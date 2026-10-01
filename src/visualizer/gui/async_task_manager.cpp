@@ -1030,33 +1030,48 @@ namespace lfs::vis::gui {
                     }
                     const auto stage_started_at = std::chrono::steady_clock::now();
                     std::string user_error;
-                    auto result = splat_load_state_.batch_stopped.load()
-                                      ? std::expected<lfs::io::LoadResult, std::string>(std::unexpected(
-                                            splat_load_state_.batch_stop_reason))
-                                      : viewer_->getSceneManager()->stageSplatFile(
-                                            request.path,
-                                            [this, job, index, total = requests.size()](const float pct,
-                                                                                        const std::string& stage) {
-                                                jobs_.report(job,
-                                                             (static_cast<float>(index) + pct / 100.0F) /
-                                                                 static_cast<float>(total),
-                                                             stage);
-                                                publishImportOverlayState();
-                                                wakeMainThreadForAsyncWork();
-                                            },
-                                            [this, job, &stop_token]() {
-                                                return stop_token.stop_requested() || jobs_.cancelRequested(job);
-                                            },
-                                            request.active_sh_degree >= 0, &user_error);
+                    auto result = [&]() -> lfs::Result<lfs::io::LoadResult> {
+                        if (splat_load_state_.batch_stopped.load()) {
+                            return lfs::make_error(lfs::ErrorInit{
+                                .code = lfs::ErrorCode::ResourceExhausted,
+                                .domain = lfs::ErrorDomain::IO,
+                                .detail = splat_load_state_.batch_stop_reason,
+                                .detection = LFS_SOURCE_SITE_CURRENT(),
+                            });
+                        }
+                        return lfs::from_legacy_expected<lfs::io::LoadResult>(
+                            viewer_->getSceneManager()->stageSplatFile(
+                                request.path,
+                                [this, job, index, total = requests.size()](const float pct,
+                                                                            const std::string& stage) {
+                                    jobs_.report(job,
+                                                 (static_cast<float>(index) + pct / 100.0F) /
+                                                     static_cast<float>(total),
+                                                 stage);
+                                    publishImportOverlayState();
+                                    wakeMainThreadForAsyncWork();
+                                },
+                                [this, job, &stop_token]() {
+                                    return stop_token.stop_requested() || jobs_.cancelRequested(job);
+                                },
+                                request.active_sh_degree >= 0, &user_error),
+                            lfs::LegacyErrorContext{
+                                .code = lfs::ErrorCode::Internal,
+                                .domain = lfs::ErrorDomain::IO,
+                                .operation = "stageSplatFile",
+                                .source = LFS_SOURCE_SITE_CURRENT(),
+                            });
+                    }();
+
+                    const std::string error_message = result ? std::string{} : std::string(result.error().detail());
 
                     if (!result && splat_load_state_.validate_batch) {
                         // Legacy loader errors flatten the native allocation
                         // cause into text. Stop this batch after device OOM:
                         // trying later files can consume the space the renderer
                         // needs to keep the already accepted nodes interactive.
-                        const auto& error = result.error();
-                        if (isImportOutOfMemory(error)) {
-                            splat_load_state_.batch_stop_reason = error;
+                        if (isImportOutOfMemory(error_message)) {
+                            splat_load_state_.batch_stop_reason = error_message;
                             splat_load_state_.batch_stopped.store(true);
                         }
                     }
@@ -1064,7 +1079,7 @@ namespace lfs::vis::gui {
                     SplatLoadCompletion completion{
                         .request = request,
                         .result = result ? std::optional<lfs::io::LoadResult>(std::move(*result)) : std::nullopt,
-                        .error = result ? std::string{} : (splat_load_state_.validate_batch && !user_error.empty() && !isImportOutOfMemory(result.error()) ? user_error : result.error()),
+                        .error = result ? std::string{} : (splat_load_state_.validate_batch && !user_error.empty() && !isImportOutOfMemory(error_message) ? user_error : error_message),
                         .stage_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - stage_started_at)};
                     {

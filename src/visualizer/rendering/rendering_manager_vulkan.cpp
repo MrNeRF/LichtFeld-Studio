@@ -1741,6 +1741,7 @@ namespace lfs::vis {
                 static_cast<void>(renderVulkanFrame(preparation));
             }
         } catch (const std::exception& error) {
+            LOG_ERROR("Import render preparation failed: {}", error.what());
             import_render_result_ = error.what();
         }
         import_render_preparing_ = false;

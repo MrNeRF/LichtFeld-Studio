@@ -604,8 +604,6 @@
       "src/mcp/shared_scene_tools.hpp:32"
     ],
     "python": [
-      "src/python/lfs/module.cpp:171",
-      "src/python/lfs/module.cpp:402",
       "src/python/lfs/py_io.cpp:599",
       "src/python/lfs/py_rendering.cpp:1179",
       "src/python/lfs/py_splat_simplify.cpp:209"

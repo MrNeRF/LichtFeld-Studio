@@ -124,7 +124,14 @@ namespace {
             return std::unexpected("not implemented");
         }
         void consolidateModels() override {}
-        std::expected<void, std::string> clearScene() override { return {}; }
+        std::expected<void, std::string> clearScene() override {
+            ++clear_calls;
+            if (!clear_error.empty())
+                return std::unexpected(clear_error);
+            return {};
+        }
+        int clear_calls = 0;
+        std::string clear_error;
         lfs::core::Scene& getScene() override { return scene_; }
         lfs::vis::SceneManager* getSceneManager() override { return nullptr; }
         lfs::vis::RenderingManager* getRenderingManager() override { return nullptr; }
@@ -1081,6 +1088,58 @@ except RuntimeError:
     ASSERT_EQ(result.values.size(), 1u);
     EXPECT_FLOAT_EQ(result.values[0], 1.0F);
     EXPECT_EQ(viewer.poll_calls, 0);
+}
+
+TEST_F(PythonIntegrationTest, SceneClearPreservesTypedShutdownError) {
+    for (const bool inline_call : {false, true}) {
+        TestVisualizer viewer;
+        viewer.on_viewer_thread = inline_call;
+        viewer.accepts_posted_work = false;
+        const ScopedVisualizer scoped_viewer(&viewer);
+        const lfs::python::SceneContextGuard scene_guard(&viewer.getScene());
+        const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+result_shape = (2,)
+result_values = []
+for clear in (lf.clear_scene, lf.get_scene().clear):
+    try:
+        clear()
+        result_values.append(0.0)
+    except lf.CancelledError as error:
+        assert error.code == 'Cancelled'
+        assert error.domain == 'Python'
+        result_values.append(1.0)
+)PY");
+        EXPECT_EQ(result.values, (std::vector<float>{1.0F, 1.0F}));
+        EXPECT_EQ(viewer.clear_calls, 0);
+    }
+}
+
+TEST_F(PythonIntegrationTest, SceneClearPreservesLegacyFailureContext) {
+    for (const bool inline_call : {false, true}) {
+        TestVisualizer viewer;
+        viewer.on_viewer_thread = inline_call;
+        viewer.clear_error = "Scene is busy";
+        const ScopedVisualizer scoped_viewer(&viewer);
+        const lfs::python::SceneContextGuard scene_guard(&viewer.getScene());
+        const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+result_shape = (2,)
+result_values = []
+for clear in (lf.clear_scene, lf.get_scene().clear):
+    try:
+        clear()
+        result_values.append(0.0)
+    except lf.Error as error:
+        assert error.code == 'FailedPrecondition'
+        assert error.domain == 'Rendering'
+        assert str(error) == 'Scene is busy'
+        assert error.context
+        result_values.append(1.0)
+)PY");
+        EXPECT_EQ(result.values, (std::vector<float>{1.0F, 1.0F}));
+        EXPECT_EQ(viewer.clear_calls, 2);
+    }
 }
 
 TEST_F(PythonIntegrationTest, ProjectLicenseRoundTripsThroughBinding) {

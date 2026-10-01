@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "preferences.hpp"
+#include <algorithm>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -170,12 +171,29 @@ namespace {
         return lfs::core::utf8_to_path(value);
     }
 
-    std::expected<void, std::string> post_clear_scene_to_viewer(lfs::vis::Visualizer& viewer) {
+    lfs::Result<void> post_clear_scene_to_viewer(lfs::vis::Visualizer& viewer) {
+        const auto clear = [&viewer]() -> lfs::Result<void> {
+            return lfs::from_legacy_expected<void>(
+                viewer.clearScene(),
+                lfs::LegacyErrorContext{
+                    .code = lfs::ErrorCode::FailedPrecondition,
+                    .domain = lfs::ErrorDomain::Rendering,
+                    .operation = "clearScene",
+                    .source = LFS_SOURCE_SITE_CURRENT(),
+                });
+        };
+        const auto shutdown_error = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::Cancelled,
+            .domain = lfs::ErrorDomain::Python,
+            .severity = lfs::Severity::Warning,
+            .detail = "Viewer is shutting down",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
         if (viewer.isOnViewerThread()) {
             if (!viewer.acceptsPostedWork()) {
-                return std::unexpected("Viewer is shutting down");
+                return lfs::Result<void>::failure(shutdown_error);
             }
-            return viewer.clearScene();
+            return clear();
         }
 
         const lfs::core::TaskContext context{
@@ -185,32 +203,7 @@ namespace {
             .site = LFS_SOURCE_SITE_CURRENT(),
         };
 
-        lfs::Result<void> result = lfs::vis::post_guarded_and_wait<void>(
-            viewer, context,
-            [&viewer]() -> lfs::Result<void> {
-                return lfs::from_legacy_expected<void>(
-                    viewer.clearScene(),
-                    lfs::LegacyErrorContext{
-                        .code = lfs::ErrorCode::Internal,
-                        .domain = lfs::ErrorDomain::Rendering,
-                        .operation = "clearScene",
-                        .source = LFS_SOURCE_SITE_CURRENT(),
-                    });
-            },
-            lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::Cancelled,
-                .domain = lfs::ErrorDomain::Python,
-                .severity = lfs::Severity::Warning,
-                .detail = "Viewer is shutting down",
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            }));
-
-        if (!result) {
-            const auto& error = result.error();
-            return std::unexpected(std::string(
-                error.user_message().empty() ? error.detail() : error.user_message()));
-        }
-        return {};
+        return lfs::vis::post_guarded_and_wait<void>(viewer, context, clear, shutdown_error);
     }
 
     lfs::Result<lfs::vis::ProjectOpenOutcome>
@@ -383,7 +376,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -448,14 +441,19 @@ namespace {
         return started;
     }
 
-    std::expected<void, std::string> clear_scene_from_python() {
+    lfs::Result<void> clear_scene_from_python() {
         if (auto* const viewer = lfs::python::get_visualizer()) {
             return post_clear_scene_to_viewer(*viewer);
         }
 
         auto* const scene_manager = lfs::python::get_scene_manager();
         if (!scene_manager) {
-            return std::unexpected("No scene manager available");
+            return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Unavailable,
+                .domain = lfs::ErrorDomain::Python,
+                .detail = "No scene manager available",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
 
         if (scene_manager->clear()) {
@@ -466,11 +464,20 @@ namespace {
             trainer_manager &&
             scene_manager->getContentType() == lfs::vis::SceneManager::ContentType::Dataset &&
             !trainer_manager->canPerform(lfs::vis::TrainingAction::ClearScene)) {
-            return std::unexpected(
-                std::string(trainer_manager->getActionBlockedReason(lfs::vis::TrainingAction::ClearScene)));
+            return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::Python,
+                .detail = std::string(trainer_manager->getActionBlockedReason(lfs::vis::TrainingAction::ClearScene)),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
 
-        return std::unexpected("Scene clear request was rejected");
+        return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::FailedPrecondition,
+            .domain = lfs::ErrorDomain::Python,
+            .detail = "Scene clear request was rejected",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        }));
     }
 
     CommandCenter* get_command_center_opt() {
@@ -861,7 +868,7 @@ namespace {
 
 } // namespace
 
-std::expected<void, std::string> lfs::python::clear_application_scene() {
+lfs::Result<void> lfs::python::clear_application_scene() {
     return clear_scene_from_python();
 }
 
@@ -1866,9 +1873,7 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "clear_scene", []() {
             nb::gil_scoped_release release;
-            if (auto result = clear_scene_from_python(); !result) {
-                throw std::runtime_error(std::format("clear_scene failed: {}", result.error()));
-            }
+            lfs::python::unwrap(lfs::python::clear_application_scene());
         },
         "Remove all nodes from the scene");
     m.def(
