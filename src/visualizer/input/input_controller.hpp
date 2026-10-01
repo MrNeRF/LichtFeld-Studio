@@ -16,6 +16,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>

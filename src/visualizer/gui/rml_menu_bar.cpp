@@ -35,6 +35,7 @@
 #include <format>
 #include <glm/glm.hpp>
 #include <string_view>
+#include <utility>
 
 namespace lfs::vis::gui {
 

@@ -39,6 +39,7 @@
 #include "viewport_interaction_context.hpp"
 #include "viewport_interop_service.hpp"
 #include "viewport_overlay_service.hpp"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>

@@ -32,6 +32,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
+#include <utility>
 
 namespace lfs::vis {
 

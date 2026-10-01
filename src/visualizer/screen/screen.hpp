@@ -7,6 +7,7 @@
 #include "screen/editor_type.hpp"
 #include "screen/screen_layout.hpp"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <nlohmann/json_fwd.hpp>

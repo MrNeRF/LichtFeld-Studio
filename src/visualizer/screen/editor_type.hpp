@@ -6,6 +6,7 @@
 
 #include "screen/screen_layout.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <nlohmann/json_fwd.hpp>

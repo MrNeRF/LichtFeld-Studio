@@ -26,6 +26,7 @@
 #include <RmlUi/Core/Input.h>
 #include <RmlUi/Core/StringUtilities.h>
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <format>

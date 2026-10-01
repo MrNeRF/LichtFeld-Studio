@@ -8,6 +8,7 @@
 #include "rendering/rendering_types.hpp"
 #include "screen/editor_type.hpp"
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 

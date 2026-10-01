@@ -6,12 +6,14 @@
 #include "screen/json_id.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <functional>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <utility>
 
 namespace lfs::vis::screen {
 

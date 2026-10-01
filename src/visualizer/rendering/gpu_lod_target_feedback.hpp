@@ -5,6 +5,7 @@
 #include "lod_page_cache.hpp"
 #include "render_target_id.hpp"
 #include <algorithm>
+#include <cstdint>
 #include <unordered_map>
 
 namespace lfs::vis {

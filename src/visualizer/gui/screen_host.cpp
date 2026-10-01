@@ -22,6 +22,7 @@
 #include <cassert>
 #include <cmath>
 #include <format>
+#include <utility>
 
 namespace lfs::vis::gui {
 

@@ -12,6 +12,7 @@
 #include "screen/screen_service.hpp"
 
 #include <RmlUi/Core/DataModelHandle.h>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>

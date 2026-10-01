@@ -15,6 +15,7 @@
 #include "selection/selection_service.hpp"
 #include "theme/theme.hpp"
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <glm/gtc/quaternion.hpp>
@@ -300,14 +301,14 @@ namespace lfs::vis::tools {
         const auto settings = rm->settingsForView(view);
         if (!settings.depth_filter_enabled)
             return;
-        const float near = std::clamp(-settings.depth_filter_max.z, 0.0f, DEPTH_MAX - DEPTH_MIN);
-        const float far = std::clamp(-settings.depth_filter_min.z, near + DEPTH_MIN, DEPTH_MAX);
-        const auto half_extents = depthWindowFarPlaneHalfExtents(viewport, settings, far,
+        const float near_depth = std::clamp(-settings.depth_filter_max.z, 0.0f, DEPTH_MAX - DEPTH_MIN);
+        const float far_depth = std::clamp(-settings.depth_filter_min.z, near_depth + DEPTH_MIN, DEPTH_MAX);
+        const auto half_extents = depthWindowFarPlaneHalfExtents(viewport, settings, far_depth,
                                                                  settings.depth_filter_scale_x, settings.depth_filter_scale_y);
         rm->editViewSettings(view, [&](ViewSettings& target) {
             target.depth_filter_transform = lfs::geometry::EuclideanTransform(glm::quat_cast(viewport.camera.R), viewport.camera.t);
-            target.depth_filter_min = glm::vec3(-half_extents.x, -half_extents.y, -far);
-            target.depth_filter_max = glm::vec3(half_extents.x, half_extents.y, -near);
+            target.depth_filter_min = glm::vec3(-half_extents.x, -half_extents.y, -far_depth);
+            target.depth_filter_max = glm::vec3(half_extents.x, half_extents.y, -near_depth);
         });
     }
 

@@ -11,6 +11,7 @@
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <utility>
 
 #include <algorithm>
 #include <ranges>

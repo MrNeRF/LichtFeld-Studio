@@ -42,6 +42,7 @@
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <optional>
 #include <shared_mutex>
 #include <stdexcept>

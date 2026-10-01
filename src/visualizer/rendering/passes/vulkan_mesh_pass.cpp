@@ -13,6 +13,7 @@
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_result.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <format>
@@ -23,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <vk_mem_alloc.h>
 

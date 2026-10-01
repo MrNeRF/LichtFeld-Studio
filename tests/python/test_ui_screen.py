@@ -99,7 +99,10 @@ def test_screen_layout_and_view_settings_round_trip(lf):
 
     camera = lf.ui.screen.view_camera(view)
     assert len(camera["rotation"]) == 9
+    assert isinstance(camera["translation"], tuple)
+    assert isinstance(camera["pivot"], tuple)
     assert len(camera["translation"]) == 3
+    assert len(camera["pivot"]) == 3
     assert lf.ui.screen.set_view_camera(view, (4.0, 3.0, 4.0), (0.0, 0.0, 0.0))
     moved = lf.ui.screen.view_camera(view)
     assert moved["translation"] == pytest.approx((4.0, 3.0, 4.0), abs=1e-4)

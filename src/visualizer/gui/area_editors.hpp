@@ -10,10 +10,12 @@
 #include "gui/ui_context.hpp"
 #include "screen/screen.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // The GUI half of the editor types (the model half is screen/editor_type):
