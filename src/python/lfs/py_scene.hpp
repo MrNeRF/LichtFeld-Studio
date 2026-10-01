@@ -11,6 +11,7 @@
 #include "py_prop.hpp"
 #include "py_splat_data.hpp"
 #include "py_tensor.hpp"
+#include <expected>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -21,6 +22,9 @@
 namespace nb = nanobind;
 
 namespace lfs::python {
+
+    // Shared viewer-thread dispatch for the two Python scene-clear entry points.
+    std::expected<void, std::string> clear_application_scene();
 
     struct PySelectionGroup {
         uint8_t id;

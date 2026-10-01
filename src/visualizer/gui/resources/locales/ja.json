@@ -3017,5 +3017,11 @@
     "canceling": "Canceling cleanup… Please wait."
   },
   "projects.gallery.review.unlinked_copy": "現在のシーンをそのままアップロードします。このコンピューターには何も保存されません。",
-  "projects.gallery.state.live_snapshot": "現在のシーンから公開"
+  "projects.gallery.state.live_snapshot": "現在のシーンから公開",
+  "runtime.import_batch_failed.one": "{} 個のファイルを読み込めませんでした",
+  "runtime.import_batch_failed.few": "{} 個のファイルを読み込めませんでした",
+  "runtime.import_batch_failed.other": "{} 個のファイルを読み込めませんでした",
+  "runtime.import_out_of_memory": "GPU メモリが不足しています",
+  "runtime.import_batch_kept": "他のファイルは読み込まれており、引き続きシーンで使用できます。",
+  "runtime.import_render_failed": "このファイルを描画する準備ができませんでした"
 }

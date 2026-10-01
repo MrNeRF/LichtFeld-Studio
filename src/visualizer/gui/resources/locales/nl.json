@@ -3017,5 +3017,11 @@
     "canceling": "Canceling cleanup… Please wait."
   },
   "projects.gallery.review.unlinked_copy": "De huidige scène wordt ongewijzigd geüpload. Er wordt niets opgeslagen op deze computer.",
-  "projects.gallery.state.live_snapshot": "Gepubliceerd vanuit de huidige scène"
+  "projects.gallery.state.live_snapshot": "Gepubliceerd vanuit de huidige scène",
+  "runtime.import_batch_failed.one": "{} bestand is niet geladen",
+  "runtime.import_batch_failed.few": "{} bestanden zijn niet geladen",
+  "runtime.import_batch_failed.other": "{} bestanden zijn niet geladen",
+  "runtime.import_out_of_memory": "Onvoldoende GPU-geheugen",
+  "runtime.import_batch_kept": "De overige bestanden zijn geladen en blijven beschikbaar in de scène.",
+  "runtime.import_render_failed": "Dit bestand kon niet worden voorbereid voor weergave"
 }

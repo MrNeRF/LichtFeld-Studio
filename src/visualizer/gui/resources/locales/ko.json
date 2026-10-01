@@ -3017,5 +3017,11 @@
     "canceling": "Canceling cleanup… Please wait."
   },
   "projects.gallery.review.unlinked_copy": "현재 장면을 그대로 업로드합니다. 이 컴퓨터에는 아무것도 저장되지 않습니다.",
-  "projects.gallery.state.live_snapshot": "현재 장면에서 게시됨"
+  "projects.gallery.state.live_snapshot": "현재 장면에서 게시됨",
+  "runtime.import_batch_failed.one": "파일 {}개를 불러오지 못했습니다",
+  "runtime.import_batch_failed.few": "파일 {}개를 불러오지 못했습니다",
+  "runtime.import_batch_failed.other": "파일 {}개를 불러오지 못했습니다",
+  "runtime.import_out_of_memory": "GPU 메모리가 부족합니다",
+  "runtime.import_batch_kept": "나머지 파일은 불러왔으며 장면에서 계속 사용할 수 있습니다.",
+  "runtime.import_render_failed": "이 파일을 렌더링할 준비를 하지 못했습니다"
 }

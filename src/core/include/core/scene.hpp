@@ -311,15 +311,15 @@ namespace lfs::core {
         glm::mat4 getNodeTransform(NodeId id) const;
         bool renameNode(NodeId id, const std::string& new_name);
         bool renameNode(std::string old_name, const std::string& new_name);
-        void clear();
+        void clear(bool internal_import = false);
         std::pair<std::string, std::string> cycleVisibilityWithNames();
 
         NodeId addGroup(const std::string& name, NodeId parent = NULL_NODE);
         NodeId addPlySequence(const std::string& name, NodeId parent = NULL_NODE, size_t frame_count = 0);
         NodeId addSplatPlaceholder(const std::string& name, NodeId parent = NULL_NODE);
-        NodeId addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, NodeId parent = NULL_NODE);
+        NodeId addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, NodeId parent = NULL_NODE, Uuid* inserted_uuid = nullptr);
         NodeId addPointCloud(const std::string& name, std::shared_ptr<lfs::core::PointCloud> point_cloud, NodeId parent = NULL_NODE);
-        NodeId addMesh(const std::string& name, std::shared_ptr<lfs::core::MeshData> mesh_data, NodeId parent = NULL_NODE);
+        NodeId addMesh(const std::string& name, std::shared_ptr<lfs::core::MeshData> mesh_data, NodeId parent = NULL_NODE, Uuid* inserted_uuid = nullptr);
         NodeId addCropBox(const std::string& name, NodeId parent_id);
         NodeId addEllipsoid(const std::string& name, NodeId parent_id);
         NodeId addDataset(const std::string& name);
@@ -439,6 +439,7 @@ namespace lfs::core {
             cudaStream_t worker_stream = nullptr;
             uint64_t generation = 0;
             bool includes_hidden_splats = false;
+            std::string error;
         };
 
         // The inputs are captured without copying model tensors. The caller must
@@ -457,6 +458,11 @@ namespace lfs::core {
             uint64_t generation) const;
         void requestCombinedModelBuild(bool include_hidden_splats = false) const;
         [[nodiscard]] bool combinedModelBuildPending() const;
+        [[nodiscard]] std::string combinedModelBuildError() const;
+        void setImportValidation(bool enabled) {
+            import_validation_.store(enabled);
+            combined_model_build_failure_.reset();
+        }
 
         void setCombinedModelAllocator(SplatTensorAllocator allocator);
 
@@ -742,7 +748,8 @@ namespace lfs::core {
         [[nodiscard]] NodeId insertNode(
             std::unique_ptr<SceneNode> node,
             bool allow_duplicate_name = false,
-            std::optional<NodeId> preferred_id = std::nullopt);
+            std::optional<NodeId> preferred_id = std::nullopt,
+            Uuid* inserted_uuid = nullptr);
         mutable std::shared_ptr<lfs::core::SplatData> cached_combined_;
         mutable bool cached_combined_includes_hidden_ = false;
         mutable std::shared_ptr<lfs::core::Tensor> cached_transform_indices_;
@@ -761,6 +768,8 @@ namespace lfs::core {
         mutable std::mutex combined_model_mutex_;
         SplatTensorAllocator combined_model_allocator_;
         mutable std::optional<CombinedModelBuild> completed_combined_model_build_;
+        mutable std::optional<std::pair<uint64_t, std::string>> combined_model_build_failure_;
+        std::atomic<bool> import_validation_{false};
         mutable std::mutex combined_model_build_mutex_;
         mutable std::atomic<bool> combined_model_build_running_{false};
         mutable std::shared_ptr<CombinedModelBuildLifetimeRegistry>

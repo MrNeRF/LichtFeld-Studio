@@ -189,10 +189,15 @@ namespace lfs::vis {
 
         [[nodiscard]] bool init(VulkanContext& context);
         void prepare(VulkanContext& context, const VulkanViewportPassParams& params);
+        // Validation borrows the live mesh cache synchronously; only presentation
+        // resources belong to the temporary pass. New uploads stay in the live cache.
+        void prepareImport(VulkanContext& context, const VulkanViewportPassParams& params,
+                           VulkanViewportPass* resident_mesh_resources = nullptr);
         void record(VkCommandBuffer command_buffer,
                     VkExtent2D framebuffer_extent,
                     const VulkanViewportPassParams& params);
         [[nodiscard]] SceneUpscalerSelection sceneUpscalerSelection() const;
+        void discardImportMesh(uint64_t mesh_id);
         void shutdown();
 
     private:

@@ -3017,5 +3017,11 @@
     "canceling": "Canceling cleanup… Please wait."
   },
   "projects.gallery.review.unlinked_copy": "Bieżąca scena zostanie przesłana bez zmian. Na tym komputerze nic nie zostanie zapisane.",
-  "projects.gallery.state.live_snapshot": "Opublikowano z bieżącej sceny"
+  "projects.gallery.state.live_snapshot": "Opublikowano z bieżącej sceny",
+  "runtime.import_batch_failed.one": "{} plik nie został wczytany",
+  "runtime.import_batch_failed.few": "{} pliki nie zostały wczytane",
+  "runtime.import_batch_failed.other": "{} plików nie zostało wczytanych",
+  "runtime.import_out_of_memory": "Za mało pamięci GPU",
+  "runtime.import_batch_kept": "Pozostałe pliki zostały wczytane i nadal są dostępne w scenie.",
+  "runtime.import_render_failed": "Nie udało się przygotować tego pliku do wyświetlenia"
 }

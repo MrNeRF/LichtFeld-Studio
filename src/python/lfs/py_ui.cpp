@@ -3871,7 +3871,8 @@ namespace lfs::python {
                                     g_show_load_file_confirmation_callback(
                                         paths,
                                         event.is_dataset,
-                                        event.replace);
+                                        event.replace,
+                                        event.user_batch);
                                 } catch (
                                     const std::
                                         exception& error) {

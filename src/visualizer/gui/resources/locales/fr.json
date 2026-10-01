@@ -3017,5 +3017,11 @@
     "canceling": "Canceling cleanup… Please wait."
   },
   "projects.gallery.review.unlinked_copy": "La scène actuelle est envoyée telle quelle. Rien n’est enregistré sur cet ordinateur.",
-  "projects.gallery.state.live_snapshot": "Publiée depuis la scène actuelle"
+  "projects.gallery.state.live_snapshot": "Publiée depuis la scène actuelle",
+  "runtime.import_batch_failed.one": "{} fichier n’a pas été chargé",
+  "runtime.import_batch_failed.few": "{} fichiers n’ont pas été chargés",
+  "runtime.import_batch_failed.other": "{} fichiers n’ont pas été chargés",
+  "runtime.import_out_of_memory": "Mémoire GPU insuffisante",
+  "runtime.import_batch_kept": "Les autres fichiers ont été chargés et restent disponibles dans la scène.",
+  "runtime.import_render_failed": "Impossible de préparer ce fichier pour l’affichage"
 }

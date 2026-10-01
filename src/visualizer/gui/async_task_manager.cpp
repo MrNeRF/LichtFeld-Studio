@@ -8,6 +8,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/mesh_data.hpp"
 #include "core/number_format.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
@@ -18,6 +19,7 @@
 #include "gui/error_event_bridge.hpp"
 #include "gui/gallery_scene_publication.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/import_error.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/utils/native_file_dialog.hpp"
@@ -878,6 +880,8 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::shutdown() {
+        if (auto* loader = viewer_->getDataLoader())
+            loader->cancelPendingImports();
         if (isExporting())
             cancelExport();
         if (export_state_.thread && export_state_.thread->joinable())
@@ -930,7 +934,7 @@ namespace lfs::vis::gui {
                                           const bool replace_first,
                                           std::vector<std::string> name_hints,
                                           std::vector<bool> visibility,
-                                          std::optional<core::events::cmd::LoadGalleryScene> gallery) {
+                                          std::optional<core::events::cmd::LoadGalleryScene> gallery, const bool import_batch) {
         if (paths.empty()) {
             LOG_WARN("Splat load requested without paths");
             return false;
@@ -963,6 +967,8 @@ namespace lfs::vis::gui {
 
         splat_load_state_.job = *created;
         splat_load_state_.replace_first = replace_first;
+        splat_load_state_.validate_batch = import_batch && !gallery;
+        viewer_->getSceneManager()->getScene().setImportValidation(splat_load_state_.validate_batch);
         splat_load_state_.gallery = std::move(gallery);
         splat_load_state_.gallery_group_uuid.reset();
         splat_load_state_.scene_generation = gallery_scene_epoch_;
@@ -973,7 +979,12 @@ namespace lfs::vis::gui {
             splat_load_state_.requests.clear();
             splat_load_state_.loaded_count = 0;
             splat_load_state_.failed_count = 0;
+            splat_load_state_.failures.clear();
+            splat_load_state_.attachment_pending = false;
             splat_load_state_.consolidation_pending = false;
+            splat_load_state_.pending_render_request.reset();
+            splat_load_state_.batch_stopped.store(false);
+            splat_load_state_.batch_stop_reason.clear();
             for (size_t index = 0; index < paths.size(); ++index) {
                 splat_load_state_.requests.push_back(SplatLoadRequest{
                     .path = std::move(paths[index]),
@@ -1018,33 +1029,58 @@ namespace lfs::vis::gui {
                         break;
                     }
                     const auto stage_started_at = std::chrono::steady_clock::now();
-                    auto result = viewer_->getSceneManager()->stageSplatFile(
-                        request.path,
-                        [this, job, index, total = requests.size()](const float pct,
-                                                                    const std::string& stage) {
-                            jobs_.report(job,
-                                         (static_cast<float>(index) + pct / 100.0F) /
-                                             static_cast<float>(total),
-                                         stage);
-                            publishImportOverlayState();
-                            wakeMainThreadForAsyncWork();
-                        },
-                        [this, job, &stop_token]() {
-                            return stop_token.stop_requested() || jobs_.cancelRequested(job);
-                        },
-                        request.active_sh_degree >= 0);
+                    std::string user_error;
+                    auto result = splat_load_state_.batch_stopped.load()
+                                      ? std::expected<lfs::io::LoadResult, std::string>(std::unexpected(
+                                            splat_load_state_.batch_stop_reason))
+                                      : viewer_->getSceneManager()->stageSplatFile(
+                                            request.path,
+                                            [this, job, index, total = requests.size()](const float pct,
+                                                                                        const std::string& stage) {
+                                                jobs_.report(job,
+                                                             (static_cast<float>(index) + pct / 100.0F) /
+                                                                 static_cast<float>(total),
+                                                             stage);
+                                                publishImportOverlayState();
+                                                wakeMainThreadForAsyncWork();
+                                            },
+                                            [this, job, &stop_token]() {
+                                                return stop_token.stop_requested() || jobs_.cancelRequested(job);
+                                            },
+                                            request.active_sh_degree >= 0, &user_error);
+
+                    if (!result && splat_load_state_.validate_batch) {
+                        // Legacy loader errors flatten the native allocation
+                        // cause into text. Stop this batch after device OOM:
+                        // trying later files can consume the space the renderer
+                        // needs to keep the already accepted nodes interactive.
+                        const auto& error = result.error();
+                        if (isImportOutOfMemory(error)) {
+                            splat_load_state_.batch_stop_reason = error;
+                            splat_load_state_.batch_stopped.store(true);
+                        }
+                    }
 
                     SplatLoadCompletion completion{
                         .request = request,
                         .result = result ? std::optional<lfs::io::LoadResult>(std::move(*result)) : std::nullopt,
-                        .error = result ? std::string{} : result.error(),
+                        .error = result ? std::string{} : (splat_load_state_.validate_batch && !user_error.empty() && !isImportOutOfMemory(result.error()) ? user_error : result.error()),
                         .stage_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - stage_started_at)};
                     {
                         const std::lock_guard lock(splat_load_state_.mutex);
                         splat_load_state_.completions.push_back(std::move(completion));
+                        splat_load_state_.attachment_pending = true;
                     }
                     wakeMainThreadForAsyncWork();
+                    if (splat_load_state_.validate_batch) {
+                        // Do not retain staged files or allocate the next model
+                        // until the viewer has consumed this completion.
+                        std::unique_lock lock(splat_load_state_.mutex);
+                        splat_load_state_.completion_consumed.wait(lock, stop_token, [this] {
+                            return !splat_load_state_.attachment_pending;
+                        });
+                    }
                     if (!result && (stop_token.stop_requested() || jobs_.cancelRequested(job))) {
                         canceled = true;
                         break;
@@ -1058,7 +1094,90 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    bool AsyncTaskManager::discardPendingImport(const core::Uuid& uuid) {
+        auto* manager = viewer_->getSceneManager();
+        const bool restore_selection = manager->selectionState().generation() ==
+                                       splat_load_state_.attachment_selection_generation;
+        try {
+            if (const auto* node = manager->getScene().getNodeByUuid(uuid); node && node->mesh)
+                viewer_->getGuiManager()->discardImportMesh(node->mesh->id());
+        } catch (const std::exception& error) {
+            LOG_ERROR("Could not release failed mesh import: {}", error.what());
+            return false;
+        }
+        if (!manager->discardFailedImport(uuid))
+            return false;
+        if (restore_selection) {
+            std::vector<core::NodeId> ids;
+            for (const auto& selected : splat_load_state_.previous_selection) {
+                if (const auto* node = manager->getScene().getNodeByUuid(selected))
+                    ids.push_back(node->id);
+            }
+            manager->selectNodesById(ids);
+        }
+        return true;
+    }
+
     void AsyncTaskManager::checkAsyncSplatLoadCompletion() {
+        // Check the epoch captured before staging, not one captured after attachment.
+        if ((splat_load_state_.thread || splat_load_state_.pending_render_request ||
+             splat_load_state_.worker_complete.load(std::memory_order_acquire)) &&
+            splat_load_state_.scene_generation != gallery_scene_epoch_) {
+            cancelImport(false);
+            return;
+        }
+        auto* const manager = viewer_->getSceneManager();
+        if (splat_load_state_.pending_render_request && manager) {
+            auto& scene = manager->getScene();
+            auto* rendering = viewer_->getRenderingManager();
+            const bool uses_combined = !rendering || rendering->importUsesCombinedModel();
+            auto error = uses_combined ? scene.combinedModelBuildError() : std::string{};
+            if (uses_combined && scene.combinedModelBuildPending())
+                return;
+            if (uses_combined && error.empty()) {
+                try {
+                    // Small aggregates use the same synchronous path as the viewport.
+                    static_cast<void>(scene.getCombinedModel());
+                    if (scene.combinedModelBuildPending())
+                        return;
+                } catch (const std::exception& failure) {
+                    error = failure.what();
+                }
+            }
+            if (error.empty() && viewer_->getWindow()) {
+                if (auto* rendering = viewer_->getRenderingManager()) {
+                    const auto rendered = viewer_->getGuiManager()->pollImportRenderCheck(splat_load_state_.pending_render_node);
+                    if (!rendered)
+                        return;
+                    error = *rendered;
+                }
+            }
+            if (auto* rendering = viewer_->getRenderingManager())
+                rendering->cancelImportRenderCheck();
+            viewer_->getGuiManager()->endImportRenderCheck();
+            if (!error.empty()) {
+                // Attachment is provisional until the new node can be rendered.
+                // Previously accepted nodes remain owned by the scene.
+                if (!discardPendingImport(splat_load_state_.pending_render_node)) {
+                    cancelImport();
+                    return;
+                }
+                LOG_ERROR("Import rendering failed for '{}': {}", core::path_to_utf8(splat_load_state_.pending_render_request->path), error);
+                const std::string reason = isImportOutOfMemory(error) ? error : LOC("runtime.import_render_failed");
+                --splat_load_state_.loaded_count;
+                ++splat_load_state_.failed_count;
+                splat_load_state_.failures.emplace_back(
+                    splat_load_state_.pending_render_request->path, reason);
+                splat_load_state_.batch_stop_reason = reason;
+                splat_load_state_.batch_stopped.store(true);
+            }
+            splat_load_state_.pending_render_request.reset();
+            {
+                const std::lock_guard lock(splat_load_state_.mutex);
+                splat_load_state_.attachment_pending = false;
+            }
+            splat_load_state_.completion_consumed.notify_all();
+        }
         if (splat_load_state_.gallery && jobs_.cancelRequested(splat_load_state_.job) &&
             splat_load_state_.worker_complete.load(std::memory_order_acquire)) {
             cancelImport(); // The worker has finished; joining cannot wait on IO.
@@ -1108,16 +1227,33 @@ namespace lfs::vis::gui {
         for (auto& completion : completions) {
             if (!completion.error.empty()) {
                 ++splat_load_state_.failed_count;
-                lfs::core::events::state::SplatFileLoadFailed{
-                    .path = completion.request.path,
-                    .error = completion.error}
-                    .emit();
+                if (splat_load_state_.validate_batch)
+                    splat_load_state_.failures.emplace_back(completion.request.path, completion.error);
+                else
+                    core::events::state::SplatFileLoadFailed{.path = completion.request.path, .error = completion.error}.emit();
                 continue;
             }
             if (!completion.result || !scene_manager)
                 continue;
 
+            splat_load_state_.previous_selection.clear();
+            for (const auto id : scene_manager->getSelectedNodeIds()) {
+                if (const auto* node = scene_manager->getScene().getNodeById(id))
+                    splat_load_state_.previous_selection.push_back(node->uuid);
+            }
+            splat_load_state_.attachment_selection_generation = scene_manager->selectionState().generation();
+            core::Uuid imported_uuid;
+            bool counted_as_loaded = false;
             try {
+                if (splat_load_state_.validate_batch) {
+                    viewer_->getGuiManager()->beginImportRenderCheck();
+                    // Release the old render copy before attachment can grow
+                    // selection masks or allocate the replacement aggregate.
+                    scene_manager->drainGpuForTensorRelease();
+                    if (auto* rendering = viewer_->getRenderingManager())
+                        rendering->releaseSceneModelResources();
+                    scene_manager->getScene().discardUnconsolidatedModelCache();
+                }
                 jobs_.report(splat_load_state_.job, std::nullopt,
                              LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
                 const auto attach_started_at = std::chrono::steady_clock::now();
@@ -1133,7 +1269,7 @@ namespace lfs::vis::gui {
                         completion.request.path,
                         completion.request.name_hint,
                         completion.request.is_visible,
-                        std::move(*completion.result), true);
+                        std::move(*completion.result), true, false, &imported_uuid, &splat_load_state_.attachment_selection_generation, true);
                 } else {
                     if (splat_load_state_.gallery)
                         std::get<std::shared_ptr<core::SplatData>>(completion.result->data)->set_active_sh_degree(completion.request.active_sh_degree);
@@ -1142,7 +1278,7 @@ namespace lfs::vis::gui {
                         completion.request.name_hint,
                         splat_load_state_.gallery ? false : completion.request.is_visible,
                         std::move(*completion.result), splat_load_state_.gallery.has_value(), gallery_group,
-                        splat_load_state_.gallery.has_value());
+                        splat_load_state_.gallery.has_value(), &imported_uuid, &splat_load_state_.attachment_selection_generation);
                     if (splat_load_state_.gallery) {
                         scene_manager->getScene().setNodeTransform(node_name, completion.request.transform);
                         scene_manager->getScene().setNodeVisibility(node_name, true);
@@ -1157,12 +1293,38 @@ namespace lfs::vis::gui {
                          attach_elapsed.count(),
                          completion.stage_elapsed.count() + attach_elapsed.count());
                 ++splat_load_state_.loaded_count;
+                counted_as_loaded = true;
+                if (splat_load_state_.validate_batch) {
+                    splat_load_state_.pending_render_request = completion.request;
+                    splat_load_state_.pending_render_node = imported_uuid;
+                    auto* rendering = viewer_->getRenderingManager();
+                    if (!rendering || rendering->importUsesCombinedModel()) {
+                        // One aggregate per attachment is needed to validate real
+                        // allocations before staging the next file. Comparison
+                        // uses the owned node models and needs no aggregate.
+                        scene_manager->getScene().requestCombinedModelBuild(false);
+                        static_cast<void>(scene_manager->getScene().getCombinedModel());
+                    }
+                }
             } catch (const std::exception& error) {
+                viewer_->getGuiManager()->endImportRenderCheck();
+                LOG_ERROR("Import attachment failed for '{}': {}", core::path_to_utf8(completion.request.path), error.what());
+                if (splat_load_state_.validate_batch) {
+                    if (!imported_uuid.is_nil() && !discardPendingImport(imported_uuid)) {
+                        cancelImport();
+                        return;
+                    }
+                    if (counted_as_loaded)
+                        --splat_load_state_.loaded_count;
+                    splat_load_state_.pending_render_request.reset();
+                    splat_load_state_.batch_stop_reason = error.what();
+                    splat_load_state_.batch_stopped.store(true);
+                }
                 ++splat_load_state_.failed_count;
-                lfs::core::events::state::SplatFileLoadFailed{
-                    .path = completion.request.path,
-                    .error = error.what()}
-                    .emit();
+                if (splat_load_state_.validate_batch)
+                    splat_load_state_.failures.emplace_back(completion.request.path, error.what());
+                else
+                    core::events::state::SplatFileLoadFailed{.path = completion.request.path, .error = error.what()}.emit();
             }
         }
 
@@ -1179,6 +1341,15 @@ namespace lfs::vis::gui {
             }
         }
         gallery_transaction.reset();
+        if (!completions.empty()) {
+            completions.clear();
+            {
+                const std::lock_guard lock(splat_load_state_.mutex);
+                if (!splat_load_state_.pending_render_request)
+                    splat_load_state_.attachment_pending = false;
+            }
+            splat_load_state_.completion_consumed.notify_all();
+        }
 
         if (!splat_load_state_.worker_complete.load(std::memory_order_acquire)) {
             publishImportOverlayState();
@@ -1191,11 +1362,16 @@ namespace lfs::vis::gui {
         }
         const auto state = jobs_.update(splat_load_state_.job);
         if (!state || state->status == JobStatus::Canceled) {
+            splat_load_state_.gallery.reset();
+            splat_load_state_.gallery_group_uuid.reset();
+            splat_load_state_.worker_complete.store(false, std::memory_order_release);
             std::lock_guard lock(splat_load_state_.mutex);
             splat_load_state_.completions.clear();
             return;
         }
         if (state->worker_canceled) {
+            splat_load_state_.gallery.reset();
+            splat_load_state_.gallery_group_uuid.reset();
             jobs_.canceled(splat_load_state_.job);
             std::lock_guard lock(splat_load_state_.mutex);
             splat_load_state_.completions.clear();
@@ -1203,7 +1379,7 @@ namespace lfs::vis::gui {
             return;
         }
 
-        if (scene_manager && splat_load_state_.loaded_count > 1 &&
+        if (scene_manager && !splat_load_state_.validate_batch && splat_load_state_.loaded_count > 1 &&
             !splat_load_state_.consolidation_pending) {
             jobs_.report(splat_load_state_.job, 0.98F,
                          LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
@@ -1218,12 +1394,24 @@ namespace lfs::vis::gui {
                 publishImportOverlayState();
                 return;
             }
-            // Preserve the original float coefficients for editing and re-export.
-            // The renderer cache may quantize its own combined copy.
             if (!splat_load_state_.gallery)
                 scene_manager->consolidateNodeModels();
             splat_load_state_.consolidation_pending = false;
         }
+        if (!splat_load_state_.failures.empty()) {
+            if (splat_load_state_.validate_batch) {
+                lfs::core::events::state::SplatBatchLoadFailed{
+                    .failures = std::move(splat_load_state_.failures),
+                    .loaded_count = splat_load_state_.loaded_count}
+                    .emit();
+            } else {
+                for (const auto& [path, error] : splat_load_state_.failures)
+                    lfs::core::events::state::SplatFileLoadFailed{.path = path, .error = error}.emit();
+            }
+            splat_load_state_.failures.clear();
+        }
+        if (scene_manager)
+            scene_manager->getScene().setImportValidation(false);
         const bool success = splat_load_state_.loaded_count > 0;
         {
             const std::lock_guard lock(import_state_.mutex);
@@ -1238,7 +1426,13 @@ namespace lfs::vis::gui {
         } else {
             jobs_.failed(splat_load_state_.job, "No splat files could be loaded");
         }
-        import_state_.show_completion.store(true, std::memory_order_release);
+        // Gallery ownership ends with this job, before a dataset can commit its clear.
+        splat_load_state_.gallery.reset();
+        splat_load_state_.gallery_group_uuid.reset();
+        // Batch failures already have a localized file-error modal. Keeping the
+        // dataset failure overlay open as well obscures it and blocks input
+        // even after the file-error modal is dismissed.
+        import_state_.show_completion.store(success || !splat_load_state_.validate_batch, std::memory_order_release);
         if (success)
             scheduleImportCompletionDismiss();
         publishImportOverlayState();
@@ -1249,7 +1443,30 @@ namespace lfs::vis::gui {
     void AsyncTaskManager::setupEvents() {
         using namespace lfs::core::events;
 
-        state::SceneCleared::when([this](const auto&) { ++gallery_scene_epoch_; });
+        state::SceneReplacing::when([this](const auto& event) {
+            if (!viewer_->getSceneManager() || event.scene != &viewer_->getSceneManager()->getScene())
+                return;
+            ++gallery_scene_epoch_;
+            if (auto* loader = viewer_->getDataLoader())
+                loader->cancelPendingImports();
+            // Dataset application also clears the scene. Cancel splat staging,
+            // without canceling the dataset job currently committing that clear.
+            if (splat_load_state_.thread || splat_load_state_.pending_render_request)
+                cancelImport(false);
+        });
+        state::SceneCleared::when([this](const auto& event) {
+            // Normal import replacement emits SceneCleared too; only history
+            // restoration is a new explicit boundary here. Gallery retains
+            // master's epoch invalidation on all scene clears.
+            if (!event.from_history && !canCancelGalleryImport())
+                return;
+            ++gallery_scene_epoch_;
+            if (event.from_history) {
+                if (auto* loader = viewer_->getDataLoader())
+                    loader->cancelPendingImports();
+            }
+            cancelImport(false);
+        });
 
         cmd::PrepareGalleryProject::when([this](const auto& command) {
             startGalleryProjectExport({command.source_path, command.destination,
@@ -1409,14 +1626,36 @@ namespace lfs::vis::gui {
         });
     }
 
+    bool AsyncTaskManager::importWorkersFinished() const {
+        if (splat_load_state_.thread && !splat_load_state_.worker_complete.load(std::memory_order_acquire))
+            return false;
+        if (import_state_.thread) {
+            const auto state = jobs_.peek(import_state_.job);
+            if (state && (state->status == JobStatus::Initialized || state->status == JobStatus::Running))
+                return false;
+        }
+        return true;
+    }
+
     void AsyncTaskManager::pollImportCompletion() {
+        if (import_cancel_pending_) {
+            cancelImport(false);
+            if (import_cancel_pending_)
+                return;
+        }
         checkAsyncSplatLoadCompletion();
         checkAsyncImportCompletion();
         settlePendingJobs();
+        if (auto* loader = viewer_->getDataLoader())
+            loader->processPendingImports();
     }
 
     bool AsyncTaskManager::hasPendingMainThreadCompletions() const {
-        return import_state_.load_complete.load(std::memory_order_acquire) ||
+        if (import_cancel_pending_)
+            return importWorkersFinished();
+        return splat_load_state_.pending_render_request.has_value() ||
+               (viewer_->getDataLoader() && viewer_->getDataLoader()->hasPendingImports()) ||
+               import_state_.load_complete.load(std::memory_order_acquire) ||
                splat_load_state_.worker_complete.load(std::memory_order_acquire) ||
                [&] {
                    const std::lock_guard lock(splat_load_state_.mutex);
@@ -2315,6 +2554,12 @@ namespace lfs::vis::gui {
         publishImportOverlayState();
     }
 
+    bool AsyncTaskManager::canCancelGalleryImport() const {
+        const auto active = jobs_.active(JobType::Import);
+        return splat_load_state_.gallery.has_value() && active &&
+               active->handle == splat_load_state_.job;
+    }
+
     bool AsyncTaskManager::requestGalleryImportCancel() {
         if (!canCancelGalleryImport())
             return false;
@@ -2326,30 +2571,47 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::cancelImport(const bool wait_for_worker) {
-        if (!wait_for_worker && splat_load_state_.gallery && splat_load_state_.thread &&
-            !splat_load_state_.worker_complete.load(std::memory_order_acquire)) {
-            jobs_.requestCancel(splat_load_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
-            splat_load_state_.thread->request_stop();
-            ++gallery_scene_epoch_;
+        if (auto* gui = viewer_->getGuiManager())
+            gui->endImportRenderCheck();
+        if (auto* rendering = viewer_->getRenderingManager())
+            rendering->cancelImportRenderCheck();
+        if (!wait_for_worker && !importWorkersFinished()) {
+            import_cancel_pending_ = true;
+            if (const auto active = jobs_.active(JobType::Import);
+                active && (active->handle == splat_load_state_.job || active->handle == import_state_.job))
+                jobs_.requestCancel(active->handle, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
+            if (splat_load_state_.thread)
+                splat_load_state_.thread->request_stop();
+            if (import_state_.thread)
+                import_state_.thread->request_stop();
+            if (splat_load_state_.scene_generation == gallery_scene_epoch_)
+                ++gallery_scene_epoch_;
+            if (auto* manager = viewer_->getSceneManager())
+                manager->getScene().setImportValidation(false);
             publishImportOverlayState();
-            return; // Poll joins after staging finishes; project switches do not wait on IO.
+            return; // Join only after completion; project switches never wait on IO.
         }
+        import_cancel_pending_ = false;
+        if (auto* manager = viewer_->getSceneManager())
+            manager->getScene().setImportValidation(false);
         const auto splat_job = splat_load_state_.job;
         const auto import_job = import_state_.job;
-        const bool cancel_gallery = isImporting() && splat_load_state_.gallery_group_uuid.has_value();
+        const bool cancel_gallery = canCancelGalleryImport() && splat_load_state_.gallery_group_uuid.has_value();
         const bool had_activity = isImporting() ||
                                   import_state_.show_completion.load() ||
                                   import_state_.thread.has_value() ||
                                   splat_load_state_.thread.has_value();
         if (!had_activity) {
+            splat_load_state_.gallery.reset();
+            splat_load_state_.gallery_group_uuid.reset();
             return;
         }
 
         LOG_INFO("Cancelling import");
         cancelImportCompletionDismiss();
-        if (isImporting()) {
-            jobs_.requestCancel(
-                import_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
+        if (const auto active = jobs_.active(JobType::Import);
+            active && (active->handle == splat_job || active->handle == import_job)) {
+            jobs_.requestCancel(active->handle, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
         }
         if (import_state_.thread) {
             import_state_.thread->request_stop();
@@ -2372,6 +2634,8 @@ namespace lfs::vis::gui {
             splat_load_state_.gallery_group_uuid.reset();
         }
 
+        splat_load_state_.gallery.reset();
+        splat_load_state_.gallery_group_uuid.reset();
         const auto cancel_if_running = [this](const JobHandle handle) {
             if (const auto state = jobs_.update(handle); state && state->running())
                 jobs_.canceled(handle);
@@ -2386,6 +2650,9 @@ namespace lfs::vis::gui {
         import_state_.load_complete.store(false);
         import_state_.show_completion.store(false);
         splat_load_state_.worker_complete.store(false, std::memory_order_release);
+        splat_load_state_.pending_render_request.reset();
+        if (auto* rendering = viewer_->getRenderingManager())
+            rendering->cancelImportRenderCheck();
         {
             const std::lock_guard lock(import_state_.mutex);
             import_state_.path.clear();
@@ -2647,7 +2914,12 @@ namespace lfs::vis::gui {
             return;
         }
 
+        const auto committing_job = import_state_.job;
         const auto result = scene_manager->applyLoadedDataset(path, params, std::move(*load_result));
+        // Scene callbacks may explicitly replace or cancel the committing job.
+        const auto active = jobs_.active(JobType::Import);
+        if (!committing_job || import_state_.job != committing_job || !active || active->handle != committing_job)
+            return;
 
         if (result) {
             if (auto* data_loader = viewer_->getDataLoader())

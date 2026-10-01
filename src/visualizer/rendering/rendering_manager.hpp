@@ -90,6 +90,8 @@ namespace lfs::vis {
             const ViewportRegion* viewport_region = nullptr;
             SceneManager* scene_manager = nullptr;
             VulkanContext* vulkan_context = nullptr;
+            bool preparing_import = false;
+            core::Uuid provisional_import_node;
         };
 
         struct VulkanFrameResult {
@@ -130,6 +132,10 @@ namespace lfs::vis {
         void initialize();
         bool isInitialized() const { return initialized_; }
         void releaseSceneModelResources();
+        void beginImportRenderCheck(uint64_t scene_generation);
+        bool importUsesCombinedModel() const;
+        std::optional<std::string> pollImportRenderCheck(const RenderContext& context, const std::function<void()>& prepare_viewport = {});
+        void cancelImportRenderCheck();
 
         // Main render function
         VulkanFrameResult renderVulkanFrame(const RenderContext& context);
@@ -806,6 +812,14 @@ namespace lfs::vis {
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
+        std::optional<std::string> prepareImportRenderCheck(const RenderContext& context, const std::function<void()>& prepare_viewport);
+        void noteImportRenderFrame(uint64_t scene_generation, std::string error = {});
+        glm::ivec2 last_nonzero_viewport_size_{0, 0};
+        bool import_render_check_ = false;
+        bool import_render_preparing_ = false;
+        uint64_t import_render_generation_ = 0;
+        unsigned import_render_frames_ = 0;
+        std::optional<std::string> import_render_result_;
         StaleFrameGuard vksplat_stale_frame_guard_;
         DirtyMask parked_arena_retry_ = 0;
         std::uint64_t viewport_projection_generation_ = 1;

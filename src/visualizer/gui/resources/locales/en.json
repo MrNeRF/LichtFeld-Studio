@@ -3017,5 +3017,11 @@
     "canceling": "Canceling cleanup… Please wait."
   },
   "projects.gallery.review.unlinked_copy": "The current scene is uploaded as it is. Nothing is saved on this computer.",
-  "projects.gallery.state.live_snapshot": "Published from current scene"
+  "projects.gallery.state.live_snapshot": "Published from current scene",
+  "runtime.import_batch_failed.one": "{} file was not loaded",
+  "runtime.import_batch_failed.few": "{} files were not loaded",
+  "runtime.import_batch_failed.other": "{} files were not loaded",
+  "runtime.import_out_of_memory": "Not enough GPU memory",
+  "runtime.import_batch_kept": "The other files were loaded and remain available in the scene.",
+  "runtime.import_render_failed": "Could not prepare this file for rendering"
 }
