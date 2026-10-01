@@ -16,11 +16,16 @@
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <format>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <limits>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <vector>
 
@@ -328,4 +333,130 @@ TEST(ThinStructure, BaseMaskCompositionAndUnitWeightL1Gradient) {
     for (int c = 0; c < 3; ++c)
         for (size_t i = 0; i < response_values.size() / 2; ++i)
             EXPECT_EQ(gradient[c * response_values.size() + i], plain[c * response_values.size() + i]);
+}
+
+namespace {
+    Tensor read_full_real_image() {
+        auto [data, width, height, channels] = load_image(std::getenv("LFS_THIN_STRUCTURE_TEST_IMAGE"));
+        const std::unique_ptr<void, decltype(&free_image)> owner(data, free_image);
+        if (!data || width <= 0 || height <= 0 || channels != 3)
+            throw std::runtime_error("A real RGB image is required");
+        return Tensor::from_blob(data, TensorShape{static_cast<size_t>(height), static_cast<size_t>(width), 3},
+                                 Device::CPU, DataType::UInt8)
+            .permute({2, 0, 1})
+            .contiguous()
+            .to(Device::CUDA);
+    }
+} // namespace
+
+TEST(ThinStructure, RidgeBoundaryShapesMatchReference) {
+    const auto* image_path = std::getenv("LFS_THIN_STRUCTURE_TEST_IMAGE");
+    const auto* reference_path = std::getenv("LFS_THIN_STRUCTURE_REFERENCE_PATH");
+    const auto* output_path = std::getenv("LFS_THIN_STRUCTURE_TEST_OUTPUT");
+    if (!image_path || !reference_path || !output_path)
+        GTEST_SKIP() << "set real-image, reference-map and output paths to run";
+    const auto full_image = read_full_real_image();
+    const bool write_reference = std::getenv("LFS_THIN_STRUCTURE_WRITE_REFERENCE") != nullptr;
+    const std::filesystem::path reference_root(reference_path);
+    if (write_reference)
+        std::filesystem::create_directories(reference_root);
+    const std::array<TensorShape, 9> shapes{
+        TensorShape{1, 1}, TensorShape{2, 3}, TensorShape{5, 7}, TensorShape{11, 11},
+        TensorShape{31, 33}, TensorShape{32, 128}, TensorShape{33, 129}, TensorShape{127, 131},
+        TensorShape{full_image.shape()[1], full_image.shape()[2]}};
+    nlohmann::json results = nlohmann::json::array();
+    for (const auto dtype : {DataType::UInt8, DataType::Float32}) {
+        for (const auto& shape : shapes) {
+            if (std::getenv("LFS_THIN_STRUCTURE_SMALL_CASES") && shape[0] == full_image.shape()[1] && shape[1] == full_image.shape()[2])
+                continue;
+            const auto name = std::format("{}_{}x{}", dtype == DataType::UInt8 ? "u8" : "f32", shape[0], shape[1]);
+            SCOPED_TRACE(name);
+            ASSERT_LE(shape[0], full_image.shape()[1]);
+            ASSERT_LE(shape[1], full_image.shape()[2]);
+            auto image = full_image.slice(1, 0, static_cast<int>(shape[0]))
+                             .slice(2, 0, static_cast<int>(shape[1]))
+                             .contiguous();
+            if (dtype == DataType::Float32)
+                image = image.to(DataType::Float32) / 255.0f;
+            RidgeWorkspace workspace;
+            auto map = Tensor::empty(shape, Device::CUDA);
+            ridge_structure_map(image, map, workspace);
+            const auto actual = map.cpu().to_vector();
+            const auto path = reference_root / (name + ".bin");
+            const auto bytes = static_cast<std::streamsize>(actual.size() * sizeof(float));
+            if (write_reference) {
+                std::ofstream file(path, std::ios::binary);
+                ASSERT_TRUE(file);
+                file.write(reinterpret_cast<const char*>(actual.data()), bytes);
+                ASSERT_TRUE(file);
+            } else {
+                ASSERT_TRUE(std::filesystem::is_regular_file(path));
+                ASSERT_EQ(std::filesystem::file_size(path), actual.size() * sizeof(float));
+                std::vector<float> reference(actual.size());
+                std::ifstream file(path, std::ios::binary);
+                file.read(reinterpret_cast<char*>(reference.data()), bytes);
+                ASSERT_TRUE(file);
+                float max_error = 0.0f;
+                for (size_t i = 0; i < actual.size(); ++i) {
+                    ASSERT_TRUE(std::isfinite(actual[i]));
+                    ASSERT_GE(actual[i], 0.0f);
+                    max_error = std::max(max_error, std::abs(actual[i] - reference[i]));
+                }
+                const bool byte_identical = std::memcmp(actual.data(), reference.data(), static_cast<size_t>(bytes)) == 0;
+                EXPECT_LE(max_error, 1e-6f);
+                results.push_back({{"case", name}, {"byte_identical", byte_identical}, {"max_error", max_error}});
+            }
+        }
+    }
+    std::filesystem::create_directories(output_path);
+    std::ofstream result(std::filesystem::path(output_path) / "detector_reference_comparison.json");
+    ASSERT_TRUE(result);
+    result << results.dump(2);
+    ASSERT_TRUE(result);
+}
+
+TEST(ThinStructure, DetectorTimingOnRealImage) {
+    const auto* image_path = std::getenv("LFS_THIN_STRUCTURE_TEST_IMAGE");
+    const auto* output_path = std::getenv("LFS_THIN_STRUCTURE_TEST_OUTPUT");
+    if (!image_path || !output_path || !std::getenv("LFS_THIN_STRUCTURE_MEASURE"))
+        GTEST_SKIP() << "set real-image, output paths and LFS_THIN_STRUCTURE_MEASURE to run timing";
+    const auto byte_image = read_full_real_image();
+    nlohmann::json results = nlohmann::json::array();
+    for (const auto dtype : {DataType::UInt8, DataType::Float32}) {
+        auto image = dtype == DataType::UInt8 ? byte_image : byte_image.to(DataType::Float32) / 255.0f;
+        RidgeWorkspace workspace;
+        auto map = Tensor::empty({image.shape()[1], image.shape()[2]}, Device::CUDA);
+        for (int i = 0; i < 10; ++i)
+            ridge_structure_map(image, map, workspace);
+        ASSERT_EQ(cudaStreamSynchronize(image.stream()), cudaSuccess);
+        cudaEvent_t start = nullptr, end = nullptr;
+        ASSERT_EQ(cudaEventCreate(&start), cudaSuccess);
+        ASSERT_EQ(cudaEventCreate(&end), cudaSuccess);
+        std::vector<float> samples;
+        for (int i = 0; i < 100; ++i) {
+            ASSERT_EQ(cudaEventRecord(start, image.stream()), cudaSuccess);
+            ridge_structure_map(image, map, workspace);
+            ASSERT_EQ(cudaEventRecord(end, image.stream()), cudaSuccess);
+            ASSERT_EQ(cudaEventSynchronize(end), cudaSuccess);
+            float elapsed = 0.0f;
+            ASSERT_EQ(cudaEventElapsedTime(&elapsed, start, end), cudaSuccess);
+            samples.push_back(elapsed);
+        }
+        ASSERT_EQ(cudaEventDestroy(start), cudaSuccess);
+        ASSERT_EQ(cudaEventDestroy(end), cudaSuccess);
+        std::sort(samples.begin(), samples.end());
+        float sum = 0.0f;
+        for (size_t i = 10; i < 90; ++i)
+            sum += samples[i];
+        results.push_back({{"dtype", dtype == DataType::UInt8 ? "u8" : "f32"},
+                           {"height", image.shape()[1]},
+                           {"width", image.shape()[2]},
+                           {"samples", samples},
+                           {"trimmed_mean_ms", sum / 80.0f}});
+    }
+    std::filesystem::create_directories(output_path);
+    std::ofstream result(std::filesystem::path(output_path) / "detector_timing.json");
+    ASSERT_TRUE(result);
+    result << results.dump(2);
+    ASSERT_TRUE(result);
 }
