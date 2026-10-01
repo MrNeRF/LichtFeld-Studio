@@ -143,6 +143,39 @@ if(TARGET lfs_visualizer)
                     endforeach()
                 endforeach()
             endforeach()
+            # A non-multiple source count catches codec padding/Q16 tails;
+            # normal CI fixtures remain 512 points for bounded running time.
+            foreach(_sog_tensor IN ITEMS metal vulkan)
+                set(_sog_test MacViewerParity_format_sog_nonmultiple_${_sog_tensor}_gut)
+                add_test(NAME ${_sog_test} COMMAND mac_viewer_backend_benchmark
+                    --smoke --gut --tensor-backend ${_sog_tensor} --fixture-format sog --fixture-count 1025
+                    --input-fixture "${CMAKE_CURRENT_BINARY_DIR}/${_sog_test}.sog"
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/${_sog_test}.json")
+                set_tests_properties(${_sog_test} PROPERTIES
+                    LABELS "metal;gpu;metal4;parity;formats" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            endforeach()
+            # Imported RGBA coverage also exercises fitted nonidentity cameras,
+            # independently of the synthetic editor-overlay fixtures.
+            foreach(_rgba_tensor IN ITEMS metal vulkan)
+                foreach(_rgba_profile IN ITEMS studio portal)
+                    foreach(_rgba_view IN ITEMS perspective ortho)
+                        set(_rgba_test MacViewerParity_input_gut_rgba_${_rgba_tensor}_${_rgba_profile}_${_rgba_view})
+                        set(_rgba_args --gut --transparent)
+                        if(_rgba_profile STREQUAL "portal")
+                            list(APPEND _rgba_args --portal)
+                        endif()
+                        if(_rgba_view STREQUAL "ortho")
+                            list(APPEND _rgba_args --ortho)
+                        endif()
+                        add_test(NAME ${_rgba_test} COMMAND mac_viewer_backend_benchmark
+                            --smoke --tensor-backend ${_rgba_tensor} ${_rgba_args}
+                            --input-fixture "${CMAKE_CURRENT_BINARY_DIR}/${_rgba_test}.ply"
+                            --output "${CMAKE_CURRENT_BINARY_DIR}/${_rgba_test}.json")
+                        set_tests_properties(${_rgba_test} PROPERTIES
+                            LABELS "metal;gpu;metal4;parity;formats" TIMEOUT 180 SKIP_RETURN_CODE 77)
+                    endforeach()
+                endforeach()
+            endforeach()
             add_test(NAME MacViewerGpuProfileSmoke COMMAND mac_viewer_backend_benchmark
                 --smoke --profile --deterministic-reference
                 --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-gpu-profile-smoke.json")

@@ -29,7 +29,7 @@ namespace {
     using Json = nlohmann::json;
     using Slot = vis::VksplatViewportRenderer::OutputSlot;
     struct Options {
-        size_t count = 100000;
+        size_t count = 100000, fixture_count = 512;
         int width = 1280, height = 720, warmup = 12, samples = 40, tone = 0;
         float exposure = 1.f;
         std::string output, images, overlay, input, camera, fixture_format;
@@ -194,6 +194,8 @@ namespace {
                 throw std::runtime_error("Invalid value for " + arg);
             if (arg == "--count")
                 o.count = number;
+            else if (arg == "--fixture-count")
+                o.fixture_count = number;
             else if (arg == "--width")
                 o.width = number;
             else if (arg == "--height")
@@ -205,8 +207,10 @@ namespace {
             else
                 throw std::runtime_error("Unknown option " + arg);
         }
-        if (o.width > 4096 || o.height > 4096 || o.count > 1000000 || o.samples > 10000 || o.warmup > 1000)
+        if (o.width > 4096 || o.height > 4096 || o.count > 1000000 || o.fixture_count > 1000000 || o.samples > 10000 || o.warmup > 1000)
             throw std::runtime_error("Benchmark reservation limit exceeded");
+        if (!o.input_fixture && o.fixture_count != 512)
+            throw std::runtime_error("--fixture-count requires --input-fixture");
         if (!o.camera.empty() && o.input.empty())
             throw std::runtime_error("--camera requires --input");
         if (!o.input.empty() && (o.lod || o.gpu_lod || o.spark || o.near || o.frustum || o.saturation || !o.overlay.empty()))
@@ -467,7 +471,7 @@ namespace {
                 // import/storage backend under test. SSOG's CPU hierarchy builder
                 // currently allocates intermediate device gathers on Metal.
                 core::GpuBackendScope fixture_scope(core::GpuBackend::Metal);
-                auto fixture = scene(512, 3);
+                auto fixture = scene(o.fixture_count, 3);
                 const auto format = o.fixture_format.empty() ? "ply" : o.fixture_format;
                 const auto saved = [&]() -> io::Result<void> {
                     if (format == "ply")
@@ -500,6 +504,8 @@ namespace {
             imported = *splats;
             loader_name = loaded->loader_used;
             o.count = imported->means_raw().size(0);
+            if (o.input_fixture && o.fixture_format != "rad" && o.fixture_format != "ssog" && o.count != o.fixture_count)
+                throw std::runtime_error("Flat fixture import changed its requested source count");
             if (o.count > std::numeric_limits<uint32_t>::max())
                 throw std::runtime_error("Real scene exceeds the renderer's uint32 source extent");
             degrees = {0};
@@ -827,6 +833,9 @@ namespace {
                 if (!ref)
                     throw std::runtime_error(ref.error());
                 double maximum = 0, squares = 0, native_sum = 0, reference_sum = 0, worst_rgb = -1;
+                std::array<double, 2> composite_max{}, composite_squares{};
+                double common_max = 0, common_squares = 0;
+                size_t common_channels = 0, coverage_disagreements = 0;
                 const auto origin = request.frame_view.subregion_origin;
                 const size_t ref_width = reference_request.frame_view.size.x;
                 for (size_t y = 0; y < size_t(o.height); ++y)
@@ -837,8 +846,29 @@ namespace {
                         if (!std::isfinite(a) || !std::isfinite(b) || a < 0 || a > 1 || b < 0 || b > 1)
                             throw std::runtime_error("Invalid transparent alpha");
                         double color_error = 0;
-                        for (size_t c = 0; c < 3; ++c)
-                            color_error = std::max(color_error, std::abs(double(rgba.ptr<float>()[pixel * 4 + c]) - (*ref)->ptr<float>()[ref_pixel * 4 + c]));
+                        if ((a > 0) != (b > 0))
+                            ++coverage_disagreements;
+                        for (size_t c = 0; c < 3; ++c) {
+                            const double native_rgb = rgba.ptr<float>()[pixel * 4 + c];
+                            const double reference_rgb = (*ref)->ptr<float>()[ref_pixel * 4 + c];
+                            const double straight_delta = native_rgb - reference_rgb;
+                            color_error = std::max(color_error, std::abs(straight_delta));
+                            if (a > 0 && b > 0) {
+                                common_max = std::max(common_max, std::abs(straight_delta));
+                                common_squares += straight_delta * straight_delta;
+                                ++common_channels;
+                            }
+                            // Straight RGB is undefined at zero alpha. Keep its
+                            // raw errors in the report, and check visible color
+                            // on both black and white across ALL pixels instead.
+                            // These endpoints bound every background in [0,1].
+                            const double black_delta = native_rgb * a - reference_rgb * b;
+                            const std::array<double, 2> delta{black_delta, black_delta + double(b) - a};
+                            for (size_t background = 0; background < 2; ++background) {
+                                composite_max[background] = std::max(composite_max[background], std::abs(delta[background]));
+                                composite_squares[background] += delta[background] * delta[background];
+                            }
+                        }
                         if (color_error > worst_rgb) {
                             worst_rgb = color_error;
                             difference["transparent_worst_pixel"] = {
@@ -860,20 +890,44 @@ namespace {
                     throw std::runtime_error("Transparent benchmark published empty coverage");
                 difference["alpha_max_error"] = maximum;
                 difference["alpha_rmse"] = rms;
+                difference["transparent_valid_max_error"] = common_max;
+                difference["transparent_valid_rmse"] = std::sqrt(common_squares / std::max<size_t>(1, common_channels));
+                difference["transparent_coverage_disagreement_pixels"] = coverage_disagreements;
+                difference["transparent_coverage_disagreement_fraction"] = double(coverage_disagreements) / (size_t(o.width) * o.height);
+                double visible_max = 0, visible_rmse = 0;
+                for (size_t background = 0; background < 2; ++background) {
+                    const double error = std::sqrt(composite_squares[background] / (size_t(o.width) * o.height * 3));
+                    difference[background ? "transparent_white_max_error" : "transparent_black_max_error"] = composite_max[background];
+                    difference[background ? "transparent_white_rmse" : "transparent_black_rmse"] = error;
+                    visible_max = std::max(visible_max, composite_max[background]);
+                    visible_rmse = std::max(visible_rmse, error);
+                }
+                difference["transparent_visible_max_error"] = visible_max;
+                difference["transparent_visible_rmse"] = visible_rmse;
                 if (o.verify_parity && (maximum > 4. / 255 + 1e-7 || rms > 1. / 255))
                     throw std::runtime_error("Transparent alpha exceeds parity bounds: " + difference.dump());
+                if (o.verify_parity && (visible_max > 4. / 255 + 1e-7 || visible_rmse > 1. / 255 ||
+                                        double(difference["transparent_coverage_disagreement_fraction"]) > .001))
+                    throw std::runtime_error("Transparent composite/coverage exceeds parity bounds: " + difference.dump());
             }
             // The Vulkan reference uses compressed FP16 footprints/colors. Bound
             // local and RMS error without claiming bit-identical arithmetic.
             // Median depth has a hard coverage boundary at 0.5. FP16 reference and
             // FP32 native can disagree on boundary pixels; record the full image
             // error and enforce a separate bound, never silently drop those pixels.
-            const double local_error = o.depth ? double(difference["depth_valid_max_error"]) : o.equirect && o.overlay == "markers" ? double(difference["marker_stable_max_error"])
-                                                                                                                                    : double(difference["max_error"]);
+            // Unpremultiplied RGB has no visible meaning where either alpha
+            // is zero. Its full error remains reported; common coverage keeps
+            // the original straight-RGB max gate, with full-image black/white
+            // composite and alpha gates enforced above (no pixels omitted).
+            const double local_error = o.depth ? double(difference["depth_valid_max_error"])
+                                       : o.transparent ? double(difference["transparent_valid_max_error"])
+                                       : o.equirect && o.overlay == "markers" ? double(difference["marker_stable_max_error"])
+                                                                             : double(difference["max_error"]);
+            const double rms_error = double(difference[o.depth ? "depth_valid_rmse" : o.transparent ? "transparent_visible_rmse" : "rmse"]);
             if (o.verify_parity && (local_error > 4. / 255 + 1e-7 ||
                                     double(difference["depth_coverage_disagreement_fraction"]) > .001 ||
                                     (difference.contains("marker_boundary_disagreement_fraction") && double(difference["marker_boundary_disagreement_fraction"]) > .001) ||
-                                    double(difference[o.depth ? "depth_valid_rmse" : "rmse"]) > 1. / 255))
+                                    rms_error > 1. / 255))
                 throw std::runtime_error("Native image exceeds FP16-reference parity bounds (valid max 4/255, RMS 1/255, depth coverage 0.1%): SH" + std::to_string(degree) + " " + difference.dump());
             const auto native_stats = statistics(native_times), vulkan_stats = statistics(vulkan_times);
             const auto diagnostics = metal.frameDiagnostics(Slot::Main);
@@ -882,6 +936,7 @@ namespace {
             Json gpu_diagnostics = {{"required_instances", diagnostics->required_instances},
                                     {"reserved_instances", diagnostics->reserved_instances},
                                     {"input_splats", diagnostics->input_splats},
+                                    {"blend_threads_per_group", diagnostics->blend_threads},
                                     {"counter_timestamps_available", diagnostics->counter_timestamps_available}};
             if (o.profile_gpu) {
                 const std::array<const char*, 6> stages{"command", "projection", "instances", "sort", "blend", "present"};
@@ -907,7 +962,7 @@ namespace {
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"gpu_profiling", o.profile_gpu}, {"deterministic_reference", o.deterministic_reference}, {"tensor_backend", core::gpu_backend_name(o.tensor_backend)}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", imported ? Json(nullptr) : Json(1939)}, {"scene_source", imported ? o.input : "synthetic"}, {"loader", loader_name}, {"generated_input_fixture", o.input_fixture}, {"fixture_format", o.fixture_format}, {"camera_source", imported ? (o.camera.empty() ? "fitted_bounds" : o.camera) : "synthetic"}, {"camera_pose", camera_pose}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"tone_operator", o.tone}, {"exposure", o.exposure}, {"transparent", o.transparent}, {"depth_grayscale", o.depth_gray}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"frustum_fixture", o.frustum}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"gpu_profiling", o.profile_gpu}, {"deterministic_reference", o.deterministic_reference}, {"tensor_backend", core::gpu_backend_name(o.tensor_backend)}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", imported ? Json(nullptr) : Json(1939)}, {"scene_source", imported ? o.input : "synthetic"}, {"loader", loader_name}, {"generated_input_fixture", o.input_fixture}, {"generated_source_count", o.input_fixture ? Json(o.fixture_count) : Json(nullptr)}, {"fixture_format", o.fixture_format}, {"camera_source", imported ? (o.camera.empty() ? "fitted_bounds" : o.camera) : "synthetic"}, {"camera_pose", camera_pose}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"tone_operator", o.tone}, {"exposure", o.exposure}, {"transparent", o.transparent}, {"depth_grayscale", o.depth_gray}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"frustum_fixture", o.frustum}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {

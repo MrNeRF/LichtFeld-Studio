@@ -459,7 +459,14 @@ retain its actual pose/focal length, input extent, loader and SH storage. Synthe
 hierarchy/geometry/overlay fixtures are rejected with real inputs; they must not
 be mistaken for the imported file's hierarchy. The macOS CI generates a small
 binary PLY through the shared writer and verifies the loader, SH3/Q16 and camera-fit
-path without downloading assets.
+path without downloading assets. The generated format fixtures default to 512
+sources; `--fixture-count N` explicitly changes their source count (up to one
+million), while `--count` controls ordinary synthetic scenes. Both requested
+generated count and actual imported count are retained in JSON. Flat formats
+must preserve source count; hierarchical RAD/SSOG may add LOD nodes. Two Mac-only
+SOG cases use 1025 sources to exercise padded codec rows and partial Q16 blocks.
+For a larger local format check, use `--fixture-format sog --fixture-count 100000
+--input-fixture build-macos-release/stress.sog`.
 
 ```sh
 VK_DRIVER_FILES=/path/to/MoltenVK_icd.json ./build-macos-release/tests/metal_viewer/mac_viewer_backend_benchmark \
@@ -468,9 +475,21 @@ VK_DRIVER_FILES=/path/to/MoltenVK_icd.json ./build-macos-release/tests/metal_vie
 ```
 
 Display checks can use `--tone 0..6 --exposure 1.6`, `--transparent` or
-`--depth-gray`. Transparent reports include separate alpha errors and the worst
-RGB pixel with both RGBA values; these errors remain visible even without
-`--verify-parity`. On the same 1.18M SH0 PLY/camera at 600x668, the latest paired
+`--depth-gray`. Transparent reports retain raw straight-RGB errors and the worst
+pixel with both RGBA values, including zero-alpha boundary disagreements. The
+straight-RGB max gate applies on common positive coverage. Separate full-image
+alpha and black/white composited RGB checks retain max 4/255 and RMS 1/255 gates;
+coverage disagreements are bounded to 0.1% of pixels. No pixel is removed from
+the alpha/composite checks. Black and white endpoints bound every background
+in [0,1]; arbitrary RGB at zero alpha is not treated as visible color. These
+additional diagnostics do not change either renderer or its alpha threshold.
+Eight Mac-only imported PLY RGBA comparisons exercise fitted nonidentity cameras,
+both tensor backends, Studio/portal GUT and perspective/orthographic views.
+The 1.18M PLY GUT transparency check found one coverage-boundary disagreement
+among 400800 pixels: raw straight-RGB max 135/255, common-coverage max 1/255,
+alpha max 1/255, and black/white composited max about 1.14/255. This numerical
+tail remains explicitly reported; the renderers are not pixel-identical.
+All metrics remain visible even without `--verify-parity`. On the same 1.18M SH0 PLY/camera at 600x668, the latest paired
 opaque and transparent GS runs each stayed within 2/255 maximum RGB error;
 transparent alpha stayed within 1/255. This is a measured scene/camera result,
 not pixel identity or a universal image-error bound.
