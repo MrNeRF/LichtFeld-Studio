@@ -108,8 +108,8 @@ static void compare(const Readback& r, const std::vector<ProjectedSplat>& splats
 // Long lists with sparse contributors put the first pick, median and
 // saturation in different depth chunks. Compare every output channel to the
 // independent double-precision source-order oracle, including partial tiles.
-static void compare_depth_chunks(id<MTLDevice> device) {
-    constexpr uint32_t n = 32769, w = 19, h = 17;
+static void compare_depth_chunks(id<MTLDevice> device, uint32_t n) {
+    constexpr uint32_t w = 19, h = 17;
     std::vector<ProjectedSplat> splats(n);
     auto input = [device newBufferWithLength:n * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
     auto queue = [device newCommandQueue];
@@ -472,7 +472,9 @@ static void run(id<MTLDevice> device) {
             s.color.w = 1 + float((i * 7) % 11);
             s.bounds = {uint32_t(std::max(0.f, x - 6)), uint32_t(std::max(0.f, y - 6)),
                         uint32_t(std::min(float(width), x + 7)), uint32_t(std::min(float(height), y + 7))};
-            if (fully_culled || count == 2 || i % 19 == 3)
+            // Whole empty source groups exercise stable compaction prefixes;
+            // scattered empty lanes and the final partial group retain ties.
+            if (fully_culled || count == 2 || i % 19 == 3 || (i / 256) % 4 == 1)
                 s.bounds = {};
             else
                 expected_instances += ((s.bounds.z + 15) / 16 - s.bounds.x / 16) * ((s.bounds.w + 15) / 16 - s.bounds.y / 16);
@@ -983,7 +985,8 @@ int main() {
             compare_portal_gut_median(device);
             compare_gut_culling(device);
             compare_dense_gut_subtiles(device);
-            compare_depth_chunks(device);
+            compare_depth_chunks(device, 8193);
+            compare_depth_chunks(device, 32769);
             compare_unaligned_macro_crop(device);
             compare_weak_transparent_layers(device);
             compare_half_ring_threshold(device);

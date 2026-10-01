@@ -74,7 +74,7 @@ namespace lfs::rendering::metal {
     struct RasterFrame::Impl {
         id<MTLDevice> device;
         uint32_t width, height, max_splats, capacity, tiles, columns, sort_blocks;
-        id<MTLBuffer> counts, offsets, status, histogram, histogram_offsets, ranges, dispatch_args;
+        id<MTLBuffer> counts, offsets, status, histogram, histogram_offsets, digit_offsets, ranges, dispatch_args;
         std::array<id<MTLBuffer>, 2> keys, indices;
         id<MTLTexture> color, depth, pick;
         ScanStorage count_scan, histogram_scan;
@@ -109,6 +109,7 @@ namespace lfs::rendering::metal {
         const uint32_t histogram_size = f.sort_blocks * 256;
         f.histogram = allocate(device, size_t(histogram_size) * 4);
         f.histogram_offsets = allocate(device, size_t(histogram_size) * 4);
+        f.digit_offsets = allocate(device, 257 * sizeof(uint32_t));
         f.count_scan = reserve_scan(device, max_splats);
         f.histogram_scan = reserve_scan(device, histogram_size, 4);
         if (f.histogram_scan.size() > 4)
@@ -132,7 +133,7 @@ namespace lfs::rendering::metal {
     struct TileRasterizer::Impl {
         id<MTLDevice> device;
         std::map<std::string, id<MTLComputePipelineState>> pipelines;
-        id<MTLLibrary> library;
+        id<MTLLibrary> library, relaxed_library;
         std::mutex blend_mutex;
         std::map<std::pair<uint32_t, uint32_t>, id<MTLComputePipelineState>> blend_pipelines;
         id<MTLComputePipelineState> blendPipeline(uint32_t mode, uint32_t flags) {
@@ -144,10 +145,32 @@ namespace lfs::rendering::metal {
             [constants setConstantValue:&mode type:MTLDataTypeUInt atIndex:0];
             [constants setConstantValue:&flags type:MTLDataTypeUInt atIndex:1];
             NSError* error = nil;
-            auto function = [library newFunctionWithName:@"tile_blend" constantValues:constants error:&error];
+            auto blend_library = library;
+            // Only opaque display blending permits reassociation. Coverage,
+            // overlays, Portal/RAD and requested depth retain safe arithmetic.
+            if ((flags & 4096u) && (mode == uint32_t(RasterMode::Gaussian) || mode == uint32_t(RasterMode::Gut)) &&
+                !(flags & (1u | 2u | 4u | 8u | 16u | 64u | 2048u))) {
+                if (@available(macOS 15.0, iOS 18.0, *)) {
+                    if (!relaxed_library) {
+                        auto options = [MTLCompileOptions new];
+                        options.languageVersion = MTLLanguageVersion2_4;
+                        options.mathMode = MTLMathModeRelaxed; // Honors Inf/NaN guards.
+                        relaxed_library = [device newLibraryWithSource:[NSString stringWithUTF8String:kTileRasterizerSource]
+                                                              options:options error:&error];
+                        if (!relaxed_library)
+                            throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal opaque blend compilation failed");
+                    }
+                    blend_library = relaxed_library;
+                }
+            }
+            auto function = [blend_library newFunctionWithName:@"tile_blend" constantValues:constants error:&error];
             if (!function)
                 throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal blend specialization failed");
-            auto state = [device newComputePipelineStateWithFunction:function error:&error];
+            auto descriptor = [MTLComputePipelineDescriptor new];
+            descriptor.computeFunction = function;
+            descriptor.maxTotalThreadsPerThreadgroup = 64;
+            descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth = YES;
+            auto state = [device newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&error];
             if (!state)
                 throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal blend pipeline failed");
             if (state.threadExecutionWidth != 32 || state.maxTotalThreadsPerThreadgroup < 64)
@@ -223,15 +246,18 @@ namespace lfs::rendering::metal {
             throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal tile shader compilation failed");
         impl_->library = library;
         for (const char* name : {"tile_counts", "scan_blocks", "scan_add", "scan32_blocks", "scan32_add", "tile_status", "source_keys", "tile_instances",
-                                 "tile_histogram", "tile_scatter", "source_histogram", "source_scatter", "source_ranges", "tile_ranges", "tile_depth_batches", "tile_depth_compose"}) {
-            const bool source_keys = std::string_view(name).starts_with("source_") && std::string_view(name) != "source_keys";
+                                 "tile_histogram", "tile_scatter", "source_histogram", "source_scatter", "source_ranges", "tile_ranges", "tile_depth_batches", "tile_depth_compose", "source_compact", "source_permutation", "digit_scan", "digit_offsets"}) {
+            const bool source_keys = (std::string_view(name) == "source_histogram" || std::string_view(name) == "source_scatter" || std::string_view(name) == "source_ranges");
             const char* function_name = std::string_view(name) == "source_ranges" ? "tile_ranges"
                 : source_keys ? (std::string_view(name) == "source_histogram" ? "tile_histogram" : "tile_scatter") : name;
             auto constants = [MTLFunctionConstantValues new];
             [constants setConstantValue:&source_keys type:MTLDataTypeBool atIndex:2];
             auto function = [library newFunctionWithName:[NSString stringWithUTF8String:function_name]
                                           constantValues:constants error:&error];
-            auto state = [device newComputePipelineStateWithFunction:function error:&error];
+            auto descriptor = [MTLComputePipelineDescriptor new];
+            descriptor.computeFunction = function;
+            descriptor.maxTotalThreadsPerThreadgroup = 256;
+            auto state = [device newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&error];
             if (!state)
                 throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal tile pipeline failed");
             if (state.threadExecutionWidth != 32 || state.maxTotalThreadsPerThreadgroup < 256)
@@ -297,7 +323,7 @@ namespace lfs::rendering::metal {
         check_mask(overlay.selection, selection_count);
         check_mask(overlay.preview, preview_count);
         bool single_simd = mode == RasterMode::Gaussian && projection.display.z != 1.f;
-        RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u) | (macro_half_display ? 64u : 0u) | (single_simd ? 128u : 0u) | (exact_median ? 2048u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
+        RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u) | (macro_half_display ? 64u : 0u) | (single_simd ? 128u : 0u) | (exact_median ? 2048u : 0u) | (background.w == 1.f ? 4096u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
         // Keys and the unused index side have no readers after tile ranges
         // are generated. Reuse them for partial color/depth/pick; admission
         // includes one possible gap per tile and all padded edge pixels.
@@ -373,13 +399,24 @@ namespace lfs::rendering::metal {
                 [e setBytes:&sort length:sizeof(sort) atIndex:3];
                 [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:0 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
                 [e endEncoding];
-                impl_->scan(command, f->histogram, f->histogram_offsets, f->sort_blocks * 256, f->histogram_scan, true, 0, profile, f->status, f->dispatch_args);
+                e = impl_->begin(command, "digit_scan", profile, GpuStage::Sort);
+                [e setBuffer:f->histogram offset:0 atIndex:0];
+                [e setBuffer:f->histogram_offsets offset:0 atIndex:1];
+                [e setBuffer:f->digit_offsets offset:0 atIndex:2];
+                [e setBuffer:f->status offset:0 atIndex:3];
+                [e dispatchThreadgroups:MTLSizeMake(256, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+                [e endEncoding];
+                e = impl_->begin(command, "digit_offsets", profile, GpuStage::Sort);
+                [e setBuffer:f->digit_offsets offset:0 atIndex:0];
+                [e dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+                [e endEncoding];
                 e = impl_->begin(command, source_keys ? "source_scatter" : "tile_scatter", profile, GpuStage::Sort);
                 [e setBuffer:f->keys[src] offset:0 atIndex:0];
                 [e setBuffer:f->indices[src] offset:0 atIndex:1];
                 [e setBuffer:f->keys[dst] offset:0 atIndex:2];
                 [e setBuffer:f->indices[dst] offset:0 atIndex:3];
                 [e setBuffer:f->histogram_offsets offset:0 atIndex:4];
+                [e setBuffer:f->digit_offsets offset:0 atIndex:7];
                 [e setBuffer:f->status offset:0 atIndex:5];
                 [e setBytes:&sort length:sizeof(sort) atIndex:6];
                 [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:0 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
@@ -389,21 +426,32 @@ namespace lfs::rendering::metal {
         if (source_sorted) {
             auto e = impl_->begin(command, "source_keys", profile, GpuStage::Sort);
             set_projected(e);
-            [e setBuffer:f->keys[0] offset:0 atIndex:1];
-            [e setBuffer:f->indices[0] offset:0 atIndex:2];
-            [e setBuffer:f->status offset:0 atIndex:3];
+            [e setBuffer:f->keys[1] offset:0 atIndex:1];
+            [e setBuffer:f->indices[1] offset:0 atIndex:2];
+            [e setBuffer:f->offsets offset:0 atIndex:3];
             [e setBytes:&p length:sizeof(p) atIndex:4];
-            [e setBuffer:f->dispatch_args offset:0 atIndex:5];
             [e setBuffer:f->counts offset:0 atIndex:6];
             dispatch(e, count);
+            const uint32_t groups = ceil_div(count, 256);
+            impl_->scan(command, f->offsets, f->histogram, groups, f->count_scan, false, 0, profile);
+            e = impl_->begin(command, "source_compact", profile, GpuStage::Sort);
+            [e setBuffer:f->keys[1] offset:0 atIndex:0];
+            [e setBuffer:f->indices[1] offset:0 atIndex:1];
+            [e setBuffer:f->offsets offset:0 atIndex:2];
+            [e setBuffer:f->histogram offset:0 atIndex:3];
+            [e setBuffer:f->keys[0] offset:0 atIndex:4];
+            [e setBuffer:f->indices[0] offset:0 atIndex:5];
+            [e setBuffer:f->status offset:0 atIndex:6];
+            [e setBuffer:f->dispatch_args offset:0 atIndex:7];
+            [e setBytes:&p length:sizeof(p) atIndex:8];
+            dispatch(e, count);
             encode_sort(4, 0, true);
-            // Four passes finish in indices[0]. Preserve the permutation in
-            // dead key scratch before instance emission reuses keys/indices[0].
-            // counts/instances consume it before tile radix overwrites keys[1].
-            auto copy = [command blitCommandEncoder];
-            [copy copyFromBuffer:f->indices[0] sourceOffset:0 toBuffer:f->keys[1]
-               destinationOffset:0 size:size_t(count) * sizeof(uint32_t)];
-            [copy endEncoding];
+            e = impl_->begin(command, "source_permutation", profile, GpuStage::Sort);
+            [e setBuffer:f->indices[0] offset:0 atIndex:0];
+            [e setBuffer:f->keys[1] offset:0 atIndex:1];
+            [e setBuffer:f->status offset:0 atIndex:2];
+            [e setBytes:&p length:sizeof(p) atIndex:3];
+            dispatch(e, count);
         }
         // Source key generation also computes original tile counts while its
         // projected input is read sequentially. Gather only those 8-byte counts;
@@ -460,6 +508,7 @@ namespace lfs::rendering::metal {
             [clear_jobs fillBuffer:f->counts range:NSMakeRange(0, batch_slots * 8) value:255];
             [clear_jobs endEncoding];
             e = impl_->begin(command, "tile_depth_batches", profile, GpuStage::Blend);
+            [e setBuffer:f->status offset:0 atIndex:3];
             [e setBuffer:f->ranges offset:0 atIndex:0];
             [e setBuffer:f->counts offset:0 atIndex:1];
             [e setBytes:&p length:sizeof(p) atIndex:2];

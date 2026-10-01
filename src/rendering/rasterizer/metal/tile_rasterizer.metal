@@ -24,7 +24,11 @@ struct RasterStatus { ulong required; uint error, blend_threads; };
 // of 64 preserves cooperative load boundaries; 576 fits summaries into the
 // retired sort buffers without an extra per-frame GPU allocation.
 constant uint kDepthChunkSize=576u;
-constant uint kDepthSplitThreshold=16384u;
+// Dense views benefit from earlier depth parallelism. Sparse views retain
+// long serial lists to avoid partial-buffer traffic and replay overhead.
+uint depth_split_threshold(device const RasterStatus& status, constant RasterParameters& p) {
+    return status.required > ulong(p.tiles) * 896ul ? 2048u : 16384u;
+}
 uint4 clipped_bounds(ProjectedSplat s, constant RasterParameters& p) {
     if (!all(isfinite(s.mean_depth)) || s.mean_depth.z <= 0 ||
         !all(isfinite(s.conic_opacity)) || !all(isfinite(s.color))) return uint4(0);
@@ -45,7 +49,7 @@ kernel void tile_counts(device const ProjectedSplat* splats [[buffer(0)]],
                         uint i [[thread_position_in_grid]]) {
     if (i >= p.count) return;
     if (p.unused & 256u) {
-        counts[i] = source_counts[source_order[i]];
+        counts[i] = source_order[i] < p.count ? source_counts[source_order[i]] : 0;
     } else {
         const uint4 b = clipped_bounds(splats[i],p);
         counts[i] = b.z > b.x && b.w > b.y ?
@@ -165,24 +169,60 @@ kernel void tile_status(device const ulong* counts [[buffer(0)]],
 kernel void source_keys(device const ProjectedSplat* splats [[buffer(0)]],
                         device uint* keys [[buffer(1)]],
                         device uint* indices [[buffer(2)]],
-                        device RasterStatus& status [[buffer(3)]],
+                        device ulong* groups [[buffer(3)]],
                         constant RasterParameters& p [[buffer(4)]],
-                        device uint* dispatch_args [[buffer(5)]],
                         device ulong* counts [[buffer(6)]],
-                        uint i [[thread_position_in_grid]]) {
-    if (i >= p.count) return;
-    const auto s = splats[i];
-    keys[i] = as_type<uint>(s.color.w);
-    const uint4 b = clipped_bounds(s,p);
-    counts[i] = b.z > b.x && b.w > b.y ?
-        ulong((b.z + 15) / 16 - b.x / 16) * ((b.w + 15) / 16 - b.y / 16) : 0;
-    indices[i] = i;
-    if (!i) {
-        status.required = p.count;
-        status.error = 0;
-        status.blend_threads = 0;
-        write_sort_dispatch(status, dispatch_args);
+                        uint group [[threadgroup_position_in_grid]],
+                        uint lane [[thread_index_in_threadgroup]],
+                        uint sg [[simdgroup_index_in_threadgroup]]) {
+    threadgroup uint totals[8];
+    const uint i=group*256u+lane;
+    uint key=0;ulong count=0;
+    if(i<p.count) {
+        const auto s=splats[i];
+        key=as_type<uint>(s.color.w);
+        const uint4 b=clipped_bounds(s,p);
+        count=b.z>b.x && b.w>b.y ? ulong((b.z+15)/16-b.x/16)*((b.w+15)/16-b.y/16):0;
+        counts[i]=count;
     }
+    const uint valid=count!=0;
+    uint rank=simd_prefix_exclusive_sum(valid);
+    const uint total=simd_sum(valid);
+    if((lane&31u)==0)totals[sg]=total;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for(uint j=0;j<sg;++j)rank+=totals[j];
+    if(valid) { keys[group*256u+rank]=key;indices[group*256u+rank]=i; }
+    if(lane==255u)groups[group]=rank+valid;
+}
+kernel void source_compact(device const uint* source_keys [[buffer(0)]],
+                           device const uint* source_ids [[buffer(1)]],
+                           device const ulong* groups [[buffer(2)]],
+                           device const ulong* offsets [[buffer(3)]],
+                           device uint* keys [[buffer(4)]],
+                           device uint* ids [[buffer(5)]],
+                           device RasterStatus& status [[buffer(6)]],
+                           device uint* dispatch_args [[buffer(7)]],
+                           constant RasterParameters& p [[buffer(8)]],
+                           uint i [[thread_position_in_grid]]) {
+    const uint group=i/256u,lane=i%256u;
+    if(i>=p.count)return;
+    if(lane<groups[group]) {
+        const uint to=uint(offsets[group])+lane;
+        keys[to]=source_keys[i];ids[to]=source_ids[i];
+    }
+    if(!i) {
+        const uint last=(p.count-1u)/256u;
+        status.required=offsets[last]+groups[last];
+        status.error=0;status.blend_threads=0;
+        write_sort_dispatch(status,dispatch_args);
+    }
+}
+kernel void source_permutation(device const uint* sorted [[buffer(0)]],
+                               device uint* order [[buffer(1)]],
+                               device const RasterStatus& status [[buffer(2)]],
+                               constant RasterParameters& p [[buffer(3)]],
+                               uint i [[thread_position_in_grid]]) {
+    if(i<p.count)order[i]=i<status.required?sorted[i]:0xffffffffu;
 }
 kernel void tile_instances(device const ProjectedSplat* splats [[buffer(0)]],
                            device const ulong* offsets [[buffer(1)]],
@@ -194,6 +234,7 @@ kernel void tile_instances(device const ProjectedSplat* splats [[buffer(0)]],
                            uint i [[thread_position_in_grid]]) {
     if (i >= p.count || status.error) return;
     const uint source = (p.unused & 256u) ? source_order[i] : i;
+    if(source>=p.count)return;
     const auto s = splats[source];
     const uint4 bounds = clipped_bounds(s,p);
     if (bounds.z <= bounds.x || bounds.w <= bounds.y) return;
@@ -275,6 +316,45 @@ kernel void tile_histogram(device const ulong* keys [[buffer(0)]],
         total += atomic_load_explicit(&counts[s * 256 + lane], memory_order_relaxed);
     histogram[lane * live_sort_blocks(status) + group] = total;
 }
+// One workgroup scans all partitions belonging to one radix digit. The
+// following 256-way scan supplies the global digit base used by scatter.
+kernel void digit_scan(device const uint* histogram [[buffer(0)]],
+                       device uint* offsets [[buffer(1)]],
+                       device uint* totals [[buffer(2)]],
+                       device const RasterStatus& status [[buffer(3)]],
+                       uint digit [[threadgroup_position_in_grid]],
+                       uint lane [[thread_index_in_threadgroup]],
+                       uint sg [[simdgroup_index_in_threadgroup]]) {
+    threadgroup uint sums[8];
+    const uint blocks=live_sort_blocks(status);
+    uint carry=0;
+    for(uint block=0;block<blocks;block+=256u) {
+        const uint i=block+lane;
+        const uint value=i<blocks?histogram[digit*blocks+i]:0u;
+        uint prefix=simd_prefix_exclusive_sum(value);
+        const uint total=simd_sum(value);
+        if((lane&31u)==0)sums[sg]=total;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for(uint j=0;j<sg;++j)prefix+=sums[j];
+        if(i<blocks)offsets[digit*blocks+i]=carry+prefix;
+        for(uint j=0;j<8u;++j)carry+=sums[j];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if(!lane)totals[digit]=carry;
+}
+kernel void digit_offsets(device uint* totals [[buffer(0)]],
+                          uint lane [[thread_index_in_threadgroup]],
+                          uint sg [[simdgroup_index_in_threadgroup]]) {
+    threadgroup uint sums[8];
+    const uint value=totals[lane];
+    uint prefix=simd_prefix_exclusive_sum(value);
+    const uint total=simd_sum(value);
+    if((lane&31u)==0)sums[sg]=total;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for(uint j=0;j<sg;++j)prefix+=sums[j];
+    totals[lane]=prefix;
+    if(lane==255u)totals[256]=prefix+value;
+}
 kernel void tile_scatter(device const ulong* keys_in [[buffer(0)]],
                          device const uint* values_in [[buffer(1)]],
                          device ulong* keys_out [[buffer(2)]],
@@ -282,6 +362,7 @@ kernel void tile_scatter(device const ulong* keys_in [[buffer(0)]],
                          device const uint* histogram [[buffer(4)]],
                          device const RasterStatus& status [[buffer(5)]],
                          constant SortParameters& p [[buffer(6)]],
+                         device const uint* digit_offsets [[buffer(7)]],
                          uint group [[threadgroup_position_in_grid]],
                          uint lane [[thread_index_in_threadgroup]],
                          uint sl [[thread_index_in_simdgroup]],
@@ -294,9 +375,9 @@ kernel void tile_scatter(device const ulong* keys_in [[buffer(0)]],
     // avoiding every per-chunk shared-memory barrier and ballot transpose.
     const uint homogeneous_digit = uint((radix_key(keys_in, base) >> p.shift) & 255ul);
     const uint histogram_index = homogeneous_digit * live_sort_blocks(status) + group;
-    const uint block_destination = histogram[histogram_index];
-    const uint next_destination = histogram_index + 1u < 256u * live_sort_blocks(status)
-        ? histogram[histogram_index + 1u] : uint(n);
+    const uint block_destination = histogram[histogram_index] + digit_offsets[homogeneous_digit];
+    const uint next_destination = group + 1u < live_sort_blocks(status)
+        ? histogram[histogram_index + 1u] + digit_offsets[homogeneous_digit] : digit_offsets[homogeneous_digit + 1u];
     const uint block_count = uint(min(2048ul, n - base));
     if (next_destination - block_destination == block_count) {
         for (uint offset = lane; offset < block_count; offset += 256u) {
@@ -312,7 +393,7 @@ kernel void tile_scatter(device const ulong* keys_in [[buffer(0)]],
     }
     threadgroup uint digit_base[256];
     threadgroup uint offsets[8 * 256];
-    digit_base[lane] = histogram[lane * live_sort_blocks(status) + group];
+    digit_base[lane] = histogram[lane * live_sort_blocks(status) + group] + digit_offsets[lane];
     const uint below = (1u << sl) - 1;
     for (ulong chunk = base; chunk < min(base + 2048, n); chunk += 256) {
         for (uint s = 0; s < 8; ++s) offsets[s * 256 + lane] = 0;
@@ -370,12 +451,13 @@ kernel void tile_ranges(device const ulong* keys [[buffer(0)]],
 kernel void tile_depth_batches(device const uint* ranges [[buffer(0)]],
                                device uint2* jobs [[buffer(1)]],
                                constant RasterParameters& p [[buffer(2)]],
+                               device const RasterStatus& status [[buffer(3)]],
                                uint tile [[thread_position_in_grid]]) {
     if (tile >= p.tiles)
         return;
     const uint begin = ranges[tile * 2u], end = ranges[tile * 2u + 1u];
     const uint base = begin / kDepthChunkSize + tile;
-    const uint chunks = end - begin > kDepthSplitThreshold ? (end - begin) / kDepthChunkSize + uint((end - begin) % kDepthChunkSize != 0u) : uint(end > begin);
+    const uint chunks = end - begin > depth_split_threshold(status,p) ? (end - begin) / kDepthChunkSize + uint((end - begin) % kDepthChunkSize != 0u) : uint(end > begin);
     for (uint chunk = 0u; chunk < chunks; ++chunk)
         jobs[base + chunk] = uint2(tile, begin + chunk * kDepthChunkSize);
 }
@@ -418,7 +500,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     if(depth_dispatch && depth_jobs[job_slot].x==0xffffffffu)return;
     const uint tile=depth_dispatch?depth_jobs[job_slot].x:job_slot, subtile=group%subtiles;
     const uint slot=prefix?ranges[tile*2u]/kDepthChunkSize+tile:job_slot;
-    const bool depth_batch=(kRasterFlags&512u)!=0u && ranges[tile*2u+1u]-ranges[tile*2u]>kDepthSplitThreshold;
+    const bool depth_batch=(kRasterFlags&512u)!=0u && ranges[tile*2u+1u]-ranges[tile*2u]>depth_split_threshold(status,p);
     if(depth_dispatch && (!depth_batch || depth_jobs[slot].y==ranges[tile*2u]))return;
     threadgroup float4 means[64], conics[64], colors[64];
     threadgroup GutSplat geometry[64];
@@ -824,7 +906,7 @@ kernel void tile_depth_compose(device const ProjectedSplat* splats [[buffer(0)]]
     const bool valid = pixel.x < p.width && pixel.y < p.height;
     const uint begin = status.error ? 0u : ranges[tile * 2u], end = status.error ? 0u : ranges[tile * 2u + 1u];
     // The prefix pass wrote short, empty and overflow tiles directly.
-    if (end - begin <= kDepthSplitThreshold)
+    if (end - begin <= depth_split_threshold(status,p))
         return;
     threadgroup float4 replay_means[64], replay_conics[64], replay_colors[64];
     threadgroup uint replay_ids[64];
