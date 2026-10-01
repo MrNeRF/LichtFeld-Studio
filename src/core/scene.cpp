@@ -11,6 +11,7 @@
 #include "core/memory_pressure.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor/internal/cuda_event_pool.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
@@ -1052,6 +1053,7 @@ namespace lfs::core {
             order_input(model.means_raw());
             order_input(model.sh0_raw());
             order_input(model.shN_raw());
+            order_input(model.shN_value_bounds());
             order_input(model.scaling_raw());
             order_input(model.rotation_raw());
             order_input(model.opacity_raw());
@@ -1087,8 +1089,69 @@ namespace lfs::core {
             TensorShape({total, static_cast<size_t>(SH0_COEFFS), 3}),
             total,
             "SplatData.sh0");
+        // Encode the aggregate in bounded bands. A full float aggregate plus
+        // a canonical copy of each q16 source can exceed the models' own storage
+        // several times over, even though the final renderer buffer would fit.
+        // Keep the original path until both required workspaces fit within
+        // its full float aggregate. Float-only inputs need no decode workspace.
+        constexpr size_t band_size = 65536;
+        uint32_t decode_rest = 0;
+        for (const auto* input : selected_inputs)
+            if (input->model->shN_value_quantized())
+                decode_rest = std::max(decode_rest, static_cast<uint32_t>(input->model->max_sh_coeffs_rest()));
+        const size_t band_floats = sh_swizzled_float_count(std::min(total, band_size), dst_layout_rest);
+        const size_t decode_floats = decode_rest ? sh_swizzled_float_count(std::min(total, band_size), decode_rest) : 0;
+        const bool banded_q16 = band_floats + decode_floats < shN_swizzled_floats && allocator && sh_value_quant::enabled() && dst_layout_rest > 0 &&
+                                std::all_of(selected_inputs.begin(), selected_inputs.end(), [](const auto* input) {
+                                    const auto& model = *input->model;
+                                    return !model.shN_raw().is_valid() || model.shN_raw().numel() == 0 ||
+                                           model.shN_raw().dtype() == DataType::Float32 || model.shN_value_quantized();
+                                });
+        Tensor shN_bounds;
         Tensor shN;
-        if (shN_swizzled_floats > 0) {
+        if (banded_q16) {
+            const size_t cells = sh_value_quant::sh_value_u16_count(total, dst_layout_rest);
+            const size_t bounds = sh_value_quant::n_bounds_for_prims(total) * 2;
+            shN = allocator(TensorShape({cells}), cells, DataType::Float16, "SplatData.shN");
+            shN_bounds = allocator(TensorShape({bounds}), bounds, DataType::Float32, "SplatData.shN_value_bounds");
+            auto band = Tensor::empty_exact({band_floats});
+            auto decoded = decode_floats ? Tensor::empty_exact({decode_floats}) : Tensor{};
+            for (size_t begin = 0; begin < total; begin += band_size) {
+                const size_t count = std::min(band_size, total - begin);
+                if (const auto status = cudaMemsetAsync(band.data_ptr(), 0, band_floats * sizeof(float), build_stream); status != cudaSuccess)
+                    throw std::runtime_error(cudaGetErrorString(status));
+                size_t source_begin = 0;
+                for (const auto* input : selected_inputs) {
+                    const auto& model = *input->model;
+                    const size_t source_end = source_begin + model.size();
+                    const size_t overlap_begin = std::max(begin, source_begin);
+                    const size_t overlap_end = std::min(begin + count, source_end);
+                    const auto rest = static_cast<uint32_t>(model.max_sh_coeffs_rest());
+                    if (overlap_begin < overlap_end && rest > 0 && model.shN_raw().is_valid() && model.shN_raw().numel() > 0) {
+                        const size_t n = overlap_end - overlap_begin;
+                        if (model.shN_value_quantized()) {
+                            sh_value_quant::decode_shN_u16_range_to_float4(
+                                reinterpret_cast<const uint16_t*>(model.shN_raw().data_ptr()),
+                                model.shN_value_bounds().ptr<float>(), decoded.ptr<float>(),
+                                overlap_begin - source_begin, n, model.size(), rest, build_stream, true);
+                            shN_swizzled_copy_contiguous(decoded.ptr<float>(), band.ptr<float>(), n,
+                                                         overlap_begin - begin, rest, dst_layout_rest, build_stream);
+                        } else {
+                            shN_swizzled_copy_range(model.shN_raw().ptr<float>(), band.ptr<float>(),
+                                                    overlap_begin - source_begin, n, overlap_begin - begin,
+                                                    rest, dst_layout_rest, build_stream);
+                        }
+                    }
+                    source_begin = source_end;
+                }
+                sh_value_quant::encode_shN_float4_to_u16(
+                    band.ptr<float>(), reinterpret_cast<uint16_t*>(shN.data_ptr()) + sh_value_quant::sh_value_u16_count(begin, dst_layout_rest),
+                    shN_bounds.ptr<float>() + sh_value_quant::n_bounds_for_prims(begin) * 2,
+                    count, dst_layout_rest, build_stream);
+            }
+            if (const auto status = cudaStreamSynchronize(build_stream); status != cudaSuccess)
+                throw std::runtime_error(cudaGetErrorString(status));
+        } else if (shN_swizzled_floats > 0) {
             const bool q16_float_workspace =
                 static_cast<bool>(allocator) && sh_value_quant::enabled();
             if (allocator && !q16_float_workspace) {
@@ -1134,7 +1197,7 @@ namespace lfs::core {
             sh0.slice(0, offset, offset + size).copy_from(model.sh0_raw());
             opacity.slice(0, offset, offset + size).copy_from(model.opacity_raw());
 
-            if (stats.max_sh_degree > 0 && model.shN_raw().is_valid() &&
+            if (!banded_q16 && stats.max_sh_degree > 0 && model.shN_raw().is_valid() &&
                 model.shN_raw().numel() > 0) {
                 const auto model_layout_rest =
                     static_cast<std::uint32_t>(model.max_sh_coeffs_rest());
@@ -1205,8 +1268,13 @@ namespace lfs::core {
             std::move(opacity),
             stats.total_scene_scale / selected_inputs.size(),
             SplatData::ShNLayout::Swizzled);
-        result.model->set_active_sh_degree(stats.max_active_sh_degree);
-        commit_combined_model_q16(*result.model, allocator);
+        if (banded_q16) {
+            result.model->set_active_sh_degree(stats.max_active_sh_degree, std::move(shN_bounds));
+            result.model->set_tensor_allocator(allocator);
+        } else {
+            result.model->set_active_sh_degree(stats.max_active_sh_degree);
+            commit_combined_model_q16(*result.model, allocator);
+        }
         if (has_any_deleted) {
             result.model->deleted() = std::move(deleted);
         }

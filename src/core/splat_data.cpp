@@ -678,6 +678,15 @@ namespace {
         return out;
     }
 
+    // Match the production host decode explicitly on every compiler: round the
+    // subtraction and normalization, then fuse the final multiply-add.
+    [[nodiscard]] float decode_q16_host(const uint16_t q, const float lo, const float hi) {
+        constexpr float inv_q = 1.0f / 65535.0f;
+        const volatile float range = hi - lo;
+        const volatile float normalized = static_cast<float>(q) * inv_q;
+        return std::fma(static_cast<float>(range), static_cast<float>(normalized), lo);
+    }
+
     // Host q16 dequant into canonical [N, K, 3]. Math matches the previous
     // single-threaded loop in shN_canonical() (lo/hi/kInvQ + cell-linear index).
     [[nodiscard]] lfs::core::Tensor dequant_q16_to_canonical_cpu(
@@ -691,7 +700,6 @@ namespace {
         auto* const dst = out.ptr<float>();
         const std::uint32_t n_cells =
             sh_value_quant::n_value_cells_per_prim(static_cast<std::uint32_t>(k));
-        constexpr float kInvQ = 1.0f / 65535.0f;
         tbb::parallel_for(
             tbb::blocked_range<size_t>(0, n),
             [&](const tbb::blocked_range<size_t>& range) {
@@ -707,7 +715,7 @@ namespace {
                         const size_t idx = static_cast<size_t>(block) * n_cells * kShReorderSize +
                                            static_cast<size_t>(c) * kShReorderSize + lane;
                         const auto q = codes[idx];
-                        row[c] = lo + (hi - lo) * (static_cast<float>(q) * kInvQ);
+                        row[c] = decode_q16_host(q, lo, hi);
                     }
                 }
             });
@@ -1490,7 +1498,6 @@ namespace lfs::core {
                 const float* const bounds = bounds_cpu.ptr<float>();
                 const std::uint32_t n_cells =
                     sh_value_quant::n_value_cells_per_prim(static_cast<std::uint32_t>(k));
-                constexpr float kInvQ = 1.0f / 65535.0f;
                 tbb::parallel_for(
                     tbb::blocked_range<size_t>(0, n),
                     [&](const tbb::blocked_range<size_t>& range) {
@@ -1507,7 +1514,7 @@ namespace lfs::core {
                                 const size_t idx = static_cast<size_t>(block) * n_cells * kShReorderSize +
                                                    static_cast<size_t>(c) * kShReorderSize + lane;
                                 row[(c % SH_CHANNELS) * k + c / SH_CHANNELS] =
-                                    lo + (hi - lo) * (static_cast<float>(codes[idx]) * kInvQ);
+                                    decode_q16_host(codes[idx], lo, hi);
                             }
                         }
                     });
