@@ -480,6 +480,7 @@ body {
     padding: 0 0 0 8dp;
     position: relative;
     top: 0;
+    transform: none;
 }
 
 #depth-view-block .viewport-depth-mode-select selectvalue {
@@ -493,6 +494,7 @@ body {
     line-height: 22dp;
     position: relative;
     top: 0;
+    transform: none;
 }
 
 #depth-view-block .viewport-depth-mode-select selectarrow {
