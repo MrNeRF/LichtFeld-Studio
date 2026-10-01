@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "python/python_compat.hpp"
+#include "visualizer/rendering/passes/vulkan_split_view_pass.hpp"
+#include "visualizer/rendering/rendering_manager.hpp"
 #include <gtest/gtest.h>
 
 #include <torch/torch.h>
@@ -928,6 +930,38 @@ result_values = [float(top), float(bottom)]
     EXPECT_EQ(result.shape[0], 2);
     ASSERT_EQ(result.values.size(), static_cast<size_t>(2));
     EXPECT_GT(result.values[0], result.values[1]);
+}
+
+TEST_F(PythonIntegrationTest, CaptureSplitComparisonPreservesPresentedOrientation) {
+    for (const bool flip_y : {false, true}) {
+        const ScopedCaptureViewportRenderCallback callback([flip_y]() -> std::optional<lfs::vis::ViewportRender> {
+            constexpr size_t width = 64;
+            constexpr size_t height = 8;
+            std::vector<float> pixels(3 * width * height, 0.0f);
+            for (size_t x = 0; x < width; ++x) {
+                pixels[(flip_y ? height - 1 : 0) * width + x] = 1.0f;
+            }
+            const auto image = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::from_vector(
+                pixels, {3, height, width}, lfs::core::Device::CPU));
+            lfs::vis::VulkanSplitViewParams params;
+            params.left.image = params.right.image = image;
+            params.left.flip_y = params.right.flip_y = flip_y;
+            params.content_rect = {0, 0, width, height};
+            return lfs::vis::ViewportRender{
+                lfs::vis::RenderingManager::composeSplitViewCpu(params, {width, height}), nullptr};
+        });
+        const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+image = lf.capture_viewport().image.cpu().tolist()
+result_shape = (4,)
+result_values = [image[0][0][0], image[-1][0][0], image[0][-1][0], image[-1][-1][0]]
+)PY");
+        ASSERT_EQ(result.values.size(), 4u);
+        EXPECT_FLOAT_EQ(result.values[0], 1.0f);
+        EXPECT_FLOAT_EQ(result.values[1], 0.0f);
+        EXPECT_FLOAT_EQ(result.values[2], 1.0f);
+        EXPECT_FLOAT_EQ(result.values[3], 0.0f);
+    }
 }
 
 TEST_F(PythonIntegrationTest, CaptureViewportPostsToViewerThreadWhenOffThread) {
