@@ -51,14 +51,14 @@ static void wait(id<MTLCommandBuffer> command) {
     require(command.status == MTLCommandBufferStatusCompleted, command.error.localizedDescription.UTF8String ?: "GPU command failed");
 }
 static void compare(const Readback& r, const std::vector<ProjectedSplat>& splats, uint32_t w, uint32_t h,
-                    simd_float4 bg, RasterMode mode) {
+                    simd_float4 bg, RasterMode mode, bool expected_depth = false, float far = 100.f) {
     std::vector<uint32_t> sorted(splats.size());
     for (uint32_t i = 0; i < sorted.size(); ++i)
         sorted[i] = i;
     std::stable_sort(sorted.begin(), sorted.end(), [&](auto a, auto b) { return splats[a].color.w < splats[b].color.w; });
     for (uint32_t y = 0; y < h; ++y)
         for (uint32_t x = 0; x < w; ++x) {
-            double rgb[3] = {}, trans = 1, z = 0, near = 0, median = 1e10;
+            double rgb[3] = {}, trans = 1, z = 0, valid_weight = 0, near = 0, median = 1e10;
             uint32_t picked = UINT32_MAX;
             for (auto id : sorted) {
                 const auto& s = splats[id];
@@ -81,7 +81,10 @@ static void compare(const Readback& r, const std::vector<ProjectedSplat>& splats
                 }
                 for (int c = 0; c < 3; ++c)
                     rgb[c] += s.color[c] * a * trans;
-                z += s.mean_depth.z * a * trans;
+                if (!expected_depth || s.mean_depth.z <= far) {
+                    z += s.mean_depth.z * a * trans;
+                    valid_weight += a * trans;
+                }
                 const double next = trans * (1 - a);
                 if (trans > .5 && next <= .5)
                     median = s.mean_depth.z;
@@ -97,11 +100,59 @@ static void compare(const Readback& r, const std::vector<ProjectedSplat>& splats
             require(std::abs(float(rgba[3]) - (1 - trans + bg.w * trans)) < .001, "Alpha mismatch");
             require(std::abs(depth[0] - z) < .001, "Weighted depth mismatch");
             require(std::abs(depth[1] - (1 - trans)) < 2e-5, "Depth alpha mismatch");
-            require(std::abs(depth[2] - near) < 1e-5, "First contributor depth mismatch");
+            require(std::abs(depth[2] - (expected_depth ? valid_weight : near)) < 1e-5, "First contributor/valid-weight depth mismatch");
             require(std::abs(depth[3] - median) < 1e-5, "Median depth mismatch");
             require(*pick == picked, "Pick source ID mismatch");
         }
 }
+// Long lists with sparse contributors put the first pick, median and
+// saturation in different depth chunks. Compare every output channel to the
+// independent double-precision source-order oracle, including partial tiles.
+static void compare_depth_chunks(id<MTLDevice> device) {
+    constexpr uint32_t n = 32769, w = 19, h = 17;
+    std::vector<ProjectedSplat> splats(n);
+    auto input = [device newBufferWithLength:n * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    auto queue = [device newCommandQueue];
+    TileRasterizer raster(device);
+    RasterFrame frame(device, w, h, n, n * 4);
+    const simd_float4 bg{.1f, .2f, .3f, 1};
+    for (uint32_t scenario = 0; scenario < 4; ++scenario) {
+        const uint32_t first = scenario == 0 ? 0 : 1088;
+        const uint32_t stride = scenario == 0 ? 1 : scenario == 1 ? 97
+                                                                  : 31;
+        const float opacity = scenario == 1 ? .02f : .25f;
+        for (uint32_t i = 0; i < n; ++i) {
+            const bool visible = i >= first && (i - first) % stride == 0;
+            splats[i] = {{visible ? 9.f : 1000.f, 8, .5f + float(i) * .0001f, 20},
+                         {.02f, .004f, .03f, opacity},
+                         {float(i % 7) / 7, float(i % 11) / 11, float(i % 13) / 13, float(i / 4 + 1)},
+                         {0, 0, w, h}};
+        }
+        std::memcpy(input.contents, splats.data(), splats.size() * sizeof(ProjectedSplat));
+        // Reusing scratch must not expose partials from a previous dense frame.
+        for (uint32_t count : {n, 0u, 1u, n, n}) {
+            auto command = [queue commandBuffer];
+            Projection projection{};
+            const bool expected_depth = scenario == 3;
+            projection.rasterization = {1, expected_depth ? 1.f : 0.f, 1.5f, 0};
+            raster.encode(command, {input}, count, RasterMode::Gaussian, bg, frame, {}, {}, projection);
+            const auto actual = readback(device, command, frame);
+            wait(command);
+            require(frame.status().error == RasterError::None && frame.status().required_instances == uint64_t(count) * 4,
+                    "Depth chunk fixture has unexpected tile membership");
+            compare(actual, std::vector<ProjectedSplat>(splats.begin(), splats.begin() + count), w, h, bg, RasterMode::Gaussian, expected_depth, 1.5f);
+        }
+    }
+    RasterFrame overflow(device, w, h, n, n * 2);
+    auto command = [queue commandBuffer];
+    raster.encode(command, {input}, n, RasterMode::Gaussian, bg, overflow);
+    const auto empty = readback(device, command, overflow);
+    wait(command);
+    require(overflow.status().error == RasterError::InstanceCapacityExceeded,
+            "Depth chunk admission ignored instance overflow");
+    compare(empty, {}, w, h, bg, RasterMode::Gaussian);
+}
+
 // A fresh reservation uses the established two-SIMD GUT kernel. Reused
 // dense reservations can choose SIMD32 without changing a single output bit.
 static void compare_dense_gut_subtiles(id<MTLDevice> device) {
@@ -779,6 +830,7 @@ int main() {
             run(device);
             compare_gut_culling(device);
             compare_dense_gut_subtiles(device);
+            compare_depth_chunks(device);
             compare_unaligned_macro_crop(device);
             compare_weak_transparent_layers(device);
             compare_half_ring_threshold(device);

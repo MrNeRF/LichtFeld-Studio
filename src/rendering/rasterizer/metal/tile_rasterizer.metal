@@ -20,6 +20,11 @@ struct RasterParameters {
     uint4 mask_limits;
 };
 struct RasterStatus { ulong required; uint error, blend_threads; };
+// Keep in sync with the host reservation in tile_rasterizer.mm. A multiple
+// of 64 preserves cooperative load boundaries; 576 fits summaries into the
+// retired sort buffers without an extra per-frame GPU allocation.
+constant uint kDepthChunkSize=576u;
+constant uint kDepthSplitThreshold=16384u;
 uint4 clipped_bounds(ProjectedSplat s, constant RasterParameters& p) {
     if (!all(isfinite(s.mean_depth)) || s.mean_depth.z <= 0 ||
         !all(isfinite(s.conic_opacity)) || !all(isfinite(s.color))) return uint4(0);
@@ -152,6 +157,8 @@ kernel void tile_status(device const ulong* counts [[buffer(0)]],
     status.error = status.required > p.capacity ? 1 : 0;
     status.blend_threads = (p.unused & 128u) ? 32u : 64u;
     write_sort_dispatch(status, dispatch_args);
+    dispatch_args[18]=(uint(((status.error?0ul:status.required)+ulong(kDepthChunkSize-1u))/ulong(kDepthChunkSize))+p.tiles)*8u;
+    dispatch_args[19]=1u;dispatch_args[20]=1u;
 }
 // Sort the exact existing radial-distance key before duplicating a source into
 // tiles. Stable tile-only sorting then preserves its full depth and tie order.
@@ -202,6 +209,29 @@ kernel void tile_instances(device const ProjectedSplat* splats [[buffer(0)]],
 // Stable LSD radix sort adapted from training/kernels/metal/fast_raster.metal.
 // Full float32 positive depth is retained; equal depths preserve source order.
 struct SortParameters { uint blocks, shift; };
+// A positive conic reaches its minimum over a rectangle at its center or
+// at the constrained minimum of one of its four edges. Subtract a roundoff
+// bound before using that minimum to reject an entire pixel group.
+float conic_lower_power(float2 d, float3 c) {
+    const float3 terms = float3(c.x * d.x * d.x, 2.f * c.y * d.x * d.y, c.z * d.y * d.y);
+    return .5f * (terms.x + terms.y + terms.z) - 1e-4f * (1.f + dot(abs(terms), float3(1)));
+}
+bool conic_intersects_pixels(ProjectedSplat s, uint2 origin, uint2 maximum) {
+    const float3 c = s.conic_opacity.xyz;
+    if (c.x <= 0.f || c.z <= 0.f || c.x * c.z <= c.y * c.y)
+        return true;
+    const float2 lo = float2(origin) - s.mean_depth.xy;
+    const float2 hi = float2(maximum) - s.mean_depth.xy;
+    if (all(lo <= 0.f) && all(hi >= 0.f))
+        return true;
+    const float2 y = clamp(-c.y * float2(lo.x, hi.x) / c.z, lo.y, hi.y);
+    const float2 x = clamp(-c.y * float2(lo.y, hi.y) / c.x, lo.x, hi.x);
+    const float lower = min(min(conic_lower_power(float2(lo.x, y.x), c), conic_lower_power(float2(hi.x, y.y), c)),
+                            min(conic_lower_power(float2(x.x, lo.y), c), conic_lower_power(float2(x.y, hi.y), c)));
+    const float support = max(4.f, log(max(s.conic_opacity.w, .5f / 255.f) * 510.f)) + 1e-4f;
+    return !isfinite(lower) || lower <= support;
+}
+
 constant bool kSourceKey32 [[function_constant(2)]];
 ulong radix_key(device const ulong* keys, ulong index) {
     return kSourceKey32 ? ulong(reinterpret_cast<device const uint*>(keys)[index]) : keys[index];
@@ -253,6 +283,27 @@ kernel void tile_scatter(device const ulong* keys_in [[buffer(0)]],
     const ulong n = status.error ? 0 : status.required;
     const ulong base = ulong(group) * 2048;
     if (base >= n) return; // Uniform for the entire group.
+    // The exclusive histogram proves whether the entire block has one digit.
+    // Such a block is already stable: copy directly to its global prefix,
+    // avoiding every per-chunk shared-memory barrier and ballot transpose.
+    const uint homogeneous_digit = uint((radix_key(keys_in, base) >> p.shift) & 255ul);
+    const uint histogram_index = homogeneous_digit * live_sort_blocks(status) + group;
+    const uint block_destination = histogram[histogram_index];
+    const uint next_destination = histogram_index + 1u < 256u * live_sort_blocks(status)
+        ? histogram[histogram_index + 1u] : uint(n);
+    const uint block_count = uint(min(2048ul, n - base));
+    if (next_destination - block_destination == block_count) {
+        for (uint offset = lane; offset < block_count; offset += 256u) {
+            const ulong source = base + offset;
+            const uint destination = block_destination + offset;
+            if (kSourceKey32)
+                reinterpret_cast<device uint*>(keys_out)[destination] = uint(radix_key(keys_in, source));
+            else
+                keys_out[destination] = keys_in[source];
+            values_out[destination] = values_in[source];
+        }
+        return;
+    }
     threadgroup uint digit_base[256];
     threadgroup uint offsets[8 * 256];
     digit_base[lane] = histogram[lane * live_sort_blocks(status) + group];
@@ -310,6 +361,18 @@ kernel void tile_ranges(device const ulong* keys [[buffer(0)]],
 }
 
 // Specialize the blend body to retain only the active renderer features.
+kernel void tile_depth_batches(device const uint* ranges [[buffer(0)]],
+                               device uint2* jobs [[buffer(1)]],
+                               constant RasterParameters& p [[buffer(2)]],
+                               uint tile [[thread_position_in_grid]]) {
+    if (tile >= p.tiles)
+        return;
+    const uint begin = ranges[tile * 2u], end = ranges[tile * 2u + 1u];
+    const uint base = begin / kDepthChunkSize + tile;
+    const uint chunks = end - begin > kDepthSplitThreshold ? (end - begin) / kDepthChunkSize + uint((end - begin) % kDepthChunkSize != 0u) : uint(end > begin);
+    for (uint chunk = 0u; chunk < chunks; ++chunk)
+        jobs[base + chunk] = uint2(tile, begin + chunk * kDepthChunkSize);
+}
 constant uint kRasterMode [[function_constant(0)]];
 constant uint kRasterFlags [[function_constant(1)]];
 kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
@@ -325,6 +388,10 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                        device const GutSplat* gut [[buffer(10)]],
                        device const uint* logical_ids [[buffer(11)]],
                        constant uint& logical_count [[buffer(12)]],
+                       device const uint2* depth_jobs [[buffer(13)]],
+                       device float4* partial_color [[buffer(14)]],
+                       device float4* partial_depth [[buffer(15)]],
+                       device uint* partial_pick [[buffer(16)]],
                        texture2d<float, access::write> color [[texture(0)]],
                        texture2d<float, access::write> depth [[texture(1)]],
                        texture2d<uint, access::write> pick [[texture(2)]],
@@ -339,7 +406,14 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     // half composition and the GUT saturation/depth convention.
     const bool single_simd=(kRasterFlags&128u)!=0;
     const uint subtiles=single_simd?8u:4u, pixel_height=single_simd?4u:8u;
-    const uint tile=group/subtiles, subtile=group%subtiles;
+    const bool prefix=(kRasterFlags&1024u)!=0u;
+    const bool depth_dispatch=(kRasterFlags&512u)!=0u && !prefix;
+    const uint job_slot=group/subtiles;
+    if(depth_dispatch && depth_jobs[job_slot].x==0xffffffffu)return;
+    const uint tile=depth_dispatch?depth_jobs[job_slot].x:job_slot, subtile=group%subtiles;
+    const uint slot=prefix?ranges[tile*2u]/kDepthChunkSize+tile:job_slot;
+    const bool depth_batch=(kRasterFlags&512u)!=0u && ranges[tile*2u+1u]-ranges[tile*2u]>kDepthSplitThreshold;
+    if(depth_dispatch && (!depth_batch || depth_jobs[slot].y==ranges[tile*2u]))return;
     threadgroup float4 means[64], conics[64], colors[64];
     threadgroup GutSplat geometry[64];
     threadgroup half4 macro_chol[64];
@@ -358,8 +432,9 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     const float2 ray_min=(float2(tile_origin)+.5f-p.intrinsics.zw)/p.intrinsics.xy;
     const float2 ray_max=(float2(tile_origin)+float2(7.5f,float(pixel_height)-.5f)-p.intrinsics.zw)/p.intrinsics.xy;
     const float4 plane_lengths=p.camera.z==1u?float4(1):sqrt(1.f+float4(ray_min,ray_max)*float4(ray_min,ray_max));
-    const bool batch_half=(kRasterMode==0u && (kRasterFlags&(4u|64u))) ||
-        (kRasterMode!=3u && !(kRasterFlags&16u) && (kRasterFlags&1u) && overlay_enabled(overlay_params[22].y));
+    const bool separate_median=(kRasterFlags&(4u|2048u))==(4u|2048u);
+    const bool batch_half=(!(kRasterFlags&2048u) || separate_median) && ((kRasterMode==0u && (kRasterFlags&(4u|64u))) ||
+        (kRasterMode!=3u && !(kRasterFlags&16u) && (kRasterFlags&1u) && overlay_enabled(overlay_params[22].y)));
     const float2 first_macro=floor((float2(tile_origin)+p.render_origin.xy)/overlay_macro_extent);
     const bool uniform_macro=all(first_macro==floor((float2(tile_origin)+7.f+p.render_origin.xy)/overlay_macro_extent));
     const float2 batch_macro_origin=first_macro*overlay_macro_extent;
@@ -369,6 +444,18 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     const half2 pixel_macro_coord=half2((float2(pixel)+p.render_origin.xy-pixel_macro_origin)/overlay_tile_extent);
     const bool valid = pixel.x < p.width && pixel.y < p.height;
     bool done = !valid;
+    float local_cutoff=1e-4f;
+    if(depth_dispatch) {
+        const uint first=ranges[tile*2u]/kDepthChunkSize+tile;
+        const float prefix_transmittance=valid?partial_color[first*256u+subtile*32u+lane].w:0.f;
+        done=done || prefix_transmittance<1e-4f;
+        // Subsequent chunks can only lower incoming T. A conservative bound
+        // from the prefix avoids resolving contributions guaranteed to lie
+        // behind the final saturation point. Compose replays that one chunk.
+        local_cutoff=1e-4f*.99999f/max(prefix_transmittance,1e-4f);
+        if(simd_all(done))return;
+    }
+    float median_transmittance = 1;
     float transmittance = 1, weighted_depth = 0, nearest = 0, median = 1e10f;
     float valid_depth_weight=0;
     float3 rgb = 0;
@@ -378,8 +465,8 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     float3 composed_rgb=0;
     float composed_transmittance=1;
     uint picked = 0xffffffff;
-    const uint begin = status.error ? 0 : ranges[2 * tile];
-    const uint end = status.error ? 0 : ranges[2 * tile + 1];
+    const uint begin = status.error ? 0 : depth_batch && !prefix?depth_jobs[slot].y:ranges[2 * tile];
+    const uint end = status.error ? 0 : depth_batch?begin+min(kDepthChunkSize,ranges[2*tile+1]-begin):ranges[2*tile+1];
     // A camera ray is invariant across every Gaussian and tile batch. Compute
     // spherical trigonometry once per live pixel, never inside the hot loop.
     float3 gut_origin=0,gut_direction=float3(0,0,1);
@@ -404,6 +491,11 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             threadgroup_barrier(mem_flags::mem_threadgroup);
             if(finished[0] && finished[1])break;
         }
+        uint2 live_min=tile_origin,live_max=tile_origin+uint2(7,pixel_height-1u);
+        if(single_simd && compact_gs && simd_any(done)) {
+            live_min=simd_min(done?uint2(0xffffffffu):pixel);
+            live_max=simd_max(done?uint2(0):pixel);
+        }
         const uint source_count=uint(min(ulong(64),ulong(end)-batch));
         uint count=single_simd && compact_candidates?0u:source_count;
         const uint loaders=single_simd?32u:64u;
@@ -421,8 +513,10 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
         if (compact_candidates) {
             // Integer support with a one-pixel margin includes rounding of the
             // full-float projection and the optional half portal footprint.
-            const int2 minimum=int2(tile_origin)-1, maximum=int2(tile_origin)+int2(9,int(pixel_height)+1);
+            const int2 minimum=int2(live_min)-1, maximum=int2(live_max)+2;
             if(compact_gs)active=active && all(int2(splat.bounds.xy)<maximum) && all(int2(splat.bounds.zw)>minimum);
+            if(compact_gs && active && !(kRasterFlags&(4u|64u)))
+                active=conic_intersects_pixels(splat,live_min,live_max);
             if(compact_gut && active && g.inverse0.w>0.f) {
                 // Reject only if the complete alpha-support sphere is outside
                 // one of the four pixel-ray frustum planes. Unlike a projected
@@ -498,7 +592,29 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             if((kRasterFlags&8u) && logical>=logical_count)continue;
             const float2 d = float2(pixel) - means[j].xy;
             const float4 c = conics[j];
-            const bool half_footprint=(kRasterMode==0u && (kRasterFlags&(4u|64u))) || (kRasterMode!=3u && !(kRasterFlags&16u) && (kRasterFlags&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u));
+            if (separate_median && median_transmittance > .5f) {
+                // Portal coverage keeps its display footprint, while the
+                // median uses full-precision alpha independently of it.
+                const float power=.5f*(c.x*d.x*d.x+c.z*d.y*d.y)+c.y*d.x*d.y;
+                const float edge=.01831563888873418f;
+                const float value=power<0.f || power>4.f?0.f:exp(-power);
+                float exact_alpha=min(c.w*max(0.f,(value-edge)/(1.f-edge)),.999f);
+                if(c.w<=1.f/255.f || exact_alpha<1.f/255.f)exact_alpha=0.f;
+                if((kRasterFlags&1u) && exact_alpha>0.f) {
+                    const uint flags=overlay_flags[ids[j]];
+                    if(overlay_enabled(overlay_params[22].x)) {
+                        const float gaussian=exp(-power),boundary=(.5f/255.f)/max(c.w,1e-8f);
+                        const float width=overlay_params[21].w*10.f;
+                        if(gaussian<boundary*(1+width) && gaussian>boundary*(1-width))exact_alpha=.8f;
+                    }
+                    if(overlay_enabled(overlay_params[22].y) && !(flags&2u))
+                        exact_alpha=dot(d,d)<=6.25f?1.f:0.f;
+                }
+                const float remaining=median_transmittance*(1.f-exact_alpha);
+                if(remaining<=.5f)median=means[j].z;
+                median_transmittance=remaining;
+            }
+            const bool half_footprint=(!(kRasterFlags&2048u) || separate_median) && ((kRasterMode==0u && (kRasterFlags&(4u|64u))) || (kRasterMode!=3u && !(kRasterFlags&16u) && (kRasterFlags&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u)));
             // The HiGS profile evaluates the half Cholesky footprint below.
             // Its reference does not evaluate a second full-float conic first.
             const float q = half_footprint ? 0.f : c.x*d.x*d.x + 2*c.y*d.x*d.y + c.z*d.y*d.y;
@@ -579,7 +695,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 const float2 macro_origin=floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
                 // Vulkan's 3DGUT shared-struct path retains full float centers;
                 // only the 3DGS macro-relative path compresses them to half.
-                const float2 overlay_center=(kRasterMode==3u || (kRasterFlags&16u))?means[j].xy:
+                const float2 overlay_center=(kRasterMode==3u || (kRasterFlags&(16u|2048u)))?means[j].xy:
                     float2(half2((means[j].xy+p.render_origin.xy-macro_origin)/overlay_tile_extent))*overlay_tile_extent+macro_origin-p.render_origin.xy;
                 const uint status=overlay_selection(overlay_params,logical,flags,overlay_center+(p.camera.z==2u?p.panorama.zw:float2(0)),selection,preview,p.mask_limits.xy);
                 const bool selectable=(flags&2u)==0;
@@ -606,7 +722,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                     const float marker_distance=length(marker_delta);
                     if(marker_distance>2.5f)continue;
                     rgb=overlay_target(status,selection_colors)*(marker_distance>1.5f?.4f:1.f);
-                    if(((kRasterFlags&64u)?composed_transmittance*transmittance:transmittance)>.5f)median=splat_depth;
+                    if(!separate_median && ((kRasterFlags&64u)?composed_transmittance*transmittance:transmittance)>.5f)median=splat_depth;
                     transmittance=0; done=true; break;
                 }
                 if(status&128u)radiance=mix(radiance,overlay_target(status,selection_colors),.9f);
@@ -626,7 +742,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             } else weighted_depth += splat_depth * weight;
             const float next_transmittance = transmittance * (1 - alpha);
             const float next_total_transmittance=(kRasterFlags&64u)?composed_transmittance*next_transmittance:next_transmittance;
-            if (total_transmittance > .5f && next_total_transmittance <= .5f) median = splat_depth;
+            if (!separate_median && total_transmittance > .5f && next_total_transmittance <= .5f) median = splat_depth;
             // The existing desktop GUT legacy chain records depth before
             // dropping a saturating splat's color and transmittance update.
             // Keep this explicit: native analytic and Spark math includes it.
@@ -648,7 +764,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 rgb += radiance * weight;
                 transmittance = next_transmittance;
             }
-            if (((kRasterFlags&64u)?composed_transmittance*transmittance:transmittance) < 1e-4f) { done = true; break; }
+            if (((kRasterFlags&64u)?composed_transmittance*transmittance:transmittance) < local_cutoff) { done = true; break; }
         }
         if(kRasterFlags&64u) {
             composed_rgb+=rgb*composed_transmittance;
@@ -661,6 +777,13 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     if (valid) {
         if(kRasterFlags&64u){rgb=composed_rgb;transmittance=composed_transmittance;}
         const float alpha = 1 - transmittance;
+        if(depth_batch) {
+            const uint at=slot*256u+subtile*32u+lane;
+            partial_color[at]=float4(rgb,transmittance);
+            partial_depth[at]=float4(weighted_depth,valid_depth_weight,nearest,median);
+            partial_pick[at]=picked;
+            return;
+        }
         // Premultiplied RGBA. Background alpha participates in composition.
         color.write(float4(rgb + p.background.rgb*p.background.a*transmittance,
                             alpha + p.background.a*transmittance), pixel);
@@ -668,4 +791,133 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
         depth.write(float4(weighted_depth, alpha, (kRasterFlags&2u)?valid_depth_weight:nearest, median), pixel);
         pick.write(uint4(picked), pixel);
     }
+}
+
+// Partial front-to-back colors and weighted depths are linear in incoming T.
+// The prefix already resolved its exact depth and saturation. Later chunks
+// replay only a median crossing or final saturation, using cooperative reads
+// and conservative compaction. No contributors or original IDs are truncated.
+kernel void tile_depth_compose(device const ProjectedSplat* splats [[buffer(0)]],
+                               device const uint* indices [[buffer(1)]],
+                               device const uint* ranges [[buffer(2)]],
+                               device const RasterStatus& status [[buffer(3)]],
+                               constant RasterParameters& p [[buffer(4)]],
+                               device const float4* partial_color [[buffer(14)]],
+                               device const float4* partial_depth [[buffer(15)]],
+                               device const uint* partial_pick [[buffer(16)]],
+                               texture2d<float, access::write> color [[texture(0)]],
+                               texture2d<float, access::write> depth [[texture(1)]],
+                               texture2d<uint, access::write> pick [[texture(2)]],
+                               uint group [[threadgroup_position_in_grid]],
+                               uint lane [[thread_index_in_threadgroup]]) {
+    const uint tile = group / 8u, subtile = group % 8u;
+    const uint2 pixel = uint2(tile % p.columns * 16u + subtile % 2u * 8u + lane % 8u,
+                              tile / p.columns * 16u + subtile / 2u * 4u + lane / 8u);
+    const bool valid = pixel.x < p.width && pixel.y < p.height;
+    const uint begin = status.error ? 0u : ranges[tile * 2u], end = status.error ? 0u : ranges[tile * 2u + 1u];
+    // The prefix pass wrote short, empty and overflow tiles directly.
+    if (end - begin <= kDepthSplitThreshold)
+        return;
+    threadgroup float4 replay_means[64], replay_conics[64], replay_colors[64];
+    threadgroup uint replay_ids[64];
+    float3 rgb = 0;
+    float transmittance = 1, weighted_depth = 0, valid_depth_weight = 0, nearest = 0, median = 1e10f;
+    uint picked = 0xffffffffu;
+    const uint chunks = (end - begin) / kDepthChunkSize + uint((end - begin) % kDepthChunkSize != 0u);
+    for (uint chunk = 0; chunk < chunks; ++chunk) {
+        const uint batch = begin + chunk * kDepthChunkSize;
+        const bool active = valid && transmittance >= 1e-4f;
+        if (!simd_any(active))
+            break;
+        const uint slot = begin / kDepthChunkSize + tile + (batch - begin) / kDepthChunkSize;
+        const uint at = slot * 256u + subtile * 32u + lane;
+        const float4 rgba = active ? partial_color[at] : float4(0, 0, 0, 1);
+        const float4 z = active ? partial_depth[at] : float4(0);
+        const float incoming = transmittance, next = incoming * rgba.w;
+        const bool crossing = active && incoming > .5f && next <= .5f;
+        const bool saturating = active && next < 1e-4f;
+        bool replay = active && incoming != 1.f && (crossing || saturating);
+        const bool replay_color = replay && saturating;
+        if (active && !replay_color) {
+            rgb += rgba.xyz * incoming;
+            weighted_depth += z.x * incoming;
+            valid_depth_weight += z.y * incoming;
+            if (picked == 0xffffffffu && partial_pick[at] != 0xffffffffu) {
+                picked = partial_pick[at];
+                nearest = z.z;
+            }
+            if (crossing && incoming == 1.f)
+                median = z.w;
+            transmittance = next;
+        }
+        float replay_transmittance = incoming;
+        const uint chunk_size = min(kDepthChunkSize, end - batch);
+        for (uint block = 0; block < chunk_size; block += 64u) {
+            const uint offset = batch + block;
+            if (!simd_any(replay))
+                break;
+            const uint available = min(64u, chunk_size - block);
+            const uint2 live_min = simd_min(replay ? pixel : uint2(0xffffffffu));
+            const uint2 live_max = simd_max(replay ? pixel : uint2(0));
+            uint candidates = 0;
+            for (uint source_offset = 0; source_offset < 64u; source_offset += 32u) {
+                const uint source = source_offset + lane;
+                const uint id = source < available ? indices[offset + source] : 0u;
+                ProjectedSplat v{};
+                if (source < available)
+                    v = splats[id];
+                const uint active = source < available && conic_intersects_pixels(v, live_min, live_max) ? 1u : 0u;
+                const uint destination = candidates + simd_prefix_exclusive_sum(active);
+                candidates += simd_sum(active);
+                if (active) {
+                    replay_means[destination] = v.mean_depth;
+                    replay_means[destination].w = max(8.f, 2.f * log(max(v.conic_opacity.w, .5f / 255.f) * 510.f)) + 1e-3f;
+                    replay_conics[destination] = v.conic_opacity;
+                    replay_colors[destination] = v.color;
+                    replay_ids[destination] = id;
+                }
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+            for (uint j = 0; j < candidates && replay; ++j) {
+                const float2 d = float2(pixel) - replay_means[j].xy;
+                const float4 c = replay_conics[j];
+                const float q = c.x * d.x * d.x + 2 * c.y * d.x * d.y + c.z * d.y * d.y;
+                if (q < 0.f || !isfinite(q) || q > replay_means[j].w)
+                    continue;
+                const float alpha = min(c.w * exp(-.5f * q), .999f);
+                if (alpha < .5f / 255.f)
+                    continue;
+                const float splat_depth = replay_means[j].z;
+                if (replay_color) {
+                    const float weight = alpha * replay_transmittance;
+                    if (picked == 0xffffffffu) {
+                        picked = replay_ids[j];
+                        nearest = splat_depth;
+                    }
+                    if (p.unused & 2u) {
+                        if (splat_depth <= p.clip.y) {
+                            weighted_depth += splat_depth * weight;
+                            valid_depth_weight += weight;
+                        }
+                    } else
+                        weighted_depth += splat_depth * weight;
+                    rgb += clamp(replay_colors[j].xyz, 0.f, 4.f) * weight;
+                }
+                const float remaining = replay_transmittance * (1 - alpha);
+                if (replay_transmittance > .5f && remaining <= .5f)
+                    median = splat_depth;
+                replay_transmittance = remaining;
+                replay = remaining >= 1e-4f && (replay_color || remaining > .5f);
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        if (replay_color)
+            transmittance = replay_transmittance;
+    }
+    if (!valid)
+        return;
+    const float alpha = 1 - transmittance;
+    color.write(float4(rgb + p.background.rgb * p.background.a * transmittance, alpha + p.background.a * transmittance), pixel);
+    depth.write(float4(weighted_depth, alpha, (p.unused & 2u) ? valid_depth_weight : nearest, median), pixel);
+    pick.write(uint4(picked), pixel);
 }

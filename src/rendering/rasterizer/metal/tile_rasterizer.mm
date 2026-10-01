@@ -15,6 +15,8 @@
 
 namespace lfs::rendering::metal {
     namespace {
+        // Keep in sync with the embedded Metal shader.
+        constexpr uint32_t kDepthChunkSize = 576;
         uint32_t ceil_div(uint32_t n, uint32_t d) { return n / d + (n % d != 0); }
         struct alignas(16) RasterParameters {
             uint32_t count, width, height, columns, tiles, capacity, mode, unused;
@@ -96,9 +98,9 @@ namespace lfs::rendering::metal {
         f.counts = allocate(device, size_t(max_splats) * 8);
         f.offsets = allocate(device, size_t(max_splats) * 8);
         f.status = allocate(device, sizeof(RasterStatus), MTLResourceStorageModeShared);
-        // Two raster dispatches plus at most four live histogram scan levels.
+        // Three raster dispatches plus at most four live histogram scan levels.
         // ceil(UINT32_MAX / 2048) * 256 requires four 256-way scan levels.
-        f.dispatch_args = allocate(device, 18 * sizeof(uint32_t));
+        f.dispatch_args = allocate(device, 21 * sizeof(uint32_t));
         f.ranges = allocate(device, size_t(f.tiles) * 8);
         for (int i = 0; i < 2; ++i) {
             f.keys[i] = allocate(device, size_t(max_instances) * 8);
@@ -221,7 +223,7 @@ namespace lfs::rendering::metal {
             throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal tile shader compilation failed");
         impl_->library = library;
         for (const char* name : {"tile_counts", "scan_blocks", "scan_add", "scan32_blocks", "scan32_add", "tile_status", "source_keys", "tile_instances",
-                                 "tile_histogram", "tile_scatter", "source_histogram", "source_scatter", "tile_ranges"}) {
+                                 "tile_histogram", "tile_scatter", "source_histogram", "source_scatter", "tile_ranges", "tile_depth_batches", "tile_depth_compose"}) {
             const bool source_keys = std::string_view(name).starts_with("source_") && std::string_view(name) != "source_keys";
             const char* function_name = source_keys ? (std::string_view(name) == "source_histogram" ? "tile_histogram" : "tile_scatter") : name;
             auto constants = [MTLFunctionConstantValues new];
@@ -238,8 +240,11 @@ namespace lfs::rendering::metal {
     }
     TileRasterizer::~TileRasterizer() = default;
     void TileRasterizer::encode(id<MTLCommandBuffer> command, BufferSlice projected, uint32_t count,
-                                RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay, BufferSlice gut, const Projection& projection, const LodSelection& lod, bool omit_saturating_color, bool macro_half_display, GpuProfile* profile) {
+                                RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay, BufferSlice gut, const Projection& projection, const LodSelection& lod, bool omit_saturating_color, bool macro_half_display, GpuProfile* profile, bool exact_median) {
         auto f = frame.impl_;
+        // Depth visualization must not select its median using rounded
+        // display alpha, including transparent and portal presentation.
+        macro_half_display = macro_half_display && !exact_median;
         if (macro_half_display && (mode != RasterMode::Gaussian || projection.display.z == 1.f))
             throw std::invalid_argument("Macro half display requires ordinary 3DGS");
         if (!command || command.device != impl_->device || f->device != impl_->device ||
@@ -291,10 +296,22 @@ namespace lfs::rendering::metal {
         check_mask(overlay.selection, selection_count);
         check_mask(overlay.preview, preview_count);
         bool single_simd = mode == RasterMode::Gaussian && projection.display.z != 1.f;
-        RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u) | (macro_half_display ? 64u : 0u) | (single_simd ? 128u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
+        RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u) | (macro_half_display ? 64u : 0u) | (single_simd ? 128u : 0u) | (exact_median ? 2048u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
+        // Keys and the unused index side have no readers after tile ranges
+        // are generated. Reuse them for partial color/depth/pick; admission
+        // includes one possible gap per tile and all padded edge pixels.
+        const uint64_t batch_slots = (uint64_t(f->capacity) + kDepthChunkSize - 1) / kDepthChunkSize + f->tiles;
+        const bool depth_batches = count >= 4096 && mode == RasterMode::Gaussian &&
+                                   !(p.unused & (1u | 4u | 8u | 16u | 32u | 64u)) &&
+                                   batch_slots * 256 * 16 <= f->keys[0].length &&
+                                   batch_slots * 256 * 4 <= f->indices[0].length &&
+                                   batch_slots * 8 <= f->counts.length;
+        if (depth_batches)
+            p.unused |= 512u;
         // Compile/cache the default before reserving the frame or encoding work. A
         // specialization failure cannot strand its busy flag or partial scratch.
         auto blend_pipeline = impl_->blendPipeline(uint32_t(mode), p.unused);
+        const auto prefix_pipeline = depth_batches ? impl_->blendPipeline(uint32_t(mode), p.unused | 1024u) : nil;
         if (f->in_flight.exchange(true, std::memory_order_acq_rel))
             throw std::logic_error("Metal viewer frame reservation is still in flight");
         // Completion already publishes this shared status; inspecting the last
@@ -435,10 +452,26 @@ namespace lfs::rendering::metal {
             [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:3 * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [e endEncoding];
         }
+        const uint32_t sorted_index = (4 + (std::bit_width(f->tiles - 1) + 7) / 8) % 2;
+        if (depth_batches) {
+            // Sorting has finished. This scratch no longer stores source counts.
+            auto clear_jobs = [command blitCommandEncoder];
+            [clear_jobs fillBuffer:f->counts range:NSMakeRange(0, batch_slots * 8) value:255];
+            [clear_jobs endEncoding];
+            e = impl_->begin(command, "tile_depth_batches", profile, GpuStage::Blend);
+            [e setBuffer:f->ranges offset:0 atIndex:0];
+            [e setBuffer:f->counts offset:0 atIndex:1];
+            [e setBytes:&p length:sizeof(p) atIndex:2];
+            dispatch(e, f->tiles);
+        }
         e = profiledCompute(command, profile, GpuStage::Blend);
         if (!e)
             throw std::runtime_error("Could not encode Metal viewer blend pass");
         e.label = @"tile_blend";
+        [e setBuffer:f->counts offset:0 atIndex:13];
+        [e setBuffer:f->keys[0] offset:0 atIndex:14];
+        [e setBuffer:f->keys[1] offset:0 atIndex:15];
+        [e setBuffer:f->indices[1 - sorted_index] offset:0 atIndex:16];
         [e setComputePipelineState:blend_pipeline];
         set_projected(e);
         const uint32_t sorted = (4 + (std::bit_width(f->tiles - 1) + 7) / 8) % 2;
@@ -455,7 +488,31 @@ namespace lfs::rendering::metal {
         [e setTexture:f->color atIndex:0];
         [e setTexture:f->depth atIndex:1];
         [e setTexture:f->pick atIndex:2];
-        [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * (single_simd ? 8 : 4), 1, 1) threadsPerThreadgroup:MTLSizeMake(single_simd ? 32 : 64, 1, 1)];
+        if (depth_batches) {
+            [e setComputePipelineState:prefix_pipeline];
+            [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * 8, 1, 1) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+            [e memoryBarrierWithScope:MTLBarrierScopeBuffers];
+            [e setComputePipelineState:blend_pipeline];
+            [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:18 * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+        }
+        else
+            [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * (single_simd ? 8 : 4), 1, 1) threadsPerThreadgroup:MTLSizeMake(single_simd ? 32 : 64, 1, 1)];
         [e endEncoding];
+        if (depth_batches) {
+            e = impl_->begin(command, "tile_depth_compose", profile, GpuStage::Blend);
+            set_projected(e);
+            [e setBuffer:f->indices[sorted_index] offset:0 atIndex:1];
+            [e setBuffer:f->ranges offset:0 atIndex:2];
+            [e setBuffer:f->status offset:0 atIndex:3];
+            [e setBytes:&p length:sizeof(p) atIndex:4];
+            [e setBuffer:f->keys[0] offset:0 atIndex:14];
+            [e setBuffer:f->keys[1] offset:0 atIndex:15];
+            [e setBuffer:f->indices[1 - sorted_index] offset:0 atIndex:16];
+            [e setTexture:f->color atIndex:0];
+            [e setTexture:f->depth atIndex:1];
+            [e setTexture:f->pick atIndex:2];
+            [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * 8, 1, 1) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+            [e endEncoding];
+        }
     }
 } // namespace lfs::rendering::metal

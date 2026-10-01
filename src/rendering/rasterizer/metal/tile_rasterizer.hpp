@@ -56,7 +56,7 @@ namespace lfs::rendering::metal {
         void encode(id<MTLCommandBuffer> command, BufferSlice projected, uint32_t count,
                     RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay = {},
                     BufferSlice gut = {}, const Projection& projection = {}, const LodSelection& lod = {},
-                    bool omit_saturating_color = false, bool macro_half_display = false, GpuProfile* profile = nullptr);
+                    bool omit_saturating_color = false, bool macro_half_display = false, GpuProfile* profile = nullptr, bool exact_median = false);
 
     private:
         struct Impl;

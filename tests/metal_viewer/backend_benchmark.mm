@@ -36,7 +36,7 @@ namespace {
         float exposure = 1.f;
         std::string output, images, overlay, input, camera, fixture_format;
         core::GpuBackend tensor_backend = core::GpuBackend::Metal;
-        bool profile_gpu = false, deterministic_reference = false, frustum = false, verify_parity = false, saturation = false, input_fixture = false, transparent = false, depth_gray = false;
+        bool scalar_depth_reference = false, depth_boundary = false, depth_diagnostics = false, profile_gpu = false, deterministic_reference = false, frustum = false, verify_parity = false, saturation = false, input_fixture = false, transparent = false, depth_gray = false;
         bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false, portal = false, portal_tone = false, lod = false, lod_logical = false, lod_weights = false, lod_debug = false, spark = false, gpu_lod = false, gpu_lod_budget = false;
     };
     Options options(int argc, char** argv) {
@@ -133,6 +133,19 @@ namespace {
                 o.depth = o.depth_gray = true;
                 continue;
             }
+            if (arg == "--scalar-depth-reference") {
+                o.depth = o.scalar_depth_reference = true;
+                continue;
+            }
+            if (arg == "--depth-boundary") {
+                o.depth = o.depth_boundary = true;
+                o.count = 1025;
+                continue;
+            }
+            if (arg == "--depth-diagnostics") {
+                o.depth = o.depth_diagnostics = true;
+                continue;
+            }
             if (arg == "--depth") {
                 o.depth = true;
                 continue;
@@ -219,7 +232,7 @@ namespace {
             throw std::runtime_error("Synthetic hierarchy/geometry/overlay fixtures cannot be combined with --input");
         return o;
     }
-    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr, bool spark = false, bool gpu_lod = false, bool saturation = false, const Options* frustum = nullptr) {
+    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr, bool spark = false, bool gpu_lod = false, bool saturation = false, const Options* frustum = nullptr, const Options* depth_boundary = nullptr) {
         std::mt19937 random(1939);
         std::uniform_real_distribution<float> unit(0.f, 1.f);
         std::vector<float> means(count * 3), sh0(count * 3), scales(count * 3), rotation(count * 4, 0), opacity(count);
@@ -304,6 +317,32 @@ namespace {
                 for (size_t c = 0; c < 3; ++c) {
                     scales[3 * i + c] = std::log(40.f);
                     sh0[3 * i + c] = (colors[i][c] - .5f) / .2820947917738781f;
+                }
+            }
+        }
+        if (depth_boundary) {
+            // HiGS uses 1024-source macro batches. Batch one rounds T to .5
+            // in FP16 while exact T is still above .5. The last Gaussian in
+            // the next batch must establish the median, not leave FAR_DEPTH.
+            if (count != 1025)
+                throw std::invalid_argument("Depth boundary fixture requires 1025 splats");
+            rendering::FrameView camera;
+            camera.size = {depth_boundary->width, depth_boundary->height};
+            const auto k = camera.getCameraIntrinsics();
+            std::fill(rest.begin(), rest.end(), 0.f);
+            for (size_t n = 0; n < count; ++n) {
+                const bool filler = n > 0 && n + 1 < count;
+                const float z = n == 0 ? 4.f : filler ? 4.1f
+                                                      : 6.f;
+                // Projection samples integer pixels after its half-pixel shift.
+                means[3 * n] = (filler ? 16.5f : .5f) / k.focal_x * z;
+                means[3 * n + 1] = -.5f / k.focal_y * z;
+                means[3 * n + 2] = -z;
+                const float alpha = n == 0 ? .49995f : .01f;
+                opacity[n] = std::log(alpha / (1 - alpha));
+                for (size_t c = 0; c < 3; ++c) {
+                    scales[3 * n + c] = std::log(.005f);
+                    sh0[3 * n + c] = 0;
                 }
             }
         }
@@ -573,12 +612,13 @@ namespace {
         }
         Json cases = Json::array();
         for (int degree : degrees) {
-            auto generated = imported ? nullptr : std::make_unique<core::SplatData>(scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, nullptr, o.spark, o.gpu_lod, o.saturation, o.frustum ? &o : nullptr));
+            auto generated = imported ? nullptr : std::make_unique<core::SplatData>(scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, nullptr, o.spark, o.gpu_lod, o.saturation, o.frustum ? &o : nullptr, o.depth_boundary ? &o : nullptr));
             auto& model = imported ? *imported : *generated;
             model.set_active_sh_degree(degree);
             vis::MetalViewportRenderer metal;
             metal.setProfilingEnabled(o.profile_gpu);
             vis::VksplatViewportRenderer vulkan;
+            vulkan.setDepthCaptureMode(o.scalar_depth_reference);
             rendering::ViewportRenderRequest request;
             std::vector<uint32_t> lod_indices, lod_logical, lod_levels;
             std::vector<float> lod_weights;
@@ -789,6 +829,15 @@ namespace {
                                 size_t(o.width) * 3, cropped->ptr<float>() + y * o.width * 3);
                 *reference = std::move(cropped);
             }
+            if (o.depth_boundary) {
+                const auto native_depth = metal.readDepth({.pixel = {o.width / 2, o.height / 2}, .source_size = {o.width, o.height}, .target = kTarget});
+                const auto reference_depth = vulkan.readPreviewDepth(context, kTarget);
+                if (!native_depth || !reference_depth)
+                    throw std::runtime_error("Boundary depth readback failed");
+                const auto center = size_t(o.height / 2) * o.width + o.width / 2;
+                if (std::abs(*native_depth - 6.f) > 1e-5f || std::abs((*reference_depth)->ptr<float>()[center] - 6.f) > 1e-5f)
+                    throw std::runtime_error("Exact median lost at FP16 batch boundary: Metal=" + std::to_string(*native_depth) + " Vulkan=" + std::to_string((*reference_depth)->ptr<float>()[center]) + " expected=6");
+            }
             if (!o.images.empty()) {
                 const auto save = [&](const core::Tensor& image, const char* backend) {
                     std::ofstream stream(o.images + "-sh" + std::to_string(degree) + "-" + backend + ".ppm", std::ios::binary);
@@ -805,6 +854,56 @@ namespace {
                 save(**reference, "vulkan");
             }
             auto difference = quality(pixels, **reference, request.frame_view.background_color, o.depth);
+            if (o.depth_diagnostics) {
+                if (o.subregion || o.gut || o.lod || o.gpu_lod)
+                    throw std::runtime_error("Depth diagnostic currently requires ordinary full-frame GS");
+                auto native_depth = core::Tensor::empty({size_t(o.height), size_t(o.width)}, core::Device::CPU, core::DataType::Float32);
+                auto ticket = metal.submitReadback(kTarget, native_depth, 0, 0, true);
+                if (!ticket)
+                    throw std::runtime_error(lfs::format_for_developer(ticket.error()));
+                auto ready = metal.pollReadback(*ticket, true);
+                if (!ready || *ready != vis::VksplatViewportRenderer::ReadbackTicketStatus::Ready)
+                    throw std::runtime_error("Depth diagnostic readback failed");
+                auto reference_depth = vulkan.readPreviewDepth(context, kTarget);
+                if (!reference_depth)
+                    throw std::runtime_error(reference_depth.error());
+                // An independent production FP32 chain checks whether the
+                // discrepancy originates in projection or HiGS batch arithmetic.
+                vulkan.setDepthCaptureMode(true);
+                frame(false);
+                auto scalar_pixels = vulkan.readOutputImage(context, kTarget);
+                auto scalar_depth = vulkan.readPreviewDepth(context, kTarget);
+                vulkan.setDepthCaptureMode(false);
+                if (!scalar_pixels || !scalar_depth)
+                    throw std::runtime_error("FP32 diagnostic readback failed");
+                Json diagnostic{{"metal_vs_macro", difference},
+                                {"metal_vs_scalar", quality(pixels, **scalar_pixels, request.frame_view.background_color, true)},
+                                {"macro_vs_scalar", quality(**reference, **scalar_pixels, request.frame_view.background_color, true)}};
+                std::vector<std::pair<double, size_t>> errors;
+                for (size_t at = 0; at < native_depth.numel(); ++at) {
+                    double error = 0;
+                    for (size_t c = 0; c < 3; ++c)
+                        error = std::max(error, std::abs(double(pixels.ptr<float>()[3 * at + c]) - (*reference)->ptr<float>()[3 * at + c]));
+                    if (error > 1. / 255.)
+                        errors.emplace_back(error, at);
+                }
+                std::sort(errors.rbegin(), errors.rend());
+                diagnostic["pixels"] = Json::array();
+                for (size_t j = 0; j < std::min<size_t>(100, errors.size()); ++j) {
+                    const auto [error, at] = errors[j];
+                    diagnostic["pixels"].push_back({{"x", at % o.width}, {"y", at / o.width}, {"rgb_error", error}, {"metal_depth", native_depth.ptr<float>()[at]}, {"macro_depth", (*reference_depth)->ptr<float>()[at]}, {"scalar_depth", (*scalar_depth)->ptr<float>()[at]}});
+                }
+                const auto prefix = o.output + "-sh" + std::to_string(degree);
+                std::ofstream(prefix + "-depth-diagnostic.json") << diagnostic.dump(2);
+                const auto save_depth = [&](const core::Tensor& tensor, const char* label) {
+                    std::ofstream file(prefix + "-" + label + ".f32", std::ios::binary);
+                    file.write(reinterpret_cast<const char*>(tensor.ptr<float>()), tensor.numel() * sizeof(float));
+                };
+                save_depth(native_depth, "metal-depth");
+                save_depth(**reference_depth, "macro-depth");
+                save_depth(**scalar_depth, "scalar-depth");
+            }
+
             if (o.equirect && o.overlay == "markers") {
                 const auto a = pixels.ptr<float>(), b = (*reference)->ptr<float>();
                 // Center markers have two flat colors separated by a hard
@@ -974,7 +1073,7 @@ namespace {
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"renderer_identity_verified", true}, {"preferences_isolated", true}, {"metal_renderer", "metal"}, {"vulkan_reference_renderer", "vulkan"}, {"gpu_profiling", o.profile_gpu}, {"deterministic_reference", o.deterministic_reference}, {"tensor_backend", core::gpu_backend_name(o.tensor_backend)}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", imported ? Json(nullptr) : Json(1939)}, {"scene_source", imported ? o.input : "synthetic"}, {"loader", loader_name}, {"generated_input_fixture", o.input_fixture}, {"generated_source_count", o.input_fixture ? Json(o.fixture_count) : Json(nullptr)}, {"fixture_format", o.fixture_format}, {"camera_source", imported ? (o.camera.empty() ? "fitted_bounds" : o.camera) : "synthetic"}, {"camera_pose", camera_pose}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"tone_operator", o.tone}, {"exposure", o.exposure}, {"transparent", o.transparent}, {"depth_grayscale", o.depth_gray}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"frustum_fixture", o.frustum}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"renderer_identity_verified", true}, {"preferences_isolated", true}, {"metal_renderer", "metal"}, {"vulkan_reference_renderer", "vulkan"}, {"gpu_profiling", o.profile_gpu}, {"deterministic_reference", o.deterministic_reference}, {"tensor_backend", core::gpu_backend_name(o.tensor_backend)}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", imported ? Json(nullptr) : Json(1939)}, {"scene_source", imported ? o.input : "synthetic"}, {"loader", loader_name}, {"generated_input_fixture", o.input_fixture}, {"generated_source_count", o.input_fixture ? Json(o.fixture_count) : Json(nullptr)}, {"fixture_format", o.fixture_format}, {"camera_source", imported ? (o.camera.empty() ? "fitted_bounds" : o.camera) : "synthetic"}, {"camera_pose", camera_pose}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"tone_operator", o.tone}, {"exposure", o.exposure}, {"transparent", o.transparent}, {"depth_grayscale", o.depth_gray}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"frustum_fixture", o.frustum}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"scalar_depth_reference", o.scalar_depth_reference}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {
