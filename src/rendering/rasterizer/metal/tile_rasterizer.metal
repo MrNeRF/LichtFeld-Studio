@@ -228,6 +228,9 @@ kernel void tile_ranges(device const ulong* keys [[buffer(0)]],
     if (ulong(i) + 1 == status.required) ranges[tile * 2 + 1] = i + 1;
 }
 
+// Specialize the blend body to retain only the active renderer features.
+constant uint kRasterMode [[function_constant(0)]];
+constant uint kRasterFlags [[function_constant(1)]];
 kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                        device const uint* indices [[buffer(1)]],
                        device const uint* ranges [[buffer(2)]],
@@ -244,13 +247,23 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                        texture2d<float, access::write> color [[texture(0)]],
                        texture2d<float, access::write> depth [[texture(1)]],
                        texture2d<uint, access::write> pick [[texture(2)]],
-                       uint tile [[threadgroup_position_in_grid]],
+                       uint group [[threadgroup_position_in_grid]],
                        uint lane [[thread_index_in_threadgroup]],
                        uint sg [[simdgroup_index_in_threadgroup]]) {
-    threadgroup float4 means[256], conics[256], colors[256];
-    threadgroup uint ids[256], finished[8];
-    const uint2 pixel = uint2((tile % p.columns) * 16 + lane % 16,
-                              (tile / p.columns) * 16 + lane / 16);
+    // Keep the stable 16x16 bin/sort contract. Four independent 8x8 blend
+    // groups traverse the same ordered list, each with its own saturation vote.
+    // This reduces shared storage and avoids waiting for unrelated pixels.
+    const uint tile=group/4, subtile=group%4;
+    threadgroup float4 means[64], conics[64], colors[64];
+    threadgroup GutSplat geometry[64];
+    threadgroup uint ids[64], finished[2], active_counts[2];
+    const uint2 tile_origin = uint2((tile % p.columns)*16+(subtile%2)*8,
+                                    (tile / p.columns)*16+(subtile/2)*8);
+    const uint2 pixel = tile_origin+uint2(lane%8,lane/8);
+    // Rings/markers can extend the displayed footprint. Preserve their full
+    // parent list, as for GUT rays, panoramas and Spark's density support.
+    const bool compact_candidates=kRasterMode==0u && p.camera.z!=2u && !(kRasterFlags&16u) &&
+        (!(kRasterFlags&1u) || (!overlay_enabled(overlay_params[22].x) && !overlay_enabled(overlay_params[22].y)));
     const bool valid = pixel.x < p.width && pixel.y < p.height;
     bool done = !valid;
     float transmittance = 1, weighted_depth = 0, nearest = 0, median = 1e10f;
@@ -262,7 +275,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     // A camera ray is invariant across every Gaussian and tile batch. Compute
     // spherical trigonometry once per live pixel, never inside the hot loop.
     float3 gut_origin=0,gut_direction=float3(0,0,1);
-    if(p.mode==3u && valid && end>begin) {
+    if(kRasterMode==3u && valid && end>begin) {
         const bool orthographic=p.camera.z==1u;
         if(p.camera.z==2u) {
             const float2 angle=((float2(pixel)+.5f+p.panorama.zw)/p.panorama.xy-.5f)*float2(2.f*M_PI_F,M_PI_F);
@@ -274,74 +287,123 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             gut_direction=orthographic?float3(0,0,1):float3(xy,1);
         }
     }
-    for (ulong batch = begin; batch < end; batch += 256) {
+    for (ulong batch = begin; batch < end; batch += 64) {
         const bool all_done = simd_all(done);
         if ((lane & 31) == 0) finished[sg] = all_done;
         threadgroup_barrier(mem_flags::mem_threadgroup);
         bool stop = true;
-        for (uint s = 0; s < 8; ++s) stop = stop && finished[s];
+        for (uint s = 0; s < 2; ++s) stop = stop && finished[s];
         if (stop) break;
-        const uint count = uint(min(ulong(256), ulong(end) - batch));
-        if (lane < count) {
-            const uint id = indices[batch + lane];
-            const auto splat = splats[id];
-            ids[lane] = id;
-            means[lane] = splat.mean_depth;
-            conics[lane] = splat.conic_opacity;
-            colors[lane] = splat.color;
-            if((p.unused&16u) && p.mode!=1u) {
-                const float opacity=p.mode==3u?gut[id].mean_opacity.w:splat.conic_opacity.w;
+        const uint source_count=uint(min(ulong(64),ulong(end)-batch));
+        uint count=source_count, destination=lane, id=0;
+        ProjectedSplat splat{};
+        bool active=lane<source_count;
+        if (active) {
+            id=indices[batch+lane];
+            splat=splats[id];
+        }
+        if (compact_candidates) {
+            // Integer support with a one-pixel margin includes rounding of the
+            // full-float projection and the optional half portal footprint.
+            const int2 minimum=int2(tile_origin)-1, maximum=int2(tile_origin)+9;
+            active=active && all(int2(splat.bounds.xy)<maximum) && all(int2(splat.bounds.zw)>minimum);
+            const uint live=active?1u:0u;
+            destination=simd_prefix_exclusive_sum(live);
+            const uint total=simd_sum(live);
+            if ((lane&31)==0) active_counts[sg]=total;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            if (sg) destination+=active_counts[0];
+            count=active_counts[0]+active_counts[1];
+        }
+        if (active) {
+            ids[destination] = id;
+            if (kRasterMode==3u) {
+                auto g=gut[id];
+                if (p.camera.z!=1u) {
+                    // Pinhole/spherical rays start at camera origin. The
+                    // inverse-Gaussian origin is invariant across all pixels:
+                    // cache it here, reusing xyz of the shared mean payload.
+                    const float3 delta=-g.mean_opacity.xyz;
+                    g.mean_opacity.xyz=float3(dot(g.inverse0.xyz,delta),dot(g.inverse1.xyz,delta),dot(g.inverse2.xyz,delta));
+                }
+                geometry[destination]=g;
+            }
+            means[destination] = splat.mean_depth;
+            conics[destination] = splat.conic_opacity;
+            colors[destination] = splat.color;
+            colors[destination].xyz = clamp(colors[destination].xyz, 0.f, 4.f);
+            if (!(kRasterFlags&16u) && kRasterMode!=1u) {
+                const float opacity=kRasterMode==3u?geometry[destination].mean_opacity.w:splat.conic_opacity.w;
+                // The radial key is no longer needed after sorting. Cache the
+                // alpha support once per Gaussian/tile, then reject before exp.
+                // The small margin retains FP32 threshold-boundary contributors.
+                colors[destination].w=max(4.f,log(max(opacity,.5f/255.f)*510.f))+1e-4f;
+            }
+            if((kRasterFlags&16u) && kRasterMode!=1u) {
+                const float opacity=kRasterMode==3u?geometry[destination].mean_opacity.w:splat.conic_opacity.w;
                 const float adjusted=sqrt(8.f)+.7f*(min(opacity,5.f)-1.f);
                 const float power=opacity>1.f?.5f*adjusted*adjusted:max(4.f,log(max(opacity,.5f/255.f)*510.f));
                 // Neither radius nor radial sort metric is used by this hot
                 // blend path. Reuse shared slots for cutoff and density, with
                 // one exp per Gaussian/tile and no new buffers or shared memory.
-                means[lane].w=exp(-power);
-                colors[lane].w=opacity>1.f?exp((opacity*opacity-1.f)/2.718281828459045f):0.f;
+                means[destination].w=exp(-power);
+                colors[destination].w=opacity>1.f?exp((opacity*opacity-1.f)/2.718281828459045f):0.f;
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
         if (!done) for (uint j = 0; j < count; ++j) {
             // Studio's CUDA/Vulkan convention samples at integer pixel coordinates.
-            const uint logical=(p.unused&8u)?logical_ids[ids[j]]:ids[j];
-            if((p.unused&8u) && logical>=logical_count)continue;
+            const uint logical=(kRasterFlags&8u)?logical_ids[ids[j]]:ids[j];
+            if((kRasterFlags&8u) && logical>=logical_count)continue;
             const float2 d = float2(pixel) - means[j].xy;
             const float4 c = conics[j];
+            const bool half_footprint=(kRasterMode==0u && (kRasterFlags&4u)) || (kRasterMode!=3u && !(kRasterFlags&16u) && (kRasterFlags&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u));
             const float q = c.x*d.x*d.x + 2*c.y*d.x*d.y + c.z*d.y*d.y;
             if (q < 0 || !isfinite(q)) continue;
+            if (!(kRasterFlags&16u) && kRasterMode==0u && !half_footprint && .5f*q>colors[j].w) continue;
             float alpha;
             float splat_depth=means[j].z;
-            if (p.mode == 1) alpha = dot(d,d) <= means[j].w*means[j].w ? c.w : 0;
-            else if (p.mode == 2) alpha = q <= 9 ? c.w : 0;
-            else if(p.mode==3u) {
-                const auto g=gut[ids[j]];
-                if(p.unused&4u) {
+            if (kRasterMode == 1) alpha = dot(d,d) <= means[j].w*means[j].w ? c.w : 0;
+            else if (kRasterMode == 2) alpha = q <= 9 ? c.w : 0;
+            else if(kRasterMode==3u) {
+                const auto g=geometry[j];
+                if(kRasterFlags&4u) {
                     const float2 axis=float2(g.inverse0.w,g.inverse1.w);
                     if(abs(dot(d,axis))>means[j].w || abs(dot(d,float2(axis.y,-axis.x)))>g.inverse2.w)continue;
                 }
-                const float3 delta=gut_origin-g.mean_opacity.xyz;
-                const float3 local_origin=float3(dot(g.inverse0.xyz,delta),dot(g.inverse1.xyz,delta),dot(g.inverse2.xyz,delta));
+                float3 local_origin=g.mean_opacity.xyz;
+                if (p.camera.z==1u) {
+                    const float3 delta=gut_origin-g.mean_opacity.xyz;
+                    local_origin=float3(dot(g.inverse0.xyz,delta),dot(g.inverse1.xyz,delta),dot(g.inverse2.xyz,delta));
+                }
                 const float3 local_direction=float3(dot(g.inverse0.xyz,gut_direction),dot(g.inverse1.xyz,gut_direction),dot(g.inverse2.xyz,gut_direction));
                 const float denom=dot(local_direction,local_direction);
                 if(!isfinite(denom)||denom<=1e-12f)continue;
                 const float3 distance=cross(local_direction*rsqrt(denom),local_origin);
-                alpha=g.mean_opacity.w*exp(-.5f*dot(distance,distance));
+                const float power=.5f*dot(distance,distance);
+                if (!(kRasterFlags&16u) && power>colors[j].w) continue;
+                alpha=g.mean_opacity.w*exp(-power);
                 const float t=-dot(local_direction,local_origin)/denom;
                 const float z=gut_origin.z+t*gut_direction.z;
                 splat_depth=t>0 && z>p.clip.x && isfinite(z)?z:1e10f;
-            } else if(p.unused&4u) {
+            } else if(half_footprint) {
+                // The macro-relative FP16 conic can admit a boundary point
+                // that the full-float conic rejects. Evaluate its support below
+                // directly instead of computing and then overwriting a float exp.
+                alpha=0.f;
+            } else if(kRasterFlags&4u) {
                 const float edge=.01831563888873418f;
                 const float value=q>8.f?0.f:exp(-.5f*q);
                 alpha=c.w*max(0.f,(value-edge)/(1.f-edge));
             } else alpha = c.w * exp(-.5f * q);
-            if((p.unused&16u) && p.mode!=1u) {
-                const float opacity=p.mode==3u?gut[ids[j]].mean_opacity.w:c.w;
+            if((kRasterFlags&16u) && kRasterMode!=1u) {
+                const float opacity=kRasterMode==3u?geometry[j].mean_opacity.w:c.w;
                 const float value=clamp(alpha/max(opacity,1e-8f),0.f,1.f);
                 if(value<means[j].w)continue;
                 if(colors[j].w>0)alpha=1.f-pow(max(0.f,1.f-value),colors[j].w);
             }
             alpha = min(alpha, .999f);
-            if((p.mode==0u && (p.unused&4u)) || (p.mode!=3u && !(p.unused&16u) && (p.unused&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u))){
+            if(half_footprint){
                 const float2 origin=floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
                 const half2 center=half2((means[j].xy+p.render_origin.xy-origin)/overlay_tile_extent);
                 const half2 coord=half2((float2(pixel)+p.render_origin.xy-origin)/overlay_tile_extent);
@@ -355,15 +417,15 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 // Match the portal's macro-relative FP16 footprint. The
                 // native accumulation remains FP32; this is display-profile math.
                 half value=exp2(-power);
-                if(p.unused&4u) {
+                if(kRasterFlags&4u) {
                     const half edge=half(.01831563888873418f);
                     value=max(half(0),(value-edge)/(half(1)-edge));
                 }
                 alpha=float(min(half(c.w)*value,half(.999f)));
             }
-            if (alpha < ((p.unused&4u)?1.f/255.f:.5f/255.f)) continue;
-            float3 radiance=clamp(colors[j].xyz,0.f,4.f);
-            if(p.unused&1u){
+            if (alpha < ((kRasterFlags&4u)?1.f/255.f:.5f/255.f)) continue;
+            float3 radiance=colors[j].xyz;
+            if(kRasterFlags&1u){
                 const uint flags=overlay_flags[ids[j]];
                 // Pixel-sized overlays use the same macro-relative half position
                 // as the desktop reference. Keep Gaussian blending in FP32.
@@ -371,7 +433,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 const float2 macro_origin=floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
                 // Vulkan's 3DGUT shared-struct path retains full float centers;
                 // only the 3DGS macro-relative path compresses them to half.
-                const float2 overlay_center=(p.mode==3u || (p.unused&16u))?means[j].xy:
+                const float2 overlay_center=(kRasterMode==3u || (kRasterFlags&16u))?means[j].xy:
                     float2(half2((means[j].xy+p.render_origin.xy-macro_origin)/overlay_tile_extent))*overlay_tile_extent+macro_origin-p.render_origin.xy;
                 const uint status=overlay_selection(overlay_params,logical,flags,overlay_center+(p.camera.z==2u?p.panorama.zw:float2(0)),selection,preview,p.mask_limits.xy);
                 const bool selectable=(flags&2u)==0;
@@ -404,7 +466,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             if (picked == 0xffffffff) { picked = logical; nearest = splat_depth; }
             // Match expected_far in the reference: invalid/too-distant
             // GUT depths affect transmittance but never the depth average.
-            if(p.unused&2u) {
+            if(kRasterFlags&2u) {
                 if(splat_depth<=p.clip.y) {
                     weighted_depth += splat_depth * weight;
                     valid_depth_weight += weight;
@@ -415,7 +477,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             // The existing desktop GUT legacy chain records depth before
             // dropping a saturating splat's color and transmittance update.
             // Keep this explicit: native analytic and Spark math includes it.
-            if ((p.unused & 32u) && next_transmittance < 1e-4f) {
+            if ((kRasterFlags & 32u) && next_transmittance < 1e-4f) {
                 done = true;
                 break;
             }
@@ -431,7 +493,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
         color.write(float4(rgb + p.background.rgb*p.background.a*transmittance,
                             alpha + p.background.a*transmittance), pixel);
         // weighted depth, accumulated alpha, first contributor depth.
-        depth.write(float4(weighted_depth, alpha, (p.unused&2u)?valid_depth_weight:nearest, median), pixel);
+        depth.write(float4(weighted_depth, alpha, (kRasterFlags&2u)?valid_depth_weight:nearest, median), pixel);
         pick.write(uint4(picked), pixel);
     }
 }

@@ -98,7 +98,7 @@ if(TARGET lfs_visualizer)
         option(LFS_BUILD_MAC_VIEWER_BENCHMARK "Build the native Metal versus Vulkan viewer benchmark" ON)
         if(LFS_BUILD_MAC_VIEWER_BENCHMARK)
             add_executable(mac_viewer_backend_benchmark backend_benchmark.mm)
-            target_link_libraries(mac_viewer_backend_benchmark PRIVATE lfs_metal_viewer lfs_visualizer lfs_core Python::Python)
+            target_link_libraries(mac_viewer_backend_benchmark PRIVATE lfs_metal_viewer lfs_visualizer lfs_core lfs_io Python::Python)
             target_compile_options(mac_viewer_backend_benchmark PRIVATE -fobjc-arc)
             target_include_directories(mac_viewer_backend_benchmark PRIVATE
                 "${CMAKE_SOURCE_DIR}/src/visualizer/rendering"
@@ -111,6 +111,13 @@ if(TARGET lfs_visualizer)
                 --smoke --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-benchmark-smoke.json")
             set_tests_properties(MacViewerBackendBenchmarkSmoke PROPERTIES
                 LABELS "benchmark;metal;gpu;metal4" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            # Exercise the real shared loader and camera fit in macOS CI without
+            # downloads or a user-provided dataset. Generated data stays in build.
+            add_test(NAME MacViewerParity_input COMMAND mac_viewer_backend_benchmark
+                --smoke --input-fixture "${CMAKE_CURRENT_BINARY_DIR}/metal-viewer-input-smoke.ply"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-input.json")
+            set_tests_properties(MacViewerParity_input PROPERTIES
+                LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
             foreach(_mode IN ITEMS mip ortho depth export_scale gut equirect near saturation)
                 add_test(NAME MacViewerParity_${_mode} COMMAND mac_viewer_backend_benchmark
                     --smoke --${_mode} --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-${_mode}.json")

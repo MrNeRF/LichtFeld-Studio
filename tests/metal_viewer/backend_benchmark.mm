@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor_backend.hpp"
+#include "io/exporter.hpp"
+#include "io/loader.hpp"
 #include "metal_viewport_renderer.hpp"
 #include "preferences.hpp"
 #import <Metal/Metal.h>
@@ -13,6 +15,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <random>
 #include <stdexcept>
@@ -27,8 +30,8 @@ namespace {
     struct Options {
         size_t count = 100000;
         int width = 1280, height = 720, warmup = 12, samples = 40;
-        std::string output, images, overlay;
-        bool verify_parity = false, saturation = false;
+        std::string output, images, overlay, input, camera;
+        bool verify_parity = false, saturation = false, input_fixture = false;
         bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false, portal = false, portal_tone = false, lod = false, lod_logical = false, lod_weights = false, lod_debug = false, spark = false, gpu_lod = false, gpu_lod_budget = false;
     };
     Options options(int argc, char** argv) {
@@ -112,6 +115,17 @@ namespace {
                 o.output = value;
                 continue;
             }
+            if (arg == "--input" || arg == "--input-fixture") {
+                if (!o.input.empty())
+                    throw std::runtime_error("Only one benchmark input is allowed");
+                o.input = value;
+                o.input_fixture = arg == "--input-fixture";
+                continue;
+            }
+            if (arg == "--camera") {
+                o.camera = value;
+                continue;
+            }
             if (arg == "--images") {
                 o.images = value;
                 continue;
@@ -141,6 +155,10 @@ namespace {
         }
         if (o.width > 4096 || o.height > 4096 || o.count > 1000000 || o.samples > 10000 || o.warmup > 1000)
             throw std::runtime_error("Benchmark reservation limit exceeded");
+        if (!o.camera.empty() && o.input.empty())
+            throw std::runtime_error("--camera requires --input");
+        if (!o.input.empty() && (o.lod || o.gpu_lod || o.spark || o.near || o.saturation || !o.overlay.empty()))
+            throw std::runtime_error("Synthetic hierarchy/geometry/overlay fixtures cannot be combined with --input");
         return o;
     }
     core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr, bool spark = false, bool gpu_lod = false, bool saturation = false) {
@@ -350,7 +368,7 @@ namespace {
         const double mse = squares / native.numel();
         return {{"mae", sum / native.numel()}, {"rmse", std::sqrt(mse)}, {"max_error", maximum}, {"psnr_db", mse == 0 ? Json(nullptr) : Json(-10 * std::log10(mse))}, {"identical", mse == 0}, {"depth_valid_max_error", depth_view ? Json(valid_depth_max) : Json(nullptr)}, {"depth_valid_rmse", depth_view ? Json(std::sqrt(valid_depth_squares / std::max<size_t>(1, valid_depth_channels))) : Json(nullptr)}, {"depth_coverage_disagreement_pixels", depth_coverage_disagreements}, {"depth_coverage_disagreement_fraction", 3. * depth_coverage_disagreements / native.numel()}};
     }
-    Json run(const Options& o) {
+    Json run(Options o) {
         core::GpuBackendScope scope(core::GpuBackend::Metal);
         vis::VulkanContext context;
         if (!context.initHeadless())
@@ -359,9 +377,92 @@ namespace {
         // production Vulkan path while the native adapter is called directly.
         if (vis::UserPreferences::instance().viewerBackend() != rendering::ViewerBackend::Automatic)
             throw std::runtime_error("Benchmark preferences must be isolated");
+        std::shared_ptr<core::SplatData> imported;
+        rendering::FrameView imported_view;
+        std::vector<glm::mat4> imported_transforms;
+        std::vector<int> degrees{0, 3};
+        std::string loader_name;
+        if (!o.input.empty()) {
+            if (o.input_fixture) {
+                // CI exercises the supported binary format through the shared
+                // writer and loader, including SH3 -> production Q16 preparation.
+                auto fixture = scene(512, 3);
+                const auto saved = io::save_ply(fixture, {.output_path = o.input});
+                if (!saved)
+                    throw std::runtime_error(saved.error().format());
+            }
+            // Loading, codec preparation and camera fitting precede all measured
+            // frames. Both adapters consume this same resident model unchanged.
+            auto loader = io::Loader::create();
+            auto loaded = loader->load(o.input);
+            if (!loaded)
+                throw std::runtime_error(loaded.error().format());
+            auto splats = std::get_if<std::shared_ptr<core::SplatData>>(&loaded->data);
+            if (!splats || !*splats || !(*splats)->means_raw().size(0))
+                throw std::runtime_error("Benchmark input must contain a nonempty splat model");
+            imported = *splats;
+            loader_name = loaded->loader_used;
+            o.count = imported->means_raw().size(0);
+            if (o.count > std::numeric_limits<uint32_t>::max())
+                throw std::runtime_error("Real scene exceeds the renderer's uint32 source extent");
+            degrees = {0};
+            const int degree = std::min(3, imported->get_max_sh_degree());
+            if (degree > 0) {
+                (void)imported->apply_shN_value_quant();
+                degrees.push_back(degree);
+            }
+            imported_transforms = {rendering::DATA_TO_VISUALIZER_WORLD_AXES_4};
+            if (o.camera.empty()) {
+                const auto low = imported->means_raw().min(0).cpu();
+                const auto high = imported->means_raw().max(0).cpu();
+                const glm::vec3 a(low.ptr<float>()[0], low.ptr<float>()[1], low.ptr<float>()[2]);
+                const glm::vec3 b(high.ptr<float>()[0], high.ptr<float>()[1], high.ptr<float>()[2]);
+                for (int c = 0; c < 3; ++c)
+                    if (!std::isfinite(a[c]) || !std::isfinite(b[c]))
+                        throw std::runtime_error("Cannot fit a camera to non-finite scene bounds");
+                const auto center = rendering::visualizerWorldPointFromDataWorld(a * .5f + b * .5f);
+                const float radius = std::max(.01f, glm::length(b - a) * .5f);
+                if (!std::isfinite(radius))
+                    throw std::runtime_error("Scene bounds exceed finite camera-fit precision");
+                const float aspect = float(o.width) / o.height;
+                const float half_fov = std::atan(std::tan(rendering::focalLengthToVFovRad(imported_view.focal_length_mm) * .5f) * std::min(1.f, aspect));
+                imported_view.translation = center + glm::vec3(0, 0, 1.2f * radius / std::sin(half_fov));
+            } else {
+                std::ifstream stream(o.camera);
+                if (!stream)
+                    throw std::runtime_error("Cannot read benchmark camera JSON");
+                Json camera;
+                stream >> camera;
+                if (camera.contains("structuredContent"))
+                    camera = camera.at("structuredContent");
+                if (camera.contains("camera"))
+                    camera = camera.at("camera");
+                for (int row = 0; row < 3; ++row) {
+                    imported_view.translation[row] = camera.at("eye").at(row).get<float>();
+                    for (int col = 0; col < 3; ++col)
+                        imported_view.rotation[col][row] = camera.at("rotation_matrix").at(row).at(col).get<float>();
+                }
+                const float fov = camera.at("fov_degrees").get<float>();
+                if (!(fov > 0 && fov < 179) || !std::isfinite(fov))
+                    throw std::runtime_error("Invalid benchmark camera FOV");
+                imported_view.focal_length_mm = rendering::vFovToFocalLength(fov);
+                const auto orthogonal = glm::transpose(imported_view.rotation) * imported_view.rotation;
+                for (int row = 0; row < 3; ++row) {
+                    if (!std::isfinite(imported_view.translation[row]))
+                        throw std::runtime_error("Non-finite benchmark camera position");
+                    for (int col = 0; col < 3; ++col)
+                        if (!std::isfinite(imported_view.rotation[col][row]) || std::abs(orthogonal[col][row] - (row == col ? 1.f : 0.f)) > .001f)
+                            throw std::runtime_error("Invalid benchmark camera rotation");
+                }
+                if (std::abs(glm::determinant(imported_view.rotation) - 1.f) > .001f)
+                    throw std::runtime_error("Benchmark camera rotation must preserve handedness");
+            }
+        }
         Json cases = Json::array();
-        for (int degree : {0, 3}) {
-            auto model = scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, nullptr, o.spark, o.gpu_lod, o.saturation);
+        for (int degree : degrees) {
+            auto generated = imported ? nullptr : std::make_unique<core::SplatData>(scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, nullptr, o.spark, o.gpu_lod, o.saturation));
+            auto& model = imported ? *imported : *generated;
+            model.set_active_sh_degree(degree);
             vis::MetalViewportRenderer metal;
             vis::VksplatViewportRenderer vulkan;
             rendering::ViewportRenderRequest request;
@@ -394,6 +495,10 @@ namespace {
                 lod.object_scale = 1;
                 lod.behind_camera_penalty = lod.cone_foveation = 1;
                 lod.viewport_foveation = false;
+            }
+            if (imported) {
+                request.frame_view = imported_view;
+                request.scene.model_transforms = &imported_transforms;
             }
             request.frame_view.size = {o.width, o.height};
             if (o.near)
@@ -606,11 +711,25 @@ namespace {
                                     double(difference[o.depth ? "depth_valid_rmse" : "rmse"]) > 1. / 255))
                 throw std::runtime_error("Native image exceeds FP16-reference parity bounds (valid max 4/255, RMS 1/255, depth coverage 0.1%): SH" + std::to_string(degree) + " " + difference.dump());
             const auto native_stats = statistics(native_times), vulkan_stats = statistics(vulkan_times);
-            cases.push_back({{"sh_degree", degree}, {"storage", degree ? "q16" : "sh0"}, {"metal", native_stats}, {"vulkan", vulkan_stats}, {"speedup_vulkan_over_metal", (o.subregion || (o.gut && o.lod)) ? Json(nullptr) : Json(double(vulkan_stats["median_ms"]) / double(native_stats["median_ms"]))}, {"image_difference", difference}});
+            cases.push_back({{"sh_degree", degree}, {"storage", degree ? (model.shN_value_quantized() ? "q16" : model.shN_ieee_f16() ? "f16"
+                                                                                                                                     : "f32")
+                                                                       : "sh0"},
+                             {"metal", native_stats},
+                             {"vulkan", vulkan_stats},
+                             {"speedup_vulkan_over_metal", (o.subregion || (o.gut && o.lod)) ? Json(nullptr) : Json(double(vulkan_stats["median_ms"]) / double(native_stats["median_ms"]))},
+                             {"image_difference", difference}});
+        }
+        Json camera_pose = Json::object();
+        if (imported) {
+            camera_pose["eye"] = {imported_view.translation.x, imported_view.translation.y, imported_view.translation.z};
+            camera_pose["focal_length_mm"] = imported_view.focal_length_mm;
+            camera_pose["rotation_matrix"] = Json::array();
+            for (int row = 0; row < 3; ++row)
+                camera_pose["rotation_matrix"].push_back({imported_view.rotation[0][row], imported_view.rotation[1][row], imported_view.rotation[2][row]});
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", imported ? Json(nullptr) : Json(1939)}, {"scene_source", imported ? o.input : "synthetic"}, {"loader", loader_name}, {"generated_input_fixture", o.input_fixture}, {"camera_source", imported ? (o.camera.empty() ? "fitted_bounds" : o.camera) : "synthetic"}, {"camera_pose", camera_pose}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {

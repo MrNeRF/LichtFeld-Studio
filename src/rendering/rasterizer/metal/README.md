@@ -91,6 +91,17 @@ Callers can precompile cached specializations with `prepare` before interaction.
   positive radial distance squared, tile ranges, front-to-back composition and transmittance exit.
   The radix sort reuses the algorithm in `training/kernels/metal/fast_raster.metal`,
   without depending on the trainer. It only sorts the tile-ID bytes actually used.
+- Four independent 8x8 blend groups share each stable 16x16 bin list. Each
+  group stops on its own pixel saturation; ordinary GS candidates are compacted
+  stably against the subtile support with a rounding margin. Rings/markers,
+  GUT rays, panoramas and Spark retain the complete parent list.
+- Ordinary alpha support is cached per Gaussian and rejected before exponentials.
+  FP16 portal/marker footprints retain their own support equations. Shared GUT
+  batches cache inverse geometry and camera-origin transforms for pinhole and
+  spherical rays; orthographic origins remain pixel-dependent.
+- Blend pipelines specialize mode and active feature flags, eliminating inactive
+  branches and register pressure. The synchronized cache creates a variant before
+  acquiring a frame reservation, so a compile failure cannot strand its busy flag.
 - Color/alpha, weighted depth, first-contributor depth/ID and median depth.
   Equal-depth ties preserve source order. Median depth uses 1e10 for no crossing.
 - Explicit frame reservations with retained GPU lifetimes. Encoding performs no
@@ -290,7 +301,7 @@ emitted on successful frames and route changes, including Automatic and fallback
 tensor selection is logged after startup preflight. Preferences reject unavailable
 CUDA/Metal choices with a localized dialog and preserve the previous settings.
 
-Representative sustained performance across large scenes remains under evaluation; projection, resident GPU traversal,
+Representative sustained performance across multiple large scenes remains under evaluation; projection, resident GPU traversal,
 RAD page decoding/admission/eviction and adaptive frame reservations are native. RAD's signed-byte/page-frame layout must not be decoded as
 SplatData Q16. iOS can reuse projection/raster/scene contracts but needs direct
 Metal presentation and its own device/simulator verification.
@@ -354,6 +365,24 @@ CPU image readback and complete desktop UI/composition are excluded. These are
 serial completed-frame wall latencies, not GPU kernel timestamps or pipelined
 viewer FPS. Safe mode isolates the process from saved user preferences.
 
+`--input /path/to/scene.ply` (or another shared-loader splat format) measures a
+real resident model. Loading, optional Q16 codec preparation and camera fitting
+precede warmup and measurements. Both adapters use the same model, node basis,
+camera, size and settings. Without `--camera`, GPU bounds fit a perspective camera.
+`--camera camera.json` accepts the camera pose from a saved MCP `camera_get`
+response or a raw object with `eye`, `rotation_matrix` and `fov_degrees`. Reports
+retain its actual pose/focal length, input extent, loader and SH storage. Synthetic
+hierarchy/geometry/overlay fixtures are rejected with real inputs; they must not
+be mistaken for the imported file's hierarchy. The macOS CI generates a small
+binary PLY through the shared writer and verifies the loader, SH3/Q16 and camera-fit
+path without downloading assets.
+
+```sh
+VK_DRIVER_FILES=/path/to/MoltenVK_icd.json ./build-macos-release/tests/metal_viewer/mac_viewer_backend_benchmark \
+  --input /path/to/scene.ply --camera /path/to/camera.json \
+  --width 600 --height 668 --warmup 12 --samples 40 --output build-macos-release/real-viewer-benchmark.json
+```
+
 The JSON contains raw samples, median/p95, Vulkan/Metal median ratio, image
 MAE/RMSE/PSNR/max error, device/OS/compiler, validation environment, and combined
 process peak RSS. A ratio above one means Metal was faster for that case only.
@@ -414,3 +443,15 @@ matched 3DGS selection indices exactly. Seven GUT brush IDs differed from the
 legacy Vulkan arithmetic within 0.002 pixels of the boundary; independent double
 projection confirmed the native decisions in every case. This is semantic and
 numerical parity, not a promise of bit-identical floating-point boundary decisions.
+
+Local paired tests on an Apple M4 Pro illustrate the effect of the blend changes,
+without establishing a universal speed advantage. On the 1.18M SH0 PLY at 600x668,
+native 3DGS fell from 31.5 ms to roughly 11 ms, and GUT from 62.2 ms to 31.5 ms.
+Vulkan varied around 8.7-12.9 ms for GS and 26.6-27.2 ms for GUT. The native GS
+image remained byte-identical through the optimizations; repeated reference GS
+runs varied at isolated pixels (up to 6/255) without Vulkan source changes. Those
+full errors remain reported: a real-input strict parity run can reject them, and
+its 4/255 gate is not weakened. GUT stayed within 1/255. The synthetic 100k
+SH0/Q16 tests measured about 2.3x for GS and 1.4x for GUT in these runs. All figures
+are serial completed-frame latency, exclude desktop composition and must be
+retested on other scenes/devices. Real-scene GUT still trails the reference here.

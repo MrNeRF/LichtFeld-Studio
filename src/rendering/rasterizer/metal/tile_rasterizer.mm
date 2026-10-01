@@ -7,6 +7,7 @@
 #include <bit>
 #include <cmath>
 #include <map>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -122,6 +123,29 @@ namespace lfs::rendering::metal {
     struct TileRasterizer::Impl {
         id<MTLDevice> device;
         std::map<std::string, id<MTLComputePipelineState>> pipelines;
+        id<MTLLibrary> library;
+        std::mutex blend_mutex;
+        std::map<std::pair<uint32_t, uint32_t>, id<MTLComputePipelineState>> blend_pipelines;
+        id<MTLComputePipelineState> blendPipeline(uint32_t mode, uint32_t flags) {
+            std::lock_guard lock(blend_mutex);
+            const auto key = std::pair{mode, flags};
+            if (const auto found = blend_pipelines.find(key); found != blend_pipelines.end())
+                return found->second;
+            auto constants = [MTLFunctionConstantValues new];
+            [constants setConstantValue:&mode type:MTLDataTypeUInt atIndex:0];
+            [constants setConstantValue:&flags type:MTLDataTypeUInt atIndex:1];
+            NSError* error = nil;
+            auto function = [library newFunctionWithName:@"tile_blend" constantValues:constants error:&error];
+            if (!function)
+                throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal blend specialization failed");
+            auto state = [device newComputePipelineStateWithFunction:function error:&error];
+            if (!state)
+                throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal blend pipeline failed");
+            if (state.threadExecutionWidth != 32 || state.maxTotalThreadsPerThreadgroup < 64)
+                throw std::runtime_error("Metal blend specialization requires SIMD32 and 64-thread groups");
+            blend_pipelines.emplace(key, state);
+            return state;
+        }
         id<MTLComputeCommandEncoder> begin(id<MTLCommandBuffer> command, const char* name) {
             auto encoder = [command computeCommandEncoder];
             if (!encoder)
@@ -174,8 +198,9 @@ namespace lfs::rendering::metal {
                                               error:&error];
         if (!library)
             throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal tile shader compilation failed");
+        impl_->library = library;
         for (const char* name : {"tile_counts", "scan_blocks", "scan_add", "scan32_blocks", "scan32_add", "tile_status", "tile_instances",
-                                 "tile_histogram", "tile_scatter", "tile_ranges", "tile_blend"}) {
+                                 "tile_histogram", "tile_scatter", "tile_ranges"}) {
             auto function = [library newFunctionWithName:[NSString stringWithUTF8String:name]];
             auto state = [device newComputePipelineStateWithFunction:function error:&error];
             if (!state)
@@ -237,6 +262,10 @@ namespace lfs::rendering::metal {
         };
         check_mask(overlay.selection, selection_count);
         check_mask(overlay.preview, preview_count);
+        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
+        // Compile/cache before reserving the frame or encoding any work. A
+        // specialization failure cannot strand its busy flag or partial scratch.
+        const auto blend_pipeline = impl_->blendPipeline(uint32_t(mode), p.unused);
         if (f->in_flight.exchange(true, std::memory_order_acq_rel))
             throw std::logic_error("Metal viewer frame reservation is still in flight");
         f->completed.store(false, std::memory_order_release);
@@ -245,7 +274,6 @@ namespace lfs::rendering::metal {
             f->completed.store(finished.status == MTLCommandBufferStatusCompleted, std::memory_order_release);
             f->in_flight.store(false, std::memory_order_release);
         }];
-        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
         const auto dispatch = [](id<MTLComputeCommandEncoder> e, uint32_t n) {
             [e dispatchThreadgroups:MTLSizeMake(ceil_div(n, 256), 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [e endEncoding];
@@ -319,7 +347,11 @@ namespace lfs::rendering::metal {
             [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:3 * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [e endEncoding];
         }
-        e = impl_->begin(command, "tile_blend");
+        e = [command computeCommandEncoder];
+        if (!e)
+            throw std::runtime_error("Could not encode Metal viewer blend pass");
+        e.label = @"tile_blend";
+        [e setComputePipelineState:blend_pipeline];
         set_projected(e);
         const uint32_t sorted = (4 + (std::bit_width(f->tiles - 1) + 7) / 8) % 2;
         [e setBuffer:gut.buffer ?: f->counts offset:gut.buffer ? gut.offset : 0 atIndex:10];
@@ -335,7 +367,7 @@ namespace lfs::rendering::metal {
         [e setTexture:f->color atIndex:0];
         [e setTexture:f->depth atIndex:1];
         [e setTexture:f->pick atIndex:2];
-        [e dispatchThreadgroups:MTLSizeMake(f->tiles, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * 4, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
         [e endEncoding];
     }
 } // namespace lfs::rendering::metal
