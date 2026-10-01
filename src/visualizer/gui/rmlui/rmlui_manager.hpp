@@ -254,6 +254,8 @@ namespace lfs::vis::gui {
             PanelInputState input;
             std::function<bool(float, float)> pointer_blocker;
             PointerPressState pointer_presses[3] = {};
+            Rml::ObserverPtr<Rml::Element> pointer_documents[3];
+            Rml::ObserverPtr<Rml::Element> drag_element;
             std::vector<SDL_Scancode> shortcuts;
             uint64_t frame = 0;
             bool exclusive = false;
@@ -273,8 +275,23 @@ namespace lfs::vis::gui {
         bool input_mouse_down_[3] = {};
         FrameInputBuffer dispatch_frame_;
         PanelInputState dispatch_input_;
-        std::vector<Rml::Context*> pointer_contexts_;
+        std::vector<uint64_t> pointer_contexts_;
         bool focusContext(Rml::Context* context, bool activate = false);
+        void cancelPointerInput(Rml::Context* context, bool unloading = false);
+        void flushInputLifecycle();
+        void destroyContextNow(uint64_t id);
+        Rml::Context* contextById(uint64_t id, bool include_retired = false) const;
+        struct PointerCancellation {
+            uint64_t context_id;
+            Rml::ObserverPtr<Rml::Element> unloaded_drag;
+        };
+        std::vector<PointerCancellation> pending_pointer_cancellations_;
+        std::vector<uint64_t> pending_context_destructions_;
+        std::unordered_map<Rml::Context*, uint64_t> context_ids_;
+        uint64_t next_context_id_ = 1;
+        uint64_t current_drag_context_id_ = 0;
+        bool flushing_input_lifecycle_ = false;
+        bool input_dispatch_active_ = false;
         bool accepts_text_activation_ = true;
         std::vector<Rml::ObserverPtr<Rml::Element>> rejected_focus_;
 
@@ -308,6 +325,7 @@ namespace lfs::vis::gui {
         std::uint64_t tracked_context_order_ = 0;
         mutable std::mutex drag_payload_mutex_;
         std::optional<RmlDragPayload> drag_payload_;
+        uint64_t drag_payload_context_id_ = 0;
         std::uint64_t next_drag_payload_token_ = 1;
         SceneGraphElement* active_scene_graph_element_ = nullptr;
     };

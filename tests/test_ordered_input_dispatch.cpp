@@ -1086,3 +1086,431 @@ namespace lfs::vis {
         manager().deactivateInput(modal);
     }
 } // namespace lfs::vis
+
+namespace lfs::vis {
+    class PointerCancellationDispatchTest : public WindowInputDispatchTest {
+    protected:
+        struct Listener : Rml::EventListener {
+            int starts = 0, moves = 0, ends = 0, drops = 0, clicks = 0, cancelled_ends = 0;
+            std::function<void(Rml::Event&)> callback;
+            void ProcessEvent(Rml::Event& event) override {
+                const auto& type = event.GetType();
+                starts += type == "dragstart";
+                moves += type == "drag";
+                ends += type == "dragend";
+                cancelled_ends += type == "dragend" && event.GetParameter("cancelled", false);
+                drops += type == "dragdrop";
+                clicks += type == "click";
+                if (callback)
+                    callback(event);
+            }
+        } listener_;
+        Rml::ObserverPtr<Rml::Element> handle_;
+        float delivered_x_ = 0;
+        bool delivered_down_ = false;
+
+        void SetUp() override {
+            WindowInputDispatchTest::SetUp();
+            auto* handle = document_->AppendChild(document_->CreateElement("div"));
+            handle_ = handle->GetObserverPtr();
+            for (const auto& [name, value] : std::initializer_list<std::pair<const char*, const char*>>{
+                     {"position", "absolute"},
+                     {"left", "220px"},
+                     {"top", "100px"},
+                     {"width", "50px"},
+                     {"height", "50px"},
+                     {"drag", "drag-drop"}})
+                handle->SetProperty(name, value);
+            for (const auto* type : {"dragstart", "drag", "dragend", "click"})
+                handle->AddEventListener(type, &listener_);
+            document_->AddEventListener("dragdrop", &listener_, true);
+            context_->Update();
+            registerPointer();
+        }
+        void TearDown() override {
+            if (handle_) {
+                handle_->GetOwnerDocument()->RemoveEventListener("dragdrop", &listener_, true);
+                for (const auto* type : {"dragstart", "drag", "dragend", "click"})
+                    handle_->RemoveEventListener(type, &listener_);
+            }
+            WindowInputDispatchTest::TearDown();
+        }
+        void registerPointer() {
+            manager().routeInput(context_, {}, [&](const gui::PanelInputState& input) {
+                delivered_x_ = input.mouse_x;
+                delivered_down_ = input.mouse_down[0];
+                context_->ProcessMouseMove(input.mouse_x, input.mouse_y, 0);
+                for (const auto& button : input.mouse_button_events) {
+                    if (button.down)
+                        context_->ProcessMouseButtonDown(button.button, 0);
+                    else
+                        context_->ProcessMouseButtonUp(button.button, 0);
+                } }, false, [](float x, float) { return x >= 280; });
+        }
+        void pointer(Uint32 type, float x = 240, float y = 115) {
+            SDL_Event event{};
+            event.type = type;
+            if (type == SDL_EVENT_MOUSE_MOTION) {
+                event.motion.x = x;
+                event.motion.y = y;
+            } else {
+                event.button.button = SDL_BUTTON_LEFT;
+                event.button.x = x;
+                event.button.y = y;
+            }
+            dispatch(event);
+        }
+        void drainLifecycle() {
+            SDL_Event event{};
+            event.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
+            dispatch(event);
+        }
+        void startDrag() {
+            pointer(SDL_EVENT_MOUSE_BUTTON_DOWN);
+            pointer(SDL_EVENT_MOUSE_MOTION, 250, 130);
+            ASSERT_EQ(listener_.starts, 1);
+        }
+        void expectCancelled() {
+            EXPECT_EQ(listener_.ends, 1);
+            EXPECT_EQ(listener_.cancelled_ends, 1);
+            EXPECT_EQ(listener_.drops, 0);
+            EXPECT_EQ(listener_.clicks, 0);
+        }
+        void expectNoDragAfterReopen() {
+            registerPointer();
+            EXPECT_FALSE(delivered_down_);
+            const int moves = listener_.moves;
+            pointer(SDL_EVENT_MOUSE_MOTION, 310, 210);
+            EXPECT_LT(delivered_x_, 0);
+            EXPECT_FALSE(delivered_down_);
+            pointer(SDL_EVENT_MOUSE_MOTION, 250, 140);
+            EXPECT_FALSE(delivered_down_);
+            EXPECT_EQ(listener_.moves, moves);
+            expectCancelled();
+        }
+        void releaseAndReopen() {
+            pointer(SDL_EVENT_MOUSE_BUTTON_UP, 300, 200);
+            expectNoDragAfterReopen();
+        }
+    };
+
+    TEST_F(PointerCancellationDispatchTest, DeactivationCancelsBeforeReleaseAndReopen) {
+        startDrag();
+        manager().deactivateInput(context_);
+        drainLifecycle();
+        expectCancelled();
+        releaseAndReopen();
+    }
+
+    TEST_F(PointerCancellationDispatchTest, FocusLossCancelsBeforeReleaseAndRefocus) {
+        startDrag();
+        SDL_Event event{};
+        event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+        dispatch(event);
+        expectCancelled();
+        event.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
+        dispatch(event);
+        // The physical release happened outside the application and was lost.
+        expectNoDragAfterReopen();
+    }
+
+    TEST_F(PointerCancellationDispatchTest, HidingOwningDocumentCancelsDrag) {
+        startDrag();
+        document_->Hide();
+        drainLifecycle();
+        expectCancelled();
+        document_->Show();
+        context_->Update();
+        releaseAndReopen();
+    }
+
+    TEST_F(PointerCancellationDispatchTest, UnloadingOwningDocumentEndsDragBeforeRemoval) {
+        startDrag();
+        revert_.clear();
+        document_->Close();
+        drainLifecycle();
+        expectCancelled();
+        context_->Update();
+        releaseAndReopen();
+    }
+
+    TEST_F(PointerCancellationDispatchTest, UnloadingSecondaryPressDocumentEndsPrimaryDragOnce) {
+        startDrag();
+        auto* other = context_->LoadDocumentFromMemory(
+            "<rml><head><style>body { position:absolute; left:0px; top:180px; width:100px; height:100px; }"
+            "</style></head><body/></rml>");
+        ASSERT_NE(other, nullptr);
+        other->Show();
+        context_->Update();
+        ASSERT_EQ(context_->GetElementAtPoint({40, 200})->GetOwnerDocument(), other);
+        SDL_Event event{};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.button = SDL_BUTTON_RIGHT;
+        event.button.x = 40;
+        event.button.y = 200;
+        dispatch(event);
+        other->Close();
+        drainLifecycle();
+        expectCancelled();
+        context_->Update();
+        event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        dispatch(event);
+        releaseAndReopen();
+    }
+
+    TEST_F(PointerCancellationDispatchTest, DestroyingContextRetiresGestureBeforeRemoval) {
+        startDrag();
+        revert_.clear();
+        manager().destroyContext("dispatch-field");
+        drainLifecycle();
+        EXPECT_EQ(listener_.ends, 0);
+        EXPECT_EQ(listener_.drops, 0);
+        pointer(SDL_EVENT_MOUSE_BUTTON_UP, 300, 200);
+        EXPECT_FALSE(handle_);
+    }
+
+    TEST_F(PointerCancellationDispatchTest, HidingAnotherDocumentKeepsAcceptedDrag) {
+        auto* other = context_->LoadDocumentFromMemory("<rml><body/></rml>");
+        other->Show();
+        startDrag();
+        other->Hide();
+        EXPECT_EQ(listener_.ends, 0);
+        pointer(SDL_EVENT_MOUSE_BUTTON_UP, 300, 200);
+        EXPECT_EQ(listener_.ends, 1);
+    }
+
+    TEST_F(PointerCancellationDispatchTest, HideDuringDragStartCancelsAfterRmlReturns) {
+        listener_.callback = [&](Rml::Event& event) {
+            if (event.GetType() == "dragstart")
+                document_->Hide();
+        };
+        startDrag();
+        expectCancelled();
+        listener_.callback = {};
+    }
+
+    TEST_F(PointerCancellationDispatchTest, CancelCallbackCanDestroyItsContext) {
+        listener_.callback = [&](Rml::Event& event) {
+            if (event.GetType() == "dragend") {
+                revert_.clear();
+                manager().destroyContext("dispatch-field");
+                EXPECT_NE(Rml::GetContext("dispatch-field"), nullptr);
+            }
+        };
+        startDrag();
+        SDL_Event event{};
+        event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+        dispatch(event);
+        EXPECT_EQ(manager().getContext("dispatch-field"), nullptr);
+        EXPECT_FALSE(handle_);
+        expectCancelled();
+    }
+
+    TEST_F(PointerCancellationDispatchTest, DestroyDuringDragStartWaitsForRmlCaller) {
+        listener_.callback = [&](Rml::Event& event) {
+            if (event.GetType() == "dragstart") {
+                revert_.clear();
+                manager().destroyContext("dispatch-field");
+                EXPECT_NE(Rml::GetContext("dispatch-field"), nullptr);
+            }
+        };
+        startDrag();
+        EXPECT_EQ(manager().getContext("dispatch-field"), nullptr);
+        EXPECT_FALSE(handle_);
+        EXPECT_EQ(listener_.ends, 0);
+        EXPECT_EQ(listener_.drops, 0);
+    }
+
+    TEST_F(PointerCancellationDispatchTest, EarlierRootListenerNeverReceivesCancelledDrop) {
+        auto* root = context_->GetRootElement();
+        root->AddEventListener("dragdrop", &listener_, true);
+        startDrag();
+        SDL_Event event{};
+        event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+        dispatch(event);
+        expectCancelled();
+        root->RemoveEventListener("dragdrop", &listener_, true);
+    }
+
+    TEST_F(PointerCancellationDispatchTest, MouseoutRestoringHoverCannotClickOnCancel) {
+        bool restored = false;
+        listener_.callback = [&](Rml::Event& event) {
+            if (event.GetType() == "mouseout" && !restored) {
+                restored = true;
+                context_->ProcessMouseMove(240, 115, 0);
+            }
+        };
+        auto* root = context_->GetRootElement();
+        pointer(SDL_EVENT_MOUSE_BUTTON_DOWN);
+        root->AddEventListener("mouseout", &listener_, true);
+        SDL_Event event{};
+        event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+        dispatch(event);
+        EXPECT_TRUE(restored);
+        pointer(SDL_EVENT_MOUSE_BUTTON_UP);
+        EXPECT_EQ(listener_.clicks, 0);
+        EXPECT_EQ(listener_.drops, 0);
+        root->RemoveEventListener("mouseout", &listener_, true);
+        listener_.callback = {};
+    }
+
+    TEST_F(PointerCancellationDispatchTest, HidingPayloadSourceCannotReleaseIntoViewport) {
+        uint64_t token = 0;
+        listener_.callback = [&](Rml::Event& event) {
+            if (event.GetType() == "dragstart") {
+                token = manager().beginDragPayload("project", "drag-project", "Project");
+            } else if (event.GetType() == "dragend")
+                manager().endDragPayload(token);
+        };
+        startDrag();
+        document_->Hide();
+        drainLifecycle();
+        EXPECT_NE(token, 0);
+        EXPECT_FALSE(manager().dragPayload());
+        EXPECT_FALSE(manager().takeReleasedDragPayload());
+        expectCancelled();
+        listener_.callback = {};
+    }
+
+    TEST_F(PointerCancellationDispatchTest, DeactivatingPayloadSourceCannotReleaseIntoViewport) {
+        uint64_t token = 0;
+        listener_.callback = [&](Rml::Event& event) {
+            if (event.GetType() == "dragstart") {
+                token = manager().beginDragPayload("project", "drag-project", "Project");
+            } else if (event.GetType() == "dragend")
+                manager().endDragPayload(token);
+        };
+        startDrag();
+        manager().deactivateInput(context_);
+        drainLifecycle();
+        EXPECT_NE(token, 0);
+        EXPECT_FALSE(manager().dragPayload());
+        EXPECT_FALSE(manager().takeReleasedDragPayload());
+        expectCancelled();
+        listener_.callback = {};
+    }
+
+    TEST_F(PointerCancellationDispatchTest, HideBeforePayloadCreationRejectsPayload) {
+        listener_.callback = [&](Rml::Event& event) {
+            if (event.GetType() == "dragstart") {
+                document_->Hide();
+                EXPECT_EQ(manager().beginDragPayload("project", "drag-project", "Project"), 0);
+            }
+        };
+        startDrag();
+        expectCancelled();
+        EXPECT_FALSE(manager().dragPayload());
+        listener_.callback = {};
+    }
+
+    TEST_F(PointerCancellationDispatchTest, HideDuringReleaseDragStartRejectsPayload) {
+        uint64_t token = 0;
+        listener_.callback = [&](Rml::Event& event) {
+            if (event.GetType() == "dragstart") {
+                document_->Hide();
+                token = manager().beginDragPayload("project", "drag-project", "Project");
+                EXPECT_EQ(token, 0);
+            } else if (event.GetType() == "dragend")
+                EXPECT_FALSE(manager().endDragPayload(token));
+        };
+        pointer(SDL_EVENT_MOUSE_BUTTON_DOWN);
+        // The release position starts the drag before the button-up is delivered.
+        pointer(SDL_EVENT_MOUSE_BUTTON_UP, 250, 130);
+        EXPECT_EQ(listener_.starts, 1);
+        EXPECT_EQ(listener_.ends, 1);
+        EXPECT_FALSE(manager().dragPayload());
+        EXPECT_FALSE(manager().takeReleasedDragPayload());
+        listener_.callback = {};
+    }
+
+    TEST_F(PointerCancellationDispatchTest, ReleaseDragStartWithoutHideReleasesPayload) {
+        uint64_t token = 0;
+        listener_.callback = [&](Rml::Event& event) {
+            if (event.GetType() == "dragstart")
+                token = manager().beginDragPayload("project", "drag-project", "Project");
+            else if (event.GetType() == "dragend")
+                EXPECT_TRUE(manager().endDragPayload(token));
+        };
+        pointer(SDL_EVENT_MOUSE_BUTTON_DOWN);
+        pointer(SDL_EVENT_MOUSE_BUTTON_UP, 250, 130);
+        EXPECT_EQ(listener_.starts, 1);
+        EXPECT_EQ(listener_.ends, 1);
+        EXPECT_NE(token, 0);
+        auto released = manager().takeReleasedDragPayload();
+        ASSERT_TRUE(released);
+        EXPECT_EQ(released->token, token);
+        listener_.callback = {};
+    }
+
+    TEST_F(PointerCancellationDispatchTest, CancelCallbackCanCloseDocument) {
+        listener_.callback = [&](Rml::Event& event) {
+            if (event.GetType() == "dragend") {
+                revert_.clear();
+                document_->Close();
+            }
+        };
+        startDrag();
+        manager().deactivateInput(context_);
+        drainLifecycle();
+        expectCancelled();
+        context_->Update();
+        EXPECT_FALSE(handle_);
+        listener_.callback = {};
+    }
+
+    TEST_F(PointerCancellationDispatchTest, ReopenedPanelSuppressesCancelledPressUntilRelease) {
+        startDrag();
+        document_->Hide();
+        drainLifecycle();
+        document_->Show();
+        context_->Update();
+        gui::PanelInputState held;
+        held.mouse_down[0] = true;
+        manager().routeInput(context_, held, [&](const gui::PanelInputState& input) {
+            EXPECT_FALSE(input.mouse_down[0]);
+            EXPECT_TRUE(input.mouse_button_events.empty());
+        });
+        pointer(SDL_EVENT_MOUSE_BUTTON_UP);
+        expectCancelled();
+    }
+
+    TEST_F(PointerCancellationDispatchTest, RetiredCancellationCannotAffectReplacementContext) {
+        startDrag();
+        document_->Hide();
+        revert_.clear();
+        manager().destroyContext("dispatch-field");
+        auto* replacement = manager().createContext("dispatch-field", 400, 300);
+        ASSERT_NE(replacement, nullptr);
+        auto* document = replacement->LoadDocumentFromMemory("<rml><body>replacement</body></rml>");
+        document->Show();
+        drainLifecycle();
+        EXPECT_EQ(manager().getContext("dispatch-field"), replacement);
+        EXPECT_TRUE(document->IsVisible());
+        EXPECT_EQ(listener_.ends, 0);
+        EXPECT_FALSE(handle_);
+    }
+
+    TEST_F(PointerCancellationDispatchTest, UnrelatedDeactivationPreservesNormalPayloadRelease) {
+        uint64_t token = 0;
+        listener_.callback = [&](Rml::Event& event) {
+            if (event.GetType() == "dragstart")
+                token = manager().beginDragPayload("project", "drag-project", "Project");
+            else if (event.GetType() == "dragend")
+                manager().endDragPayload(token);
+        };
+        startDrag();
+        auto* other = manager().createContext("other-payload-context", 400, 300);
+        manager().activateInput(other, [](const gui::PanelInputState&) {}, false);
+        manager().deactivateInput(other);
+        drainLifecycle();
+        ASSERT_TRUE(manager().dragPayload());
+        EXPECT_EQ(manager().dragPayload()->token, token);
+        pointer(SDL_EVENT_MOUSE_BUTTON_UP, 300, 200);
+        auto released = manager().takeReleasedDragPayload();
+        ASSERT_TRUE(released);
+        EXPECT_EQ(released->token, token);
+        EXPECT_EQ(listener_.ends, 1);
+        EXPECT_EQ(listener_.cancelled_ends, 0);
+        listener_.callback = {};
+    }
+} // namespace lfs::vis
