@@ -41,7 +41,7 @@ namespace lfs::core::internal {
         // write it through its device address and read_readback waits for the
         // producer and copies from the mapping, so the staging ring and its
         // mutex stay out of the path. The block comes back zeroed.
-        [[nodiscard]] StorageRef allocate_readback(size_t bytes);
+        [[nodiscard]] LFS_CORE_API StorageRef allocate_readback(size_t bytes);
         void read_readback(StorageRef storage, void* destination, size_t bytes);
         LFS_CORE_API void deallocate(StorageRef storage) noexcept;
         LFS_CORE_API void copy_host_to_device(const CopyRequest& request);
