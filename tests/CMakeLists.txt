@@ -571,6 +571,8 @@ set(TEST_FILES
     test_tensor_point_ops.cpp
     test_tensor_expression.cpp
     test_tensor_expression_cuda.cu
+    test_tensor_warp_reduce.cpp
+    test_tensor_warp_reduce_cuda.cu
     test_splat_codec_edits.cpp
     test_tensor_splat_affine.cpp
     test_tensor_sh_codec.cpp
