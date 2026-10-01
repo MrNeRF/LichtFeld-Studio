@@ -48,6 +48,7 @@ kernel void scan_blocks(device const ulong* input [[buffer(0)]],
                         device ulong* output [[buffer(1)]],
                         device ulong* sums [[buffer(2)]],
                         constant uint& count [[buffer(3)]],
+                        constant uint& primitive_counts [[buffer(4)]],
                         uint group [[threadgroup_position_in_grid]],
                         uint lane [[thread_index_in_threadgroup]],
                         uint sg [[simdgroup_index_in_threadgroup]]) {
@@ -57,7 +58,13 @@ kernel void scan_blocks(device const ulong* input [[buffer(0)]],
     // MSL 2.4 SIMD reductions do not accept ulong. Sum 16-bit limbs with
     // uint32 operations (32 lanes cannot overflow), then carry in ulong.
     ulong prefix = 0, simd_total = 0;
-    for (uint shift = 0; shift < 64; shift += 16) {
+    if (primitive_counts) {
+        // Width/height are bounded by 16384: a source covers at most
+        // 1024*1024 bins. A 32-lane sum fits uint32 without truncation;
+        // group totals and every subsequent hierarchy level stay uint64.
+        prefix = ulong(simd_prefix_exclusive_sum(uint(value)));
+        simd_total = ulong(simd_sum(uint(value)));
+    } else for (uint shift = 0; shift < 64; shift += 16) {
         const uint limb = uint((value >> shift) & 65535);
         prefix += ulong(simd_prefix_exclusive_sum(limb)) << shift;
         simd_total += ulong(simd_sum(limb)) << shift;
@@ -76,14 +83,26 @@ kernel void scan_add(device ulong* output [[buffer(0)]],
 }
 // Histogram totals cannot exceed the admitted uint32 instance capacity. Keep
 // the pre-admission count scan above in uint64 so overflow reporting stays exact.
+// Scratch remains reserved for the largest frame, but both its digit stride and
+// recursive scan extents follow the live instance count without a CPU readback.
+uint live_sort_blocks(device const RasterStatus& status) {
+    return max(1u, uint(((status.error ? 0ul : status.required) + 2047ul) / 2048ul));
+}
+uint histogram_scan_count(device const RasterStatus& status, uint level) {
+    uint count = live_sort_blocks(status) * 256u;
+    for (uint i = 0; i < level; ++i) count = (count + 255u) / 256u;
+    return count;
+}
 kernel void scan32_blocks(device const uint* input [[buffer(0)]],
                           device uint* output [[buffer(1)]],
                           device uint* sums [[buffer(2)]],
-                          constant uint& count [[buffer(3)]],
+                          constant uint& level [[buffer(3)]],
+                          device const RasterStatus& status [[buffer(4)]],
                           uint group [[threadgroup_position_in_grid]],
                           uint lane [[thread_index_in_threadgroup]],
                           uint sg [[simdgroup_index_in_threadgroup]]) {
     threadgroup uint group_sums[8];
+    const uint count = histogram_scan_count(status, level);
     const uint i=group*256+lane;
     const uint value=i<count?input[i]:0;
     uint prefix=simd_prefix_exclusive_sum(value);
@@ -96,8 +115,10 @@ kernel void scan32_blocks(device const uint* input [[buffer(0)]],
 }
 kernel void scan32_add(device uint* output [[buffer(0)]],
                        device const uint* offsets [[buffer(1)]],
-                       constant uint& count [[buffer(2)]],
+                       constant uint& level [[buffer(2)]],
+                       device const RasterStatus& status [[buffer(3)]],
                        uint i [[thread_position_in_grid]]) {
+    const uint count = histogram_scan_count(status, level);
     if(i<count)output[i]+=offsets[i/256];
 }
 kernel void tile_status(device const ulong* counts [[buffer(0)]],
@@ -113,6 +134,14 @@ kernel void tile_status(device const ulong* counts [[buffer(0)]],
     dispatch_args[1]=1; dispatch_args[2]=1;
     dispatch_args[3]=max(1u,uint((live+255)/256));
     dispatch_args[4]=1; dispatch_args[5]=1;
+    uint histogram_count = live_sort_blocks(status) * 256u;
+    for (uint level = 0; level < 4; ++level) {
+        const uint groups = (histogram_count + 255u) / 256u;
+        dispatch_args[6 + level * 3] = groups;
+        dispatch_args[7 + level * 3] = 1;
+        dispatch_args[8 + level * 3] = 1;
+        histogram_count = groups;
+    }
 }
 kernel void tile_instances(device const ProjectedSplat* splats [[buffer(0)]],
                            device const ulong* offsets [[buffer(1)]],
@@ -151,15 +180,24 @@ kernel void tile_histogram(device const ulong* keys [[buffer(0)]],
     const ulong n = status.error ? 0 : status.required;
     for (uint j = 0; j < 8; ++j) {
         const ulong i = ulong(group) * 2048 + j * 256 + lane;
-        if (i < n)
-            atomic_fetch_add_explicit(&counts[sg * 256 + ((keys[i] >> p.shift) & 255)],
-                                       1, memory_order_relaxed);
+        const bool valid = i < n;
+        const uint digit = valid ? uint((keys[i] >> p.shift) & 255ul) : 0u;
+        uint peers = uint(static_cast<simd_vote::vote_t>(simd_ballot(valid)));
+        for (uint bit = 0; bit < 8; ++bit) {
+            const bool set = ((digit >> bit) & 1u) != 0;
+            const uint vote = uint(static_cast<simd_vote::vote_t>(simd_ballot(set)));
+            peers &= set ? vote : ~vote;
+        }
+        // Coalesce equal radix digits in each SIMD, avoiding 32 serialized
+        // atomics for the common high depth/tile bytes. Integer counts are exact.
+        if (valid && (peers & ((1u << (lane & 31u)) - 1u)) == 0u)
+            atomic_fetch_add_explicit(&counts[sg * 256 + digit], popcount(peers), memory_order_relaxed);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     uint total = 0;
     for (uint s = 0; s < 8; ++s)
         total += atomic_load_explicit(&counts[s * 256 + lane], memory_order_relaxed);
-    histogram[lane * p.blocks + group] = total;
+    histogram[lane * live_sort_blocks(status) + group] = total;
 }
 kernel void tile_scatter(device const ulong* keys_in [[buffer(0)]],
                          device const uint* values_in [[buffer(1)]],
@@ -177,7 +215,7 @@ kernel void tile_scatter(device const ulong* keys_in [[buffer(0)]],
     if (base >= n) return; // Uniform for the entire group.
     threadgroup uint digit_base[256];
     threadgroup uint offsets[8 * 256];
-    digit_base[lane] = uint(histogram[lane * p.blocks + group]);
+    digit_base[lane] = histogram[lane * live_sort_blocks(status) + group];
     const uint below = (1u << sl) - 1;
     for (ulong chunk = base; chunk < min(base + 2048, n); chunk += 256) {
         for (uint s = 0; s < 8; ++s) offsets[s * 256 + lane] = 0;
@@ -253,14 +291,18 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     // Keep the stable 16x16 bin/sort contract. Four independent 8x8 blend
     // groups traverse the same ordered list, each with its own saturation vote.
     // This reduces shared storage and avoids waiting for unrelated pixels.
-    const uint tile=group/4, subtile=group%4;
+    // Ordinary GS uses one SIMD32 group per 8x4 pixel region. Retain
+    // the same 64-source batch boundary so half composition stays unchanged.
+    const bool single_simd=(kRasterFlags&128u)!=0;
+    const uint subtiles=single_simd?8u:4u, pixel_height=single_simd?4u:8u;
+    const uint tile=group/subtiles, subtile=group%subtiles;
     threadgroup float4 means[64], conics[64], colors[64];
     threadgroup GutSplat geometry[64];
     threadgroup half4 macro_chol[64];
     threadgroup half2 macro_center[64];
     threadgroup uint ids[64], finished[2], active_counts[2];
     const uint2 tile_origin = uint2((tile % p.columns)*16+(subtile%2)*8,
-                                    (tile / p.columns)*16+(subtile/2)*8);
+                                    (tile / p.columns)*16+(subtile/2)*pixel_height);
     const uint2 pixel = tile_origin+uint2(lane%8,lane/8);
     // Ordinary GS bounds are suitable only without extended overlays. GUT
     // uses a separate conservative 3D-support sphere; portal and panorama
@@ -277,6 +319,10 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     const float2 first_macro=floor((float2(tile_origin)+p.render_origin.xy)/overlay_macro_extent);
     const bool uniform_macro=all(first_macro==floor((float2(tile_origin)+7.f+p.render_origin.xy)/overlay_macro_extent));
     const float2 batch_macro_origin=first_macro*overlay_macro_extent;
+    // Pixel coordinates and crop-relative macro identity are invariant across
+    // every batch. Keep the same half rounding outside the contributor loop.
+    const float2 pixel_macro_origin=uniform_macro?batch_macro_origin:floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
+    const half2 pixel_macro_coord=half2((float2(pixel)+p.render_origin.xy-pixel_macro_origin)/overlay_tile_extent);
     const bool valid = pixel.x < p.width && pixel.y < p.height;
     bool done = !valid;
     float transmittance = 1, weighted_depth = 0, nearest = 0, median = 1e10f;
@@ -307,25 +353,31 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     }
     for (ulong batch = begin; batch < end; batch += 64) {
         const bool all_done = simd_all(done);
-        if ((lane & 31) == 0) finished[sg] = all_done;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        bool stop = true;
-        for (uint s = 0; s < 2; ++s) stop = stop && finished[s];
-        if (stop) break;
+        if(single_simd) {
+            if(all_done)break;
+        } else {
+            if ((lane & 31) == 0) finished[sg] = all_done;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            if(finished[0] && finished[1])break;
+        }
         const uint source_count=uint(min(ulong(64),ulong(end)-batch));
-        uint count=source_count, destination=lane, id=0;
+        uint count=single_simd && compact_candidates?0u:source_count;
+        const uint loaders=single_simd?32u:64u;
+        for(uint source_offset=0;source_offset<64u;source_offset+=loaders) {
+        const uint source_lane=source_offset+lane;
+        uint destination=source_lane, id=0;
         ProjectedSplat splat{};
         GutSplat g{};
-        bool active=lane<source_count;
+        bool active=source_lane<source_count;
         if (active) {
-            id=indices[batch+lane];
+            id=indices[batch+source_lane];
             splat=splats[id];
             if(kRasterMode==3u)g=gut[id];
         }
         if (compact_candidates) {
             // Integer support with a one-pixel margin includes rounding of the
             // full-float projection and the optional half portal footprint.
-            const int2 minimum=int2(tile_origin)-1, maximum=int2(tile_origin)+9;
+            const int2 minimum=int2(tile_origin)-1, maximum=int2(tile_origin)+int2(9,int(pixel_height)+1);
             if(compact_gs)active=active && all(int2(splat.bounds.xy)<maximum) && all(int2(splat.bounds.zw)>minimum);
             if(compact_gut && active && g.inverse0.w>0.f) {
                 // Reject only if the complete alpha-support sphere is outside
@@ -341,10 +393,15 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             const uint live=active?1u:0u;
             destination=simd_prefix_exclusive_sum(live);
             const uint total=simd_sum(live);
-            if ((lane&31)==0) active_counts[sg]=total;
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-            if (sg) destination+=active_counts[0];
-            count=active_counts[0]+active_counts[1];
+            if(single_simd) {
+                destination+=count;
+                count+=total;
+            } else {
+                if ((lane&31)==0) active_counts[sg]=total;
+                threadgroup_barrier(mem_flags::mem_threadgroup);
+                if (sg) destination+=active_counts[0];
+                count=active_counts[0]+active_counts[1];
+            }
         }
         if (active) {
             ids[destination] = id;
@@ -388,7 +445,9 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 colors[destination].w=opacity>1.f?exp((opacity*opacity-1.f)/2.718281828459045f):0.f;
             }
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        if(single_simd)simdgroup_barrier(mem_flags::mem_threadgroup);
+        else threadgroup_barrier(mem_flags::mem_threadgroup);
         if (!done) for (uint j = 0; j < count; ++j) {
             // Studio's CUDA/Vulkan convention samples at integer pixel coordinates.
             const uint logical=(kRasterFlags&8u)?logical_ids[ids[j]]:ids[j];
@@ -396,7 +455,9 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             const float2 d = float2(pixel) - means[j].xy;
             const float4 c = conics[j];
             const bool half_footprint=(kRasterMode==0u && (kRasterFlags&(4u|64u))) || (kRasterMode!=3u && !(kRasterFlags&16u) && (kRasterFlags&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u));
-            const float q = c.x*d.x*d.x + 2*c.y*d.x*d.y + c.z*d.y*d.y;
+            // The HiGS profile evaluates the half Cholesky footprint below.
+            // Its reference does not evaluate a second full-float conic first.
+            const float q = half_footprint ? 0.f : c.x*d.x*d.x + 2*c.y*d.x*d.y + c.z*d.y*d.y;
             if (q < 0 || !isfinite(q)) continue;
             if (!(kRasterFlags&16u) && kRasterMode==0u && !half_footprint && .5f*q>colors[j].w) continue;
             float alpha;
@@ -442,16 +503,14 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             }
             alpha = min(alpha, .999f);
             if(half_footprint){
-                const float2 origin=uniform_macro?batch_macro_origin:floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
-                const half2 center=uniform_macro?macro_center[j]:half2((means[j].xy+p.render_origin.xy-origin)/overlay_tile_extent);
-                const half2 coord=half2((float2(pixel)+p.render_origin.xy-origin)/overlay_tile_extent);
+                const half2 center=uniform_macro?macro_center[j]:half2((means[j].xy+p.render_origin.xy-pixel_macro_origin)/overlay_tile_extent);
                 const half4 chol=macro_chol[j];
-                const half2 delta=coord-center;
+                const half2 delta=pixel_macro_coord-center;
                 // The macro reference rounds the X product before adding Y.
                 const half dx=half(chol.x*delta.x);
                 const half u=half(dx+chol.y*delta.y),v=half(chol.z*delta.y);
                 const half power=u*u+v*v;
-                if(power<0 || power>chol.w)continue;
+                if(!isfinite(power) || power<0 || power>chol.w)continue;
                 // Match the portal's macro-relative FP16 footprint. The
                 // final native composition remains FP32; this is display-profile math.
                 half value=exp2(-power);
@@ -543,7 +602,8 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             composed_transmittance*=transmittance;
             rgb=0;transmittance=1;
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if(single_simd)simdgroup_barrier(mem_flags::mem_threadgroup);
+        else threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     if (valid) {
         if(kRasterFlags&64u){rgb=composed_rgb;transmittance=composed_transmittance;}

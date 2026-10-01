@@ -3,6 +3,7 @@
 #pragma once
 #ifdef __APPLE__
 #include "core/error.hpp"
+#include <array>
 #include "point_cloud_vulkan_renderer.hpp"
 #include "vksplat_viewport_renderer.hpp"
 
@@ -23,6 +24,16 @@ namespace lfs::vis {
         MetalViewportRenderer();
         ~MetalViewportRenderer();
         static bool supports(const core::SplatData&, const rendering::ViewportRenderRequest&);
+        // Diagnostics are opt-in and separate from ordinary rendering and wall latency.
+        struct FrameDiagnostics {
+            uint64_t required_instances = 0;
+            uint32_t reserved_instances = 0, input_splats = 0;
+            double gpu_command_ms = 0;
+            bool counter_timestamps_available = false;
+            std::array<double, 5> gpu_stage_ms{}; // projection, instances, sort, blend, present
+        };
+        void setProfilingEnabled(bool);
+        lfs::Result<FrameDiagnostics> frameDiagnostics(VksplatViewportRenderer::OutputSlot) const;
         void setLodSettings(size_t pool_splats, float vram_fraction, uint32_t fade_frames);
         static bool supportsSelection(const core::SplatData&, const VksplatViewportRenderer::SelectionMaskRequest&);
         lfs::Result<core::Tensor> buildSelectionMask(VulkanContext&, const core::SplatData&, const VksplatViewportRenderer::SelectionMaskRequest&);

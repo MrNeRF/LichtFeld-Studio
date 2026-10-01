@@ -268,13 +268,13 @@ static void run(id<MTLDevice> device) {
     auto queue = [device newCommandQueue];
     constexpr uint32_t width = 37, height = 29;
     const simd_float4 bg{.15f, .1f, .2f, .4f};
-    // The reserved histogram exceeds 256*256 entries, exercising three
-    // scan levels even when the live frame is small or empty. Reuse it after
-    // a large stable sort to catch stale inactive histogram blocks.
+    // Reserve three scan levels, then alternate large, small, empty and fully
+    // culled live domains without reallocating. The independent CPU oracle
+    // catches stale histogram data and equal-depth instability across blocks.
     constexpr uint32_t capacity = 131073;
     RasterFrame frame(device, width, height, capacity, capacity * 6);
     std::mt19937 random(0x1939);
-    for (uint32_t count : {0u, 1u, 255u, 256u, 257u, 2047u, 2048u, 2049u, 4097u, capacity, 0u}) {
+    for (uint32_t count : {capacity, 2049u, 1u, 2u, 0u, 255u, 256u, 257u, 2047u, 2048u, 4097u, capacity, 257u, 2u, 0u}) {
         std::vector<ProjectedSplat> splats(count);
         uint64_t expected_instances = 0;
         for (uint32_t i = 0; i < count; ++i) {
@@ -288,7 +288,7 @@ static void run(id<MTLDevice> device) {
             s.color.w = 1 + float((i * 7) % 11);
             s.bounds = {uint32_t(std::max(0.f, x - 6)), uint32_t(std::max(0.f, y - 6)),
                         uint32_t(std::min(float(width), x + 7)), uint32_t(std::min(float(height), y + 7))};
-            if (i % 19 == 3)
+            if (count == 2 || i % 19 == 3)
                 s.bounds = {};
             else
                 expected_instances += ((s.bounds.z + 15) / 16 - s.bounds.x / 16) * ((s.bounds.w + 15) / 16 - s.bounds.y / 16);

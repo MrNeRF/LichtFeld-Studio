@@ -118,6 +118,36 @@ if(TARGET lfs_visualizer)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-input.json")
             set_tests_properties(MacViewerParity_input PROPERTIES
                 LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            # Import format parity is macOS/GPU-only. Each case uses an isolated
+            # generated file, the shared loader, both SH0 and SH3/Q16, and real
+            # tensor storage. CI checks correctness, never a timing ratio.
+            foreach(_format IN ITEMS ply spz3 spz4 glb sog ssog rad)
+                set(_extension "${_format}")
+                if(_format MATCHES "^spz")
+                    set(_extension spz)
+                endif()
+                foreach(_tensor IN ITEMS metal vulkan)
+                    foreach(_raster IN ITEMS gs gut)
+                        set(_format_test MacViewerParity_format_${_format}_${_tensor}_${_raster})
+                        set(_format_args)
+                        if(_raster STREQUAL "gut")
+                            list(APPEND _format_args --gut)
+                        endif()
+                        add_test(NAME ${_format_test} COMMAND mac_viewer_backend_benchmark
+                            --smoke --tensor-backend ${_tensor} ${_format_args}
+                            --fixture-format ${_format}
+                            --input-fixture "${CMAKE_CURRENT_BINARY_DIR}/${_format_test}.${_extension}"
+                            --output "${CMAKE_CURRENT_BINARY_DIR}/${_format_test}.json")
+                        set_tests_properties(${_format_test} PROPERTIES
+                            LABELS "metal;gpu;metal4;parity;formats" TIMEOUT 180 SKIP_RETURN_CODE 77)
+                    endforeach()
+                endforeach()
+            endforeach()
+            add_test(NAME MacViewerGpuProfileSmoke COMMAND mac_viewer_backend_benchmark
+                --smoke --profile --deterministic-reference
+                --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-gpu-profile-smoke.json")
+            set_tests_properties(MacViewerGpuProfileSmoke PROPERTIES
+                LABELS "benchmark;metal;gpu;metal4" TIMEOUT 180 SKIP_RETURN_CODE 77)
             foreach(_frustum_mode IN ITEMS native mip ortho portal)
                 set(_frustum_args --frustum)
                 if(NOT _frustum_mode STREQUAL "native")

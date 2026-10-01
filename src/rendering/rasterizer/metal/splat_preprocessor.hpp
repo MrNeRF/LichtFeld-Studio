@@ -110,6 +110,7 @@ namespace lfs::rendering::metal {
     // Encodes into a caller-owned command buffer. No CPU sort, readback, global
     // float32 SH expansion, queue wait, or per-frame allocation. Callers retain
     // buffer ownership until completion and synchronize external producers.
+    class GpuProfile;
     class SplatPreprocessor {
     public:
         explicit SplatPreprocessor(id<MTLDevice> device);
@@ -120,7 +121,7 @@ namespace lfs::rendering::metal {
         void prepare(ShStorage storage, uint32_t active_degree, PrimitiveMode mode);
         void encode(id<MTLCommandBuffer> command, const SplatBuffers& inputs,
                     const Projection& projection, uint32_t active_degree,
-                    PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene = {}, const OverlayBuffers& overlay = {}, BufferSlice gut_output = {}, const LodSelection& lod = {});
+                    PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene = {}, const OverlayBuffers& overlay = {}, BufferSlice gut_output = {}, const LodSelection& lod = {}, GpuProfile* profile = nullptr);
 
     private:
         struct Impl;

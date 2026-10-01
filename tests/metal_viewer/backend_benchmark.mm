@@ -9,6 +9,7 @@
 #import <Metal/Metal.h>
 #include <Python.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -31,9 +32,9 @@ namespace {
         size_t count = 100000;
         int width = 1280, height = 720, warmup = 12, samples = 40, tone = 0;
         float exposure = 1.f;
-        std::string output, images, overlay, input, camera;
+        std::string output, images, overlay, input, camera, fixture_format;
         core::GpuBackend tensor_backend = core::GpuBackend::Metal;
-        bool frustum = false, verify_parity = false, saturation = false, input_fixture = false, transparent = false, depth_gray = false;
+        bool profile_gpu = false, deterministic_reference = false, frustum = false, verify_parity = false, saturation = false, input_fixture = false, transparent = false, depth_gray = false;
         bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false, portal = false, portal_tone = false, lod = false, lod_logical = false, lod_weights = false, lod_debug = false, spark = false, gpu_lod = false, gpu_lod_budget = false;
     };
     Options options(int argc, char** argv) {
@@ -94,6 +95,14 @@ namespace {
                 o.export_scale = true;
                 continue;
             }
+            if (arg == "--profile") {
+                o.profile_gpu = true;
+                continue;
+            }
+            if (arg == "--deterministic-reference") {
+                o.deterministic_reference = true;
+                continue;
+            }
             if (arg == "--verify-parity") {
                 o.verify_parity = true;
                 continue;
@@ -144,6 +153,12 @@ namespace {
                     throw std::runtime_error("Only one benchmark input is allowed");
                 o.input = value;
                 o.input_fixture = arg == "--input-fixture";
+                continue;
+            }
+            if (arg == "--fixture-format") {
+                if (value != "ply" && value != "spz3" && value != "spz4" && value != "glb" && value != "sog" && value != "ssog" && value != "rad")
+                    throw std::invalid_argument("Unknown benchmark fixture format");
+                o.fixture_format = value;
                 continue;
             }
             if (arg == "--camera") {
@@ -446,17 +461,37 @@ namespace {
         std::string loader_name;
         if (!o.input.empty()) {
             if (o.input_fixture) {
-                // CI exercises the supported binary format through the shared
-                // writer and loader, including SH3 -> production Q16 preparation.
+                // Exercise production codecs and importer routing, including SH3 ->
+                // Q16 preparation. No download, CUDA codec or user file is needed.
+                // The corpus writer has one fixed tensor backend independent of the
+                // import/storage backend under test. SSOG's CPU hierarchy builder
+                // currently allocates intermediate device gathers on Metal.
+                core::GpuBackendScope fixture_scope(core::GpuBackend::Metal);
                 auto fixture = scene(512, 3);
-                const auto saved = io::save_ply(fixture, {.output_path = o.input});
+                const auto format = o.fixture_format.empty() ? "ply" : o.fixture_format;
+                const auto saved = [&]() -> io::Result<void> {
+                    if (format == "ply")
+                        return io::save_ply(fixture, {.output_path = o.input});
+                    if (format == "spz3" || format == "spz4" || format == "glb")
+                        return io::save_spz(fixture, {.output_path = o.input, .version = format == "spz4" ? 4 : 3, .glb = format == "glb"});
+                    if (format == "sog")
+                        return io::save_sog(fixture, {.output_path = o.input, .kmeans_iterations = 1, .use_gpu = false});
+                    if (format == "ssog")
+                        return io::save_ssog(fixture, {.output_path = o.input, .lod_levels = 2, .kmeans_iterations = 1, .use_gpu = false});
+                    return io::save_rad(fixture, {.output_path = o.input});
+                }();
                 if (!saved)
                     throw std::runtime_error(saved.error().format());
             }
             // Loading, codec preparation and camera fitting precede all measured
             // frames. Both adapters consume this same resident model unchanged.
             auto loader = io::Loader::create();
-            auto loaded = loader->load(o.input);
+            // Use the same shared migration step as desktop import. SPZ starts
+            // in CPU decoder storage; direct loader calls without an allocator
+            // would test an unprepared model that the application never renders.
+            io::LoadOptions load_options;
+            load_options.splat_tensor_allocator = context.tensorInterop().splat_allocator();
+            auto loaded = loader->load(o.input, load_options);
             if (!loaded)
                 throw std::runtime_error(loaded.error().format());
             auto splats = std::get_if<std::shared_ptr<core::SplatData>>(&loaded->data);
@@ -471,6 +506,7 @@ namespace {
             const int degree = std::min(3, imported->get_max_sh_degree());
             if (degree > 0) {
                 (void)imported->apply_shN_value_quant();
+
                 degrees.push_back(degree);
             }
             imported_transforms = {rendering::DATA_TO_VISUALIZER_WORLD_AXES_4};
@@ -526,6 +562,7 @@ namespace {
             auto& model = imported ? *imported : *generated;
             model.set_active_sh_degree(degree);
             vis::MetalViewportRenderer metal;
+            metal.setProfilingEnabled(o.profile_gpu);
             vis::VksplatViewportRenderer vulkan;
             rendering::ViewportRenderRequest request;
             std::vector<uint32_t> lod_indices, lod_logical, lod_levels;
@@ -635,7 +672,12 @@ namespace {
                 request.overlay.emphasis.flash_intensity = .8f;
             }
             if (!vis::MetalViewportRenderer::supports(model, request))
-                throw std::runtime_error("Unsupported native benchmark frame");
+                throw std::runtime_error("Unsupported native benchmark frame: means device=" + std::to_string(int(model.means_raw().device())) +
+                                         " dtype=" + std::to_string(int(model.means_raw().dtype())) +
+                                         " sh0=" + std::to_string(int(model.sh0_raw().dtype())) +
+                                         " packed_nonSH=" + std::to_string(model.non_sh_attrs_f16()) +
+                                         " rad=" + std::to_string(bool(model.lod_tree && model.lod_tree->rad_source.valid())) +
+                                         " gpu_lod=" + std::to_string(request.lod_gpu_traversal.enabled));
             // Compare tiled export against the full reference camera. The
             // legacy Vulkan panorama subregion wraps its local tile grid;
             // comparing that output would bless a clipped reference seam.
@@ -660,7 +702,7 @@ namespace {
             }
             auto frame = [&](bool native) {
                 auto result = native ? vis::legacyMetalResult(metal.render(context, model, request, Slot::Main))
-                                     : vulkan.render(context, reference_cut ? *reference_cut : model, reference_request, false, Slot::Main);
+                                     : vulkan.render(context, reference_cut ? *reference_cut : model, reference_request, false, Slot::Main, false, o.deterministic_reference);
                 if (!result)
                     throw std::runtime_error(result.error());
                 wait(context, *result);
@@ -684,6 +726,7 @@ namespace {
                     throw std::runtime_error("Native LOD diagnostics differ from the completed GPU cut");
             }
             std::vector<double> native_times, vulkan_times;
+            std::array<std::vector<double>, 6> gpu_times;
             for (int n = 0; n < o.samples; ++n) {
                 // AB/BA pairs reduce order, thermal and drift bias; keep every raw sample.
                 for (int j = 0; j < 2; ++j) {
@@ -696,6 +739,15 @@ namespace {
                     if (native && !complete())
                         throw std::runtime_error("Partial native frame in measured sample");
                     (native ? native_times : vulkan_times).push_back(ms);
+                    if (native && o.profile_gpu) {
+                        const auto diagnostics = metal.frameDiagnostics(Slot::Main);
+                        if (!diagnostics)
+                            throw std::runtime_error(lfs::format_for_developer(diagnostics.error()));
+                        gpu_times[0].push_back(diagnostics->gpu_command_ms);
+                        if (diagnostics->counter_timestamps_available)
+                            for (size_t stage = 0; stage < 5; ++stage)
+                                gpu_times[stage + 1].push_back(diagnostics->gpu_stage_ms[stage]);
+                    }
                 }
             }
             // GPU synchronization is measured; CPU image transfers are deliberately separate.
@@ -820,10 +872,23 @@ namespace {
                                     double(difference[o.depth ? "depth_valid_rmse" : "rmse"]) > 1. / 255))
                 throw std::runtime_error("Native image exceeds FP16-reference parity bounds (valid max 4/255, RMS 1/255, depth coverage 0.1%): SH" + std::to_string(degree) + " " + difference.dump());
             const auto native_stats = statistics(native_times), vulkan_stats = statistics(vulkan_times);
+            const auto diagnostics = metal.frameDiagnostics(Slot::Main);
+            if (!diagnostics)
+                throw std::runtime_error(lfs::format_for_developer(diagnostics.error()));
+            Json gpu_diagnostics = {{"required_instances", diagnostics->required_instances},
+                                    {"reserved_instances", diagnostics->reserved_instances},
+                                    {"input_splats", diagnostics->input_splats},
+                                    {"counter_timestamps_available", diagnostics->counter_timestamps_available}};
+            if (o.profile_gpu) {
+                const std::array<const char*, 6> stages{"command", "projection", "instances", "sort", "blend", "present"};
+                for (size_t stage = 0; stage < stages.size(); ++stage)
+                    gpu_diagnostics[stages[stage]] = gpu_times[stage].empty() ? Json(nullptr) : statistics(gpu_times[stage]);
+            }
             cases.push_back({{"sh_degree", degree}, {"storage", degree ? (model.shN_value_quantized() ? "q16" : model.shN_ieee_f16() ? "f16"
                                                                                                                                      : "f32")
                                                                        : "sh0"},
                              {"metal", native_stats},
+                             {"metal_gpu_diagnostics", gpu_diagnostics},
                              {"vulkan", vulkan_stats},
                              {"speedup_vulkan_over_metal", (o.subregion || (o.gut && o.lod)) ? Json(nullptr) : Json(double(vulkan_stats["median_ms"]) / double(native_stats["median_ms"]))},
                              {"image_difference", difference}});
@@ -838,7 +903,7 @@ namespace {
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"tensor_backend", core::gpu_backend_name(o.tensor_backend)}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", imported ? Json(nullptr) : Json(1939)}, {"scene_source", imported ? o.input : "synthetic"}, {"loader", loader_name}, {"generated_input_fixture", o.input_fixture}, {"camera_source", imported ? (o.camera.empty() ? "fitted_bounds" : o.camera) : "synthetic"}, {"camera_pose", camera_pose}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"tone_operator", o.tone}, {"exposure", o.exposure}, {"transparent", o.transparent}, {"depth_grayscale", o.depth_gray}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"frustum_fixture", o.frustum}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"gpu_profiling", o.profile_gpu}, {"deterministic_reference", o.deterministic_reference}, {"tensor_backend", core::gpu_backend_name(o.tensor_backend)}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", imported ? Json(nullptr) : Json(1939)}, {"scene_source", imported ? o.input : "synthetic"}, {"loader", loader_name}, {"generated_input_fixture", o.input_fixture}, {"fixture_format", o.fixture_format}, {"camera_source", imported ? (o.camera.empty() ? "fitted_bounds" : o.camera) : "synthetic"}, {"camera_pose", camera_pose}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"tone_operator", o.tone}, {"exposure", o.exposure}, {"transparent", o.transparent}, {"depth_grayscale", o.depth_gray}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"frustum_fixture", o.frustum}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {

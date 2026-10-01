@@ -80,8 +80,24 @@ namespace lfs::io {
         if (!allocator) {
             return {};
         }
+        auto renderer_allocator = allocator;
+#if defined(__APPLE__)
+        // Native Apple allocators may provide the requested bytes without
+        // setting Tensor's row-capacity metadata. Q16 degree changes and edits
+        // require that metadata, even when no additional bytes are needed.
+        renderer_allocator = [allocator](lfs::core::TensorShape shape, size_t capacity,
+                                         lfs::core::DataType dtype, std::string_view name) {
+            auto tensor = allocator(std::move(shape), capacity, dtype, name);
+            if (tensor.is_valid() && tensor.ndim() > 0 && !tensor.is_external_storage()) {
+                const auto required = std::max(capacity, tensor.size(0));
+                if (tensor.capacity() < required)
+                    tensor.reserve(required);
+            }
+            return tensor;
+        };
+#endif
         if (pagedRadGpuResidencyRequested(model)) {
-            model.set_tensor_allocator(allocator);
+            model.set_tensor_allocator(renderer_allocator);
             LOG_INFO("RAD paged LOD active: skipping full renderer-storage migration (chunks={})",
                      model.lod_tree->chunk_count());
             return {};
@@ -100,7 +116,7 @@ namespace lfs::io {
                 }
             }
             if (splatTensorsRendererReady(model)) {
-                model.set_tensor_allocator(allocator);
+                model.set_tensor_allocator(renderer_allocator);
                 return {};
             }
 
@@ -109,7 +125,7 @@ namespace lfs::io {
                 lfs::core::Tensor source_contiguous = source.is_contiguous() ? source : source.contiguous();
                 const auto& shape = source_contiguous.shape();
                 const size_t capacity = shape.rank() > 0 ? shape[0] : source_contiguous.numel();
-                lfs::core::Tensor dst = allocator(shape, capacity, source_contiguous.dtype(), name);
+                lfs::core::Tensor dst = renderer_allocator(shape, capacity, source_contiguous.dtype(), name);
                 dst.set_name(std::string{name});
                 dst.copy_from(source_contiguous);
                 return dst;
@@ -122,6 +138,12 @@ namespace lfs::io {
             const bool encode_q16 = lfs::core::sh_value_quant::enabled() && !shN_q16;
             lfs::core::Tensor deleted = model.has_deleted_mask() ? model.deleted() : lfs::core::Tensor{};
 
+            #if defined(__APPLE__)
+            // A decoder can use Metal while the selected tensor allocator uses
+            // Vulkan (or vice versa). Keep SH conversion on the destination GPU.
+            auto migrated_means = copy_to_allocator(model.means_raw(), "SplatData.means");
+            const auto destination_backend = lfs::core::gpu_backend_of(migrated_means);
+#endif
             lfs::core::Tensor shN;
             lfs::core::Tensor shN_bounds;
             const auto& shN_src = model.shN_raw();
@@ -131,6 +153,11 @@ namespace lfs::io {
                     // q16 after the migrate so we do not import a full-size float
                     // rest buffer just to throw it away.
                     shN = shN_src;
+#if defined(__APPLE__)
+                    if (destination_backend && lfs::core::gpu_backend_of(shN) &&
+                        lfs::core::gpu_backend_of(shN) != destination_backend)
+                        shN = lfs::core::internal::copy_to_backend(shN, *destination_backend);
+#endif
                 } else {
                     shN = copy_to_allocator(shN_src, "SplatData.shN");
                 }
@@ -140,7 +167,11 @@ namespace lfs::io {
                     model.shN_value_bounds(), "SplatData.shN_value_bounds");
             }
             lfs::core::SplatData migrated(max_sh,
+                                          #if defined(__APPLE__)
+                                          std::move(migrated_means),
+#else
                                           copy_to_allocator(model.means_raw(), "SplatData.means"),
+#endif
                                           copy_to_allocator(model.sh0_raw(), "SplatData.sh0"),
                                           std::move(shN),
                                           copy_to_allocator(model.scaling_raw(), "SplatData.scaling"),
@@ -155,7 +186,7 @@ namespace lfs::io {
             auto lod_tree = std::move(model.lod_tree);
             model = std::move(migrated);
             model.lod_tree = std::move(lod_tree);
-            model.set_tensor_allocator(allocator);
+            model.set_tensor_allocator(renderer_allocator);
             if (encode_q16) {
                 (void)model.apply_shN_value_quant();
             }

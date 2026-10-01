@@ -4,6 +4,7 @@
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
 #include "frame_budget.hpp"
+#include "gpu_profile.hpp"
 #include "lod_selector.hpp"
 #include "metal_present_source.hpp"
 #include "metal_rad_pager.hpp"
@@ -134,6 +135,7 @@ namespace lfs::vis {
             uint64_t generation = 0, consumer_serial = 0, producer_value = 0;
             uint64_t request_key = 0;
             std::unique_ptr<RasterFrame> raster;
+            std::unique_ptr<GpuProfile> gpu_profile;
             id<MTLBuffer> projected, gut_geometry, objects, overlay_parameters, overlay_flags, overlay_nodes, selection_colors;
             std::array<id<MTLBuffer>, 4> lod_buffers;
             std::array<id<MTLBuffer>, 3> page_maps;
@@ -164,6 +166,7 @@ namespace lfs::vis {
         core::MetalTensorReader reader;
         SplatPreprocessor preprocessor{reader.device()};
         TileRasterizer rasterizer{reader.device()};
+        bool profiling_enabled = false;
         id<MTLComputePipelineState> present;
         id<MTLRenderPipelineState> point_pipeline;
         id<MTLDepthStencilState> point_depth_state;
@@ -776,7 +779,10 @@ namespace lfs::vis {
         const auto resident_mask = [&](const core::Tensor* mask) { return !mask || !mask->is_valid() ||
                                                                           (nativeStorage(*mask) && mask->is_contiguous() && mask->bytes() >= size_t(model.size()) &&
                                                                            (mask->dtype() == core::DataType::UInt8 || mask->dtype() == core::DataType::Bool)); };
-        const bool rad = model.lod_tree && model.lod_tree->rad_source.valid();
+        // A fully resident RAD can use the ordinary source path. Paging is
+        // required only for a GPU hierarchy cut or a partial resident preview.
+        const bool rad = model.lod_tree && model.lod_tree->rad_source.valid() &&
+                         (r.lod_gpu_traversal.enabled || model.lod_tree->total_nodes() > size_t(model.size()));
         const size_t logical_count = rad ? model.lod_tree->total_nodes() : size_t(model.size());
         const auto indices = r.scene.transform_indices.get();
         const size_t objects = r.scene.model_transforms ? r.scene.model_transforms->size() : 0;
@@ -826,7 +832,8 @@ namespace lfs::vis {
             }
             if (i.frames[static_cast<size_t>(slot)][i.next[static_cast<size_t>(slot)] % 3].get() == previous)
                 previous = nullptr;
-            const bool rad = model.lod_tree && model.lod_tree->rad_source.valid();
+            const bool rad = model.lod_tree && model.lod_tree->rad_source.valid() &&
+                             (request.lod_gpu_traversal.enabled || model.lod_tree->total_nodes() > size_t(model.size()));
             MetalRadPager* pager = nullptr;
             Impl::NativeLodTree paged_tree;
             if (rad) {
@@ -857,6 +864,11 @@ namespace lfs::vis {
             const uint32_t draw_count = gpu_lod ? uint32_t(std::clamp<size_t>(request.lod_gpu_traversal.output_capacity, gpu_tree->roots, std::min(gpu_tree->nodes, source_count))) : uint32_t(pager ? model.size() : request.lod_indices ? request.lod_count
                                                                                                                                                                                                                                           : model.size());
             auto& f = i.acquire(slot, request, draw_count);
+            if (i.profiling_enabled && !f.gpu_profile)
+                f.gpu_profile = std::make_unique<GpuProfile>(i.reader.device());
+            auto* profile = i.profiling_enabled ? f.gpu_profile.get() : nullptr;
+            if (profile)
+                profile->reset();
             f.gpu_lod_active = gpu_lod;
             f.rad_bootstrap = pager && !gpu_lod;
             f.rad_signature = pager ? pager->signature() : 0;
@@ -1163,10 +1175,10 @@ namespace lfs::vis {
                 overlay.preview = preview_enabled ? slice(10) : BufferSlice{};
                 overlay.selection_count = selection_enabled ? uint32_t(std::min<size_t>(views[9].bytes, std::numeric_limits<uint32_t>::max())) : 0;
                 overlay.preview_count = preview_enabled ? uint32_t(std::min<size_t>(views[10].bytes, std::numeric_limits<uint32_t>::max())) : 0;
-                i.preprocessor.encode(command, inputs, projection, degree, request.gut ? PrimitiveMode::Gut : PrimitiveMode::Gaussian, {f.projected, 0}, scene, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, lod);
+                i.preprocessor.encode(command, inputs, projection, degree, request.gut ? PrimitiveMode::Gut : PrimitiveMode::Gaussian, {f.projected, 0}, scene, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, lod, profile);
                 i.rasterizer.encode(command, {f.projected, 0}, draw_count, request.gut ? RasterMode::Gut : RasterMode::Gaussian,
-                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, projection, lod, request.gut && !spark, request.transparent_background && !request.gut && !spark);
-                auto encoder = [command computeCommandEncoder];
+                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, projection, lod, request.gut && !spark, request.transparent_background && !request.gut && !spark, profile);
+                auto encoder = profiledCompute(command, profile, GpuStage::Present);
                 [encoder setComputePipelineState:i.present];
                 [encoder setTexture:f.raster->color() atIndex:0];
                 [encoder setTexture:f.raster->depth() atIndex:1];
@@ -1366,6 +1378,34 @@ namespace lfs::vis {
             status.miss_chunks += values[n] != 0 && values[n] != 0xffffffffu;
         }
         return status;
+    }
+    void MetalViewportRenderer::setProfilingEnabled(bool enabled) {
+        impl_->profiling_enabled = enabled;
+    }
+    lfs::Result<MetalViewportRenderer::FrameDiagnostics> MetalViewportRenderer::frameDiagnostics(Slot slot) const {
+        try {
+            const auto complete = outputComplete(slot);
+            if (!complete)
+                throw lfs::Exception(complete.error());
+            if (!*complete)
+                throw lfs::Exception(nativeError("Native diagnostics require a complete frame", lfs::ErrorCode::FailedPrecondition));
+            const auto* frame = impl_->latest[static_cast<size_t>(slot)];
+            FrameDiagnostics result;
+            result.input_splats = frame->count;
+            result.reserved_instances = frame->capacity;
+            if (frame->raster)
+                result.required_instances = frame->raster->status().required_instances;
+            result.gpu_command_ms = (frame->command.GPUEndTime - frame->command.GPUStartTime) * 1000.;
+            if (!std::isfinite(result.gpu_command_ms) || result.gpu_command_ms < 0)
+                throw std::runtime_error("Invalid native command GPU interval");
+            if (impl_->profiling_enabled && frame->gpu_profile) {
+                result.counter_timestamps_available = frame->gpu_profile->available();
+                result.gpu_stage_ms = frame->gpu_profile->resolve();
+            }
+            return result;
+        } catch (const std::exception& error) {
+            return nativeError(error);
+        }
     }
     lfs::Result<bool> MetalViewportRenderer::outputComplete(Slot slot) const {
         try {

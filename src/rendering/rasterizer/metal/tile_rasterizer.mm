@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "tile_rasterizer.hpp"
+#include "gpu_profile.hpp"
 #include "tile_shader_source.hpp"
 #include <array>
 #include <atomic>
@@ -93,7 +94,9 @@ namespace lfs::rendering::metal {
         f.counts = allocate(device, size_t(max_splats) * 8);
         f.offsets = allocate(device, size_t(max_splats) * 8);
         f.status = allocate(device, sizeof(RasterStatus), MTLResourceStorageModeShared);
-        f.dispatch_args = allocate(device, 6 * sizeof(uint32_t));
+        // Two raster dispatches plus at most four live histogram scan levels.
+        // ceil(UINT32_MAX / 2048) * 256 requires four 256-way scan levels.
+        f.dispatch_args = allocate(device, 18 * sizeof(uint32_t));
         f.ranges = allocate(device, size_t(f.tiles) * 8);
         for (int i = 0; i < 2; ++i) {
             f.keys[i] = allocate(device, size_t(max_instances) * 8);
@@ -104,6 +107,8 @@ namespace lfs::rendering::metal {
         f.histogram_offsets = allocate(device, size_t(histogram_size) * 4);
         f.count_scan = reserve_scan(device, max_splats);
         f.histogram_scan = reserve_scan(device, histogram_size, 4);
+        if (f.histogram_scan.size() > 4)
+            throw std::length_error("Metal histogram scan exceeds indirect dispatch reservation");
         f.color = texture(device, width, height, MTLPixelFormatRGBA16Float);
         f.depth = texture(device, width, height, MTLPixelFormatRGBA32Float);
         f.pick = texture(device, width, height, MTLPixelFormatR32Uint);
@@ -146,8 +151,8 @@ namespace lfs::rendering::metal {
             blend_pipelines.emplace(key, state);
             return state;
         }
-        id<MTLComputeCommandEncoder> begin(id<MTLCommandBuffer> command, const char* name) {
-            auto encoder = [command computeCommandEncoder];
+        id<MTLComputeCommandEncoder> begin(id<MTLCommandBuffer> command, const char* name, GpuProfile* profile = nullptr, GpuStage stage = GpuStage::Sort) {
+            auto encoder = profiledCompute(command, profile, stage);
             if (!encoder)
                 throw std::runtime_error("Could not encode Metal viewer compute pass");
             encoder.label = [NSString stringWithUTF8String:name];
@@ -155,26 +160,40 @@ namespace lfs::rendering::metal {
             return encoder;
         }
         void scan(id<MTLCommandBuffer> command, id<MTLBuffer> input, id<MTLBuffer> output,
-                  uint32_t count, const ScanStorage& storage, bool narrow = false, size_t level = 0) {
+                  uint32_t count, const ScanStorage& storage, bool narrow = false, size_t level = 0,
+                  GpuProfile* profile = nullptr, id<MTLBuffer> live_status = nil,
+                  id<MTLBuffer> live_dispatch = nil) {
             if (!count)
                 return;
             const auto& scratch = storage.at(level);
             const auto groups = ceil_div(count, 256);
-            auto encoder = begin(command, narrow ? "scan32_blocks" : "scan_blocks");
+            auto encoder = begin(command, narrow ? "scan32_blocks" : "scan_blocks", profile, narrow ? GpuStage::Sort : GpuStage::Instances);
             [encoder setBuffer:input offset:0 atIndex:0];
             [encoder setBuffer:output offset:0 atIndex:1];
             [encoder setBuffer:scratch.sums offset:0 atIndex:2];
-            [encoder setBytes:&count length:4 atIndex:3];
-            [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+            const uint32_t scan_level = static_cast<uint32_t>(level);
+            [encoder setBytes:narrow ? &scan_level : &count length:4 atIndex:3];
+            if (narrow) {
+                [encoder setBuffer:live_status offset:0 atIndex:4];
+                [encoder dispatchThreadgroupsWithIndirectBuffer:live_dispatch indirectBufferOffset:(6 + 3 * level) * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+            } else {
+                const uint32_t primitive_counts = level == 0;
+                [encoder setBytes:&primitive_counts length:sizeof(primitive_counts) atIndex:4];
+                [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+            }
             [encoder endEncoding];
             if (groups <= 1)
                 return;
-            scan(command, scratch.sums, scratch.offsets, groups, storage, narrow, level + 1);
-            encoder = begin(command, narrow ? "scan32_add" : "scan_add");
+            scan(command, scratch.sums, scratch.offsets, groups, storage, narrow, level + 1, profile, live_status, live_dispatch);
+            encoder = begin(command, narrow ? "scan32_add" : "scan_add", profile, narrow ? GpuStage::Sort : GpuStage::Instances);
             [encoder setBuffer:output offset:0 atIndex:0];
             [encoder setBuffer:scratch.offsets offset:0 atIndex:1];
-            [encoder setBytes:&count length:4 atIndex:2];
-            [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+            [encoder setBytes:narrow ? &scan_level : &count length:4 atIndex:2];
+            if (narrow) {
+                [encoder setBuffer:live_status offset:0 atIndex:3];
+                [encoder dispatchThreadgroupsWithIndirectBuffer:live_dispatch indirectBufferOffset:(6 + 3 * level) * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+            } else
+                [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [encoder endEncoding];
         }
     };
@@ -212,7 +231,7 @@ namespace lfs::rendering::metal {
     }
     TileRasterizer::~TileRasterizer() = default;
     void TileRasterizer::encode(id<MTLCommandBuffer> command, BufferSlice projected, uint32_t count,
-                                RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay, BufferSlice gut, const Projection& projection, const LodSelection& lod, bool omit_saturating_color, bool macro_half_display) {
+                                RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay, BufferSlice gut, const Projection& projection, const LodSelection& lod, bool omit_saturating_color, bool macro_half_display, GpuProfile* profile) {
         auto f = frame.impl_;
         if (macro_half_display && (mode != RasterMode::Gaussian || projection.display.z == 1.f))
             throw std::invalid_argument("Macro half display requires ordinary 3DGS");
@@ -264,7 +283,8 @@ namespace lfs::rendering::metal {
         };
         check_mask(overlay.selection, selection_count);
         check_mask(overlay.preview, preview_count);
-        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u) | (macro_half_display ? 64u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
+        const bool single_simd = mode == RasterMode::Gaussian && projection.display.z != 1.f;
+        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u) | (macro_half_display ? 64u : 0u) | (single_simd ? 128u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
         // Compile/cache before reserving the frame or encoding any work. A
         // specialization failure cannot strand its busy flag or partial scratch.
         const auto blend_pipeline = impl_->blendPipeline(uint32_t(mode), p.unused);
@@ -284,14 +304,14 @@ namespace lfs::rendering::metal {
             [e setBuffer:count ? projected.buffer : f->counts offset:count ? projected.offset : 0 atIndex:0];
         };
         if (count) {
-            auto e = impl_->begin(command, "tile_counts");
+            auto e = impl_->begin(command, "tile_counts", profile, GpuStage::Instances);
             set_projected(e);
             [e setBuffer:f->counts offset:0 atIndex:1];
             [e setBytes:&p length:sizeof(p) atIndex:2];
             dispatch(e, count);
-            impl_->scan(command, f->counts, f->offsets, count, f->count_scan);
+            impl_->scan(command, f->counts, f->offsets, count, f->count_scan, false, 0, profile);
         }
-        auto e = impl_->begin(command, "tile_status");
+        auto e = impl_->begin(command, "tile_status", profile, GpuStage::Instances);
         [e setBuffer:f->counts offset:0 atIndex:0];
         [e setBuffer:f->offsets offset:0 atIndex:1];
         [e setBuffer:f->status offset:0 atIndex:2];
@@ -300,7 +320,7 @@ namespace lfs::rendering::metal {
         [e dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
         [e endEncoding];
         if (count) {
-            e = impl_->begin(command, "tile_instances");
+            e = impl_->begin(command, "tile_instances", profile, GpuStage::Instances);
             set_projected(e);
             [e setBuffer:f->offsets offset:0 atIndex:1];
             [e setBuffer:f->status offset:0 atIndex:2];
@@ -312,20 +332,18 @@ namespace lfs::rendering::metal {
             for (uint32_t pass = 0; pass < passes; ++pass) {
                 const SortParameters sort{f->sort_blocks, pass * 8};
                 const uint32_t src = pass % 2, dst = 1 - src;
-                // Only live sort groups run. Inactive histogram blocks must still
-                // be zeroed because the fixed-stride prefix scan spans the reservation.
-                auto clear_histogram = [command blitCommandEncoder];
-                [clear_histogram fillBuffer:f->histogram range:NSMakeRange(0, f->histogram.length) value:0];
-                [clear_histogram endEncoding];
-                e = impl_->begin(command, "tile_histogram");
+                // Each live block writes all 256 digits into a compact histogram.
+                // GPU-sized scans never read inactive reserved entries, including
+                // when a large frame is followed by a small or fully culled one.
+                e = impl_->begin(command, "tile_histogram", profile, GpuStage::Sort);
                 [e setBuffer:f->keys[src] offset:0 atIndex:0];
                 [e setBuffer:f->histogram offset:0 atIndex:1];
                 [e setBuffer:f->status offset:0 atIndex:2];
                 [e setBytes:&sort length:sizeof(sort) atIndex:3];
                 [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:0 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
                 [e endEncoding];
-                impl_->scan(command, f->histogram, f->histogram_offsets, f->sort_blocks * 256, f->histogram_scan, true);
-                e = impl_->begin(command, "tile_scatter");
+                impl_->scan(command, f->histogram, f->histogram_offsets, f->sort_blocks * 256, f->histogram_scan, true, 0, profile, f->status, f->dispatch_args);
+                e = impl_->begin(command, "tile_scatter", profile, GpuStage::Sort);
                 [e setBuffer:f->keys[src] offset:0 atIndex:0];
                 [e setBuffer:f->indices[src] offset:0 atIndex:1];
                 [e setBuffer:f->keys[dst] offset:0 atIndex:2];
@@ -341,7 +359,7 @@ namespace lfs::rendering::metal {
         [clear fillBuffer:f->ranges range:NSMakeRange(0, f->ranges.length) value:0];
         [clear endEncoding];
         if (count) {
-            e = impl_->begin(command, "tile_ranges");
+            e = impl_->begin(command, "tile_ranges", profile, GpuStage::Sort);
             const uint32_t sorted = (4 + (std::bit_width(f->tiles - 1) + 7) / 8) % 2;
             [e setBuffer:f->keys[sorted] offset:0 atIndex:0];
             [e setBuffer:f->ranges offset:0 atIndex:1];
@@ -349,7 +367,7 @@ namespace lfs::rendering::metal {
             [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:3 * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [e endEncoding];
         }
-        e = [command computeCommandEncoder];
+        e = profiledCompute(command, profile, GpuStage::Blend);
         if (!e)
             throw std::runtime_error("Could not encode Metal viewer blend pass");
         e.label = @"tile_blend";
@@ -369,7 +387,7 @@ namespace lfs::rendering::metal {
         [e setTexture:f->color atIndex:0];
         [e setTexture:f->depth atIndex:1];
         [e setTexture:f->pick atIndex:2];
-        [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * 4, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+        [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * (single_simd ? 8 : 4), 1, 1) threadsPerThreadgroup:MTLSizeMake(single_simd ? 32 : 64, 1, 1)];
         [e endEncoding];
     }
 } // namespace lfs::rendering::metal

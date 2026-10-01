@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "splat_preprocessor.hpp"
+#include "gpu_profile.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "shader_source.hpp"
@@ -129,7 +130,7 @@ namespace lfs::rendering::metal {
     }
 
     void SplatPreprocessor::encode(id<MTLCommandBuffer> command, const SplatBuffers& in,
-                                   const Projection& projection, uint32_t degree, PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene, const OverlayBuffers& overlay, BufferSlice gut_output, const LodSelection& lod) {
+                                   const Projection& projection, uint32_t degree, PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene, const OverlayBuffers& overlay, BufferSlice gut_output, const LodSelection& lod, GpuProfile* profile) {
         if (!command || command.commandQueue.device != impl_->device || command.status != MTLCommandBufferStatusNotEnqueued)
             throw std::invalid_argument("Metal viewer requires an uncommitted command buffer on the same device");
         if (degree > 3 || (in.layout_rest != 0 && in.layout_rest != 3 && in.layout_rest != 8 && in.layout_rest != 15) ||
@@ -217,7 +218,7 @@ namespace lfs::rendering::metal {
             throw std::invalid_argument("Multiple Metal scene objects require primitive indices");
         // Resolve/compile before opening an encoder so failure leaves the command usable.
         auto pipeline = impl_->pipeline(in.storage, degree, mode);
-        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+        id<MTLComputeCommandEncoder> encoder = profiledCompute(command, profile, GpuStage::Projection);
         if (!encoder)
             throw std::runtime_error("Cannot create Metal projection encoder");
         encoder.label = @"LichtFeld splat projection";
