@@ -48,9 +48,13 @@ namespace lfs::rendering::metal {
         ~TileRasterizer();
         TileRasterizer(const TileRasterizer&) = delete;
         TileRasterizer& operator=(const TileRasterizer&) = delete;
+        // Vulkan's legacy GUT chain omits the saturating color/alpha update,
+        // while retaining median and expected-depth contributions. Native
+        // analytic/Spark rendering and the GS macro reference include it.
         void encode(id<MTLCommandBuffer> command, BufferSlice projected, uint32_t count,
                     RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay = {},
-                    BufferSlice gut = {}, const Projection& projection = {}, const LodSelection& lod = {});
+                    BufferSlice gut = {}, const Projection& projection = {}, const LodSelection& lod = {},
+                    bool omit_saturating_color = false);
 
     private:
         struct Impl;

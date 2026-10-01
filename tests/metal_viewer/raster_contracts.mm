@@ -166,6 +166,33 @@ static void run(id<MTLDevice> device) {
     const auto threshold_read = readback(device, threshold_command, frame);
     wait(threshold_command);
     compare(threshold_read, threshold_splats, width, height, bg, RasterMode::Gaussian);
+    // Legacy desktop color saturation is independent of depth collection.
+    // At this exact center, alpha=.95 then .999 leaves T<1e-4. The final
+    // color is omitted only when compatibility is explicitly requested.
+    const std::vector<ProjectedSplat> opaque_splats = {
+        {{18, 14, 3, 3}, {1, 0, 1, .95f}, {.7f, .1f, .1f, 9}, {16, 12, 21, 17}},
+        {{18, 14, 6, 3}, {1, 0, 1, .999f}, {.8f, .8f, .8f, 36}, {16, 12, 21, 17}}};
+    auto opaque_input = [device newBufferWithBytes:opaque_splats.data() length:opaque_splats.size() * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    Projection opaque_camera{};
+    opaque_camera.rasterization = {1, 1, 100, 0};
+    for (bool omit : {false, true}) {
+        auto opaque_command = [queue commandBuffer];
+        raster.encode(opaque_command, {opaque_input}, 2, RasterMode::Gaussian, bg, frame,
+                      {}, {}, opaque_camera, {}, omit);
+        const auto opaque_read = readback(device, opaque_command, frame);
+        wait(opaque_command);
+        const auto color = reinterpret_cast<const _Float16*>(static_cast<const char*>(opaque_read.color.contents) + 14 * opaque_read.color_stride) + 18 * 4;
+        const auto depth = reinterpret_cast<const float*>(static_cast<const char*>(opaque_read.depth.contents) + 14 * opaque_read.depth_stride) + 18 * 4;
+        const float trans = omit ? 1 - .95f : (1 - .95f) * (1 - .999f);
+        for (int c = 0; c < 3; ++c) {
+            const float expected = opaque_splats[0].color[c] * .95f +
+                                   (omit ? 0 : .8f * (1 - .95f) * .999f) + bg[c] * bg.w * trans;
+            require(std::abs(float(color[c]) - expected) < .001, "Saturation color compatibility differs");
+        }
+        require(std::abs(depth[0] - (3 * .95f + 6 * (1 - .95f) * .999f)) < 1e-5, "Saturation dropped expected-depth numerator");
+        require(std::abs(depth[2] - (.95f + (1 - .95f) * .999f)) < 1e-6, "Saturation dropped expected-depth weight");
+        require(std::abs(depth[1] - (1 - trans)) < 1e-6 && depth[3] == 3, "Saturation alpha or median differs");
+    }
     // Overflow cannot publish only part of a scene. Reusing that reservation for
     // an empty scene must clear stale ranges and recover a successful status.
     RasterFrame small(device, width, height, 1, 1);

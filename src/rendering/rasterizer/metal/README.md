@@ -261,15 +261,26 @@ FP32 native and FP16 reference blending can cross the 50% median boundary on
 different pixels. A passing depth gate does not mean pixel-identical depth.
 
 A local macOS real-scene check imported a 1,179,648-splat SH0 PLY, rendered it
-with confirmed native routing, exercised selection and whole-node translation
-without point selection, exported SPZ, and activated spatial and temporal
-reconstruction, including convergence to zero remaining temporal samples. The
-fixed-view color comparisons had PSNR 65.54-65.56 dB. Three repeated native
-captures were identical. Repeated Vulkan captures varied at one pixel out of
-456,320 (maximum 6/255); comparisons against its stable captures had maximum
-error 2/255. The isolated reference variation remains undiagnosed. This is
-close visual parity, not pixel identity or a guarantee for every scene,
-camera or editor workflow. Synthetic maximum-error gates remain unchanged.
+with confirmed native routing, exercised exact 3DGS mask queries and positive
+GS/GUT ring picking, and applied whole-node translation/rotation/scale with undo.
+SPZ export/reimport and spatial/temporal reconstruction succeeded, including
+convergence to zero remaining temporal samples. Native repeated captures were
+identical. The three GUT color comparisons differed by at most 1/255 after the
+saturation correction below. The first 3DGS Vulkan frame uses its legacy warmup
+chain and differs at 28 pixels by more than 4/255; later frames use its macro
+chain, with one isolated 6/255 difference and RMS 0.000529. The isolated macro
+difference remains under investigation. These are measured scene-specific results,
+not pixel identity or a guarantee for every scene, camera or editor workflow.
+Synthetic maximum-error gates remain unchanged.
+
+The desktop GUT adapter explicitly matches the legacy Vulkan saturating-color
+rule: if the next transmittance is below 1e-4, that splat's color and alpha update
+are omitted. Median and expected-depth numerator/weight still include it, as in
+the reference. GS macro composition and native analytic/Spark rendering retain
+their include-last-contributor equations. Independent GPU assertions test both
+color modes and unchanged expected depth. Two macOS comparison fixtures use
+nearly opaque overlapping Gaussians: the GUT fixture fails before this correction
+with a 10/255 maximum color error and passes afterward. No Vulkan shader changes.
 
 The native desktop boundary returns structured `lfs::Result`/`lfs::Status`
 errors, preserving existing typed causes and classifying invalid arguments,

@@ -28,7 +28,7 @@ namespace {
         size_t count = 100000;
         int width = 1280, height = 720, warmup = 12, samples = 40;
         std::string output, images, overlay;
-        bool verify_parity = false;
+        bool verify_parity = false, saturation = false;
         bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false, portal = false, portal_tone = false, lod = false, lod_logical = false, lod_weights = false, lod_debug = false, spark = false, gpu_lod = false, gpu_lod_budget = false;
     };
     Options options(int argc, char** argv) {
@@ -89,6 +89,10 @@ namespace {
                 o.verify_parity = true;
                 continue;
             }
+            if (arg == "--saturation") {
+                o.saturation = true;
+                continue;
+            }
             if (arg == "--mip") {
                 o.mip = true;
                 continue;
@@ -139,7 +143,7 @@ namespace {
             throw std::runtime_error("Benchmark reservation limit exceeded");
         return o;
     }
-    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr, bool spark = false, bool gpu_lod = false) {
+    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr, bool spark = false, bool gpu_lod = false, bool saturation = false) {
         std::mt19937 random(1939);
         std::uniform_real_distribution<float> unit(0.f, 1.f);
         std::vector<float> means(count * 3), sh0(count * 3), scales(count * 3), rotation(count * 4, 0), opacity(count);
@@ -182,6 +186,26 @@ namespace {
         }
         for (auto& value : rest)
             value = (unit(random) - .5f) * rest_amplitude;
+        if (saturation) {
+            if (count < 2)
+                throw std::runtime_error("Saturation fixture requires two splats");
+            std::fill(opacity.begin(), opacity.end(), -100.f);
+            std::fill(rest.begin(), rest.end(), 0.f);
+            // The second splat leaves T=0.05*0.001 < 1e-4 at the center.
+            // Vulkan GUT's legacy chain omits that saturating color; the GS
+            // macro chain retains it. Distinct colors expose that difference.
+            for (size_t n = 0; n < 2; ++n) {
+                means[3 * n] = means[3 * n + 1] = 0;
+                means[3 * n + 2] = -4.f - float(n);
+                opacity[n] = n ? 12.f : std::log(19.f);
+                for (size_t c = 0; c < 3; ++c) {
+                    scales[3 * n + c] = std::log(3.f);
+                    const float color = n ? .8f : c == 0 ? .7f
+                                                         : .1f;
+                    sh0[3 * n + c] = (color - .5f) / .2820947917738781f;
+                }
+            }
+        }
         if (reference_cut) {
             // The legacy GUT gather reads compact slots as source IDs and has
             // no LOD indirection bindings. Keep that production path untouched;
@@ -337,7 +361,7 @@ namespace {
             throw std::runtime_error("Benchmark preferences must be isolated");
         Json cases = Json::array();
         for (int degree : {0, 3}) {
-            auto model = scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, nullptr, o.spark, o.gpu_lod);
+            auto model = scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, nullptr, o.spark, o.gpu_lod, o.saturation);
             vis::MetalViewportRenderer metal;
             vis::VksplatViewportRenderer vulkan;
             rendering::ViewportRenderRequest request;
@@ -586,7 +610,7 @@ namespace {
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {

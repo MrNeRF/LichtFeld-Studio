@@ -187,7 +187,7 @@ namespace lfs::rendering::metal {
     }
     TileRasterizer::~TileRasterizer() = default;
     void TileRasterizer::encode(id<MTLCommandBuffer> command, BufferSlice projected, uint32_t count,
-                                RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay, BufferSlice gut, const Projection& projection, const LodSelection& lod) {
+                                RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay, BufferSlice gut, const Projection& projection, const LodSelection& lod, bool omit_saturating_color) {
         auto f = frame.impl_;
         if (!command || command.device != impl_->device || f->device != impl_->device ||
             command.status != MTLCommandBufferStatusNotEnqueued || count > f->max_splats || uint32_t(mode) > 3)
@@ -245,7 +245,7 @@ namespace lfs::rendering::metal {
             f->completed.store(finished.status == MTLCommandBufferStatusCompleted, std::memory_order_release);
             f->in_flight.store(false, std::memory_order_release);
         }];
-        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
+        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
         const auto dispatch = [](id<MTLComputeCommandEncoder> e, uint32_t n) {
             [e dispatchThreadgroups:MTLSizeMake(ceil_div(n, 256), 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [e endEncoding];

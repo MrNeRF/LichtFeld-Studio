@@ -402,7 +402,6 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             }
             const float weight = alpha * transmittance;
             if (picked == 0xffffffff) { picked = logical; nearest = splat_depth; }
-            rgb += radiance * weight;
             // Match expected_far in the reference: invalid/too-distant
             // GUT depths affect transmittance but never the depth average.
             if(p.unused&2u) {
@@ -413,6 +412,14 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             } else weighted_depth += splat_depth * weight;
             const float next_transmittance = transmittance * (1 - alpha);
             if (transmittance > .5f && next_transmittance <= .5f) median = splat_depth;
+            // The existing desktop GUT legacy chain records depth before
+            // dropping a saturating splat's color and transmittance update.
+            // Keep this explicit: native analytic and Spark math includes it.
+            if ((p.unused & 32u) && next_transmittance < 1e-4f) {
+                done = true;
+                break;
+            }
+            rgb += radiance * weight;
             transmittance = next_transmittance;
             if (transmittance < 1e-4f) { done = true; break; }
         }
