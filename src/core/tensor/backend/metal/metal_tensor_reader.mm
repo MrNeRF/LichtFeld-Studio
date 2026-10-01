@@ -37,6 +37,21 @@ namespace lfs::core {
     id<MTLDevice> MetalTensorReader::device() const { return impl_->queue.device; }
 
     id<MTLCommandBuffer> MetalTensorReader::submit(std::span<const Tensor* const> tensors, const Encode& encode) {
+        return submitAccess(tensors, encode, false);
+    }
+    id<MTLCommandBuffer> MetalTensorReader::submitWrites(std::span<const Tensor* const> inputs,
+                                                         std::span<Tensor* const> outputs, const EncodeWrite& encode) {
+        if (!encode || outputs.empty())
+            throw std::invalid_argument("Native Metal writes require an encoder and explicit outputs");
+        std::vector<const Tensor*> tensors(inputs.begin(), inputs.end());
+        for (auto* output : outputs) {
+            if (!output || !output->is_valid())
+                throw std::invalid_argument("Native Metal write output must be a valid tensor");
+            tensors.push_back(output);
+        }
+        return submitAccess(tensors, [&](id<MTLCommandBuffer> command, std::span<const MetalTensorView> views) { encode(command, views.first(inputs.size()), views.subspan(inputs.size())); }, true);
+    }
+    id<MTLCommandBuffer> MetalTensorReader::submitAccess(std::span<const Tensor* const> tensors, const Encode& encode, bool writes) {
         if (@available(macOS 26.0, *)) {
             if (!encode)
                 throw std::invalid_argument("Metal tensor reader needs an encoder");
@@ -79,13 +94,16 @@ namespace lfs::core {
             [command encodeSignalEvent:impl_->consumer value:done];
             const auto consumer = impl_->consumer;
             const auto failed = impl_->failed;
+            const auto context = impl_->context;
             [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
                 (void)owners;
                 if (completed.status == MTLCommandBufferStatusError) {
                     failed->store(true, std::memory_order_release);
-                    // This consumer only reads tensors. A failed command has stopped
-                    // accessing them, so later producer mutations can safely resume.
-                    // Keep failure sticky; releasing the wait is not render success.
+                    // A failed read has stopped accessing its inputs. A failed
+                    // write may have partial outputs: quarantine the tensor context
+                    // before releasing the GPU wait. Neither is reported as success.
+                    if (writes)
+                        context->record_external_write_failure();
                     consumer.signaledValue = done;
                 }
             }];

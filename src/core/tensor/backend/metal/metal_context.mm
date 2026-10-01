@@ -172,6 +172,7 @@ namespace lfs::core::internal::metal {
     }
 
     void Context::dispatch(const std::span<const StorageRef> uses, const Dispatch& dispatch) {
+        check_external_write_failure();
         LFS_ASSERT_MSG(dispatch.buffers.size() + (dispatch.params.empty() ? 0 : 1) <= kArgumentSlots &&
                            dispatch.params.size() <= kMaxParamsBytes,
                        "Metal dispatch exceeds its argument slots");
@@ -326,7 +327,17 @@ namespace lfs::core::internal::metal {
         prepare_locked();
     }
 
+    void Context::record_external_write_failure() noexcept {
+        failure_->external_write_failed.store(true, std::memory_order_release);
+    }
+
+    void Context::check_external_write_failure() const {
+        if (failure_->external_write_failed.load(std::memory_order_acquire))
+            throw TensorError("Native Metal tensor write failed; partial output is quarantined");
+    }
+
     void Context::check_failures() const {
+        check_external_write_failure();
         std::lock_guard lock(failure_->mutex);
         if (!failure_->message.empty())
             throw TensorError(std::format("Metal tensor work failed: {}", failure_->message));
@@ -339,6 +350,7 @@ namespace lfs::core::internal::metal {
     }
 
     uint64_t Context::signal(id<MTLSharedEvent> const event) {
+        check_external_write_failure();
         std::lock_guard lock(encode_mutex_);
         commit_locked();
         const uint64_t serial = submitted_.load(std::memory_order_acquire);
@@ -404,7 +416,7 @@ namespace lfs::core::internal::metal {
         }
         while (completed() < serial && ![event_ waitUntilSignaledValue:serial timeoutMS:100]) {
             std::lock_guard lock(failure_->mutex);
-            if (!failure_->message.empty())
+            if (!failure_->message.empty() || failure_->external_write_failed.load(std::memory_order_acquire))
                 return;
         }
     }

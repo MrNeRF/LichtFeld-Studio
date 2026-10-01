@@ -43,6 +43,38 @@ static void run() {
         for (size_t i = 0; i < count; ++i)
             require(values[i] == float(iteration + 1), "Producer/consumer ordering or slice offset mismatch");
     }
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        auto source = Tensor::full({count + 2}, float(iteration + 1), Device::GPU);
+        auto output = Tensor::full({count + 2}, -9.f, Device::GPU);
+        auto input_slice = source.slice(0, 1, count + 1);
+        auto output_slice = output.slice(0, 1, count + 1);
+        const std::array<const Tensor*, 1> inputs{&input_slice};
+        const std::array<Tensor*, 1> outputs{&output_slice};
+        const auto command = reader.submitWrites(inputs, outputs, [&](id<MTLCommandBuffer> command, std::span<const MetalTensorView> input, std::span<const MetalTensorView> destination) {
+            require(input.size() == 1 && destination.size() == 1, "Mutable native view count mismatch");
+            auto blit = [command blitCommandEncoder];
+            [blit copyFromBuffer:input[0].buffer sourceOffset:input[0].offset toBuffer:destination[0].buffer destinationOffset:destination[0].offset size:input[0].bytes];
+            [blit endEncoding];
+        });
+        // No command completion wait: dependent tensor reads and source writes
+        // must both be ordered after the native writer, including slice offsets.
+        source.add_(20.f);
+        const auto result = output.add(10.f).cpu();
+        require(result.ptr<float>()[0] == 1.f && result.ptr<float>()[count + 1] == 1.f, "Native write overwrote slice borders");
+        for (size_t n = 1; n <= count; ++n)
+            require(result.ptr<float>()[n] == float(iteration + 11), "Native write-to-tensor read ordering differs");
+        [command waitUntilCompleted];
+        require(command.status == MTLCommandBufferStatusCompleted, "Native tensor write failed");
+    }
+    {
+        auto output = Tensor::full({count}, -5.f, Device::GPU);
+        const std::array<Tensor*, 1> outputs{&output};
+        bool discarded = false;
+        try {
+            (void)reader.submitWrites({}, outputs, [](auto, auto, auto) { throw std::runtime_error("Write encode failure"); });
+        } catch (const std::runtime_error&) { discarded = true; }
+        require(discarded && output.cpu().ptr<float>()[0] == -5.f, "Unsubmitted native write changed or poisoned output");
+    }
     Tensor cpu = Tensor::ones({3}, Device::CPU);
     std::array<const Tensor*, 1> inputs{&cpu};
     bool rejected = false;
@@ -67,7 +99,7 @@ static void run() {
     auto command = reader.submit(inputs, [](auto, auto) {});
     [command waitUntilCompleted];
     require(command.status == MTLCommandBufferStatusCompleted, "Encoding failure poisoned the next submission");
-    std::puts("Metal tensor reader contracts passed: resident views, offsets, GPU ordering, mutations and encoding failure recovery.");
+    std::puts("Metal tensor access contracts passed: resident read/write views, offsets, GPU dependencies, mutations and encoding failure recovery.");
 }
 int main() {
     @autoreleasepool {

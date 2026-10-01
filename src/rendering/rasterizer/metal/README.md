@@ -352,3 +352,13 @@ all JSON reports without a speed gate.
 It explicitly skips on hosts lacking the resident tensor Metal backend (currently
 macOS 26/Metal 4); the raster-only contracts still run on supported older hosts.
 Windows and Linux CI continue to run only the CPU backend-selection contract.
+
+
+Native editor kernels can submit explicit mutable tensor outputs through
+`MetalTensorReader::submitWrites`. Producer readiness, native completion and
+storage retirement use the same GPU events as read-only rendering. Later tensor
+reads/writes/host access observe the native result without an intermediate CPU
+copy. A failed encode discards the command; a failed submitted write quarantines
+the tensor context before its wait is released, preventing partial output from
+becoming valid data. Reader contracts cover sliced outputs, immediate dependent
+tensor operations, concurrent source mutation and encode failure recovery.

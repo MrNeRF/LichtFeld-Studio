@@ -16,8 +16,9 @@ namespace lfs::core {
         size_t bytes = 0;
     };
 
-    // Read-only, zero-copy consumer of resident Metal tensors. Producer work and
-    // later tensor mutations are ordered by GPU events; no CPU completion wait.
+    // Zero-copy native access to resident Metal tensors. submit is read-only;
+    // submitWrites names mutable outputs explicitly. Tensor work and native
+    // access are ordered by GPU events; no CPU completion wait.
     // The caller must serialize model mutations while taking/submitting its snapshot,
     // exactly as for TensorVulkanInterop. This object does not acquire a scene lock.
     class LFS_CORE_API MetalTensorReader {
@@ -34,7 +35,17 @@ namespace lfs::core {
         // On encoding failure the command is discarded; discard its frame reservation.
         [[nodiscard]] id<MTLCommandBuffer> submit(std::span<const Tensor* const> tensors, const Encode& encode);
 
+        using EncodeWrite = std::function<void(id<MTLCommandBuffer>, std::span<const MetalTensorView>, std::span<const MetalTensorView>)>;
+        // Explicit mutable outputs use the same GPU producer/consumer ordering.
+        // Later tensor reads, writes, host access and pool reuse wait for them.
+        // Encoding failure discards the command; submitted write failure is sticky
+        // in the tensor context, so partial output can never become valid data.
+        // Callers must serialize inputs/outputs while taking this snapshot.
+        [[nodiscard]] id<MTLCommandBuffer> submitWrites(std::span<const Tensor* const> inputs,
+                                                        std::span<Tensor* const> outputs, const EncodeWrite& encode);
+
     private:
+        id<MTLCommandBuffer> submitAccess(std::span<const Tensor* const>, const Encode&, bool writes);
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };
