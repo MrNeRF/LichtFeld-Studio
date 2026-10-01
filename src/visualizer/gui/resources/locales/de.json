@@ -1,7 +1,8 @@
 {
   "ui.vram_window_1m": "1 min",
-  "ui.vram_process_nvml_tooltip": "GPU-Speicher des Prozesses laut NVIDIA-Treiber.",
-  "ui.vram_process_estimate_tooltip": "GPU-Speicher des Prozesses als Obergrenze aus der Gerätenutzung geschätzt, da kein Prozesswert verfügbar ist.",
+  "ui.vram_process_nvml_tooltip": "GPU-Speicher des Prozesses laut Betriebssystem oder GPU-Treiber.",
+  "ui.vram_process_unavailable_tooltip": "GPU-Speicher des Prozesses ist nicht verfügbar. Die Gerätenutzung umfasst andere Anwendungen.",
+  "ui.vram_over_budget": "über dem Budget",
   "ui.vram_device_nvml_tooltip": "Gerätespeicher laut NVIDIA-Treiber.",
   "ui.vram_device_cuda_tooltip": "Gerätespeicher aus dem für CUDA sichtbaren Speicher; reservierte physische Kapazität kann fehlen.",
   "ui.vram_device_capacity": "Device capacity",

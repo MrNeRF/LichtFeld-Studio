@@ -1,7 +1,8 @@
 {
   "ui.vram_window_1m": "1 min",
-  "ui.vram_process_nvml_tooltip": "Memoria GPU del proceso según el controlador de NVIDIA.",
-  "ui.vram_process_estimate_tooltip": "Memoria GPU del proceso estimada como límite superior a partir del uso del dispositivo porque no hay un valor por proceso.",
+  "ui.vram_process_nvml_tooltip": "Memoria GPU del proceso según el sistema operativo o el controlador GPU.",
+  "ui.vram_process_unavailable_tooltip": "La memoria GPU del proceso no está disponible. El uso del dispositivo incluye otras aplicaciones.",
+  "ui.vram_over_budget": "presupuesto excedido",
   "ui.vram_device_nvml_tooltip": "Memoria del dispositivo según el controlador de NVIDIA.",
   "ui.vram_device_cuda_tooltip": "Memoria visible para CUDA; puede excluir capacidad física reservada.",
   "ui.vram_device_capacity": "Device capacity",

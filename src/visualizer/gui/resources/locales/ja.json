@@ -1,7 +1,8 @@
 {
   "ui.vram_window_1m": "1 min",
-  "ui.vram_process_nvml_tooltip": "NVIDIA ドライバーが報告するプロセスの GPU メモリ。",
-  "ui.vram_process_estimate_tooltip": "プロセス値を取得できないため、デバイス使用量から推定したプロセス GPU メモリの上限です。",
+  "ui.vram_process_nvml_tooltip": "OS または GPU ドライバーが報告するプロセスの GPU メモリ。",
+  "ui.vram_process_unavailable_tooltip": "プロセスの GPU メモリは取得できません。デバイスの使用量には他のアプリケーションも含まれます。",
+  "ui.vram_over_budget": "予算超過",
   "ui.vram_device_nvml_tooltip": "NVIDIA ドライバーが報告するデバイスメモリ。",
   "ui.vram_device_cuda_tooltip": "CUDA から見えるメモリです。予約済みの物理容量は含まれない場合があります。",
   "ui.vram_device_capacity": "Device capacity",

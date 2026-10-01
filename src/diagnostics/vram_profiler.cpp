@@ -12,6 +12,7 @@
 #include <cuda_runtime.h>
 #ifndef _WIN32
 #include <dlfcn.h>
+#include <nvml.h>
 #include <unistd.h>
 #endif
 #include <deque>
@@ -82,12 +83,6 @@ namespace lfs::diagnostics {
 
         [[nodiscard]] NvmlMemorySample nvml_memory_sample() {
             using Device = void*;
-            struct ProcessInfo {
-                unsigned int pid;
-                unsigned long long bytes;
-                unsigned int gpu_instance_id;
-                unsigned int compute_instance_id;
-            };
             struct DeviceMemoryInfo {
                 unsigned long long total;
                 unsigned long long free;
@@ -98,7 +93,8 @@ namespace lfs::diagnostics {
                 Device device = nullptr;
                 std::mutex mutex;
                 int (*handle)(const char*, Device*) = nullptr;
-                int (*processes)(Device, unsigned int*, ProcessInfo*) = nullptr;
+                int (*processes)(Device, unsigned int*, nvmlProcessInfo_t*) = nullptr;
+                int (*graphics)(Device, unsigned int*, nvmlProcessInfo_t*) = nullptr;
                 int (*memory)(Device, DeviceMemoryInfo*) = nullptr;
                 Api() {
                     lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
@@ -107,12 +103,16 @@ namespace lfs::diagnostics {
                     const auto init = reinterpret_cast<int (*)()>(dlsym(lib, "nvmlInit_v2"));
                     handle = reinterpret_cast<int (*)(const char*, Device*)>(
                         dlsym(lib, "nvmlDeviceGetHandleByPciBusId_v2"));
-                    processes = reinterpret_cast<int (*)(Device, unsigned int*, ProcessInfo*)>(
+                    processes = reinterpret_cast<int (*)(Device, unsigned int*, nvmlProcessInfo_t*)>(
                         dlsym(lib, "nvmlDeviceGetComputeRunningProcesses_v3"));
+                    graphics = reinterpret_cast<int (*)(Device, unsigned int*, nvmlProcessInfo_t*)>(
+                        dlsym(lib, "nvmlDeviceGetGraphicsRunningProcesses_v3"));
                     memory = reinterpret_cast<int (*)(Device, DeviceMemoryInfo*)>(
                         dlsym(lib, "nvmlDeviceGetMemoryInfo"));
-                    if (!init || !handle || !processes || init() != 0)
+                    if (!init || !handle || !processes || init() != 0) {
+                        handle = nullptr;
                         return;
+                    }
                 }
                 Device getDevice() {
                     std::lock_guard lock(mutex);
@@ -141,13 +141,24 @@ namespace lfs::diagnostics {
                     sample.total = static_cast<std::size_t>(info.total);
                 }
             }
-            unsigned int count = 64;
-            ProcessInfo info[64]{};
-            if (api.processes(device, &count, info) != 0)
-                return sample;
-            for (unsigned int i = 0; i < count; ++i) {
-                if (info[i].pid == static_cast<unsigned int>(getpid()))
-                    sample.process = static_cast<std::size_t>(info[i].bytes);
+            for (const auto query : {api.processes, api.graphics}) {
+                if (!query)
+                    continue;
+                std::vector<nvmlProcessInfo_t> info(64);
+                auto count = static_cast<unsigned int>(info.size());
+                auto status = query(device, &count, info.data());
+                if (status == NVML_ERROR_INSUFFICIENT_SIZE) {
+                    info.resize(count);
+                    status = query(device, &count, info.data());
+                }
+                if (status != NVML_SUCCESS)
+                    continue;
+                for (unsigned int i = 0; i < count; ++i) {
+                    if (info[i].pid == static_cast<unsigned int>(getpid()) &&
+                        info[i].usedGpuMemory != NVML_VALUE_NOT_AVAILABLE)
+                        sample.process = std::max(sample.process,
+                                                  static_cast<std::size_t>(info[i].usedGpuMemory));
+                }
             }
             return sample;
         }
@@ -1225,12 +1236,10 @@ namespace lfs::diagnostics {
 #ifndef _WIN32
         {
             const auto usage = nvml_memory_sample();
-            if (usage.process) {
-                process.process_used = usage.process;
-                process.total_used = usage.used ? usage.used : process.cuda_used;
-                process.total = usage.total ? usage.total : process.cuda_total;
-                process.process_memory_valid = true;
-            }
+            process.process_used = usage.process;
+            process.total = usage.total ? usage.total : process.cuda_total;
+            process.total_used = std::min(usage.total ? usage.used : process.cuda_used, process.total);
+            process.process_memory_valid = usage.process > 0;
         }
 #endif
 
@@ -1287,17 +1296,11 @@ namespace lfs::diagnostics {
             return;
         }
 
-#ifndef _WIN32
-        const auto usage = process_used && total_used && total ? NvmlMemorySample{}
-                                                               : nvml_memory_sample();
-        const auto measured_process_used = process_used ? process_used : usage.process;
-        const auto measured_total_used = total_used ? total_used : usage.used;
-        const auto measured_total = total ? total : usage.total;
-#else
+        // The GUI has already selected a source. Do not replace an unavailable
+        // PID sample with device-wide usage or an independently timed sample.
         const auto measured_process_used = process_used;
-        const auto measured_total_used = total_used;
+        const auto measured_total_used = std::min(total_used, total);
         const auto measured_total = total;
-#endif
         std::lock_guard lock(impl_->mutex);
         impl_->process.process_used = measured_process_used;
         impl_->process.total_used = measured_total_used;
