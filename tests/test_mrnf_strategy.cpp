@@ -32,11 +32,13 @@ class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Te
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
+#include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
 #include "io/formats/ply.hpp"
+#include "io/project_document.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/mean_step_scale.cuh"
@@ -44,6 +46,7 @@ class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Te
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/checkpoint.hpp"
 #include "training/dataset.hpp"
+#include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/optimizer/render_output.hpp"
 #include "training/strategies/mrnf.hpp"
@@ -52,6 +55,7 @@ class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Te
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
@@ -2798,5 +2802,94 @@ TEST(MRNFStrategyTest, ChunkedChildPlacementMatchesSingleChunk) {
     ASSERT_EQ(chunked_sh.size(), single_sh.size());
     for (size_t i = 0; i < single_sh.size(); ++i) {
         ASSERT_NEAR(chunked_sh[i], single_sh[i], 1e-4f) << "SH value " << i;
+    }
+}
+
+TEST(MRNFStrategyTest, LongAxisSplitPlacementIgnoresQuaternionMagnitudeOnRealRows) {
+    const auto* path = std::getenv("LFS_SPLIT_TEST_MODEL");
+    if (!path)
+        GTEST_SKIP() << "set LFS_SPLIT_TEST_MODEL to a trained splat model";
+    auto document = lfs::io::project::ProjectDocument::open(path);
+    ASSERT_TRUE(document.has_value()) << lfs::format_for_developer(document.error());
+    Scene scene;
+    const auto hydration = document->hydrate(scene);
+    ASSERT_TRUE(hydration.has_value()) << lfs::format_for_developer(hydration.error());
+    const auto* model_ptr = scene.getCombinedModel();
+    ASSERT_NE(model_ptr, nullptr);
+    const auto& model = *model_ptr;
+    ASSERT_EQ(model.rotation_raw().ndim(), 2);
+    ASSERT_EQ(model.rotation_raw().shape()[1], 4);
+    ASSERT_EQ(model.scaling_raw().shape(), TensorShape({model.rotation_raw().shape()[0], 3}));
+    const auto source_rotations = model.rotation_raw().cpu().to_vector();
+    const auto source_scales = model.scaling_raw().cpu().to_vector();
+    std::vector<float> rotations, scales, expected_offsets;
+    std::vector<float> expected_lengths;
+    for (size_t row = 0; row < model.rotation_raw().shape()[0] && expected_lengths.size() < 192; ++row) {
+        double squared_norm = 0.0;
+        for (int c = 0; c < 4; ++c)
+            squared_norm += double(source_rotations[4 * row + c]) * source_rotations[4 * row + c];
+        const double norm = std::sqrt(squared_norm);
+        if (!std::isfinite(norm) || norm < 1e-6 || std::abs(norm - 1.0) < 0.01)
+            continue;
+        double q[4];
+        for (int c = 0; c < 4; ++c)
+            q[c] = source_rotations[4 * row + c] / norm;
+        const auto* scale = source_scales.data() + 3 * row;
+        const int axis = static_cast<int>(std::max_element(scale, scale + 3) - scale);
+        const float length = 0.5f * std::exp(scale[axis]);
+        ASSERT_TRUE(std::isfinite(length));
+        ASSERT_GT(length, 0.0f);
+        for (const float multiplier : {1.0f, static_cast<float>(1.0 / norm), 2.0f}) {
+            for (int c = 0; c < 4; ++c)
+                rotations.push_back(source_rotations[4 * row + c] * multiplier);
+            scales.insert(scales.end(), scale, scale + 3);
+            for (int c = 0; c < 3; ++c) {
+                const double cross = c == (axis + 1) % 3 ? q[1 + (axis + 2) % 3] : c == (axis + 2) % 3 ? -q[1 + (axis + 1) % 3]
+                                                                                                       : 0.0;
+                const double direction = (c == axis ? 2.0 * q[0] * q[0] - 1.0 : 0.0) +
+                                         2.0 * q[1 + axis] * q[1 + c] + 2.0 * q[0] * cross;
+                expected_offsets.push_back(static_cast<float>(length * direction));
+            }
+            expected_lengths.push_back(length);
+        }
+    }
+    ASSERT_FALSE(expected_lengths.empty()) << "trained model must contain non-unit quaternion rows";
+    const size_t n = expected_lengths.size();
+    auto positions = Tensor::zeros({n, 3}, Device::CUDA);
+    auto quaternions = Tensor::from_vector(rotations, {n, 4}, Device::CUDA);
+    auto log_scales = Tensor::from_vector(scales, {n, 3}, Device::CUDA);
+    auto sh0 = Tensor::zeros({n, 3}, Device::CUDA);
+    auto opacities = Tensor::zeros({n}, Device::CUDA);
+    auto children_positions = Tensor::empty({n, 3}, Device::CUDA);
+    auto children_rotations = Tensor::empty({n, 4}, Device::CUDA);
+    auto children_scales = Tensor::empty({n, 3}, Device::CUDA);
+    auto children_sh0 = Tensor::empty({n, 3}, Device::CUDA);
+    auto children_opacities = Tensor::empty({n}, Device::CUDA);
+    std::vector<int> indices(n);
+    for (size_t i = 0; i < n; ++i)
+        indices[i] = static_cast<int>(i);
+    const auto split_indices = Tensor::from_vector(indices, {n}, Device::CUDA).to(DataType::Int64);
+    kernels::launch_long_axis_split_gaussians_inplace(
+        positions.ptr<float>(), quaternions.ptr<float>(), log_scales.ptr<float>(),
+        sh0.ptr<float>(), nullptr, opacities.ptr<float>(), children_positions.ptr<float>(),
+        children_rotations.ptr<float>(), children_scales.ptr<float>(), children_sh0.ptr<float>(),
+        nullptr, children_opacities.ptr<float>(), split_indices.ptr<int64_t>(), static_cast<int>(n), 0);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto first = positions.cpu().to_vector();
+    const auto second = children_positions.cpu().to_vector();
+    EXPECT_EQ(quaternions.cpu().to_vector(), rotations);
+    EXPECT_EQ(children_rotations.cpu().to_vector(), rotations);
+    for (size_t row = 0; row < n; ++row) {
+        SCOPED_TRACE(row);
+        const float tolerance = std::max(1e-7f, expected_lengths[row] * 1e-4f);
+        float squared_length = 0.0f;
+        for (int c = 0; c < 3; ++c) {
+            EXPECT_NEAR(first[3 * row + c], expected_offsets[3 * row + c], tolerance);
+            EXPECT_NEAR(second[3 * row + c], -expected_offsets[3 * row + c], tolerance);
+            squared_length += first[3 * row + c] * first[3 * row + c];
+            if (row % 3 != 0)
+                EXPECT_NEAR(first[3 * row + c], first[3 * (row - row % 3) + c], tolerance);
+        }
+        EXPECT_NEAR(std::sqrt(squared_length), expected_lengths[row], tolerance);
     }
 }
