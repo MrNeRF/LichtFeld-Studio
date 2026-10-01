@@ -4,8 +4,8 @@
 # Native Metal viewer backend
 
 The native Metal rasterizer consumes resident LichtFeld tensors, including Q16
-SH storage. On macOS it can be selected explicitly under Preferences; Automatic
-continues to use Vulkan. The desktop UI, grid and gizmos still use the existing
+SH storage. Auto prefers Metal on compatible Macs; Vulkan remains the default
+on other systems and the fallback for unsupported frame/storage contracts. The desktop UI, grid and gizmos still use the existing
 Vulkan compositor, sampling shared Metal color/depth textures on the same GPU.
 No full-frame CPU readback occurs during interactive native presentation.
 
@@ -24,7 +24,7 @@ the saved preference. The tensor badge reports the current process backend.
 Compact R and T role markers sit to the right of FPS and keep the same
 appearance on hover. Localized tooltips expand the role names and explain
 independent routing and restart semantics. With no scene output, R shows the
-configured scene renderer (Automatic currently selects Vulkan); the tooltip
+configured scene renderer (Auto prefers Metal on compatible Macs); the tooltip
 distinguishes this idle state from an actual rendered frame.
 CPU visualizer
 contracts cover metadata propagation/reset and status-bar sizing without a GPU.
@@ -296,7 +296,7 @@ remain available to Windows/Linux CI without a GPU.
 
 The desktop UI, grid, gizmos and final composition still use Vulkan. This
 backend is not yet a fully independent Metal desktop presentation/editor stack.
-Automatic continues to use Vulkan, and no global Vulkan shader is modified.
+Auto prefers compatible Metal frames and falls back to Vulkan; no global Vulkan shader is modified.
 
 Dense GUT reservations can switch from 8x8/two-SIMD blend groups to
 8x4/SIMD32 groups using their already completed instance counts. The threshold

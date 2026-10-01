@@ -7389,7 +7389,9 @@ namespace lfs::vis {
         const bool force_input_upload) {
         LOG_TIMER("VksplatViewportRenderer::buildSelectionMask");
 #ifdef __APPLE__
-        if (UserPreferences::instance().viewerBackend() == rendering::ViewerBackend::Metal && MetalViewportRenderer::supportsSelection(splat_data, request)) {
+        if (rendering::selectDesktopViewerBackend(UserPreferences::instance().viewerBackend(),
+                core::gpu_backend_available(core::GpuBackend::Metal),
+                MetalViewportRenderer::supportsSelection(splat_data, request)).effective == rendering::ViewerBackend::Metal) {
             std::lock_guard native_lock(readback_mutex_);
             try {
                 if (!metal_viewport_)
@@ -8211,8 +8213,10 @@ namespace lfs::vis {
 #ifdef __APPLE__
         std::unique_lock native_lock(readback_mutex_);
         const auto preference = UserPreferences::instance().viewerBackend();
-        if (preference == rendering::ViewerBackend::Metal &&
-            MetalViewportRenderer::supports(splat_data, request)) {
+        const bool metal_available = core::gpu_backend_available(core::GpuBackend::Metal);
+        const auto selection = rendering::selectDesktopViewerBackend(
+            preference, metal_available, MetalViewportRenderer::supports(splat_data, request));
+        if (selection.effective == rendering::ViewerBackend::Metal) {
             try {
                 if (!metal_viewport_)
                     metal_viewport_ = std::make_unique<MetalViewportRenderer>();
@@ -8245,11 +8249,13 @@ namespace lfs::vis {
                     return std::unexpected("Metal export reservation did not converge");
             }
             metal_output_[static_cast<size_t>(output_slot)] = true;
-            const bool route_changed = metal_route_[static_cast<size_t>(output_slot)] != 0;
-            metal_route_[static_cast<size_t>(output_slot)] = 0;
+            const int route = preference == rendering::ViewerBackend::Automatic ? 4 : 0;
+            const bool route_changed = metal_route_[static_cast<size_t>(output_slot)] != route;
+            metal_route_[static_cast<size_t>(output_slot)] = route;
             native_lock.unlock();
             if (route_changed)
-                LOG_INFO("Viewer GPU backend: requested=metal effective=metal slot={}", static_cast<size_t>(output_slot));
+                LOG_INFO("Viewer GPU backend: requested={} effective=metal slot={}",
+                         rendering::viewerBackendName(preference), static_cast<size_t>(output_slot));
             return result;
         }
         metal_output_[static_cast<size_t>(output_slot)] = false;
@@ -9391,7 +9397,7 @@ namespace lfs::vis {
         if (route_changed) {
             LOG_INFO("Viewer GPU backend: requested={} effective=vulkan slot={} reason={}",
                      rendering::viewerBackendName(preference), static_cast<size_t>(output_slot),
-                     preference == rendering::ViewerBackend::Metal ? "unsupported frame or tensor storage" : "none");
+                     preference != rendering::ViewerBackend::Vulkan && metal_available ? "unsupported frame or tensor storage" : "none");
         }
 #endif
         const std::uint64_t lod_page_generation =

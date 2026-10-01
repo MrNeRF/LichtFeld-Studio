@@ -32,5 +32,12 @@ int main() {
     }
     if (parseViewerBackend("cuda") || parseViewerBackend("unknown"))
         return 10;
+    // Exercise the production desktop policy without requiring a GPU in CI.
+    if (selectDesktopViewerBackend(ViewerBackend::Automatic, true).effective != ViewerBackend::Metal ||
+        selectDesktopViewerBackend(ViewerBackend::Automatic, false).effective != ViewerBackend::Vulkan ||
+        selectDesktopViewerBackend(ViewerBackend::Automatic, true, false).effective != ViewerBackend::Vulkan ||
+        selectDesktopViewerBackend(ViewerBackend::Vulkan, true).effective != ViewerBackend::Vulkan ||
+        selectDesktopViewerBackend(ViewerBackend::Metal, false).effective != ViewerBackend::Vulkan)
+        return 11;
     return 0;
 }

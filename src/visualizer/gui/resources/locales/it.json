@@ -876,12 +876,12 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "tensor_auto": "Automatico",
+    "tensor_auto": "Auto",
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
     "viewer_backend": "Backend del viewer",
-    "viewer_backend_description": "Si applica subito e controlla il rendering della scena separatamente dal calcolo tensoriale. Automatico usa Vulkan; Metal usa Vulkan per i fotogrammi non supportati.",
+    "viewer_backend_description": "Si applica subito. Auto preferisce Metal sui Mac compatibili e Vulkan sugli altri sistemi. I fotogrammi non supportati usano Vulkan.",
     "tensor_backend": "Tensor backend",
     "tensor_restart": "Controlla il calcolo dei tensori sulla GPU, indipendentemente dal renderer del viewer. Le modifiche si applicano dopo il riavvio di LichtFeld Studio. Automatico sceglie CUDA, Metal o Vulkan in base alla build e alla GPU.",
     "backend_unavailable": "Il backend selezionato non è disponibile su questo dispositivo. Le impostazioni non sono state modificate.",

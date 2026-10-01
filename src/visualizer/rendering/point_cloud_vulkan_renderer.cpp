@@ -5,6 +5,7 @@
 #include "point_cloud_vulkan_renderer.hpp"
 #ifdef __APPLE__
 #include "metal_viewport_renderer.hpp"
+#include "core/tensor_backend.hpp"
 #include "preferences.hpp"
 #endif
 
@@ -2262,7 +2263,10 @@ namespace lfs::vis {
                                      OutputSlot output_slot) {
 #ifdef __APPLE__
         const auto preference = UserPreferences::instance().viewerBackend();
-        if (preference == rendering::ViewerBackend::Metal && MetalViewportRenderer::supportsPoints(request)) {
+        const bool metal_available = core::gpu_backend_available(core::GpuBackend::Metal);
+        const auto selection = rendering::selectDesktopViewerBackend(
+            preference, metal_available, MetalViewportRenderer::supportsPoints(request));
+        if (selection.effective == rendering::ViewerBackend::Metal) {
             try {
                 if (!impl_->metal)
                     impl_->metal = std::make_unique<MetalViewportRenderer>();
@@ -2270,9 +2274,11 @@ namespace lfs::vis {
                 if (result) {
                     const auto slot = static_cast<size_t>(output_slot);
                     impl_->metal_output[slot] = true;
-                    if (impl_->metal_route[slot] != 0) {
-                        LOG_INFO("Point viewer GPU backend: requested=metal effective=metal slot={}", slot);
-                        impl_->metal_route[slot] = 0;
+                    const int route = preference == rendering::ViewerBackend::Automatic ? 4 : 0;
+                    if (impl_->metal_route[slot] != route) {
+                        LOG_INFO("Point viewer GPU backend: requested={} effective=metal slot={}",
+                                 rendering::viewerBackendName(preference), slot);
+                        impl_->metal_route[slot] = route;
                     }
                 }
                 return result;
@@ -2294,7 +2300,7 @@ namespace lfs::vis {
                 impl_->metal_route[slot] = route;
                 LOG_INFO("Point viewer GPU backend: requested={} effective=vulkan slot={} reason={}",
                          rendering::viewerBackendName(preference), slot,
-                         preference == rendering::ViewerBackend::Metal ? "unsupported tensor storage" : "none");
+                         preference != rendering::ViewerBackend::Vulkan && metal_available ? "unsupported tensor storage" : "none");
             }
         }
         return result;

@@ -876,12 +876,12 @@
     "zoom": "줌"
   },
   "preferences": {
-    "tensor_auto": "자동",
+    "tensor_auto": "Auto",
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
     "viewer_backend": "뷰어 백엔드",
-    "viewer_backend_description": "즉시 적용되며 텐서 계산과 별도로 장면 렌더링을 제어합니다. 자동은 Vulkan을 사용하며, Metal은 지원하지 않는 프레임에 Vulkan을 사용합니다.",
+    "viewer_backend_description": "즉시 적용됩니다. Auto는 호환되는 Mac에서 Metal을, 다른 시스템에서는 Vulkan을 우선 사용합니다. 지원되지 않는 프레임은 Vulkan을 사용합니다.",
     "tensor_backend": "Tensor backend",
     "tensor_restart": "뷰어 렌더러와 독립적으로 GPU 텐서 계산을 제어합니다. 변경 사항은 LichtFeld Studio를 다시 시작한 후 적용됩니다. 자동은 이 빌드와 GPU에 따라 CUDA, Metal 또는 Vulkan을 선택합니다.",
     "backend_unavailable": "선택한 백엔드는 이 기기에서 사용할 수 없습니다. 설정은 변경되지 않았습니다.",

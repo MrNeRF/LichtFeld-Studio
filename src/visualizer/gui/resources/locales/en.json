@@ -872,12 +872,12 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "tensor_auto": "Automatic",
+    "tensor_auto": "Auto",
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
     "viewer_backend": "Viewer backend",
-    "viewer_backend_description": "Applies immediately and controls scene rendering separately from tensor execution. Automatic uses Vulkan; Metal uses Vulkan for unsupported frames.",
+    "viewer_backend_description": "Applies immediately. Auto prefers Metal on compatible Macs and Vulkan elsewhere. Unsupported frames use Vulkan.",
     "tensor_backend": "Tensor backend",
     "tensor_restart": "Controls GPU tensor computation, independently of the viewer renderer. Changes apply after restarting LichtFeld Studio. Automatic selects CUDA, Metal or Vulkan according to this build and GPU.",
     "backend_unavailable": "The selected backend is unavailable on this machine. Your settings have not changed.",

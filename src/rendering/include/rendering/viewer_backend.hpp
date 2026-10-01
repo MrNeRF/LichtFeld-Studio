@@ -77,4 +77,10 @@ namespace lfs::rendering {
         }
         return {requested, std::nullopt, ViewerBackendReason::NoAvailableBackend};
     }
+    // The desktop compositor is Vulkan. A compatible native Metal scene
+    // renderer is preferred by Auto without coupling it to the selected tensor API.
+    [[nodiscard]] constexpr ViewerBackendSelection selectDesktopViewerBackend(
+        ViewerBackend requested, bool metal_available, bool metal_supports_frame = true) {
+        return selectViewerBackend(requested, {true, metal_available, true}, metal_supports_frame);
+    }
 } // namespace lfs::rendering

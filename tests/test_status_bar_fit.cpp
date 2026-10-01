@@ -574,7 +574,12 @@ namespace {
         EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar_));
         lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_);
         context_->Update();
-        EXPECT_EQ(model_.renderer_value, "Metal"); // Configured renderer, no scene frame.
+#ifdef __APPLE__
+        EXPECT_EQ(model_.renderer_value,
+                  lfs::core::gpu_backend_available(lfs::core::GpuBackend::Metal) ? "Metal" : "Vulkan");
+#else
+        EXPECT_EQ(model_.renderer_value, "Vulkan");
+#endif // Configured renderer, no scene frame.
         EXPECT_EQ(store.viewer_backend_mask.get(), 0u);
         preferences.setViewerBackend(lfs::rendering::ViewerBackend::Vulkan);
         lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_);
@@ -582,7 +587,12 @@ namespace {
         EXPECT_EQ(model_.renderer_value, "Vulkan");
         preferences.setViewerBackend(lfs::rendering::ViewerBackend::Automatic);
         lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_);
+#ifdef __APPLE__
+        EXPECT_EQ(model_.renderer_value,
+                  lfs::core::gpu_backend_available(lfs::core::GpuBackend::Metal) ? "Metal" : "Vulkan");
+#else
         EXPECT_EQ(model_.renderer_value, "Vulkan");
+#endif
     }
 
     TEST_F(StatusBarFitTest, McpDetailsReserveOnlyTheirMeasuredOverlayArea) {

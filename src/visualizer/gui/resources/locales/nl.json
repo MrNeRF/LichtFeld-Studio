@@ -876,12 +876,12 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "tensor_auto": "Automatisch",
+    "tensor_auto": "Auto",
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
     "viewer_backend": "Viewer-backend",
-    "viewer_backend_description": "Wordt direct toegepast en regelt scènerendering afzonderlijk van tensorberekeningen. Automatisch gebruikt Vulkan; Metal gebruikt Vulkan voor niet-ondersteunde frames.",
+    "viewer_backend_description": "Wordt direct toegepast. Auto geeft de voorkeur aan Metal op compatibele Macs en elders aan Vulkan. Niet-ondersteunde frames gebruiken Vulkan.",
     "tensor_backend": "Tensor backend",
     "tensor_restart": "Regelt GPU-tensorberekeningen onafhankelijk van de viewer-renderer. Wijzigingen worden toegepast na het herstarten van LichtFeld Studio. Automatisch kiest CUDA, Metal of Vulkan op basis van deze build en de GPU.",
     "backend_unavailable": "De geselecteerde backend is niet beschikbaar op dit apparaat. Uw instellingen zijn niet gewijzigd.",

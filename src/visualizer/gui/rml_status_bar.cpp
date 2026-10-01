@@ -1749,8 +1749,15 @@ namespace lfs::vis::gui {
         // Until a scene publishes an output, show its configured renderer.
         // The tooltip distinguishes this idle state from actual frame telemetry;
         // the UI compositor is not the scene renderer represented by R.
-        if (active_renderer.empty())
-            active_renderer = requested == rendering::ViewerBackend::Metal ? "Metal" : "Vulkan";
+        if (active_renderer.empty()) {
+#ifdef __APPLE__
+            const bool metal_available = core::gpu_backend_available(core::GpuBackend::Metal);
+#else
+            constexpr bool metal_available = false;
+#endif
+            const auto selected = rendering::selectDesktopViewerBackend(requested, metal_available);
+            active_renderer = selected.effective == rendering::ViewerBackend::Metal ? "Metal" : "Vulkan";
+        }
         setModelString("renderer_label", model_.renderer_label, LOC("status_bar.renderer_backend_short"));
         setModelString("renderer_value", model_.renderer_value, active_renderer);
         auto renderer_tooltip = std::string(LOC("status_bar.renderer_backend")) + ": " +
