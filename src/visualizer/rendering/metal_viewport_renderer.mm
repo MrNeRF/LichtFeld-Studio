@@ -6,6 +6,7 @@
 #include "frame_budget.hpp"
 #include "lod_selector.hpp"
 #include "metal_present_source.hpp"
+#include "metal_rad_pager.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "splat_preprocessor.hpp"
 #include "tile_rasterizer.hpp"
@@ -130,6 +131,9 @@ namespace lfs::vis {
             std::unique_ptr<RasterFrame> raster;
             id<MTLBuffer> projected, gut_geometry, objects, overlay_parameters, overlay_flags, overlay_nodes, selection_colors;
             std::array<id<MTLBuffer>, 4> lod_buffers;
+            std::array<id<MTLBuffer>, 3> page_maps;
+            bool rad_bootstrap = false;
+            uint64_t rad_signature = 0;
             id<MTLCommandBuffer> command;
             id<MTLTexture> point_depth;
             std::unique_ptr<LodCutFrame> gpu_lod;
@@ -149,6 +153,8 @@ namespace lfs::vis {
         };
         std::map<const core::SplatLodTree*, NativeLodTree> lod_trees;
         std::unique_ptr<LodSelector> lod_selector;
+        std::array<std::unique_ptr<MetalRadPager>, 4> rad_pagers;
+        MetalRadPager::Settings rad_settings;
         core::MetalTensorReader reader;
         SplatPreprocessor preprocessor{reader.device()};
         TileRasterizer rasterizer{reader.device()};
@@ -194,6 +200,10 @@ namespace lfs::vis {
                 for (auto& group : frames)
                     for (auto& frame : group)
                         frame.reset();
+                // Upload queues import this consumer semaphore. Retire their decode
+                // jobs and queues before destroying the presentation event.
+                for (auto& pager : rad_pagers)
+                    pager.reset();
                 vkDestroySemaphore(context->device(), completion, nullptr);
             }
         }
@@ -453,6 +463,10 @@ namespace lfs::vis {
     };
     MetalViewportRenderer::MetalViewportRenderer() : impl_(std::make_unique<Impl>()) {}
     MetalViewportRenderer::~MetalViewportRenderer() = default;
+    void MetalViewportRenderer::setLodSettings(size_t splats, float fraction, uint32_t fade) {
+        std::lock_guard lock(impl_->readback_mutex);
+        impl_->rad_settings = {splats, fraction, fade};
+    }
     bool MetalViewportRenderer::supportsPoints(const PointCloudVulkanRenderer::RenderRequest& r) {
         const auto resident = [](const core::Tensor* t) { return t && t->is_valid() && t->is_contiguous() && core::gpu_backend_of(*t) == core::GpuBackend::Metal; };
         if (!resident(r.positions) || !resident(r.colors) || r.positions->dtype() != core::DataType::Float32 ||
@@ -581,20 +595,24 @@ namespace lfs::vis {
         const auto resident_mask = [&](const core::Tensor* mask) { return !mask || !mask->is_valid() ||
                                                                           (core::gpu_backend_of(*mask) == core::GpuBackend::Metal && mask->is_contiguous() && mask->bytes() >= size_t(model.size()) &&
                                                                            (mask->dtype() == core::DataType::UInt8 || mask->dtype() == core::DataType::Bool)); };
+        const bool rad = model.lod_tree && model.lod_tree->rad_source.valid();
+        const size_t logical_count = rad ? model.lod_tree->total_nodes() : size_t(model.size());
         const auto indices = r.scene.transform_indices.get();
         const size_t objects = r.scene.model_transforms ? r.scene.model_transforms->size() : 0;
         const bool indexed = indices && indices->is_valid();
         if ((objects > 1 && !indexed) || (indexed &&
                                           (core::gpu_backend_of(*indices) != core::GpuBackend::Metal || !indices->is_contiguous() ||
-                                           indices->dtype() != core::DataType::Int32 || indices->bytes() < size_t(model.size()) * 4)))
+                                           indices->dtype() != core::DataType::Int32 || indices->bytes() < logical_count * 4)))
             return false;
         return resident_mask(r.overlay.emphasis.mask.get()) && resident_mask(r.overlay.emphasis.transient_mask.mask) &&
-               core::gpu_backend_of(model.means_raw()) == core::GpuBackend::Metal &&
+               (core::gpu_backend_of(model.means_raw()) == core::GpuBackend::Metal ||
+                (rad && model.means_raw().device() == core::Device::CPU && core::default_gpu_backend() == core::GpuBackend::Metal)) &&
                (!r.equirectangular || r.gut) && (r.splat_render_profile == 0 || r.splat_render_profile == 1) &&
                (!r.lod_gpu_traversal.enabled || (model.lod_tree && model.lod_tree->has_tree() &&
-                                                 r.lod_gpu_traversal.node_count == model.lod_tree->total_nodes() && model.lod_tree->total_nodes() <= size_t(model.size()) &&
+                                                 r.lod_gpu_traversal.node_count == model.lod_tree->total_nodes() && (rad || model.lod_tree->total_nodes() <= size_t(model.size())) &&
                                                  r.lod_gpu_traversal.output_capacity > 0 && r.lod_gpu_traversal.output_capacity <= std::numeric_limits<uint32_t>::max())) &&
-               (!model.lod_tree || (!model.lod_tree->rad_source.valid() && (!model.lod_tree->lod_opacity_encoded || !r.gut))) &&
+               (!rad || (r.lod_gpu_traversal.enabled && model.lod_tree->rad_source.chunk_size >= core::SplatLodTree::kChunkSplats && model.lod_tree->rad_source.chunk_size % core::SplatLodTree::kChunkSplats == 0)) &&
+               (!model.lod_tree || !model.lod_tree->lod_opacity_encoded || !r.gut) &&
                (!r.lod_indices || r.lod_count <= std::numeric_limits<uint32_t>::max()) &&
                model.means_raw().dtype() == core::DataType::Float32 && model.sh0_raw().dtype() == core::DataType::Float32 &&
                ((model.scaling_raw().dtype() == core::DataType::Float32 && model.rotation_raw().dtype() == core::DataType::Float32 &&
@@ -602,7 +620,7 @@ namespace lfs::vis {
                 model.non_sh_attrs_f16());
     }
     lfs::Result<VksplatViewportRenderer::RenderResult> MetalViewportRenderer::render(
-        VulkanContext& context, const core::SplatData& model, const rendering::ViewportRenderRequest& request, Slot slot, bool expected_depth) {
+        VulkanContext& context, const core::SplatData& model, const rendering::ViewportRenderRequest& request, Slot slot, bool expected_depth, bool wait_for_pages) {
         try {
             auto& i = *impl_;
             std::lock_guard lock(i.readback_mutex);
@@ -628,29 +646,77 @@ namespace lfs::vis {
             }
             if (i.frames[static_cast<size_t>(slot)][i.next[static_cast<size_t>(slot)] % 3].get() == previous)
                 previous = nullptr;
-            const bool gpu_lod = request.lod_gpu_traversal.enabled;
-            auto* gpu_tree = gpu_lod ? &i.prepareLodTree(model) : nullptr;
-            const uint32_t draw_count = gpu_lod ? uint32_t(std::clamp<size_t>(request.lod_gpu_traversal.output_capacity, gpu_tree->roots, gpu_tree->nodes)) : uint32_t(request.lod_indices ? request.lod_count : model.size());
+            const bool rad = model.lod_tree && model.lod_tree->rad_source.valid();
+            MetalRadPager* pager = nullptr;
+            Impl::NativeLodTree paged_tree;
+            if (rad) {
+                auto& owner = i.rad_pagers[static_cast<size_t>(slot)];
+                if (!owner)
+                    owner = std::make_unique<MetalRadPager>(i.reader.device());
+                pager = owner.get();
+                pager->configure(model, context, i.completion, i.rad_settings);
+                const Frame* completed = nullptr;
+                for (const auto& candidate : i.frames[static_cast<size_t>(slot)])
+                    if (candidate && candidate->gpu_lod_active && candidate->gpu_lod && !candidate->gpu_lod->busy() &&
+                        candidate->rad_signature == pager->signature() && candidate->command.status == MTLCommandBufferStatusCompleted &&
+                        (!completed || candidate->producer_value > completed->producer_value))
+                        completed = candidate.get();
+                const auto touches = completed ? completed->gpu_lod->touches() : BufferSlice{};
+                pager->advance(touches.buffer ? std::span<const uint32_t>(static_cast<const uint32_t*>(touches.buffer.contents), pager->cache().snapshot().logical_chunks) : std::span<const uint32_t>{});
+                if (wait_for_pages)
+                    pager->waitForRoot();
+                paged_tree.nodes = pager->nodes();
+                paged_tree.chunks = uint32_t(pager->cache().snapshot().logical_chunks);
+                paged_tree.roots = 1;
+                paged_tree.signature = pager->signature();
+            }
+            const bool gpu_lod = request.lod_gpu_traversal.enabled && (!pager || pager->rootReady());
+            auto* gpu_tree = gpu_lod ? (pager ? &paged_tree : &i.prepareLodTree(model)) : nullptr;
+            const uint32_t source_count = pager && gpu_lod ? pager->physicalNodes() : uint32_t(model.size());
+            const uint32_t logical_count = pager ? pager->nodes() : source_count;
+            const uint32_t draw_count = gpu_lod ? uint32_t(std::clamp<size_t>(request.lod_gpu_traversal.output_capacity, gpu_tree->roots, std::min(gpu_tree->nodes, source_count))) : uint32_t(pager ? model.size() : request.lod_indices ? request.lod_count
+                                                                                                                                                                                                                                          : model.size());
             auto& f = i.acquire(slot, request, draw_count);
             f.gpu_lod_active = gpu_lod;
+            f.rad_bootstrap = pager && !gpu_lod;
+            f.rad_signature = pager ? pager->signature() : 0;
             LodSelection lod{};
             LodParameters lod_parameters{};
             if (gpu_lod) {
                 if (!i.lod_selector)
                     i.lod_selector = std::make_unique<LodSelector>(i.reader.device());
-                if (!f.gpu_lod || f.gpu_capacity != draw_count || f.gpu_source_count != uint32_t(model.size()) || f.gpu_tree_signature != gpu_tree->signature) {
-                    f.gpu_lod = std::make_unique<LodCutFrame>(i.reader.device(), draw_count, uint32_t(model.size()), gpu_tree->chunks);
+                if (!f.gpu_lod || f.gpu_capacity != draw_count || f.gpu_source_count != source_count || f.gpu_tree_signature != gpu_tree->signature) {
+                    f.gpu_lod = std::make_unique<LodCutFrame>(i.reader.device(), draw_count, source_count, gpu_tree->chunks);
                     f.gpu_capacity = draw_count;
-                    f.gpu_source_count = uint32_t(model.size());
+                    f.gpu_source_count = source_count;
                     f.gpu_tree_signature = gpu_tree->signature;
                     f.gpu_chunks = gpu_tree->chunks;
                 }
                 lod = f.gpu_lod->selection(request.lod_debug_mode);
+                lod.logical_count = logical_count;
                 const auto& p = request.lod_gpu_traversal;
-                lod_parameters.node_count = lod_parameters.physical_node_count = gpu_tree->nodes;
+                lod_parameters.node_count = gpu_tree->nodes;
+                lod_parameters.physical_node_count = source_count;
                 lod_parameters.output_capacity = draw_count;
                 lod_parameters.logical_chunk_count = gpu_tree->chunks;
                 lod_parameters.chunk_splats = uint32_t(core::SplatLodTree::kChunkSplats);
+                if (pager) {
+                    lod_parameters.current_frame = uint32_t(pager->cache().frameIndex());
+                    lod_parameters.fade_frames = wait_for_pages ? 0 : pager->fadeFrames();
+                    const auto& snapshot = pager->cache().snapshot();
+                    const std::array<std::span<const uint32_t>, 3> maps{snapshot.chunk_to_page, snapshot.page_resident_frame, snapshot.page_to_chunk};
+                    for (size_t n = 0; n < maps.size(); ++n) {
+                        const size_t bytes = std::max<size_t>(16, maps[n].size_bytes());
+                        if (!f.page_maps[n] || f.page_maps[n].length < bytes)
+                            f.page_maps[n] = [i.reader.device() newBufferWithLength:bytes options:MTLResourceStorageModeShared];
+                        if (!f.page_maps[n])
+                            throw std::bad_alloc();
+                        std::memcpy(f.page_maps[n].contents, maps[n].data(), maps[n].size_bytes());
+                    }
+                    gpu_tree->buffers.chunk_to_page = {f.page_maps[0]};
+                    gpu_tree->buffers.page_age = {f.page_maps[1]};
+                    gpu_tree->buffers.page_to_chunk = {f.page_maps[2]};
+                }
                 lod_parameters.pixel_scale_limit = p.pixel_scale_limit;
                 lod_parameters.object_scale = p.object_scale;
                 lod_parameters.behind_camera_penalty = p.behind_camera_penalty;
@@ -672,7 +738,7 @@ namespace lfs::vis {
                 lod_parameters.ortho_half_height = p.ortho_half_height;
                 lod_parameters.viewport_foveation = uint32_t(p.viewport_foveation);
                 lod_parameters.orthographic = uint32_t(p.orthographic);
-            } else if (request.lod_indices) {
+            } else if (!pager && request.lod_indices) {
                 lod.enabled = true;
                 lod.debug = request.lod_debug_mode;
                 lod.count = draw_count;
@@ -709,8 +775,9 @@ namespace lfs::vis {
             const int node_degree = request.scene.node_active_sh_degrees.empty() ? model.get_active_sh_degree() : *std::max_element(request.scene.node_active_sh_degrees.begin(), request.scene.node_active_sh_degrees.end());
             const int max_degree = std::clamp(node_degree, 0, std::min(3, model.get_max_sh_degree()));
             const uint32_t degree = static_cast<uint32_t>(std::clamp(request.sh_degree, 0, max_degree));
-            const auto storage = model.shN_value_quantized() ? ShStorage::Q16 : model.shN_ieee_f16() ? ShStorage::SwizzledFloat16
-                                                                                                     : ShStorage::SwizzledFloat32;
+            const auto storage = pager && gpu_lod ? ShStorage::RadSigned8 : model.shN_value_quantized() ? ShStorage::Q16
+                                                                        : model.shN_ieee_f16()          ? ShStorage::SwizzledFloat16
+                                                                                                        : ShStorage::SwizzledFloat32;
             Projection projection{};
             projection.model_to_world = matrix(glm::mat4(1));
             auto view = glm::mat4(glm::transpose(rendering::dataCameraToWorldFromVisualizerRotation(request.frame_view.rotation)));
@@ -724,7 +791,7 @@ namespace lfs::vis {
             // Viewer raster clipping differs from the desktop projection matrix's
             // near/far planes. Derive the reference near threshold at configure.
             const bool portal = request.splat_render_profile == 1;
-            const bool spark = (gpu_lod || (request.lod_indices && request.lod_count)) && model.lod_tree && model.lod_tree->lod_opacity_encoded;
+            const bool spark = (pager || gpu_lod || (request.lod_indices && request.lod_count)) && model.lod_tree && model.lod_tree->lod_opacity_encoded;
             const bool portal_math = portal && !spark;
             const bool mip = request.mip_filter && !(portal_math && request.gut);
             const float dilation = portal_math && !request.gut ? .075f : mip ? .1f
@@ -797,6 +864,24 @@ namespace lfs::vis {
                                                         &model.opacity_raw(), &model.sh0_raw(), degree ? &model.shN_raw() : nullptr,
                                                         degree ? &model.shN_value_bounds() : nullptr, &model.deleted(), scene.count ? request.scene.transform_indices.get() : nullptr,
                                                         selection_enabled ? selection : nullptr, preview_enabled ? preview : nullptr};
+            if (pager) {
+                if (gpu_lod) {
+                    const auto& pool = pager->pool();
+                    const std::array<size_t, 7> order{0, 4, 3, 5, 1, 2, 6};
+                    for (size_t n = 0; n < order.size(); ++n)
+                        tensors[n] = &pool.regions[order[n]];
+                } else {
+                    const auto& prefix = pager->preview(model);
+                    for (size_t n = 0; n < prefix.size(); ++n)
+                        tensors[n] = &prefix[n];
+                }
+                tensors[7] = &pager->deleted(model);
+            }
+            std::vector<const core::Tensor*> inputs_tensors(tensors.begin(), tensors.end());
+            if (pager && gpu_lod) {
+                inputs_tensors.push_back(&pager->pool().regions[7]);
+                inputs_tensors.push_back(&pager->pool().regions[8]);
+            }
             if (i.serial == std::numeric_limits<uint64_t>::max())
                 throw std::runtime_error("Metal viewport timeline exhausted");
             const uint64_t serial = i.serial + 1;
@@ -831,8 +916,14 @@ namespace lfs::vis {
             hash(&lod.debug, sizeof(lod.debug));
             hash(&draw_count, sizeof(draw_count));
             if (gpu_lod) {
-                hash(&lod_parameters, sizeof(lod_parameters));
+                auto stable_lod = lod_parameters;
+                stable_lod.current_frame = 0;
+                hash(&stable_lod, sizeof(stable_lod));
                 hash(&gpu_tree->signature, sizeof(gpu_tree->signature));
+                if (pager) {
+                    const auto page_generation = pager->cache().snapshot().generation;
+                    hash(&page_generation, sizeof(page_generation));
+                }
             } else if (lod.enabled)
                 for (const auto slice : {lod.indices, lod.logical_indices, lod.levels, lod.weights}) {
                     const bool present = slice.buffer != nil;
@@ -868,17 +959,25 @@ namespace lfs::vis {
                     hash(&pointer, sizeof(pointer));
                 }
             const bool refine = !previous || previous->request_key != key || previous->raster->busy() ||
-                                previous->raster->status().error != RasterError::None;
-            f.command = i.reader.submit(tensors, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
+                                previous->raster->status().error != RasterError::None || (pager && (pager->pending() || !pager->rootReady()));
+            f.command = i.reader.submit(inputs_tensors, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
                 // A blit on the readback queue may still sample a recycled slot.
                 // GPU ordering protects it without waiting on the host each frame.
                 if (i.next_readback)
                     [command encodeWaitForEvent:i.readback_event value:i.next_readback];
+                auto slice = [&](size_t n) { return BufferSlice{views[n].buffer, views[n].offset}; };
+                if (pager && gpu_lod) {
+                    gpu_tree->buffers.bounds = slice(11);
+                    gpu_tree->buffers.links = slice(12);
+                    gpu_tree->buffers.page_frames = slice(6);
+                }
                 if (gpu_lod)
                     i.lod_selector->encode(command, gpu_tree->buffers, lod_parameters, *f.gpu_lod);
-                auto slice = [&](size_t n) { return BufferSlice{views[n].buffer, views[n].offset}; };
                 SplatBuffers inputs{slice(0), slice(1), slice(2), slice(3), slice(4), slice(5), slice(6), slice(7),
-                                    uint32_t(model.size()), uint32_t(model.max_sh_coeffs_rest()), storage, model.non_sh_attrs_f16()};
+                                    source_count, uint32_t(model.max_sh_coeffs_rest()), storage, model.non_sh_attrs_f16()};
+                if (pager && gpu_lod)
+                    inputs.rad_page_splats = uint32_t(core::SplatLodTree::kChunkSplats);
+                inputs.deleted_count = uint32_t(std::min<size_t>(views[7].bytes, std::numeric_limits<uint32_t>::max()));
                 scene.object_indices = slice(8);
                 overlay.selection = selection_enabled ? slice(9) : BufferSlice{};
                 overlay.preview = preview_enabled ? slice(10) : BufferSlice{};
@@ -907,6 +1006,8 @@ namespace lfs::vis {
                         event.signaledValue = serial;
                 }];
             });
+            if (pager && gpu_lod)
+                pager->noteRendererCompletion(serial);
             f.producer_value = serial;
             f.request_key = key;
             i.serial = serial;
@@ -1039,6 +1140,7 @@ namespace lfs::vis {
             i.latest[index] = nullptr;
             for (auto& frame : i.frames[index])
                 frame.reset();
+            i.rad_pagers[index].reset();
             i.next[index] = 0;
             i.needed_capacity[index] = 0;
             return {};
@@ -1070,9 +1172,19 @@ namespace lfs::vis {
         status.pixel_scale_feedback = cut.threshold_multiplier;
         const auto touches = completed->gpu_lod->touches();
         status.resident_chunks = status.chunk_count = status.pool_pages = completed->gpu_chunks;
+        const auto& pager = i.rad_pagers[static_cast<size_t>(slot)];
+        if (pager && completed->rad_signature == pager->signature()) {
+            status.resident_chunks = pager->cache().snapshot().resident_chunks;
+            status.pool_pages = pager->cache().snapshot().physical_pages;
+            status.streaming_jobs = pager->cache().outstandingWorkCount() + size_t(pager->pending());
+            status.deferred_requests = pager->cache().deferredRequestCount();
+            status.admission_frozen = pager->frozen();
+        }
         const auto values = static_cast<const uint32_t*>(touches.buffer.contents);
-        for (size_t n = 0; n < status.chunk_count; ++n)
+        for (size_t n = 0; n < status.chunk_count; ++n) {
             status.touched_chunks += values[n] != 0;
+            status.miss_chunks += values[n] != 0 && values[n] != 0xffffffffu;
+        }
         return status;
     }
     lfs::Result<bool> MetalViewportRenderer::outputComplete(Slot slot) const {
@@ -1084,6 +1196,8 @@ namespace lfs::vis {
             [frame->command waitUntilCompleted];
             if (frame->command.status != MTLCommandBufferStatusCompleted)
                 throw std::runtime_error("Metal output command failed");
+            if (frame->rad_bootstrap)
+                return false;
             if (frame->gpu_lod && frame->gpu_lod_active && frame->gpu_lod->status().overflow)
                 return false;
             return !frame->raster || frame->raster->status().error == RasterError::None;

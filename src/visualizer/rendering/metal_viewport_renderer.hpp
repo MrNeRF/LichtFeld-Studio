@@ -23,12 +23,13 @@ namespace lfs::vis {
         MetalViewportRenderer();
         ~MetalViewportRenderer();
         static bool supports(const core::SplatData&, const rendering::ViewportRenderRequest&);
+        void setLodSettings(size_t pool_splats, float vram_fraction, uint32_t fade_frames);
         static bool supportsPoints(const PointCloudVulkanRenderer::RenderRequest&);
         lfs::Result<PointCloudVulkanRenderer::RenderResult> renderPoints(
             VulkanContext&, const PointCloudVulkanRenderer::RenderRequest&, PointCloudVulkanRenderer::OutputSlot);
         lfs::Result<VksplatViewportRenderer::RenderResult> render(
             VulkanContext&, const core::SplatData&, const rendering::ViewportRenderRequest&,
-            VksplatViewportRenderer::OutputSlot, bool expected_depth = false);
+            VksplatViewportRenderer::OutputSlot, bool expected_depth = false, bool wait_for_pages = false);
         glm::ivec2 size(VksplatViewportRenderer::OutputSlot) const;
         // Explicit validation/readback boundary: waits for the native command and
         // distinguishes a complete image from capacity-overflow fallback output.

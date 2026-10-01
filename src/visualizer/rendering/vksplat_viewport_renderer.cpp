@@ -8206,7 +8206,8 @@ namespace lfs::vis {
             } catch (const std::exception& e) {
                 return std::unexpected(std::string("Metal viewport initialization failed: ") + e.what());
             }
-            auto result = legacyMetalResult(metal_viewport_->render(context, splat_data, request, output_slot, depth_capture_expected_));
+            metal_viewport_->setLodSettings(lod_page_pool_splats_, lod_pool_vram_fraction_, lod_fade_frames_);
+            auto result = legacyMetalResult(metal_viewport_->render(context, splat_data, request, output_slot, depth_capture_expected_, deterministic_export || depth_capture_mode_ || output_slot == OutputSlot::Preview));
             if (!result)
                 return result;
             // Offline capture cannot publish the provisional overflow image used
@@ -8223,7 +8224,7 @@ namespace lfs::vis {
                     }
                     if (attempt == 4)
                         break;
-                    result = legacyMetalResult(metal_viewport_->render(context, splat_data, request, output_slot, depth_capture_expected_));
+                    result = legacyMetalResult(metal_viewport_->render(context, splat_data, request, output_slot, depth_capture_expected_, deterministic_export || depth_capture_mode_ || output_slot == OutputSlot::Preview));
                     if (!result)
                         return result;
                 }

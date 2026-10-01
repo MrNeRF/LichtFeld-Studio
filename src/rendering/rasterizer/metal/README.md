@@ -49,8 +49,19 @@ Callers can precompile cached specializations with `prepare` before interaction.
   physical cuts, half padding and Gaussian/point/disc/GUT modes. A real tensor
   uploader contract quantizes production Q16 and SH0 sources into the pool,
   submits the native consumer without a host producer wait, and mutates the same
-  pool afterward to verify generation ordering. Desktop RAD paging integration
-  remains separate from this low-level decoder contract.
+  pool afterward to verify generation ordering.
+- Desktop RAD paging uses the existing `LodPageCache` and `LodUploadEngine`.
+  Native 2048-node pages remain distinct from larger RAD file blocks. Packed
+  attributes, signed SH and quantized bounds/links are decoded on the tensor GPU
+  queue; mappings are published only after completion. Each native frame owns
+  its mapping/age snapshot, and uploads wait for already-submitted consumers
+  before reusing pool pages. Logical IDs drive masks, object transforms and
+  picking even when they exceed physical pool capacity. Initial CPU previews
+  migrate only their resident prefix; captures wait for the pinned root.
+  Working-set admission, priority eviction, page fade and saturated-pool sleep
+  preserve the shared pager contracts. The macOS `MetalViewerRadPagerContracts`
+  generates a real RAD and exercises eviction, metadata, generation replacement,
+  first-frame coverage, capture, larger file blocks and stable-view convergence.
 - SH0 specialization does not bind/read SH rest or bounds; points specialization
   does not bind/read Gaussian scales or rotations.
 - Affine object transforms, positive-view-Z perspective projection, normalized

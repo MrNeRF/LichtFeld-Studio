@@ -378,8 +378,8 @@ if(APPLE)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/vulkan/shader/src/slang/display_color.inc"
         "${CMAKE_CURRENT_SOURCE_DIR}/rendering/metal_viewport_present.metal")
-    target_sources(lfs_visualizer PRIVATE rendering/metal_viewport_renderer.mm)
-    set_source_files_properties(rendering/metal_viewport_renderer.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_sources(lfs_visualizer PRIVATE rendering/metal_viewport_renderer.mm rendering/metal_rad_pager.mm)
+    set_source_files_properties(rendering/metal_viewport_renderer.mm rendering/metal_rad_pager.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_target_properties(lfs_visualizer PROPERTIES OBJCXX_STANDARD 23 OBJCXX_STANDARD_REQUIRED YES)
     target_include_directories(lfs_visualizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_link_libraries(lfs_visualizer PRIVATE lfs_metal_viewer)
