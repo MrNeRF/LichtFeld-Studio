@@ -1395,8 +1395,11 @@ namespace lfs::vis {
             FrameDiagnostics result;
             result.input_splats = frame->count;
             result.reserved_instances = frame->capacity;
-            if (frame->raster)
-                result.required_instances = frame->raster->status().required_instances;
+            if (frame->raster) {
+                const auto status = frame->raster->status();
+                result.required_instances = status.required_instances;
+                result.blend_threads = status.blend_threads;
+            }
             result.gpu_command_ms = (frame->command.GPUEndTime - frame->command.GPUStartTime) * 1000.;
             if (!std::isfinite(result.gpu_command_ms) || result.gpu_command_ms < 0)
                 throw std::runtime_error("Invalid native command GPU interval");

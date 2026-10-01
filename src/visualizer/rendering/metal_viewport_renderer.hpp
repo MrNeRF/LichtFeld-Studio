@@ -28,6 +28,7 @@ namespace lfs::vis {
         struct FrameDiagnostics {
             uint64_t required_instances = 0;
             uint32_t reserved_instances = 0, input_splats = 0;
+            uint32_t blend_threads = 0; // Gaussian dispatch size from completed GPU status
             double gpu_command_ms = 0;
             bool counter_timestamps_available = false;
             std::array<double, 5> gpu_stage_ms{}; // projection, instances, sort, blend, present

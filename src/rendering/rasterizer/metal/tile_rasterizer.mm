@@ -290,11 +290,11 @@ namespace lfs::rendering::metal {
         };
         check_mask(overlay.selection, selection_count);
         check_mask(overlay.preview, preview_count);
-        const bool single_simd = mode == RasterMode::Gaussian && projection.display.z != 1.f;
+        bool single_simd = mode == RasterMode::Gaussian && projection.display.z != 1.f;
         RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u) | (macro_half_display ? 64u : 0u) | (single_simd ? 128u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
-        // Compile/cache before reserving the frame or encoding any work. A
+        // Compile/cache the default before reserving the frame or encoding work. A
         // specialization failure cannot strand its busy flag or partial scratch.
-        const auto blend_pipeline = impl_->blendPipeline(uint32_t(mode), p.unused);
+        auto blend_pipeline = impl_->blendPipeline(uint32_t(mode), p.unused);
         if (f->in_flight.exchange(true, std::memory_order_acq_rel))
             throw std::logic_error("Metal viewer frame reservation is still in flight");
         // Completion already publishes this shared status; inspecting the last
@@ -303,11 +303,27 @@ namespace lfs::rendering::metal {
         // camera can choose the less efficient path for one frame, but both
         // paths preserve the exact full-width key and original source IDs.
         bool source_sorted = false;
-        if (count >= 4096 && count <= f->capacity && f->previous_source_count == count &&
-            f->completed.load(std::memory_order_acquire)) {
-            const auto previous = *static_cast<const RasterStatus*>(f->status.contents);
-            source_sorted = previous.error == RasterError::None &&
-                            previous.required_instances > uint64_t(count) * 5 / 4;
+        try {
+            if (count >= 4096 && count <= f->capacity && f->previous_source_count == count &&
+                f->completed.load(std::memory_order_acquire)) {
+                const auto previous = *static_cast<const RasterStatus*>(f->status.contents);
+                source_sorted = previous.error == RasterError::None &&
+                                previous.required_instances > uint64_t(count) * 5 / 4;
+                if (mode == RasterMode::Gut && previous.error == RasterError::None &&
+                    previous.required_instances > uint64_t(f->tiles) * 512) {
+                    // Cache SIMD32 only when a completed dense frame needs it.
+                    // Sparse scenes retain their original pipeline and avoid
+                    // compiling a large unused shader variant during startup.
+                    blend_pipeline = impl_->blendPipeline(uint32_t(mode), p.unused | 128u);
+                    single_simd = true;
+                    p.unused |= 128u;
+                }
+            }
+        } catch (...) {
+            // No raster work has been encoded and completed/status metadata is
+            // untouched. A specialization failure must release the reservation.
+            f->in_flight.store(false, std::memory_order_release);
+            throw;
         }
         f->previous_source_count = count;
         if (source_sorted)

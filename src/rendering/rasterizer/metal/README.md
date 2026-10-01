@@ -298,6 +298,24 @@ The desktop UI, grid, gizmos and final composition still use Vulkan. This
 backend is not yet a fully independent Metal desktop presentation/editor stack.
 Automatic continues to use Vulkan, and no global Vulkan shader is modified.
 
+Dense GUT reservations can switch from 8x8/two-SIMD blend groups to
+8x4/SIMD32 groups using their already completed instance counts. The threshold
+is more than 512 intersections per parent tile, with at least 4096 sources,
+unchanged source count and a successful prior frame. Sparse, first, overflowed
+and changing-count frames retain the original grouping. The dense variant is
+compiled/cached only when first needed, before encoding raster work; failure
+releases the reservation without changing prior completion/status metadata.
+Sparse scenes do not compile an unused variant. There is no new CPU/GPU wait
+or allocation per steady-state frame. Only the grouping and conservative subtile frustum change;
+ordered 64-source batches, FP32 composition, saturation and depth remain intact.
+The existing GPU status also reports `blend_threads_per_group` in benchmark
+JSON, and the exact tests assert which dispatch actually ran; no new readback
+or status-buffer allocation is added.
+Exact GPU contracts compare every color/depth/ID bit against a fresh two-SIMD
+reservation for dense/sparse/empty recovery, odd extents, perspective,
+orthographic, spherical and Spark density rendering. An unconditional SIMD32
+experiment regressed synthetic SH3 GUT and was not retained.
+
 The production adapter admits short resident UInt8/Bool selection and preview
 masks: unknown logical IDs remain unselected. Mac contracts exercise both tensor
 backends, GS/GUT, reordered cuts and an explicit Metal preference, comparing the

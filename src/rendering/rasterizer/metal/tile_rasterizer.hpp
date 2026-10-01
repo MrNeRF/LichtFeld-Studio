@@ -13,7 +13,7 @@ namespace lfs::rendering::metal {
     struct RasterStatus {
         uint64_t required_instances;
         RasterError error;
-        uint32_t unused;
+        uint32_t blend_threads; // completed GPU dispatch: 32 or 64; reuses reserved status space
     };
     static_assert(sizeof(RasterStatus) == 16);
 

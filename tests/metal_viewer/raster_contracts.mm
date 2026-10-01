@@ -102,11 +102,72 @@ static void compare(const Readback& r, const std::vector<ProjectedSplat>& splats
             require(*pick == picked, "Pick source ID mismatch");
         }
 }
+// A fresh reservation uses the established two-SIMD GUT kernel. Reused
+// dense reservations can choose SIMD32 without changing a single output bit.
+static void compare_dense_gut_subtiles(id<MTLDevice> device) {
+    constexpr uint32_t n = 8193, w = 19, h = 17;
+    std::vector<ProjectedSplat> splats(n);
+    std::vector<GutSplat> geometry(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        splats[i] = {{9, 8, 3, 20}, {1, 0, 1, .05f},
+                     {float(i % 7) / 7, float(i % 11) / 11, float(i % 13) / 13, float(i / 3 + 1)}, {0, 0, w, h}};
+        geometry[i] = {{2.5f, 0, 0, 2}, {0, 2.5f, 0, 0}, {0, 0, 2.5f, 0},
+                       {float(int(i % 5) - 2) * .15f, float(int(i % 7) - 3) * .15f, 3 + .02f * (i % 8), .05f}};
+    }
+    auto input = [device newBufferWithBytes:splats.data() length:splats.size() * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    auto gut = [device newBufferWithBytes:geometry.data() length:geometry.size() * sizeof(GutSplat) options:MTLResourceStorageModeShared];
+    auto queue = [device newCommandQueue];
+    TileRasterizer raster(device);
+    RasterFrame adaptive(device, w, h, n, n * 4);
+    Projection camera{matrix_identity_float4x4, matrix_identity_float4x4, {0, 0, 0, 0}, {17, 17, w * .5f, h * .5f}, {.01f, 100, 1, .3f}, {w, h, uint32_t(CameraModel::Perspective), 0}};
+    uint32_t previous_count = 0;
+    for (auto model : {CameraModel::Perspective, CameraModel::Orthographic, CameraModel::Equirectangular})
+        for (bool spark : {false, true}) {
+            camera.extent.z = uint32_t(model);
+            camera.panorama = {float(w), float(h), 0, 0};
+            camera.display.z = spark ? 1 : 0;
+            for (uint32_t i = 0; i < n; ++i) {
+                splats[i].bounds.z = model == CameraModel::Equirectangular ? 32 : w;
+                geometry[i].mean_opacity.w = spark ? 1.2f : .05f;
+            }
+            std::memcpy(input.contents, splats.data(), splats.size() * sizeof(ProjectedSplat));
+            std::memcpy(gut.contents, geometry.data(), geometry.size() * sizeof(GutSplat));
+            // Dense -> dense -> sparse -> empty -> dense -> dense exercises
+            // both choices, source-count invalidation and old-output recovery.
+            for (uint32_t count : {n, n, 1u, 0u, n, n}) {
+                RasterFrame reference(device, w, h, n, n * 4);
+                const simd_float4 bg = spark ? simd_float4{.1f, .2f, .3f, 1} : simd_float4{0, 0, 0, 0};
+                auto command = [queue commandBuffer];
+                raster.encode(command, {input}, count, RasterMode::Gut, bg, reference, {}, {gut}, camera);
+                const auto expected = readback(device, command, reference);
+                wait(command);
+                command = [queue commandBuffer];
+                raster.encode(command, {input}, count, RasterMode::Gut, bg, adaptive, {}, {gut}, camera);
+                const auto actual = readback(device, command, adaptive);
+                wait(command);
+                require(adaptive.status().error == RasterError::None && adaptive.status().required_instances == uint64_t(count) * 4,
+                        "Dense GUT fixture did not exercise the intended list density");
+                require(reference.status().blend_threads == 64, "Fresh GUT reference did not use the original grouping");
+                require(adaptive.status().blend_threads == (count == n && previous_count == n ? 32u : 64u),
+                        "Dense/sparse GUT dispatch did not follow the completed density policy");
+                previous_count = count;
+                for (uint32_t y = 0; y < h; ++y) {
+                    const auto equal = [&](id<MTLBuffer> a, size_t a_stride, id<MTLBuffer> b, size_t b_stride, size_t bytes) {
+                        return std::memcmp(static_cast<const char*>(a.contents) + y * a_stride,
+                                           static_cast<const char*>(b.contents) + y * b_stride, bytes) == 0;
+                    };
+                    require(equal(actual.color, actual.color_stride, expected.color, expected.color_stride, w * 8), "Dense GUT subtiles changed RGB/alpha");
+                    require(equal(actual.depth, actual.depth_stride, expected.depth, expected.depth_stride, w * 16), "Dense GUT subtiles changed a depth channel");
+                    require(equal(actual.pick, actual.pick_stride, expected.pick, expected.pick_stride, w * 4), "Dense GUT subtiles changed stable source IDs");
+                }
+            }
+        }
+}
 // Compare the same 3D ray pipeline with support-sphere culling enabled and
 // explicitly disabled. Color, all depth channels and source IDs must be exact,
 // including anisotropy, affine shear, partial subtiles and ill-conditioned input.
-static void compare_gut_culling(id<MTLDevice> device) {
-    constexpr uint32_t n = 259, w = 129, h = 97;
+static void compare_gut_culling_for_count(id<MTLDevice> device, uint32_t n) {
+    constexpr uint32_t w = 129, h = 97;
     std::mt19937 random(1939);
     std::uniform_real_distribution<float> unit(0.f, 1.f);
     std::vector<float> means(n * 3), scales(n * 3), rotations(n * 4), sh0(n * 3), opacity(n);
@@ -153,13 +214,18 @@ static void compare_gut_culling(id<MTLDevice> device) {
                 auto command = [queue commandBuffer];
                 projector.encode(command, input, p, 0, PrimitiveMode::Gut, {projected}, {}, {}, {geometry});
                 wait(command);
-                const auto splats = static_cast<const ProjectedSplat*>(projected.contents);
+                auto splats = static_cast<ProjectedSplat*>(projected.contents);
                 auto guts = static_cast<GutSplat*>(geometry.contents);
                 size_t bounds = 0;
                 for (uint32_t i = 0; i < n; ++i)
                     if (splats[i].bounds.z > splats[i].bounds.x && splats[i].bounds.w > splats[i].bounds.y) {
                         require(std::isfinite(guts[i].inverse0.w), "Invalid GUT support sphere");
                         bounds += guts[i].inverse0.w > 0;
+                        // For the dense case, enlarge valid conservative bins
+                        // to exercise SIMD32 frustum rejection independently of
+                        // the projected rectangle (never shrink alpha support).
+                        if (n >= 4096)
+                            splats[i].bounds = {0, 0, w, h};
                     }
                 require(ill_conditioned ? bounds == 0 : bounds > 0, "GUT support-sphere fallback was not exercised");
                 command = [queue commandBuffer];
@@ -167,12 +233,24 @@ static void compare_gut_culling(id<MTLDevice> device) {
                 const auto culled = readback(device, command, frame);
                 wait(command);
                 require(frame.status().error == RasterError::None, "GUT culling fixture overflow");
+                if (n >= 4096 && !ill_conditioned)
+                    require(frame.status().required_instances > uint64_t(63) * 512, "Dense GUT culling fixture missed the SIMD32 policy");
+                const std::vector<GutSplat> saved_geometry(guts, guts + n);
                 for (uint32_t i = 0; i < n; ++i)
                     guts[i].inverse0.w = 0;
                 command = [queue commandBuffer];
                 raster.encode(command, {projected}, n, RasterMode::Gut, {.1f, .2f, .3f, 1}, frame, {}, {geometry}, p);
                 const auto full = readback(device, command, frame);
                 wait(command);
+                std::memcpy(guts, saved_geometry.data(), n * sizeof(GutSplat));
+                command = [queue commandBuffer];
+                raster.encode(command, {projected}, n, RasterMode::Gut, {.1f, .2f, .3f, 1}, frame, {}, {geometry}, p);
+                const auto reused_culled = readback(device, command, frame);
+                wait(command);
+                if (n >= 4096 && !ill_conditioned)
+                    require(frame.status().blend_threads == 32, "Dense GUT frustum test did not execute SIMD32");
+                if (n < 4096)
+                    require(frame.status().blend_threads == 64, "Sparse GUT frustum test changed its grouping");
                 for (uint32_t y = 0; y < h; ++y) {
                     const auto same = [&](id<MTLBuffer> a, id<MTLBuffer> b, size_t stride, size_t pixel_bytes) {
                         return std::memcmp(static_cast<const char*>(a.contents) + y * stride,
@@ -181,9 +259,16 @@ static void compare_gut_culling(id<MTLDevice> device) {
                     require(same(culled.color, full.color, full.color_stride, 8), "GUT culling changed color/alpha");
                     require(same(culled.depth, full.depth, full.depth_stride, 16), "GUT culling changed depth");
                     require(same(culled.pick, full.pick, full.pick_stride, 4), "GUT culling changed source IDs");
+                    require(same(reused_culled.color, full.color, full.color_stride, 8), "Adaptive GUT culling changed color/alpha");
+                    require(same(reused_culled.depth, full.depth, full.depth_stride, 16), "Adaptive GUT culling changed depth");
+                    require(same(reused_culled.pick, full.pick, full.pick_stride, 4), "Adaptive GUT culling changed source IDs");
                 }
             }
     std::puts("GUT subtile culling preserves exact color, depth and IDs across 8 affine/density/camera cases.");
+}
+static void compare_gut_culling(id<MTLDevice> device) {
+    compare_gut_culling_for_count(device, 259);
+    compare_gut_culling_for_count(device, 4097);
 }
 // Independent double-precision oracle: an opaque foreground leaves a small
 // background contribution spread over thousands of weak depth-ordered splats.
@@ -693,6 +778,7 @@ int main() {
         try {
             run(device);
             compare_gut_culling(device);
+            compare_dense_gut_subtiles(device);
             compare_unaligned_macro_crop(device);
             compare_weak_transparent_layers(device);
             compare_half_ring_threshold(device);

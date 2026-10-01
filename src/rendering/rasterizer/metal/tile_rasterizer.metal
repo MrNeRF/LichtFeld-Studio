@@ -19,7 +19,7 @@ struct RasterParameters {
     float4 panorama;
     uint4 mask_limits;
 };
-struct RasterStatus { ulong required; uint error, unused; };
+struct RasterStatus { ulong required; uint error, blend_threads; };
 uint4 clipped_bounds(ProjectedSplat s, constant RasterParameters& p) {
     if (!all(isfinite(s.mean_depth)) || s.mean_depth.z <= 0 ||
         !all(isfinite(s.conic_opacity)) || !all(isfinite(s.color))) return uint4(0);
@@ -150,7 +150,7 @@ kernel void tile_status(device const ulong* counts [[buffer(0)]],
                         device uint* dispatch_args [[buffer(4)]]) {
     status.required = p.count ? offsets[p.count - 1] + counts[p.count - 1] : 0;
     status.error = status.required > p.capacity ? 1 : 0;
-    status.unused = 0;
+    status.blend_threads = (p.unused & 128u) ? 32u : 64u;
     write_sort_dispatch(status, dispatch_args);
 }
 // Sort the exact existing radial-distance key before duplicating a source into
@@ -173,7 +173,7 @@ kernel void source_keys(device const ProjectedSplat* splats [[buffer(0)]],
     if (!i) {
         status.required = p.count;
         status.error = 0;
-        status.unused = 0;
+        status.blend_threads = 0;
         write_sort_dispatch(status, dispatch_args);
     }
 }
@@ -334,8 +334,9 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     // Keep the stable 16x16 bin/sort contract. Four independent 8x8 blend
     // groups traverse the same ordered list, each with its own saturation vote.
     // This reduces shared storage and avoids waiting for unrelated pixels.
-    // Ordinary GS uses one SIMD32 group per 8x4 pixel region. Retain
-    // the same 64-source batch boundary so half composition stays unchanged.
+    // Ordinary GS and dense GUT use one SIMD32 group per 8x4 pixel
+    // region. Retain the same ordered 64-source batch boundary, including
+    // half composition and the GUT saturation/depth convention.
     const bool single_simd=(kRasterFlags&128u)!=0;
     const uint subtiles=single_simd?8u:4u, pixel_height=single_simd?4u:8u;
     const uint tile=group/subtiles, subtile=group%subtiles;
@@ -355,7 +356,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     const bool compact_gut=kRasterMode==3u && p.camera.z!=2u && !(kRasterFlags&4u);
     const bool compact_candidates=compact_gs || compact_gut;
     const float2 ray_min=(float2(tile_origin)+.5f-p.intrinsics.zw)/p.intrinsics.xy;
-    const float2 ray_max=(float2(tile_origin)+7.5f-p.intrinsics.zw)/p.intrinsics.xy;
+    const float2 ray_max=(float2(tile_origin)+float2(7.5f,float(pixel_height)-.5f)-p.intrinsics.zw)/p.intrinsics.xy;
     const float4 plane_lengths=p.camera.z==1u?float4(1):sqrt(1.f+float4(ray_min,ray_max)*float4(ray_min,ray_max));
     const bool batch_half=(kRasterMode==0u && (kRasterFlags&(4u|64u))) ||
         (kRasterMode!=3u && !(kRasterFlags&16u) && (kRasterFlags&1u) && overlay_enabled(overlay_params[22].y));
