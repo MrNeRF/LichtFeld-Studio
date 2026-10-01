@@ -973,6 +973,207 @@ static void compare_portal_gut_median(id<MTLDevice> device) {
         }
 }
 
+// A ten-splat reduction of the public RacoonFamily depth boundary. The
+// foreground transmittance is within 3e-6 of 0.5; reassociating perspective
+// division selects background depth 191 instead of foreground depth 3.976.
+// Hex literals preserve the captured FP32 inputs; no downloaded asset is
+// needed by CI. Exercise production projection, sorting and exact median.
+static void compare_perspective_depth_boundary(id<MTLDevice> device) {
+    constexpr float means[] = {
+        0x1.17c0000000000p+1f, -0x1.b5f0000000000p+0f, -0x1.a698000000000p+1f,
+        -0x1.fb00000000000p-2f, 0x1.f500000000000p-1f, -0x1.3bd0000000000p+1f,
+        -0x1.2c40000000000p-1f, 0x1.0570000000000p+0f, -0x1.4068000000000p+1f,
+        -0x1.48a0000000000p-1f, 0x1.07d0000000000p+0f, -0x1.33c0000000000p+1f,
+        -0x1.4ea0000000000p-1f, 0x1.0770000000000p+0f, -0x1.3798000000000p+1f,
+        -0x1.4d40000000000p-1f, 0x1.0800000000000p+0f, -0x1.3630000000000p+1f,
+        -0x1.68c0000000000p-1f, 0x1.1290000000000p+0f, -0x1.3598000000000p+1f,
+        -0x1.7d80000000000p-1f, 0x1.1790000000000p+0f, -0x1.3c70000000000p+1f,
+        -0x1.7840000000000p-1f, 0x1.1d20000000000p+0f, -0x1.36d0000000000p+1f,
+        -0x1.59b5600000000p+7f, 0x1.4973600000000p+7f, 0x1.83a5000000000p+4f};
+    constexpr float scales[] = {
+        -0x1.d000000000000p+1f, -0x1.f000000000000p+0f, -0x1.3000000000000p+1f,
+        -0x1.6000000000000p+2f, -0x1.e800000000000p+1f, -0x1.b800000000000p+1f,
+        -0x1.1800000000000p+2f, -0x1.1000000000000p+2f, -0x1.a000000000000p+1f,
+        -0x1.f000000000000p+1f, -0x1.7000000000000p+2f, -0x1.0c00000000000p+2f,
+        -0x1.b800000000000p+1f, -0x1.3800000000000p+2f, -0x1.3400000000000p+2f,
+        -0x1.3800000000000p+2f, -0x1.7400000000000p+2f, -0x1.3000000000000p+2f,
+        -0x1.0400000000000p+2f, -0x1.d800000000000p+2f, -0x1.0c00000000000p+3f,
+        -0x1.e800000000000p+1f, -0x1.b000000000000p+1f, -0x1.7000000000000p+1f,
+        -0x1.5000000000000p+2f, -0x1.3400000000000p+2f, -0x1.7800000000000p+1f,
+        0x1.0000000000000p+1f, 0x1.0000000000000p+1f, 0x1.0000000000000p+1f};
+    constexpr float rotations[] = {
+        0x1.9705e60000000p-1f, 0x1.b5b5b80000000p-2f, 0x1.5959500000000p-3f, -0x1.9595980000000p-2f,
+        0x1.3d26720000000p-1f, 0x1.8383880000000p-1f, 0x1.9999900000000p-3f, 0x1.e1e1c00000000p-5f,
+        0x1.7ece300000000p-5f, -0x1.0303020000000p-1f, 0x1.e9e9e00000000p-3f, -0x1.a7a7ac0000000p-1f,
+        0x0.0p+0f, -0x1.4141000000000p-6f, 0x1.0000000000000p+0f, -0x1.a1a1c00000000p-5f,
+        0x1.48fe0e0000000p-3f, 0x1.2525280000000p-2f, 0x1.5959500000000p-3f, 0x1.dbdbdc0000000p-1f,
+        0x1.003bea0000000p-1f, -0x1.ededec0000000p-2f, -0x1.9595980000000p-2f, -0x1.3333380000000p-1f,
+        0x1.d664880000000p-1f, 0x1.6565680000000p-2f, 0x1.7979700000000p-3f, 0x1.8181000000000p-7f,
+        0x1.43a6aa0000000p-4f, -0x1.8b8b8c0000000p-1f, 0x1.8989800000000p-3f, -0x1.3333380000000p-1f,
+        0x1.ef7a0e0000000p-3f, 0x1.dbdbe00000000p-1f, -0x1.8182000000000p-7f, 0x1.1d1d1c0000000p-2f,
+        0x1.47d9c40000000p-1f, 0x1.2121400000000p-5f, -0x1.67676c0000000p-1f, -0x1.3d3d400000000p-2f};
+    constexpr float opacities[] = {
+        -0x1.1298520000000p+0f,
+        0x1.2e145a0000000p+1f,
+        0x1.8a5a9c0000000p+0f,
+        0x1.9152ba0000000p+0f,
+        0x1.d3bc7a0000000p-1f,
+        -0x1.7dd69c0000000p-2f,
+        0x1.35c6880000000p+2f,
+        0x1.3b5f8c0000000p+1f,
+        0x1.01024e0000000p-7f,
+        0x1.35c6880000000p+2f};
+    Projection camera{};
+    camera.model_to_world=matrix_identity_float4x4;
+    // Desktop import maps dataset Y/Z into visualizer world axes.
+    camera.model_to_world.columns[1].y=-1;
+    camera.model_to_world.columns[2].z=-1;
+    camera.world_to_camera.columns[0] = {0x1.6a09e60000000p-1f, 0x1.e2b7de0000000p-3f, -0x1.5555560000000p-1f, 0x0.0p+0f};
+    camera.world_to_camera.columns[1] = {0x0.0p+0f, -0x1.e2b7de0000000p-1f, -0x1.5555560000000p-2f, 0x0.0p+0f};
+    camera.world_to_camera.columns[2] = {-0x1.6a09e60000000p-1f, 0x1.e2b7de0000000p-3f, -0x1.5555560000000p-1f, 0x0.0p+0f};
+    camera.world_to_camera.columns[3] = {0x1.21a1840000000p-1f, 0x1.822cb40000000p-2f, 0x1.2eeef00000000p+2f, 0x1.0000000000000p+0f};
+    camera.camera_local = {0x1.5555560000000p+1f, 0x1.eeeeee0000000p+0f, 0x1.bbbbbc0000000p+1f, 0x1.0000000000000p+0f};
+    camera.intrinsics = {0x1.21822a0000000p+9f, 0x1.2182280000000p+9f, 0x1.e000000000000p+8f, 0x1.0e00000000000p+8f};
+    camera.clip_scale = {0x1.47ae140000000p-7f, 0x1.fffffe0000000p+127f, 0x1.0000000000000p+0f, 0x1.3333340000000p-2f};
+    camera.rasterization = {0x1.0000000000000p+0f, 0x0.0p+0f, 0x1.86a0000000000p+16f, 0x0.0p+0f};
+    camera.display = {0x0.0p+0f, 0x1.0000000000000p+0f, 0x0.0p+0f, 0x1.0000000000000p+0f};
+    camera.panorama = {0x1.e000000000000p+9f, 0x1.0e00000000000p+9f, 0x0.0p+0f, 0x0.0p+0f};
+    camera.extent={960,540,0,0};
+
+    constexpr uint32_t count=10;
+    const float dc[count*3]{};
+    const auto buffer=[&](const void* data,size_t size) {
+        return [device newBufferWithBytes:data length:size options:MTLResourceStorageModeShared];
+    };
+    SplatBuffers input;
+    input.count=count; input.storage=ShStorage::CanonicalFloat32;
+    input.means={buffer(means,sizeof(means))};
+    input.log_scales={buffer(scales,sizeof(scales))};
+    input.rotations={buffer(rotations,sizeof(rotations))};
+    input.opacity_logits={buffer(opacities,sizeof(opacities))};
+    input.sh0={buffer(dc,sizeof(dc))};
+    auto projected=[device newBufferWithLength:count*sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    auto queue=[device newCommandQueue];
+    SplatPreprocessor projection(device);
+    TileRasterizer raster(device);
+    RasterFrame frame(device,960,540,count,count*60*34);
+    for (bool exact : {false,true}) {
+        auto command=[queue commandBuffer];
+        projection.encode(command,input,camera,0,PrimitiveMode::Gaussian,{projected});
+        raster.encode(command,{projected},count,RasterMode::Gaussian,{0,0,0,1},frame,{}, {},camera,{},false,false,nullptr,exact);
+        auto actual=readback(device,command,frame);
+        wait(command);
+        require(frame.status().error==RasterError::None,"Perspective boundary rasterization failed");
+        const auto depth=reinterpret_cast<const float*>(static_cast<const char*>(actual.depth.contents)+536*actual.depth_stride)+238*4;
+        require(std::abs(depth[3]-3.9756839275360107f)<1e-5f,
+                "Perspective rounding changed median from foreground to distant background");
+    }
+}
+// The opposite view catches the other direction of the same FP32 boundary.
+static void compare_reverse_perspective_depth_boundary(id<MTLDevice> device) {
+    constexpr float means[] = {
+        0x1.0670000000000p+1f, 0x1.7fc0000000000p-1f, -0x1.9380000000000p+0f,
+        0x1.0668000000000p+1f, 0x1.9740000000000p-1f, -0x1.9400000000000p+0f,
+        0x1.07e0000000000p+1f, 0x1.92a0000000000p-1f, -0x1.9290000000000p+0f,
+        0x1.0930000000000p+1f, 0x1.9940000000000p-1f, -0x1.8e10000000000p+0f,
+        0x1.04d0000000000p+1f, 0x1.9120000000000p-1f, -0x1.a290000000000p+0f,
+        0x1.0cf0000000000p+1f, 0x1.9d40000000000p-1f, -0x1.a490000000000p+0f,
+        0x1.1170000000000p+1f, 0x1.9560000000000p-1f, -0x1.9d40000000000p+0f,
+        0x1.0e78000000000p+1f, 0x1.9d20000000000p-1f, -0x1.a420000000000p+0f,
+        0x1.1198000000000p+1f, 0x1.96a0000000000p-1f, -0x1.a070000000000p+0f,
+        0x1.1180000000000p+1f, 0x1.96e0000000000p-1f, -0x1.a0c0000000000p+0f,
+        0x1.a078000000000p+1f, 0x1.1b88000000000p+1f, -0x1.4b88000000000p+1f,
+        0x1.cf08000000000p+1f, 0x1.a160000000000p+0f, -0x1.7ce0000000000p+1f,
+        0x1.4a20000000000p+2f, 0x1.6088000000000p+1f, -0x1.104c000000000p+2f};
+    constexpr float scales[] = {
+        -0x1.4800000000000p+2f, -0x1.5000000000000p+2f, -0x1.4400000000000p+2f,
+        -0x1.3c00000000000p+2f, -0x1.5c00000000000p+2f, -0x1.3400000000000p+2f,
+        -0x1.b000000000000p+2f, -0x1.7c00000000000p+2f, -0x1.2000000000000p+2f,
+        -0x1.0400000000000p+2f, -0x1.0c00000000000p+2f, -0x1.e800000000000p+1f,
+        -0x1.4400000000000p+2f, -0x1.8400000000000p+2f, -0x1.d000000000000p+1f,
+        -0x1.5800000000000p+2f, -0x1.5c00000000000p+2f, -0x1.4000000000000p+2f,
+        -0x1.0c00000000000p+2f, -0x1.c800000000000p+2f, -0x1.9800000000000p+2f,
+        -0x1.6c00000000000p+2f, -0x1.1400000000000p+2f, -0x1.7000000000000p+2f,
+        -0x1.9400000000000p+2f, -0x1.7000000000000p+2f, -0x1.6c00000000000p+2f,
+        -0x1.8800000000000p+2f, -0x1.6000000000000p+2f, -0x1.6400000000000p+2f,
+        -0x1.4000000000000p+0f, -0x1.d800000000000p+1f, -0x1.3000000000000p+1f,
+        -0x1.b000000000000p+0f, -0x1.8000000000000p+1f, -0x1.8800000000000p+1f,
+        -0x1.8000000000000p+0f, -0x1.2800000000000p+1f, -0x1.1000000000000p+1f};
+    constexpr float rotations[] = {
+        0x1.5c8e580000000p-2f, -0x1.8787880000000p-1f, -0x1.3d3d400000000p-2f, 0x1.cdcdcc0000000p-2f,
+        0x1.641b520000000p-3f, 0x1.7373780000000p-1f, -0x1.5555580000000p-2f, 0x1.2727260000000p-1f,
+        0x1.dc31740000000p-2f, 0x1.57575c0000000p-1f, -0x1.8989900000000p-3f, 0x1.1717160000000p-1f,
+        0x1.0849f00000000p-1f, -0x1.dddddc0000000p-2f, -0x1.6363680000000p-1f, -0x1.7979800000000p-3f,
+        0x1.dcf6900000000p-1f, 0x1.2929300000000p-3f, 0x1.5555540000000p-2f, -0x1.0102000000000p-8f,
+        0x1.888ad80000000p-1f, -0x1.7575740000000p-2f, 0x1.6969600000000p-3f, 0x1.fdfdfc0000000p-2f,
+        0x1.cf3dfa0000000p-1f, -0x1.2d2d2c0000000p-2f, 0x1.d1d1c00000000p-4f, -0x1.2525280000000p-2f,
+        0x1.e72f0a0000000p-5f, -0x1.4b4b4c0000000p-1f, -0x1.0b0b100000000p-1f, -0x1.1b1b200000000p-1f,
+        0x1.b9508a0000000p-1f, -0x1.3535340000000p-2f, -0x1.4545480000000p-2f, 0x1.0505040000000p-2f,
+        0x1.38136e0000000p-1f, -0x1.2b2b2a0000000p-1f, -0x1.0303080000000p-1f, 0x1.6969600000000p-3f,
+        0x1.aaa5480000000p-3f, -0x1.ededec0000000p-2f, -0x1.9f9fa40000000p-1f, 0x1.0505040000000p-2f,
+        0x1.e269ea0000000p-4f, -0x1.5555540000000p-2f, -0x1.dbdbe00000000p-1f, 0x1.b1b1a00000000p-4f,
+        0x1.75c8480000000p-3f, 0x1.5959600000000p-3f, 0x1.2b2b2a0000000p-1f, 0x1.8b8b8c0000000p-1f};
+    constexpr float opacities[] = {
+        -0x1.c1dec40000000p-5f,
+        0x1.90c5d80000000p-1f,
+        0x1.6c41320000000p+1f,
+        0x1.6199ae0000000p-4f,
+        0x1.24d82a0000000p-1f,
+        0x1.4498940000000p+0f,
+        0x1.f101f20000000p+0f,
+        0x1.986b3c0000000p+0f,
+        0x1.f101f20000000p+0f,
+        0x1.3657720000000p-1f,
+        0x1.6263b00000000p+2f,
+        0x1.dce3860000000p+1f,
+        0x1.9152ba0000000p+0f};
+    Projection camera{};
+    camera.model_to_world=matrix_identity_float4x4;
+    // Desktop import maps dataset Y/Z into visualizer world axes.
+    camera.model_to_world.columns[1].y=-1;
+    camera.model_to_world.columns[2].z=-1;
+    camera.world_to_camera.columns[0] = {-0x1.6a09e60000000p-1f, -0x1.2c834a0000000p-3f, 0x1.6228660000000p-1f, 0x0.0p+0f};
+    camera.world_to_camera.columns[1] = {0x0.0p+0f, -0x1.f4dad20000000p-1f, -0x1.a8fd480000000p-3f, 0x0.0p+0f};
+    camera.world_to_camera.columns[2] = {0x1.6a09e60000000p-1f, -0x1.2c834a0000000p-3f, 0x1.6228660000000p-1f, 0x0.0p+0f};
+    camera.world_to_camera.columns[3] = {-0x1.21a1840000000p-1f, 0x1.689d900000000p-1f, 0x1.c91b040000000p+1f, 0x1.0000000000000p+0f};
+    camera.camera_local = {-0x1.6228660000000p+1f, 0x1.6e183e0000000p+0f, -0x1.f784000000000p+0f, 0x1.0000000000000p+0f};
+    camera.intrinsics = {0x1.21822a0000000p+9f, 0x1.2182280000000p+9f, 0x1.e000000000000p+8f, 0x1.0e00000000000p+8f};
+    camera.clip_scale = {0x1.47ae140000000p-7f, 0x1.fffffe0000000p+127f, 0x1.0000000000000p+0f, 0x1.3333340000000p-2f};
+    camera.rasterization = {0x1.0000000000000p+0f, 0x0.0p+0f, 0x1.86a0000000000p+16f, 0x0.0p+0f};
+    camera.display = {0x0.0p+0f, 0x1.0000000000000p+0f, 0x0.0p+0f, 0x1.0000000000000p+0f};
+    camera.panorama = {0x1.e000000000000p+9f, 0x1.0e00000000000p+9f, 0x0.0p+0f, 0x0.0p+0f};
+    camera.extent={960,540,0,0};
+
+    constexpr uint32_t count=13;
+    const float dc[count*3]{};
+    const auto buffer=[&](const void* data,size_t size) {
+        return [device newBufferWithBytes:data length:size options:MTLResourceStorageModeShared];
+    };
+    SplatBuffers input;
+    input.count=count; input.storage=ShStorage::CanonicalFloat32;
+    input.means={buffer(means,sizeof(means))};
+    input.log_scales={buffer(scales,sizeof(scales))};
+    input.rotations={buffer(rotations,sizeof(rotations))};
+    input.opacity_logits={buffer(opacities,sizeof(opacities))};
+    input.sh0={buffer(dc,sizeof(dc))};
+    auto projected=[device newBufferWithLength:count*sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    auto queue=[device newCommandQueue];
+    SplatPreprocessor projection(device);
+    TileRasterizer raster(device);
+    RasterFrame frame(device,960,540,count,count*60*34);
+    for (bool exact : {false,true}) {
+        auto command=[queue commandBuffer];
+        projection.encode(command,input,camera,0,PrimitiveMode::Gaussian,{projected});
+        raster.encode(command,{projected},count,RasterMode::Gaussian,{0,0,0,1},frame,{}, {},camera,{},false,false,nullptr,exact);
+        auto actual=readback(device,command,frame);
+        wait(command);
+        require(frame.status().error==RasterError::None,"Perspective boundary rasterization failed");
+        const auto depth=reinterpret_cast<const float*>(static_cast<const char*>(actual.depth.contents)+356*actual.depth_stride)+396*4;
+        require(std::abs(depth[3]-10.653661727905273f)<1e-5f,
+                "Reverse-view perspective rounding moved the median across a depth gap");
+    }
+}
+
 int main() {
     @autoreleasepool {
         auto device = MTLCreateSystemDefaultDevice();
@@ -980,6 +1181,8 @@ int main() {
             return LFS_METAL_TEST_REQUIRE_DEVICE ? 1 : 77;
         try {
             run(device);
+            compare_perspective_depth_boundary(device);
+            compare_reverse_perspective_depth_boundary(device);
             compare_tight_projection(device);
             compare_tile_key_widths(device);
             compare_portal_gut_median(device);

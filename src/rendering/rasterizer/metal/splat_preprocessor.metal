@@ -251,9 +251,12 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     if(portal)alpha=lfsPortalCompactOpacity(alpha);
     if(portal && alpha<=1.f/255.f)return;
     const float source_alpha=alpha;
-    // Vulkan's project_splat subtracts half a pixel before integer sampling.
+    // Match the reference's fused focal/center transform. Divide the focal
+    // directly by Z: multiplying a rounded reciprocal into the coordinate or
+    // focal changes a center by an ULP near median-transmittance boundaries.
+    // This preserves the foreground/background choice without a depth epsilon.
     float2 center=equirectangular?panorama_project(view,frame.panorama.xy)-frame.panorama.zw-.5f:
-        frame.intrinsics.xy*view.xy/(orthographic?1.0f:view.z)+frame.intrinsics.zw-.5f;
+        fma(frame.intrinsics.xy/(orthographic?1.f:view.z),view.xy,frame.intrinsics.zw)-.5f;
     float3 conic;
     float radius;
     float2 panorama_radius=0,portal_axis=0,portal_extent=0,gaussian_support=0;
