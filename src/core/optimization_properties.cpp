@@ -204,6 +204,15 @@ namespace lfs::core::param {
             .precision(2)
             .ui_step(0.1)
 
+            .all_strategies()
+            .float_prop(&OptimizationParameters::gradient_loss_weight,
+                        "gradient_loss_weight", "Gradient Loss Weight", d.gradient_loss_weight, 0.0f, 8.0f,
+                        "Penalizes signed luminance derivative residuals from step 2000; 0 disables it, recommended 1.8")
+            .locale("training.losses.gradient_loss_weight")
+            .tooltip("training.tooltip.gradient_loss_weight")
+            .precision(2)
+            .ui_step(0.1)
+
             // Refinement
             .all_strategies()
             .size_prop(&OptimizationParameters::refine_every,

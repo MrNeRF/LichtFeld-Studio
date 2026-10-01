@@ -174,6 +174,7 @@ namespace lfs::core {
             float dc_reg = 0.0f;
             float sh_rest_reg = 0.0f;
             float thin_structure_weight = 0.0f;
+            float gradient_loss_weight = 0.0f;
             float init_opacity = 0.5f;
             float init_scaling = 0.1f;
             int max_cap = 1000000;

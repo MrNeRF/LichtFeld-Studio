@@ -31,6 +31,7 @@
   "far_scene_min_fraction": 0.009999999776482582,
   "far_seed_dose": 0,
   "fill_pacing_iter": 0,
+  "gradient_loss_weight": 0.0,
   "grow_fraction": 0.07000000029802322,
   "grow_until_iter": 15000,
   "growth_grad_threshold": 0.003000000026077032,

@@ -16,6 +16,7 @@
 #include "dataset.hpp"
 #include "io/project_recovery.hpp"
 #include "kernels/depth_loss.hpp"
+#include "kernels/gradient_residual.hpp"
 #include "kernels/thin_structure.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/refine_scratch.hpp"
@@ -521,6 +522,7 @@ namespace lfs::training {
         core::Tensor get_thin_structure_map(int camera_uid, const core::Tensor& image, float weight);
         void clear_thin_structure_cache();
         friend struct TrainerThinStructureTestAccess;
+        friend struct TrainerGradientResidualTestAccess;
 
         // Release GPU state that is only needed while a train step is active.
         // The model, optimizer, and source background image remain resident so
@@ -565,7 +567,14 @@ namespace lfs::training {
             const lfs::core::Tensor& corrected,
             const lfs::core::Tensor& gt_image,
             const lfs::core::param::OptimizationParameters& opt_params,
-            const lfs::core::Tensor& raw_rendered);
+            const lfs::core::Tensor& raw_rendered,
+            int iteration = 0);
+
+        void add_gradient_residual(
+            const core::Tensor& corrected, const core::Tensor& target,
+            const core::Tensor& raw, const core::Tensor& pixel_weight,
+            const core::param::OptimizationParameters& params, int iteration,
+            core::Tensor& loss, core::Tensor& grad_corrected, core::Tensor& grad_raw);
 
         struct MaskLossResult {
             lfs::core::Tensor loss;
@@ -584,7 +593,8 @@ namespace lfs::training {
             const lfs::core::Tensor& alpha,
             const lfs::core::param::OptimizationParameters& opt_params,
             const lfs::core::Tensor& raw_rendered,
-            const lfs::core::Tensor& structure_map = {});
+            const lfs::core::Tensor& structure_map = {},
+            int iteration = 0);
 
         // Validate masks exist for all cameras when mask mode is enabled
         std::expected<void, std::string> validate_masks();
@@ -927,6 +937,7 @@ namespace lfs::training {
         uint64_t thin_structure_cache_clock_ = 0;
         uint64_t thin_structure_map_computations_ = 0;
         kernels::RidgeWorkspace thin_structure_workspace_;
+        kernels::GradientResidualWorkspace gradient_residual_workspace_;
         core::Tensor thin_structure_map_buffer_;
         core::Tensor thin_structure_weight_buffer_;
 

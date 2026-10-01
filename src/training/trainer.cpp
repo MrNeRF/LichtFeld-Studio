@@ -1136,6 +1136,7 @@ namespace lfs::training {
         densification_error_map_ = {};
         clearEdgeWeightCache();
         clear_thin_structure_cache();
+        gradient_residual_workspace_ = {};
         mask_preprocess_workspace_ = {};
     }
 
@@ -1726,12 +1727,30 @@ namespace lfs::training {
         }
     }
 
+    void Trainer::add_gradient_residual(
+        const core::Tensor& corrected, const core::Tensor& target,
+        const core::Tensor& raw, const core::Tensor& pixel_weight,
+        const core::param::OptimizationParameters& params, const int iteration,
+        core::Tensor& loss, core::Tensor& grad_corrected, core::Tensor& grad_raw) {
+        if (params.gradient_loss_weight == 0.0f || iteration < kernels::GRADIENT_LOSS_START_STEP)
+            return;
+        const bool has_raw = raw.is_valid() && raw.numel() > 0;
+        const auto& image = has_raw ? raw : corrected;
+        auto& gradient = has_raw ? grad_raw : grad_corrected;
+        if (!gradient.is_valid())
+            gradient = core::Tensor::zeros_like(image);
+        const auto term = kernels::gradient_residual_loss_gradient(
+            image, target, pixel_weight, gradient, params.gradient_loss_weight,
+            gradient_residual_workspace_);
+        loss = loss + term;
+    }
+
     // Compute photometric loss AND gradient manually
     std::expected<Trainer::PhotometricLossResult, std::string> Trainer::compute_photometric_loss_with_gradient(
         const lfs::core::Tensor& corrected,
         const lfs::core::Tensor& gt_image,
         const lfs::core::param::OptimizationParameters& opt_params,
-        const lfs::core::Tensor& raw_rendered) {
+        const lfs::core::Tensor& raw_rendered, const int iteration) {
         const bool use_decoupled_appearance_loss =
             raw_rendered.is_valid() &&
             raw_rendered.numel() > 0 &&
@@ -1749,6 +1768,8 @@ namespace lfs::training {
                 grads.grad_raw = grads.grad_raw.squeeze(0);
             }
 
+            add_gradient_residual(corrected, gt_image, raw_rendered, {}, opt_params, iteration,
+                                  loss_tensor, grads.grad_corrected, grads.grad_raw);
             return PhotometricLossResult{
                 .loss = loss_tensor,
                 .grad_corrected = grads.grad_corrected,
@@ -1761,10 +1782,13 @@ namespace lfs::training {
             return std::unexpected(result.error());
         }
         auto [loss_tensor, ctx] = *result;
+        core::Tensor grad_raw;
+        add_gradient_residual(corrected, gt_image, raw_rendered, {}, opt_params, iteration,
+                              loss_tensor, ctx.grad_image, grad_raw);
         return PhotometricLossResult{
             .loss = loss_tensor,
             .grad_corrected = ctx.grad_image,
-            .grad_raw = {}};
+            .grad_raw = grad_raw};
     }
 
     std::expected<void, std::string> Trainer::validate_masks() {
@@ -1821,7 +1845,7 @@ namespace lfs::training {
         const lfs::core::Tensor& alpha,
         const lfs::core::param::OptimizationParameters& opt_params,
         const lfs::core::Tensor& raw_rendered,
-        const lfs::core::Tensor& structure_map) {
+        const lfs::core::Tensor& structure_map, const int iteration) {
 
         using namespace lfs::core;
         constexpr float ALPHA_CONSISTENCY_WEIGHT = 10.0f;
@@ -1924,7 +1948,7 @@ namespace lfs::training {
                 loss = loss + penalty.loss;
             }
         } else {
-            auto fallback = compute_photometric_loss_with_gradient(corrected, gt_image, opt_params, raw_rendered);
+            auto fallback = compute_photometric_loss_with_gradient(corrected, gt_image, opt_params, raw_rendered, iteration);
             if (!fallback) {
                 return std::unexpected(fallback.error());
             }
@@ -1953,6 +1977,10 @@ namespace lfs::training {
             loss = loss + alpha_term.loss;
             grad_alpha = alpha_term.grad_alpha;
         }
+
+        if (photometric_weight.is_valid())
+            add_gradient_residual(corrected, gt_image, raw_rendered, base_photometric_weight,
+                                  opt_params, iteration, loss, grad_corrected, grad_raw);
 
         return MaskLossResult{
             .loss = loss,
@@ -3585,6 +3613,7 @@ namespace lfs::training {
         densification_error_map_ = {};
         clearEdgeWeightCache();
         clear_thin_structure_cache();
+        gradient_residual_workspace_ = {};
         strategy_.reset();
         bilateral_grid_.reset();
         ppisp_.reset();
@@ -6811,7 +6840,7 @@ namespace lfs::training {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
-                                    params_.optimization, raw_loss_input, structure_map);
+                                    params_.optimization, raw_loss_input, structure_map, iter);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -6830,7 +6859,7 @@ namespace lfs::training {
                                 tile_grad = result->grad_corrected;
                             } else {
                                 auto result = compute_photometric_loss_with_gradient(
-                                    corrected_image, gt_tile, params_.optimization, raw_loss_input);
+                                    corrected_image, gt_tile, params_.optimization, raw_loss_input, iter);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -7050,7 +7079,7 @@ namespace lfs::training {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
-                                    params_.optimization, raw_loss_input, structure_map);
+                                    params_.optimization, raw_loss_input, structure_map, iter);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -7071,7 +7100,7 @@ namespace lfs::training {
                                 normal_terms_weight = result->normal_pixel_weight;
                             } else {
                                 auto result = compute_photometric_loss_with_gradient(
-                                    corrected_image, gt_tile, params_.optimization, raw_loss_input);
+                                    corrected_image, gt_tile, params_.optimization, raw_loss_input, iter);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
