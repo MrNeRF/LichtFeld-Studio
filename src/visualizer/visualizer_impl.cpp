@@ -2697,7 +2697,7 @@ namespace lfs::vis {
                     .view = id,
                     .viewport = camera,
                     .settings = settings,
-                    .logical_screen_size = window_manager_->getWindowSize(),
+                    .logical_screen_size = camera.frameBufferSize,
                     .viewport_region = &region,
                     .scene_manager = scene_manager_.get(),
                     .vulkan_context = window_manager_->getVulkanContext()};
