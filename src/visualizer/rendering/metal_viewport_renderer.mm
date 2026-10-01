@@ -1177,7 +1177,7 @@ namespace lfs::vis {
                 overlay.preview_count = preview_enabled ? uint32_t(std::min<size_t>(views[10].bytes, std::numeric_limits<uint32_t>::max())) : 0;
                 i.preprocessor.encode(command, inputs, projection, degree, request.gut ? PrimitiveMode::Gut : PrimitiveMode::Gaussian, {f.projected, 0}, scene, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, lod, profile);
                 i.rasterizer.encode(command, {f.projected, 0}, draw_count, request.gut ? RasterMode::Gut : RasterMode::Gaussian,
-                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, projection, lod, request.gut && !spark, request.transparent_background && !request.gut && !spark, profile);
+                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, projection, lod, request.gut && !spark, (request.transparent_background || request.overlay.markers.show_rings) && !request.gut && !spark, profile);
                 auto encoder = profiledCompute(command, profile, GpuStage::Present);
                 [encoder setComputePipelineState:i.present];
                 [encoder setTexture:f.raster->color() atIndex:0];

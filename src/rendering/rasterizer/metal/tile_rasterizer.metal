@@ -521,7 +521,11 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 alpha=float(min(half(c.w)*value,half(.999f)));
             }
             const float minimum_alpha=(kRasterFlags&4u)?1.f/255.f:.5f/255.f;
-            if (alpha < ((kRasterFlags&64u)?float(half(minimum_alpha)):minimum_alpha)) continue;
+            if (alpha < (half_footprint?float(half(minimum_alpha)):minimum_alpha)) continue;
+            // The reference gates overlays again in FP32 after its half
+            // body threshold. A half value equal to the rounded threshold
+            // can lie below .5/255 and must not become an opaque ring.
+            if ((kRasterFlags&1u) && alpha < .5f/255.f) continue;
             float3 radiance=colors[j].xyz;
             if(kRasterFlags&1u){
                 const uint flags=overlay_flags[ids[j]];
@@ -536,7 +540,12 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 const uint status=overlay_selection(overlay_params,logical,flags,overlay_center+(p.camera.z==2u?p.panorama.zw:float2(0)),selection,preview,p.mask_limits.xy);
                 const bool selectable=(flags&2u)==0;
                 if(overlay_enabled(overlay_params[22].x)&&selectable){
-                    const float gaussian=exp(-.5f*q);
+                    // Rings use the full conic at the same reconstructed
+                    // center as the reference, independently of the body
+                    // footprint. A half body deliberately leaves q unused.
+                    const float2 ring_delta=float2(pixel)-overlay_center;
+                    const float sigma_over_2=.5f*(c.x*ring_delta.x*ring_delta.x+c.z*ring_delta.y*ring_delta.y)+c.y*ring_delta.x*ring_delta.y;
+                    const float gaussian=exp(-sigma_over_2);
                     const float boundary=(.5f/255.f)/max(c.w,1e-8f);
                     const float width=overlay_params[21].w*10;
                     if(gaussian<boundary*(1+width)&&gaussian>boundary*(1-width)){

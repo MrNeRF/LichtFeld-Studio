@@ -170,7 +170,7 @@ namespace {
                 continue;
             }
             if (arg == "--overlay") {
-                if (value != "selection" && value != "preview" && value != "crop" && value != "ellipsoid" && value != "window" && value != "markers" && value != "flash" && value != "affine")
+                if (value != "selection" && value != "preview" && value != "crop" && value != "ellipsoid" && value != "window" && value != "markers" && value != "flash" && value != "affine" && value != "rings" && value != "selected-rings")
                     throw std::runtime_error("Unknown overlay fixture");
                 o.overlay = value;
                 continue;
@@ -621,12 +621,12 @@ namespace {
             request.depth_view = o.depth;
             request.frame_view.orthographic = o.ortho;
             request.frame_view.ortho_scale = 32;
-            if (o.overlay == "selection" || o.overlay == "preview") {
+            if (o.overlay == "selection" || o.overlay == "preview" || o.overlay == "selected-rings") {
                 std::vector<float> mask(o.count);
                 for (size_t n = 0; n < o.count; ++n)
                     mask[n] = float(n % 3);
                 auto tensor = std::make_shared<core::Tensor>(core::Tensor::from_vector(mask, {o.count}, core::Device::GPU).to(core::DataType::UInt8));
-                if (o.overlay == "selection") {
+                if (o.overlay == "selection" || o.overlay == "selected-rings") {
                     request.overlay.has_selection = true;
                     request.overlay.emphasis.mask = tensor;
                 } else {
@@ -656,6 +656,10 @@ namespace {
                 request.filters.view_volume = volume;
                 request.filters.screen_window = rendering::SelectionScreenWindow{};
                 request.filters.dim_outside_view_volume = true;
+            }
+            if (o.overlay == "rings" || o.overlay == "selected-rings") {
+                request.overlay.markers.show_rings = true;
+                request.overlay.markers.ring_width = .02f;
             }
             if (o.overlay == "markers")
                 request.overlay.markers.show_center_markers = true;
@@ -689,7 +693,7 @@ namespace {
                 reference_request.lod_weights = nullptr;
                 reference_request.lod_count = 0;
                 reference_request.lod_debug_mode = false;
-                if (o.overlay == "selection") {
+                if (o.overlay == "selection" || o.overlay == "selected-rings") {
                     std::vector<float> mask(o.count);
                     for (size_t n = 0; n < lod_indices.size(); ++n)
                         mask[lod_indices[n]] = float((o.lod_logical ? lod_logical[n] : lod_indices[n]) % 3);

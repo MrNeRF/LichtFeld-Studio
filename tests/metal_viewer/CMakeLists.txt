@@ -184,6 +184,21 @@ if(TARGET lfs_visualizer)
                     set_tests_properties(${_display_test} PROPERTIES
                         LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
                 endforeach()
+                # Rings need the full conic even when the body uses FP16.
+                foreach(_ring_overlay IN ITEMS rings selected-rings)
+                    foreach(_ring_alpha IN ITEMS opaque transparent)
+                        set(_ring_args)
+                        if(_ring_alpha STREQUAL "transparent")
+                            list(APPEND _ring_args --transparent)
+                        endif()
+                        set(_ring_test MacViewerParity_${_display_profile}_${_ring_alpha}_${_ring_overlay})
+                        add_test(NAME ${_ring_test} COMMAND mac_viewer_backend_benchmark
+                            --smoke ${_display_args} ${_ring_args} --overlay ${_ring_overlay}
+                            --output "${CMAKE_CURRENT_BINARY_DIR}/${_ring_test}.json")
+                        set_tests_properties(${_ring_test} PROPERTIES
+                            LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+                    endforeach()
+                endforeach()
                 foreach(_transparent_overlay IN ITEMS selection preview markers affine)
                     set(_display_test MacViewerParity_${_display_profile}_transparent_${_transparent_overlay})
                     add_test(NAME ${_display_test} COMMAND mac_viewer_backend_benchmark

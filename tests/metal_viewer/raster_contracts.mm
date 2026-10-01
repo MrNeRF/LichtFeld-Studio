@@ -263,6 +263,49 @@ static void compare_unaligned_macro_crop(id<MTLDevice> device) {
         require(same(a.pick, b.pick, a.pick_stride, b.pick_stride, 4), "Macro cache changed unaligned crop IDs");
     }
 }
+// These pixels straddle the FP16 body admission threshold. Ring alpha is
+// discontinuous, so accidentally accepting a rounded-down body contribution
+// turns a negligible splat into an opaque edge.
+static void compare_half_ring_threshold(id<MTLDevice> device) {
+    const std::array<ProjectedSplat, 2> source = {{
+        {{34.547904968f, 66.692443848f, 4.f, 3.f},
+         {2.882635355f, .016116982f, 2.940344095f, .790994585f},
+         {.4f, .2f, .1f, 16.f}, {0, 0, 128, 96}},
+        {{82.307426453f, 71.455528259f, 4.f, 3.f},
+         {2.921408415f, -.013935118f, 2.862745047f, .772662878f},
+         {.4f, .2f, .1f, 16.f}, {0, 0, 128, 96}},
+    }};
+    const std::array<simd_uint2, 2> pixels = {{{33, 68}, {81, 73}}};
+    std::array<simd_float4, 207> parameters{};
+    parameters[21].w = .02f;
+    parameters[22].x = 1.f;
+    std::array<simd_float4, 128> colors{};
+    const uint32_t flags = 0;
+    OverlayBuffers overlay;
+    overlay.parameters = {[device newBufferWithBytes:parameters.data() length:sizeof(parameters) options:MTLResourceStorageModeShared]};
+    overlay.flags = {[device newBufferWithBytes:&flags length:sizeof(flags) options:MTLResourceStorageModeShared]};
+    overlay.colors = {[device newBufferWithBytes:colors.data() length:sizeof(colors) options:MTLResourceStorageModeShared]};
+    overlay.parameter_count = parameters.size();
+    TileRasterizer raster(device);
+    RasterFrame frame(device, 128, 96, 1, 48);
+    auto queue = [device newCommandQueue];
+    for (size_t n = 0; n < source.size(); ++n) {
+        auto input = [device newBufferWithBytes:&source[n] length:sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+        auto command = [queue commandBuffer];
+        raster.encode(command, {input}, 1, RasterMode::Gaussian, {}, frame, overlay, {}, {}, {}, false, true);
+        const auto result = readback(device, command, frame);
+        wait(command);
+        require(frame.status().error == RasterError::None, "Half ring threshold fixture overflow");
+        const auto pixel = pixels[n];
+        const auto rgba = reinterpret_cast<const _Float16*>(static_cast<const char*>(result.color.contents) + pixel.y * result.color_stride) + pixel.x * 4;
+        const auto pick = reinterpret_cast<const uint32_t*>(static_cast<const char*>(result.pick.contents) + pixel.y * result.pick_stride) + pixel.x;
+        if (n == 0) {
+            require(float(rgba[3]) == 0.f && *pick == 0xffffffff, "Rounded-down half alpha was promoted to an opaque ring");
+        } else {
+            require(std::abs(float(rgba[3]) - .8f) < .001f && *pick == 0, "Half body omitted the full-conic ring overlay");
+        }
+    }
+}
 static void run(id<MTLDevice> device) {
     TileRasterizer raster(device);
     auto queue = [device newCommandQueue];
@@ -622,6 +665,7 @@ int main() {
             compare_gut_culling(device);
             compare_unaligned_macro_crop(device);
             compare_weak_transparent_layers(device);
+            compare_half_ring_threshold(device);
             return 0;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s\n", e.what());
