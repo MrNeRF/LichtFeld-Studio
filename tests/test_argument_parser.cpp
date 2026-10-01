@@ -2055,20 +2055,21 @@ TEST(ArgumentParserTest, IterationsAndStepsScalerConflictBeforeModeChecks) {
     }
 }
 
-// Catches --iter starting to rescale the timetable.
-TEST(ArgumentParserTest, IterationsAlonePreserveDefaultTimetable) {
+// Catches --iter failing to rescale the timetable.
+TEST(ArgumentParserTest, IterationsAloneRescalesTimetable) {
     const char* argv[]{"LichtFeld-Studio", "--iter", "7000"};
     const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed) << parsed.error();
     const auto& opt = (*parsed)->optimization;
-    const auto defaults = lfs::core::param::OptimizationParameters::mrnf_defaults();
-    EXPECT_EQ(opt.iterations, 7000u);
-    EXPECT_FLOAT_EQ(opt.steps_scaler, 1.f);
-    EXPECT_EQ(opt.stop_refine, defaults.stop_refine);
-    EXPECT_EQ(opt.refine_every, defaults.refine_every);
-    EXPECT_EQ(opt.sh_degree_interval, defaults.sh_degree_interval);
-    EXPECT_EQ(opt.eval_steps, defaults.eval_steps);
-    EXPECT_EQ(opt.save_steps, defaults.save_steps);
+    const std::vector<size_t> expected_steps{1'633, 7'000};
+    EXPECT_EQ(opt.iterations, 7'000u);
+    EXPECT_FLOAT_EQ(opt.steps_scaler, 7'000.f / 30'000.f);
+    EXPECT_FLOAT_EQ(opt.image_count_scaler, 1.f);
+    EXPECT_EQ(opt.stop_refine, 6'650u);
+    EXPECT_EQ(opt.refine_every, 47u);
+    EXPECT_EQ(opt.sh_degree_interval, 233u);
+    EXPECT_EQ(opt.eval_steps, expected_steps);
+    EXPECT_EQ(opt.save_steps, expected_steps);
 }
 
 // Catches step scaling applied after explicit CLI step values.
@@ -2093,8 +2094,8 @@ TEST(ArgumentParserTest, ScalingPrecedesAbsoluteStepOverrides) {
     EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>{1000});
 }
 
-// Catches a config steps_scaler multiplying an explicit --iter.
-TEST(ArgumentParserTest, ConfigScalingPrecedesExplicitIterations) {
+// Catches a config steps_scaler taking precedence over an explicit --iter instead of being replaced.
+TEST(ArgumentParserTest, ExplicitIterationsReplaceConfigScaling) {
     const auto path = std::filesystem::path(make_test_path("lfs_arg_parser_step_scaling")) / "config.json";
     auto json = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
     json["steps_scaler"] = 0.5f;
@@ -2105,12 +2106,55 @@ TEST(ArgumentParserTest, ConfigScalingPrecedesExplicitIterations) {
     std::filesystem::remove(path);
     ASSERT_TRUE(parsed) << parsed.error();
     EXPECT_EQ((*parsed)->optimization.iterations, 2500u);
-    EXPECT_EQ((*parsed)->optimization.stop_refine, 14250u);
-    EXPECT_FLOAT_EQ((*parsed)->optimization.steps_scaler, 0.5f);
+    EXPECT_EQ((*parsed)->optimization.stop_refine, 2375u);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.steps_scaler, 2500.f / 30'000.f);
 }
 
-// Catches help text that hides the --iter / --steps-scaler conflict.
-TEST(ArgumentParserTest, StepScalingHelpShowsMutualExclusion) {
+// Catches --iter overriding a config that explicitly disables step scaling.
+TEST(ArgumentParserTest, ExplicitIterationsRespectDisabledConfigScaling) {
+    const auto path = std::filesystem::path(make_test_path("lfs_arg_parser_disabled_step_scaling")) / "config.json";
+    const auto path_text = path.string();
+    const char* argv[]{"LichtFeld-Studio", "--config", path_text.c_str(), "--iter", "2500"};
+
+    for (const float disabled_scaler : {0.f, -1.f}) {
+        SCOPED_TRACE(disabled_scaler);
+        auto json = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+        json["steps_scaler"] = disabled_scaler;
+        std::ofstream(path) << json.dump();
+
+        const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_TRUE(parsed) << parsed.error();
+        EXPECT_EQ((*parsed)->optimization.iterations, 2500u);
+        EXPECT_EQ((*parsed)->optimization.stop_refine, 28'500u);
+        EXPECT_EQ((*parsed)->optimization.refine_every, 200u);
+        EXPECT_FLOAT_EQ((*parsed)->optimization.steps_scaler, disabled_scaler);
+    }
+    std::filesystem::remove(path);
+}
+
+// Catches --iter retaining the image-count share from a previously auto-scaled config.
+TEST(ArgumentParserTest, ExplicitIterationsResetConfigImageCountScaling) {
+    const auto path = std::filesystem::path(make_test_path("lfs_arg_parser_image_count_scaling")) / "config.json";
+    auto json = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+    json["steps_scaler"] = 2.f;
+    json["image_count_scaler"] = 2.f;
+    json["image_count_scaler_total"] = 2.f;
+    std::ofstream(path) << json.dump();
+    const auto path_text = path.string();
+    const char* argv[]{"LichtFeld-Studio", "--config", path_text.c_str(), "--iter", "2500"};
+
+    const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    std::filesystem::remove(path);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ((*parsed)->optimization.iterations, 2500u);
+    EXPECT_EQ((*parsed)->optimization.stop_refine, 2375u);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.steps_scaler, 2500.f / 30'000.f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.image_count_scaler, 1.f);
+}
+
+// Catches help text that hides the --iter scaling behavior or --steps-scaler conflict.
+TEST(ArgumentParserTest, StepScalingHelpDescribesIterationScalingAndMutualExclusion) {
+    EXPECT_NE(lfs::io::args::optimization_cli_help("--iter").find("proportionally rescales the training timetable"), std::string::npos);
     EXPECT_NE(lfs::io::args::optimization_cli_help("--iter").find("; cannot be combined with --steps-scaler"), std::string::npos);
     EXPECT_NE(lfs::io::args::optimization_cli_help("--steps-scaler").find("; cannot be combined with --iter"), std::string::npos);
 }

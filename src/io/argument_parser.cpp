@@ -43,7 +43,7 @@ namespace lfs::io::args {
 
         // Registry ranges are UI-clamp semantics; CLI acceptance is intentionally wider.
         constexpr std::array OPTIMIZATION_CLI_BINDINGS{
-            OptimizationCliBinding{"--iter", "iterations", Integer, false, "; cannot be combined with --steps-scaler"},
+            OptimizationCliBinding{"--iter", "iterations", Integer, false, "; proportionally rescales the training timetable unless scaling is disabled; cannot be combined with --steps-scaler"},
             OptimizationCliBinding{"--strategy", "strategy", String, false, "; legacy aliases: mnrf, lfs"},
             OptimizationCliBinding{"--sh-degree", "sh_degree", Integer},
             OptimizationCliBinding{"--sh-degree-interval", "sh_degree_interval", Integer},
@@ -1464,6 +1464,12 @@ namespace {
                     if (flag)
                         target = true;
                 };
+
+                if (iterations_val && opt.steps_scaler > 0.f) {
+                    opt.steps_scaler = static_cast<float>(*iterations_val) /
+                                       static_cast<float>(opt.iterations);
+                    opt.image_count_scaler = 1.f;
+                }
 
                 if (steps_scaler_val) {
                     opt.steps_scaler = *steps_scaler_val;
