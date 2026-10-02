@@ -367,8 +367,8 @@ namespace lfs::vis {
     DirtyMask RenderingManager::pendingDirtyMask() const {
         std::lock_guard lock(views_mutex_);
         DirtyMask mask = 0;
-        for (const auto id : ledger_views_)
-            mask |= viewState(id).dirty_mask_.load(std::memory_order_relaxed);
+        for (const auto& [id, view] : view_states_)
+            mask |= view->dirty_mask_.load(std::memory_order_relaxed);
         return mask;
     }
 
@@ -379,7 +379,10 @@ namespace lfs::vis {
                 markViewDirty(id, flags, FrameReason::Overlay);
         if (lod_controller_ && lod_controller_->hasReadyResults())
             markDirty(DirtyFlag::CAMERA, lfs::vis::FrameReason::CameraMotion);
-        return pendingDirtyMask() != 0;
+        for (const auto id : ledger_views_)
+            if (viewState(id).dirty_mask_.load(std::memory_order_relaxed) != 0)
+                return true;
+        return false;
     }
 
     bool RenderingManager::releaseViewTargets(ViewRenderState& view) {
