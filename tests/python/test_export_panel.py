@@ -185,7 +185,7 @@ def test_export_panel_builds_format_and_model_records(export_panel_module):
     ]
     assert panel._has_models is True
     assert panel.update_policy == "dirty"
-    assert module.ExportPanel.update_interval_ms == 100
+    assert module.ExportPanel.update_interval_ms is None
 
 
 def test_export_panel_seeds_selection_from_scene_nodes(export_panel_module):
