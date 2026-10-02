@@ -46,6 +46,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float3* __restrict__ cam_position,
         const float* raw_opacities,
         const uint* __restrict__ primitive_work_indices,
+        const float4* __restrict__ primitive_color,
         const float2* __restrict__ grad_mean2d,
         const float3* __restrict__ grad_conic,
         const float* __restrict__ grad_depth,
@@ -165,6 +166,31 @@ namespace fast_lfs::rasterization::kernels::backward {
         if (visible && fused_adam.rendered_count != nullptr)
             fused_adam.rendered_count[primitive_idx] += 1.0f;
 
+        // Gate the accumulated image derivative per splat/channel, before SH
+        // conversion and before adding regularizers. Negative colour may recover
+        // only when its image derivative points brighter under gradient descent.
+        uint colour_reg_mask = 7u;
+        if (in_range && fused_adam.sh0.param != nullptr &&
+            (visible || fused_adam.dc_reg_weight > 0.0f || fused_adam.sh_rest_reg_weight > 0.0f)) {
+            // Forward stores unclamped RGB for visible rows. Culled rows have no
+            // buffer entry and retain the regularizer gate's SH evaluation.
+            const float3 colour = visible ? make_float3(primitive_color[work_idx]) : convert_sh_to_color(reinterpret_cast<const float3*>(fused_adam.sh0.param), sh_coefficients_rest, means[primitive_idx], cam_position[0], primitive_idx, ACTIVE_SH_BASES, sh_layout_slots, shN_value_bounds, shN_value_bounds != nullptr ? shN_value_n_cells : 0u, shN_value_bits == 16u ? 16u : 0u);
+            float3 image_grad = visible ? grad_color_helper[work_idx] : make_float3(0.0f);
+            if (colour.x < 0.0f && image_grad.x >= 0.0f)
+                image_grad.x = 0.0f;
+            if (colour.y < 0.0f && image_grad.y >= 0.0f)
+                image_grad.y = 0.0f;
+            if (colour.z < 0.0f && image_grad.z >= 0.0f)
+                image_grad.z = 0.0f;
+            if (visible)
+                grad_color_helper[work_idx] = image_grad;
+            // A regularizer alone cannot take the below-black recovery exception.
+            colour_reg_mask =
+                (colour.x >= 0.0f || image_grad.x < 0.0f ? 1u : 0u) |
+                (colour.y >= 0.0f || image_grad.y < 0.0f ? 2u : 0u) |
+                (colour.z >= 0.0f || image_grad.z < 0.0f ? 4u : 0u);
+        }
+
         // Compute SH backward gradients before entering the geometry path.
         if (invisible) {
             // Reg-only scale/opacity; SH/means/rot get pure momentum decay (zeros).
@@ -203,7 +229,8 @@ namespace fast_lfs::rasterization::kernels::backward {
                     delta = coeff[c] - limit;
                 else if (coeff[c] < -limit)
                     delta = coeff[c] + limit;
-                sh0_grads[c] += (2.0f * fused_adam.dc_reg_weight / 3.0f) * delta;
+                if (colour_reg_mask & (1u << c))
+                    sh0_grads[c] += (2.0f * fused_adam.dc_reg_weight / 3.0f) * delta;
                 dc_loss_local += (fused_adam.dc_reg_weight / 3.0f) * delta * delta;
             }
         }
@@ -222,7 +249,7 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float3 sh_gc = visible ? grad_color_helper[work_idx] : make_float3(0.0f, 0.0f, 0.0f);
             apply_shN_grads_packed<ACTIVE_SH_BASES>(
                 fused_adam, primitive_idx, sh_layout_slots,
-                sh_mean, sh_cam, sh_gc, visible);
+                sh_mean, sh_cam, sh_gc, visible, colour_reg_mask);
         }
         // sh0 / streamed shN Adam state is dead from here on (compiler can free it).
 
@@ -853,9 +880,9 @@ namespace fast_lfs::rasterization::kernels::backward {
                     const float3 color_clamped =
                         fminf(fmaxf(color_unclamped, 0.0f), config::max_blend_color);
                     const unsigned factor_bits =
-                        (color_unclamped.x >= 0.0f && color_unclamped.x <= config::max_blend_color ? 1u : 0u) |
-                        (color_unclamped.y >= 0.0f && color_unclamped.y <= config::max_blend_color ? 2u : 0u) |
-                        (color_unclamped.z >= 0.0f && color_unclamped.z <= config::max_blend_color ? 4u : 0u);
+                        (color_unclamped.x <= config::max_blend_color ? 1u : 0u) |
+                        (color_unclamped.y <= config::max_blend_color ? 2u : 0u) |
+                        (color_unclamped.z <= config::max_blend_color ? 4u : 0u);
                     s_color[thread_rank] = make_float4(
                         color_clamped.x, color_clamped.y, color_clamped.z, __uint_as_float(factor_bits));
                     if (stage_depth)

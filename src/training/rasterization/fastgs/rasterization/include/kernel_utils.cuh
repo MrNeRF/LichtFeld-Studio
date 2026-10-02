@@ -822,7 +822,8 @@ namespace fast_lfs::rasterization::kernels {
         const FusedAdamSettings& fused_adam,
         const uint primitive_idx,
         const uint sh_layout_slots,
-        GradSource grad_source) {
+        GradSource grad_source,
+        const uint colour_reg_mask = 7u) {
         using C = lfs::training::joint_adam::DeviceCodec<8>;
         using VC = lfs::core::sh_value::DeviceCodec16;
         constexpr float kInf = 1e30f;
@@ -906,7 +907,8 @@ namespace fast_lfs::rasterization::kernels {
                             cell_lin < (ACTIVE_SH_BASES - 1u) * 3u && p.n_primitives > 0) {
                             const float reg_scale = fused_adam.sh_rest_reg_weight /
                                                     (static_cast<float>(p.n_primitives) * (ACTIVE_SH_BASES - 1u) * 3.0f);
-                            gci += 2.0f * reg_scale * pci;
+                            if (colour_reg_mask & (1u << (cell_lin % 3u)))
+                                gci += 2.0f * reg_scale * pci;
                             if (fused_adam.sh_rest_reg_loss_out != nullptr)
                                 local_sh_rest_loss += reg_scale * pci * pci;
                         }
@@ -1017,7 +1019,8 @@ namespace fast_lfs::rasterization::kernels {
                             cell_lin < kCoefficientCount && p.n_primitives > 0) {
                             const float reg_scale = fused_adam.sh_rest_reg_weight /
                                                     (static_cast<float>(p.n_primitives) * kCoefficientCount);
-                            gci += 2.0f * reg_scale * pci;
+                            if (colour_reg_mask & (1u << (cell_lin % 3u)))
+                                gci += 2.0f * reg_scale * pci;
                             // The loss was accumulated in the first pass. This
                             // pass only re-encodes the regularized moments.
                         }
@@ -1061,13 +1064,15 @@ namespace fast_lfs::rasterization::kernels {
         const float3 mean3d,
         const float3 cam_position,
         const float3 grad_color,
-        const bool compute_sh_grads) {
+        const bool compute_sh_grads,
+        const uint colour_reg_mask = 7u) {
         const FusedAdamParam& p = fused_adam.shN;
         if (p.joint_bits == 8) {
             apply_shN_grads_packed_joint<ACTIVE_SH_BASES>(
                 fused_adam, primitive_idx, sh_layout_slots,
                 ShNGradFromColor<ACTIVE_SH_BASES>(
-                    mean3d, cam_position, grad_color, compute_sh_grads));
+                    mean3d, cam_position, grad_color, compute_sh_grads),
+                colour_reg_mask);
         }
         // Non-joint state is unsupported (joint is the only codec).
     }

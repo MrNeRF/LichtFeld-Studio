@@ -169,6 +169,7 @@ void fast_lfs::rasterization::backward(
                 cam_position,
                 raw_opacities,
                 primitive_work_indices,
+                per_primitive_buffers.color,
                 grad_mean2d_helper,
                 grad_conic_helper,
                 grad_depth_helper,

@@ -370,7 +370,7 @@ TEST_F(FusedRegLossTest, FusedPathHasNoPerCallRegLossAllocs) {
 }
 
 // Retained trained vertices exercise the clamp with real geometry and colours.
-TEST_F(FusedRegLossTest, ClampedTrainedColorMatchesFiniteDifference) {
+TEST_F(FusedRegLossTest, ClampedTrainedColorAllowsOnlyImageDrivenRecovery) {
     const auto path = std::filesystem::path(PROJECT_ROOT_PATH) /
                       "tests/data/clamped_colour_regression.ply.fixture";
     ASSERT_TRUE(std::filesystem::is_regular_file(path));
@@ -426,32 +426,143 @@ TEST_F(FusedRegLossTest, ClampedTrainedColorMatchesFiniteDifference) {
     RecordProperty("finite_difference", std::to_string(finite_difference));
     EXPECT_NEAR(finite_difference, 0., 1e-8);
 
+    auto update = [&](float image_gradient, float dc_weight) {
+        model->sh0() = original.to(Device::CUDA);
+        AdamConfig config{.lr = 0.01f, .beta1 = 0.9, .beta2 = 0.999, .eps = 0.1f};
+        AdamOptimizer optimizer(*model, config);
+        optimizer.allocate_gradients();
+        optimizer.zero_grad(0);
+        auto forward = fast_rasterize_forward(camera, *model, bg_, 0, 0, 0, 0, false);
+        EXPECT_TRUE(forward.has_value());
+        auto grad = Tensor::zeros({3, 64, 64}, Device::CPU);
+        for (size_t i = 2 * 64 * 64; i < 3 * 64 * 64; ++i)
+            grad.ptr<float>()[i] = image_gradient;
+        FastGSFusedExtraGradients extra;
+        extra.dc_reg_weight = dc_weight;
+        fast_rasterize_backward(forward->second, grad.to(Device::CUDA), *model, optimizer,
+                                {}, {}, DensificationType::None, 1, extra);
+        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        const auto after = model->sh0().cpu();
+        float largest = 0.f;
+        for (size_t i = 0; i < 32; ++i) {
+            const float change = after.ptr<float>()[i * 3 + 2] - original.ptr<float>()[i * 3 + 2];
+            if (std::fabs(change) > std::fabs(largest))
+                largest = change;
+        }
+        return largest;
+    };
+    const float darker = update(1.f, 0.f);
+    const float brighter = update(-1.f, 0.f);
+    const float regularizer_only = update(0.f, 0.001f);
+    const float darker_with_regularizer = update(1.f, 0.001f);
+    const float brighter_with_regularizer = update(-1.f, 0.001f);
+    RecordProperty("darker_change", std::to_string(darker));
+    RecordProperty("brighter_change", std::to_string(brighter));
+    RecordProperty("regularizer_only_change", std::to_string(regularizer_only));
+    EXPECT_NEAR(darker, 0.f, 1e-6f);
+    EXPECT_GT(brighter, 1e-4f);
+    EXPECT_NEAR(regularizer_only, 0.f, 1e-6f);
+    EXPECT_NEAR(darker_with_regularizer, 0.f, 1e-6f);
+    EXPECT_GT(brighter_with_regularizer, 1e-4f);
+
+    // Positive colours retain the actual derivative of the forward renderer.
+    auto positive = original.clone();
+    for (size_t i = 0; i < 32; ++i)
+        positive.ptr<float>()[i * 3 + 2] = (0.2f - 0.5f) / 0.28209479177387814f;
+    plus = positive.clone();
+    minus = positive.clone();
+    for (size_t i = 0; i < 32; ++i) {
+        plus.ptr<float>()[i * 3 + 2] += h;
+        minus.ptr<float>()[i * 3 + 2] -= h;
+    }
+    model->sh0() = plus.to(Device::CUDA);
+    {
+        auto forward = fast_rasterize_forward(camera, *model, bg_, 0, 0, 0, 0, false);
+        ASSERT_TRUE(forward.has_value());
+        loss_plus = blue_sum(forward->first.image);
+    }
+    model->sh0() = minus.to(Device::CUDA);
+    double coverage = 0.;
+    {
+        auto forward = fast_rasterize_forward(camera, *model, bg_, 0, 0, 0, 0, false);
+        ASSERT_TRUE(forward.has_value());
+        loss_minus = blue_sum(forward->first.image);
+        const auto alpha = forward->second.alpha.cpu();
+        for (size_t i = 0; i < alpha.numel(); ++i)
+            coverage += alpha.ptr<float>()[i];
+    }
+    const double positive_difference = (loss_plus - loss_minus) / (2. * h);
+    RecordProperty("positive_finite_difference", std::to_string(positive_difference));
+    RecordProperty("visible_alpha_sum", std::to_string(coverage));
+    ASSERT_GT(coverage, 1.);
+    EXPECT_NEAR(positive_difference, 0.28209479177387814 * coverage, 0.02);
+
+    plus = positive.clone();
+    minus = positive.clone();
+    plus.ptr<float>()[2] += h;
+    minus.ptr<float>()[2] -= h;
+    model->sh0() = plus.to(Device::CUDA);
+    {
+        auto fwd = fast_rasterize_forward(camera, *model, bg_, 0, 0, 0, 0, false);
+        ASSERT_TRUE(fwd.has_value());
+        loss_plus = blue_sum(fwd->first.image);
+    }
+    model->sh0() = minus.to(Device::CUDA);
+    {
+        auto fwd = fast_rasterize_forward(camera, *model, bg_, 0, 0, 0, 0, false);
+        ASSERT_TRUE(fwd.has_value());
+        loss_minus = blue_sum(fwd->first.image);
+    }
+    const float first_gradient = static_cast<float>((loss_plus - loss_minus) / (2. * h));
+    ASSERT_GT(first_gradient, 0.f);
+    model->sh0() = positive.to(Device::CUDA);
+    {
+        AdamConfig cfg{.lr = 0.01f, .beta1 = 0.9, .beta2 = 0.999, .eps = 0.1f};
+        AdamOptimizer opt(*model, cfg);
+        opt.allocate_gradients();
+        opt.zero_grad(0);
+        auto fwd = fast_rasterize_forward(camera, *model, bg_, 0, 0, 0, 0, false);
+        ASSERT_TRUE(fwd.has_value());
+        auto grad = Tensor::zeros({3, 64, 64}, Device::CPU);
+        for (size_t i = 2 * 64 * 64; i < 3 * 64 * 64; ++i)
+            grad.ptr<float>()[i] = 1.f;
+        fast_rasterize_backward(fwd->second, grad.to(Device::CUDA), *model, opt,
+                                {}, {}, DensificationType::None, 1);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        const auto after = model->sh0().cpu();
+        const float expected_step = -0.01f * first_gradient / (std::fabs(first_gradient) + 0.1f);
+        const float actual_step = after.ptr<float>()[2] - positive.ptr<float>()[2];
+        RecordProperty("positive_first_gradient", std::to_string(first_gradient));
+        RecordProperty("positive_expected_step", std::to_string(expected_step));
+        RecordProperty("positive_actual_step", std::to_string(actual_step));
+        EXPECT_NEAR(actual_step, expected_step, 2e-5f);
+    }
+
+    model->set_active_sh_degree(1);
     model->sh0() = original.to(Device::CUDA);
+    auto rest = Tensor::zeros_like(model->shN_canonical()).cpu();
+    for (size_t i = 0; i < rest.numel() / 3; ++i)
+        rest.ptr<float>()[i * 3 + 2] = 0.25f;
+    model->shN_set_from_canonical(rest.to(Device::CUDA));
     AdamConfig config{.lr = 0.01f, .beta1 = 0.9, .beta2 = 0.999, .eps = 0.1f};
     AdamOptimizer optimizer(*model, config);
     optimizer.allocate_gradients();
+    const auto fused = optimizer.prepare_fastgs_fused_adam(1001);
+    ASSERT_TRUE(fused.shN.enabled);
     optimizer.zero_grad(0);
     auto forward = fast_rasterize_forward(camera, *model, bg_, 0, 0, 0, 0, false);
     ASSERT_TRUE(forward.has_value());
-    const auto alpha = forward->second.alpha.cpu();
-    double coverage = 0.;
-    for (size_t i = 0; i < alpha.numel(); ++i)
-        coverage += alpha.ptr<float>()[i];
-    RecordProperty("visible_alpha_sum", std::to_string(coverage));
-    ASSERT_GT(coverage, 1.);
     EXPECT_DOUBLE_EQ(blue_sum(forward->first.image), 0.);
-    auto grad_cpu = Tensor::zeros({3, 64, 64}, Device::CPU);
-    for (size_t i = 2 * 64 * 64; i < 3 * 64 * 64; ++i)
-        grad_cpu.ptr<float>()[i] = 1.f;
-    fast_rasterize_backward(forward->second, grad_cpu.to(Device::CUDA), *model, optimizer,
-                            {}, {}, DensificationType::None, 1);
+    auto grad = Tensor::zeros_like(forward->first.image);
+    FastGSFusedExtraGradients extra;
+    extra.sh_rest_reg_weight = 10.f;
+    fast_rasterize_backward(forward->second, grad, *model, optimizer,
+                            {}, {}, DensificationType::None, 1001, extra);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-    const auto after = model->sh0().cpu();
-    float largest_change = 0.f;
-    for (size_t i = 0; i < 32; ++i)
-        largest_change = std::max(largest_change,
-                                  std::fabs(after.ptr<float>()[i * 3 + 2] - original.ptr<float>()[i * 3 + 2]));
-    RecordProperty("largest_blue_coefficient_change", std::to_string(largest_change));
-    EXPECT_LT(largest_change, 1e-6f)
-        << "negative clamped colour has zero finite-difference gradient";
+    const auto rest_after = model->shN_canonical_cpu();
+    float rest_change = 0.f;
+    for (size_t i = 0; i < rest.numel() / 3; ++i)
+        rest_change = std::max(rest_change, std::fabs(rest_after.ptr<float>()[i * 3 + 2] - 0.25f));
+    RecordProperty("regularizer_only_rest_change", std::to_string(rest_change));
+    EXPECT_LT(rest_change, 1e-5f);
 }
