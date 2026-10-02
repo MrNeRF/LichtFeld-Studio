@@ -96,6 +96,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float far_,
         const uint depth_bits,
         const bool mip_filter,
+        const float mip_filter_dilation,
         float* __restrict__ max_screen_share) {
         (void)w;
         (void)h;
@@ -214,7 +215,7 @@ namespace fast_lfs::rasterization::kernels::forward {
 
         // Mip filter: use smaller dilation and compensate opacity
         const float det_raw = mip_filter ? fmaxf(cov2d.x * cov2d.z - cov2d.y * cov2d.y, 0.0f) : 0.0f;
-        const float kernel_size = mip_filter ? config::dilation_mip_filter : config::dilation;
+        const float kernel_size = mip_filter ? mip_filter_dilation : config::dilation;
         cov2d.x += kernel_size;
         cov2d.z += kernel_size;
         const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;

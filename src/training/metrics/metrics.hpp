@@ -171,13 +171,14 @@ namespace lfs::training {
     };
 
     using EvaluationRenderFn = std::function<
-        std::expected<EvaluationRenderResult, std::string>(lfs::core::Camera&)>;
+        std::expected<EvaluationRenderResult, std::string>(lfs::core::Camera&, float)>;
 
     [[nodiscard]] std::expected<PreparedEvaluationView, std::string> prepare_evaluation_view(
         lfs::core::Camera& camera,
         const lfs::core::param::TrainingParameters& params,
         const EvaluationRenderFn& render,
-        const EvaluationViewInputs* cached_inputs = nullptr);
+        const EvaluationViewInputs* cached_inputs = nullptr,
+        lfs::io::PipelinedImageLoader* image_loader = nullptr);
 
     [[nodiscard]] std::optional<float> mean_normal_angle_deg(
         const lfs::core::Tensor& rendered_normal,
@@ -262,7 +263,8 @@ namespace lfs::training {
         EvalMetrics evaluate(const int iteration,
                              const lfs::core::SplatData& splatData,
                              std::shared_ptr<CameraDataset> val_dataset,
-                             lfs::core::Tensor& background);
+                             lfs::core::Tensor& background,
+                             lfs::io::PipelinedImageLoader* image_loader = nullptr);
 
         // Save final report
         void save_report() const {

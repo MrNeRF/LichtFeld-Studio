@@ -3,6 +3,8 @@
 
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
+#include "core/tensor/internal/tensor_serialization.hpp"
+#include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "licht_test_support.hpp"
 #include "training/dataset.hpp"
@@ -12,8 +14,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <iterator>
 #include <map>
+#include <sstream>
 #include <tuple>
 #include <vector>
 
@@ -169,6 +177,54 @@ TEST_F(PipelinedImageLoaderTest, OriginalJpegUsesDirectDecodeWithoutColdReencodi
         EXPECT_EQ(ready.tensor.to(DataType::Float32).cpu().to_vector(),
                   repeated.tensor.to(DataType::Float32).cpu().to_vector());
     }
+}
+
+TEST_F(PipelinedImageLoaderTest, UndistortedTrainingImageIsIdenticalForImmediateColdAndHit) {
+    const auto [width, height, channels] = lfs::core::get_image_info(image_path_);
+    ASSERT_GT(width, 0);
+    ASSERT_GT(height, 0);
+    ASSERT_GE(channels, 3);
+    const float focal = 0.9765625f * static_cast<float>(width);
+    const auto undistort = lfs::core::compute_undistort_params(
+        focal, focal, 0.5f * width, 0.5f * height, width, height,
+        Tensor::from_vector({0.10f, -0.33f, 0.85f}, {3}, Device::CPU),
+        Tensor::from_vector({0.001f, -0.001f}, {2}, Device::CPU),
+        CameraModelType::PINHOLE, 0.0f);
+
+    LoadParams params;
+    params.resize_factor = 1;
+    params.max_width = 128;
+    params.output_uint8 = true;
+    params.undistort = &undistort;
+
+    PipelinedImageLoader loader(config());
+    const auto immediate = loader.load_image_immediate(image_path_, params);
+    ASSERT_TRUE(immediate.is_valid());
+
+    ImageRequest request;
+    request.sequence_id = 1;
+    request.path = image_path_;
+    request.params = params;
+    request.undistort = &undistort;
+    loader.prefetch({request});
+    const auto cold = loader.get();
+    ASSERT_TRUE(cold.error.empty()) << cold.error;
+
+    request.sequence_id = 2;
+    loader.prefetch({request});
+    const auto hit = loader.get();
+    ASSERT_TRUE(hit.error.empty()) << hit.error;
+
+    const auto expect_identical = [](const Tensor& lhs, const Tensor& rhs) {
+        ASSERT_EQ(lhs.shape(), rhs.shape());
+        ASSERT_EQ(lhs.dtype(), rhs.dtype());
+        const auto lhs_cpu = lhs.cpu().contiguous();
+        const auto rhs_cpu = rhs.cpu().contiguous();
+        ASSERT_EQ(lhs_cpu.bytes(), rhs_cpu.bytes());
+        EXPECT_EQ(std::memcmp(lhs_cpu.data_ptr(), rhs_cpu.data_ptr(), lhs_cpu.bytes()), 0);
+    };
+    expect_identical(immediate, cold.tensor);
+    expect_identical(cold.tensor, hit.tensor);
 }
 
 // Fails if a release frees nothing, spills a newer image before the oldest, or

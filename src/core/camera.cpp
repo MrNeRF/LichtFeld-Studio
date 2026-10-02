@@ -402,8 +402,16 @@ namespace lfs::core {
     }
 
     void Camera::load_image_size(int resize_factor, int max_width) {
+        if (_undistort_prepared) {
+            const auto grid = compute_undistort_grid(_undistort_params, resize_factor, max_width);
+            _image_width = grid.width;
+            _image_height = grid.height;
+            _image_size_loaded = true;
+            return;
+        }
+
         int w, h;
-        if (_undistort_prepared || !_has_image) {
+        if (!_has_image) {
             w = _camera_width;
             h = _camera_height;
         } else {
@@ -458,6 +466,11 @@ namespace lfs::core {
         int w = std::get<0>(result);
         int h = std::get<1>(result);
         int c = std::get<2>(result);
+
+        if (_undistort_prepared) {
+            const auto grid = compute_undistort_grid(_undistort_params, resize_factor, max_width);
+            return static_cast<size_t>(grid.width) * grid.height * c * sizeof(uint8_t);
+        }
 
         if (resize_factor > 0) {
             w = w / resize_factor;
@@ -573,10 +586,11 @@ namespace lfs::core {
                 mask = mask.squeeze(2);
             }
         } else if (!_mask_path.empty() && std::filesystem::exists(_mask_path)) {
+            const bool warp_full_resolution = _undistort_prepared && apply_undistortion;
             const ImageLoadParams params{
                 .path = _mask_path,
-                .resize_factor = resize_factor,
-                .max_width = max_width,
+                .resize_factor = warp_full_resolution ? 1 : resize_factor,
+                .max_width = warp_full_resolution ? 0 : max_width,
                 .stream = _stream};
 
             mask = load_image_cached(params);
@@ -605,22 +619,27 @@ namespace lfs::core {
             mask = Tensor::full(mask.shape(), 1.0f, mask.device()) - mask;
         }
 
-        // Threshold before undistort; final binarization happens after geometric resampling.
-        if (binarize && mask_threshold > 0.0f && mask_threshold < 1.0f) {
+        if (binarize && !(_undistort_prepared && apply_undistortion) &&
+            mask_threshold > 0.0f && mask_threshold < 1.0f) {
             mask = mask.ge(mask_threshold).to(DataType::Float32);
         }
 
         if (_undistort_prepared && apply_undistortion) {
-            const auto scaled = scale_undistort_params(
+            const auto scaled = prepare_undistort_params(
                 _undistort_params,
                 static_cast<int>(mask.shape()[1]),
                 static_cast<int>(mask.shape()[0]),
+                resize_factor,
                 max_width);
-            mask = undistort_mask(mask, scaled, _stream);
+            mask = undistort_mask_area(mask, scaled, _stream);
         }
 
         if (binarize) {
-            mask = mask.ge(0.5f).to(DataType::UInt8).contiguous();
+            const float final_threshold = _undistort_prepared && apply_undistortion &&
+                                                  mask_threshold > 0.0f && mask_threshold < 1.0f
+                                              ? mask_threshold
+                                              : 0.5f;
+            mask = mask.ge(final_threshold).to(DataType::UInt8).contiguous();
         } else {
             // Keep Float32 [0,1] so undistorted samples match the pipelined
             // loader / fused-kernel domain (kMaskKeepMin). Rounding through
@@ -694,17 +713,18 @@ namespace lfs::core {
             depth = depth.squeeze(2);
         }
 
-        if (!_image_size_loaded)
-            load_image_size(resize_factor, max_width);
-        depth = resize_depth_prior(depth.contiguous(), _image_height, _image_width, _stream);
-
         if (_undistort_prepared) {
-            const auto scaled = scale_undistort_params(
+            const auto scaled = prepare_undistort_params(
                 _undistort_params,
                 static_cast<int>(depth.shape()[1]),
                 static_cast<int>(depth.shape()[0]),
+                resize_factor,
                 max_width);
-            depth = undistort_mask(depth, scaled, _stream);
+            depth = undistort_depth_area(depth.contiguous(), scaled, _stream);
+        } else {
+            if (!_image_size_loaded)
+                load_image_size(resize_factor, max_width);
+            depth = resize_depth_prior(depth.contiguous(), _image_height, _image_width, _stream);
         }
 
         _cached_depth = depth.contiguous();
@@ -716,7 +736,8 @@ namespace lfs::core {
     }
 
     Tensor Camera::load_and_get_normal(const int resize_factor, const int max_width,
-                                       const NormalPriorDecode& decode) {
+                                       const NormalPriorDecode& decode,
+                                       const bool apply_undistortion) {
         if (_normal_loaded && _cached_normal.is_valid()) {
             return _cached_normal;
         }
@@ -810,18 +831,18 @@ namespace lfs::core {
             }
         }
 
-        if (!_image_size_loaded)
-            load_image_size(resize_factor, max_width);
-        normal = resize_normal_prior(normal.contiguous(), _image_height, _image_width, _stream);
-
-        if (_undistort_prepared) {
-            const auto scaled = scale_undistort_params(
+        if (_undistort_prepared && apply_undistortion) {
+            const auto scaled = prepare_undistort_params(
                 _undistort_params,
                 static_cast<int>(normal.shape()[2]),
                 static_cast<int>(normal.shape()[1]),
+                resize_factor,
                 max_width);
-            normal = undistort_image(normal, scaled, _stream);
-            normal = resize_normal_prior(normal.contiguous(), normal.shape()[1], normal.shape()[2], _stream);
+            normal = undistort_normal_area(normal.contiguous(), scaled, _stream);
+        } else {
+            if (!_image_size_loaded)
+                load_image_size(resize_factor, max_width);
+            normal = resize_normal_prior(normal.contiguous(), _image_height, _image_width, _stream);
         }
 
         _cached_normal = normal.contiguous();

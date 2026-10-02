@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/parameters.hpp"
@@ -485,6 +486,48 @@ TEST(MetricsEvalMask, UndistortClassifiesFloatKeepBand) {
     const auto alpha_bytes = mask_bytes(alpha->mask);
     EXPECT_EQ(*std::max_element(alpha_bytes.begin(), alpha_bytes.end()), 0)
         << "alpha 200 must stay not-keep after undistort";
+}
+
+TEST(MetricsEvalMask, UndistortedBinaryAlphaThresholdsFinalAreaValues) {
+    if (!cuda_available())
+        GTEST_SKIP() << "CUDA not available";
+    UniqueTempDir tmp("lfs_eval_mask_area_threshold");
+    constexpr int width = 32;
+    constexpr int height = 32;
+    std::vector<uint8_t> alpha(static_cast<size_t>(width * height), 176);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            if ((x + 2 * y) % 4 == 0)
+                alpha[static_cast<size_t>(y) * width + x] = 255;
+        }
+    }
+    const auto image_path = tmp.path() / "rgba.png";
+    write_rgba_png(image_path, alpha, height, width);
+    auto camera = make_camera(
+        image_path, {}, width, height,
+        Tensor::from_vector({-0.1f, 0.02f}, {2}, Device::CPU));
+    camera->set_has_alpha(true);
+    camera->prepare_undistortion();
+
+    auto config = sai_config();
+    config.mask_mode = MaskMode::Segment;
+    config.mask_threshold = 0.7f;
+    auto loaded = load_alpha_masked_metrics_inputs(*camera, config);
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+
+    std::vector<float> normalized(alpha.size());
+    std::transform(alpha.begin(), alpha.end(), normalized.begin(),
+                   [](const uint8_t value) { return static_cast<float>(value) / 255.0f; });
+    const auto scaled = lfs::core::prepare_undistort_params(
+        camera->undistort_params(), width, height,
+        config.resize_factor, config.max_width);
+    const auto expected = lfs::core::undistort_mask_area(
+                              Tensor::from_vector(normalized, {height, width}, Device::CUDA),
+                              scaled, nullptr)
+                              .ge(config.mask_threshold)
+                              .to(DataType::UInt8)
+                              .contiguous();
+    EXPECT_EQ(mask_bytes(loaded->mask), mask_bytes(expected));
 }
 
 TEST(MetricsEvalMask, SegmentModeStillUsesBinaryThreshold) {

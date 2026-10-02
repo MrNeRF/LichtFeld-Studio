@@ -12,6 +12,9 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <iostream>
+#include <limits>
+#include <numbers>
 #include <random>
 #include <utility>
 #include <vector>
@@ -57,7 +60,7 @@ namespace {
             {static_cast<size_t>(params.src_height), static_cast<size_t>(params.src_width)},
             Device::CUDA);
 
-        auto dst = undistort_mask(src, params, nullptr);
+        auto dst = undistort_mask_area(src, params, nullptr);
         cudaDeviceSynchronize();
 
         ASSERT_EQ(dst.ndim(), 2u);
@@ -117,11 +120,18 @@ namespace {
         const float x, const float y, const UndistortParams& params) {
         const float r2 = x * x + y * y;
         if (params.model_type == CameraModelType::PINHOLE) {
-            const float radial = 1.0f + params.distortion[0] * r2 +
-                                 params.distortion[1] * r2 * r2 +
-                                 params.distortion[2] * r2 * r2 * r2;
-            const float p1 = params.distortion[3];
-            const float p2 = params.distortion[4];
+            const float numerator = 1.0f + params.distortion[0] * r2 +
+                                    params.distortion[1] * r2 * r2 +
+                                    params.distortion[2] * r2 * r2 * r2;
+            const float denominator = params.num_distortion >= 6
+                                          ? 1.0f + params.distortion[3] * r2 +
+                                                params.distortion[4] * r2 * r2 +
+                                                params.distortion[5] * r2 * r2 * r2
+                                          : 1.0f;
+            const float radial = numerator / denominator;
+            const int tangential_offset = params.num_distortion >= 6 ? 6 : 3;
+            const float p1 = params.distortion[tangential_offset];
+            const float p2 = params.distortion[tangential_offset + 1];
             return {x * radial + 2.0f * p1 * x * y + p2 * (r2 + 2.0f * x * x),
                     y * radial + p1 * (r2 + 2.0f * y * y) + 2.0f * p2 * x * y};
         }
@@ -148,6 +158,89 @@ namespace {
             dy += params.distortion[8] * distorted_r2 + params.distortion[9] * r4;
         }
         return {dx, dy};
+    }
+
+    double lanczos3(const double x) {
+        const double absolute_x = std::abs(x);
+        if (absolute_x >= 3.0)
+            return 0.0;
+        if (absolute_x < 1.0e-12)
+            return 1.0;
+        const double pi_x = std::numbers::pi * x;
+        return std::sin(pi_x) / pi_x * std::sin(pi_x / 3.0) / (pi_x / 3.0);
+    }
+
+    float reconstruct_lanczos3(
+        const std::vector<float>& source,
+        const int width,
+        const int height,
+        const double sample_x,
+        const double sample_y) {
+        const int begin_x = static_cast<int>(std::ceil(sample_x - 3.0));
+        const int end_x = static_cast<int>(std::floor(sample_x + 3.0));
+        const int begin_y = static_cast<int>(std::ceil(sample_y - 3.0));
+        const int end_y = static_cast<int>(std::floor(sample_y + 3.0));
+        double value = 0.0;
+        double weight_sum = 0.0;
+        for (int y = begin_y; y <= end_y; ++y) {
+            const double wy = lanczos3(sample_y - static_cast<double>(y));
+            for (int x = begin_x; x <= end_x; ++x) {
+                const double weight = wy * lanczos3(sample_x - static_cast<double>(x));
+                if (x < 0 || x >= width || y < 0 || y >= height)
+                    continue;
+                value += weight * source[static_cast<size_t>(y) * width + x];
+                weight_sum += weight;
+            }
+        }
+        return std::abs(weight_sum) > 1.0e-12
+                   ? static_cast<float>(value / weight_sum)
+                   : 0.0f;
+    }
+
+    std::vector<float> oracle_undistort_lanczos3_8x8(
+        const std::vector<float>& source,
+        const UndistortParams& params) {
+        constexpr int quadrature = 8;
+        std::vector<float> result(
+            static_cast<size_t>(params.dst_width) * params.dst_height, 0.0f);
+        for (int oy = 0; oy < params.dst_height; ++oy) {
+            for (int ox = 0; ox < params.dst_width; ++ox) {
+                double value = 0.0;
+                for (int qy = 0; qy < quadrature; ++qy) {
+                    for (int qx = 0; qx < quadrature; ++qx) {
+                        const double px = ox + (qx + 0.5) / quadrature;
+                        const double py = oy + (qy + 0.5) / quadrature;
+                        const float nx = static_cast<float>((px - params.dst_cx) / params.dst_fx);
+                        const float ny = static_cast<float>((py - params.dst_cy) / params.dst_fy);
+                        const auto [dx, dy] = distort_test_coordinate(nx, ny, params);
+                        const double sx = dx * params.src_fx + params.src_cx - 0.5;
+                        const double sy = dy * params.src_fy + params.src_cy - 0.5;
+                        value += reconstruct_lanczos3(
+                            source, params.src_width, params.src_height, sx, sy);
+                    }
+                }
+                result[static_cast<size_t>(oy) * params.dst_width + ox] =
+                    static_cast<float>(value / (quadrature * quadrature));
+            }
+        }
+        return result;
+    }
+
+    double laplacian_energy(
+        const float* const image, const int width, const int height) {
+        double energy = 0.0;
+        size_t samples = 0;
+        for (int y = 1; y + 1 < height; ++y) {
+            for (int x = 1; x + 1 < width; ++x) {
+                const size_t index = static_cast<size_t>(y) * width + x;
+                const double laplacian =
+                    -4.0 * image[index] + image[index - 1] + image[index + 1] +
+                    image[index - width] + image[index + width];
+                energy += laplacian * laplacian;
+                ++samples;
+            }
+        }
+        return energy / static_cast<double>(samples);
     }
 
     void expect_inverse_round_trip(const CameraModelType model) {
@@ -204,9 +297,11 @@ namespace {
                 const auto [dx, dy] = distort_test_coordinate(ux, uy, params);
                 const float round_trip_x = dx * params.src_fx + params.src_cx;
                 const float round_trip_y = dy * params.src_fy + params.src_cy;
+                // Area sampling returns the footprint centroid, which differs from the centre
+                // point by a second-order term; 1e-2 px matches the inverse acceptance.
                 EXPECT_LE(std::hypot(round_trip_x - (x + 0.5f),
                                      round_trip_y - (y + 0.5f)),
-                          1.0e-3f);
+                          1.0e-2f);
                 ++checked;
             }
         }
@@ -214,6 +309,159 @@ namespace {
     }
 
 } // namespace
+
+TEST(UndistortResampling, MatchesEightByEightOracle) {
+    const auto native = compute_undistort_params(
+        187.5f, 187.5f, 96.0f, 54.0f, 192, 108,
+        Tensor::from_vector({0.10f, -0.33f, 0.85f}, {3}, Device::CPU),
+        Tensor::from_vector({0.001f, -0.001f}, {2}, Device::CPU),
+        CameraModelType::PINHOLE, 0.0f);
+    const auto params = prepare_undistort_params(native, 192, 108, 1, 120);
+
+    std::vector<float> source(static_cast<size_t>(params.src_width) * params.src_height);
+    for (int y = 0; y < params.src_height; ++y) {
+        for (int x = 0; x < params.src_width; ++x) {
+            const float value = 0.5f + 0.22f * std::sin(2.0f * std::numbers::pi_v<float> * 0.18f * x) +
+                                0.17f * std::cos(2.0f * std::numbers::pi_v<float> * 0.11f * y);
+            source[static_cast<size_t>(y) * params.src_width + x] = std::clamp(value, 0.0f, 1.0f);
+        }
+    }
+    const auto reference = oracle_undistort_lanczos3_8x8(source, params);
+    const auto input = Tensor::from_vector(
+        source, {1, static_cast<size_t>(params.src_height), static_cast<size_t>(params.src_width)},
+        Device::CUDA);
+    const auto output = undistort_image(input, params, nullptr).cpu().contiguous();
+    const float* const actual = output.ptr<float>();
+    double squared_error = 0.0;
+    for (size_t i = 0; i < reference.size(); ++i) {
+        const double difference = static_cast<double>(actual[i]) - reference[i];
+        squared_error += difference * difference;
+    }
+    const double psnr = -10.0 * std::log10(squared_error / static_cast<double>(reference.size()));
+    const double hf_ratio = laplacian_energy(actual, params.dst_width, params.dst_height) /
+                            laplacian_energy(reference.data(), params.dst_width, params.dst_height);
+    EXPECT_GE(psnr, 58.0);
+    EXPECT_GE(hf_ratio, 0.95);
+    EXPECT_LE(hf_ratio, 1.10);
+}
+
+TEST(UndistortResampling, PreservesConstantWithDistortionAndBorderRenormalization) {
+    const auto native = compute_undistort_params(
+        62.5f, 62.5f, 32.0f, 20.0f, 64, 40,
+        Tensor::from_vector({0.10f, -0.33f, 0.85f}, {3}, Device::CPU),
+        Tensor::from_vector({0.001f, -0.001f}, {2}, Device::CPU),
+        CameraModelType::PINHOLE, 0.0f);
+    const auto params = prepare_undistort_params(native, 64, 40, 1, 40);
+    const auto source = Tensor::ones({3, 40, 64}, Device::CUDA) * 0.625f;
+    const auto output = undistort_image(source, params, nullptr);
+    EXPECT_LE((output - 0.625f).abs().max().item<float>(), 2.0e-5f);
+}
+
+TEST(UndistortResampling, IdentityIsExact) {
+    UndistortParams params{};
+    params.src_width = params.dst_width = 37;
+    params.src_height = params.dst_height = 23;
+    params.src_fx = params.dst_fx = 31.25f;
+    params.src_fy = params.dst_fy = 30.75f;
+    params.src_cx = params.dst_cx = 18.25f;
+    params.src_cy = params.dst_cy = 11.75f;
+    params.model_type = CameraModelType::PINHOLE;
+    const auto source = Tensor::randn({3, 23, 37}, Device::CUDA);
+    const auto output = undistort_image(source, params, nullptr);
+    const auto difference = (source - output).abs().max().item<float>();
+    EXPECT_EQ(difference, 0.0f);
+}
+
+TEST(UndistortGrid, UsesFinalIntegerDimensionsForIntrinsics) {
+    UndistortParams params{};
+    params.src_width = 8192;
+    params.src_height = 4320;
+    params.src_fx = params.dst_fx = 8000.0f;
+    params.src_fy = params.dst_fy = 8000.0f;
+    params.src_cx = params.dst_cx = 4096.0f;
+    params.src_cy = params.dst_cy = 2160.0f;
+    params.dst_width = 7963;
+    params.dst_height = 4217;
+    const auto grid = compute_undistort_grid(params, 1, 5120);
+    EXPECT_EQ(grid.width, 5120);
+    EXPECT_EQ(grid.height, 2711);
+    const auto scaled = prepare_undistort_params(params, 8192, 4320, 1, 5120);
+    EXPECT_FLOAT_EQ(scaled.dst_fx, params.dst_fx * 5120.0f / 7963.0f);
+    EXPECT_FLOAT_EQ(scaled.dst_fy, params.dst_fy * 2711.0f / 4217.0f);
+    EXPECT_FLOAT_EQ(scaled.dst_cx, params.dst_cx * 5120.0f / 7963.0f);
+    EXPECT_FLOAT_EQ(scaled.dst_cy, params.dst_cy * 2711.0f / 4217.0f);
+}
+
+TEST(UndistortSidecars, ShareGridPreserveRangesAndNormalizeVectors) {
+    const auto native = compute_undistort_params(
+        62.5f, 62.5f, 32.0f, 20.0f, 64, 40,
+        Tensor::from_vector({0.10f, -0.33f, 0.85f}, {3}, Device::CPU),
+        Tensor::from_vector({0.001f, -0.001f}, {2}, Device::CPU),
+        CameraModelType::PINHOLE, 0.0f);
+    const auto params = prepare_undistort_params(native, 64, 40, 1, 40);
+
+    std::vector<float> mask_values(64 * 40);
+    std::vector<float> depth_values(64 * 40);
+    std::vector<float> normal_values(3 * 64 * 40, 0.0f);
+    for (int y = 0; y < 40; ++y) {
+        for (int x = 0; x < 64; ++x) {
+            const size_t index = static_cast<size_t>(y) * 64 + x;
+            mask_values[index] = x < 32 ? 0.0f : 1.0f;
+            depth_values[index] = x < 32 ? 1.0f : 10.0f;
+            normal_values[index] = x < 32 ? 1.0f : 0.0f;
+            normal_values[2 * 64 * 40 + index] = x < 32 ? 0.0f : 1.0f;
+        }
+    }
+    const auto mask = undistort_mask_area(
+        Tensor::from_vector(mask_values, {40, 64}, Device::CUDA), params, nullptr);
+    const auto depth = undistort_depth_area(
+        Tensor::from_vector(depth_values, {40, 64}, Device::CUDA), params, nullptr);
+    const auto normal = undistort_normal_area(
+        Tensor::from_vector(normal_values, {3, 40, 64}, Device::CUDA), params, nullptr);
+
+    const TensorShape scalar_shape = {
+        static_cast<size_t>(params.dst_height), static_cast<size_t>(params.dst_width)};
+    EXPECT_EQ(mask.shape(), scalar_shape);
+    EXPECT_EQ(depth.shape(), scalar_shape);
+    EXPECT_EQ(normal.shape(), (TensorShape({3, scalar_shape[0], scalar_shape[1]})));
+    EXPECT_GE(mask.min().item<float>(), 0.0f);
+    EXPECT_LE(mask.max().item<float>(), 1.0f);
+    EXPECT_GE(depth.min().item<float>(), 1.0f);
+    EXPECT_LE(depth.max().item<float>(), 10.0f);
+
+    const auto normal_cpu = normal.cpu().contiguous();
+    const float* const values = normal_cpu.ptr<float>();
+    const size_t plane = scalar_shape[0] * scalar_shape[1];
+    for (size_t index = 0; index < plane; ++index) {
+        const float length = std::sqrt(
+            values[index] * values[index] +
+            values[plane + index] * values[plane + index] +
+            values[2 * plane + index] * values[2 * plane + index]);
+        EXPECT_NEAR(length, 1.0f, 2.0e-5f);
+    }
+}
+
+TEST(UndistortInverse, HighQualityValidityRequiresFullLanczosCoverage) {
+    UndistortParams params{};
+    params.src_fx = params.src_fy = 32.0f;
+    params.src_cx = params.src_cy = 32.0f;
+    params.dst_fx = params.dst_fy = 32.0f;
+    params.dst_cx = params.dst_cy = 16.0f;
+    params.src_width = params.src_height = 64;
+    params.dst_width = params.dst_height = 32;
+    params.model_type = CameraModelType::PINHOLE;
+
+    Tensor validity;
+    const auto output = distort_image_to_source(
+        Tensor::ones({3, 32, 32}, Device::CUDA), params, validity, nullptr);
+    EXPECT_EQ(output.shape(), (TensorShape({3, 64, 64})));
+    const auto mask_cpu = validity.cpu().contiguous();
+    const uint8_t* const mask = mask_cpu.ptr<uint8_t>();
+    EXPECT_EQ(mask[32 * 64 + 18], 0);
+    EXPECT_EQ(mask[32 * 64 + 19], 1);
+    EXPECT_EQ(mask[32 * 64 + 44], 1);
+    EXPECT_EQ(mask[32 * 64 + 45], 0);
+}
 
 TEST(UndistortInverse, PinholeRoundTrip) {
     expect_inverse_round_trip(CameraModelType::PINHOLE);
@@ -244,9 +492,14 @@ TEST(UndistortInverse, ValidityMaskExcludesOutOfFrameSamples) {
     const auto mask_cpu = validity.cpu().contiguous();
     const uint8_t* const mask = mask_cpu.ptr<uint8_t>();
     EXPECT_EQ(mask[32 * 64 + 15], 0);
-    EXPECT_EQ(mask[32 * 64 + 16], 1);
-    EXPECT_EQ(mask[32 * 64 + 47], 1);
+    EXPECT_EQ(mask[32 * 64 + 32], 1);
     EXPECT_EQ(mask[32 * 64 + 48], 0);
+    for (int x = 0; x < 64; ++x) {
+        if (mask[32 * 64 + x] != 0) {
+            EXPECT_GE(x, 16);
+            EXPECT_LE(x, 47);
+        }
+    }
 }
 
 TEST(UndistortInverse, HighResolutionValidityHasNoInteriorHoles) {
@@ -259,7 +512,7 @@ TEST(UndistortInverse, HighResolutionValidityHasNoInteriorHoles) {
     const auto full = compute_undistort_params(
         8000.0f, 8000.0f, SOURCE_WIDTH / 2.0f, SOURCE_HEIGHT / 2.0f, SOURCE_WIDTH, SOURCE_HEIGHT,
         radial, tangential, CameraModelType::PINHOLE);
-    const auto params = scale_undistort_params(full, EVAL_WIDTH, EVAL_HEIGHT, EVAL_WIDTH);
+    const auto params = prepare_undistort_params(full, EVAL_WIDTH, EVAL_HEIGHT, 1, EVAL_WIDTH);
 
     const auto input = Tensor::ones(
         {3, static_cast<size_t>(params.dst_height), static_cast<size_t>(params.dst_width)}, Device::CUDA);
@@ -312,34 +565,50 @@ TEST(UndistortInverse, HighResolutionValidityHasNoInteriorHoles) {
 // Wide-angle fisheye rays map to huge pinhole radii (r = tan(theta)); a solver that walks there
 // in the image plane with bounded steps rejects them although they land inside the frame.
 TEST(UndistortInverse, WideAngleFisheyeRaysAreInverted) {
+    constexpr int HEIGHT = 16;
+    constexpr int ROW = 8;
     UndistortParams params{};
     params.model_type = CameraModelType::FISHEYE;
     params.src_fx = params.src_fy = 100.0f;
     params.src_cx = 2048.0f;
-    params.src_cy = 0.5f;
+    params.src_cy = ROW + 0.5f;
     params.src_width = 4096;
-    params.src_height = 1;
+    params.src_height = HEIGHT;
     params.dst_cx = 1024.0f;
-    params.dst_cy = 0.5f;
+    params.dst_cy = HEIGHT / 2.0f;
     params.dst_width = 2048;
-    params.dst_height = 1;
+    params.dst_height = HEIGHT;
 
-    std::vector<float> coordinates(3 * 2048);
-    for (int x = 0; x < 2048; ++x)
-        coordinates[x] = static_cast<float>(x);
-    const auto input = Tensor::from_vector(coordinates, TensorShape({3, 1, 2048}), Device::CUDA);
+    std::vector<float> coordinates(3 * HEIGHT * 2048);
+    for (int y = 0; y < HEIGHT; ++y)
+        for (int x = 0; x < 2048; ++x)
+            coordinates[static_cast<size_t>(y) * 2048 + x] = static_cast<float>(x);
+    const auto input = Tensor::from_vector(
+        coordinates, TensorShape({3, static_cast<size_t>(HEIGHT), 2048}), Device::CUDA);
 
     for (const auto& [focal, source_x] : {std::pair{100.0f, 2193}, std::pair{10.0f, 2203}}) {
         params.dst_fx = params.dst_fy = focal;
         Tensor validity;
         const auto output = distort_image_to_source(input, params, validity, nullptr);
-        const float xd = (source_x + 0.5f - params.src_cx) / params.src_fx;
-        const float expected_x = std::tan(xd) * focal + params.dst_cx - 0.5f;
-        ASSERT_LT(expected_x, static_cast<float>(params.dst_width - 1));
+
+        // The warp integrates the pixel footprint with 8x8 quadrature; near 90 degrees the mean
+        // of tan(theta) over the footprint is far from tan(theta) at the centre.
+        double expected_x = 0.0;
+        for (int qy = 0; qy < 8; ++qy) {
+            for (int qx = 0; qx < 8; ++qx) {
+                const double xd = (source_x + (qx + 0.5) / 8.0 - params.src_cx) / params.src_fx;
+                const double yd = (ROW + (qy + 0.5) / 8.0 - params.src_cy) / params.src_fy;
+                const double theta = std::hypot(xd, yd);
+                expected_x += xd * std::tan(theta) / theta * focal + params.dst_cx - 0.5;
+            }
+        }
+        expected_x /= 64.0;
+        ASSERT_LT(expected_x, params.dst_width - 1.0);
         const auto valid = validity.cpu().contiguous();
         const auto mapped = output.cpu().contiguous();
-        EXPECT_EQ(valid.ptr<uint8_t>()[source_x], 1) << "focal " << focal;
-        EXPECT_NEAR(mapped.ptr<float>()[source_x], expected_x, 0.05f) << "focal " << focal;
+        const size_t index = static_cast<size_t>(ROW) * params.src_width + source_x;
+        EXPECT_EQ(valid.ptr<uint8_t>()[index], 1) << "focal " << focal;
+        EXPECT_NEAR(mapped.ptr<float>()[index], expected_x, 0.05) << "focal " << focal;
     }
 }
 
@@ -814,7 +1083,7 @@ TEST(ScaleUndistortParams, PreservesPrincipalPointOffset) {
     params.dst_width = 66;
     params.dst_height = 24;
 
-    const auto scaled = scale_undistort_params(params, 40, 15);
+    const auto scaled = prepare_undistort_params(params, 40, 15, 2, 0);
 
     EXPECT_FLOAT_EQ(scaled.src_fx, 50.0f);
     EXPECT_FLOAT_EQ(scaled.src_fy, 60.0f);
@@ -835,36 +1104,20 @@ TEST(ScaleUndistortParams, CapsOutputAndScalesDestinationIntrinsics) {
 
     constexpr int actual_src_width = TEST_W / 2;
     constexpr int actual_src_height = TEST_H / 2;
-    const auto uncapped = scale_undistort_params(params, actual_src_width, actual_src_height);
+    const auto uncapped = prepare_undistort_params(params, actual_src_width, actual_src_height, 2, 0);
     const int max_width = std::max(uncapped.dst_width, uncapped.dst_height) / 2;
     ASSERT_GT(max_width, 0);
 
-    const auto capped = scale_undistort_params(
-        params, actual_src_width, actual_src_height, max_width);
-
-    int expected_width;
-    int expected_height;
-    if (uncapped.dst_width > uncapped.dst_height) {
-        expected_width = max_width;
-        expected_height = std::max(
-            1, static_cast<int>(static_cast<std::int64_t>(uncapped.dst_height) * max_width /
-                                uncapped.dst_width));
-    } else {
-        expected_height = max_width;
-        expected_width = std::max(
-            1, static_cast<int>(static_cast<std::int64_t>(uncapped.dst_width) * max_width /
-                                uncapped.dst_height));
-    }
+    const auto capped = prepare_undistort_params(
+        params, actual_src_width, actual_src_height, 2, max_width);
 
     EXPECT_EQ(std::max(capped.dst_width, capped.dst_height), max_width);
-    EXPECT_EQ(capped.dst_width, expected_width);
-    EXPECT_EQ(capped.dst_height, expected_height);
-    const float dst_sx = static_cast<float>(expected_width) / static_cast<float>(uncapped.dst_width);
-    const float dst_sy = static_cast<float>(expected_height) / static_cast<float>(uncapped.dst_height);
-    EXPECT_FLOAT_EQ(capped.dst_fx, uncapped.dst_fx * dst_sx);
-    EXPECT_FLOAT_EQ(capped.dst_fy, uncapped.dst_fy * dst_sy);
-    EXPECT_FLOAT_EQ(capped.dst_cx, uncapped.dst_cx * dst_sx);
-    EXPECT_FLOAT_EQ(capped.dst_cy, uncapped.dst_cy * dst_sy);
+    const float dst_sx = static_cast<float>(capped.dst_width) / static_cast<float>(params.dst_width);
+    const float dst_sy = static_cast<float>(capped.dst_height) / static_cast<float>(params.dst_height);
+    EXPECT_FLOAT_EQ(capped.dst_fx, params.dst_fx * dst_sx);
+    EXPECT_FLOAT_EQ(capped.dst_fy, params.dst_fy * dst_sy);
+    EXPECT_FLOAT_EQ(capped.dst_cx, params.dst_cx * dst_sx);
+    EXPECT_FLOAT_EQ(capped.dst_cy, params.dst_cy * dst_sy);
     EXPECT_FLOAT_EQ(capped.src_fx, uncapped.src_fx);
     EXPECT_FLOAT_EQ(capped.src_fy, uncapped.src_fy);
     EXPECT_FLOAT_EQ(capped.src_cx, uncapped.src_cx);
@@ -881,8 +1134,8 @@ TEST(ScaleUndistortParams, CapsOutputWhenSourceSizeMatches) {
     const int max_width = std::max(params.src_width, params.src_height);
     ASSERT_GT(std::max(params.dst_width, params.dst_height), max_width);
 
-    const auto capped = scale_undistort_params(
-        params, params.src_width, params.src_height, max_width);
+    const auto capped = prepare_undistort_params(
+        params, params.src_width, params.src_height, 1, max_width);
 
     EXPECT_EQ(std::max(capped.dst_width, capped.dst_height), max_width);
     EXPECT_LT(capped.dst_width, params.dst_width);
@@ -896,13 +1149,13 @@ TEST(ScaleUndistortParams, NonRestrictiveCapsMatchUncappedResult) {
 
     constexpr int actual_src_width = TEST_W / 2;
     constexpr int actual_src_height = TEST_H / 2;
-    const auto uncapped = scale_undistort_params(params, actual_src_width, actual_src_height);
+    const auto uncapped = prepare_undistort_params(params, actual_src_width, actual_src_height, 2, 0);
     const int output_max = std::max(uncapped.dst_width, uncapped.dst_height);
 
     for (const int max_width : {output_max, output_max + 1, 0, -1}) {
         SCOPED_TRACE(max_width);
-        const auto actual = scale_undistort_params(
-            params, actual_src_width, actual_src_height, max_width);
+        const auto actual = prepare_undistort_params(
+            params, actual_src_width, actual_src_height, 2, max_width);
         expect_params_equal(actual, uncapped);
     }
 }
@@ -920,7 +1173,7 @@ TEST(UndistortConsistency, MaskAndImageSameDimensions) {
     auto mask_src = Tensor::ones({static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)}, Device::CUDA);
 
     auto img_dst = undistort_image(img_src, params, nullptr);
-    auto mask_dst = undistort_mask(mask_src, params, nullptr);
+    auto mask_dst = undistort_mask_area(mask_src, params, nullptr);
     cudaDeviceSynchronize();
 
     EXPECT_EQ(img_dst.shape()[1], mask_dst.shape()[0]);
@@ -1099,7 +1352,7 @@ TEST(UndistortScale, ScaleUndistortParams) {
 
     constexpr int HALF_W = TEST_W / 2;
     constexpr int HALF_H = TEST_H / 2;
-    const auto scaled = scale_undistort_params(params, HALF_W, HALF_H);
+    const auto scaled = prepare_undistort_params(params, HALF_W, HALF_H, 2, 0);
 
     EXPECT_EQ(scaled.src_width, HALF_W);
     EXPECT_EQ(scaled.src_height, HALF_H);
@@ -1112,15 +1365,16 @@ TEST(UndistortScale, ScaleUndistortParams) {
     EXPECT_NEAR(scaled.src_cx, params.src_cx * sx, 1e-4f);
     EXPECT_NEAR(scaled.src_cy, params.src_cy * sy, 1e-4f);
 
-    EXPECT_NEAR(scaled.dst_fx, params.dst_fx * sx, 1e-4f);
-    EXPECT_NEAR(scaled.dst_fy, params.dst_fy * sy, 1e-4f);
-
-    const int expected_dst_w = std::max(1, static_cast<int>(std::lroundf(params.dst_width * sx)));
-    const int expected_dst_h = std::max(1, static_cast<int>(std::lroundf(params.dst_height * sy)));
+    const int expected_dst_w = std::max(1, static_cast<int>(std::lround(params.dst_width * 0.5)));
+    const int expected_dst_h = std::max(1, static_cast<int>(std::lround(params.dst_height * 0.5)));
     EXPECT_EQ(scaled.dst_width, expected_dst_w);
     EXPECT_EQ(scaled.dst_height, expected_dst_h);
-    EXPECT_NEAR(scaled.dst_cx, params.dst_cx * sx, 1e-4f);
-    EXPECT_NEAR(scaled.dst_cy, params.dst_cy * sy, 1e-4f);
+    const float dst_sx = static_cast<float>(expected_dst_w) / static_cast<float>(params.dst_width);
+    const float dst_sy = static_cast<float>(expected_dst_h) / static_cast<float>(params.dst_height);
+    EXPECT_NEAR(scaled.dst_fx, params.dst_fx * dst_sx, 1e-4f);
+    EXPECT_NEAR(scaled.dst_fy, params.dst_fy * dst_sy, 1e-4f);
+    EXPECT_NEAR(scaled.dst_cx, params.dst_cx * dst_sx, 1e-4f);
+    EXPECT_NEAR(scaled.dst_cy, params.dst_cy * dst_sy, 1e-4f);
 
     run_image_undistort(scaled);
     run_mask_undistort(scaled);

@@ -3230,9 +3230,10 @@ namespace lfs::training {
         if (metrics_stream_)
             metrics_guard.emplace(metrics_stream_);
 
+        const auto image_loader = getActiveImageLoader();
         auto prepared = prepare_evaluation_view(
             camera, params,
-            [&](lfs::core::Camera& render_camera)
+            [&](lfs::core::Camera& render_camera, const float mip_filter_dilation)
                 -> std::expected<EvaluationRenderResult, std::string> {
                 const std::shared_lock lock(render_mutex_);
                 // Exclude the non-refining optimizer writes for the metric read window
@@ -3257,7 +3258,8 @@ namespace lfs::training {
                             1.0f, false, GsplatRenderMode::RGB, true);
                     } else {
                         output = fast_rasterize(
-                            render_camera, model, background, params.optimization.mip_filter);
+                            render_camera, model, background, params.optimization.mip_filter,
+                            {}, false, mip_filter_dilation);
                     }
 
                     raw_image = output.image;
@@ -3287,7 +3289,8 @@ namespace lfs::training {
                     .output = std::move(output),
                     .raw_image = std::move(raw_image)};
             },
-            cached_inputs.gt_image.is_valid() ? &cached_inputs : nullptr);
+            cached_inputs.gt_image.is_valid() ? &cached_inputs : nullptr,
+            image_loader.get());
         if (!prepared)
             return std::unexpected(prepared.error());
 
@@ -7986,10 +7989,12 @@ namespace lfs::training {
                         evaluator_->print_evaluation_header(iter);
                         eval_ppisp_applied_.store(0);
                         eval_ppisp_exif_.store(0);
+                        const auto evaluation_image_loader = getActiveImageLoader();
                         auto metrics = evaluator_->evaluate(iter,
                                                             strategy_->get_model(),
                                                             val_dataset_,
-                                                            background_);
+                                                            background_,
+                                                            evaluation_image_loader.get());
                         if (evaluator_->has_appearance()) {
                             const int n = eval_ppisp_applied_.load();
                             const int k = eval_ppisp_exif_.load();
@@ -8739,10 +8744,12 @@ namespace lfs::training {
                 lfs::diagnostics::VramProfiler::instance().mark("evaluation");
                 eval_ppisp_applied_.store(0);
                 eval_ppisp_exif_.store(0);
+                const auto evaluation_image_loader = getActiveImageLoader();
                 auto metrics = evaluator_->evaluate(eval_iteration,
                                                     strategy_->get_model(),
                                                     val_dataset_,
-                                                    background_);
+                                                    background_,
+                                                    evaluation_image_loader.get());
                 LOG_INFO("{}", metrics.to_string());
                 photometric_loss_.arena().shrink_to_required();
             }
