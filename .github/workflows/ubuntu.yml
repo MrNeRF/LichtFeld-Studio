@@ -211,6 +211,7 @@ jobs:
           fi
       - name: Run render-on-demand GPU idle test
         run: |
+          test -n "$LFS_RENDER_IDLE_MANIFEST"
           build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m pytest \
             tests/python/test_render_on_demand_idle.py -m 'gpu and integration' -q
       - name: Stop Xvfb started by this job
