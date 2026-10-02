@@ -5,6 +5,7 @@
 #pragma once
 
 #include <condition_variable>
+#include <cstdint>
 
 #include "core/events.hpp"
 #include "core/export.hpp"

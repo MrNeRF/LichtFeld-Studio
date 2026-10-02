@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "python/python_compat.hpp"
+#include "visualizer/rendering/passes/vulkan_split_view_pass.hpp"
+#include "visualizer/rendering/rendering_manager.hpp"
 #include <gtest/gtest.h>
 
 #include <torch/torch.h>
@@ -147,7 +149,14 @@ namespace {
             return std::unexpected("not implemented");
         }
         void consolidateModels() override {}
-        std::expected<void, std::string> clearScene() override { return {}; }
+        std::expected<void, std::string> clearScene() override {
+            ++clear_calls;
+            if (!clear_error.empty())
+                return std::unexpected(clear_error);
+            return {};
+        }
+        int clear_calls = 0;
+        std::string clear_error;
         lfs::core::Scene& getScene() override { return scene_; }
         lfs::vis::SceneManager* getSceneManager() override { return nullptr; }
         lfs::vis::RenderingManager* getRenderingManager() override { return nullptr; }
@@ -956,6 +965,38 @@ result_values = [float(top), float(bottom)]
     EXPECT_GT(result.values[0], result.values[1]);
 }
 
+TEST_F(PythonIntegrationTest, CaptureSplitComparisonPreservesPresentedOrientation) {
+    for (const bool flip_y : {false, true}) {
+        const ScopedCaptureViewportRenderCallback callback([flip_y]() -> std::optional<lfs::vis::ViewportRender> {
+            constexpr size_t width = 64;
+            constexpr size_t height = 8;
+            std::vector<float> pixels(3 * width * height, 0.0f);
+            for (size_t x = 0; x < width; ++x) {
+                pixels[(flip_y ? height - 1 : 0) * width + x] = 1.0f;
+            }
+            const auto image = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::from_vector(
+                pixels, {3, height, width}, lfs::core::Device::CPU));
+            lfs::vis::VulkanSplitViewParams params;
+            params.left.image = params.right.image = image;
+            params.left.flip_y = params.right.flip_y = flip_y;
+            params.content_rect = {0, 0, width, height};
+            return lfs::vis::ViewportRender{
+                lfs::vis::RenderingManager::composeSplitViewCpu(params, {width, height}), nullptr};
+        });
+        const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+image = lf.capture_viewport().image.cpu().tolist()
+result_shape = (4,)
+result_values = [image[0][0][0], image[-1][0][0], image[0][-1][0], image[-1][-1][0]]
+)PY");
+        ASSERT_EQ(result.values.size(), 4u);
+        EXPECT_FLOAT_EQ(result.values[0], 1.0f);
+        EXPECT_FLOAT_EQ(result.values[1], 0.0f);
+        EXPECT_FLOAT_EQ(result.values[2], 1.0f);
+        EXPECT_FLOAT_EQ(result.values[3], 0.0f);
+    }
+}
+
 TEST_F(PythonIntegrationTest, CaptureViewportPostsToViewerThreadWhenOffThread) {
     TestVisualizer viewer;
     const ScopedVisualizer scoped_viewer(&viewer);
@@ -1131,6 +1172,58 @@ except RuntimeError:
     ASSERT_EQ(result.values.size(), 1u);
     EXPECT_FLOAT_EQ(result.values[0], 1.0F);
     EXPECT_EQ(viewer.poll_calls, 0);
+}
+
+TEST_F(PythonIntegrationTest, SceneClearPreservesTypedShutdownError) {
+    for (const bool inline_call : {false, true}) {
+        TestVisualizer viewer;
+        viewer.on_viewer_thread = inline_call;
+        viewer.accepts_posted_work = false;
+        const ScopedVisualizer scoped_viewer(&viewer);
+        const lfs::python::SceneContextGuard scene_guard(&viewer.getScene());
+        const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+result_shape = (2,)
+result_values = []
+for clear in (lf.clear_scene, lf.get_scene().clear):
+    try:
+        clear()
+        result_values.append(0.0)
+    except lf.CancelledError as error:
+        assert error.code == 'Cancelled'
+        assert error.domain == 'Python'
+        result_values.append(1.0)
+)PY");
+        EXPECT_EQ(result.values, (std::vector<float>{1.0F, 1.0F}));
+        EXPECT_EQ(viewer.clear_calls, 0);
+    }
+}
+
+TEST_F(PythonIntegrationTest, SceneClearPreservesLegacyFailureContext) {
+    for (const bool inline_call : {false, true}) {
+        TestVisualizer viewer;
+        viewer.on_viewer_thread = inline_call;
+        viewer.clear_error = "Scene is busy";
+        const ScopedVisualizer scoped_viewer(&viewer);
+        const lfs::python::SceneContextGuard scene_guard(&viewer.getScene());
+        const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+result_shape = (2,)
+result_values = []
+for clear in (lf.clear_scene, lf.get_scene().clear):
+    try:
+        clear()
+        result_values.append(0.0)
+    except lf.Error as error:
+        assert error.code == 'FailedPrecondition'
+        assert error.domain == 'Rendering'
+        assert str(error) == 'Scene is busy'
+        assert error.context
+        result_values.append(1.0)
+)PY");
+        EXPECT_EQ(result.values, (std::vector<float>{1.0F, 1.0F}));
+        EXPECT_EQ(viewer.clear_calls, 2);
+    }
 }
 
 TEST_F(PythonIntegrationTest, ProjectLicenseRoundTripsThroughBinding) {

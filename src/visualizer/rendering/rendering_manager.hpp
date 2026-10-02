@@ -503,6 +503,8 @@ namespace lfs::vis {
         glm::ivec2 getRenderedSize() const { return this->state().viewport_artifact_service_.renderedSize(); }
         std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
         std::shared_ptr<lfs::core::Tensor> captureViewportImage();
+        [[nodiscard]] static std::shared_ptr<lfs::core::Tensor> composeSplitViewCpu(
+            const VulkanSplitViewParams& params, const glm::ivec2& output_size);
 
         // Where the 3D viewport sat inside the window framebuffer on the last frame,
         // top-left origin. Lets callers crop a full-window readback down to the viewport

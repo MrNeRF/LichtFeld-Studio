@@ -88,6 +88,8 @@ namespace lfs::app {
             return "ssog";
         case core::ExportFormat::SPZ:
             return "spz";
+        case core::ExportFormat::GLB:
+            return "glb";
         case core::ExportFormat::HTML_VIEWER:
             return "html";
         case core::ExportFormat::USD:

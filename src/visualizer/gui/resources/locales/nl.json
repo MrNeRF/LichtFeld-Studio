@@ -1,7 +1,8 @@
 {
   "ui.vram_window_1m": "1 min",
-  "ui.vram_process_nvml_tooltip": "GPU-geheugen van het proces volgens het NVIDIA-stuurprogramma.",
-  "ui.vram_process_estimate_tooltip": "GPU-geheugen van het proces, geschat als bovengrens op basis van apparaatgebruik omdat een proceswaarde ontbreekt.",
+  "ui.vram_process_nvml_tooltip": "GPU-geheugen van het proces volgens het besturingssysteem of GPU-stuurprogramma.",
+  "ui.vram_process_unavailable_tooltip": "GPU-geheugen van het proces is niet beschikbaar. Het apparaatgebruik omvat andere toepassingen.",
+  "ui.vram_over_budget": "boven budget",
   "ui.vram_device_nvml_tooltip": "Apparaatgeheugen volgens het NVIDIA-stuurprogramma.",
   "ui.vram_device_cuda_tooltip": "Geheugen dat CUDA ziet; gereserveerde fysieke capaciteit kan ontbreken.",
   "ui.vram_process_metal_tooltip": "GPU-geheugen dat dit proces via Metal heeft toegewezen.",

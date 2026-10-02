@@ -9,6 +9,7 @@
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "io/loader.hpp"
+#include "py_error.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/core/training_manager.hpp"
 #include "visualizer/core/training_state.hpp"
@@ -651,8 +652,7 @@ namespace lfs::python {
     void PyScene::clear() {
         if (get_visualizer()) {
             nb::gil_scoped_release release;
-            if (auto result = clear_application_scene(); !result)
-                throw std::runtime_error(result.error());
+            unwrap(clear_application_scene());
             return;
         }
         if (auto* const scene_manager = get_scene_manager()) {

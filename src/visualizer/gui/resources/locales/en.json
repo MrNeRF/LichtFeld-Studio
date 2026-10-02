@@ -1,7 +1,8 @@
 {
   "ui.vram_window_1m": "1 min",
-  "ui.vram_process_nvml_tooltip": "Process GPU memory reported by the NVIDIA driver.",
-  "ui.vram_process_estimate_tooltip": "Process GPU memory is estimated as an upper bound from device usage because a process value is unavailable.",
+  "ui.vram_process_nvml_tooltip": "Process GPU memory reported by the operating system or GPU driver.",
+  "ui.vram_process_unavailable_tooltip": "Process GPU memory is unavailable. Device usage includes other applications.",
+  "ui.vram_over_budget": "over budget",
   "ui.vram_device_nvml_tooltip": "Device memory reported by the NVIDIA driver.",
   "ui.vram_device_cuda_tooltip": "Device memory comes from CUDA visible memory, which can exclude reserved physical capacity.",
   "ui.vram_process_metal_tooltip": "GPU memory this process has allocated through Metal.",
