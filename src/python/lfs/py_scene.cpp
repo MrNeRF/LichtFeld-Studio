@@ -651,8 +651,7 @@ namespace lfs::python {
     void PyScene::clear() {
         if (get_visualizer()) {
             nb::gil_scoped_release release;
-            if (auto result = clear_application_scene(); !result)
-                throw std::runtime_error(result.error());
+            clear_application_scene();
             return;
         }
         if (auto* const scene_manager = get_scene_manager()) {

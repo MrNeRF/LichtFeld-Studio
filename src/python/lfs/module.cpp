@@ -895,8 +895,9 @@ namespace {
 
 } // namespace
 
-std::expected<void, std::string> lfs::python::clear_application_scene() {
-    return clear_scene_from_python();
+void lfs::python::clear_application_scene() {
+    if (auto result = clear_scene_from_python(); !result)
+        throw std::runtime_error(result.error());
 }
 
 NB_MODULE(lichtfeld, m) {

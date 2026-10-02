@@ -7952,6 +7952,7 @@ namespace lfs::vis::gui {
                 return import_render_error_;
             return result;
         } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): reported to the caller as the import render error.
             return error.what();
         }
     }

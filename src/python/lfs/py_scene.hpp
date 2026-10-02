@@ -24,7 +24,8 @@ namespace nb = nanobind;
 namespace lfs::python {
 
     // Shared viewer-thread dispatch for the two Python scene-clear entry points.
-    std::expected<void, std::string> clear_application_scene();
+    // Throws std::runtime_error with the user-facing reason on failure.
+    void clear_application_scene();
 
     struct PySelectionGroup {
         uint8_t id;

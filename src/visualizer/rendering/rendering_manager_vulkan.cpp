@@ -1570,6 +1570,7 @@ namespace lfs::vis {
                 static_cast<void>(renderVulkanFrame(preparation));
             }
         } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): reported to the caller as the import render error.
             import_render_result_ = error.what();
         }
         import_render_preparing_ = false;
