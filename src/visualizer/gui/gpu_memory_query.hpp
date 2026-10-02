@@ -47,7 +47,7 @@ namespace lfs::vis::gui {
                                               size_t nvml_total, size_t dxgi_budget = 0,
                                               bool dxgi_valid = false);
     LFS_VIS_API GpuMemoryInfo selectUnifiedGpuMemory(size_t process_used, size_t working_set,
-                                                     size_t gpu_allocated, size_t host_available);
+                                                     size_t gpu_in_use, size_t host_available);
     LFS_VIS_API std::string formatGpuGiB(size_t bytes);
     // Localization keys naming the source of the process and device readings.
     LFS_VIS_API const char* gpuProcessMemoryTooltipKey(const GpuMemoryInfo& info);

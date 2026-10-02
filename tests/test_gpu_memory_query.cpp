@@ -93,7 +93,7 @@ namespace {
         constexpr std::size_t GiB = std::size_t{1} << 30;
         using lfs::vis::gui::selectUnifiedGpuMemory;
 
-        // Other GPU clients bind first: 28 GiB working set, 10 GiB allocated.
+        // Other GPU clients bind first: 28 GiB working set, 10 GiB in use.
         auto status = selectUnifiedGpuMemory(4 * GiB, 28 * GiB, 10 * GiB, 20 * GiB);
         EXPECT_TRUE(status.unified_memory);
         EXPECT_TRUE(status.process_valid);
@@ -106,7 +106,7 @@ namespace {
         status = selectUnifiedGpuMemory(4 * GiB, 28 * GiB, 10 * GiB, 3 * GiB);
         EXPECT_EQ(status.total_used, 25 * GiB);
 
-        // Allocation beyond the working set saturates.
+        // Usage beyond the working set saturates.
         status = selectUnifiedGpuMemory(4 * GiB, 28 * GiB, 40 * GiB, 20 * GiB);
         EXPECT_EQ(status.total_used, 28 * GiB);
 
