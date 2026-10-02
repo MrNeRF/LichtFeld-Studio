@@ -257,6 +257,7 @@ namespace lfs::vis {
         dataset_config_ = lfs::core::param::DatasetConfig{};
         dataset_config_.centralize_dataset = "off";
         dataset_config_.loading_params = lfs::core::param::LoadingParams{};
+        server_config_ = lfs::core::param::ServerConfig{};
         export_formats_.clear();
         dirty_.store(false, std::memory_order_release);
     }
@@ -303,6 +304,7 @@ namespace lfs::vis {
 
         // Apply CLI overrides to dataset config
         const auto& ds = params.dataset;
+        server_config_ = params.server;
         if (ds.resize_factor > 0)
             dataset_config_.resize_factor = ds.resize_factor;
         if (ds.max_width >= 0)
@@ -351,29 +353,16 @@ namespace lfs::vis {
     }
 
     std::expected<void, std::string> ParameterManager::importConfigFile(const std::filesystem::path& path, const bool import_dataset) {
-        lfs::core::param::ExplicitTrainingOverrides overrides;
-        auto optimization = lfs::core::param::read_optim_params_from_json(path, overrides);
-        if (!optimization)
-            return std::unexpected(optimization.error());
+        const auto defaults = createForDataset(dataset_config_.data_path, dataset_config_.output_path);
+        auto candidate = lfs::core::param::read_training_parameters_from_json(path, defaults);
+        if (!candidate)
+            return std::unexpected(candidate.error());
 
-        lfs::core::param::TrainingParameters candidate;
-        candidate.dataset = dataset_config_;
-        try {
-            if (import_dataset) {
-                overrides.optimization_json.clear();
-                lfs::core::param::apply_explicit_training_overrides(candidate, overrides);
-                if (auto error = candidate.dataset.validate(); !error.empty())
-                    return std::unexpected("Invalid dataset parameters: " + error);
-            }
-        } catch (const std::exception& e) {
-            return std::unexpected(std::string("Error parsing dataset parameters: ") + e.what());
-        }
-
-        // Validate the entire import before changing either set of parameters.
-        optimization->apply_step_scaling();
-        importParams(*optimization);
-        if (import_dataset)
-            dataset_config_ = std::move(candidate.dataset);
+        if (!import_dataset)
+            candidate->dataset = dataset_config_;
+        // The upstream parser validates the entire configuration before applying it.
+        candidate->optimization.apply_step_scaling();
+        importTrainingParams(*candidate);
         markDirty();
         return {};
     }
@@ -408,6 +397,7 @@ namespace lfs::vis {
         }
 
         dataset_config_ = params.dataset;
+        server_config_ = params.server;
         export_formats_ = params.export_formats;
         dirty_.store(false, std::memory_order_release);
 
@@ -462,6 +452,7 @@ namespace lfs::vis {
         params.dataset = dataset_config_;
         params.dataset.data_path = data_path;
         params.dataset.output_path = output_path;
+        params.server = server_config_;
         params.export_formats = export_formats_;
         return params;
     }

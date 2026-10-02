@@ -813,6 +813,68 @@ namespace lfs::core {
             return read_optim_params_from_json(path, unused);
         }
 
+        std::expected<TrainingParameters, std::string> read_training_parameters_from_json(
+            const std::filesystem::path& path,
+            const TrainingParameters& defaults) {
+            auto json_result = read_json_file(path);
+            if (!json_result) {
+                return std::unexpected(json_result.error());
+            }
+
+            const auto& json = *json_result;
+            const auto& opt_json = json.contains("optimization") ? json["optimization"] : json;
+            if (!opt_json.is_object()) {
+                return std::unexpected("Optimization parameters must be a JSON object");
+            }
+
+            try {
+                TrainingParameters params = defaults;
+                params.optimization = OptimizationParameters::mrnf_defaults();
+                if (opt_json.contains("strategy")) {
+                    const auto strategy = opt_json.at("strategy").get<std::string>();
+                    const auto canonical = canonical_strategy_name(strategy);
+                    if (!canonical.empty()) {
+                        params.optimization = OptimizationParameters::defaults_for_strategy(canonical);
+                    }
+                }
+                apply_optimization_json_overlay(params.optimization, opt_json, true);
+
+                if (json.contains("dataset")) {
+                    if (!json["dataset"].is_object()) {
+                        return std::unexpected("Dataset parameters must be a JSON object");
+                    }
+                    apply_dataset_json_overlay(params.dataset, json["dataset"]);
+                }
+                if (json.contains("server")) {
+                    if (!json["server"].is_object()) {
+                        return std::unexpected("Server parameters must be a JSON object");
+                    }
+                    const auto& server_json = json["server"];
+                    if (server_json.contains("tcp_server_connection_port")) {
+                        params.server.tcp_server_connection_port =
+                            server_json["tcp_server_connection_port"].get<int>();
+                    }
+                    if (server_json.contains("tcp_broadcast_connection_port")) {
+                        params.server.tcp_broadcast_connection_port =
+                            server_json["tcp_broadcast_connection_port"].get<int>();
+                    }
+                    if (server_json.contains("tcp_connection")) {
+                        params.server.tcp_connection = server_json["tcp_connection"].get<bool>();
+                    }
+                }
+
+                if (const auto error = params.optimization.validate(); !error.empty()) {
+                    return std::unexpected("Invalid optimization parameters: " + error);
+                }
+                if (const auto error = params.dataset.validate(); !error.empty()) {
+                    return std::unexpected("Invalid dataset parameters: " + error);
+                }
+                return params;
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format("Error parsing training parameters: {}", e.what()));
+            }
+        }
+
         std::expected<void, std::string> save_training_parameters_to_json(
             const TrainingParameters& params,
             const std::filesystem::path& output_path) {
@@ -932,6 +994,7 @@ namespace lfs::core {
             json["loading_params"] = loading_params.to_json();
             json["invert_masks"] = invert_masks;
             json["mask_threshold"] = mask_threshold;
+            json["centralize_dataset"] = centralize_dataset;
             if (!output_name.empty())
                 json["output_name"] = output_name;
 
@@ -972,6 +1035,9 @@ namespace lfs::core {
             }
             if (j.contains("mask_threshold")) {
                 dataset.mask_threshold = j["mask_threshold"].get<float>();
+            }
+            if (j.contains("centralize_dataset")) {
+                dataset.centralize_dataset = j["centralize_dataset"].get<std::string>();
             }
 
             return dataset;

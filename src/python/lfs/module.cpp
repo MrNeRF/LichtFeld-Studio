@@ -2166,9 +2166,11 @@ NB_MODULE(lichtfeld, m) {
                 throw std::runtime_error("No parameter manager available");
             }
             lfs::core::param::TrainingParameters params;
-            const lfs::python::PyDatasetConfig dataset_params;
-            params.dataset = dataset_params.has_params() ? dataset_params.params() : param_manager->getDatasetConfig();
-            params.optimization = param_manager->copyActiveParams();
+            if (auto* const trainer_manager = lfs::python::get_trainer_manager()) {
+                params = trainer_manager->getEditableTrainingParams(*param_manager);
+            } else {
+                params = param_manager->createForDataset({}, {});
+            }
             if (const auto result = lfs::core::param::save_training_parameters_to_json(params, output_path); !result) {
                 throw std::runtime_error("Failed to save config: " + result.error());
             }
