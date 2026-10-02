@@ -156,7 +156,7 @@ namespace lfs::io {
 #if defined(__APPLE__)
                     if (destination_backend && lfs::core::gpu_backend_of(shN) &&
                         lfs::core::gpu_backend_of(shN) != destination_backend)
-                        shN = lfs::core::internal::copy_to_backend(shN, *destination_backend);
+                        shN = shN.to(*destination_backend);
 #endif
                 } else {
                     shN = copy_to_allocator(shN_src, "SplatData.shN");
