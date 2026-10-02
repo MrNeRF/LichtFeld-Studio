@@ -2486,14 +2486,14 @@ class OptimizationParams:
 
     @property
     def undistort(self) -> bool:
-        """Undistort images on-the-fly before training"""
+        """Remove lens distortion before training: each image and its mask, depth and normal map are resampled once from full resolution into a distortion-free pinhole camera, which training then uses. Alternative to --gut for distorted or non-pinhole cameras"""
 
     @undistort.setter
     def undistort(self, arg: bool, /) -> None: ...
 
     @property
     def eval_space(self) -> EvalSpace:
-        """Reference image space used for evaluation"""
+        """Reference images for evaluation with --undistort: distorted = the original images, with the render warped into the original lens; undistorted = the undistorted training images"""
 
     @eval_space.setter
     def eval_space(self, arg: EvalSpace, /) -> None: ...
