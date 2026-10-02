@@ -310,6 +310,36 @@ namespace {
 
 } // namespace
 
+// Catches a fixed sample lattice aliasing under strong minification: with eight samples per axis over
+// 32 source pixels, every sample lands on the same phase of a four-pixel stripe pattern.
+TEST(UndistortResampling, StrongMinificationAveragesTheWholeFootprint) {
+    constexpr int source_width = 512;
+    constexpr int source_height = 64;
+    constexpr int factor = 32;
+    UndistortParams params{};
+    params.model_type = CameraModelType::PINHOLE;
+    params.src_width = source_width;
+    params.src_height = source_height;
+    params.src_fx = params.src_fy = 400.0f;
+    params.src_cx = 0.5f * source_width;
+    params.src_cy = 0.5f * source_height;
+    params.dst_width = source_width / factor;
+    params.dst_height = source_height / factor;
+    params.dst_fx = params.dst_fy = params.src_fx / factor;
+    params.dst_cx = params.src_cx / factor;
+    params.dst_cy = params.src_cy / factor;
+
+    std::vector<float> stripes(static_cast<size_t>(source_width) * source_height);
+    for (size_t i = 0; i < stripes.size(); ++i)
+        stripes[i] = (i % 4 == 1 || i % 4 == 2) ? 1.0f : 0.0f;
+    const auto input = Tensor::from_vector(
+        stripes, {1, static_cast<size_t>(source_height), static_cast<size_t>(source_width)}, Device::CUDA);
+    const auto output = undistort_image(input, params, nullptr).cpu().contiguous();
+    ASSERT_EQ(output.numel(), static_cast<size_t>(params.dst_width * params.dst_height));
+    const float* const values = output.ptr<float>();
+    for (size_t i = 0; i < output.numel(); ++i)
+        EXPECT_NEAR(values[i], 0.5f, 0.02f) << i;
+}
 TEST(UndistortResampling, MatchesEightByEightOracle) {
     const auto native = compute_undistort_params(
         187.5f, 187.5f, 96.0f, 54.0f, 192, 108,

@@ -319,6 +319,9 @@ namespace lfs::core {
           _FoVy(other._FoVy) {
         _world_view_transform = transform;
         _sfm_observations = other._sfm_observations;
+        _undistort_precomputed = other._undistort_precomputed;
+        _undistort_prepared = other._undistort_prepared;
+        _undistort_params = other._undistort_params;
 
         // Non-blocking so image loading doesn't serialize with the legacy stream.
         // On failure fall back to the default stream rather than a bad handle.

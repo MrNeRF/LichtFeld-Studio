@@ -102,7 +102,7 @@ namespace fast_lfs::rasterization {
         unsigned int sh_value_n_cells = 0,
         unsigned int sh_value_bits = 0, // 0=fp32, 16=q16(+bounds) or IEEE f16
         float* max_screen_share_ptr = nullptr,
-        float mip_filter_dilation = 0.1f);
+        float dilation_scale = 1.0f);
 
     void release_forward_context(const ForwardContext& forward_ctx);
 
