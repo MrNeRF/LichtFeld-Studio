@@ -189,7 +189,6 @@ jobs:
       DISPLAY: :92
       LFS_MCP_PORT: 45692
       LFS_RENDER_IDLE_MANIFEST: ${{ vars.LFS_RENDER_IDLE_MANIFEST }}
-      LFS_RENDER_IDLE_SHOTS: ${{ runner.temp }}/render-on-demand-shots
       LFS_EXECUTABLE: ${{ github.workspace }}/build/LichtFeld-Studio
       LFS_TEST_BUILD_DIR: ${{ github.workspace }}/build
     steps:
@@ -210,6 +209,8 @@ jobs:
             done
           fi
       - name: Run render-on-demand GPU idle test
+        env:
+          LFS_RENDER_IDLE_SHOTS: ${{ runner.temp }}/render-on-demand-shots
         run: |
           test -n "$LFS_RENDER_IDLE_MANIFEST"
           build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m pytest \
