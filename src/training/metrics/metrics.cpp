@@ -1019,21 +1019,21 @@ namespace lfs::training {
                                                 : 1.0f;
 
             float psnr = 0.0f;
-            std::optional<float> ssim;
+            float ssim = 0.0f;
             try {
                 psnr = _psnr_metric->compute(r_output.image, gt_image, mask);
-                const bool require_complete_windows = erode_ssim_mask && mask.is_valid();
-                const auto ssim_mask = require_complete_windows
-                                           ? lfs::training::erode_metrics_mask(
-                                                 mask, 5, r_output.image.stream())
-                                           : mask;
-                if (!require_complete_windows ||
-                    ssim_mask.to(lfs::core::DataType::Float32).sum().item<float>() > 0.0f) {
-                    ssim = _ssim_metric->compute(r_output.image, gt_image, ssim_mask);
-                } else {
-                    LOG_WARN("Eval: SSIM unavailable for camera '{}' (no complete SSIM window inside the evaluated pixels)",
-                             cam->image_name());
+                auto ssim_mask = mask;
+                if (erode_ssim_mask && mask.is_valid()) {
+                    auto complete_windows = lfs::training::erode_metrics_mask(
+                        mask, 5, r_output.image.stream());
+                    if (complete_windows.to(lfs::core::DataType::Float32).sum().item<float>() > 0.0f) {
+                        ssim_mask = std::move(complete_windows);
+                    } else {
+                        LOG_WARN("Eval: camera '{}' has no complete SSIM window inside the evaluated pixels; SSIM includes partial windows",
+                                 cam->image_name());
+                    }
                 }
+                ssim = _ssim_metric->compute(r_output.image, gt_image, ssim_mask);
             } catch (const std::exception& e) {
                 LOG_WARN("Eval: skipping camera '{}' (metric computation failed: {})", cam->image_name(), e.what());
                 view.skipped_reason = std::string("metric computation failed: ") + e.what();
@@ -1041,17 +1041,16 @@ namespace lfs::training {
                 continue;
             }
 
-            if (!std::isfinite(psnr) || (ssim && !std::isfinite(*ssim))) {
+            if (!std::isfinite(psnr) || !std::isfinite(ssim)) {
                 LOG_WARN("Eval: skipping camera '{}' (non-finite metric values: PSNR={}, SSIM={})",
-                         cam->image_name(), psnr, ssim.value_or(0.0f));
+                         cam->image_name(), psnr, ssim);
                 view.skipped_reason = "non-finite metric values";
                 skipped_images++;
                 continue;
             }
 
             psnr_values.push_back(psnr);
-            if (ssim)
-                ssim_values.push_back(*ssim);
+            ssim_values.push_back(ssim);
             view.psnr = psnr;
             view.ssim = ssim;
             view.masked = mask.is_valid();
@@ -1305,8 +1304,6 @@ namespace lfs::training {
         // Compute averages
         if (!psnr_values.empty()) {
             result.psnr = std::accumulate(psnr_values.begin(), psnr_values.end(), 0.0f) / psnr_values.size();
-        }
-        if (!ssim_values.empty()) {
             result.ssim = std::accumulate(ssim_values.begin(), ssim_values.end(), 0.0f) / ssim_values.size();
         }
         result.lpips = mean_of_finite(lpips_values);

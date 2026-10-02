@@ -309,9 +309,9 @@ TEST(UndistortInverse, HighResolutionValidityHasNoInteriorHoles) {
     EXPECT_EQ(mask[(EVAL_HEIGHT / 2) * EVAL_WIDTH + EVAL_WIDTH / 2], 1);
 }
 
-// A wide-angle fisheye ray needs Newton steps longer than the step limit; damping the step
-// must still reach the root instead of rejecting a pixel that maps well inside the frame.
-TEST(UndistortInverse, FisheyeLongStepsAreDampedNotRejected) {
+// Wide-angle fisheye rays map to huge pinhole radii (r = tan(theta)); a solver that walks there
+// in the image plane with bounded steps rejects them although they land inside the frame.
+TEST(UndistortInverse, WideAngleFisheyeRaysAreInverted) {
     UndistortParams params{};
     params.model_type = CameraModelType::FISHEYE;
     params.src_fx = params.src_fy = 100.0f;
@@ -319,7 +319,6 @@ TEST(UndistortInverse, FisheyeLongStepsAreDampedNotRejected) {
     params.src_cy = 0.5f;
     params.src_width = 4096;
     params.src_height = 1;
-    params.dst_fx = params.dst_fy = 100.0f;
     params.dst_cx = 1024.0f;
     params.dst_cy = 0.5f;
     params.dst_width = 2048;
@@ -329,17 +328,19 @@ TEST(UndistortInverse, FisheyeLongStepsAreDampedNotRejected) {
     for (int x = 0; x < 2048; ++x)
         coordinates[x] = static_cast<float>(x);
     const auto input = Tensor::from_vector(coordinates, TensorShape({3, 1, 2048}), Device::CUDA);
-    Tensor validity;
-    const auto output = distort_image_to_source(input, params, validity, nullptr);
 
-    constexpr int SOURCE_X = 2193;
-    const float xd = (SOURCE_X + 0.5f - params.src_cx) / params.src_fx;
-    const float expected_x = std::tan(xd) * params.dst_fx + params.dst_cx - 0.5f;
-    ASSERT_LT(expected_x, static_cast<float>(params.dst_width - 1));
-    const auto valid = validity.cpu().contiguous();
-    const auto mapped = output.cpu().contiguous();
-    EXPECT_EQ(valid.ptr<uint8_t>()[SOURCE_X], 1);
-    EXPECT_NEAR(mapped.ptr<float>()[SOURCE_X], expected_x, 0.05f);
+    for (const auto& [focal, source_x] : {std::pair{100.0f, 2193}, std::pair{10.0f, 2203}}) {
+        params.dst_fx = params.dst_fy = focal;
+        Tensor validity;
+        const auto output = distort_image_to_source(input, params, validity, nullptr);
+        const float xd = (source_x + 0.5f - params.src_cx) / params.src_fx;
+        const float expected_x = std::tan(xd) * focal + params.dst_cx - 0.5f;
+        ASSERT_LT(expected_x, static_cast<float>(params.dst_width - 1));
+        const auto valid = validity.cpu().contiguous();
+        const auto mapped = output.cpu().contiguous();
+        EXPECT_EQ(valid.ptr<uint8_t>()[source_x], 1) << "focal " << focal;
+        EXPECT_NEAR(mapped.ptr<float>()[source_x], expected_x, 0.05f) << "focal " << focal;
+    }
 }
 
 // ====================== Coefficient packing tests ======================

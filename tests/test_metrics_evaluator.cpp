@@ -588,9 +588,9 @@ TEST(MetricsEvaluatorUndistort, SharedPreparationMatchesCachedInteractiveInputsI
     std::filesystem::remove_all(tmp);
 }
 
-// A keep-mask narrower than the 11x11 SSIM window has no complete window after erosion;
-// the view must keep its PSNR instead of being dropped from every aggregate.
-TEST(MetricsEvaluatorUndistort, ThinMaskKeepsPsnrWithoutSsim) {
+// A keep-mask narrower than the 11x11 SSIM window has no complete window after erosion; the
+// view must stay measured (SSIM over partial windows) instead of being dropped or reported as 0.
+TEST(MetricsEvaluatorUndistort, ThinMaskFallsBackToPartialSsimWindows) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
     }
@@ -631,7 +631,9 @@ TEST(MetricsEvaluatorUndistort, ThinMaskKeepsPsnrWithoutSsim) {
     EXPECT_TRUE(view.masked);
     ASSERT_TRUE(view.psnr.has_value());
     EXPECT_NEAR(*view.psnr, 20.0f * std::log10(255.0f / 2.0f), 0.01f);
-    EXPECT_FALSE(view.ssim.has_value());
+    ASSERT_TRUE(view.ssim.has_value());
+    EXPECT_GT(*view.ssim, 0.0f);
+    EXPECT_FLOAT_EQ(metrics.ssim, *view.ssim);
 
     std::filesystem::remove_all(tmp);
 }

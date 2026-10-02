@@ -267,11 +267,55 @@ namespace lfs::core {
                 bilinear_sample(src, params.src_width, params.src_height, params.src_width, sx, sy);
         }
 
+        // The fisheye radial model is one-dimensional in the incidence angle: solving it in theta
+        // stays well conditioned up to the angle limit, where Newton in the image plane cannot reach
+        // the root because r = tan(theta) grows without bound.
+        __device__ bool inverse_fisheye_radial(
+            const float xd, const float yd, const float* __restrict__ dist,
+            float& ux, float& uy) {
+            const float theta_d = sqrtf(xd * xd + yd * yd);
+            if (theta_d < 1e-8f) {
+                ux = xd;
+                uy = yd;
+                return true;
+            }
+            float theta = fminf(theta_d, MAX_FISHEYE_THETA);
+            for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
+                const float theta2 = theta * theta;
+                const float theta4 = theta2 * theta2;
+                const float theta6 = theta4 * theta2;
+                const float theta8 = theta4 * theta4;
+                const float residual = theta * (1.0f + dist[0] * theta2 + dist[1] * theta4 +
+                                                dist[2] * theta6 + dist[3] * theta8) -
+                                       theta_d;
+                const float slope = 1.0f + 3.0f * dist[0] * theta2 + 5.0f * dist[1] * theta4 +
+                                    7.0f * dist[2] * theta6 + 9.0f * dist[3] * theta8;
+                if (!isfinite(residual) || !isfinite(slope) || fabsf(slope) < NEWTON_EPSILON)
+                    return false;
+                const float step = residual / slope;
+                theta -= step;
+                if (fabsf(step) < 1e-7f)
+                    break;
+            }
+            if (!(theta > 0.0f) || theta >= MAX_FISHEYE_THETA)
+                return false;
+            const float scale = tanf(theta) / theta_d;
+            ux = xd * scale;
+            uy = yd * scale;
+            return true;
+        }
+
         __device__ bool inverse_distortion(
             const float xd, const float yd, const UndistortParams& params,
             float& ux, float& uy) {
-            ux = xd;
-            uy = yd;
+            if (params.model_type == CameraModelType::FISHEYE ||
+                params.model_type == CameraModelType::THIN_PRISM_FISHEYE) {
+                if (!inverse_fisheye_radial(xd, yd, params.distortion, ux, uy))
+                    return false;
+            } else {
+                ux = xd;
+                uy = yd;
+            }
 
             float previous_error_px = INFINITY;
             for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
@@ -1073,8 +1117,8 @@ namespace lfs::core {
         nvtxRangePush("distort_image_to_source");
 
         const CUDAStreamGuard stream_guard(stream);
-        src.sync_to_stream(stream);
         const auto input = src.contiguous();
+        input.sync_to_stream(stream);
         const int channels = static_cast<int>(input.shape()[0]);
         auto dst = Tensor::empty(
             {static_cast<size_t>(channels), static_cast<size_t>(params.src_height),
