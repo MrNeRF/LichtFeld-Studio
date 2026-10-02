@@ -13,6 +13,7 @@
 #include "core/event_bridge/control_boundary.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
@@ -1543,3 +1544,82 @@ namespace {
     // The real viewer registers the manager used by the compiled binding.
     // No window loop or SelectionTool is initialized: this is its no-tool lane.
 } // namespace
+// NOTE: Tests that actually execute Python scripts require the lichtfeld module
+// to be importable, which depends on the CommandCenter and training infrastructure.
+// These are better tested via integration tests (running training with --python-script).
+
+TEST_F(PythonIntegrationTest, LoadConfirmationLegacyCallbackOpensDialog) {
+    const lfs::python::GilAcquire gil;
+    std::unique_ptr<PyObject, decltype(&Py_DecRef)> globals(PyDict_New(), Py_DecRef);
+    ASSERT_NE(globals, nullptr);
+    PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
+    const auto run = [&](const char* code) {
+        auto* result = PyRun_String(code, Py_file_input, globals.get(), globals.get());
+        if (!result)
+            ADD_FAILURE() << consumePythonError();
+        const bool success = result != nullptr;
+        Py_XDECREF(result);
+        return success;
+    };
+    ASSERT_TRUE(run(R"PY(
+import lichtfeld as lf
+calls = []
+dialogs = []
+original_dialog = lf.ui.confirm_dialog
+lf.ui.confirm_dialog = lambda *args: dialogs.append(args)
+def callback(paths, is_dataset, replace):
+    calls.append((paths, is_dataset, replace))
+    lf.ui.confirm_dialog('Load files', 'Confirm replacement', ['Load', 'Cancel'])
+lf.ui.on_show_load_file_confirmation(callback)
+)PY"));
+    lfs::core::events::cmd::ShowLoadFileConfirmation{
+        .paths = {"first.ply", "second.ply"},
+        .is_dataset = false,
+        .replace = true,
+        .user_batch = true}
+        .emit();
+    EXPECT_TRUE(run(R"PY(
+try:
+    assert calls == [(['first.ply', 'second.ply'], False, True)], calls
+    assert dialogs == [('Load files', 'Confirm replacement', ['Load', 'Cancel'])], dialogs
+finally:
+    lf.ui.on_show_load_file_confirmation(lambda paths, is_dataset, replace: None)
+    lf.ui.confirm_dialog = original_dialog
+)PY"));
+}
+
+TEST_F(PythonIntegrationTest, LoadConfirmationBatchCallbackRetainsProvenance) {
+    const lfs::python::GilAcquire gil;
+    std::unique_ptr<PyObject, decltype(&Py_DecRef)> globals(PyDict_New(), Py_DecRef);
+    ASSERT_NE(globals, nullptr);
+    PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
+    const auto run = [&](const char* code) {
+        auto* result = PyRun_String(code, Py_file_input, globals.get(), globals.get());
+        if (!result)
+            ADD_FAILURE() << consumePythonError();
+        const bool success = result != nullptr;
+        Py_XDECREF(result);
+        return success;
+    };
+    ASSERT_TRUE(run(R"PY(
+import lichtfeld as lf
+calls = []
+lf.ui.on_show_load_file_confirmation(lambda *args: calls.append(('old', args)))
+def callback(paths, is_dataset, replace, user_batch):
+    calls.append((paths, is_dataset, replace, user_batch))
+lf.ui.on_show_load_file_confirmation_with_batch(callback)
+lf.ui.on_show_load_file_confirmation_with_batch(callback)
+)PY"));
+    lfs::core::events::cmd::ShowLoadFileConfirmation{
+        .paths = {"first.ply", "second.ply"},
+        .is_dataset = false,
+        .replace = true,
+        .user_batch = true}
+        .emit();
+    EXPECT_TRUE(run(R"PY(
+try:
+    assert calls == [(['first.ply', 'second.ply'], False, True, True)], calls
+finally:
+    lf.ui.on_show_load_file_confirmation_with_batch(lambda paths, is_dataset, replace, user_batch: None)
+)PY"));
+}

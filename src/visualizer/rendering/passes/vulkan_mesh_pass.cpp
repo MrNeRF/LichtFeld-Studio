@@ -13,6 +13,7 @@
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_result.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <format>
@@ -23,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <vk_mem_alloc.h>
 
@@ -1969,6 +1971,11 @@ namespace lfs::vis {
         if (!impl_)
             return;
         impl_->prepare(context, params);
+    }
+
+    void VulkanMeshPass::discardImport(uint64_t mesh_id) {
+        if (impl_ && impl_->assets)
+            impl_->assets->discardImportMesh(mesh_id);
     }
 
     void VulkanMeshPass::record(VkCommandBuffer command_buffer, VkRect2D viewport_rect,

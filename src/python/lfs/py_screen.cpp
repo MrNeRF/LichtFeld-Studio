@@ -434,8 +434,8 @@ namespace lfs::python {
                     },
                     nlohmann::json::object())));
                 if (out.contains("translation")) {
-                    out["translation"] = nb::tuple(out["translation"]);
-                    out["pivot"] = nb::tuple(out["pivot"]);
+                    out["translation"] = nb::tuple(nb::borrow<nb::object>(out["translation"]));
+                    out["pivot"] = nb::tuple(nb::borrow<nb::object>(out["pivot"]));
                 }
                 return out;
             },

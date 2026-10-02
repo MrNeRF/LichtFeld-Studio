@@ -35,6 +35,7 @@
 #include <format>
 #include <glm/glm.hpp>
 #include <string_view>
+#include <utility>
 
 namespace lfs::vis::gui {
 
@@ -685,6 +686,16 @@ namespace lfs::vis::gui {
         if (!menu_items_ || !document_)
             return;
 
+        if (rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }, isOpen()))
+            return;
+        for (const auto& event : input.input_events) {
+            if (event.kind == FrameInputEventKind::KeyDown && event.scancode == SDL_SCANCODE_ESCAPE && isOpen()) {
+                closeDropdown();
+                if (event.dispatch)
+                    event.dispatch->consumed = true;
+                return;
+            }
+        }
         wants_input_ = false;
         if (rml_manager_)
             rml_manager_->trackContextFrame(rml_context_, 0, 0);
@@ -848,6 +859,7 @@ namespace lfs::vis::gui {
     void RmlMenuBar::openDropdown(int index) {
         assert(index >= 0 && index < static_cast<int>(current_idnames_.size()));
 
+        rml_manager_->activateInput(rml_context_, [this](const PanelInputState& event) { processInput(event); });
         open_menu_index_ = index;
         open_submenu_index_ = -1;
         open_child_submenu_index_ = -1;
@@ -882,6 +894,7 @@ namespace lfs::vis::gui {
 
     void RmlMenuBar::closeDropdown() {
         open_menu_index_ = -1;
+        rml_manager_->deactivateInput(rml_context_, true);
         open_submenu_index_ = -1;
         open_child_submenu_index_ = -1;
         open_menu_idname_.clear();

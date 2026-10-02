@@ -132,7 +132,7 @@ namespace lfs::vis::gui {
 
     inline Rml::Input::KeyIdentifier sdlScancodeToRml(SDL_Scancode sc) {
         // Shortcut and navigation keys should be layout-independent. Text entry
-        // still comes from SDL text events through text_codepoints.
+        // still comes from SDL text events through the ordered input stream.
         // clang-format off
         switch (sc) {
         case SDL_SCANCODE_ESCAPE:          return Rml::Input::KI_ESCAPE;

@@ -10,6 +10,7 @@
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "screen/screen_service.hpp"
+#include <array>
 #include <gtest/gtest.h>
 
 namespace lfs::vis {

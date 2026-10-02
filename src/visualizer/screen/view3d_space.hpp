@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
 #include "screen/editor_type.hpp"
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -57,10 +59,10 @@ namespace lfs::vis::screen {
     // Returns false for commands it does not know.
     bool applyViewCommand(View3DSpace& view, std::string_view command, float viewport_height);
 
-    [[nodiscard]] nlohmann::json viewSettingsToJson(const ViewSettings& settings);
+    [[nodiscard]] LFS_VIS_API nlohmann::json viewSettingsToJson(const ViewSettings& settings);
     // Fields missing from `json` keep their value from `base`; present fields
     // must be valid or the whole read fails.
-    [[nodiscard]] std::optional<ViewSettings> viewSettingsFromJson(const nlohmann::json& json,
-                                                                   const ViewSettings& base);
+    [[nodiscard]] LFS_VIS_API std::optional<ViewSettings> viewSettingsFromJson(const nlohmann::json& json,
+                                                                               const ViewSettings& base);
 
 } // namespace lfs::vis::screen

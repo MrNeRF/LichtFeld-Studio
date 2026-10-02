@@ -895,6 +895,10 @@ namespace {
 
 } // namespace
 
+std::expected<void, std::string> lfs::python::clear_application_scene() {
+    return clear_scene_from_python();
+}
+
 NB_MODULE(lichtfeld, m) {
     m.doc() = "LichtFeld Python control module for Gaussian splatting";
 
@@ -1976,6 +1980,30 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("discard_changes") = false,
         nb::arg("replace") = false,
         "Load a file (PLY, checkpoint) or dataset into the scene.");
+
+    m.def(
+        "load_files",
+        [](const std::vector<std::string>& paths, bool stop_training,
+           bool discard_changes, bool replace, bool user_batch) {
+            if (paths.empty())
+                throw std::invalid_argument("No files were provided");
+            lfs::core::events::cmd::LoadFile command{
+                .path = python_utf8_path(paths.front()),
+                .is_dataset = false,
+                .stop_training = stop_training,
+                .discard_changes = discard_changes,
+                .replace = replace,
+                .user_batch = user_batch && paths.size() > 1};
+            for (const auto& path : paths)
+                command.paths.push_back(python_utf8_path(path));
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled("python.load_files",
+                                       [command = std::move(command)] { command.emit(); });
+        },
+        nb::arg("paths"), nb::arg("stop_training") = false,
+        nb::arg("discard_changes") = false, nb::arg("replace") = false,
+        nb::arg("_user_batch") = false,
+        "Import splat and mesh files as one ordered batch.");
 
     m.def(
         "load_config_file",

@@ -6,6 +6,7 @@
 
 #include "screen/screen.hpp"
 
+#include <cstdint>
 #include <optional>
 
 // Pointer gestures on the screen's chrome:

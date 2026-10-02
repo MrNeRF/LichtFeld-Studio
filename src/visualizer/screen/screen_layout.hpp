@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include <array>
 #include <compare>
 #include <cstdint>
@@ -103,7 +104,7 @@ namespace lfs::vis::screen {
         [[nodiscard]] const DividerGeometry* dividerAt(float x, float y, float slop) const;
     };
 
-    class ScreenLayout {
+    class LFS_VIS_API ScreenLayout {
     public:
         struct Node {
             SplitId split; // valid for split nodes

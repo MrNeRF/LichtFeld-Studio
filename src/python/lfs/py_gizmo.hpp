@@ -6,6 +6,7 @@
 
 #include "gui/line_renderer.hpp"
 
+#include <cstdint>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>

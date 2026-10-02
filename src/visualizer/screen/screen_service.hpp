@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <core/export.hpp>
+#include <cstdint>
 #include <mutex>
 #include <utility>
 

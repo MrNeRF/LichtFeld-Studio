@@ -3151,5 +3151,11 @@
   "view3d.coordinate_axes": "좌표축",
   "view3d.pivot_point": "피벗 포인트",
   "view3d.camera_frustums": "카메라 절두체",
-  "ui.split_viewport": "뷰 분할"
+  "ui.split_viewport": "뷰 분할",
+  "runtime.import_batch_failed.one": "파일 {}개를 불러오지 못했습니다",
+  "runtime.import_batch_failed.few": "파일 {}개를 불러오지 못했습니다",
+  "runtime.import_batch_failed.other": "파일 {}개를 불러오지 못했습니다",
+  "runtime.import_out_of_memory": "GPU 메모리가 부족합니다",
+  "runtime.import_batch_kept": "나머지 파일은 불러왔으며 장면에서 계속 사용할 수 있습니다.",
+  "runtime.import_render_failed": "이 파일을 렌더링할 준비를 하지 못했습니다"
 }

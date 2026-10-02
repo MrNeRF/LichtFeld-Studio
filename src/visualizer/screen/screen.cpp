@@ -10,6 +10,7 @@
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <utility>
 
 namespace lfs::vis::screen {
 

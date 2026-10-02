@@ -9,6 +9,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_input.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
+#include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_pointer_dispatch.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
@@ -284,9 +285,13 @@ namespace lfs::vis::gui {
 
     void RmlProgressOverlay::processInput(const PanelInputState& input, const bool blocked) {
         if (blocked || !isVisible() || !rml_context_ || !elements_cached_) {
+            if (rml_manager_ && rml_context_)
+                rml_manager_->deactivateInput(rml_context_);
             cancelPointerInput();
             return;
         }
+        if (rml_manager_ && rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event, false); }, true))
+            return;
         if (rml_manager_)
             rml_manager_->trackContextFrame(rml_context_, 0, 0);
 
@@ -333,20 +338,8 @@ namespace lfs::vis::gui {
             render_needed_ = true;
         }
 
-        for (const int scancode : input.keys_pressed) {
-            const auto key = sdlScancodeToRml(static_cast<SDL_Scancode>(scancode));
-            if (key != Rml::Input::KI_UNKNOWN) {
-                rml_context_->ProcessKeyDown(key, mods);
-                render_needed_ = true;
-            }
-        }
-        for (const int scancode : input.keys_released) {
-            const auto key = sdlScancodeToRml(static_cast<SDL_Scancode>(scancode));
-            if (key != Rml::Input::KI_UNKNOWN) {
-                rml_context_->ProcessKeyUp(key, mods);
-                render_needed_ = true;
-            }
-        }
+        for (const auto& event : input.input_events)
+            render_needed_ |= rml_input::processKeyboardEvent(*rml_context_, event, rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr);
     }
 
     void RmlProgressOverlay::render(int screen_w, int screen_h,

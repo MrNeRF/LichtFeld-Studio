@@ -4960,32 +4960,15 @@ namespace lfs::vis {
 
         // Deleted splats are skipped by the projection and selection shaders through
         // the mask, so opacity binds unchanged. A ByteAddressBuffer needs a multiple
-        // of 4 bytes; any other mask length binds from a padded per-slot copy.
+        // of 4 bytes and Vulkan-visible storage; otherwise bind a per-slot copy.
         const std::size_t deleted_mask_bytes = (n + 3u) & ~std::size_t{3u};
         Tensor deleted_for_bind;
         auto& padded_mask = deleted_mask_copies_[ring_slot].padded_mask;
         if (bind_deleted) {
             try {
-                lfs::core::GpuBackendScope backend_scope(*input_backend);
-                deleted_for_bind = lfs::core::gpu_backend_of(deleted_input) == input_backend
-                                       ? deleted_input
-                                       : deleted_input.to(*input_backend);
-                if (deleted_mask_bytes != n) {
-                    const bool fresh = !padded_mask.is_valid() ||
-                                       static_cast<std::size_t>(padded_mask.numel()) != deleted_mask_bytes ||
-                                       lfs::core::gpu_backend_of(padded_mask) != input_backend;
-                    if (fresh) {
-                        padded_mask = context.tensorInterop().empty(
-                            {deleted_mask_bytes}, DataType::Bool, *input_backend);
-                        padded_mask.zero_();
-                    }
-                    if (fresh || input_upload_requested) {
-                        padded_mask.slice(0, 0, n).copy_(deleted_for_bind);
-                    }
-                    deleted_for_bind = padded_mask;
-                } else {
-                    padded_mask = {};
-                }
+                deleted_for_bind = vksplat::prepareDeletedMask(
+                    context.tensorInterop(), deleted_input, *input_backend,
+                    input_upload_requested, padded_mask);
             } catch (const std::exception& error) {
                 return std::unexpected(std::format(
                     "VkSplat failed to prepare the deleted mask: {}",

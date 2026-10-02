@@ -4,6 +4,7 @@
 
 #include "screen/screen_layout.hpp"
 
+#include <cmath>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 

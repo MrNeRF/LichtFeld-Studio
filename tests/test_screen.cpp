@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <utility>
 
 namespace lfs::vis::screen {
 
@@ -868,8 +869,8 @@ namespace lfs::vis::screen {
 
     TEST_F(GestureTest, SplitIsRefusedWhenTheAreaIsTooSmall) {
         const AreaId scene = screen->findEditor(editors::kScene);
-        const auto small = Rect{0.0f, 0.0f, 400.0f, 180.0f};
-        const auto g = screen->solve(small, kMetrics);
+        const auto small_rect = Rect{0.0f, 0.0f, 400.0f, 180.0f};
+        const auto g = screen->solve(small_rect, kMetrics);
         const Rect r = rectOf(g, scene);
         ASSERT_GT(r.w, 0.0f);
         if (!gestures.press(g, r.x + 2.0f, r.y + 2.0f, false))

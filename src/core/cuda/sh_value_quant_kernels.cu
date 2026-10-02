@@ -24,6 +24,20 @@ namespace lfs::core::sh_value_quant {
 
         constexpr int kThreads = 256;
 
+        // Canonical host serialization and combined-model encoding require
+        // identical rounding, including when the CUDA target enables fast math.
+        __device__ __forceinline__ float decode_host_rounded(const uint16_t q, const float lo, const float hi) {
+            float range, normalized, value;
+            const float code = static_cast<float>(q);
+            constexpr float inv_q = 1.0f / 65535.0f;
+            // Explicit RN PTX also avoids fast-math's FTZ modifier.
+            asm("sub.rn.f32 %0, %1, %2;" : "=f"(range) : "f"(hi), "f"(lo));
+            asm("mul.rn.f32 %0, %1, %2;" : "=f"(normalized) : "f"(code), "f"(inv_q));
+            // Same fused RN operation as __fmaf_rn, without fast-math FTZ.
+            asm("fma.rn.f32 %0, %1, %2, %3;" : "=f"(value) : "f"(range), "f"(normalized), "f"(lo));
+            return value;
+        }
+
         __device__ __forceinline__ std::uint32_t shAtF4(
             std::uint32_t p, std::uint32_t k, std::uint32_t slots) {
             constexpr std::uint32_t R = lfs::core::kShReorderSize;
@@ -188,7 +202,7 @@ namespace lfs::core::sh_value_quant {
             const auto cell = static_cast<std::uint32_t>(
                 canonical_index % floats_per_primitive);
             const float2 mm = bounds[primitive / 256u];
-            dst[output_index] = lfs::core::sh_value::DeviceCodec16::decode(
+            dst[output_index] = decode_host_rounded(
                 src_u16[lfs::core::sh_value::shAtU16(primitive, cell, n_cells_per_primitive)],
                 mm.x,
                 mm.y);
@@ -276,7 +290,8 @@ namespace lfs::core::sh_value_quant {
             std::uint32_t n_dst,
             std::uint32_t n_src,
             std::uint32_t slots_per_prim,
-            std::uint32_t n_cells_per_prim) {
+            std::uint32_t n_cells_per_prim,
+            bool match_cpu_rounding) {
             using DC = lfs::core::sh_value::DeviceCodec16;
             const std::uint32_t p_local = blockIdx.x * blockDim.x + threadIdx.x;
             if (p_local >= n_dst)
@@ -293,9 +308,13 @@ namespace lfs::core::sh_value_quant {
 
             const float2 mm = src_bounds[p_src / 256u];
             for (std::uint32_t c = 0; c < n_cells_per_prim; ++c) {
-                const float v = DC::decode(
-                    src_u16[lfs::core::sh_value::shAtU16(p_src, c, n_cells_per_prim)],
-                    mm.x, mm.y);
+                const auto q = src_u16[lfs::core::sh_value::shAtU16(p_src, c, n_cells_per_prim)];
+                float v;
+                if (match_cpu_rounding) {
+                    v = decode_host_rounded(q, mm.x, mm.y);
+                } else {
+                    v = DC::decode(q, mm.x, mm.y);
+                }
                 const std::uint32_t slot = c / 4u;
                 const std::uint32_t comp = c % 4u;
                 if (slot >= slots_per_prim)
@@ -730,7 +749,8 @@ namespace lfs::core::sh_value_quant {
         std::size_t n_dst,
         std::size_t n_src_primitives,
         std::uint32_t coeffs_rest,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        bool match_cpu_rounding) {
         if (n_dst == 0 || coeffs_rest == 0)
             return;
         if (!src_u16 || !src_bounds_float2 || !dst_float4_swizzled) {
@@ -748,7 +768,7 @@ namespace lfs::core::sh_value_quant {
             static_cast<std::uint32_t>(n_dst),
             static_cast<std::uint32_t>(n_src_primitives),
             slots,
-            n_cells);
+            n_cells, match_cpu_rounding);
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "decode_shN_u16_range_to_float4");
     }
 

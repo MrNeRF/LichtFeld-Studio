@@ -3151,5 +3151,11 @@
   "view3d.coordinate_axes": "Coordinate Axes",
   "view3d.pivot_point": "Pivot Point",
   "view3d.camera_frustums": "Camera Frustums",
-  "ui.split_viewport": "Split Viewport"
+  "ui.split_viewport": "Split Viewport",
+  "runtime.import_batch_failed.one": "{} file was not loaded",
+  "runtime.import_batch_failed.few": "{} files were not loaded",
+  "runtime.import_batch_failed.other": "{} files were not loaded",
+  "runtime.import_out_of_memory": "Not enough GPU memory",
+  "runtime.import_batch_kept": "The other files were loaded and remain available in the scene.",
+  "runtime.import_render_failed": "Could not prepare this file for rendering"
 }

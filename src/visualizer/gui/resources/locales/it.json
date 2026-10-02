@@ -3151,5 +3151,11 @@
   "view3d.coordinate_axes": "Assi coordinati",
   "view3d.pivot_point": "Punto di rotazione",
   "view3d.camera_frustums": "Frustum delle camere",
-  "ui.split_viewport": "Dividi vista"
+  "ui.split_viewport": "Dividi vista",
+  "runtime.import_batch_failed.one": "{} file non è stato caricato",
+  "runtime.import_batch_failed.few": "{} file non sono stati caricati",
+  "runtime.import_batch_failed.other": "{} file non sono stati caricati",
+  "runtime.import_out_of_memory": "Memoria GPU insufficiente",
+  "runtime.import_batch_kept": "Gli altri file sono stati caricati e rimangono disponibili nella scena.",
+  "runtime.import_render_failed": "Impossibile preparare questo file per la visualizzazione"
 }

@@ -68,6 +68,7 @@ namespace lfs::vis {
     struct ViewRenderState {
         ViewportOverlayService viewport_overlay_service_;
         ViewId id = kNoView;
+        glm::ivec2 last_nonzero_viewport_size_{0, 0};
         std::chrono::steady_clock::time_point last_visible{};
         std::optional<RenderSettings> rendered_settings;
         lfs::rendering::ScreenOverlayRenderer screen_overlay_renderer_;

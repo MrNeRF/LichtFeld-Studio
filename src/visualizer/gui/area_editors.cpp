@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <format>
+#include <utility>
 
 namespace lfs::vis::gui {
 

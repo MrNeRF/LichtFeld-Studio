@@ -1271,7 +1271,7 @@ namespace lfs::vis {
         held.mouse_down[0] = true;
         held.mouse_wheel = 3.0f;
         held.keys_pressed = {SDL_SCANCODE_RIGHT};
-        held.text_inputs = {"x"};
+        held.input_events = {{.kind = FrameInputEventKind::Text, .text = "x"}};
         route(held, GetParam().blockers);
         EXPECT_TRUE(owns());
         EXPECT_TRUE(bar_->IsPseudoClassSet("active"));
@@ -1457,8 +1457,7 @@ namespace lfs::vis {
         auto input = inputAt(button_point_);
         input.mouse_button_events = {transition(true, button_point_), transition(false, button_point_)};
         input.keys_pressed = {SDL_SCANCODE_BACKSPACE};
-        input.text_inputs = {"x"};
-        input.text_codepoints = {U'x'};
+        input.input_events = {{.kind = FrameInputEventKind::Text, .text = "x"}};
         const auto value = text_->GetValue();
         route(input, {.pending_modal = true});
         EXPECT_EQ(context_->GetFocusElement(), text_);

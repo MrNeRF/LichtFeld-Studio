@@ -5,10 +5,12 @@
 #include "screen/view3d_space.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <glm/gtc/quaternion.hpp>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <utility>
 
 namespace lfs::vis::screen {
 

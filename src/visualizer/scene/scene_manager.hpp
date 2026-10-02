@@ -107,20 +107,20 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<lfs::io::LoadResult, std::string> stageSplatFile(
             const std::filesystem::path& path,
             lfs::io::ProgressCallback progress = {},
-            lfs::io::CancelCallback cancel_requested = {}, bool preserve_raw = false);
+            lfs::io::CancelCallback cancel_requested = {}, bool preserve_raw = false, std::string* user_error = nullptr);
         [[nodiscard]] std::string attachLoadedSplatFile(const std::filesystem::path& path,
                                                         const std::string& name_hint,
                                                         bool is_visible,
                                                         lfs::io::LoadResult load_result,
                                                         bool replace_scene,
-                                                        bool defer_import_license = false);
+                                                        bool defer_import_license = false, core::Uuid* imported_uuid = nullptr, uint32_t* import_selection_generation = nullptr, bool internal_import = false);
         [[nodiscard]] std::string attachLoadedSplatNode(const std::filesystem::path& path,
                                                         const std::string& name_hint,
                                                         bool is_visible,
                                                         lfs::io::LoadResult load_result,
                                                         bool preserve_raw = false,
                                                         core::NodeId parent = core::NULL_NODE,
-                                                        bool defer_import_license = false);
+                                                        bool defer_import_license = false, core::Uuid* imported_uuid = nullptr, uint32_t* import_selection_generation = nullptr);
         void setImportLicenseCallback(std::function<void(const std::optional<std::vector<uint8_t>>&)> callback) {
             import_license_callback_ = std::move(callback);
         }
@@ -143,12 +143,13 @@ namespace lfs::vis {
         void setPLYVisibility(std::string name, bool visible);
         [[nodiscard]] std::expected<void, std::string> removeNodeWithResult(core::NodeId id, bool keep_children = false);
         void removeNode(core::NodeId id, bool keep_children = false);
+        [[nodiscard]] bool discardFailedImport(const core::Uuid& uuid);
         void setNodeVisibility(core::NodeId id, bool visible);
         void setNodeVisibilityTransient(core::NodeId id, bool visible);
 
         // Node selection
         void selectNode(const std::string& name);
-        void selectNode(core::NodeId id);
+        void selectNode(core::NodeId id, uint32_t* import_selection_generation = nullptr);
         void selectNodes(const std::vector<std::string>& names);
         void selectNodesById(const std::vector<core::NodeId>& ids);
         void addToSelection(const std::string& name);
@@ -218,7 +219,7 @@ namespace lfs::vis {
 
         void loadCheckpointForTraining(const std::filesystem::path& path,
                                        const lfs::core::param::TrainingParameters& params);
-        [[nodiscard]] bool clear();
+        [[nodiscard]] bool clear(bool internal_import = false);
         void switchToEditMode(); // Keep trained model, discard dataset
 
         // For rendering - gets appropriate model
@@ -342,7 +343,7 @@ namespace lfs::vis {
             std::vector<std::string> removed_node_names;
         };
 
-        [[nodiscard]] bool resetToEmptyState(bool trainer_already_cleared = false);
+        [[nodiscard]] bool resetToEmptyState(bool trainer_already_cleared = false, bool internal_import = false);
         enum class TrainingRemovalImpact {
             None,
             TrainingModel,
@@ -358,7 +359,7 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<void, std::string> removeNodeImpl(core::NodeId id,
                                                                       bool keep_children,
                                                                       HistoryMode history_mode,
-                                                                      TrainingRemovalImpact impact);
+                                                                      TrainingRemovalImpact impact, bool internal_import = false);
         void setupEventHandlers();
         [[nodiscard]] lfs::Status prepareDatasetTrainer(
             const lfs::core::param::TrainingParameters& params);

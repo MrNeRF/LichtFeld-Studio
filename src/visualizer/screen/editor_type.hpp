@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "screen/screen_layout.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <nlohmann/json_fwd.hpp>
@@ -62,7 +64,7 @@ namespace lfs::vis::screen {
         std::function<std::unique_ptr<SpaceData>()> create_space{};
     };
 
-    class EditorTypeRegistry {
+    class LFS_VIS_API EditorTypeRegistry {
     public:
         // Resolves ids that are not registered types, e.g. registered UI
         // panels that can be shown as an editor. Called on every lookup, so

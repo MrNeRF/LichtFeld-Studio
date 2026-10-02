@@ -3151,5 +3151,11 @@
   "view3d.coordinate_axes": "Osie współrzędnych",
   "view3d.pivot_point": "Punkt obrotu",
   "view3d.camera_frustums": "Ostrosłupy kamer",
-  "ui.split_viewport": "Podziel widok"
+  "ui.split_viewport": "Podziel widok",
+  "runtime.import_batch_failed.one": "{} plik nie został wczytany",
+  "runtime.import_batch_failed.few": "{} pliki nie zostały wczytane",
+  "runtime.import_batch_failed.other": "{} plików nie zostało wczytanych",
+  "runtime.import_out_of_memory": "Za mało pamięci GPU",
+  "runtime.import_batch_kept": "Pozostałe pliki zostały wczytane i nadal są dostępne w scenie.",
+  "runtime.import_render_failed": "Nie udało się przygotować tego pliku do wyświetlenia"
 }

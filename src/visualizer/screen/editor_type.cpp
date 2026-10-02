@@ -5,6 +5,7 @@
 #include "screen/editor_type.hpp"
 
 #include <algorithm>
+#include <utility>
 
 namespace lfs::vis::screen {
 

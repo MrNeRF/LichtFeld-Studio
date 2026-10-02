@@ -5,6 +5,7 @@
 #include "screen/screen_service.hpp"
 
 #include <cassert>
+#include <utility>
 
 namespace lfs::vis::screen {
 

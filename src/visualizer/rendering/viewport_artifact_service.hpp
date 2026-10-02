@@ -17,6 +17,8 @@ namespace lfs::vis {
         ViewportArtifactService() = default;
         ~ViewportArtifactService();
 
+        ViewportArtifactService(ViewportArtifactService&&) noexcept = default;
+        ViewportArtifactService& operator=(ViewportArtifactService&&) noexcept = default;
         ViewportArtifactService(const ViewportArtifactService&) = delete;
         ViewportArtifactService& operator=(const ViewportArtifactService&) = delete;
 

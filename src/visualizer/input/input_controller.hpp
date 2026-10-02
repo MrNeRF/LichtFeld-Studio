@@ -16,6 +16,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
@@ -177,7 +178,7 @@ namespace lfs::vis {
         // A finger touched (down) or left the trackpad.
         void handleTrackpadTouch(bool down);
         void handleKey(int key, int action, int mods);
-        void handleKey(int physical_key, int logical_key, int scancode, int action, int mods);
+        void handleKey(int physical_key, int logical_key, int scancode, int action, int mods, bool owned_release = false, bool gui_consumed = false);
         void handleFileDrop(const std::vector<std::string>& paths);
         void onWindowFocusLost();
         bool focusSelection();
@@ -219,7 +220,7 @@ namespace lfs::vis {
         bool scaleOrthographicView(Viewport& target_viewport, float factor);
         // Middle-drag style orbit/look by drag pixels, without release momentum.
         void orbitViewport(Viewport& target_viewport, const glm::vec2& drag);
-        void publishCameraMove(Viewport* target_viewport = nullptr);
+        void publishCameraMove(Viewport* target_viewport = nullptr, bool preserve_gt_comparison = false);
         // Suppress shared transform/x-y re-anchoring only for an explicitly
         // that panel's camera; this predicate neither selects a viewport nor changes
         // focus.

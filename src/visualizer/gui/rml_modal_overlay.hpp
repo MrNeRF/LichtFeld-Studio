@@ -64,6 +64,7 @@ namespace lfs::vis::gui {
         RmlModalOverlay& operator=(const RmlModalOverlay&) = delete;
 
         void enqueue(lfs::core::ModalRequest request);
+        void activatePending();
         void processInput(const PanelInputState& input);
         void render(int screen_w, int screen_h,
                     float screen_x, float screen_y,

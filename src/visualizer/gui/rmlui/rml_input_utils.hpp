@@ -1,5 +1,11 @@
 #pragma once
 
+#include "core/logger.hpp"
+#include "gui/rmlui/rml_text_input_handler.hpp"
+#include "gui/rmlui/sdl_rml_key_mapping.hpp"
+#include "input/frame_input_buffer.hpp"
+#include <cstdlib>
+
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/EventListener.h>
 
@@ -97,6 +103,83 @@ namespace lfs::vis::gui::rml_input {
         if (auto* const still_focused = context.GetFocusElement();
             still_focused && isSelectRelatedElement(still_focused)) {
             still_focused->Blur();
+        }
+        return true;
+    }
+
+    inline bool isRepeatedDialogAction(const FrameInputEvent& event, Rml::Element* focused = nullptr) {
+        if (event.kind != FrameInputEventKind::KeyDown || !event.repeat)
+            return false;
+        if (event.scancode == SDL_SCANCODE_ESCAPE)
+            return true;
+        if (event.scancode == SDL_SCANCODE_SPACE)
+            return !wantsTextInput(focused);
+        return (event.scancode == SDL_SCANCODE_RETURN || event.scancode == SDL_SCANCODE_KP_ENTER) &&
+               (!focused || focused->GetTagName() != "textarea");
+    }
+
+    // Mouse transitions share the keyboard timeline; never flush future text on blur.
+    template <typename Pointer, typename Keyboard>
+    void replayInputEvents(const std::vector<FrameInputEvent>& events,
+                           const std::vector<FrameMouseButtonEvent>& buttons,
+                           Pointer&& pointer, Keyboard&& keyboard) {
+        for (const auto& event : events) {
+            if (event.kind == FrameInputEventKind::MouseButton) {
+                if (event.mouse_button_index < buttons.size())
+                    pointer(buttons[event.mouse_button_index]);
+            } else {
+                keyboard(event);
+            }
+        }
+    }
+
+    // Replay one SDL event. Callers retain their own submit/cancel policies, but
+    // must invoke them at the event's position in the stream, before later text.
+    inline bool processKeyboardEvent(Rml::Context& context, const FrameInputEvent& event,
+                                     RmlTextInputHandler* handler = nullptr) {
+        if (event.kind == FrameInputEventKind::MouseButton)
+            return false;
+        const auto consumed = [&](bool value) {
+            if (event.dispatch)
+                event.dispatch->consumed |= value;
+            return value;
+        };
+        auto* focused = context.GetFocusElement();
+        const bool editable = isTextEditableElement(focused);
+        if (event.kind == FrameInputEventKind::TextEditing) {
+            return consumed(editable && handler && handler->handleTextEditing(event.text, event.editing_start, event.editing_length));
+        }
+        if (event.kind == FrameInputEventKind::Text) {
+            if (std::getenv("LFS_TRACE_INPUT"))
+                LOG_INFO("INPUT consumer context={} element={} text={}", context.GetName(), focused ? focused->GetTagName() : "none", event.text);
+            if (!wantsTextInput(focused))
+                return false;
+            if (!editable || !handler || !handler->handleTextInput(event.text))
+                context.ProcessTextInput(event.text);
+            consumed(true);
+            return true;
+        }
+        const auto sc = event.scancode;
+        if (handler && handler->isComposing() &&
+            (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER || sc == SDL_SCANCODE_ESCAPE))
+            return false;
+        if (wantsTextInput(focused) &&
+            ((sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_0) || sc == SDL_SCANCODE_KP_PERIOD))
+            return false;
+        const auto key = sdlScancodeToRml(sc);
+        if (key == Rml::Input::KI_UNKNOWN)
+            return false;
+        const int mods = sdlModsToRml(event.modifiers & SDL_KMOD_CTRL,
+                                      event.modifiers & SDL_KMOD_SHIFT,
+                                      event.modifiers & SDL_KMOD_ALT,
+                                      event.modifiers & SDL_KMOD_GUI);
+        if (event.kind == FrameInputEventKind::KeyDown) {
+            if (!editable || !handler || !handler->handleKeyDown(key, mods))
+                consumed(!context.ProcessKeyDown(key, mods));
+            else
+                consumed(true);
+        } else {
+            consumed(!context.ProcessKeyUp(key, mods));
         }
         return true;
     }

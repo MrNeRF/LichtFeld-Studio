@@ -3151,5 +3151,11 @@
   "view3d.coordinate_axes": "坐标轴",
   "view3d.pivot_point": "轴心点",
   "view3d.camera_frustums": "相机视锥",
-  "ui.split_viewport": "拆分视口"
+  "ui.split_viewport": "拆分视口",
+  "runtime.import_batch_failed.one": "有 {} 个文件未能加载",
+  "runtime.import_batch_failed.few": "有 {} 个文件未能加载",
+  "runtime.import_batch_failed.other": "有 {} 个文件未能加载",
+  "runtime.import_out_of_memory": "GPU 显存不足",
+  "runtime.import_batch_kept": "其他文件已加载，仍可在场景中使用。",
+  "runtime.import_render_failed": "无法准备此文件以进行渲染"
 }

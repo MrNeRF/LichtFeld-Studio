@@ -7834,11 +7834,6 @@ namespace lfs::vis::project {
         const auto shell_staged_at =
             std::chrono::steady_clock::now();
 
-        // Invalidate gallery imports before swapping scenes; their workers drain asynchronously.
-        if (auto* const gui = viewer_.getGuiManager()) {
-            gui->asyncTasks().cancelImport(false);
-        }
-
         stopHydrationThreads(false);
         if (auto* trainer_manager = viewer_.getTrainerManager();
             trainer_manager && trainer_manager->hasTrainer() &&
@@ -7849,6 +7844,11 @@ namespace lfs::vis::project {
                 "Project switching requires the trainer to reach its terminal state",
                 "project.training");
         }
+        // Every project-open entry point reaches this committed switch boundary.
+        if (auto* loader = viewer_.getDataLoader())
+            loader->cancelPendingImports();
+        if (auto* gui = viewer_.getGuiManager())
+            gui->asyncTasks().cancelImport(false);
         viewer_.deactivateProjectTools();
         viewer_.resetProjectState();
         manager->setDatasetPath({});
