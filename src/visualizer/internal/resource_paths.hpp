@@ -19,7 +19,7 @@ namespace lfs::vis {
     inline std::filesystem::path resolveAssetPathUncached(const std::string& asset_name) {
         std::vector<std::filesystem::path> search_paths;
 
-#ifdef LFS_DEV_RMLUI_SOURCE_DIR
+#if defined(LFS_DEV_RMLUI_SOURCE_DIR) && !defined(LFS_MACOS_PORTABLE_APP)
         constexpr std::string_view rmlui_prefix = "rmlui/";
         if (asset_name.rfind(rmlui_prefix, 0) == 0) {
             search_paths.push_back(
@@ -31,6 +31,7 @@ namespace lfs::vis {
         // Primary: Use runtime-detected resource directory
         search_paths.push_back(lfs::core::getAssetsDir() / asset_name);
 
+#ifndef LFS_MACOS_PORTABLE_APP
         // Development fallback: Try build directory
 #ifdef VISUALIZER_ASSET_PATH
         search_paths.push_back(std::filesystem::path(VISUALIZER_ASSET_PATH) / asset_name);
@@ -48,6 +49,8 @@ namespace lfs::vis {
                                    "src/rendering/resources/assets/JetBrainsMono-Regular.ttf");
         }
 #endif
+
+#endif // LFS_MACOS_PORTABLE_APP
 
         for (const auto& path : search_paths) {
             if (std::filesystem::exists(path))

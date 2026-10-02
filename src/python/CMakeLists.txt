@@ -613,6 +613,13 @@ endif()
 
 if(BUILD_PORTABLE AND NOT LFS_MACOS_PORTABLE_APP)
     install(DIRECTORY "${STUBS_DIR}/" DESTINATION "${CMAKE_INSTALL_BINDIR}" OPTIONAL)
+elseif(LFS_MACOS_PORTABLE_APP)
+    # The app target does not necessarily build generated typings. Always ship
+    # the committed complete set, then overlay generated files if available.
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/stubs/" DESTINATION "${PYTHON_INSTALL_DIR}")
+    if(BUILD_PYTHON_STUBS)
+        install(DIRECTORY "${STUBS_DIR}/" DESTINATION "${PYTHON_INSTALL_DIR}" OPTIONAL)
+    endif()
 else()
     install(DIRECTORY "${STUBS_DIR}/" DESTINATION "${PYTHON_INSTALL_DIR}" OPTIONAL)
 endif()

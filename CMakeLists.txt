@@ -1472,6 +1472,12 @@ install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/core11-logo.png" DE
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/core11-logo-dark.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/volinga-logo.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/volinga-logo-dark.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
+if(LFS_MACOS_PORTABLE_APP)
+    # Include every runtime GUI asset; keep documentation out of the bundle.
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/"
+        DESTINATION "${INSTALL_RESOURCE_DIR}/assets"
+        PATTERN "*.md" EXCLUDE PATTERN "*.icns" EXCLUDE)
+endif()
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/rmlui/resources/" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/rmlui")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales" DESTINATION "${INSTALL_RESOURCE_DIR}")
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locale_index.json"

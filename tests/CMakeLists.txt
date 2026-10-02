@@ -17,6 +17,11 @@ if(BUILD_LOCALIZATION_TESTS)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         TIMEOUT 30
     )
+    if(APPLE)
+        add_test(NAME MacosPortableResourcePaths
+            COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/python/test_macos_portable_resource_paths.py)
+        set_tests_properties(MacosPortableResourcePaths PROPERTIES TIMEOUT 30)
+    endif()
     add_custom_target(test_localization_contracts
         COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R LocalizationContracts
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/CTestTestfile.cmake

@@ -676,11 +676,11 @@ namespace lfs::vis {
 
             search_paths.push_back(lfs::core::getResourceBaseDir() / "shaders" / "vulkan_rasterizer");
 
-#ifdef LFS_VULKAN_RASTERIZER_DEV_SPV_DIR
+#if defined(LFS_VULKAN_RASTERIZER_DEV_SPV_DIR) && !defined(LFS_MACOS_PORTABLE_APP)
             search_paths.push_back(lfs::core::utf8_to_path(LFS_VULKAN_RASTERIZER_DEV_SPV_DIR));
 #endif
 
-#ifdef PROJECT_ROOT_PATH
+#if defined(PROJECT_ROOT_PATH) && !defined(LFS_MACOS_PORTABLE_APP)
             search_paths.push_back(lfs::core::utf8_to_path(PROJECT_ROOT_PATH) /
                                    "src/rendering/rasterizer/vulkan/shader");
 #endif
