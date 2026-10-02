@@ -214,7 +214,10 @@ namespace lfs::core {
           _undistort_prepared(other._undistort_prepared),
           _undistort_params(other._undistort_params),
           _stream(other._stream),
-          _sfm_observations(std::move(other._sfm_observations)) {
+          _sfm_observations(std::move(other._sfm_observations)),
+          _sfm_observation_source(std::move(other._sfm_observation_source)),
+          _sfm_observation_node(other._sfm_observation_node),
+          _sfm_observation_count(other._sfm_observation_count) {
         // Take ownership of the stream
         other._stream = nullptr;
         other._mask_loaded = false;
@@ -277,6 +280,9 @@ namespace lfs::core {
             _undistort_prepared = other._undistort_prepared;
             _undistort_params = other._undistort_params;
             _sfm_observations = std::move(other._sfm_observations);
+            _sfm_observation_source = std::move(other._sfm_observation_source);
+            _sfm_observation_node = other._sfm_observation_node;
+            _sfm_observation_count = other._sfm_observation_count;
 
             // Take ownership of the stream
             _stream = other._stream;
@@ -319,6 +325,9 @@ namespace lfs::core {
           _FoVy(other._FoVy) {
         _world_view_transform = transform;
         _sfm_observations = other._sfm_observations;
+        _sfm_observation_source = other._sfm_observation_source;
+        _sfm_observation_node = other._sfm_observation_node;
+        _sfm_observation_count = other._sfm_observation_count;
         _undistort_precomputed = other._undistort_precomputed;
         _undistort_prepared = other._undistort_prepared;
         _undistort_params = other._undistort_params;
@@ -926,6 +935,8 @@ namespace lfs::core {
         _T = Tensor::from_vector(T_new, {3}, Device::CPU);
         _world_view_transform = world_to_view(_R, _T);
         _cam_position = _cam_position + trans.to(Device::CUDA).contiguous();
+        if (_sfm_observation_source)
+            set_sfm_observations(sfm_observations());
         for (auto& observation : _sfm_observations) {
             observation.x += t_acc(0);
             observation.y += t_acc(1);

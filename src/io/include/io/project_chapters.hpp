@@ -392,6 +392,8 @@ namespace lfs::io::project {
         // camera objects; parsers default this to true.
         bool has_image = true;
         std::string split = "train";
+        // Observations of this camera node in the project's SFMO chapter.
+        std::uint64_t sfm_observation_count = 0;
 
         friend bool operator==(const CameraRecord&, const CameraRecord&) = default;
     };

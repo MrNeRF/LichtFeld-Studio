@@ -83,7 +83,8 @@ namespace lfs::io::project {
         bool is_payload_class_chunk(const ChunkInfo& row) noexcept {
             return (row.flags & TENSOR_PAYLOAD) != 0 ||
                    row.key.fourcc == FOURCC_CKPT ||
-                   row.key.fourcc == FOURCC_PPIS;
+                   row.key.fourcc == FOURCC_PPIS ||
+                   row.key.fourcc == FOURCC_SFMO;
         }
 
         std::optional<std::uint64_t> payload_materialized_bytes_override;

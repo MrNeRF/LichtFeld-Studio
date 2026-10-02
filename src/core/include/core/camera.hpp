@@ -8,12 +8,14 @@
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include "core/uuid.hpp"
 #include <array>
 #include <cassert>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <future>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -178,11 +180,34 @@ namespace lfs::core {
             float z = 0.0f;
         };
 
+        // Observations stored in a project and decoded on first use.
+        class SfmObservationSource {
+        public:
+            virtual ~SfmObservationSource() = default;
+            [[nodiscard]] virtual const std::vector<SfmObservation>& observations(
+                const Uuid& camera_node) const = 0;
+        };
+
         void set_sfm_observations(std::vector<SfmObservation> observations) {
             _sfm_observations = std::move(observations);
+            _sfm_observation_source.reset();
         }
-        [[nodiscard]] const std::vector<SfmObservation>& sfm_observations() const noexcept {
-            return _sfm_observations;
+        void set_sfm_observation_source(std::shared_ptr<const SfmObservationSource> source,
+                                        const Uuid& camera_node, std::size_t count) {
+            _sfm_observations.clear();
+            _sfm_observation_source = std::move(source);
+            _sfm_observation_node = camera_node;
+            _sfm_observation_count = count;
+        }
+        [[nodiscard]] const std::vector<SfmObservation>& sfm_observations() const {
+            return _sfm_observation_source ? _sfm_observation_source->observations(_sfm_observation_node)
+                                           : _sfm_observations;
+        }
+        [[nodiscard]] std::size_t sfm_observation_count() const noexcept {
+            return _sfm_observation_source ? _sfm_observation_count : _sfm_observations.size();
+        }
+        [[nodiscard]] const SfmObservationSource* sfm_observation_source() const noexcept {
+            return _sfm_observation_source.get();
         }
 
         // Rewrites image/mask/depth/normal paths that live under old_root to the same
@@ -305,6 +330,9 @@ namespace lfs::core {
         cudaStream_t _stream = nullptr;
 
         std::vector<SfmObservation> _sfm_observations;
+        std::shared_ptr<const SfmObservationSource> _sfm_observation_source;
+        Uuid _sfm_observation_node{};
+        std::size_t _sfm_observation_count = 0;
     };
     inline float focal2fov(float focal, int pixels) {
         return 2.0f * std::atan(pixels / (2.0f * focal));

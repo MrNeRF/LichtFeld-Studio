@@ -13,6 +13,7 @@
 #include "io/project_document.hpp"
 #include "io/project_operations.hpp"
 #include "io/project_recovery.hpp"
+#include "io/sfm_observation_chapter.hpp"
 #include "licht_test_support.hpp"
 #include "project/session_state.hpp"
 #include "training/checkpoint.hpp"
@@ -1105,6 +1106,168 @@ namespace {
             lfs::core::CameraModelType::PINHOLE,
             image_name, std::filesystem::path{},
             std::filesystem::path{}, size, size, uid);
+    }
+
+    using lfs::core::Camera;
+    using lfs::io::project::SfmObservationTable;
+
+    void expect_sfm_observations_exact(const std::span<const Camera::SfmObservation> expected,
+                                       const std::span<const Camera::SfmObservation> actual) {
+        ASSERT_EQ(actual.size(), expected.size());
+        EXPECT_EQ(std::memcmp(actual.data(), expected.data(), expected.size_bytes()), 0);
+    }
+
+    std::shared_ptr<Camera> add_observed_camera(Scene& scene, const lfs::core::NodeId group,
+                                                const std::string& name, const int uid,
+                                                std::vector<Camera::SfmObservation> observations) {
+        auto camera = make_adapter_test_camera(name, uid);
+        camera->set_sfm_observations(std::move(observations));
+        EXPECT_NE(scene.addCamera(name, group, camera), lfs::core::NULL_NODE);
+        return camera;
+    }
+
+    // Catches a layout that is not the documented little-endian header, sorted index and raw
+    // float32 data, and an index reader that accepts truncated, foreign or unsorted chapters.
+    TEST(SfmObservationChapterTest, EncodesTheDocumentedLayoutAndRejectsMalformedChapters) {
+        const std::vector<Camera::SfmObservation> first{{.u = 1.5f, .v = 2.0f, .x = -3.0f, .y = 4.0f, .z = 5.0f}};
+        const std::vector<Camera::SfmObservation> second{{.u = 6.0f, .v = 7.0f, .x = 8.0f, .y = 9.0f, .z = 10.0f},
+                                                         {.u = -0.0f, .v = 0.25f, .x = 0.5f, .y = 0.75f, .z = 1.0f}};
+        const auto low = fixed_uuid(19'300);
+        const auto high = fixed_uuid(19'301);
+        ASSERT_TRUE(lfs::io::project::UuidLess{}(low, high));
+        const auto bytes = lfs::io::project::encode_sfm_observations(SfmObservationTable{{high, &second}, {low, &first}});
+        ASSERT_EQ(bytes.size(), 32u + 2 * 24u + 3 * 20u);
+        const auto u32 = [&](const std::size_t offset) {
+            return std::to_integer<std::uint32_t>(bytes[offset]) |
+                   std::to_integer<std::uint32_t>(bytes[offset + 1]) << 8 |
+                   std::to_integer<std::uint32_t>(bytes[offset + 2]) << 16 |
+                   std::to_integer<std::uint32_t>(bytes[offset + 3]) << 24;
+        };
+        EXPECT_EQ(std::string(reinterpret_cast<const char*>(bytes.data()), 4), "SFMO");
+        EXPECT_EQ(u32(4), 1u);
+        EXPECT_EQ(u32(8), 2u);
+        EXPECT_EQ(u32(16), 3u);
+        EXPECT_EQ(std::memcmp(bytes.data() + 32, low.bytes.data(), 16), 0);
+        EXPECT_EQ(u32(32 + 16), 1u);
+        EXPECT_EQ(std::memcmp(bytes.data() + 56, high.bytes.data(), 16), 0);
+        EXPECT_EQ(u32(56 + 16), 2u);
+        EXPECT_EQ(u32(80), std::bit_cast<std::uint32_t>(1.5f));
+        EXPECT_EQ(u32(100), std::bit_cast<std::uint32_t>(6.0f));
+
+        const auto index_of = [](std::vector<std::byte> chapter) {
+            auto value = LazyChunkValue::from_owned(std::move(chapter), fixed_uuid(19'302));
+            EXPECT_TRUE(value);
+            return lfs::io::project::read_sfm_observation_index(*value);
+        };
+        const auto index = index_of(bytes);
+        ASSERT_TRUE(index) << lfs::format_for_developer(index.error());
+        EXPECT_EQ(index->observation_count, 3u);
+        EXPECT_EQ(index->cameras.at(low).first, 0u);
+        EXPECT_EQ(index->cameras.at(high).first, 1u);
+        EXPECT_EQ(index->cameras.at(high).count, 2u);
+
+        auto truncated = bytes;
+        truncated.resize(bytes.size() - 4);
+        EXPECT_FALSE(index_of(truncated));
+        auto foreign = bytes;
+        foreign[0] = std::byte{'X'};
+        EXPECT_FALSE(index_of(foreign));
+        auto unsorted = bytes;
+        std::swap_ranges(unsorted.begin() + 32, unsorted.begin() + 48, unsorted.begin() + 56);
+        EXPECT_FALSE(index_of(unsorted));
+    }
+
+    // Catches observations written into the size-limited JSON scene chapter, decoded when the
+    // project opens, rewritten on every save, or altered on the way back.
+    TEST(SceneChapterAdapterTest, SfmObservationsLiveInTheirOwnChapterAndLoadOnFirstUse) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        std::vector<Camera::SfmObservation> dense(200'000);
+        for (std::size_t i = 0; i < dense.size(); ++i) {
+            const auto value = static_cast<float>(i);
+            dense[i] = {.u = value, .v = -value, .x = 0.5f * value, .y = 1.0f, .z = -0.0f};
+        }
+        const std::vector<Camera::SfmObservation> sparse{{.u = 12.5f, .v = 2160.125f, .x = -0.03125f, .y = 64.5f, .z = 0.125f}};
+        Scene source;
+        const auto group = source.addCameraGroup("Training", source.addDataset("Dataset"), 2);
+        add_observed_camera(source, group, "dense.png", 7, dense);
+        add_observed_camera(source, group, "sparse.png", 8, sparse);
+        add_observed_camera(source, group, "none.png", 9, {});
+
+        auto chapter = capture_scene_graph(source, ScenePayloadBindings{});
+        ASSERT_TRUE(chapter) << lfs::format_for_developer(chapter.error());
+        EXPECT_LT(chapter->to_bytes().size(), 16u * 1024u);
+        auto document = make_empty_document(fixed_uuid(19'310), 100);
+        document->edit_scene_graph() = std::move(*chapter);
+        ASSERT_TRUE(lfs::io::project::sync_sfm_observations(
+            *document, lfs::io::project::capture_sfm_observation_cameras(source)));
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "observed.licht";
+        (void)require_result(document->save(path, save_options(19'311, 200)));
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        const auto root = json_root(reopened->scene_graph().dom());
+        std::map<std::string, std::uint64_t> counts;
+        for (const auto& node : root["nodes"]) {
+            if (node.value("type", "") == "camera")
+                counts[node["name"]] = node["camera"].value("sfm_observations", std::uint64_t{0});
+        }
+        EXPECT_EQ(counts, (std::map<std::string, std::uint64_t>{{"dense.png", dense.size()}, {"none.png", 0}, {"sparse.png", 1}}));
+        const auto* stored = reopened->find_sfm_observations();
+        ASSERT_NE(stored, nullptr);
+        const auto stored_uuid = stored->snapshot_uuid();
+
+        Scene restored;
+        ASSERT_TRUE(reopened->hydrate(restored));
+        const auto camera_of = [&](const std::string& name) { return restored.getNode(name)->camera; };
+        ASSERT_NE(camera_of("dense.png")->sfm_observation_source(), nullptr);
+        EXPECT_EQ(camera_of("dense.png")->sfm_observation_count(), dense.size());
+        EXPECT_EQ(camera_of("none.png")->sfm_observation_source(), nullptr);
+        expect_sfm_observations_exact(dense, camera_of("dense.png")->sfm_observations());
+        expect_sfm_observations_exact(sparse, camera_of("sparse.png")->sfm_observations());
+        EXPECT_TRUE(camera_of("none.png")->sfm_observations().empty());
+
+        ASSERT_TRUE(lfs::io::project::sync_sfm_observations(
+            *reopened, lfs::io::project::capture_sfm_observation_cameras(restored)));
+        reopened->edit_metrics();
+        (void)require_result(reopened->save(path, save_options(19'312, 300)));
+        auto resaved = require_result_ptr(ProjectDocument::open(path));
+        ASSERT_NE(resaved->find_sfm_observations(), nullptr);
+        EXPECT_EQ(resaved->find_sfm_observations()->snapshot_uuid(), stored_uuid);
+
+        const auto copy = temporary.path / "copy.licht";
+        (void)require_result(resaved->save_as(copy, save_options(19'313, 400)));
+        auto copied = require_result_ptr(ProjectDocument::open(copy));
+        Scene from_copy;
+        ASSERT_TRUE(copied->hydrate(from_copy));
+        expect_sfm_observations_exact(sparse, from_copy.getNode("sparse.png")->camera->sfm_observations());
+    }
+
+    // Catches a reader that requires the observation reference and so rejects projects written
+    // before it existed, or that invents observations for them.
+    TEST(SceneChapterAdapterTest, CamerasWithoutStoredObservationsStillHydrate) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        Scene source;
+        const auto group = source.addCameraGroup("Training", source.addDataset("Dataset"), 1);
+        add_observed_camera(source, group, "legacy.png", 8, {});
+        auto chapter = capture_scene_graph(source, ScenePayloadBindings{});
+        ASSERT_TRUE(chapter) << lfs::format_for_developer(chapter.error());
+        auto document = make_empty_document(fixed_uuid(19'320), 100);
+        document->edit_scene_graph() = std::move(*chapter);
+        ASSERT_TRUE(lfs::io::project::sync_sfm_observations(
+            *document, lfs::io::project::capture_sfm_observation_cameras(source)));
+        EXPECT_EQ(document->find_sfm_observations(), nullptr);
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "legacy.licht";
+        (void)require_result(document->save(path, save_options(19'321, 200)));
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        Scene restored;
+        ASSERT_TRUE(reopened->hydrate(restored));
+        EXPECT_TRUE(restored.getNode("legacy.png")->camera->sfm_observations().empty());
     }
 
     TEST(SceneChapterAdapterTest,
