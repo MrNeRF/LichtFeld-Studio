@@ -21,8 +21,7 @@ namespace lfs::rendering::metal {
         static_assert(core::sh_value_quant::kBlockSize == 256);
 
         std::runtime_error failure(const char* operation, NSError* error) {
-            return std::runtime_error(std::string(operation) + ": " +
-                                      (error.localizedDescription.UTF8String ?: "Metal operation failed"));
+            return std::runtime_error(std::format("{} (error_code={}, error_domain={}, error={})", operation, long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
         }
 
         void check_slice(BufferSlice view, size_t bytes, NSUInteger alignment,

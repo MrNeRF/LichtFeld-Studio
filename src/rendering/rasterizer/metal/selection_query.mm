@@ -32,11 +32,11 @@ namespace lfs::rendering::metal {
         NSError* error = nil;
         auto library = [device newLibraryWithSource:[NSString stringWithUTF8String:kMetalSelectionSource] options:options error:&error];
         if (!library)
-            throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal selection shader compilation failed");
+            throw std::runtime_error(std::format("Metal selection shader compilation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
         i.query = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"selection_query"] error:&error];
         i.polygon = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"polygon_coverage"] error:&error];
         if (!i.query || !i.polygon)
-            throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal selection pipeline creation failed");
+            throw std::runtime_error(std::format("Metal selection pipeline creation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
         i.dummy = [device newBufferWithLength:64 options:MTLResourceStorageModeShared];
         if (!i.dummy)
             throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = 64, .label = "viewer.selection", .operation = "selection.dummy.allocate"});

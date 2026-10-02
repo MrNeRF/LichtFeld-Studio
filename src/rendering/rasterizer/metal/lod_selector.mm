@@ -84,10 +84,10 @@ namespace lfs::rendering::metal {
         NSError* error = nil;
         auto library = [device newLibraryWithSource:[NSString stringWithUTF8String:kMetalLodSelectorSource] options:options error:&error];
         if (!library)
-            throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal LOD shader compilation failed");
+            throw std::runtime_error(std::format("Metal LOD shader compilation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
         impl_->pipeline = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"select_lod"] error:&error];
         if (!impl_->pipeline)
-            throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal LOD pipeline creation failed");
+            throw std::runtime_error(std::format("Metal LOD pipeline creation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
     }
     LodSelector::~LodSelector() = default;
     void LodSelector::encode(id<MTLCommandBuffer> command, const LodTreeBuffers& tree,

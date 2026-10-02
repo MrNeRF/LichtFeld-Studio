@@ -315,10 +315,10 @@ namespace lfs::vis {
             options.languageVersion = MTLLanguageVersion2_4;
             auto library = [reader.device() newLibraryWithSource:[NSString stringWithUTF8String:kMetalPresentSource] options:options error:&error];
             if (!library)
-                throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal pipeline creation failed");
+                throw std::runtime_error(std::format("Metal presentation shader compilation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
             present = [reader.device() newComputePipelineStateWithFunction:[library newFunctionWithName:@"present_viewer"] error:&error];
             if (!present)
-                throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal pipeline creation failed");
+                throw std::runtime_error(std::format("Metal presentation pipeline creation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
             auto point_descriptor = [MTLRenderPipelineDescriptor new];
             point_descriptor.vertexFunction = [library newFunctionWithName:@"point_vertex"];
             point_descriptor.fragmentFunction = [library newFunctionWithName:@"point_fragment"];
@@ -327,7 +327,7 @@ namespace lfs::vis {
             point_descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
             point_pipeline = [reader.device() newRenderPipelineStateWithDescriptor:point_descriptor error:&error];
             if (!point_pipeline)
-                throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal pipeline creation failed");
+                throw std::runtime_error(std::format("Metal point pipeline creation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
             auto depth_descriptor = [MTLDepthStencilDescriptor new];
             depth_descriptor.depthCompareFunction = MTLCompareFunctionLess;
             depth_descriptor.depthWriteEnabled = YES;
@@ -461,7 +461,7 @@ namespace lfs::vis {
             if (frame) {
                 wait(frame->producer_value);
                 if (frame->command.status == MTLCommandBufferStatusError)
-                    throw std::runtime_error(frame->command.error.localizedDescription.UTF8String ?: "Metal command failed");
+                    throw std::runtime_error(std::format("Metal command failed while acquiring a viewport frame (status={}, producer={}, consumer={}, error_code={}, error={})", long(frame->command.status), frame->producer_value, frame->consumer_serial, long(frame->command.error.code), frame->command.error.localizedDescription.UTF8String ?: "none"));
                 if (!context->waitForRetiredFrameSubmitSerial(frame->consumer_serial))
                     throw std::runtime_error(context->lastError());
                 if ((frame->raster && frame->raster->busy()) || (frame->gpu_lod && frame->gpu_lod->busy()))
@@ -513,7 +513,7 @@ namespace lfs::vis {
         id<MTLBuffer> readTexture(Frame& f, Image& image, size_t bytes_per_pixel, glm::ivec2 pixel = {-1, -1}) const {
             wait(f.producer_value);
             if (f.command.status == MTLCommandBufferStatusError)
-                throw std::runtime_error(f.command.error.localizedDescription.UTF8String ?: "Metal command failed");
+                throw std::runtime_error(std::format("Metal command failed before texture readback (status={}, producer={}, extent={}x{}, error_code={}, error={})", long(f.command.status), f.producer_value, f.size.x, f.size.y, long(f.command.error.code), f.command.error.localizedDescription.UTF8String ?: "none"));
             auto queue = [reader.device() newCommandQueue];
             auto command = [queue commandBuffer];
             const bool sample = pixel.x >= 0;
@@ -849,8 +849,8 @@ namespace lfs::vis {
         } catch (const std::exception& e) { return nativeError(e); }
     }
     bool MetalViewportRenderer::supports(const core::SplatData& model, const rendering::ViewportRenderRequest& r) {
-        // Every unsupported contract is routed to the existing renderer; never silently
-        // drop filters, display settings or editor overlays from a requested frame.
+        // Validate the native scene contract before encoding. Unsupported requests
+        // report an error; filters, settings and overlays are never silently dropped.
         // Short byte masks have an unselected suffix; both native overlay
         // stages guard logical IDs against the exact resident mask extent.
         const auto resident_mask = [](const core::Tensor* mask) { return !mask || !mask->is_valid() ||

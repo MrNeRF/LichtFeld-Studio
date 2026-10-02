@@ -5,11 +5,17 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <format>
 #include <stdexcept>
 #include <vector>
 
 namespace lfs::rendering::metal {
-    enum class GpuStage : uint32_t { Projection, Instances, Sort, Blend, Present, Count };
+    enum class GpuStage : uint32_t { Projection,
+                                     Instances,
+                                     Sort,
+                                     Blend,
+                                     Present,
+                                     Count };
 
     // Opt-in diagnostics only. Each frame owns its sample buffer until its
     // command completes; resolving never participates in ordinary rendering.
@@ -30,7 +36,7 @@ namespace lfs::rendering::metal {
                     NSError* error = nil;
                     buffer_ = [device newCounterSampleBufferWithDescriptor:descriptor error:&error];
                     if (!buffer_)
-                        throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal timestamp allocation failed");
+                        throw std::runtime_error(std::format("Metal timestamp allocation failed (samples={}, device={}, error_code={}, error={})", kSamples, device.name.UTF8String, long(error.code), error.localizedDescription.UTF8String ?: "none"));
                     break;
                 }
             }
@@ -41,7 +47,7 @@ namespace lfs::rendering::metal {
             if (!available())
                 return [command computeCommandEncoder];
             if (stages_.size() * 2 + 2 > kSamples)
-                throw std::length_error("Metal viewer GPU timestamp reservation exceeded");
+                throw std::length_error(std::format("Metal viewer GPU timestamp reservation exceeded (passes={}, samples={}, stage={})", stages_.size(), kSamples, uint32_t(stage)));
             if (@available(macOS 11.0, iOS 14.0, *)) {
                 auto descriptor = [MTLComputePassDescriptor computePassDescriptor];
                 auto attachment = descriptor.sampleBufferAttachments[0];
@@ -50,7 +56,7 @@ namespace lfs::rendering::metal {
                 attachment.endOfEncoderSampleIndex = stages_.size() * 2 + 1;
                 auto encoder = [command computeCommandEncoderWithDescriptor:descriptor];
                 if (!encoder)
-                    throw std::runtime_error("Metal profiled compute encoder failed");
+                    throw std::runtime_error(std::format("Metal profiled compute encoder failed (stage={}, passes={}, command_status={})", uint32_t(stage), stages_.size(), long(command.status)));
                 stages_.push_back(stage);
                 return encoder;
             }
@@ -63,12 +69,12 @@ namespace lfs::rendering::metal {
                 return result;
             const auto data = [buffer_ resolveCounterRange:NSMakeRange(0, stages_.size() * 2)];
             if (!data || data.length != stages_.size() * 2 * sizeof(MTLCounterResultTimestamp))
-                throw std::runtime_error("Metal GPU timestamp resolution failed");
+                throw std::runtime_error(std::format("Metal GPU timestamp resolution failed (data_present={}, bytes={}, expected_bytes={}, passes={})", data != nil, data.length, stages_.size() * 2 * sizeof(MTLCounterResultTimestamp), stages_.size()));
             const auto timestamps = static_cast<const MTLCounterResultTimestamp*>(data.bytes);
             for (size_t i = 0; i < stages_.size(); ++i) {
                 const uint64_t start = timestamps[i * 2].timestamp, end = timestamps[i * 2 + 1].timestamp;
                 if (!start || end < start || end == UINT64_MAX)
-                    throw std::runtime_error("Invalid Metal GPU timestamp sample");
+                    throw std::runtime_error(std::format("Invalid Metal GPU timestamp sample (pass={}, stage={}, start={}, end={})", i, uint32_t(stages_[i]), start, end));
                 result[size_t(stages_[i])] += double(end - start) / 1e6;
             }
             return result;
@@ -80,7 +86,7 @@ namespace lfs::rendering::metal {
         std::vector<GpuStage> stages_;
     };
     inline id<MTLComputeCommandEncoder> profiledCompute(id<MTLCommandBuffer> command,
-                                                      GpuProfile* profile, GpuStage stage) {
+                                                        GpuProfile* profile, GpuStage stage) {
         return profile ? profile->begin(command, stage) : [command computeCommandEncoder];
     }
 } // namespace lfs::rendering::metal

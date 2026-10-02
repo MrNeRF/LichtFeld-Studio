@@ -162,21 +162,21 @@ namespace lfs::rendering::metal {
                                                                options:options
                                                                  error:&error];
                         if (!relaxed_library)
-                            throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal opaque blend compilation failed");
+                            throw std::runtime_error(std::format("Metal opaque blend compilation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
                     }
                     blend_library = relaxed_library;
                 }
             }
             auto function = [blend_library newFunctionWithName:@"tile_blend" constantValues:constants error:&error];
             if (!function)
-                throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal blend specialization failed");
+                throw std::runtime_error(std::format("Metal blend specialization failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
             auto descriptor = [MTLComputePipelineDescriptor new];
             descriptor.computeFunction = function;
             descriptor.maxTotalThreadsPerThreadgroup = 64;
             descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth = YES;
             auto state = [device newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&error];
             if (!state)
-                throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal blend pipeline failed");
+                throw std::runtime_error(std::format("Metal blend pipeline failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
             if (state.threadExecutionWidth != 32 || state.maxTotalThreadsPerThreadgroup < 64)
                 throw std::runtime_error(std::format("Metal blend specialization requires SIMD32 and 64-thread groups (width={}, max_threads={}, mode={}, flags={})", state.threadExecutionWidth, state.maxTotalThreadsPerThreadgroup, mode, flags));
             blend_pipelines.emplace(key, state);
@@ -240,7 +240,7 @@ namespace lfs::rendering::metal {
                                             options:options
                                               error:&error];
         if (!library)
-            throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal tile shader compilation failed");
+            throw std::runtime_error(std::format("Metal tile shader compilation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
         impl_->library = library;
         for (const char* name : {"tile_counts", "scan_blocks", "scan_add", "tile_status", "source_keys", "tile_instances",
                                  "tile_histogram", "tile_scatter", "source_histogram", "source_scatter", "source_ranges", "tile_ranges", "tile_depth_batches", "tile_depth_compose", "source_compact", "source_permutation", "digit_scan", "digit_offsets"}) {
@@ -258,7 +258,7 @@ namespace lfs::rendering::metal {
             descriptor.maxTotalThreadsPerThreadgroup = 256;
             auto state = [device newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&error];
             if (!state)
-                throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal tile pipeline failed");
+                throw std::runtime_error(std::format("Metal tile pipeline failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
             if (state.threadExecutionWidth != 32 || state.maxTotalThreadsPerThreadgroup < 256)
                 throw std::runtime_error(std::format("Metal viewer requires SIMD32 and 256-thread groups (function={}, simd_width={}, max_threads={})", function_name, state.threadExecutionWidth, state.maxTotalThreadsPerThreadgroup));
             impl_->pipelines.emplace(name, state);
@@ -380,7 +380,7 @@ namespace lfs::rendering::metal {
                     }
                 }
                 source_sorted = previous.error == RasterError::None &&
-                                previous.required_instances > uint64_t(count) * 5 / 4;
+                                previous.required_instances > uint64_t(count) / 4;
                 if (mode == RasterMode::Gut && previous.error == RasterError::None &&
                     previous.required_instances > uint64_t(f->tiles) * 512) {
                     // Cache SIMD32 only when a completed dense frame needs it.
