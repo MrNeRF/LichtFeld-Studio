@@ -438,7 +438,7 @@ namespace lfs::core {
             bool has_nan(StorageRef input, size_t count, ExecContext context) override;
             bool has_inf(StorageRef input, size_t count, ExecContext context) override;
             bool arg_extreme(StorageRef, StorageRef, StorageRef, const ArgExtremeProgram&,
-                             ExecContext) override { return false; }
+                             ExecContext) override;
             void cumsum(StorageRef data, const StridedLayout& layout, int dim,
                         ExecContext context) override;
             void sort_1d(StorageRef values, StorageRef indices, size_t count,
