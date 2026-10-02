@@ -100337,14 +100337,21 @@ const initUI = (global) => {
         console.log(`[screenshot] capture start: render target ${prevWidth}x${prevHeight} -> ${width}x${height}, maxTextureSize=${graphicsDevice.maxTextureSize}, backend=${graphicsDevice.constructor.name}`);
         showScreenshotToast(`Capturing ${width} x ${height}...`);
 
-        // Hide the measurement/label gizmos for the capture frames so their 3D handles don't appear in the export. Gizmo entities are parented to app.root (this engine build leaves scene.root null).
-        const gizmoLayers = [];
-        for (const name of ['LfsMeasureGizmo', 'LfsLabelGizmo']) {
-            const layer = app.root ? app.root.find(name) : null;
-            if (layer) {
-                gizmoLayers.push({ layer, visible: layer.enabled });
-                layer.enabled = false;
-            }
+        // Hide the measurement/label gizmos for the capture frames so their 3D handles (axis arrows, planes, center sphere) don't appear in the export. The gizmo meshes live under root entities named 'gizmo:*' parented to app.root - the 'LfsMeasureGizmo'/'LfsLabelGizmo' names are render layers, not entities, so Entity.find() can never locate them. Disabling a gizmo root also stops its per-frame guide-line drawing.
+        const hiddenGizmos = [];
+        if (app.root) {
+            const collectGizmos = (node) => {
+                for (let i = 0; i < node.children.length; i++) {
+                    const child = node.children[i];
+                    if (child.name.indexOf('gizmo:') === 0) {
+                        hiddenGizmos.push({ entity: child, enabled: child.enabled });
+                        child.enabled = false;
+                    } else {
+                        collectGizmos(child);
+                    }
+                }
+            };
+            collectGizmos(app.root);
         }
 
         // Pause camera animation during the capture so an animating camera doesn't move between the two rendered frames.
@@ -100364,8 +100371,8 @@ const initUI = (global) => {
             graphicsDevice.maxPixelRatio = prevMaxPixelRatio;
             app.setCanvasResolution(RESOLUTION_AUTO);
             camera.camera.aspectRatio = graphicsDevice.width / graphicsDevice.height;
-            for (const { layer, visible } of gizmoLayers) {
-                layer.enabled = visible;
+            for (const { entity, enabled } of hiddenGizmos) {
+                entity.enabled = enabled;
             }
             if (!wasAnimPaused && state.cameraMode === 'anim') {
                 state.animationPaused = false;
