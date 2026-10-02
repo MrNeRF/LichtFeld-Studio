@@ -116,6 +116,30 @@ namespace {
             y * scale + p1 * (r2 + 2.0f * y * y) + 2.0f * p2 * x * y};
     }
 
+    // COLMAP ThinPrismFisheyeCameraModel::ImgFromCam, extra params {k1, k2, p1, p2, k3, k4, sx1, sy1}.
+    std::pair<double, double> colmap_thin_prism_fisheye_reference(
+        const double u, const double v, const std::array<double, 8>& extra) {
+        const double r = std::sqrt(u * u + v * v);
+        double uu = u;
+        double vv = v;
+        if (r > std::numeric_limits<double>::epsilon()) {
+            const double theta = std::atan(r);
+            uu = theta * u / r;
+            vv = theta * v / r;
+        }
+        const auto [k1, k2, p1, p2, k3, k4, sx1, sy1] = extra;
+        const double u2 = uu * uu;
+        const double uv = uu * vv;
+        const double v2 = vv * vv;
+        const double r2 = u2 + v2;
+        const double r4 = r2 * r2;
+        const double r6 = r4 * r2;
+        const double r8 = r6 * r2;
+        const double radial = k1 * r2 + k2 * r4 + k3 * r6 + k4 * r8;
+        return {uu + uu * radial + 2.0 * p1 * uv + p2 * (r2 + 2.0 * u2) + sx1 * r2,
+                vv + vv * radial + 2.0 * p2 * uv + p1 * (r2 + 2.0 * v2) + sy1 * r2};
+    }
+
     std::pair<float, float> distort_test_coordinate(
         const float x, const float y, const UndistortParams& params) {
         const float r2 = x * x + y * y;
@@ -140,24 +164,123 @@ namespace {
         if (r < 1e-8f)
             return {x, y};
         const float theta = std::atan(r);
-        const float theta2 = theta * theta;
-        const float theta_d = theta * (1.0f + params.distortion[0] * theta2 +
-                                       params.distortion[1] * theta2 * theta2 +
-                                       params.distortion[2] * theta2 * theta2 * theta2 +
-                                       params.distortion[3] * theta2 * theta2 * theta2 * theta2);
-        float dx = x * theta_d / r;
-        float dy = y * theta_d / r;
+        const float uu = x * theta / r;
+        const float vv = y * theta / r;
+        const float t2 = theta * theta;
+        const float t4 = t2 * t2;
+        const float radial = params.distortion[0] * t2 + params.distortion[1] * t4 +
+                             params.distortion[2] * t4 * t2 + params.distortion[3] * t4 * t4;
+        float dx = uu + uu * radial;
+        float dy = vv + vv * radial;
         if (params.model_type == CameraModelType::THIN_PRISM_FISHEYE) {
-            const float distorted_r2 = dx * dx + dy * dy;
             const float p1 = params.distortion[4];
             const float p2 = params.distortion[5];
-            dx += 2.0f * p1 * dx * dy + p2 * (distorted_r2 + 2.0f * dx * dx);
-            dy += p1 * (distorted_r2 + 2.0f * dy * dy) + 2.0f * p2 * dx * dy;
-            const float r4 = distorted_r2 * distorted_r2;
-            dx += params.distortion[6] * distorted_r2 + params.distortion[7] * r4;
-            dy += params.distortion[8] * distorted_r2 + params.distortion[9] * r4;
+            dx += 2.0f * p1 * uu * vv + p2 * (t2 + 2.0f * uu * uu) +
+                  params.distortion[6] * t2 + params.distortion[7] * t4;
+            dy += 2.0f * p2 * uu * vv + p1 * (t2 + 2.0f * vv * vv) +
+                  params.distortion[8] * t2 + params.distortion[9] * t4;
         }
         return {dx, dy};
+    }
+
+    constexpr std::array<float, 4> FULL_THIN_PRISM_RADIAL = {0.1f, -0.02f, 0.003f, -0.001f};
+    constexpr std::array<float, 4> FULL_THIN_PRISM_TANGENTIAL = {0.002f, -0.0015f, 0.003f, -0.002f};
+
+    UndistortParams make_full_thin_prism_params(
+        const float fx, const float fy, const float cx, const float cy,
+        const int width, const int height) {
+        const auto radial = Tensor::from_vector(
+            std::vector<float>(FULL_THIN_PRISM_RADIAL.begin(), FULL_THIN_PRISM_RADIAL.end()),
+            TensorShape({4}), Device::CPU);
+        const auto tangential = Tensor::from_vector(
+            std::vector<float>(FULL_THIN_PRISM_TANGENTIAL.begin(), FULL_THIN_PRISM_TANGENTIAL.end()),
+            TensorShape({4}), Device::CPU);
+        return compute_undistort_params(
+            fx, fy, cx, cy, width, height, radial, tangential, CameraModelType::THIN_PRISM_FISHEYE);
+    }
+
+    std::array<double, 8> full_thin_prism_colmap_extra() {
+        const auto& k = FULL_THIN_PRISM_RADIAL;
+        const auto& t = FULL_THIN_PRISM_TANGENTIAL;
+        return {k[0], k[1], t[0], t[1], k[2], k[3], t[2], t[3]};
+    }
+
+    // Normalized points at incidence angles up to 1.45 rad in several azimuths.
+    std::vector<std::pair<float, float>> wide_angle_sample_points() {
+        std::vector<std::pair<float, float>> points;
+        for (const float theta : {0.3f, 0.8f, 1.2f, 1.45f}) {
+            const float r = std::tan(theta);
+            for (const float azimuth : {0.0f, 1.1f, 2.5f, 4.2f})
+                points.emplace_back(r * std::cos(azimuth), r * std::sin(azimuth));
+        }
+        return points;
+    }
+
+    int source_column_at_angle(const UndistortParams& params, const float theta) {
+        float dx, dy;
+        distort_normalized_point(params, std::tan(theta), 0.0f, dx, dy);
+        return static_cast<int>(std::floor(dx * params.src_fx + params.src_cx));
+    }
+
+    // Round trip through the GPU inverse for every source column between incidence angles 1.3 and
+    // 1.5 rad on a row near the optical axis. Undistorted focal lengths at or above the source keep
+    // the Lanczos ramp phase error (up to 0.018 px) from being amplified on the way back.
+    void expect_thin_prism_wide_angle_round_trip(const std::array<float, 10>& packed) {
+        UndistortParams params{};
+        params.model_type = CameraModelType::THIN_PRISM_FISHEYE;
+        params.src_width = 1792;
+        params.src_height = 8;
+        params.src_fx = params.src_fy = 1000.0f;
+        params.src_cx = 32.0f;
+        params.src_cy = 4.0f;
+        params.dst_width = 14336;
+        params.dst_height = 48;
+        params.dst_fx = 1000.0f;
+        params.dst_fy = 2000.0f;
+        params.dst_cx = 8.0f;
+        params.dst_cy = 24.0f;
+        std::copy(packed.begin(), packed.end(), params.distortion);
+        params.num_distortion = static_cast<int>(packed.size());
+
+        const size_t plane = static_cast<size_t>(params.dst_width) * params.dst_height;
+        std::vector<float> coordinates(3 * plane, 0.0f);
+        for (int y = 0; y < params.dst_height; ++y) {
+            for (int x = 0; x < params.dst_width; ++x) {
+                const size_t i = static_cast<size_t>(y) * params.dst_width + x;
+                coordinates[i] = static_cast<float>(x);
+                coordinates[plane + i] = static_cast<float>(y);
+            }
+        }
+        auto input = Tensor::from_vector(
+            coordinates, TensorShape({3, 48, 14336}), Device::CUDA);
+        Tensor validity;
+        const auto output = distort_image_to_source(input, params, validity, nullptr);
+        ASSERT_EQ(output.shape(), (TensorShape({3, 8, 1792})));
+        ASSERT_EQ(validity.shape(), (TensorShape({8, 1792})));
+
+        const auto output_cpu = output.cpu().contiguous();
+        const auto validity_cpu = validity.cpu().contiguous();
+        const float* const mapped_x = output_cpu.ptr<float>();
+        const float* const mapped_y = output_cpu.ptr<float>() + 8 * 1792;
+        const uint8_t* const valid = validity_cpu.ptr<uint8_t>();
+
+        constexpr int row = 3;
+        const int first_column = source_column_at_angle(params, 1.3f);
+        const int last_column = source_column_at_angle(params, 1.5f);
+        ASSERT_LT(first_column, last_column);
+        ASSERT_LT(last_column, params.src_width);
+        for (int x = first_column; x <= last_column; ++x) {
+            const size_t i = static_cast<size_t>(row) * 1792 + x;
+            ASSERT_EQ(valid[i], 1) << "column " << x;
+            const float ux = (mapped_x[i] + 0.5f - params.dst_cx) / params.dst_fx;
+            const float uy = (mapped_y[i] + 0.5f - params.dst_cy) / params.dst_fy;
+            float dx, dy;
+            distort_normalized_point(params, ux, uy, dx, dy);
+            EXPECT_NEAR(dx * params.src_fx + params.src_cx, x + 0.5f, 1.0e-2f) << "column " << x;
+            EXPECT_NEAR(dy * params.src_fy + params.src_cy, row + 0.5f, 1.0e-2f) << "column " << x;
+            if (x == last_column)
+                EXPECT_GT(std::atan(std::hypot(ux, uy)), 1.49f);
+        }
     }
 
     double lanczos3(const double x) {
@@ -503,6 +626,42 @@ TEST(UndistortInverse, FisheyeRoundTrip) {
 
 TEST(UndistortInverse, ThinPrismFisheyeRoundTrip) {
     expect_inverse_round_trip(CameraModelType::THIN_PRISM_FISHEYE);
+}
+
+// Catches an inverse that rejects a valid thin-prism ray because the radial-only seed exceeds the
+// fisheye angle limit once the prism term has pushed the distorted radius outward.
+TEST(UndistortInverse, ThinPrismWideAngleRayRecoveredPastRadialSeedLimit) {
+    expect_thin_prism_wide_angle_round_trip({0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.1f, 0.0f, 0.0f, 0.0f});
+}
+
+// Catches a seed or Newton solve that cannot invert the full COLMAP thin-prism model at wide angles.
+TEST(UndistortInverse, ThinPrismFullCoefficientsWideAngleRoundTrip) {
+    const auto& k = FULL_THIN_PRISM_RADIAL;
+    const auto& t = FULL_THIN_PRISM_TANGENTIAL;
+    expect_thin_prism_wide_angle_round_trip({k[0], k[1], k[2], k[3], t[0], t[1], t[2], 0.0f, t[3], 0.0f});
+}
+
+// Catches a CPU inverse (used by the crop solve) that rejects or mis-solves wide thin-prism rays.
+TEST(UndistortInverse, CpuThinPrismWideRaysRoundTrip) {
+    const auto params = make_full_thin_prism_params(1000.0f, 1000.0f, 2000.0f, 2000.0f, 4000, 4000);
+    for (const float theta : {1.0f, 1.3f, 1.45f, 1.5f, 1.54f}) {
+        for (const float azimuth : {0.0f, 1.1f, 2.5f, 4.2f}) {
+            const float r = std::tan(theta);
+            float dx, dy;
+            distort_normalized_point(params, r * std::cos(azimuth), r * std::sin(azimuth), dx, dy);
+            const float image_x = dx * params.src_fx + params.src_cx;
+            const float image_y = dy * params.src_fy + params.src_cy;
+            float nx, ny;
+            ASSERT_TRUE(undistort_image_point(params, image_x, image_y, nx, ny))
+                << "theta " << theta << " azimuth " << azimuth;
+            float rx, ry;
+            distort_normalized_point(params, nx, ny, rx, ry);
+            EXPECT_NEAR(rx * params.src_fx + params.src_cx, image_x, 1.0e-2f)
+                << "theta " << theta << " azimuth " << azimuth;
+            EXPECT_NEAR(ry * params.src_fy + params.src_cy, image_y, 1.0e-2f)
+                << "theta " << theta << " azimuth " << azimuth;
+        }
+    }
 }
 
 TEST(UndistortInverse, ValidityMaskExcludesOutOfFrameSamples) {
@@ -858,7 +1017,7 @@ TEST(UndistortPacking, Fisheye2Coeffs) {
 }
 
 TEST(UndistortPacking, ThinPrismFisheye) {
-    // COLMAP THIN_PRISM_FISHEYE: radial={k1,k2,k3,k4}, tangential={p1,p2,s1,s2}
+    // COLMAP THIN_PRISM_FISHEYE: radial={k1,k2,k3,k4}, tangential={p1,p2,sx1,sy1}
     auto radial = Tensor::from_vector({0.1f, -0.02f, 0.003f, -0.001f}, TensorShape({4}), Device::CPU);
     auto tangential = Tensor::from_vector({0.0005f, -0.0003f, 0.0001f, -0.0002f}, TensorShape({4}), Device::CPU);
     auto params = compute_undistort_params(
@@ -871,9 +1030,53 @@ TEST(UndistortPacking, ThinPrismFisheye) {
     EXPECT_FLOAT_EQ(params.distortion[3], -0.001f);  // k4
     EXPECT_FLOAT_EQ(params.distortion[4], 0.0005f);  // p1
     EXPECT_FLOAT_EQ(params.distortion[5], -0.0003f); // p2
-    EXPECT_FLOAT_EQ(params.distortion[6], 0.0001f);  // s1
-    EXPECT_FLOAT_EQ(params.distortion[7], -0.0002f); // s2
-    EXPECT_EQ(params.num_distortion, 8);
+    EXPECT_FLOAT_EQ(params.distortion[6], 0.0001f);  // sx1
+    EXPECT_FLOAT_EQ(params.distortion[7], 0.0f);     // sx2
+    EXPECT_FLOAT_EQ(params.distortion[8], -0.0002f); // sy1
+    EXPECT_FLOAT_EQ(params.distortion[9], 0.0f);     // sy2
+    EXPECT_EQ(params.num_distortion, 9);
+}
+
+// Catches a packing that stores COLMAP's sy1 in the x-axis r^4 prism slot instead of the y-axis
+// r^2 slot: the y displacement of a pure-sy1 camera then vanishes.
+TEST(UndistortPacking, ThinPrismPureSy1MatchesColmapReference) {
+    constexpr float sy1 = 0.05f;
+    auto radial = Tensor::from_vector({0.0f, 0.0f, 0.0f, 0.0f}, TensorShape({4}), Device::CPU);
+    auto tangential = Tensor::from_vector({0.0f, 0.0f, 0.0f, sy1}, TensorShape({4}), Device::CPU);
+    const auto params = compute_undistort_params(
+        TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H,
+        radial, tangential, CameraModelType::THIN_PRISM_FISHEYE);
+    const std::array<double, 8> colmap_extra = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, sy1};
+
+    for (const auto [x, y] : {std::pair{0.5f, 0.0f}, std::pair{0.0f, 0.4f}, std::pair{-0.3f, 0.25f}}) {
+        float dx, dy;
+        distort_normalized_point(params, x, y, dx, dy);
+        const auto [rx, ry] = colmap_thin_prism_fisheye_reference(x, y, colmap_extra);
+        EXPECT_NEAR(dx, rx, 1.0e-6) << "(" << x << ", " << y << ")";
+        EXPECT_NEAR(dy, ry, 1.0e-6) << "(" << x << ", " << y << ")";
+    }
+
+    float dx, dy;
+    distort_normalized_point(params, 0.5f, 0.0f, dx, dy);
+    const double theta = std::atan(0.5);
+    EXPECT_NEAR(dx, theta, 1.0e-6);
+    EXPECT_NEAR(dy, sy1 * theta * theta, 1.0e-6);
+}
+
+// Catches a forward model that composes radial, tangential and prism terms sequentially instead of
+// evaluating all of them on the theta-scaled point as COLMAP does; at 1.45 rad the sequential
+// variant is off by about a millipixel-per-unit-focal (1e-3 normalized).
+TEST(UndistortThinPrism, FullCoefficientsMatchColmapReference) {
+    const auto params = make_full_thin_prism_params(
+        TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H);
+    const auto colmap_extra = full_thin_prism_colmap_extra();
+    for (const auto [x, y] : wide_angle_sample_points()) {
+        float dx, dy;
+        distort_normalized_point(params, x, y, dx, dy);
+        const auto [rx, ry] = colmap_thin_prism_fisheye_reference(x, y, colmap_extra);
+        EXPECT_NEAR(dx, rx, 5.0e-6) << "(" << x << ", " << y << ")";
+        EXPECT_NEAR(dy, ry, 5.0e-6) << "(" << x << ", " << y << ")";
+    }
 }
 
 // ====================== Per-model undistortion tests ======================
