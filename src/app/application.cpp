@@ -1557,6 +1557,7 @@ namespace lfs::app {
                             case mcp::McpHttpErrorKind::BindFailed:
                                 return vis::RuntimeServiceErrorKind::BindFailed;
                             case mcp::McpHttpErrorKind::ListenerFailed:
+                            case mcp::McpHttpErrorKind::CredentialFailed:
                                 return vis::RuntimeServiceErrorKind::RuntimeFailure;
                             }
                             return vis::RuntimeServiceErrorKind::RuntimeFailure; }(),

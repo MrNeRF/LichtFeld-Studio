@@ -388,6 +388,7 @@ class TrainingPanel(Panel):
         model.bind_func("label_clear", lambda: tr("training_panel.clear"))
         model.bind_func("label_pause", lambda: tr("training_panel.pause"))
         model.bind_func("label_resume", lambda: tr("training_panel.resume"))
+        model.bind_func("label_toolbar_start", lambda: tr("training.action_start"))
         model.bind_func("label_toolbar_edit", lambda: tr("common.edit"))
         model.bind_func("label_toolbar_reset", lambda: tr("common.reset"))
         model.bind_func("label_toolbar_stop", lambda: tr("training.action_stop"))
@@ -1686,7 +1687,7 @@ class TrainingPanel(Panel):
             "starting": ("pause", "stop"),
             "running": ("pause", "save_project"),
             "paused": ("resume", "save_project", "reset", "stop"),
-            "completed": ("switch_edit", "reset", "clear"),
+            "completed": ("start_new", "switch_edit", "reset", "clear"),
             "stopped": ("switch_edit", "reset", "clear"),
             "error": ("reset", "clear"),
         }.get(state, ())
