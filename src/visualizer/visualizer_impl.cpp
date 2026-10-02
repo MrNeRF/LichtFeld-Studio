@@ -2441,28 +2441,25 @@ namespace lfs::vis {
             auto& ledger = rendering_manager_->frameDemandLedger();
             if (demand.gui_animation && !gui_animation_demand_.active()) {
                 gui_animation_demand_ = ledger.hold(
-                    FrameReason::GuiAnimation, FrameScope::Gui, 0, 0, Cadence::display(),
-                    Finite::alive([this] {
+                    FrameReason::GuiAnimation, FrameScope::Gui, 0, 0, [this] {
                         return (gui_manager_ && gui_manager_->needsAnimationFrame()) ||
                                python::is_plugin_preload_running();
-                    }),
-                    "visible_gui_animation", false);
+                    },
+                    "visible_gui_animation");
             } else if (!demand.gui_animation) {
                 gui_animation_demand_.release();
             }
             if (demand.python_animation && !python_animation_demand_.active()) {
                 python_animation_demand_ = ledger.hold(
                     FrameReason::PythonFrameCallback, FrameScope::View, 1, DirtyFlag::ALL,
-                    Cadence::display(),
-                    Finite::alive([this] {
+                    [this] {
                         const bool playing = gui_manager_ &&
                                              gui_manager_->sequencerUI().controller().isPlaying();
                         return python::has_frame_callback() ||
                                (playing && python::has_scene_time_callback());
-                    }),
+                    },
                     python::has_frame_callback() ? "python_frame_callback"
-                                                 : "python_scene_time_callback",
-                    false);
+                                                 : "python_scene_time_callback");
             } else if (!demand.python_animation) {
                 python_animation_demand_.release();
             }
@@ -2773,7 +2770,7 @@ namespace lfs::vis {
         if (has_rendered_view_fingerprint_ && ledger_plan.present &&
             ledger_plan.render_views == 0 &&
             current_view_fingerprint != last_rendered_view_fingerprint_) {
-            rendering_manager_->frameDemandLedger().noteStaleDetection();
+            rendering_manager_->frameDemandLedger().countStaleView();
             LOG_ERROR("stale view: view inputs changed without a view render");
         }
         if (gui_frame_rendered_ && !ledger_plan.present) {
@@ -2848,7 +2845,7 @@ namespace lfs::vis {
             if (ledger_plan.render_views != 0)
                 rendering_manager_->noteVksplatViewFrame();
             if (ledger_plan.render_views != 0)
-                rendering_manager_->frameDemandLedger().noteViewRendered(
+                rendering_manager_->frameDemandLedger().countViewRendered(
                     ledger_plan.render_views, ledger_plan);
             if (ledger_plan.render_views != 0) {
                 last_rendered_view_fingerprint_ = current_view_fingerprint;
@@ -2929,7 +2926,7 @@ namespace lfs::vis {
             // from framerate_controller_ inside renderVulkanFrame; this is
             // measurement-only and does not affect pacing.
             if (presented_gui_frame && rendering_manager_) {
-                rendering_manager_->notePresentedFrame(ledger_plan);
+                rendering_manager_->countPresentedFrame(ledger_plan);
                 std::string reasons;
                 std::string details;
                 DirtyMask flags = 0;

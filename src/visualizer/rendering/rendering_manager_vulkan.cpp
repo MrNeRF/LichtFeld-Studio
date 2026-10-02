@@ -1671,8 +1671,8 @@ namespace lfs::vis {
             if (!is_training) {
                 has_training_preview_iteration_ = false;
             } else if (has_training_preview_iteration_ &&
-                       !trainingPreviewStepAdvanced(last_training_preview_iteration_, current_iteration)) {
-                frame_demand_ledger_.notePreviewSkippedNoStep();
+                       current_iteration <= last_training_preview_iteration_) {
+                frame_demand_ledger_.countSkippedPreview();
                 return;
             }
             if (is_training) {

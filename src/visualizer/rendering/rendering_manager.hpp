@@ -424,9 +424,9 @@ namespace lfs::vis {
             return presented_framerate_controller_.getAverageFPS();
         }
         // Measurement only — does not affect scene render pacing/limiting.
-        void notePresentedFrame(const FramePlan& plan) {
+        void countPresentedFrame(const FramePlan& plan) {
             presented_framerate_controller_.beginFrame();
-            frame_demand_ledger_.notePresented(plan);
+            frame_demand_ledger_.countPresented(plan);
         }
 
         // Access to the auxiliary rendering engine used by point-cloud, mesh, and readback paths.
