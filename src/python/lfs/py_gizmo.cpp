@@ -118,7 +118,7 @@ namespace lfs::python {
             auto* viewer = gm ? gm->getViewer() : nullptr;
             auto* rm = viewer ? viewer->getRenderingManager() : nullptr;
             if (rm) {
-                rm->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::MESH | vis::DirtyFlag::OVERLAY);
+                rm->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::MESH | vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
             }
         }
 

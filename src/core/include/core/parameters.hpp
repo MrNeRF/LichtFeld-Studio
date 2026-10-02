@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/training_backend.hpp"
@@ -387,8 +388,7 @@ namespace lfs::core {
             bool invert_masks = false;
             float mask_threshold = 0.5f;
 
-            // PRMS-authoritative pending import option (ownership matrix).
-            // DatasetConfig::to_json omits it; project PRMS round-trips it.
+            // Dataset import option; persisted in training configs and project PRMS.
             std::string centralize_dataset = "off";
 
             nlohmann::json to_json() const;
@@ -616,6 +616,9 @@ namespace lfs::core {
         LFS_CORE_API std::expected<OptimizationParameters, std::string> read_optim_params_from_json(
             const std::filesystem::path& path,
             ExplicitTrainingOverrides& captured_overrides);
+        LFS_CORE_API std::expected<TrainingParameters, lfs::Error> read_training_parameters_from_json(
+            const std::filesystem::path& path,
+            const TrainingParameters& defaults = {});
 
         // Save training parameters to JSON
         LFS_CORE_API std::expected<void, std::string> save_training_parameters_to_json(

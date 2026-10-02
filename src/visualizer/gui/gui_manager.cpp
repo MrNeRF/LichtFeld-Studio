@@ -4627,7 +4627,7 @@ namespace lfs::vis::gui {
             selection_ring_cursor_attempted_ = false;
             selection_ring_theme_signature_valid_ = false;
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
-                rendering->markDirty(DirtyFlag::OVERLAY);
+                rendering->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
             }
         });
         lfs::python::set_rml_manager(&rmlui_manager_);
@@ -4654,7 +4654,7 @@ namespace lfs::vis::gui {
             .screen_changed =
                 [this]() {
                     if (auto* const rendering = viewer_->getRenderingManager())
-                        rendering->markDirty(DirtyFlag::ALL);
+                        rendering->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
                 },
             .view_command =
                 [this](const screen::AreaId id, const std::string_view command) {
@@ -5038,7 +5038,7 @@ namespace lfs::vis::gui {
             global_context_menu_->reloadResources();
 
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
-            rendering->markDirty(DirtyFlag::OVERLAY);
+            rendering->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
     }
 
     void GuiManager::requestLocalizationUiRefresh() {
@@ -6308,7 +6308,7 @@ namespace lfs::vis::gui {
             ui_layout_settle_frames_ = std::max<uint8_t>(ui_layout_settle_frames_, 3);
             if (rmlui_manager_.refreshLocalizedDocuments()) {
                 if (auto* const overlay_rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
-                    overlay_rendering->markDirty(DirtyFlag::OVERLAY);
+                    overlay_rendering->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
             }
         }
 
@@ -7365,7 +7365,7 @@ namespace lfs::vis::gui {
             if (!first_render_completed_) {
                 first_render_completed_ = true;
                 if (auto* const overlay_rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
-                    overlay_rendering->markDirty(DirtyFlag::OVERLAY);
+                    overlay_rendering->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
             }
             return presented;
         }
@@ -7377,7 +7377,7 @@ namespace lfs::vis::gui {
         if (!first_render_completed_) {
             first_render_completed_ = true;
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
-                rendering->markDirty(DirtyFlag::OVERLAY);
+                rendering->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
         }
         return false;
     }
@@ -8498,7 +8498,7 @@ namespace lfs::vis::gui {
         const auto now = std::chrono::steady_clock::now();
         if (cameraThumbnailRefreshDue(now)) {
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
-                rendering->markDirty(DirtyFlag::OVERLAY);
+                rendering->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
             return true;
         }
         const bool ui_toggle_due =
@@ -8732,7 +8732,7 @@ namespace lfs::vis::gui {
         if (viewer_) {
             viewer_->screens().resetToDefault();
             if (auto* rendering = viewer_->getRenderingManager())
-                rendering->markDirty(DirtyFlag::ALL);
+                rendering->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
         auto& registry = PanelRegistry::instance();
         registry.reset_project_state();

@@ -3196,6 +3196,16 @@ namespace lfs::vis {
     }
 
     VkPresentModeKHR VulkanContext::choosePresentMode(const std::vector<VkPresentModeKHR>& modes) const {
+#ifndef NDEBUG
+        if (const char* const requested = std::getenv("LFS_PRESENT_MODE");
+            requested && std::string_view(requested) == "fifo" &&
+            std::ranges::find(modes, VK_PRESENT_MODE_FIFO_KHR) != modes.end()) {
+            return VK_PRESENT_MODE_FIFO_KHR;
+        }
+#endif
+        // MAILBOX keeps navigation low-latency and avoids blocking the GUI tenant
+        // inside vkQueuePresent while it participates in shared-arena turn-taking.
+        // With no continuous frame demand, the ledger paces active animations.
         for (const auto mode : modes) {
             if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
                 return mode;
@@ -3627,8 +3637,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;

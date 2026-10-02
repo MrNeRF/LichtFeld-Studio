@@ -2877,7 +2877,7 @@ namespace lfs::app {
                             space->settings.focal_length_mm =
                                 lfs::rendering::vFovToFocalLength(*view.fov_degrees);
                         if (auto* rendering = viewer_impl->getRenderingManager())
-                            rendering->markDirty(vis::DirtyFlag::ALL);
+                            rendering->markDirty(vis::DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
                     } else {
                         apply_view_arguments(view);
                     }
@@ -2912,7 +2912,7 @@ namespace lfs::app {
                             return json{{"error", "Not a 3D view"}};
                         space->camera.camera.resetToHome();
                         if (auto* rendering = viewer_impl->getRenderingManager())
-                            rendering->markDirty(vis::DirtyFlag::ALL);
+                            rendering->markDirty(vis::DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
                     } else {
                         core::events::cmd::ResetCamera{}.emit();
                     }
@@ -5533,7 +5533,7 @@ namespace lfs::app {
                         return json{{"success", false}, {"error", result.error}};
 
                     if (auto* const rendering_manager = viewer->getRenderingManager())
-                        rendering_manager->markDirty(vis::DirtyFlag::ALL);
+                        rendering_manager->markDirty(vis::DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
 
                     try {
                         return json::parse(result.result_json);

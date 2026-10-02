@@ -2049,7 +2049,7 @@ TEST(ArgumentParserTest, IterationsAndStepsScalerConflictBeforeModeChecks) {
         std::vector<const char*> argv{"LichtFeld-Studio"};
         for (const auto& value : values)
             argv.push_back(value.c_str());
-        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+        const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
         ASSERT_FALSE(parsed);
         EXPECT_EQ(parsed.error(), "--iter and --steps-scaler are mutually exclusive: --iter sets the iteration count exactly, --steps-scaler rescales the default schedule");
     }
@@ -2058,7 +2058,7 @@ TEST(ArgumentParserTest, IterationsAndStepsScalerConflictBeforeModeChecks) {
 // Catches --iter starting to rescale the timetable.
 TEST(ArgumentParserTest, IterationsAlonePreserveDefaultTimetable) {
     const char* argv[]{"LichtFeld-Studio", "--iter", "7000"};
-    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed) << parsed.error();
     const auto& opt = (*parsed)->optimization;
     const auto defaults = lfs::core::param::OptimizationParameters::mrnf_defaults();
@@ -2075,7 +2075,7 @@ TEST(ArgumentParserTest, IterationsAlonePreserveDefaultTimetable) {
 TEST(ArgumentParserTest, ScalingPrecedesAbsoluteStepOverrides) {
     const char* argv[]{"LichtFeld-Studio", "--steps-scaler", "0.5", "--sh-degree-interval", "1000",
                        "--morton-reorder-interval", "3000", "--fill-pacing-iter", "1234", "--eval", "--eval-steps", "1000"};
-    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed) << parsed.error();
     const auto& opt = (*parsed)->optimization;
     EXPECT_EQ(opt.sh_degree_interval, 1000u);
@@ -2101,7 +2101,7 @@ TEST(ArgumentParserTest, ConfigScalingPrecedesExplicitIterations) {
     std::ofstream(path) << json.dump();
     const auto path_text = path.string();
     const char* argv[]{"LichtFeld-Studio", "--config", path_text.c_str(), "--iter", "2500"};
-    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     std::filesystem::remove(path);
     ASSERT_TRUE(parsed) << parsed.error();
     EXPECT_EQ((*parsed)->optimization.iterations, 2500u);
@@ -2111,14 +2111,14 @@ TEST(ArgumentParserTest, ConfigScalingPrecedesExplicitIterations) {
 
 // Catches help text that hides the --iter / --steps-scaler conflict.
 TEST(ArgumentParserTest, StepScalingHelpShowsMutualExclusion) {
-    EXPECT_NE(lfs::core::args::optimization_cli_help("--iter").find("; cannot be combined with --steps-scaler"), std::string::npos);
-    EXPECT_NE(lfs::core::args::optimization_cli_help("--steps-scaler").find("; cannot be combined with --iter"), std::string::npos);
+    EXPECT_NE(lfs::io::args::optimization_cli_help("--iter").find("; cannot be combined with --steps-scaler"), std::string::npos);
+    EXPECT_NE(lfs::io::args::optimization_cli_help("--steps-scaler").find("; cannot be combined with --iter"), std::string::npos);
 }
 
 // Catches a joined short value such as -i2500 being parsed but then ignored.
 TEST(ArgumentParserTest, JoinedShortIterationValueIsUsed) {
     const char* argv[]{"LichtFeld-Studio", "-i2500"};
-    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed) << parsed.error();
     EXPECT_EQ((*parsed)->optimization.iterations, 2500u);
     EXPECT_TRUE((*parsed)->cli_iterations_set);

@@ -1389,7 +1389,7 @@ namespace lfs::vis {
             }
 
             if (applied) {
-                markDirty(DirtyFlag::SPLIT_VIEW);
+                markDirty(DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
             }
         }
     }
@@ -1496,13 +1496,26 @@ namespace lfs::vis {
             idlePreviewIntervalSec(0.0, viewer_turn_ms) + viewer_turn_ms * 1e-3));
     }
 
-    void RenderingManager::pollTrainingRefresh(const bool is_training) {
+    void RenderingManager::pollTrainingRefresh(const bool is_training, const int current_iteration) {
         std::lock_guard lock(views_mutex_);
         for (auto& [id, view] : view_states_) {
             const DirtyMask dirty = view->frame_lifecycle_service_.handleTrainingRefresh(
                 is_training, trainingRefreshIntervalSec(*view));
+            if (!is_training)
+                view->has_training_preview_iteration_ = false;
+            if (!dirty)
+                continue;
+            if (is_training && view->has_training_preview_iteration_ &&
+                !trainingPreviewStepAdvanced(view->last_training_preview_iteration_, current_iteration)) {
+                frame_demand_ledger_.notePreviewSkippedNoStep();
+                continue;
+            }
+            if (is_training) {
+                view->last_training_preview_iteration_ = current_iteration;
+                view->has_training_preview_iteration_ = true;
+            }
             view->training_refresh_dirty_.fetch_or(dirty, std::memory_order_relaxed);
-            view->dirty_mask_.fetch_or(dirty, std::memory_order_relaxed);
+            markViewDirty(id, dirty, FrameReason::TrainingPreview);
         }
     }
 
@@ -1541,7 +1554,7 @@ namespace lfs::vis {
         import_render_generation_ = generation;
         import_render_frames_ = 0;
         import_render_result_.reset();
-        markDirty(DirtyFlag::ALL);
+        markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
     }
 
     bool RenderingManager::importUsesCombinedModel() const {
@@ -1603,7 +1616,7 @@ namespace lfs::vis {
             .provisional_import_node = context.provisional_import_node};
         try {
             for (unsigned slot = 0; slot < OutputSlotRing::kFrameRingSize && !import_render_result_; ++slot) {
-                markDirty(DirtyFlag::ALL);
+                markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
                 static_cast<void>(renderVulkanFrame(preparation));
             }
         } catch (const std::exception& error) {
@@ -1618,7 +1631,7 @@ namespace lfs::vis {
 
     void RenderingManager::cancelImportRenderCheck() {
         if (import_render_check_)
-            markDirty(DirtyFlag::ALL); // Publish the prepared scene through the normal viewport pass.
+            markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange); // Publish the prepared scene through the normal viewport pass.
         import_render_check_ = false;
         import_render_result_.reset();
     }
@@ -1632,7 +1645,7 @@ namespace lfs::vis {
         else if (++import_render_frames_ == OutputSlotRing::kFrameRingSize)
             import_render_result_ = std::string{};
         else
-            markDirty(DirtyFlag::ALL);
+            markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
     }
 
     RenderingManager::VulkanFrameResult
@@ -1719,6 +1732,7 @@ namespace lfs::vis {
             // arena backing, so this also drops the viewer's final import.
             vksplat_viewport_renderer_->releaseScratchOnIdle(true);
             vksplat_idle_frame_count_ = 0;
+            vksplat_idle_since_ = {};
         }
 
         const auto framebuffer_region =
@@ -1900,7 +1914,7 @@ namespace lfs::vis {
         const auto resize_result =
             view_state.frame_lifecycle_service_.handleViewportResize(current_size);
         if (resize_result.dirty) {
-            markDirty(resize_result.dirty);
+            markViewDirty(context.view, resize_result.dirty, lfs::vis::FrameReason::SceneChange);
         }
         const bool resize_deferring = !context.preparing_import && view_state.frame_lifecycle_service_.isResizeDeferring();
         const auto requested_upscaler = sceneUpscalerBackendFromId(frame_settings.scene_upscaler)
@@ -2189,7 +2203,7 @@ namespace lfs::vis {
                 clearVulkanViewportImageState(view_state);
                 view_state.last_logged_vksplat_render_error_.clear();
                 view_state.viewport_artifact_service_.clearViewportOutput();
-                markViewDirty(context.view, DirtyFlag::ALL);
+                markViewDirty(context.view, DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
             }
         }
 
@@ -3196,7 +3210,7 @@ namespace lfs::vis {
                                                                              .camera = camera});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
-                                markDirty(DirtyFlag::SPLIT_VIEW);
+                                markViewDirty(context.view, DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
                                 if (lookup.stale_image && !lookup.grace_elapsed) {
                                     gt_image = lookup.stale_image;
                                 } else {
@@ -3273,7 +3287,7 @@ namespace lfs::vis {
                                                                              .camera = camera});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
-                                markDirty(DirtyFlag::SPLIT_VIEW);
+                                markViewDirty(context.view, DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
                                 gt_loading = true;
                                 if (lookup.stale_image && !lookup.grace_elapsed) {
                                     gt_image = lookup.stale_image;
@@ -3304,7 +3318,7 @@ namespace lfs::vis {
                                                                              .camera = camera});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
-                                markDirty(DirtyFlag::SPLIT_VIEW);
+                                markViewDirty(context.view, DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
                                 gt_loading = true;
                                 if (lookup.stale_image && !lookup.grace_elapsed) {
                                     gt_image = lookup.stale_image;

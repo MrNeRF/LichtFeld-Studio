@@ -20,8 +20,8 @@ class _PanelSpec:
     height_mode: str
     size: tuple[int, int]
     options: tuple[str, ...] = ("DEFAULT_CLOSED",)
-    update_policy: str = "interval"
-    update_interval_ms: int = 100
+    update_policy: str = "dirty"
+    update_interval_ms: int | None = None
     style: str = ""
     has_poll: bool = False
     has_draw: bool = False
@@ -111,6 +111,8 @@ _PANEL_METADATA_FIELDS = (
 def panel_metadata(name, lf):
     """Resolve a shared panel spec into class attributes for a runtime."""
     spec = PANEL_SPECS[name]
+    if spec.update_policy == "interval" and spec.update_interval_ms is None:
+        raise ValueError(f"Panel {spec.id!r} uses interval updates but has no update_interval_ms")
     return {
         "id": spec.id,
         "label": spec.label,

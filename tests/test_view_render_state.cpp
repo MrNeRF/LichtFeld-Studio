@@ -51,7 +51,7 @@ namespace lfs::vis {
 
         TEST_F(ViewRenderStateTest, SceneMutationsAndSceneSettingsDirtyEveryView) {
             clearDirty();
-            rendering.markDirty(DirtyFlag::SPLATS);
+            rendering.markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
             EXPECT_EQ(rendering.viewState(first).dirty_mask_.load(), DirtyFlag::SPLATS);
             EXPECT_EQ(rendering.viewState(second).dirty_mask_.load(), DirtyFlag::SPLATS);
             clearDirty();

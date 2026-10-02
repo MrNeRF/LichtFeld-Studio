@@ -142,13 +142,20 @@ namespace lfs::vis::gui {
         if (!has_update_interval_) {
             has_update_interval_ = true;
             try {
-                if (nb::hasattr(panel_instance_, "update_interval_ms"))
+                if (nb::hasattr(panel_instance_, "update_interval_ms") &&
+                    !panel_instance_.attr("update_interval_ms").is_none())
                     update_interval_ms_ = std::max(0, nb::cast<int>(panel_instance_.attr("update_interval_ms")));
                 if (nb::hasattr(panel_instance_, "update_policy")) {
                     const auto policy = nb::cast<std::string>(panel_instance_.attr("update_policy"));
                     dirty_driven_updates_ = policy == "dirty" || policy == "reactive";
+                    if (policy == "interval" &&
+                        (!nb::hasattr(panel_instance_, "update_interval_ms") ||
+                         panel_instance_.attr("update_interval_ms").is_none())) {
+                        throw nb::value_error("interval panels must declare update_interval_ms");
+                    }
                 }
             } catch (const std::exception& e) {
+                dirty_driven_updates_ = true;
                 LOG_ERROR("Panel update policy error: {}", e.what());
             }
         }

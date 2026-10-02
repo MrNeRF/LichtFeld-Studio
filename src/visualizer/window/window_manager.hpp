@@ -65,7 +65,7 @@ namespace lfs::vis {
         void updateWindowSize(const char* reason = "manual",
                               ResizeIntent intent = ResizeIntent::Exact);
         void pollEvents();
-        void waitEvents(double timeout_seconds);
+        void waitEvents(std::optional<double> timeout_seconds = std::nullopt);
         bool shouldClose() const;
         void requestClose() { should_close_ = true; }
         void cancelClose();

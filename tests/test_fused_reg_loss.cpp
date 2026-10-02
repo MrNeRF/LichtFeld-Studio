@@ -318,7 +318,7 @@ TEST_F(FusedRegLossTest, ClampedTrainedColorAllowsOnlyImageDrivenRecovery) {
         auto forward = fast_rasterize_forward(camera, *model, bg_, 0, 0, 0, 0, false);
         ASSERT_TRUE(forward.has_value());
         loss_minus = blue_sum(forward->first.image);
-        const auto alpha = forward->second.alpha.cpu();
+        const auto alpha = forward->first.alpha.cpu();
         for (size_t i = 0; i < alpha.numel(); ++i)
             coverage += alpha.ptr<float>()[i];
     }

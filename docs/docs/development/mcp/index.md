@@ -81,6 +81,7 @@ When a tool can block or keep running, use the runtime APIs instead of sleeping:
 - [Connecting MCP Clients](connecting-clients.md) for client setup (Claude Desktop, Claude Code, in-repo agents)
 - [Bootstrap](bootstrap.md) for the discovery-first workflow
 - [Recipes](recipes/) for concrete task sequences
+- [Frame demand and idle verification](recipes/render-on-demand.md) for the runtime frame ledger and GPU idle test
 
 ## What Not To Do
 
