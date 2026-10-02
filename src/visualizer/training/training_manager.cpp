@@ -2542,7 +2542,6 @@ namespace lfs::vis {
         params.dataset = (hasTrainer() || !pending_dataset_params_.data_path.empty())
                              ? pending_dataset_params_
                              : parameter_manager.getDatasetConfig();
-        params.optimization = parameter_manager.copyActiveParams();
         return params;
     }
 
