@@ -129,7 +129,8 @@ namespace lfs::vis {
 
     TEST_F(InputControllerFocusTest, HeldOrbitRequestsFramesOnlyWhenTheCameraChanges) {
         Viewport viewport(200, 200);
-        InputController controller(nullptr, viewport);
+        TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
         controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
                                      input::ACTION_PRESS, 100.0, 100.0);
         ASSERT_TRUE(controller.isCameraDragging());
@@ -153,7 +154,8 @@ namespace lfs::vis {
 
     TEST_F(InputControllerFocusTest, HeldPanVelocityIsNotAnAnimationUntilRelease) {
         Viewport viewport(200, 200);
-        InputController controller(nullptr, viewport);
+        TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
         controller.handleMouseButton(static_cast<int>(input::AppMouseButton::RIGHT),
                                      input::ACTION_PRESS, 100.0, 100.0);
         ASSERT_TRUE(controller.isCameraDragging());
@@ -168,7 +170,8 @@ namespace lfs::vis {
 
     TEST_F(InputControllerFocusTest, HeldLookIsEventDrivenButKeyboardMovementAnimates) {
         Viewport viewport(200, 200);
-        InputController controller(nullptr, viewport);
+        TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
         controller.initialize();
         input::InputRouter router;
         router.setInputController(&controller);
@@ -186,7 +189,8 @@ namespace lfs::vis {
 
     TEST_F(InputControllerFocusTest, PausedOrbitDecaysWithoutFrameTicks) {
         Viewport viewport(200, 200);
-        InputController controller(nullptr, viewport);
+        TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
         controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
                                      input::ACTION_PRESS, 100.0, 100.0);
         controller.handleMouseMove(120.0, 110.0);

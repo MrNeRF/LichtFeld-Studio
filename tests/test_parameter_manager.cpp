@@ -3,11 +3,11 @@
 
 #include <gtest/gtest.h>
 
-#include "core/argument_parser.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
+#include "core/training_manager.hpp"
+#include "io/argument_parser.hpp"
 #include "io/project_chapters.hpp"
-#include "training/training_manager.hpp"
 
 #include <filesystem>
 #include <format>
@@ -582,7 +582,7 @@ namespace {
                 std::vector<const char*> argv{"LichtFeld-Studio", "--strategy", strategy, "--steps-scaler", "0.5"};
                 for (const auto& flag : flags)
                     argv.push_back(flag.c_str());
-                const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+                const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
                 ASSERT_TRUE(parsed) << parsed.error();
                 ASSERT_TRUE((*parsed)->cli_step_values_set);
                 lfs::vis::ParameterManager manager;
@@ -611,7 +611,7 @@ namespace {
             }
             std::ofstream(path) << json.dump();
             const char* argv[]{"LichtFeld-Studio", "--config", path_text.c_str()};
-            const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+            const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
             ASSERT_TRUE(parsed) << parsed.error();
             EXPECT_FALSE((*parsed)->cli_step_values_set);
             EXPECT_TRUE((*parsed)->overrides.has_optimization_key("iterations"));
@@ -622,7 +622,7 @@ namespace {
             EXPECT_FLOAT_EQ(manager.getActiveParams().steps_scaler, legacy ? 2.f : 1.f);
         }
         const char* argv[]{"LichtFeld-Studio", "--config", path_text.c_str(), "--sh-degree-interval", "1000"};
-        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
         ASSERT_TRUE(parsed) << parsed.error();
         lfs::vis::ParameterManager manager;
         manager.setSessionDefaults(**parsed);
@@ -642,7 +642,7 @@ namespace {
         std::ofstream(path) << json.dump();
         const auto path_text = path.string();
         const char* argv[]{"LichtFeld-Studio", "--config", path_text.c_str(), "--steps-scaler", "0.5"};
-        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
         std::filesystem::remove(path);
         ASSERT_TRUE(parsed) << parsed.error();
         EXPECT_EQ((*parsed)->optimization.iterations, 15000u);
