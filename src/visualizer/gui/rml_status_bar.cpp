@@ -1639,9 +1639,13 @@ namespace lfs::vis::gui {
         setModelBool("gpu_panel_active", model_.gpu_panel_active,
                      lfs::vis::app_store().perf_hud.get().visible);
         setModelString("lfs_mem_text", model_.lfs_mem_text,
-                       std::format("LFS {}{} GiB", mem.process_estimated ? "≤" : "",
-                                   formatGpuGiB(mem.process_used)));
-        setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(p.info));
+                       mem.process_valid
+                           ? std::format("LFS {} GiB{}", formatGpuGiB(mem.process_used),
+                                         mem.process_over_budget
+                                             ? std::format(" ({})", LOC("ui.vram_over_budget"))
+                                             : "")
+                           : "LFS —");
+        setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(mem.process_over_budget ? p.error : p.info));
         setModelBool("show_lfs_memory", model_.show_lfs_memory, !mem.uses_process_budget);
         setModelBool("show_gpu_model", model_.show_gpu_model, !mem.device_name.empty());
         setModelString("gpu_model_text", model_.gpu_model_text, mem.device_name);

@@ -505,7 +505,7 @@ namespace lfs::vis {
         // demand when captureViewportImage() is called, never per-frame. Mirrors the
         // pixel-for-pixel result of the Vulkan split_view.frag shader so screenshots
         // match what the user sees on screen.
-        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> composeSplitViewCpu(
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> composeSplitViewCpuImpl(
             const VulkanSplitViewParams& params,
             const glm::ivec2& output_size) {
             const auto load_panel = [](const std::shared_ptr<const lfs::core::Tensor>& image)
@@ -722,7 +722,9 @@ namespace lfs::vis {
                  static_cast<std::size_t>(height),
                  static_cast<std::size_t>(width)},
                 lfs::core::Device::CPU);
-            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+            // The composite is already in screen order. HWC is the upright
+            // capture contract; CHW readbacks are flipped by Python consumers.
+            return std::make_shared<lfs::core::Tensor>(tensor.permute({1, 2, 0}).contiguous());
         }
 
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeViewportCaptureImageHwc(
@@ -881,6 +883,11 @@ namespace lfs::vis {
             return frame;
         }
     } // namespace
+
+    std::shared_ptr<lfs::core::Tensor> RenderingManager::composeSplitViewCpu(
+        const VulkanSplitViewParams& params, const glm::ivec2& output_size) {
+        return composeSplitViewCpuImpl(params, output_size);
+    }
 
     bool RenderingManager::gtRequestMatches(const GTComparisonImageJobRequest& lhs,
                                             const GTComparisonImageJobRequest& rhs) {
@@ -1571,6 +1578,7 @@ namespace lfs::vis {
                 static_cast<void>(renderVulkanFrame(preparation));
             }
         } catch (const std::exception& error) {
+            LOG_ERROR("Import render preparation failed: {}", error.what());
             import_render_result_ = error.what();
         }
         import_render_preparing_ = false;

@@ -139,8 +139,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::size_t bestProcessUsed(const lfs::diagnostics::VramProfilerSnapshot& s) {
             if (s.process.process_memory_valid && s.process.process_used > 0)
                 return s.process.process_used;
-            if (s.process.cuda_memory_valid && s.process.cuda_used > 0)
-                return s.process.cuda_used;
             return 0;
         }
 
@@ -894,7 +892,7 @@ namespace lfs::vis::gui {
 
         const auto& s = state_.snapshot;
         const auto memory = queryGpuMemory();
-        const auto process_used = memory.process_used > 0 ? memory.process_used : bestProcessUsed(s);
+        const auto process_used = memory.process_valid ? memory.process_used : 0;
         const auto process_total = memory.total > 0 ? memory.total : bestProcessTotal(s);
 
         if (iteration_label_) {
@@ -950,7 +948,7 @@ namespace lfs::vis::gui {
             element->SetClass("crit", value >= 92.0f);
         };
         const auto memory = queryGpuMemory();
-        const auto process_bytes = memory.process_used > 0 ? memory.process_used : s.vram_process_bytes;
+        const auto process_bytes = memory.process_valid ? memory.process_used : 0;
         const auto total_bytes = memory.total > 0 ? memory.total : s.vram_total_bytes;
         const auto device_bytes = memory.total > 0 ? memory.total_used : s.vram_used_bytes;
         const auto vram_process = ratio(process_bytes, total_bytes);
@@ -960,11 +958,13 @@ namespace lfs::vis::gui {
         set_width(perf_vram_free_, std::max(0.0f, 100.0f - vram_used));
         set_threshold(perf_vram_process_, vram_used);
         if (perf_vram_value_)
-            perf_vram_value_->SetInnerRML(std::format("{}{} / {}{}",
-                                                      memory.process_estimated ? "≤" : "",
-                                                      formatBytes(process_bytes),
+            perf_vram_value_->SetInnerRML(std::format("{} / {}{}{}",
+                                                      memory.process_valid ? formatBytes(process_bytes) : "—",
                                                       memory.device_estimated ? "≈" : "",
-                                                      formatBytes(total_bytes)));
+                                                      formatBytes(total_bytes),
+                                                      memory.process_over_budget
+                                                          ? std::format(" ({})", LOC("ui.vram_over_budget"))
+                                                          : ""));
         if (perf_vram_value_)
             perf_vram_value_->SetAttribute("title", LOC(gpuProcessMemoryTooltipKey(memory)));
         if (perf_vram_badge_) {
@@ -1380,12 +1380,13 @@ namespace lfs::vis::gui {
         };
 
         const auto memory = queryGpuMemory();
-        write("process", std::format("{}{}", memory.process_estimated ? "≤" : "", formatBytes(process_used)),
-              formatPercent(process_used, process_total));
+        write("process", memory.process_valid ? formatBytes(process_used) : "—",
+              memory.process_over_budget ? LOC("ui.vram_over_budget")
+                                         : (memory.process_valid ? formatPercent(process_used, process_total) : ""));
         if (auto it = summary_by_key_.find("process"); it != summary_by_key_.end())
             it->second.value->SetAttribute("title", LOC(gpuProcessMemoryTooltipKey(memory)));
-        write("cuda_context", formatBytes(s.process.cuda_used),
-              formatPercent(s.process.cuda_used, s.process.cuda_total));
+        write("cuda_context", formatBytes(memory.total_used),
+              formatPercent(memory.total_used, memory.total));
         write("cuda_pool_used",
               formatBytes(s.process.cuda_pool_valid ? s.process.cuda_pool_used : 0));
         write("cuda_pool_reserved",

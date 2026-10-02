@@ -1,7 +1,8 @@
 {
   "ui.vram_window_1m": "1 min",
-  "ui.vram_process_nvml_tooltip": "NVIDIA 驱动报告的进程 GPU 内存。",
-  "ui.vram_process_estimate_tooltip": "无法获取进程数据，因此根据设备用量估算的进程 GPU 内存上限。",
+  "ui.vram_process_nvml_tooltip": "操作系统或 GPU 驱动程序报告的进程 GPU 内存。",
+  "ui.vram_process_unavailable_tooltip": "无法获取进程 GPU 内存。设备使用量包括其他应用程序。",
+  "ui.vram_over_budget": "超出预算",
   "ui.vram_device_nvml_tooltip": "NVIDIA 驱动报告的设备内存。",
   "ui.vram_device_cuda_tooltip": "CUDA 可见内存；可能不包含预留的物理容量。",
   "ui.vram_process_metal_tooltip": "此进程通过 Metal 分配的 GPU 内存。",

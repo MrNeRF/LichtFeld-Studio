@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "gui/sequencer_viewport_edit_mode.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
 #include <RmlUi/Core/EventListener.h>
@@ -28,7 +30,7 @@ namespace lfs::vis::gui {
 
     class RmlUIManager;
 
-    class RmlSequencerOverlay {
+    class LFS_VIS_API RmlSequencerOverlay {
     public:
         enum class Action : uint8_t {
             ADD_KEYFRAME,

@@ -1,7 +1,8 @@
 {
   "ui.vram_window_1m": "1 min",
-  "ui.vram_process_nvml_tooltip": "NVIDIA 드라이버가 보고한 프로세스 GPU 메모리입니다.",
-  "ui.vram_process_estimate_tooltip": "프로세스 값을 사용할 수 없어 장치 사용량에서 추정한 프로세스 GPU 메모리의 상한입니다.",
+  "ui.vram_process_nvml_tooltip": "운영 체제 또는 GPU 드라이버가 보고한 프로세스 GPU 메모리입니다.",
+  "ui.vram_process_unavailable_tooltip": "프로세스 GPU 메모리를 확인할 수 없습니다. 장치 사용량에는 다른 애플리케이션이 포함됩니다.",
+  "ui.vram_over_budget": "예산 초과",
   "ui.vram_device_nvml_tooltip": "NVIDIA 드라이버가 보고한 장치 메모리입니다.",
   "ui.vram_device_cuda_tooltip": "CUDA에서 보이는 메모리이며 예약된 물리 용량이 제외될 수 있습니다.",
   "ui.vram_process_metal_tooltip": "이 프로세스가 Metal을 통해 할당한 GPU 메모리입니다.",

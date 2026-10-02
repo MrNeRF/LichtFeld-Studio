@@ -2085,15 +2085,20 @@ namespace lfs::vis {
 
             case input::Action::CAMERA_NEXT_VIEW:
             case input::Action::CAMERA_PREV_VIEW: {
-                const auto* trainer = services().trainerOrNull();
-                if (trainer) {
-                    const int num_cams = static_cast<int>(trainer->getAllCamList().size());
-                    if (num_cams > 0) {
+                if (const auto* scene_manager = services().sceneOrNull()) {
+                    const auto& cameras = scene_manager->getScene().getAllCamerasCached();
+                    if (!cameras.empty()) {
+                        const auto* rendering = services().renderingOrNull();
+                        const int current_uid = rendering ? rendering->getCurrentCameraId() : last_camview_;
+                        const auto current = std::ranges::find_if(cameras, [current_uid](const auto& camera) {
+                            return camera->uid() == current_uid;
+                        });
+                        const int count = static_cast<int>(cameras.size());
                         const int delta = (bound_action == input::Action::CAMERA_NEXT_VIEW) ? 1 : -1;
-                        last_camview_ = (last_camview_ < 0)
-                                            ? (delta > 0 ? 0 : num_cams - 1)
-                                            : (last_camview_ + delta + num_cams) % num_cams;
-                        cmd::GoToCamView{.cam_id = last_camview_}.emit();
+                        const int index = current == cameras.end()
+                                              ? (delta > 0 ? 0 : count - 1)
+                                              : (static_cast<int>(std::distance(cameras.begin(), current)) + delta + count) % count;
+                        cmd::GoToCamView{.cam_id = cameras[index]->uid()}.emit();
                     }
                 }
                 return;
@@ -2884,7 +2889,7 @@ namespace lfs::vis {
             .rotation = target_viewport.getRotationMatrix(),
             .translation = target_viewport.getTranslation()}
             .emit();
-        publishCameraMove(&target_viewport);
+        publishCameraMove(&target_viewport, /*preserve_gt_comparison=*/true);
 
         auto* const rendering_manager = services().renderingOrNull();
 
@@ -3474,7 +3479,7 @@ namespace lfs::vis {
     }
 
     void InputController::publishCameraMove(
-        Viewport* target_viewport) {
+        Viewport* target_viewport, const bool preserve_gt_comparison) {
         LOG_PERF("InputController::publishCameraMove drag_mode={}", static_cast<int>(drag_mode_));
         auto* const active_viewport = target_viewport ? target_viewport : &viewport();
         if (selection_tool_ && selection_tool_->isEnabled()) {
@@ -3483,7 +3488,8 @@ namespace lfs::vis {
 
         if (auto* const rendering = services().renderingOrNull()) {
             const auto view = views_.viewId(*active_viewport);
-            if (rendering->settingsForView(view).split_view_mode == SplitViewMode::GTComparison) {
+            if (!preserve_gt_comparison &&
+                rendering->settingsForView(view).split_view_mode == SplitViewMode::GTComparison) {
                 rendering->editViewSettings(view, [](ViewSettings& settings) {
                     settings.split_view_mode = SplitViewMode::Disabled;
                 });

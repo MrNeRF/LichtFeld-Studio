@@ -266,7 +266,7 @@ namespace lfs::diagnostics {
         for (const auto& row : s.rows) {
             if (!row.scope.starts_with("vulkan.external") || row.live_bytes == 0 ||
                 row.scope.starts_with("vulkan.external.imported") ||
-                row.scope.starts_with("vulkan.external_tensor") ||
+                row.scope.starts_with("vulkan.external_tensor.alias") ||
                 row.scope == "vulkan.external.semaphore")
                 continue;
             add(out, VramOwner::Viewer, row.live_bytes, &row);

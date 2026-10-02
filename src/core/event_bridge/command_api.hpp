@@ -3,12 +3,14 @@
 #pragma once
 
 #include "core/event_bridge/control_boundary.hpp"
+#include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include "core/training_snapshot_metrics.hpp"
 
 #include <atomic>
 #include <cstddef>
 #include <expected>
+#include <format>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -124,8 +126,23 @@ namespace lfs::training {
         float loss;
     };
 
-    // Broadcasts a [N] row mask over an attribute whose leading axis holds the N rows.
-    LFS_BRIDGE_API core::Tensor expand_row_mask(const core::Tensor& row_mask, const core::TensorShape& target_shape);
+    // Broadcast a row mask without owning a separate DLL symbol.
+    inline core::Tensor expand_row_mask(const core::Tensor& row_mask, const core::TensorShape& target_shape) {
+        if (row_mask.shape().rank() == 0 || target_shape.rank() == 0) {
+            return row_mask;
+        }
+        if (row_mask.shape().rank() == 1 && target_shape.rank() > 1) {
+            LFS_ASSERT_MSG(row_mask.shape()[0] == target_shape[0],
+                           std::format("row mask length {} does not match attribute rows (shape={})",
+                                       row_mask.shape()[0], target_shape.str()));
+            // Rows are the leading axis of every attribute ([N, 3], [N, 1, 3], [N, K, 3]),
+            // so the mask keeps that axis and broadcasts over all trailing ones.
+            std::vector<size_t> mask_dims(target_shape.rank(), 1);
+            mask_dims[0] = row_mask.shape()[0];
+            return row_mask.reshape(core::TensorShape{mask_dims}).expand(target_shape);
+        }
+        return row_mask;
+    }
 
     class CommandCenter {
     public:

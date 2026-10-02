@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "pty_process.hpp"
 
 #ifdef _WIN32
@@ -77,7 +79,7 @@ namespace lfs::vis::terminal {
         std::vector<TerminalRowSnapshot> visible_rows;
     };
 
-    class TerminalWidget {
+    class LFS_VIS_API TerminalWidget {
     public:
         explicit TerminalWidget(int cols = 80, int rows = 24);
         ~TerminalWidget();
