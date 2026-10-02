@@ -598,8 +598,7 @@ namespace lfs::vis {
         };
 
         [[nodiscard]] FrameDemand collectFrameDemand(bool viewport_export_locked,
-                                                     bool drained_store_dirty = false,
-                                                     bool consume_python_redraw = true);
+                                                     bool drained_store_dirty);
         [[nodiscard]] bool isMotionOnlyWake() const;
         [[nodiscard]] double displayFrameInterval() const;
         void waitForNextEvent(bool is_training, bool continuous_animation = false);

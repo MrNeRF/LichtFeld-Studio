@@ -143,7 +143,6 @@ def test_every_render_mode_is_quiet_when_idle(tmp_path: Path) -> None:
                 raise AssertionError(f"app exited during startup; see {tmp_path / 'app.log'}")
             try:
                 _initialize(endpoint)
-                _call(endpoint, "tools/list")
                 break
             except (OSError, AssertionError):
                 time.sleep(0.5)
@@ -169,7 +168,7 @@ def test_every_render_mode_is_quiet_when_idle(tmp_path: Path) -> None:
                 current = _ledger(endpoint).get("frames_presented", 0)
                 if current != last_count:
                     last_count, stable_since = current, time.monotonic()
-            baseline = _ledger(endpoint, reset=True)
+            _ledger(endpoint, reset=True)
             utilization = []
             end = time.monotonic() + idle_seconds
             while time.monotonic() < end:

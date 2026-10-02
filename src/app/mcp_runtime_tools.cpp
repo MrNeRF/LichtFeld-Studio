@@ -40,6 +40,40 @@ namespace lfs::app {
         using json = nlohmann::json;
         using mcp::McpResourceContent;
 
+        json frame_snapshot_json(const vis::FrameLedgerSnapshot& snapshot) {
+            json presents_by_reason = json::object();
+            json view_renders_by_reason = json::object();
+            json holders = json::array();
+            json last_frame_reasons = json::array();
+            for (std::size_t i = 0; i < static_cast<std::size_t>(vis::FrameReason::Count); ++i) {
+                const auto reason = static_cast<vis::FrameReason>(i);
+                presents_by_reason[vis::frameReasonName(reason)] = snapshot.presents_by_reason[i];
+                view_renders_by_reason[vis::frameReasonName(reason)] = snapshot.view_renders_by_reason[i];
+                if (snapshot.last_frame_reasons.test(i))
+                    last_frame_reasons.push_back(vis::frameReasonName(reason));
+            }
+            for (const auto& holder : snapshot.live_holders) {
+                holders.push_back(json{{"reason", vis::frameReasonName(holder.reason)},
+                                       {"scope", holder.scope == vis::FrameScope::Gui ? "gui" : "view"},
+                                       {"detail", holder.detail},
+                                       {"age_ms", std::chrono::duration<double, std::milli>(holder.age).count()}});
+            }
+            return json{{"frames_presented", snapshot.frames_presented},
+                        {"views_rendered", snapshot.views_rendered[0]},
+                        {"views_rendered_by_view", snapshot.views_rendered},
+                        {"presents_by_reason", std::move(presents_by_reason)},
+                        {"view_renders_by_reason", std::move(view_renders_by_reason)},
+                        {"frames_without_reason", snapshot.frames_without_reason},
+                        {"wakes_without_frame", snapshot.wakes_without_frame},
+                        {"holders_expired", snapshot.holders_expired},
+                        {"preview_skipped_no_step", snapshot.preview_skipped_no_step},
+                        {"stale_detections", snapshot.stale_detections},
+                        {"requests_dropped", snapshot.requests_dropped},
+                        {"last_frame_reasons", std::move(last_frame_reasons)},
+                        {"last_frame_details", snapshot.last_frame_details},
+                        {"live_holders", std::move(holders)}};
+        }
+
         constexpr std::array<std::string_view, 7> kRuntimeJobIds = {
             "editor.python",
             "training.main",
@@ -742,40 +776,7 @@ namespace lfs::app {
             if (viewer) {
                 if (auto* const rendering = viewer->getRenderingManager()) {
                     const auto snapshot = rendering->frameDemandLedger().snapshot();
-                    json presents_by_reason = json::object();
-                    json view_renders_by_reason = json::object();
-                    for (std::size_t i = 0; i < static_cast<std::size_t>(vis::FrameReason::Count); ++i) {
-                        const auto reason = static_cast<vis::FrameReason>(i);
-                        presents_by_reason[vis::frameReasonName(reason)] = snapshot.presents_by_reason[i];
-                        view_renders_by_reason[vis::frameReasonName(reason)] = snapshot.view_renders_by_reason[i];
-                    }
-                    json holders = json::array();
-                    json last_frame_reasons = json::array();
-                    for (std::size_t i = 0; i < snapshot.last_frame_reasons.size(); ++i) {
-                        if (snapshot.last_frame_reasons.test(i))
-                            last_frame_reasons.push_back(
-                                vis::frameReasonName(static_cast<vis::FrameReason>(i)));
-                    }
-                    for (const auto& holder : snapshot.live_holders) {
-                        holders.push_back(json{{"reason", vis::frameReasonName(holder.reason)},
-                                               {"scope", holder.scope == vis::FrameScope::Gui ? "gui" : "view"},
-                                               {"detail", holder.detail},
-                                               {"age_ms", std::chrono::duration<double, std::milli>(holder.age).count()}});
-                    }
-                    frames = json{{"frames_presented", snapshot.frames_presented},
-                                  {"views_rendered", snapshot.views_rendered[0]},
-                                  {"views_rendered_by_view", snapshot.views_rendered},
-                                  {"presents_by_reason", std::move(presents_by_reason)},
-                                  {"view_renders_by_reason", std::move(view_renders_by_reason)},
-                                  {"frames_without_reason", snapshot.frames_without_reason},
-                                  {"wakes_without_frame", snapshot.wakes_without_frame},
-                                  {"holders_expired", snapshot.holders_expired},
-                                  {"preview_skipped_no_step", snapshot.preview_skipped_no_step},
-                                  {"stale_detections", snapshot.stale_detections},
-                                  {"requests_dropped", snapshot.requests_dropped},
-                                  {"last_frame_reasons", std::move(last_frame_reasons)},
-                                  {"last_frame_details", snapshot.last_frame_details},
-                                  {"live_holders", std::move(holders)}};
+                    frames = frame_snapshot_json(snapshot);
                 }
             }
 
@@ -1154,38 +1155,7 @@ namespace lfs::app {
                 if (reset)
                     ledger.resetCounters();
                 const auto snapshot = ledger.snapshot();
-                json presents_by_reason = json::object();
-                json view_renders_by_reason = json::object();
-                json holders = json::array();
-                json last_frame_reasons = json::array();
-                for (std::size_t i = 0; i < static_cast<std::size_t>(vis::FrameReason::Count); ++i) {
-                    const auto reason = static_cast<vis::FrameReason>(i);
-                    presents_by_reason[vis::frameReasonName(reason)] = snapshot.presents_by_reason[i];
-                    view_renders_by_reason[vis::frameReasonName(reason)] = snapshot.view_renders_by_reason[i];
-                    if (snapshot.last_frame_reasons.test(i))
-                        last_frame_reasons.push_back(vis::frameReasonName(reason));
-                }
-                for (const auto& holder : snapshot.live_holders) {
-                    holders.push_back(json{{"reason", vis::frameReasonName(holder.reason)},
-                                           {"scope", holder.scope == vis::FrameScope::Gui ? "gui" : "view"},
-                                           {"detail", holder.detail},
-                                           {"age_ms", std::chrono::duration<double, std::milli>(holder.age).count()}});
-                }
-                const json frames{{"frames_presented", snapshot.frames_presented},
-                                  {"views_rendered", snapshot.views_rendered[0]},
-                                  {"views_rendered_by_view", snapshot.views_rendered},
-                                  {"presents_by_reason", std::move(presents_by_reason)},
-                                  {"view_renders_by_reason", std::move(view_renders_by_reason)},
-                                  {"frames_without_reason", snapshot.frames_without_reason},
-                                  {"wakes_without_frame", snapshot.wakes_without_frame},
-                                  {"holders_expired", snapshot.holders_expired},
-                                  {"preview_skipped_no_step", snapshot.preview_skipped_no_step},
-                                  {"stale_detections", snapshot.stale_detections},
-                                  {"requests_dropped", snapshot.requests_dropped},
-                                  {"last_frame_reasons", std::move(last_frame_reasons)},
-                                  {"last_frame_details", snapshot.last_frame_details},
-                                  {"live_holders", std::move(holders)}};
-                return json{{"success", true}, {"frames", frames}};
+                return json{{"success", true}, {"frames", frame_snapshot_json(snapshot)}};
             });
 
         registry.register_tool(

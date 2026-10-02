@@ -3099,13 +3099,6 @@ namespace lfs::vis {
     }
 
     VkPresentModeKHR VulkanContext::choosePresentMode(const std::vector<VkPresentModeKHR>& modes) const {
-#ifndef NDEBUG
-        if (const char* const requested = std::getenv("LFS_PRESENT_MODE");
-            requested && std::string_view(requested) == "fifo" &&
-            std::ranges::find(modes, VK_PRESENT_MODE_FIFO_KHR) != modes.end()) {
-            return VK_PRESENT_MODE_FIFO_KHR;
-        }
-#endif
         // MAILBOX keeps navigation low-latency and avoids blocking the GUI tenant
         // inside vkQueuePresent while it participates in shared-arena turn-taking.
         // With no continuous frame demand, the ledger paces active animations.

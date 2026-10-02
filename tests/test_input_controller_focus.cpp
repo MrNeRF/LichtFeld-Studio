@@ -201,7 +201,7 @@ namespace lfs::vis {
         for (int input = 0; input < 1000; ++input) {
             const auto now = start + std::chrono::milliseconds(input);
             if (cadence.secondsUntilReady(now, 0.01) == 0.0) {
-                cadence.noteFrame(now);
+                cadence.startFrame(now);
                 last_visible_input = input;
                 ++frames;
             }
@@ -211,7 +211,7 @@ namespace lfs::vis {
         // No accumulated render debt after a slow frame or an idle period.
         const auto later = start + std::chrono::seconds(2);
         EXPECT_EQ(cadence.secondsUntilReady(later, 0.01), 0.0);
-        cadence.noteFrame(later);
+        cadence.startFrame(later);
         EXPECT_GT(cadence.secondsUntilReady(later, 0.01), 0.0);
     }
 
@@ -219,7 +219,7 @@ namespace lfs::vis {
         CameraAnimationCadence cadence;
         const CameraAnimationCadence::Clock::time_point start{};
         EXPECT_EQ(cadence.secondsUntilReady(start, 1.0 / 60.0), 0.0);
-        cadence.noteFrame(start);
+        cadence.startFrame(start);
         const auto next = start + std::chrono::milliseconds(5);
         EXPECT_GT(cadence.secondsUntilReady(next, 1.0 / 60.0), 0.0);
         EXPECT_EQ(cadence.secondsUntilReady(next, 1.0 / 240.0), 0.0);

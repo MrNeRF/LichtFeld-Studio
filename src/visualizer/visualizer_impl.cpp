@@ -2421,8 +2421,7 @@ namespace lfs::vis {
     }
 
     VisualizerImpl::FrameDemand VisualizerImpl::collectFrameDemand(const bool viewport_export_locked,
-                                                                   const bool drained_store_dirty,
-                                                                   const bool consume_python_redraw) {
+                                                                   const bool drained_store_dirty) {
         FrameDemand demand;
         demand.viewport_export_locked = viewport_export_locked;
         demand.scene_dirty = rendering_manager_ && rendering_manager_->pollDirtyState();
@@ -2434,8 +2433,7 @@ namespace lfs::vis {
                                   (python::has_frame_callback() ||
                                    (scene_playback_active && python::has_scene_time_callback()));
         demand.python_overlay = !plugin_preload_running && python::has_viewport_draw_handlers();
-        demand.python_redraw = consume_python_redraw ? python::consume_redraw_request()
-                                                     : python::has_redraw_request();
+        demand.python_redraw = python::consume_redraw_request();
         demand.gui_animation = (gui_manager_ && gui_manager_->needsAnimationFrame()) || plugin_preload_running;
         if (rendering_manager_) {
             auto& ledger = rendering_manager_->frameDemandLedger();
@@ -2554,7 +2552,7 @@ namespace lfs::vis {
                                       rendering_manager_->secondsUntilTrainingRefresh()),
                              "training_refresh");
         if (rendering_manager_ && is_training)
-            consider_timeout(rendering_manager_->secondsUntilVksplatScratchRelease(true),
+            consider_timeout(rendering_manager_->secondsUntilVksplatScratchRelease(),
                              "scratch_release");
         if (const auto progress_wait =
                 training_progress_publisher_.secondsUntilDue(std::chrono::steady_clock::now()))
@@ -2754,7 +2752,7 @@ namespace lfs::vis {
                 .scope = scope,
                 .views = 1,
                 .flags = scope == FrameScope::View ? rendering_manager_->pendingDirtyMask() : 0,
-                .detail = "legacy_demand_bridge"});
+                .detail = "frame_demand"});
             ledger_plan = rendering_manager_->frameDemandLedger().plan(
                 std::chrono::steady_clock::now());
         }
@@ -2764,7 +2762,7 @@ namespace lfs::vis {
             ledger_plan.reasons.set(static_cast<std::size_t>(FrameReason::SceneChange));
         }
         if (ledger_plan.render_views == 0 && rendering_manager_)
-            rendering_manager_->noteVksplatIdleFrame(is_training);
+            rendering_manager_->releaseIdleVksplatScratch(is_training);
         const std::uint64_t current_view_fingerprint =
             viewInputFingerprint(viewport_, scene_manager_.get(), rendering_manager_.get());
         if (has_rendered_view_fingerprint_ && ledger_plan.present &&
@@ -2827,7 +2825,7 @@ namespace lfs::vis {
             }
         }
         if (camera_frame)
-            camera_animation_cadence_.noteFrame(camera_frame_started);
+            camera_animation_cadence_.startFrame(camera_frame_started);
 
         std::optional<std::chrono::steady_clock::time_point>
             project_frame_started;
@@ -2842,15 +2840,10 @@ namespace lfs::vis {
                 gui_frame_rendered_ && frame_demand.onlySceneDirty() &&
                 rendering_manager_->pendingDirtyMask() == DirtyFlag::SPLATS;
             const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
-            if (ledger_plan.render_views != 0)
-                rendering_manager_->noteVksplatViewFrame();
-            if (ledger_plan.render_views != 0)
-                rendering_manager_->frameDemandLedger().countViewRendered(
-                    ledger_plan.render_views, ledger_plan);
-            if (ledger_plan.render_views != 0) {
-                last_rendered_view_fingerprint_ = current_view_fingerprint;
-                has_rendered_view_fingerprint_ = true;
-            }
+            rendering_manager_->retainVksplatScratch();
+            rendering_manager_->frameDemandLedger().countViewRendered(ledger_plan.render_views, ledger_plan);
+            last_rendered_view_fingerprint_ = current_view_fingerprint;
+            has_rendered_view_fingerprint_ = true;
             // A preview refresh parked until training frees the shared scratch
             // changed nothing on screen; present once it has rendered.
             if (preview_refresh_only && rendering_manager_->hasParkedArenaRetry()) {

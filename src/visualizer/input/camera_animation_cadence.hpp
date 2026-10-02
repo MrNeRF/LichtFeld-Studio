@@ -22,7 +22,7 @@ namespace lfs::vis {
             return std::max(0.0, display_interval - std::chrono::duration<double>(now - *last_frame_).count());
         }
 
-        void noteFrame(Clock::time_point started_at) { last_frame_ = started_at; }
+        void startFrame(Clock::time_point started_at) { last_frame_ = started_at; }
 
     private:
         std::optional<Clock::time_point> last_frame_;

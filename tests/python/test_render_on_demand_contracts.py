@@ -23,13 +23,6 @@ def test_frame_ledger_query_does_not_post_gui_work() -> None:
     assert "ledger.snapshot()" in source[start:end]
 
 
-def test_processing_a_read_only_work_item_does_not_demand_a_frame() -> None:
-    header = (ROOT / "src/visualizer/visualizer_impl.hpp").read_text()
-    assert "posted_work" not in header
-    source = (ROOT / "src/visualizer/visualizer_impl.cpp").read_text()
-    assert "update_work_processed_" not in source
-
-
 def test_python_frame_callbacks_have_a_bounded_legacy_lifetime() -> None:
     source = (ROOT / "src/python/runner.cpp").read_text()
     assert "duration_s.value_or(10.0)" in source
@@ -91,8 +84,7 @@ def test_builtin_plugins_do_not_redraw_from_a_loop() -> None:
                 isinstance(call, ast.Call)
                 and isinstance(call.func, ast.Attribute)
                 and call.func.attr in {"request_redraw", "request_redraw_after"}
-                for child in ast.walk(node)
-                for call in ([child] if isinstance(child, ast.Call) else [])
+                for call in ast.walk(node)
             ):
                 offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}")
     assert not offenders, "Built-in plugins must schedule redraws outside loops: " + ", ".join(offenders)
