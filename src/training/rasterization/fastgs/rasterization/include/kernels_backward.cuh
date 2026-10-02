@@ -45,6 +45,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float3* __restrict__ cam_position,
         const float* raw_opacities,
         const uint* __restrict__ primitive_work_indices,
+        const float4* __restrict__ primitive_color,
         const float2* __restrict__ grad_mean2d,
         const float3* __restrict__ grad_conic,
         const float* __restrict__ grad_depth,
@@ -134,6 +135,20 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint work_idx = in_range ? primitive_work_indices[primitive_idx] : 0u;
         const bool invisible = in_range && work_idx == 0xffffffffu;
         const bool visible = in_range && !invisible;
+
+        // Gate the accumulated image derivative before SH conversion. Below
+        // black, retain only derivatives that increase colour under descent.
+        if (visible) {
+            const float3 colour = make_float3(primitive_color[work_idx]);
+            float3 image_grad = grad_color_helper[work_idx];
+            if (colour.x < 0.0f && image_grad.x >= 0.0f)
+                image_grad.x = 0.0f;
+            if (colour.y < 0.0f && image_grad.y >= 0.0f)
+                image_grad.y = 0.0f;
+            if (colour.z < 0.0f && image_grad.z >= 0.0f)
+                image_grad.z = 0.0f;
+            grad_color_helper[work_idx] = image_grad;
+        }
 
         // Compute SH backward gradients before entering the geometry path.
         if (invisible) {
