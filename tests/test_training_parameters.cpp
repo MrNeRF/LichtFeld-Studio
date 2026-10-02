@@ -352,6 +352,19 @@ namespace {
         EXPECT_NE(conflict.validate().find(conflict_message), std::string::npos);
     }
 
+    TEST_F(TrainingParametersTest, ResumeAcceptsAppliedSplatCompositionOnly) {
+        lfs::core::param::TrainingParameters params;
+        params.add_splat_paths = {"no-longer-required.ply"};
+        params.add_splat_freeze = {true};
+        params.resume_checkpoint = "training.resume";
+
+        EXPECT_NE(params.validate().find("--add-splat cannot be used together with --resume"),
+                  std::string::npos);
+
+        params.add_splats_applied = true;
+        EXPECT_TRUE(params.validate().empty());
+    }
+
     TEST_F(TrainingParametersTest, PpispExposureFromExifRoundTripsThroughJson) {
         auto params = OptimizationParameters::mrnf_defaults();
         EXPECT_TRUE(params.ppisp_exposure_from_exif);

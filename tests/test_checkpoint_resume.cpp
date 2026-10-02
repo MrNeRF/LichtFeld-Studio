@@ -1300,6 +1300,7 @@ namespace {
         EXPECT_EQ(*loaded->import_cameras_path, *params.import_cameras_path);
         EXPECT_EQ(loaded->add_splat_paths, params.add_splat_paths);
         EXPECT_EQ(loaded->add_splat_freeze, params.add_splat_freeze);
+        EXPECT_TRUE(loaded->add_splats_applied);
 
         auto target_model = make_checkpoint_test_splat(1);
         lfs::training::MCMC target_strategy(*target_model);
@@ -1312,6 +1313,7 @@ namespace {
         EXPECT_EQ(*resumed_params.import_cameras_path, *params.import_cameras_path);
         EXPECT_EQ(resumed_params.add_splat_paths, params.add_splat_paths);
         EXPECT_EQ(resumed_params.add_splat_freeze, params.add_splat_freeze);
+        EXPECT_TRUE(resumed_params.add_splats_applied);
 
         std::filesystem::remove_all(temp_dir, ec);
     }

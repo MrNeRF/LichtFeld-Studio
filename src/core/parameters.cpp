@@ -552,9 +552,10 @@ namespace lfs::core {
                 return std::format("freeze_lr_scale must be within [0, 1] (got {})", freeze_lr_scale);
             }
             if (!add_splat_paths.empty()) {
-                if (resume_checkpoint.has_value() ||
-                    resume_project.has_value() ||
-                    project_path.has_value()) {
+                if (!add_splats_applied &&
+                    (resume_checkpoint.has_value() ||
+                     resume_project.has_value() ||
+                     project_path.has_value())) {
                     return "--add-splat cannot be used together with --resume";
                 }
                 if (!add_splat_freeze.empty() && add_splat_freeze.size() != add_splat_paths.size()) {
@@ -564,7 +565,7 @@ namespace lfs::core {
                     if (path.empty()) {
                         return "--add-splat path cannot be empty";
                     }
-                    if (!std::filesystem::exists(path)) {
+                    if (!add_splats_applied && !std::filesystem::exists(path)) {
                         return std::format("Added splat does not exist: '{}'",
                                            lfs::core::path_to_utf8(path));
                     }
