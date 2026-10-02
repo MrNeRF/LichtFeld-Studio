@@ -5,13 +5,16 @@
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "io/formats/colmap.hpp"
+#include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <random>
 #include <utility>
+#include <vector>
 
 using namespace lfs::core;
 
@@ -244,6 +247,99 @@ TEST(UndistortInverse, ValidityMaskExcludesOutOfFrameSamples) {
     EXPECT_EQ(mask[32 * 64 + 16], 1);
     EXPECT_EQ(mask[32 * 64 + 47], 1);
     EXPECT_EQ(mask[32 * 64 + 48], 0);
+}
+
+TEST(UndistortInverse, HighResolutionValidityHasNoInteriorHoles) {
+    constexpr int SOURCE_WIDTH = 8192;
+    constexpr int SOURCE_HEIGHT = 4320;
+    constexpr int EVAL_WIDTH = 5120;
+    constexpr int EVAL_HEIGHT = 2700;
+    auto radial = Tensor::from_vector({0.1f, -0.3f, 0.8f}, TensorShape({3}), Device::CPU);
+    auto tangential = Tensor::from_vector({-4.0e-4f, -1.3e-3f}, TensorShape({2}), Device::CPU);
+    const auto full = compute_undistort_params(
+        8000.0f, 8000.0f, SOURCE_WIDTH / 2.0f, SOURCE_HEIGHT / 2.0f, SOURCE_WIDTH, SOURCE_HEIGHT,
+        radial, tangential, CameraModelType::PINHOLE);
+    const auto params = scale_undistort_params(full, EVAL_WIDTH, EVAL_HEIGHT, EVAL_WIDTH);
+
+    const auto input = Tensor::ones(
+        {3, static_cast<size_t>(params.dst_height), static_cast<size_t>(params.dst_width)}, Device::CUDA);
+    Tensor validity;
+    distort_image_to_source(input, params, validity, nullptr);
+    ASSERT_EQ(validity.shape(), (TensorShape({EVAL_HEIGHT, EVAL_WIDTH})));
+    const auto mask_cpu = validity.cpu().contiguous();
+    const uint8_t* const mask = mask_cpu.ptr<uint8_t>();
+
+    // Invalid pixels must all connect to the frame border; an isolated invalid pixel is a valid
+    // ray that the inverse solve rejected (the float32 residual floor at this scale is ~6e-4 px).
+    std::vector<uint8_t> reached(static_cast<size_t>(EVAL_WIDTH) * EVAL_HEIGHT, 0);
+    std::vector<int> frontier;
+    const auto visit = [&](const int x, const int y) {
+        const size_t i = static_cast<size_t>(y) * EVAL_WIDTH + x;
+        if (mask[i] == 0 && reached[i] == 0) {
+            reached[i] = 1;
+            frontier.push_back(static_cast<int>(i));
+        }
+    };
+    for (int x = 0; x < EVAL_WIDTH; ++x) {
+        visit(x, 0);
+        visit(x, EVAL_HEIGHT - 1);
+    }
+    for (int y = 0; y < EVAL_HEIGHT; ++y) {
+        visit(0, y);
+        visit(EVAL_WIDTH - 1, y);
+    }
+    while (!frontier.empty()) {
+        const int i = frontier.back();
+        frontier.pop_back();
+        const int x = i % EVAL_WIDTH;
+        const int y = i / EVAL_WIDTH;
+        if (x > 0)
+            visit(x - 1, y);
+        if (x + 1 < EVAL_WIDTH)
+            visit(x + 1, y);
+        if (y > 0)
+            visit(x, y - 1);
+        if (y + 1 < EVAL_HEIGHT)
+            visit(x, y + 1);
+    }
+    int interior_holes = 0;
+    for (size_t i = 0; i < reached.size(); ++i)
+        interior_holes += (mask[i] == 0 && reached[i] == 0) ? 1 : 0;
+    EXPECT_EQ(interior_holes, 0);
+    EXPECT_EQ(mask[(EVAL_HEIGHT / 2) * EVAL_WIDTH + EVAL_WIDTH / 2], 1);
+}
+
+// A wide-angle fisheye ray needs Newton steps longer than the step limit; damping the step
+// must still reach the root instead of rejecting a pixel that maps well inside the frame.
+TEST(UndistortInverse, FisheyeLongStepsAreDampedNotRejected) {
+    UndistortParams params{};
+    params.model_type = CameraModelType::FISHEYE;
+    params.src_fx = params.src_fy = 100.0f;
+    params.src_cx = 2048.0f;
+    params.src_cy = 0.5f;
+    params.src_width = 4096;
+    params.src_height = 1;
+    params.dst_fx = params.dst_fy = 100.0f;
+    params.dst_cx = 1024.0f;
+    params.dst_cy = 0.5f;
+    params.dst_width = 2048;
+    params.dst_height = 1;
+
+    std::vector<float> coordinates(3 * 2048);
+    for (int x = 0; x < 2048; ++x)
+        coordinates[x] = static_cast<float>(x);
+    const auto input = Tensor::from_vector(coordinates, TensorShape({3, 1, 2048}), Device::CUDA);
+    Tensor validity;
+    const auto output = distort_image_to_source(input, params, validity, nullptr);
+
+    constexpr int SOURCE_X = 2193;
+    const float xd = (SOURCE_X + 0.5f - params.src_cx) / params.src_fx;
+    const float expected_x = std::tan(xd) * params.dst_fx + params.dst_cx - 0.5f;
+    ASSERT_LT(expected_x, static_cast<float>(params.dst_width - 1));
+    const auto valid = validity.cpu().contiguous();
+    const auto mapped = output.cpu().contiguous();
+    EXPECT_EQ(valid.ptr<uint8_t>()[SOURCE_X], 1);
+    EXPECT_NEAR(mapped.ptr<float>()[SOURCE_X], expected_x, 0.05f);
 }
 
 // ====================== Coefficient packing tests ======================

@@ -3,10 +3,13 @@
 
 #include "eval_mask_kernels.cuh"
 
+#include "core/tensor/internal/cuda_stream_context.hpp"
+
 #include <cassert>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+#include <nvtx3/nvToolsExt.h>
 
 namespace lfs::training {
     namespace {
@@ -53,18 +56,23 @@ namespace lfs::training {
                mask.dtype() == lfs::core::DataType::Bool);
         assert(radius >= 0);
 
-        const int height = static_cast<int>(mask.shape()[0]);
-        const int width = static_cast<int>(mask.shape()[1]);
-        auto result = lfs::core::Tensor::zeros(
+        nvtxRangePush("erode_metrics_mask");
+        const lfs::core::CUDAStreamGuard stream_guard(stream);
+        mask.sync_to_stream(stream);
+        const auto input = mask.contiguous();
+        const int height = static_cast<int>(input.shape()[0]);
+        const int width = static_cast<int>(input.shape()[1]);
+        auto result = lfs::core::Tensor::empty(
             {static_cast<size_t>(height), static_cast<size_t>(width)},
             lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
         const dim3 block(BLOCK_DIM, BLOCK_DIM);
         const dim3 grid((width + BLOCK_DIM - 1) / BLOCK_DIM,
                         (height + BLOCK_DIM - 1) / BLOCK_DIM);
         erode_metrics_mask_kernel<<<grid, block, 0, stream>>>(
-            mask.ptr<uint8_t>(), result.ptr<uint8_t>(), width, height, radius);
+            input.ptr<uint8_t>(), result.ptr<uint8_t>(), width, height, radius);
         const cudaError_t error = cudaGetLastError();
         assert(error == cudaSuccess && "erode_metrics_mask_kernel launch failed");
+        nvtxRangePop();
         return result;
     }
 

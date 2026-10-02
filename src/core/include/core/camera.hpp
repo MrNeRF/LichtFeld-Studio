@@ -144,6 +144,11 @@ namespace lfs::core {
             _image_height = height;
             _image_size_loaded = true;
         }
+        void restore_image_dimensions(int width, int height, bool size_loaded) noexcept {
+            _image_width = width;
+            _image_height = height;
+            _image_size_loaded = size_loaded;
+        }
         int camera_height() const noexcept { return _camera_height; }
         int camera_width() const noexcept { return _camera_width; }
         float focal_x() const noexcept { return _focal_x; }
