@@ -1661,7 +1661,7 @@ namespace lfs::vis {
         // includes the viewer turn itself.
         return static_cast<float>(std::max<double>(
             framerate_controller_.getSettings().training_frame_refresh_time_sec,
-            idlePreviewIntervalSec(0.0, viewer_turn_ms) + viewer_turn_ms * 1e-3));
+            idlePreviewIntervalSec(viewer_turn_ms) + viewer_turn_ms * 1e-3));
     }
 
     void RenderingManager::pollTrainingRefresh(const bool is_training, const int current_iteration) {

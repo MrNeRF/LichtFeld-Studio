@@ -281,8 +281,7 @@ namespace lfs::vis {
                     std::optional<std::uint32_t> owed;
                     if (camera_navigating_) {
                         const auto stats = arena_->turn_stats();
-                        owed = trainingTurnsPerViewerFrame(stats.viewer_turn_ms + stats.viewer_record_ms, stats.training_step_ms,
-                                                           kTrainingFramesPerNavigationRender);
+                        owed = trainingTurnsPerViewerFrame(stats.viewer_turn_ms + stats.viewer_record_ms, stats.training_step_ms);
                     }
                     releaseViewerArenaFrame(*arena_, frame_id_, handoff_token_, owed);
                 }
@@ -292,9 +291,9 @@ namespace lfs::vis {
             // the input uploads; the arena admits its next tenant only after
             // that wait's event completes. A device sync alone cannot observe
             // Vulkan work still reading the shared scratch.
-            void noteVulkanRelease(cudaExternalSemaphore_t semaphore, std::uint64_t value, cudaStream_t stream) const {
+            void awaitVulkanRelease(cudaExternalSemaphore_t semaphore, std::uint64_t value, cudaStream_t stream) const {
                 if (arena_ && frame_active_ && semaphore != nullptr) {
-                    arena_->note_external_release(semaphore, value, stream);
+                    arena_->await_external_release(semaphore, value, stream);
                 }
             }
 
@@ -8489,7 +8488,7 @@ namespace lfs::vis {
             if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
                 last_submitted_render_value_ = completion_value;
                 if (overlay_arena_guard) {
-                    overlay_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value, render_stream_);
+                    overlay_arena_guard->awaitVulkanRelease(render_complete_cuda_.handle(), completion_value, render_stream_);
                 }
             }
             return std::unexpected(std::format("VkSplat selection overlay pass failed: {}", e.what()));
@@ -8504,7 +8503,7 @@ namespace lfs::vis {
         }
         last_submitted_render_value_ = completion_value;
         if (overlay_arena_guard) {
-            overlay_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value, render_stream_);
+            overlay_arena_guard->awaitVulkanRelease(render_complete_cuda_.handle(), completion_value, render_stream_);
         }
         if (live_submit_callback_) {
             live_submit_callback_(completion_value);
@@ -9585,7 +9584,7 @@ namespace lfs::vis {
             if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
                 last_submitted_render_value_ = completion_value;
                 if (shared_arena_guard) {
-                    shared_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value, render_stream_);
+                    shared_arena_guard->awaitVulkanRelease(render_complete_cuda_.handle(), completion_value, render_stream_);
                 }
                 if (live_submit_callback_) {
                     live_submit_callback_(completion_value);
@@ -9609,7 +9608,7 @@ namespace lfs::vis {
         resident_depth_wave_armed_ = armed_depth_waves;
         resident_sort_bits_ = depth_wave_sort_bits;
         if (shared_arena_guard) {
-            shared_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value, render_stream_);
+            shared_arena_guard->awaitVulkanRelease(render_complete_cuda_.handle(), completion_value, render_stream_);
         }
         if (live_submit_callback_) {
             live_submit_callback_(completion_value);

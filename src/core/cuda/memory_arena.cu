@@ -132,7 +132,6 @@ namespace lfs::core {
         release_submitted_at_ = other.release_submitted_at_;
         std::copy(std::begin(other.viewer_turn_ring_), std::end(other.viewer_turn_ring_), viewer_turn_ring_);
         viewer_turn_count_ = other.viewer_turn_count_;
-        last_viewer_turn_ms_ = other.last_viewer_turn_ms_;
         training_step_ms_ = other.training_step_ms_;
         viewer_record_ms_ = other.viewer_record_ms_;
         last_training_begin_ = other.last_training_begin_;
@@ -198,7 +197,6 @@ namespace lfs::core {
             release_submitted_at_ = other.release_submitted_at_;
             std::copy(std::begin(other.viewer_turn_ring_), std::end(other.viewer_turn_ring_), viewer_turn_ring_);
             viewer_turn_count_ = other.viewer_turn_count_;
-            last_viewer_turn_ms_ = other.last_viewer_turn_ms_;
             training_step_ms_ = other.training_step_ms_;
             viewer_record_ms_ = other.viewer_record_ms_;
             last_training_begin_ = other.last_training_begin_;
@@ -382,7 +380,6 @@ namespace lfs::core {
     RasterizerMemoryArena::TurnStats RasterizerMemoryArena::turn_stats() const {
         std::lock_guard<std::mutex> lock(stats_mutex_);
         TurnStats stats;
-        stats.last_viewer_turn_ms = last_viewer_turn_ms_;
         stats.training_step_ms = training_step_ms_;
         stats.viewer_record_ms = viewer_record_ms_;
         const uint32_t count = std::min<uint32_t>(viewer_turn_count_, 5u);
@@ -399,7 +396,6 @@ namespace lfs::core {
         std::lock_guard<std::mutex> lock(stats_mutex_);
         viewer_turn_ring_[viewer_turn_count_ % 5u] = turn_ms;
         ++viewer_turn_count_;
-        last_viewer_turn_ms_ = turn_ms;
         last_tenant_was_training_ = false;
         lfs::diagnostics::VramProfiler::instance().setGauge("viewer.turn_ms", turn_ms);
     }
@@ -486,7 +482,7 @@ namespace lfs::core {
 
     bool RasterizerMemoryArena::previous_frame_still_running() const {
         std::lock_guard<std::mutex> event_lock(last_frame_event_mutex_);
-        // A viewer batch registered through note_external_release counts as the
+        // A viewer batch registered through await_external_release counts as the
         // previous frame until its release event completes: neither tenant may
         // begin behind it, so at most one viewer frame is ever in flight and the
         // trainer's wait for it happens before it claims the arena.
@@ -507,7 +503,7 @@ namespace lfs::core {
         return false;
     }
 
-    void RasterizerMemoryArena::note_external_release(cudaExternalSemaphore_t semaphore, uint64_t value, cudaStream_t viewer_stream) {
+    void RasterizerMemoryArena::await_external_release(cudaExternalSemaphore_t semaphore, uint64_t value, cudaStream_t viewer_stream) {
         std::lock_guard<std::mutex> lock(last_frame_event_mutex_);
         external_release_semaphore_ = semaphore;
         external_release_value_ = value;
@@ -562,7 +558,7 @@ namespace lfs::core {
         release_pending_ = true;
     }
 
-    void RasterizerMemoryArena::note_release_event_for_testing(cudaEvent_t event, cudaStream_t viewer_stream) {
+    void RasterizerMemoryArena::set_release_event_for_testing(cudaEvent_t event, cudaStream_t viewer_stream) {
         std::lock_guard<std::mutex> lock(last_frame_event_mutex_);
         if (release_event_ && release_event_ != event) {
             log_teardown_status(cudaEventDestroy(release_event_), "replace viewer release event (test)");
@@ -1322,7 +1318,6 @@ namespace lfs::core {
             // A new session must not inherit another model's over-budget policy.
             std::lock_guard<std::mutex> stats_lock(stats_mutex_);
             viewer_turn_count_ = 0;
-            last_viewer_turn_ms_ = 0.0;
             viewer_record_ms_ = 0.0;
             training_step_ms_ = 0.0;
             last_training_begin_ = {};
