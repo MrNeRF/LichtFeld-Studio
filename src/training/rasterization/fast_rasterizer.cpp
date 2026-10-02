@@ -358,7 +358,8 @@ namespace lfs::training {
         const core::Tensor& bg_image,
         bool render_normal,
         bool render_depth,
-        float dilation_scale) {
+        float dilation_scale,
+        bool update_screen_share) {
         // Get camera parameters
         const int full_width = viewpoint_camera.image_width();
         const int full_height = viewpoint_camera.image_height();
@@ -515,7 +516,7 @@ namespace lfs::training {
                 shN_bounds_ptr,
                 shN_n_cells,
                 shN_bits,
-                (gaussian_model._max_screen_share.is_valid() &&
+                (update_screen_share && gaussian_model._max_screen_share.is_valid() &&
                  gaussian_model._max_screen_share.ndim() == 1 &&
                  gaussian_model._max_screen_share.numel() >= static_cast<size_t>(n_primitives))
                     ? gaussian_model._max_screen_share.ptr<float>()

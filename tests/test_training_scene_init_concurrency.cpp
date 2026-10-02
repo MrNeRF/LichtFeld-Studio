@@ -15,6 +15,7 @@
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/core/services.hpp"
+#include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/training/training_manager.hpp"
 
@@ -241,6 +242,11 @@ protected:
         lfs::event::EventBridge::instance().clear_all();
     }
 
+    void set_running(lfs::vis::TrainerManager& manager) {
+        ASSERT_TRUE(manager.state_machine_.transitionTo(lfs::vis::TrainingState::Starting));
+        ASSERT_TRUE(manager.state_machine_.transitionTo(lfs::vis::TrainingState::Running));
+    }
+
     void set_scene_owner_poster(
         lfs::vis::TrainerManager& manager,
         std::function<bool(std::function<void()>, std::function<void()>)> poster) {
@@ -259,6 +265,51 @@ protected:
         manager.runOnSceneOwnerThread(std::move(run), std::move(cancel));
     }
 };
+
+TEST_F(TrainingSceneInitConcurrencyTest, ColdViewportDefersWhileTrainerHoldsModelLock) {
+    lfs::vis::SceneManager scene_manager;
+    scene_manager.changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+    auto& scene = scene_manager.getScene();
+    const auto dataset = scene.addDataset("Dataset");
+    const auto cameras = scene.addCameraGroup("Training (1)", dataset, 1);
+    ASSERT_NE(scene.addCamera("camera.png", cameras, make_test_camera()), lfs::core::NULL_NODE);
+    lfs::vis::TrainerManager manager;
+    manager.setTrainer(std::make_unique<lfs::training::Trainer>(scene_manager.getScene()));
+    lfs::vis::services().set(&manager);
+    set_running(manager);
+
+    lfs::vis::RenderingManager rendering;
+    Viewport viewport(640, 480);
+    viewport.frameBufferSize = {640, 480};
+    lfs::vis::RenderSettings settings;
+    const lfs::vis::RenderingManager::RenderContext context{
+        .viewport = viewport,
+        .settings = settings,
+        .scene_manager = &scene_manager};
+    std::promise<void> locked;
+    std::promise<void> viewer_work;
+    auto work = viewer_work.get_future();
+    std::atomic<bool> timed_out{false};
+    std::jthread worker([&] {
+        std::unique_lock lock(manager.getTrainer()->getRenderMutex());
+        locked.set_value();
+        // Model growth waits for work on the viewer thread while holding this
+        // lock. Bound that wait so a blocking preview fails instead of hanging.
+        timed_out = work.wait_for(std::chrono::seconds(2)) == std::future_status::timeout;
+    });
+    locked.get_future().wait();
+    const auto deferred = rendering.renderVulkanFrame(context);
+    viewer_work.set_value();
+    worker.join();
+    EXPECT_FALSE(timed_out);
+    EXPECT_FALSE(deferred.matches_viewport_extent);
+    EXPECT_EQ(deferred.image, nullptr);
+    EXPECT_NE(rendering.pendingDirtyMask(), 0u);
+
+    // Once growth releases the lock, a hidden/empty scene can publish its extent.
+    const auto ready = rendering.renderVulkanFrame(context);
+    EXPECT_TRUE(ready.matches_viewport_extent);
+}
 
 TEST_F(TrainingSceneInitConcurrencyTest, DelayedOwnerInstallMutatesGraphWhileReadersScan) {
     lfs::vis::SceneManager scene_manager;

@@ -1475,6 +1475,57 @@ TEST_F(GsplatRasterizerTest, TileBatchesPreserveShRestAlphaAndDensificationGradi
     }
 }
 
+TEST(FastGSInference, PreservesTrainingStateAndScaleRefinement) {
+    int device_count = 0;
+    ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
+    if (device_count == 0)
+        GTEST_SKIP() << "CUDA device unavailable";
+
+    auto model = make_visible_splat(1);
+    model->means() = Tensor::zeros({1, 3}, Device::CUDA);
+    model->scaling_raw() = Tensor::zeros({1, 3}, Device::CUDA);
+    model->_max_screen_share = Tensor::zeros({1}, Device::CUDA);
+    model->_densification_info = Tensor::full({2, 1}, 0.125f, Device::CUDA);
+    auto camera = make_camera(64, 64);
+    auto background = Tensor::zeros({3}, Device::CUDA);
+
+    const std::array<const Tensor*, 8> state{
+        &model->means(), &model->sh0(), &model->rotation_raw(),
+        &model->scaling_raw(), &model->opacity_raw(), &model->shN(),
+        &model->_densification_info, &model->_max_screen_share};
+    std::vector<Tensor> before;
+    for (const auto* tensor : state)
+        before.push_back(tensor->cpu().clone());
+
+    auto reference_scales = model->scaling_raw().clone();
+    auto reference_share = model->_max_screen_share.clone();
+    const auto output = fast_rasterize(camera, *model, background);
+    ASSERT_TRUE(output.image.is_valid());
+    ASSERT_GT(output.alpha.max().item<float>(), 0.f);
+    for (size_t i = 0; i < state.size(); ++i) {
+        SCOPED_TRACE(i);
+        const auto after = state[i]->cpu();
+        ASSERT_EQ(before[i].bytes(), after.bytes());
+        if (after.bytes() != 0)
+            EXPECT_EQ(std::memcmp(before[i].data_ptr(), after.data_ptr(), after.bytes()), 0);
+    }
+
+    // Both strategies consume this statistic through the same scale clip.
+    kernels::launch_clip_log_scale_by_screen_share(
+        reference_scales.ptr<float>(), reference_share.ptr<float>(), nullptr, 0, 0.01f, 1);
+    kernels::launch_clip_log_scale_by_screen_share(
+        model->scaling_raw().ptr<float>(), model->_max_screen_share.ptr<float>(), nullptr, 0, 0.01f, 1);
+    const auto expected = reference_scales.cpu();
+    const auto actual = model->scaling_raw().cpu();
+    EXPECT_EQ(std::memcmp(expected.data_ptr(), actual.data_ptr(), expected.bytes()), 0);
+
+    // The training forward must still collect a nonzero measurement.
+    auto training = fast_rasterize_forward(camera, *model, background);
+    ASSERT_TRUE(training.has_value());
+    training->second.release_forward_context();
+    EXPECT_GT(model->_max_screen_share.max().item<float>(), 0.01f);
+}
+
 // Regression for issue #2189. Run with and without the existing pair-budget
 // test override to cover both the single-list and tile replay dispatch paths.
 class GutScreenShare : public ::testing::TestWithParam<int> {};

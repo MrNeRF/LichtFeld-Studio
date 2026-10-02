@@ -173,7 +173,8 @@ namespace lfs::training {
         const lfs::core::Tensor& bg_image = {},
         bool render_normal = false,
         bool render_depth = true,
-        float dilation_scale = 1.0f);
+        float dilation_scale = 1.0f,
+        bool update_screen_share = true);
 
     // Backward pass with optional extra alpha gradient for masked training
     void fast_rasterize_backward(
@@ -206,7 +207,7 @@ namespace lfs::training {
         float dilation_scale = 1.0f) {
         auto result = fast_rasterize_forward(
             viewpoint_camera, gaussian_model, bg_color, 0, 0, 0, 0, mip_filter,
-            bg_image, render_normal, true, dilation_scale);
+            bg_image, render_normal, /*render_depth=*/true, dilation_scale, /*update_screen_share=*/false);
         if (!result) {
             throw lfs::Exception(std::move(result.error()));
         }
