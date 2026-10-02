@@ -54,6 +54,28 @@ if(TARGET lfs_core)
 endif()
 if(TARGET lfs_visualizer)
     find_package(Python REQUIRED COMPONENTS Development.Embed)
+    # These upstream viewer contracts are otherwise in the CUDA-only test list.
+    # Run them on Mac too; do not add GPU requirements to the CPU visualizer suite.
+    if(NOT LFS_HAS_CUDA)
+        find_package(GTest CONFIG REQUIRED)
+        add_executable(mac_viewer_shared_contracts
+            ../test_input_controller_focus.cpp
+            ../test_vksplat_input_packer.cpp)
+        target_compile_features(mac_viewer_shared_contracts PRIVATE cxx_std_23)
+        target_include_directories(mac_viewer_shared_contracts PRIVATE
+            $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>
+            "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/src/visualizer"
+            "${CMAKE_SOURCE_DIR}/tests")
+        target_compile_definitions(mac_viewer_shared_contracts PRIVATE
+            PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+        target_link_libraries(mac_viewer_shared_contracts PRIVATE
+            lfs_visualizer lfs_core lfs_python_runtime lfs_python_embed GTest::gtest_main)
+        target_link_options(mac_viewer_shared_contracts PRIVATE
+            "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+        add_test(NAME MacViewerParity_sharedContracts COMMAND mac_viewer_shared_contracts)
+        set_tests_properties(MacViewerParity_sharedContracts PROPERTIES
+            LABELS "vulkan;gpu;viewer-shared" TIMEOUT 120)
+    endif()
     lfs_add_metal_contract(metal_rad_pager_contracts rad_pager_contracts.mm MetalViewerRadPagerContracts)
     target_link_libraries(metal_rad_pager_contracts PRIVATE lfs_visualizer lfs_core lfs_io Python::Python)
     target_include_directories(metal_rad_pager_contracts PRIVATE
