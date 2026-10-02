@@ -386,7 +386,17 @@ namespace lfs::training {
         return mask;
     }
 
-    std::expected<PreparedEvaluationView, std::string> prepare_evaluation_view(
+    lfs::Error evaluation_error(std::string detail, const lfs::core::SourceSite site) {
+        return lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::Internal,
+            .domain = lfs::ErrorDomain::Training,
+            .user_message = detail,
+            .detail = std::move(detail),
+            .detection = site,
+        });
+    }
+
+    lfs::Result<PreparedEvaluationView> prepare_evaluation_view(
         lfs::core::Camera& camera,
         const lfs::core::param::TrainingParameters& params,
         const EvaluationRenderFn& render,
@@ -406,7 +416,7 @@ namespace lfs::training {
                 inputs = *cached_inputs;
                 if (!inputs.gt_image.is_valid() || inputs.source_width <= 0 ||
                     inputs.source_height <= 0) {
-                    return std::unexpected("cached evaluation inputs are invalid");
+                    return evaluation_error("cached evaluation inputs are invalid", LFS_SOURCE_SITE_CURRENT());
                 }
             } else if (undistorted_reference) {
                 if (!image_loader) {
@@ -416,7 +426,7 @@ namespace lfs::training {
                 auto [source_width, source_height, source_channels] =
                     lfs::core::get_image_info(camera.image_path());
                 if (source_width <= 0 || source_height <= 0 || source_channels <= 0)
-                    return std::unexpected("failed to read evaluation image dimensions");
+                    return evaluation_error("failed to read evaluation image dimensions", LFS_SOURCE_SITE_CURRENT());
 
                 lfs::io::LoadParams load_params;
                 load_params.resize_factor = params.dataset.resize_factor;
@@ -447,8 +457,8 @@ namespace lfs::training {
                 if (inputs.gt_image.ndim() != 3 || inputs.gt_image.shape()[0] != 3 ||
                     static_cast<int>(inputs.gt_image.shape()[1]) != scaled_undistort->dst_height ||
                     static_cast<int>(inputs.gt_image.shape()[2]) != scaled_undistort->dst_width) {
-                    return std::unexpected(
-                        "undistorted evaluation image does not match the training grid");
+                    return evaluation_error("undistorted evaluation image does not match the training grid",
+                                            LFS_SOURCE_SITE_CURRENT());
                 }
             }
 
@@ -554,9 +564,9 @@ namespace lfs::training {
 
             auto rendered = render(*render_camera, dilation_scale);
             if (!rendered)
-                return std::unexpected(rendered.error());
+                return std::move(rendered.error());
             if (!rendered->output.image.is_valid())
-                return std::unexpected("evaluation render is empty");
+                return evaluation_error("evaluation render is empty", LFS_SOURCE_SITE_CURRENT());
 
             assert(rendered->output.image.ndim() == 3);
             assert(rendered->output.image.shape()[0] == 3);
@@ -654,7 +664,8 @@ namespace lfs::training {
                 .validity_mask_applied = warp_to_distorted,
                 .erode_ssim_mask = warp_to_distorted};
         } catch (const std::exception& e) {
-            return std::unexpected(e.what());
+            // LFS-CENSUS-OK(empty-catch): converted into a typed evaluation error
+            return evaluation_error(e.what(), LFS_SOURCE_SITE_CURRENT());
         }
     }
 
@@ -1105,7 +1116,7 @@ namespace lfs::training {
             auto prepared = prepare_evaluation_view(
                 *cam, _params,
                 [&](lfs::core::Camera& render_camera, const float dilation_scale)
-                    -> std::expected<EvaluationRenderResult, std::string> {
+                    -> lfs::Result<EvaluationRenderResult> {
                     try {
                         RenderOutput output;
                         if (_params.optimization.gut) {
@@ -1125,15 +1136,16 @@ namespace lfs::training {
                             .output = std::move(output),
                             .raw_image = std::move(raw_image)};
                     } catch (const std::exception& e) {
-                        return std::unexpected(e.what());
+                        // LFS-CENSUS-OK(empty-catch): converted into a typed evaluation error
+                        return evaluation_error(e.what(), LFS_SOURCE_SITE_CURRENT());
                     }
                 },
                 nullptr,
                 image_loader);
             if (!prepared) {
                 LOG_WARN("Eval: skipping camera '{}' (view preparation failed: {})",
-                         cam->image_name(), prepared.error());
-                view.skipped_reason = std::string("view preparation failed: ") + prepared.error();
+                         cam->image_name(), prepared.error().detail());
+                view.skipped_reason = std::format("view preparation failed: {}", prepared.error().detail());
                 skipped_images++;
                 continue;
             }

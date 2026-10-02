@@ -5,6 +5,7 @@
 #pragma once
 
 #include "../dataset.hpp"
+#include "core/error.hpp"
 #include "core/nn/models/lpips.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
@@ -170,15 +171,17 @@ namespace lfs::training {
         bool erode_ssim_mask = false;
     };
 
-    using EvaluationRenderFn = std::function<
-        std::expected<EvaluationRenderResult, std::string>(lfs::core::Camera&, float)>;
+    using EvaluationRenderFn =
+        std::function<lfs::Result<EvaluationRenderResult>(lfs::core::Camera&, float)>;
+
+    [[nodiscard]] lfs::Error evaluation_error(std::string detail, lfs::core::SourceSite site);
 
     // SSIM counts only complete windows inside the mask; a mask without any keeps partial windows.
     [[nodiscard]] lfs::core::Tensor ssim_evaluation_mask(
         const lfs::core::Tensor& mask, bool complete_windows_only, std::string_view camera_name,
         cudaStream_t stream);
 
-    [[nodiscard]] std::expected<PreparedEvaluationView, std::string> prepare_evaluation_view(
+    [[nodiscard]] lfs::Result<PreparedEvaluationView> prepare_evaluation_view(
         lfs::core::Camera& camera,
         const lfs::core::param::TrainingParameters& params,
         const EvaluationRenderFn& render,

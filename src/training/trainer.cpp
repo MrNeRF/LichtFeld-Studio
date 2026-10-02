@@ -3234,7 +3234,7 @@ namespace lfs::training {
         auto prepared = prepare_evaluation_view(
             camera, params,
             [&](lfs::core::Camera& render_camera, const float dilation_scale)
-                -> std::expected<EvaluationRenderResult, std::string> {
+                -> lfs::Result<EvaluationRenderResult> {
                 const std::shared_lock lock(render_mutex_);
                 // Exclude the non-refining optimizer writes for the metric read window
                 // so the live model cannot be mutated mid-render.
@@ -3243,8 +3243,9 @@ namespace lfs::training {
                 try {
                     beginModelRead(reader_stream);
                 } catch (const std::exception& e) {
-                    return std::unexpected(
-                        std::format("metric read window unavailable: {}", e.what()));
+                    // LFS-CENSUS-OK(empty-catch): converted into a typed evaluation error
+                    return evaluation_error(std::format("metric read window unavailable: {}", e.what()),
+                                            LFS_SOURCE_SITE_CURRENT());
                 }
 
                 RenderOutput output;
@@ -3276,14 +3277,15 @@ namespace lfs::training {
                             "computeCameraMetrics: reader-done record failed during degradation: {}",
                             end_error.what());
                     }
-                    return std::unexpected(
-                        std::format("metric render unavailable: {}", e.what()));
+                    return evaluation_error(std::format("metric render unavailable: {}", e.what()),
+                                            LFS_SOURCE_SITE_CURRENT());
                 }
                 try {
                     endModelRead(reader_stream);
                 } catch (const std::exception& e) {
-                    return std::unexpected(
-                        std::format("metric read-window close failed: {}", e.what()));
+                    // LFS-CENSUS-OK(empty-catch): converted into a typed evaluation error
+                    return evaluation_error(std::format("metric read-window close failed: {}", e.what()),
+                                            LFS_SOURCE_SITE_CURRENT());
                 }
                 return EvaluationRenderResult{
                     .output = std::move(output),
@@ -3292,7 +3294,7 @@ namespace lfs::training {
             cached_inputs.gt_image.is_valid() ? &cached_inputs : nullptr,
             image_loader.get());
         if (!prepared)
-            return std::unexpected(prepared.error());
+            return std::unexpected(std::string(prepared.error().detail()));
 
         if (!cached_inputs.gt_image.is_valid()) {
             std::lock_guard lock(camera_metrics_input_cache_mutex_);

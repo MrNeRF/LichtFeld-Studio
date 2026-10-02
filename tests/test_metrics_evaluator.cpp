@@ -541,7 +541,7 @@ TEST(MetricsEvaluatorUndistort, UndistortedGroundTruthEqualsTrainingLoaderImage)
     const auto training_image = loader.load_image_immediate(image_path, load_params);
 
     const auto render = [](Camera& render_camera, float)
-        -> std::expected<lfs::training::EvaluationRenderResult, std::string> {
+        -> lfs::Result<lfs::training::EvaluationRenderResult> {
         const auto height = static_cast<size_t>(render_camera.image_height());
         const auto width = static_cast<size_t>(render_camera.image_width());
         lfs::training::RenderOutput output;
@@ -550,7 +550,7 @@ TEST(MetricsEvaluatorUndistort, UndistortedGroundTruthEqualsTrainingLoaderImage)
     };
     const auto prepared = prepare_evaluation_view(
         *camera, params, render, nullptr, &loader);
-    ASSERT_TRUE(prepared.has_value()) << prepared.error();
+    ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
     ASSERT_EQ(prepared->inputs.gt_image.shape(), training_image.shape());
     ASSERT_EQ(prepared->inputs.gt_image.dtype(), training_image.dtype());
     const auto actual_cpu = prepared->inputs.gt_image.cpu().contiguous();
@@ -591,7 +591,7 @@ TEST(MetricsEvaluatorUndistort, SharedPreparationMatchesCachedInteractiveInputsI
         std::vector<float> render_dilations;
         const auto render = [&render_calls, &render_sizes, &render_dilations](
                                 Camera& render_camera, const float dilation_scale)
-            -> std::expected<lfs::training::EvaluationRenderResult, std::string> {
+            -> lfs::Result<lfs::training::EvaluationRenderResult> {
             ++render_calls;
             const auto height = static_cast<size_t>(render_camera.image_height());
             const auto width = static_cast<size_t>(render_camera.image_width());
@@ -611,9 +611,9 @@ TEST(MetricsEvaluatorUndistort, SharedPreparationMatchesCachedInteractiveInputsI
         };
 
         auto batch = prepare_evaluation_view(*cam, params, render);
-        ASSERT_TRUE(batch.has_value()) << batch.error();
+        ASSERT_TRUE(batch.has_value()) << batch.error().detail();
         auto interactive = prepare_evaluation_view(*cam, params, render, &batch->inputs);
-        ASSERT_TRUE(interactive.has_value()) << interactive.error();
+        ASSERT_TRUE(interactive.has_value()) << interactive.error().detail();
         EXPECT_EQ(render_calls, 2);
 
         EXPECT_EQ(batch->inputs.gt_image.shape(), interactive->inputs.gt_image.shape());
