@@ -2259,13 +2259,33 @@ namespace lfs::vis::project {
                         !spaces->is_array())
                         continue;
                     Json kept = Json::array();
-                    for (const auto& space : *spaces) {
+                    for (auto space : *spaces) {
                         if (space.is_object() &&
                             space.value(
                                 "type",
                                 std::string{}) ==
                                 "fixed_arrangement")
                             continue;
+                        if (&layout == &layouts->front() && &area == &areas->front() &&
+                            space.is_object() && space.value("type", std::string{}) == "screen") {
+                            auto& payload = space["opaque_payload"];
+                            // The retained DOM merge preserves unknown fields, but
+                            // it also keeps deleted array entries. Screen topology
+                            // and live area membership must come from this capture.
+                            const Json retained_areas = payload.value("areas", Json::array());
+                            Json live_areas = Json::array();
+                            for (const auto& live_area : screen_payload["areas"]) {
+                                const auto retained = std::find_if(
+                                    retained_areas.begin(), retained_areas.end(), [&](const Json& area) {
+                                        return area.is_object() && area.value("id", 0u) == live_area["id"];
+                                    });
+                                live_areas.push_back(retained != retained_areas.end() ? *retained : live_area);
+                            }
+                            payload["layout"] = screen_payload["layout"];
+                            payload["areas"] = std::move(live_areas);
+                            if (!screen_payload.contains("maximized"))
+                                payload.erase("maximized");
+                        }
                         kept.push_back(space);
                     }
                     *spaces = std::move(kept);

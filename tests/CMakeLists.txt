@@ -83,6 +83,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_scene_upscaler_registry.cpp
         test_screen_layout.cpp
         test_screen.cpp
+        test_gui_screen_session.cpp
         test_view_render_state.cpp
         test_python_editor_input.cpp
         test_startup_overlay_geometry.cpp
