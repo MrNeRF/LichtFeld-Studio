@@ -16,13 +16,16 @@
 #include "display_tensors.hpp"
 #include "gt_comparison_cache_utils.hpp"
 #include "model_renderability.hpp"
-#include "point_cloud_vulkan_renderer.hpp"
+#include "output_image_pool.hpp"
+#include "output_slot_ring.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering/passes/vulkan_scene_plugin_pipeline.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene_renderer.hpp"
 #include "scene_upscaler_plugin.hpp"
 #include "scene_upscaler_registry.hpp"
+#include "vksplat_shared_scratch_install.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
 #endif
@@ -32,7 +35,6 @@
 #include "viewport_region_utils.hpp"
 #include "viewport_request_builder.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
-#include "vksplat_viewport_renderer.hpp"
 #include "vulkan_external_tensor.hpp"
 #include <algorithm>
 #include <cassert>
@@ -1431,24 +1433,24 @@ namespace lfs::vis {
         }
 
         if (!vksplat_viewport_renderer_) {
-            vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+            vksplat_viewport_renderer_ = createSceneRenderer();
         }
 
         const auto map_shape = [](const VksplatSelectionMaskShape value) {
             switch (value) {
             case VksplatSelectionMaskShape::Brush:
-                return VksplatViewportRenderer::SelectionMaskShape::Brush;
+                return SceneRenderer::SelectionMaskShape::Brush;
             case VksplatSelectionMaskShape::Rectangle:
-                return VksplatViewportRenderer::SelectionMaskShape::Rectangle;
+                return SceneRenderer::SelectionMaskShape::Rectangle;
             case VksplatSelectionMaskShape::Polygon:
-                return VksplatViewportRenderer::SelectionMaskShape::Polygon;
+                return SceneRenderer::SelectionMaskShape::Polygon;
             case VksplatSelectionMaskShape::Ring:
-                return VksplatViewportRenderer::SelectionMaskShape::Ring;
+                return SceneRenderer::SelectionMaskShape::Ring;
             }
-            return VksplatViewportRenderer::SelectionMaskShape::Brush;
+            return SceneRenderer::SelectionMaskShape::Brush;
         };
 
-        VksplatViewportRenderer::SelectionMaskRequest request{
+        SceneRenderer::SelectionMaskRequest request{
             .frame_view = frame_view,
             .scene =
                 {.model_transforms = &scene_state.model_transforms,
@@ -1530,6 +1532,8 @@ namespace lfs::vis {
     }
 
     void RenderingManager::pollParkedArenaRetry() {
+        if (vksplat_viewport_renderer_ && vksplat_viewport_renderer_->takeRefinementRequest())
+            markDirty(DirtyFlag::CAMERA);
         if (vksplat_viewport_renderer_ && !vksplat_viewport_renderer_->pollArenaHandoff())
             return;
         std::lock_guard lock(views_mutex_);
@@ -2446,7 +2450,7 @@ namespace lfs::vis {
         if (is_training && context.vulkan_context &&
             lfs::rendering::isVkSplatBackend(frame_settings.raster_backend)) {
             if (!vksplat_viewport_renderer_) {
-                vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+                vksplat_viewport_renderer_ = createSceneRenderer();
             }
             if (const auto ok = vksplat_viewport_renderer_->ensureHandshakeReady(*context.vulkan_context); !ok) {
                 LOG_WARN("VkSplat handshake pre-init skipped: {}", ok.error());
@@ -2500,7 +2504,7 @@ namespace lfs::vis {
         // covers preparation errors after CUDA model reads but before a submit.
         struct ViewerBorrowPublisher {
             lfs::training::Trainer* trainer;
-            VksplatViewportRenderer* renderer;
+            SceneRenderer* renderer;
             ~ViewerBorrowPublisher() {
                 if (trainer && renderer) {
                     try {
@@ -2592,8 +2596,8 @@ namespace lfs::vis {
         const auto render_native_point_cloud =
             [&](const lfs::rendering::PointCloudRenderRequest& pc_request,
                 const RenderTargetId target)
-            -> lfs::Result<PointCloudVulkanRenderer::RenderResult> {
-            const auto fail = [](std::string message) -> lfs::Result<PointCloudVulkanRenderer::RenderResult> {
+            -> lfs::Result<PointSceneRenderer::RenderResult> {
+            const auto fail = [](std::string message) -> lfs::Result<PointSceneRenderer::RenderResult> {
                 return lfs::make_error({
                     .code = lfs::ErrorCode::Internal,
                     .domain = lfs::ErrorDomain::Rendering,
@@ -2608,7 +2612,7 @@ namespace lfs::vis {
                 ++point_cloud_preview_selection_revision_;
             }
             if (!point_cloud_vulkan_renderer_) {
-                point_cloud_vulkan_renderer_ = std::make_unique<PointCloudVulkanRenderer>();
+                point_cloud_vulkan_renderer_ = createPointSceneRenderer();
             }
             point_cloud_last_frame_serial_ = context.vulkan_context->lastFrameSubmitSerial() + 1;
 
@@ -2661,7 +2665,7 @@ namespace lfs::vis {
                 lfs::rendering::focalLengthToVFovRad(pc_request.frame_view.focal_length_mm),
                 pc_request.frame_view.size.y);
 
-            PointCloudVulkanRenderer::RenderRequest vk_req{};
+            PointSceneRenderer::RenderRequest vk_req{};
             vk_req.positions = positions_ptr;
             vk_req.colors = colors_ptr;
             vk_req.positions_revision = point_cloud_data_revision_;
@@ -2684,7 +2688,7 @@ namespace lfs::vis {
             vk_req.selection_revision = point_cloud_preview_selection_revision_;
             vk_req.preview_selection_revision = point_cloud_preview_selection_revision_;
             if (pc_request.filters.crop_box.has_value()) {
-                PointCloudVulkanRenderer::CropBox crop{};
+                PointSceneRenderer::CropBox crop{};
                 crop.to_local = pc_request.filters.crop_box->transform;
                 crop.min = pc_request.filters.crop_box->min;
                 crop.max = pc_request.filters.crop_box->max;
@@ -2692,7 +2696,7 @@ namespace lfs::vis {
                 crop.desaturate = pc_request.filters.crop_desaturate;
                 vk_req.crop = crop;
             } else if (pc_request.filters.crop_ellipsoid.has_value()) {
-                PointCloudVulkanRenderer::CropEllipsoid crop{};
+                PointSceneRenderer::CropEllipsoid crop{};
                 crop.to_local = pc_request.filters.crop_ellipsoid->transform;
                 crop.radii = pc_request.filters.crop_ellipsoid->radii;
                 crop.inverse = pc_request.filters.crop_inverse;
@@ -2799,7 +2803,7 @@ namespace lfs::vis {
             notifyAsyncLodResultsReady();
         };
         const auto note_vksplat_render_progress =
-            [&](const VksplatViewportRenderer::RenderResult& result) {
+            [&](const SceneRenderer::RenderResult& result) {
                 if (result.lod_streaming_active) {
                     requestViewFollowUp(view_state, DirtyFlag::CAMERA);
                 }
@@ -3014,7 +3018,7 @@ namespace lfs::vis {
                 lfs::rendering::isVkSplatBackend(request.raster_backend);
             if (vksplat_panel_supported) {
                 if (!vksplat_viewport_renderer_) {
-                    vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+                    vksplat_viewport_renderer_ = createSceneRenderer();
                 }
                 const bool force_input_upload =
                     (frame_dirty & DirtyFlag::SPLATS) != 0 && !vksplat_inputs_forced_this_frame;
@@ -3403,10 +3407,10 @@ namespace lfs::vis {
                                         clear_gt_async_ticket();
                                         return std::unexpected(err);
                                     }
-                                    if (*polled == VksplatViewportRenderer::ReadbackTicketStatus::NotReady) {
+                                    if (*polled == SceneRenderer::ReadbackTicketStatus::NotReady) {
                                         return {};
                                     }
-                                    if (*polled != VksplatViewportRenderer::ReadbackTicketStatus::Ready) {
+                                    if (*polled != SceneRenderer::ReadbackTicketStatus::Ready) {
                                         clear_gt_async_ticket();
                                         return std::unexpected("GT depth ticket finished without Ready delivery");
                                     }
@@ -3454,7 +3458,7 @@ namespace lfs::vis {
                                     compare_error = "Normal GT comparison requires pinhole camera intrinsics";
                                 } else {
                                     if (!vksplat_viewport_renderer_) {
-                                        vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+                                        vksplat_viewport_renderer_ = createSceneRenderer();
                                     }
                                     if (const auto ready = apply_gt_async_ready(); !ready) {
                                         compare_error = ready.error();
@@ -3509,7 +3513,7 @@ namespace lfs::vis {
                                         request.depth_view = false;
                                         vksplat_viewport_renderer_->setDepthCaptureMode(true, true);
                                         struct DepthCaptureModeGuard {
-                                            VksplatViewportRenderer* renderer = nullptr;
+                                            SceneRenderer* renderer = nullptr;
                                             ~DepthCaptureModeGuard() {
                                                 if (renderer) {
                                                     renderer->setDepthCaptureMode(false);
@@ -4040,7 +4044,7 @@ namespace lfs::vis {
             if (lfs::rendering::isVkSplatBackend(request.raster_backend) &&
                 context.vulkan_context &&
                 !vksplat_viewport_renderer_) {
-                vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+                vksplat_viewport_renderer_ = createSceneRenderer();
             }
 
             const bool has_lod_tree = model && model->lod_tree && model->lod_tree->has_tree();
@@ -4249,9 +4253,9 @@ namespace lfs::vis {
                     render_error = "VkSplat backend requires an active Vulkan context";
                 } else {
                     if (!vksplat_viewport_renderer_) {
-                        vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+                        vksplat_viewport_renderer_ = createSceneRenderer();
                     }
-                    const auto publish_vksplat_result = [&](const VksplatViewportRenderer::RenderResult& render_result) -> VulkanFrameResult {
+                    const auto publish_vksplat_result = [&](const SceneRenderer::RenderResult& render_result) -> VulkanFrameResult {
                         // Passive previews already advanced the refresh clock
                         // when requested. Resetting it again after a parked
                         // retry adds that delay to every subsequent interval.
@@ -4571,7 +4575,7 @@ namespace lfs::vis {
                         !view_state.split_view_service_.isActive(frame_settings);
                     if (can_rerender_selection_overlay) {
                         LOG_TIMER("vksplat.selection_overlay");
-                        std::expected<VksplatViewportRenderer::RenderResult, std::string> overlay_result =
+                        std::expected<SceneRenderer::RenderResult, std::string> overlay_result =
                             std::unexpected("VkSplat selection overlay was not executed");
                         try {
                             overlay_result = vksplat_viewport_renderer_->rerenderSelectionOverlay(
@@ -4597,7 +4601,7 @@ namespace lfs::vis {
 
                     const bool force_input_upload = (frame_dirty & DirtyFlag::SPLATS) != 0;
                     LOG_TIMER("vksplat.render");
-                    std::expected<VksplatViewportRenderer::RenderResult, std::string> render_result =
+                    std::expected<SceneRenderer::RenderResult, std::string> render_result =
                         std::unexpected("VkSplat render was not executed");
                     try {
                         render_result = vksplat_viewport_renderer_->render(
@@ -5018,7 +5022,7 @@ namespace lfs::vis {
             viewport_size = {1280, 720};
         }
         if (!vksplat_viewport_renderer_) {
-            vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+            vksplat_viewport_renderer_ = createSceneRenderer();
         }
         if (auto ok = vksplat_viewport_renderer_->ensureHandshakeReady(context); !ok) {
             return std::unexpected(ok.error());

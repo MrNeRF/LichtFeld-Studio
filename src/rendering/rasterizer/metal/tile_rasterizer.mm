@@ -7,6 +7,7 @@
 #include <atomic>
 #include <bit>
 #include <cmath>
+#include <format>
 #include <map>
 #include <mutex>
 #include <stdexcept>
@@ -16,7 +17,6 @@
 namespace lfs::rendering::metal {
     namespace {
         // Keep in sync with the embedded Metal shader.
-        constexpr uint32_t kDepthChunkSize = 576;
         uint32_t ceil_div(uint32_t n, uint32_t d) { return n / d + (n % d != 0); }
         struct alignas(16) RasterParameters {
             uint32_t count, width, height, columns, tiles, capacity, mode, unused;
@@ -35,10 +35,10 @@ namespace lfs::rendering::metal {
                                MTLResourceOptions options = MTLResourceStorageModePrivate) {
             bytes = std::max(bytes, sizeof(ProjectedSplat));
             if (bytes > device.maxBufferLength)
-                throw std::length_error("Metal viewer buffer exceeds device limit");
+                throw std::length_error(std::format("Metal viewer buffer exceeds device limit (bytes={}, max={})", bytes, device.maxBufferLength));
             auto buffer = [device newBufferWithLength:bytes options:options];
             if (!buffer)
-                throw std::runtime_error("Metal viewer GPU allocation failed");
+                throw std::runtime_error(std::format("Metal viewer GPU allocation failed (bytes={}, options={}, allocated={}, recommended={})", bytes, uint64_t(options), device.currentAllocatedSize, device.recommendedMaxWorkingSetSize));
             return buffer;
         }
         id<MTLTexture> texture(id<MTLDevice> device, uint32_t width, uint32_t height, MTLPixelFormat format) {
@@ -50,7 +50,7 @@ namespace lfs::rendering::metal {
             descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
             auto result = [device newTextureWithDescriptor:descriptor];
             if (!result)
-                throw std::runtime_error("Metal viewer texture allocation failed");
+                throw std::runtime_error(std::format("Metal viewer texture allocation failed (extent={}x{}, format={})", width, height, uint64_t(format)));
             return result;
         }
         struct ScanLevel {
@@ -77,7 +77,7 @@ namespace lfs::rendering::metal {
         id<MTLBuffer> counts, offsets, status, histogram, histogram_offsets, digit_offsets, ranges, dispatch_args;
         std::array<id<MTLBuffer>, 2> keys, indices;
         id<MTLTexture> color, depth, pick;
-        ScanStorage count_scan, histogram_scan;
+        ScanStorage count_scan;
         std::atomic_bool in_flight{false};
         std::atomic_bool completed{false};
         uint32_t previous_source_count = 0;
@@ -85,7 +85,7 @@ namespace lfs::rendering::metal {
     RasterFrame::RasterFrame(id<MTLDevice> device, uint32_t width, uint32_t height,
                              uint32_t max_splats, uint32_t max_instances) : impl_(std::make_shared<Impl>()) {
         if (!device || !width || !height || width > 16384 || height > 16384 || !max_instances)
-            throw std::invalid_argument("Invalid Metal viewer frame reservation");
+            throw std::invalid_argument(std::format("Invalid Metal viewer frame reservation (device_present={}, extent={}x{}, max_splats={}, max_instances={})", device != nil, width, height, max_splats, max_instances));
         auto& f = *impl_;
         f.device = device;
         f.width = width;
@@ -111,9 +111,6 @@ namespace lfs::rendering::metal {
         f.histogram_offsets = allocate(device, size_t(histogram_size) * 4);
         f.digit_offsets = allocate(device, 257 * sizeof(uint32_t));
         f.count_scan = reserve_scan(device, max_splats);
-        f.histogram_scan = reserve_scan(device, histogram_size, 4);
-        if (f.histogram_scan.size() > 4)
-            throw std::length_error("Metal histogram scan exceeds indirect dispatch reservation");
         f.color = texture(device, width, height, MTLPixelFormatRGBA16Float);
         f.depth = texture(device, width, height, MTLPixelFormatRGBA32Float);
         f.pick = texture(device, width, height, MTLPixelFormatR32Uint);
@@ -122,7 +119,7 @@ namespace lfs::rendering::metal {
     bool RasterFrame::busy() const { return impl_->in_flight.load(std::memory_order_acquire); }
     RasterStatus RasterFrame::status() const {
         if (busy() || !impl_->completed.load(std::memory_order_acquire))
-            throw std::logic_error("Metal viewer status requires successful GPU completion");
+            throw std::logic_error(std::format("Metal viewer status requires successful GPU completion (busy={}, completed={})", busy(), impl_->completed.load(std::memory_order_acquire)));
         return *static_cast<const RasterStatus*>(impl_->status.contents);
     }
     id<MTLTexture> RasterFrame::color() const { return impl_->color; }
@@ -156,7 +153,8 @@ namespace lfs::rendering::metal {
                         options.languageVersion = MTLLanguageVersion2_4;
                         options.mathMode = MTLMathModeRelaxed; // Honors Inf/NaN guards.
                         relaxed_library = [device newLibraryWithSource:[NSString stringWithUTF8String:kTileRasterizerSource]
-                                                              options:options error:&error];
+                                                               options:options
+                                                                 error:&error];
                         if (!relaxed_library)
                             throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal opaque blend compilation failed");
                     }
@@ -174,59 +172,48 @@ namespace lfs::rendering::metal {
             if (!state)
                 throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal blend pipeline failed");
             if (state.threadExecutionWidth != 32 || state.maxTotalThreadsPerThreadgroup < 64)
-                throw std::runtime_error("Metal blend specialization requires SIMD32 and 64-thread groups");
+                throw std::runtime_error(std::format("Metal blend specialization requires SIMD32 and 64-thread groups (width={}, max_threads={}, mode={}, flags={})", state.threadExecutionWidth, state.maxTotalThreadsPerThreadgroup, mode, flags));
             blend_pipelines.emplace(key, state);
             return state;
         }
         id<MTLComputeCommandEncoder> begin(id<MTLCommandBuffer> command, const char* name, GpuProfile* profile = nullptr, GpuStage stage = GpuStage::Sort) {
             auto encoder = profiledCompute(command, profile, stage);
             if (!encoder)
-                throw std::runtime_error("Could not encode Metal viewer compute pass");
+                throw std::runtime_error(std::format("Could not encode Metal viewer compute pass (name={}, status={})", name, long(command.status)));
             encoder.label = [NSString stringWithUTF8String:name];
             [encoder setComputePipelineState:pipelines.at(name)];
             return encoder;
         }
         void scan(id<MTLCommandBuffer> command, id<MTLBuffer> input, id<MTLBuffer> output,
-                  uint32_t count, const ScanStorage& storage, bool narrow = false, size_t level = 0,
-                  GpuProfile* profile = nullptr, id<MTLBuffer> live_status = nil,
-                  id<MTLBuffer> live_dispatch = nil) {
+                  uint32_t count, const ScanStorage& storage, size_t level = 0,
+                  GpuProfile* profile = nullptr) {
             if (!count)
                 return;
             const auto& scratch = storage.at(level);
             const auto groups = ceil_div(count, 256);
-            auto encoder = begin(command, narrow ? "scan32_blocks" : "scan_blocks", profile, narrow ? GpuStage::Sort : GpuStage::Instances);
+            auto encoder = begin(command, "scan_blocks", profile, GpuStage::Instances);
             [encoder setBuffer:input offset:0 atIndex:0];
             [encoder setBuffer:output offset:0 atIndex:1];
             [encoder setBuffer:scratch.sums offset:0 atIndex:2];
-            const uint32_t scan_level = static_cast<uint32_t>(level);
-            [encoder setBytes:narrow ? &scan_level : &count length:4 atIndex:3];
-            if (narrow) {
-                [encoder setBuffer:live_status offset:0 atIndex:4];
-                [encoder dispatchThreadgroupsWithIndirectBuffer:live_dispatch indirectBufferOffset:(6 + 3 * level) * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-            } else {
-                const uint32_t primitive_counts = level == 0;
-                [encoder setBytes:&primitive_counts length:sizeof(primitive_counts) atIndex:4];
-                [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-            }
+            [encoder setBytes:&count length:4 atIndex:3];
+            const uint32_t primitive_counts = level == 0;
+            [encoder setBytes:&primitive_counts length:4 atIndex:4];
+            [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [encoder endEncoding];
             if (groups <= 1)
                 return;
-            scan(command, scratch.sums, scratch.offsets, groups, storage, narrow, level + 1, profile, live_status, live_dispatch);
-            encoder = begin(command, narrow ? "scan32_add" : "scan_add", profile, narrow ? GpuStage::Sort : GpuStage::Instances);
+            scan(command, scratch.sums, scratch.offsets, groups, storage, level + 1, profile);
+            encoder = begin(command, "scan_add", profile, GpuStage::Instances);
             [encoder setBuffer:output offset:0 atIndex:0];
             [encoder setBuffer:scratch.offsets offset:0 atIndex:1];
-            [encoder setBytes:narrow ? &scan_level : &count length:4 atIndex:2];
-            if (narrow) {
-                [encoder setBuffer:live_status offset:0 atIndex:3];
-                [encoder dispatchThreadgroupsWithIndirectBuffer:live_dispatch indirectBufferOffset:(6 + 3 * level) * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-            } else
-                [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+            [encoder setBytes:&count length:4 atIndex:2];
+            [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [encoder endEncoding];
         }
     };
     TileRasterizer::TileRasterizer(id<MTLDevice> device) : impl_(std::make_unique<Impl>()) {
         if (!device)
-            throw std::invalid_argument("Metal viewer requires a device");
+            throw std::invalid_argument(std::format("Metal viewer requires a device (device_present={})", device != nil));
         impl_->device = device;
         auto options = [MTLCompileOptions new];
         options.languageVersion = MTLLanguageVersion2_4;
@@ -249,15 +236,17 @@ namespace lfs::rendering::metal {
         if (!library)
             throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal tile shader compilation failed");
         impl_->library = library;
-        for (const char* name : {"tile_counts", "scan_blocks", "scan_add", "scan32_blocks", "scan32_add", "tile_status", "source_keys", "tile_instances",
-                                 "tile_histogram", "tile_scatter", "source_histogram", "source_scatter", "source_ranges", "tile_ranges", "tile_depth_batches", "tile_depth_compose", "source_compact", "source_permutation", "digit_scan", "digit_offsets"}) {
+        for (const char* name : {"tile_counts", "scan_blocks", "scan_add", "tile_status", "source_keys", "tile_instances",
+                                 "tile_histogram", "tile_scatter", "source_histogram", "source_scatter", "source_ranges", "tile_ranges", "source_compact", "source_permutation", "digit_scan", "digit_offsets"}) {
             const bool source_keys = (std::string_view(name) == "source_histogram" || std::string_view(name) == "source_scatter" || std::string_view(name) == "source_ranges");
             const char* function_name = std::string_view(name) == "source_ranges" ? "tile_ranges"
-                : source_keys ? (std::string_view(name) == "source_histogram" ? "tile_histogram" : "tile_scatter") : name;
+                                        : source_keys                             ? (std::string_view(name) == "source_histogram" ? "tile_histogram" : "tile_scatter")
+                                                                                  : name;
             auto constants = [MTLFunctionConstantValues new];
             [constants setConstantValue:&source_keys type:MTLDataTypeBool atIndex:2];
             auto function = [library newFunctionWithName:[NSString stringWithUTF8String:function_name]
-                                          constantValues:constants error:&error];
+                                          constantValues:constants
+                                                   error:&error];
             auto descriptor = [MTLComputePipelineDescriptor new];
             descriptor.computeFunction = function;
             descriptor.maxTotalThreadsPerThreadgroup = 256;
@@ -265,7 +254,7 @@ namespace lfs::rendering::metal {
             if (!state)
                 throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal tile pipeline failed");
             if (state.threadExecutionWidth != 32 || state.maxTotalThreadsPerThreadgroup < 256)
-                throw std::runtime_error("Metal viewer requires SIMD32 and 256-thread groups");
+                throw std::runtime_error(std::format("Metal viewer requires SIMD32 and 256-thread groups (function={}, simd_width={}, max_threads={})", function_name, state.threadExecutionWidth, state.maxTotalThreadsPerThreadgroup));
             impl_->pipelines.emplace(name, state);
         }
     }
@@ -277,74 +266,62 @@ namespace lfs::rendering::metal {
         // display alpha, including transparent and portal presentation.
         macro_half_display = macro_half_display && !exact_median;
         if (macro_half_display && (mode != RasterMode::Gaussian || projection.display.z == 1.f))
-            throw std::invalid_argument("Macro half display requires ordinary 3DGS");
+            throw std::invalid_argument(std::format("Macro half display requires ordinary 3DGS (mode={}, spark={})", uint32_t(mode), projection.display.z));
         if (!command || command.device != impl_->device || f->device != impl_->device ||
             command.status != MTLCommandBufferStatusNotEnqueued || count > f->max_splats || uint32_t(mode) > 3)
-            throw std::invalid_argument("Invalid Metal viewer frame submission");
+            throw std::invalid_argument(std::format("Invalid Metal viewer frame submission (command_present={}, status={}, count={}, max_splats={}, mode={}, same_device={})", command != nil, long(command.status), count, f->max_splats, uint32_t(mode), command.device == impl_->device));
         for (int i = 0; i < 4; ++i)
             if (!std::isfinite(background[i]) || background[i] < 0 || (i == 3 && background[i] > 1))
-                throw std::invalid_argument("Invalid Metal viewer background");
+                throw std::invalid_argument(std::format("Invalid Metal viewer background (component={}, value={})", i, float(background[i])));
         if (count && (!projected.buffer || projected.buffer.device != impl_->device || projected.offset % 16 ||
                       projected.offset > projected.buffer.length ||
                       size_t(count) * sizeof(ProjectedSplat) > projected.buffer.length - projected.offset))
-            throw std::invalid_argument("Invalid Metal viewer projected splat buffer");
+            throw std::invalid_argument(std::format("Invalid Metal viewer projected splat buffer (count={}, offset={}, length={}, required_bytes={}, same_device={})", count, projected.offset, projected.buffer.length, size_t(count) * sizeof(ProjectedSplat), projected.buffer.device == impl_->device));
         if (mode == RasterMode::Gut && count &&
             (!gut.buffer || gut.buffer.device != impl_->device || gut.offset % 16 ||
              gut.offset > gut.buffer.length || size_t(count) * sizeof(GutSplat) > gut.buffer.length - gut.offset))
-            throw std::invalid_argument("Invalid native 3DGUT geometry buffer");
+            throw std::invalid_argument(std::format("Invalid native 3DGUT geometry buffer (count={}, offset={}, length={}, required_bytes={})", count, gut.offset, gut.buffer.length, size_t(count) * sizeof(GutSplat)));
         if (mode == RasterMode::Gut) {
             for (int component = 0; component < 4; ++component)
                 if (!std::isfinite(projection.intrinsics[component]) || !std::isfinite(projection.clip_scale[component]))
-                    throw std::invalid_argument("Invalid native 3DGUT ray parameters");
+                    throw std::invalid_argument(std::format("Invalid native 3DGUT ray parameters (component={}, intrinsics={}, clip={})", component, float(projection.intrinsics[component]), float(projection.clip_scale[component])));
             if (projection.intrinsics.x <= 0 || projection.intrinsics.y <= 0 || projection.clip_scale.x <= 0 || projection.extent.z > uint32_t(CameraModel::Equirectangular))
-                throw std::invalid_argument("Invalid native 3DGUT camera");
+                throw std::invalid_argument(std::format("Invalid native 3DGUT camera (focal=({}, {}), near={}, camera={})", projection.intrinsics.x, projection.intrinsics.y, projection.clip_scale.x, projection.extent.z));
             if (projection.extent.z == uint32_t(CameraModel::Equirectangular)) {
                 for (int component = 0; component < 4; ++component)
                     if (!std::isfinite(projection.panorama[component]))
-                        throw std::invalid_argument("Invalid native 3DGUT panorama");
+                        throw std::invalid_argument(std::format("Invalid native 3DGUT panorama (component={}, value={})", component, float(projection.panorama[component])));
                 const auto panorama = projection.panorama;
                 if (panorama.x < f->width || panorama.y < f->height || panorama.x > 65535 || panorama.y > 65535 ||
                     panorama.z < 0 || panorama.w < 0 || panorama.z + f->width > panorama.x || panorama.w + f->height > panorama.y)
-                    throw std::invalid_argument("Invalid native 3DGUT panorama subregion");
+                    throw std::invalid_argument(std::format("Invalid native 3DGUT panorama subregion (camera={}x{}, origin=({}, {}), extent={}x{})", panorama.x, panorama.y, panorama.z, panorama.w, f->width, f->height));
             }
         }
         const bool expected_depth = projection.rasterization.y == 1.f;
         if (!std::isfinite(projection.rasterization.y) || (projection.rasterization.y != 0.f && !expected_depth) ||
             (expected_depth && (!std::isfinite(projection.rasterization.z) || projection.rasterization.z <= 0)))
-            throw std::invalid_argument("Invalid Metal expected-depth capture parameters");
+            throw std::invalid_argument(std::format("Invalid Metal expected-depth capture parameters (enabled={}, max_depth={})", projection.rasterization.y, projection.rasterization.z));
         const auto logical = lod.logical_indices.buffer ? lod.logical_indices : lod.indices;
         if (lod.enabled && (lod.count != count || !lod.source_count ||
                             (count && (!logical.buffer || logical.buffer.device != impl_->device || logical.offset % 4 ||
                                        logical.offset > logical.buffer.length || size_t(count) * 4 > logical.buffer.length - logical.offset))))
-            throw std::invalid_argument("Invalid native Metal LOD identifier mapping");
+            throw std::invalid_argument(std::format("Invalid native Metal LOD identifier mapping (lod_count={}, count={}, source_count={}, offset={}, length={})", lod.count, count, lod.source_count, logical.offset, logical.buffer.length));
         const uint32_t logical_count = lod.enabled ? (lod.logical_count ? lod.logical_count : lod.source_count) : count;
         const uint32_t selection_count = overlay.selection.buffer ? (overlay.selection_count ? overlay.selection_count : logical_count) : 0;
         const uint32_t preview_count = overlay.preview.buffer ? (overlay.preview_count ? overlay.preview_count : logical_count) : 0;
         const auto check_mask = [&](BufferSlice mask, uint32_t extent) {
             if (extent && (mask.buffer.device != impl_->device || mask.offset > mask.buffer.length || extent > mask.buffer.length - mask.offset))
-                throw std::invalid_argument("Metal logical selection mask exceeds its resident storage");
+                throw std::invalid_argument(std::format("Metal logical selection mask exceeds its resident storage (extent={}, offset={}, length={}, same_device={})", extent, mask.offset, mask.buffer.length, mask.buffer.device == impl_->device));
         };
         check_mask(overlay.selection, selection_count);
         check_mask(overlay.preview, preview_count);
         bool single_simd = mode == RasterMode::Gaussian && projection.display.z != 1.f;
         RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u) | (macro_half_display ? 64u : 0u) | (single_simd ? 128u : 0u) | (exact_median ? 2048u : 0u) | (background.w == 1.f ? 4096u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
-        // Keys and the unused index side have no readers after tile ranges
-        // are generated. Reuse them for partial color/depth/pick; admission
-        // includes one possible gap per tile and all padded edge pixels.
-        const uint64_t batch_slots = (uint64_t(f->capacity) + kDepthChunkSize - 1) / kDepthChunkSize + f->tiles;
-        const bool depth_batches = count >= 4096 && mode == RasterMode::Gaussian &&
-                                   !(p.unused & (1u | 4u | 8u | 16u | 32u | 64u)) &&
-                                   batch_slots * 256 * 16 <= f->keys[0].length &&
-                                   batch_slots * 256 * 4 <= f->indices[0].length &&
-                                   batch_slots * 8 <= f->counts.length;
-        if (depth_batches)
-            p.unused |= 512u;
         // Compile/cache the default before reserving the frame or encoding work. A
         // specialization failure cannot strand its busy flag or partial scratch.
         auto blend_pipeline = impl_->blendPipeline(uint32_t(mode), p.unused);
-        const auto prefix_pipeline = depth_batches ? impl_->blendPipeline(uint32_t(mode), p.unused | 1024u) : nil;
         if (f->in_flight.exchange(true, std::memory_order_acq_rel))
-            throw std::logic_error("Metal viewer frame reservation is still in flight");
+            throw std::logic_error(std::format("Metal viewer frame reservation is still in flight (extent={}x{}, capacity={}, count={})", f->width, f->height, f->capacity, count));
         // Completion already publishes this shared status; inspecting the last
         // finished frame adds no GPU readback, allocation or synchronization.
         // Sparse/culled frames keep the original intersection sort. A changing
@@ -437,7 +414,7 @@ namespace lfs::rendering::metal {
             [e setBuffer:f->counts offset:0 atIndex:6];
             dispatch(e, count);
             const uint32_t groups = ceil_div(count, 256);
-            impl_->scan(command, f->offsets, f->histogram, groups, f->count_scan, false, 0, profile);
+            impl_->scan(command, f->offsets, f->histogram, groups, f->count_scan, 0, profile);
             e = impl_->begin(command, "source_compact", profile, GpuStage::Sort);
             [e setBuffer:f->keys[1] offset:0 atIndex:0];
             [e setBuffer:f->indices[1] offset:0 atIndex:1];
@@ -470,7 +447,7 @@ namespace lfs::rendering::metal {
             [e setBuffer:f->keys[1] offset:0 atIndex:3];
             [e setBuffer:f->counts offset:0 atIndex:4];
             dispatch(e, count);
-            impl_->scan(command, counts, offsets, count, f->count_scan, false, 0, profile);
+            impl_->scan(command, counts, offsets, count, f->count_scan, 0, profile);
         }
         auto e = impl_->begin(command, "tile_status", profile, GpuStage::Instances);
         [e setBuffer:counts offset:0 atIndex:0];
@@ -505,27 +482,11 @@ namespace lfs::rendering::metal {
             [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:3 * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [e endEncoding];
         }
-        const uint32_t sorted_index = (4 + (std::bit_width(f->tiles - 1) + 7) / 8) % 2;
-        if (depth_batches) {
-            // Sorting has finished. This scratch no longer stores source counts.
-            auto clear_jobs = [command blitCommandEncoder];
-            [clear_jobs fillBuffer:f->counts range:NSMakeRange(0, batch_slots * 8) value:255];
-            [clear_jobs endEncoding];
-            e = impl_->begin(command, "tile_depth_batches", profile, GpuStage::Blend);
-            [e setBuffer:f->status offset:0 atIndex:3];
-            [e setBuffer:f->ranges offset:0 atIndex:0];
-            [e setBuffer:f->counts offset:0 atIndex:1];
-            [e setBytes:&p length:sizeof(p) atIndex:2];
-            dispatch(e, f->tiles);
-        }
+
         e = profiledCompute(command, profile, GpuStage::Blend);
         if (!e)
-            throw std::runtime_error("Could not encode Metal viewer blend pass");
+            throw std::runtime_error(std::format("Could not encode Metal viewer blend pass (command_status={}, count={}, extent={}x{})", long(command.status), count, f->width, f->height));
         e.label = @"tile_blend";
-        [e setBuffer:f->counts offset:0 atIndex:13];
-        [e setBuffer:f->keys[0] offset:0 atIndex:14];
-        [e setBuffer:f->keys[1] offset:0 atIndex:15];
-        [e setBuffer:f->indices[1 - sorted_index] offset:0 atIndex:16];
         [e setComputePipelineState:blend_pipeline];
         set_projected(e);
         const uint32_t sorted = (4 + (std::bit_width(f->tiles - 1) + 7) / 8) % 2;
@@ -542,31 +503,8 @@ namespace lfs::rendering::metal {
         [e setTexture:f->color atIndex:0];
         [e setTexture:f->depth atIndex:1];
         [e setTexture:f->pick atIndex:2];
-        if (depth_batches) {
-            [e setComputePipelineState:prefix_pipeline];
-            [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * 8, 1, 1) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
-            [e memoryBarrierWithScope:MTLBarrierScopeBuffers];
-            [e setComputePipelineState:blend_pipeline];
-            [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:18 * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
-        }
-        else
-            [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * (single_simd ? 8 : 4), 1, 1) threadsPerThreadgroup:MTLSizeMake(single_simd ? 32 : 64, 1, 1)];
+
+        [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * (single_simd ? 8 : 4), 1, 1) threadsPerThreadgroup:MTLSizeMake(single_simd ? 32 : 64, 1, 1)];
         [e endEncoding];
-        if (depth_batches) {
-            e = impl_->begin(command, "tile_depth_compose", profile, GpuStage::Blend);
-            set_projected(e);
-            [e setBuffer:f->indices[sorted_index] offset:0 atIndex:1];
-            [e setBuffer:f->ranges offset:0 atIndex:2];
-            [e setBuffer:f->status offset:0 atIndex:3];
-            [e setBytes:&p length:sizeof(p) atIndex:4];
-            [e setBuffer:f->keys[0] offset:0 atIndex:14];
-            [e setBuffer:f->keys[1] offset:0 atIndex:15];
-            [e setBuffer:f->indices[1 - sorted_index] offset:0 atIndex:16];
-            [e setTexture:f->color atIndex:0];
-            [e setTexture:f->depth atIndex:1];
-            [e setTexture:f->pick atIndex:2];
-            [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * 8, 1, 1) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
-            [e endEncoding];
-        }
     }
 } // namespace lfs::rendering::metal

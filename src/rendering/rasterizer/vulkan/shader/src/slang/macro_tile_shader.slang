@@ -435,7 +435,7 @@ void main(uniform Uniforms uniforms) {
                        1u);
         write_dispatch(out_wave_dispatch,
                        record + LFS_VK_DEPTH_WAVE_RADIX_WORD_OFFSET,
-                       max((span + 512u * 8u - 1u) / (512u * 8u), 1u),
+                       max((span + RADIX_PARTITION_SIZE - 1u) / (RADIX_PARTITION_SIZE), 1u),
                        1u,
                        1u);
         write_dispatch(out_wave_dispatch,

@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/tensor_backend.hpp"
 #include "metal_viewport_renderer.hpp"
+#include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
+#include "vksplat_viewport_renderer.hpp"
 #include <Python.h>
 #include <array>
 #include <cmath>
@@ -62,7 +64,6 @@ static void partial_selection_mask_contract(vis::VulkanContext& context) {
     using core::Tensor;
     // A short mask has an implicit unselected suffix. Exercise admission and
     // the production adapter, not only the lower-level shader buffer contract.
-    vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Metal);
     for (const auto backend : {core::GpuBackend::Metal, core::GpuBackend::Vulkan}) {
         core::GpuBackendScope scope(backend);
         core::SplatData model(0,
@@ -71,17 +72,17 @@ static void partial_selection_mask_contract(vis::VulkanContext& context) {
                               Tensor::full({3, 3}, -3.f, Device::GPU),
                               Tensor::from_vector(std::vector<float>{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}, {3, 4}, Device::GPU),
                               Tensor::full({3, 1}, 4.f, Device::GPU), 1.f);
-        vis::VksplatViewportRenderer adapter;
+        auto adapter = vis::createSceneRenderer();
         rendering::ViewportRenderRequest request;
         request.frame_view.size = {96, 64};
         request.sh_degree = 0;
         const auto capture = [&] {
             require(vis::MetalViewportRenderer::supports(model, request), "Partial native selection mask unnecessarily rejected Metal");
-            const auto frame = adapter.render(context, model, request, true, vis::RenderTargetId{1}, false, true);
+            const auto frame = adapter->render(context, model, request, true, vis::RenderTargetId{1}, false, true);
             require(frame.has_value() && (frame->generation >> 63) != 0, "Partial selection mask fell back to Vulkan");
             auto rgb = Tensor::empty({64, 96, 3}, Device::CPU);
-            const auto ticket = adapter.submitReadOutputImageIntoCpuHwcTicket(context, vis::RenderTargetId{1}, rgb, 0, 0);
-            require(ticket.has_value() && adapter.waitReadbackTicket(*ticket).has_value(), "Partial selection readback failed");
+            const auto ticket = adapter->submitReadOutputImageIntoCpuHwcTicket(context, vis::RenderTargetId{1}, rgb, 0, 0);
+            require(ticket.has_value() && adapter->waitReadbackTicket(*ticket).has_value(), "Partial selection readback failed");
             return rgb;
         };
         const std::array<uint32_t, 3> reordered_cut{2, 0, 1};
@@ -123,27 +124,20 @@ static void partial_selection_mask_contract(vis::VulkanContext& context) {
         request.overlay.emphasis.mask = std::make_shared<Tensor>(Tensor::full({3, 2}, 1.f, Device::GPU).to(core::DataType::UInt8).slice(1, 0, 1));
         require(!vis::MetalViewportRenderer::supports(model, request), "Strided selection mask accepted");
     }
-    vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Vulkan);
 }
 static void multi_target_auto_contract(vis::VulkanContext& context, bool compare_vulkan) {
     using core::Device;
     using core::Tensor;
-    const auto previous = vis::UserPreferences::instance().viewerBackend();
-    struct Restore {
-        rendering::ViewerBackend value;
-        ~Restore() { vis::UserPreferences::instance().setViewerBackend(value); }
-    } restore{previous};
-    vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Automatic);
     constexpr std::array<vis::RenderTargetId, 8> ids{{{5}, {37}, {1024}, {90001}, {17}, {700}, {0xFFFFFFFEu}, {23}}};
     for (const auto backend : {core::GpuBackend::Metal, core::GpuBackend::Vulkan}) {
         core::GpuBackendScope scope(backend);
         core::SplatData model(0,
-            Tensor::from_vector(std::vector<float>{0, 0, -3}, {1, 3}, Device::GPU),
-            Tensor::from_vector(std::vector<float>{1, 0, 0}, {1, 1, 3}, Device::GPU), {},
-            Tensor::full({1, 3}, -2.f, Device::GPU),
-            Tensor::from_vector(std::vector<float>{1, 0, 0, 0}, {1, 4}, Device::GPU),
-            Tensor::full({1, 1}, 4.f, Device::GPU), 1.f);
-        vis::VksplatViewportRenderer adapter;
+                              Tensor::from_vector(std::vector<float>{0, 0, -3}, {1, 3}, Device::GPU),
+                              Tensor::from_vector(std::vector<float>{1, 0, 0}, {1, 1, 3}, Device::GPU), {},
+                              Tensor::full({1, 3}, -2.f, Device::GPU),
+                              Tensor::from_vector(std::vector<float>{1, 0, 0, 0}, {1, 4}, Device::GPU),
+                              Tensor::full({1, 1}, 4.f, Device::GPU), 1.f);
+        auto adapter = vis::createSceneRenderer();
         std::array<Tensor, ids.size()> snapshots;
         const auto request_for = [](size_t index) {
             rendering::ViewportRenderRequest request;
@@ -157,18 +151,18 @@ static void multi_target_auto_contract(vis::VulkanContext& context, bool compare
             const auto request = request_for(index);
             const auto size = request.frame_view.size;
             auto rgb = Tensor::empty({size_t(size.y), size_t(size.x), 3}, Device::CPU);
-            const auto ticket = adapter.submitReadOutputImageIntoCpuHwcTicket(context, ids[index], rgb, 0, 0);
+            const auto ticket = adapter->submitReadOutputImageIntoCpuHwcTicket(context, ids[index], rgb, 0, 0);
             require(ticket && vis::MetalViewportRenderer::nativeTicket(*ticket), "Dynamic view capture lost native identity");
-            require(adapter.waitReadbackTicket(*ticket).has_value(), "Dynamic view capture failed");
+            require(adapter->waitReadbackTicket(*ticket).has_value(), "Dynamic view capture failed");
             require(rgb.ptr<float>()[((size.y / 2) * size.x + size.x / 2) * 3] > .5f, "Dynamic view produced no visible splat");
             return rgb;
         };
         for (size_t index = 0; index < ids.size(); ++index) {
             const auto request = request_for(index);
-            const auto frame = adapter.render(context, model, request, true, ids[index], false, true);
+            const auto frame = adapter->render(context, model, request, true, ids[index], false, true);
             require(frame && frame->viewer_backend == rendering::ViewerBackend::Metal && (frame->generation >> 63),
                     "Auto did not select native Metal for a compatible dynamic target");
-            require(frame->size == request.frame_view.size && adapter.hasRenderTarget(ids[index]), "Dynamic target extent/ownership differs");
+            require(frame->size == request.frame_view.size && adapter->hasRenderTarget(ids[index]), "Dynamic target extent/ownership differs");
             snapshots[index] = capture(index);
         }
         for (size_t index = 0; index < ids.size(); ++index) {
@@ -176,18 +170,18 @@ static void multi_target_auto_contract(vis::VulkanContext& context, bool compare
             require(std::memcmp(current.data_ptr(), snapshots[index].data_ptr(), current.bytes()) == 0,
                     "Rendering another target changed a cached native view");
         }
-        require(!adapter.render(context, model, request_for(0), true, {}).has_value(), "Invalid target zero was accepted");
+        require(!adapter->render(context, model, request_for(0), true, {}).has_value(), "Invalid target zero was accepted");
         auto cancelled = Tensor::full({33, 49, 3}, -99.f, Device::CPU);
         auto survivor = Tensor::empty({35, 51, 3}, Device::CPU);
-        const auto cancelled_ticket = adapter.submitReadOutputImageIntoCpuHwcTicket(context, ids[0], cancelled, 0, 0);
-        const auto survivor_ticket = adapter.submitReadOutputImageIntoCpuHwcTicket(context, ids[1], survivor, 0, 0);
+        const auto cancelled_ticket = adapter->submitReadOutputImageIntoCpuHwcTicket(context, ids[0], cancelled, 0, 0);
+        const auto survivor_ticket = adapter->submitReadOutputImageIntoCpuHwcTicket(context, ids[1], survivor, 0, 0);
         require(cancelled_ticket && survivor_ticket, "Pending target tickets failed");
-        require(adapter.releaseRenderTarget(ids[0]) && !adapter.hasRenderTarget(ids[0]), "Closed native target retained ownership");
-        const auto cancelled_status = adapter.pollReadbackTicket(*cancelled_ticket);
+        require(adapter->releaseRenderTarget(ids[0]) && !adapter->hasRenderTarget(ids[0]), "Closed native target retained ownership");
+        const auto cancelled_status = adapter->pollReadbackTicket(*cancelled_ticket);
         require(cancelled_status && *cancelled_status == vis::VksplatViewportRenderer::ReadbackTicketStatus::Failed,
                 "Closed target did not fail its pending readback");
-        require(!adapter.render(context, model, request_for(0), true, ids[0]).has_value(), "A retired target ID was reused");
-        require(adapter.waitReadbackTicket(*survivor_ticket).has_value(), "Closing one target failed a different target's ticket");
+        require(!adapter->render(context, model, request_for(0), true, ids[0]).has_value(), "A retired target ID was reused");
+        require(adapter->waitReadbackTicket(*survivor_ticket).has_value(), "Closing one target failed a different target's ticket");
         require(std::memcmp(survivor.data_ptr(), snapshots[1].data_ptr(), survivor.bytes()) == 0,
                 "A ticket delivered pixels from a different view");
         for (size_t i = 0; i < cancelled.numel(); ++i)
@@ -199,18 +193,12 @@ static void multi_target_auto_contract(vis::VulkanContext& context, bool compare
         }
         if (!compare_vulkan)
             continue;
-        // Auto must retain Vulkan for a frame whose overlay is not resident.
-        auto fallback_request = request_for(1);
-        fallback_request.overlay.has_selection = true;
-        fallback_request.overlay.emphasis.mask = std::make_shared<Tensor>(Tensor::full({1}, 1.f, Device::CPU).to(core::DataType::UInt8));
-        const auto fallback = adapter.render(context, model, fallback_request, true, ids[1], false, true);
-        require(fallback && fallback->viewer_backend == rendering::ViewerBackend::Vulkan, "Unsupported Auto frame did not use Vulkan");
-        const auto returned = adapter.render(context, model, request_for(1), true, ids[1], false, true);
-        require(returned && returned->viewer_backend == rendering::ViewerBackend::Metal, "Compatible Auto frame did not return to Metal");
-        vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Vulkan);
-        const auto explicit_vk = adapter.render(context, model, request_for(1), true, ids[1], false, true);
-        require(explicit_vk && explicit_vk->viewer_backend == rendering::ViewerBackend::Vulkan, "Explicit Vulkan was overridden by Auto policy");
-        vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Automatic);
+        // Unsupported native inputs must report an error, never switch backend.
+        auto unsupported = request_for(1);
+        unsupported.overlay.has_selection = true;
+        unsupported.overlay.emphasis.mask = std::make_shared<Tensor>(Tensor::full({1}, 1.f, Device::CPU).to(core::DataType::UInt8));
+        require(!adapter->render(context, model, unsupported, true, ids[1], false, true), "Unsupported native input was silently accepted");
+        require(adapter->render(context, model, request_for(1), true, ids[1], false, true).has_value(), "Native renderer did not recover after an invalid request");
     }
 }
 static void run(bool compare_vulkan) {
@@ -396,7 +384,9 @@ static void run(bool compare_vulkan) {
     request.frame_view.subregion_full_size = request.frame_view.subregion_origin = {0, 0};
     model.means_raw() = Tensor::from_vector(std::vector<float>{0, 0, -3}, {1, 3}, Device::GPU);
     request.gut = false;
-    require(!vis::MetalViewportRenderer::supports(model, request), "Panorama accepted a rasterizer without spherical rays");
+    require(vis::MetalViewportRenderer::supports(model, request), "3DGS panorama was rejected");
+    const auto gaussian_panorama = snapshot(request);
+    require(gaussian_panorama.ptr<float>()[center] > .3f, "3DGS panorama lost the forward hemisphere");
     request.gut = true;
     request.equirectangular = false;
     require(renderer.releaseAll().has_value(), "Native scene release failed");
@@ -416,54 +406,52 @@ static void run(bool compare_vulkan) {
     require(jittered.has_value() && !jittered->lod_streaming_active, "Temporal jitter requested perpetual refinement");
     request.frame_view.containment_intrinsics.reset();
     request.frame_view.intrinsics_override.reset();
-    vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Metal);
     {
-        vis::VksplatViewportRenderer adapter;
+        auto adapter = vis::createSceneRenderer();
         uint64_t first_ticket = 0;
         for (const auto slot : {vis::RenderTargetId{1},
                                 vis::RenderTargetId{2},
                                 vis::RenderTargetId{3},
                                 vis::RenderTargetId{4}}) {
-            const auto frame = adapter.render(context, model, request, true, slot, false, true);
+            const auto frame = adapter->render(context, model, request, true, slot, false, true);
             if (!frame)
                 throw std::runtime_error(frame.error());
             require((frame->generation >> 63) != 0, "Requested native export used Vulkan");
-            const auto rgba = adapter.readOutputImageRgba8(context, slot);
+            const auto rgba = adapter->readOutputImageRgba8(context, slot);
             require(rgba.has_value(), "Native adapter capture failed");
             auto rgb = Tensor::empty({64, 96, 3}, Device::CPU, core::DataType::Float32);
-            const auto ticket = adapter.submitReadOutputImageIntoCpuHwcTicket(context, slot, rgb, 0, 0);
+            const auto ticket = adapter->submitReadOutputImageIntoCpuHwcTicket(context, slot, rgb, 0, 0);
             require(ticket.has_value() && vis::MetalViewportRenderer::nativeTicket(*ticket), "Adapter ticket lost backend identity");
             if (!first_ticket)
                 first_ticket = *ticket;
-            require(adapter.waitReadbackTicket(*ticket).has_value(), "Adapter ticket delivery failed");
+            require(adapter->waitReadbackTicket(*ticket).has_value(), "Adapter ticket delivery failed");
             require(rgb.ptr<float>()[center] > .5f, "Native adapter export lost splat");
         }
         model.opacity_raw() = Tensor::full({1, 1}, -4.f, Device::GPU).to(core::DataType::Float16);
-        adapter.setDepthCaptureMode(true, true);
-        const auto expected_frame = adapter.render(context, model, request, true, vis::RenderTargetId{4}, false, true);
+        adapter->setDepthCaptureMode(true, true);
+        const auto expected_frame = adapter->render(context, model, request, true, vis::RenderTargetId{4}, false, true);
         require(expected_frame.has_value() && (expected_frame->generation >> 63) != 0, "Expected-depth capture lost native backend");
-        const auto expected = adapter.readPreviewDepth(context, vis::RenderTargetId{4});
+        const auto expected = adapter->readPreviewDepth(context, vis::RenderTargetId{4});
         require(expected.has_value() && std::abs((*expected)->ptr<float>()[32 * 96 + 48] - 3.f) < 1e-3f, "Expected-depth capture differs");
         require((*expected)->ptr<float>()[0] >= 1e9f, "Empty expected depth lost sentinel");
-        adapter.setDepthCaptureMode(true, false);
-        require(adapter.render(context, model, request, true, vis::RenderTargetId{4}, false, true).has_value(), "Median capture failed");
-        const auto median = adapter.readPreviewDepth(context, vis::RenderTargetId{4});
+        adapter->setDepthCaptureMode(true, false);
+        require(adapter->render(context, model, request, true, vis::RenderTargetId{4}, false, true).has_value(), "Median capture failed");
+        const auto median = adapter->readPreviewDepth(context, vis::RenderTargetId{4});
         require(median.has_value() && (*median)->ptr<float>()[32 * 96 + 48] >= 1e9f, "Low-opacity median differs");
-        require(adapter.releaseRenderTarget(vis::RenderTargetId{4}), "Preview release failed");
-        require(adapter.releaseRenderTarget(vis::RenderTargetId{2}), "Left view release failed");
-        require(adapter.releaseRenderTarget(vis::RenderTargetId{3}), "Right view release failed");
-        adapter.reset();
+        require(adapter->releaseRenderTarget(vis::RenderTargetId{4}), "Preview release failed");
+        require(adapter->releaseRenderTarget(vis::RenderTargetId{2}), "Left view release failed");
+        require(adapter->releaseRenderTarget(vis::RenderTargetId{3}), "Right view release failed");
+        adapter->reset();
         model.opacity_raw() = Tensor::full({1, 1}, 4.f, Device::GPU).to(core::DataType::Float16);
-        adapter.setDepthCaptureMode(false);
-        require(adapter.render(context, model, request, true, vis::RenderTargetId{1}).has_value(), "Native adapter restart failed");
+        adapter->setDepthCaptureMode(false);
+        require(adapter->render(context, model, request, true, vis::RenderTargetId{1}).has_value(), "Native adapter restart failed");
         auto restart_rgb = Tensor::empty({64, 96, 3}, Device::CPU, core::DataType::Float32);
-        const auto restart_ticket = adapter.submitReadOutputImageIntoCpuHwcTicket(context,
-                                                                                  vis::RenderTargetId{1}, restart_rgb, 0, 0);
+        const auto restart_ticket = adapter->submitReadOutputImageIntoCpuHwcTicket(context,
+                                                                                   vis::RenderTargetId{1}, restart_rgb, 0, 0);
         require(restart_ticket.has_value() && *restart_ticket != first_ticket, "Reset reused a stale native ticket identity");
-        require(!adapter.pollReadbackTicket(first_ticket).has_value(), "Stale native ticket aliased a new destination");
-        require(adapter.waitReadbackTicket(*restart_ticket).has_value(), "Restart ticket delivery failed");
+        require(!adapter->pollReadbackTicket(first_ticket).has_value(), "Stale native ticket aliased a new destination");
+        require(adapter->waitReadbackTicket(*restart_ticket).has_value(), "Restart ticket delivery failed");
     }
-    vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Vulkan);
     auto positions = Tensor::from_vector(std::vector<float>{0, 0, -3, 0, 0, -6}, {2, 3}, Device::GPU);
     auto colors = Tensor::from_vector(std::vector<float>{0, 1, 0, 1, 0, 0}, {2, 3}, Device::GPU);
     vis::PointCloudVulkanRenderer::RenderRequest points;
@@ -503,20 +491,37 @@ static void run(bool compare_vulkan) {
         }
         require(coverage_difference == 0, "Native point coverage differs from desktop Vulkan");
     }
-    vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Automatic);
-    vis::PointCloudVulkanRenderer point_auto;
+    auto point_auto = vis::createPointSceneRenderer();
     for (const auto target : {vis::RenderTargetId{19}, vis::RenderTargetId{45}, vis::RenderTargetId{903},
-                             vis::RenderTargetId{701}, vis::RenderTargetId{300003}}) {
-        const auto output = point_auto.render(context, points, target);
-        require(output && output->viewer_backend == rendering::ViewerBackend::Metal && point_auto.hasRenderTarget(target),
+                              vis::RenderTargetId{701}, vis::RenderTargetId{300003}}) {
+        const auto output = point_auto->render(context, points, target);
+        require(output && output->viewer_backend == rendering::ViewerBackend::Metal && point_auto->hasRenderTarget(target),
                 "Auto point view lost native target ownership");
-        const auto pixels = point_auto.readOutputImage(context, target);
+        const auto pixels = point_auto->readOutputImage(context, target);
         require(pixels && (*pixels)->ptr<float>()[center + 1] > .9f, "Auto point view lost its nearest point");
     }
-    require(point_auto.releaseRenderTarget(vis::RenderTargetId{19}), "Auto point target release failed");
-    require(!point_auto.render(context, points, vis::RenderTargetId{19}).has_value(), "Closed point target ID was reused");
-    require(point_auto.readOutputImage(context, vis::RenderTargetId{300003}).has_value(), "Closing one point view damaged another");
-    vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Vulkan);
+    // COLMAP imports keep RGB as bytes on the CPU. The platform adapter must
+    // preserve their normalized colors while staging native storage.
+    auto imported_positions = positions.to(Device::CPU);
+    auto imported_colors = Tensor::from_vector(std::vector<float>{0, 255, 0, 255, 0, 0}, {2, 3}, Device::CPU).to(core::DataType::UInt8);
+    auto imported_points = points;
+    imported_points.positions = &imported_positions;
+    imported_points.colors = &imported_colors;
+    const auto imported_frame = point_auto->render(context, imported_points, vis::RenderTargetId{902});
+    require(imported_frame.has_value(), "COLMAP CPU byte-color point rendering failed");
+    const auto imported_pixels = point_auto->readOutputImage(context, vis::RenderTargetId{902});
+    require(imported_pixels && std::memcmp((*imported_pixels)->data_ptr(), point_pixels.data_ptr(), point_pixels.bytes()) == 0,
+            "COLMAP byte colors differ from normalized native point colors");
+    imported_colors.copy_(Tensor::from_vector(std::vector<float>{255, 0, 0, 255, 0, 0}, {2, 3}, Device::CPU).to(core::DataType::UInt8));
+    ++imported_points.colors_revision;
+    require(point_auto->render(context, imported_points, vis::RenderTargetId{902}).has_value(),
+            "COLMAP color revision rendering failed");
+    const auto changed_pixels = point_auto->readOutputImage(context, vis::RenderTargetId{902});
+    require(changed_pixels && (*changed_pixels)->ptr<float>()[center] > .9f && (*changed_pixels)->ptr<float>()[center + 1] < .1f,
+            "COLMAP upload cache ignored an in-place color revision");
+    require(point_auto->releaseRenderTarget(vis::RenderTargetId{19}), "Auto point target release failed");
+    require(!point_auto->render(context, points, vis::RenderTargetId{19}).has_value(), "Closed point target ID was reused");
+    require(point_auto->readOutputImage(context, vis::RenderTargetId{300003}).has_value(), "Closing one point view damaged another");
     multi_target_auto_contract(context, compare_vulkan);
     transparent_threshold_contract(context);
     partial_selection_mask_contract(context);

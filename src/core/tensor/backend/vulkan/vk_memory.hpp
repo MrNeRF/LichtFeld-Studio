@@ -108,6 +108,9 @@ namespace lfs::core::internal {
         VkExportMetalObjectCreateInfoEXT metal_export_info_{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
 #endif
         VmaPool device_pool_ = VK_NULL_HANDLE;
+#ifdef __APPLE__
+        VmaPool host_pool_ = VK_NULL_HANDLE;
+#endif
         bool exports_memory_ = false;
         mutable std::mutex allocations_mutex_;
         std::unordered_map<uint64_t, std::unique_ptr<AllocationRecord>> allocations_;

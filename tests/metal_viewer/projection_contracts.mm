@@ -335,7 +335,23 @@ static void run(id<MTLDevice> device) {
     auto invalid_panorama = panorama;
     invalid_panorama.panorama.x = 0;
     reject([&] { pipeline.encode([queue commandBuffer], spherical, invalid_panorama, 0, PrimitiveMode::Gut, { projected }, {}, {}, {geometry}); });
-    reject([&] { pipeline.encode([queue commandBuffer], spherical, panorama, 0, PrimitiveMode::Gaussian, { projected }); });
+    // A centered isotropic 3DGS has an analytic spherical Jacobian. This
+    // checks covariance and radial depth independently of the shader formula.
+    const std::array<float, 3> gs_mean{0, 0, 3};
+    spherical.means = {buffer(device, gs_mean.data(), sizeof(gs_mean))};
+    auto gs_command = [queue commandBuffer];
+    pipeline.encode(gs_command, spherical, panorama, 0, PrimitiveMode::Gaussian, {projected});
+    [gs_command commit];
+    [gs_command waitUntilCompleted];
+    require(gs_command.status == MTLCommandBufferStatusCompleted, "3DGS spherical projection failed");
+    const auto gs = static_cast<const ProjectedSplat*>(projected.contents);
+    const double variance_x = std::pow(128.0 * std::exp(double(logs[0])) / (6.0 * M_PI), 2) + panorama.clip_scale.w;
+    const double variance_y = std::pow(96.0 * std::exp(double(logs[1])) / (3.0 * M_PI), 2) + panorama.clip_scale.w;
+    require(gs->bounds.z > gs->bounds.x && std::abs(gs->mean_depth.x - 63.5f) < 1e-5f && std::abs(gs->mean_depth.y - 47.5f) < 1e-5f,
+            "3DGS spherical center differs from its analytic projection");
+    require(std::abs(gs->conic_opacity.x - 1.0 / variance_x) < 1e-5 && std::abs(gs->conic_opacity.z - 1.0 / variance_y) < 1e-5 && std::abs(gs->conic_opacity.y) < 1e-6f,
+            "3DGS spherical covariance differs from its analytic Jacobian");
+    require(std::abs(gs->mean_depth.z - 3.f) < 1e-5f, "3DGS spherical depth is not radial");
     const std::array<float, 3> nonfinite{NAN, 0, 3};
     spherical.means = {buffer(device, nonfinite.data(), sizeof(nonfinite))};
     auto invalid_command = [queue commandBuffer];

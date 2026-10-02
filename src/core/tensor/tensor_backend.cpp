@@ -1007,6 +1007,24 @@ namespace lfs::core {
 #endif
     }
 
+    bool tensor_supports_metal_access(const Tensor& tensor) {
+#ifdef __APPLE__
+        const auto backend = gpu_backend_of(tensor);
+        return backend == GpuBackend::Metal || backend == GpuBackend::Vulkan;
+#else
+        return false;
+#endif
+    }
+
+    bool tensor_backend_supports_metal_access() {
+#ifdef __APPLE__
+        const auto backend = default_gpu_backend();
+        return backend == GpuBackend::Metal || backend == GpuBackend::Vulkan;
+#else
+        return false;
+#endif
+    }
+
     bool tensor_backend_shares_vulkan_device() {
         return default_gpu_backend() != GpuBackend::Metal;
     }

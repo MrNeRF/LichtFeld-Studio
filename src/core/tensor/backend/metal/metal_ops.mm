@@ -220,7 +220,8 @@ namespace lfs::core::internal {
                 return bytes % alignment == 0 && source_at.offset % alignment == 0 &&
                        destination_at.offset % alignment == 0;
             };
-            const uint32_t element_size = aligned(16) ? 16 : aligned(4) ? 4 : 1;
+            const uint32_t element_size = aligned(16) ? 16 : aligned(4) ? 4
+                                                                        : 1;
             const auto pipeline = context.pipeline("copy_bytes", {{5, element_size}});
             const CopyParams params{
                 .source_offset = source_at.offset,
@@ -468,8 +469,7 @@ namespace lfs::core::internal {
             const std::array uses{input, output};
             const uint32_t dtype = static_cast<uint32_t>(output.dtype);
             context->dispatch(uses, {.pipeline = context->pipeline(
-                                         "cat_pad", {{0, 0}, {1, dtype}, {2, dtype},
-                                                     {5, static_cast<uint32_t>(dtype_size(output.dtype))}}),
+                                         "cat_pad", {{0, 0}, {1, dtype}, {2, dtype}, {5, static_cast<uint32_t>(dtype_size(output.dtype))}}),
                                      .buffers = {input_at.address, output_at.address},
                                      .params = param_bytes(params),
                                      .grid = threads(count)});
@@ -596,9 +596,7 @@ namespace lfs::core::internal {
             const FusedChain& chain = source.chain != nullptr ? *source.chain : none;
             stage.params.ops = chain.ops;
             const auto pipeline = context.pipeline(
-                "reduce", {{1, source.code}, {2, stage.output_code}, {6, static_cast<uint32_t>(stage.op)},
-                           {8, chain.length}, {9, chain.kinds[0]}, {10, chain.kinds[1]}, {11, chain.kinds[2]},
-                           {16, stage.mode}});
+                "reduce", {{1, source.code}, {2, stage.output_code}, {6, static_cast<uint32_t>(stage.op)}, {8, chain.length}, {9, chain.kinds[0]}, {10, chain.kinds[1]}, {11, chain.kinds[2]}, {16, stage.mode}});
             std::vector<StorageRef> uses{source.input, stage.output};
             uses.insert(uses.end(), source.operands.begin(), source.operands.end());
             context.dispatch(uses, {.pipeline = pipeline,
@@ -618,23 +616,16 @@ namespace lfs::core::internal {
             const uint32_t count32 = checked_u32(count, "Metal reduction count exceeds uint32");
             if (count <= kSingleGroupFullReduce) {
                 encode_reduce_stage(context, source,
-                                    {.op = op, .mode = kSegmentedMode, .output_code = element_code(output_dtype),
-                                     .output = output, .groups = MTLSizeMake(1, 1, 1),
-                                     .params = {.outer = 1, .reduce = count32, .inner = 1,
-                                                .mean_scale = mean_scale_for(op, count)}});
+                                    {.op = op, .mode = kSegmentedMode, .output_code = element_code(output_dtype), .output = output, .groups = MTLSizeMake(1, 1, 1), .params = {.outer = 1, .reduce = count32, .inner = 1, .mean_scale = mean_scale_for(op, count)}});
                 return;
             }
             const size_t groups = std::min(kMaxPartials, (count + kElementsPerPartial - 1) / kElementsPerPartial);
             const uint32_t partial = partial_code(source.input.dtype, op);
             const Scratch partials(context, groups * sizeof(int64_t));
             encode_reduce_stage(context, source,
-                                {.op = op, .mode = kPartialMode, .output_code = partial, .output = partials.storage,
-                                 .groups = MTLSizeMake(groups, 1, 1), .params = {.count = count32, .mean_scale = 1.0f}});
+                                {.op = op, .mode = kPartialMode, .output_code = partial, .output = partials.storage, .groups = MTLSizeMake(groups, 1, 1), .params = {.count = count32, .mean_scale = 1.0f}});
             encode_reduce_stage(context, {.input = partials.storage, .code = partial},
-                                {.op = op, .mode = kSegmentedMode, .output_code = element_code(output_dtype),
-                                 .output = output, .groups = MTLSizeMake(1, 1, 1),
-                                 .params = {.outer = 1, .reduce = static_cast<uint32_t>(groups), .inner = 1,
-                                            .mean_scale = mean_scale_for(op, count)}});
+                                {.op = op, .mode = kSegmentedMode, .output_code = element_code(output_dtype), .output = output, .groups = MTLSizeMake(1, 1, 1), .params = {.outer = 1, .reduce = static_cast<uint32_t>(groups), .inner = 1, .mean_scale = mean_scale_for(op, count)}});
         }
 
         // Reduces the middle extent of an (outer, reduce, inner) view into
@@ -654,22 +645,18 @@ namespace lfs::core::internal {
             const float mean_scale = mean_scale_for(op, reduce);
             if (inner == 1 && reduce >= kSegmentedThreshold && reduce <= kRowModeLimit) {
                 encode_reduce_stage(context, source,
-                                    {.op = op, .mode = kRowMode, .output_code = element_code(output_dtype),
-                                     .output = output,
-                                     .groups = MTLSizeMake((outer + kThreadgroupWidth / 32 - 1) / (kThreadgroupWidth / 32), 1, 1),
-                                     .params = {.outer = outer32, .reduce = reduce32, .inner = 1, .mean_scale = mean_scale}});
+                                    {.op = op, .mode = kRowMode, .output_code = element_code(output_dtype), .output = output, .groups = MTLSizeMake((outer + kThreadgroupWidth / 32 - 1) / (kThreadgroupWidth / 32), 1, 1), .params = {.outer = outer32, .reduce = reduce32, .inner = 1, .mean_scale = mean_scale}});
                 return;
             }
             if (inner == 1 && reduce >= kSegmentedThreshold) {
                 encode_reduce_stage(context, source,
-                                    {.op = op, .mode = kSegmentedMode, .output_code = element_code(output_dtype),
-                                     .output = output, .groups = MTLSizeMake(outer, 1, 1),
-                                     .params = {.outer = outer32, .reduce = reduce32, .inner = 1, .mean_scale = mean_scale}});
+                                    {.op = op, .mode = kSegmentedMode, .output_code = element_code(output_dtype), .output = output, .groups = MTLSizeMake(outer, 1, 1), .params = {.outer = outer32, .reduce = reduce32, .inner = 1, .mean_scale = mean_scale}});
                 return;
             }
             const size_t outputs = outer * inner;
             const size_t output_groups = (checked_u32(outputs, "Metal reduction output count exceeds uint32") +
-                                          kThreadgroupWidth - 1) / kThreadgroupWidth;
+                                          kThreadgroupWidth - 1) /
+                                         kThreadgroupWidth;
             // Few outputs over a long reduce extent starve the GPU of threads, so
             // the range splits across grid rows into partials that a second
             // strided pass folds.
@@ -680,26 +667,15 @@ namespace lfs::core::internal {
                     : 1;
             if (splits == 1) {
                 encode_reduce_stage(context, source,
-                                    {.op = op, .mode = kStridedMode, .output_code = element_code(output_dtype),
-                                     .output = output, .groups = MTLSizeMake(output_groups, 1, 1),
-                                     .params = {.outer = outer32, .reduce = reduce32, .inner = inner32,
-                                                .split_chunk = reduce32, .mean_scale = mean_scale}});
+                                    {.op = op, .mode = kStridedMode, .output_code = element_code(output_dtype), .output = output, .groups = MTLSizeMake(output_groups, 1, 1), .params = {.outer = outer32, .reduce = reduce32, .inner = inner32, .split_chunk = reduce32, .mean_scale = mean_scale}});
                 return;
             }
             const uint32_t partial = partial_code(source.input.dtype, op);
             const Scratch partials(context, splits * outputs * sizeof(int64_t));
             encode_reduce_stage(context, source,
-                                {.op = op, .mode = kStridedMode, .output_code = partial, .output = partials.storage,
-                                 .groups = MTLSizeMake(output_groups, splits, 1),
-                                 .params = {.outer = outer32, .reduce = reduce32, .inner = inner32,
-                                            .split_chunk = static_cast<uint32_t>((reduce + splits - 1) / splits),
-                                            .mean_scale = 1.0f}});
+                                {.op = op, .mode = kStridedMode, .output_code = partial, .output = partials.storage, .groups = MTLSizeMake(output_groups, splits, 1), .params = {.outer = outer32, .reduce = reduce32, .inner = inner32, .split_chunk = static_cast<uint32_t>((reduce + splits - 1) / splits), .mean_scale = 1.0f}});
             encode_reduce_stage(context, {.input = partials.storage, .code = partial},
-                                {.op = op, .mode = kStridedMode, .output_code = element_code(output_dtype),
-                                 .output = output, .groups = MTLSizeMake(output_groups, 1, 1),
-                                 .params = {.outer = 1, .reduce = static_cast<uint32_t>(splits),
-                                            .inner = static_cast<uint32_t>(outputs),
-                                            .split_chunk = static_cast<uint32_t>(splits), .mean_scale = mean_scale}});
+                                {.op = op, .mode = kStridedMode, .output_code = element_code(output_dtype), .output = output, .groups = MTLSizeMake(output_groups, 1, 1), .params = {.outer = 1, .reduce = static_cast<uint32_t>(splits), .inner = static_cast<uint32_t>(outputs), .split_chunk = static_cast<uint32_t>(splits), .mean_scale = mean_scale}});
         }
 
         // Axes that are not one contiguous run: the kept axes are permute-copied
@@ -764,10 +740,7 @@ namespace lfs::core::internal {
             const size_t groups = std::clamp<size_t>((count + kElementsPerGroup - 1) / kElementsPerGroup, 1, kMaxPartials);
             const Scratch partials(*context, groups * 2 * sizeof(float));
             encode_reduce_stage(*context, {.input = input, .code = element_code(DataType::Float32)},
-                                {.op = op, .mode = kPartialMode, .output_code = metal::kPairDType, .output = partials.storage,
-                                 .groups = MTLSizeMake(groups, 1, 1),
-                                 .params = {.count = checked_u32(count, "Metal reduction count exceeds uint32"),
-                                            .mean_scale = 1.0f}});
+                                {.op = op, .mode = kPartialMode, .output_code = metal::kPairDType, .output = partials.storage, .groups = MTLSizeMake(groups, 1, 1), .params = {.count = checked_u32(count, "Metal reduction count exceeds uint32"), .mean_scale = 1.0f}});
             context->wait(context->pending(partials.storage));
             const auto* const pairs = reinterpret_cast<const float*>(context->host(partials.storage));
             float accumulator = pairs[0], compensation = extreme ? 0.0f : pairs[1];
@@ -834,7 +807,8 @@ namespace lfs::core::internal {
             };
             const size_t lines = outer * inner;
             const size_t blocks = (size + kThreadgroupWidth - 1) / kThreadgroupWidth;
-            const uint32_t pass = size <= 32 ? 0 : blocks == 1 ? 1 : 2;
+            const uint32_t pass = size <= 32 ? 0 : blocks == 1 ? 1
+                                                               : 2;
             std::optional<Scratch> block_totals;
             StorageRef totals = data;
             if (pass == 2) {
@@ -1112,9 +1086,7 @@ namespace lfs::core::internal {
             launch.params.total = checked_u32(launch.total, "Metal index operation count exceeds uint32");
             const auto dtype = static_cast<uint32_t>(launch.dtype);
             const auto pipeline = context.pipeline(
-                "index_op", {{0, launch.mode}, {1, dtype}, {2, dtype},
-                             {5, static_cast<uint32_t>(dtype_size(launch.dtype))},
-                             {17, launch.boundary}, {18, launch.unary}});
+                "index_op", {{0, launch.mode}, {1, dtype}, {2, dtype}, {5, static_cast<uint32_t>(dtype_size(launch.dtype))}, {17, launch.boundary}, {18, launch.unary}});
             context.dispatch(uses, {.pipeline = pipeline,
                                     .buffers = {addresses[0], addresses[1], addresses[2], addresses[3]},
                                     .params = param_bytes(launch.params),
@@ -1235,8 +1207,7 @@ namespace lfs::core::internal {
             bind(launch.scan, 3, params.scan_offset);
             const auto dtype = static_cast<uint32_t>(launch.dtype);
             const auto pipeline = context.pipeline(
-                "mask_op", {{0, launch.mode}, {1, dtype}, {2, dtype},
-                            {5, static_cast<uint32_t>(dtype_size(launch.dtype))}, {19, launch.predicate}});
+                "mask_op", {{0, launch.mode}, {1, dtype}, {2, dtype}, {5, static_cast<uint32_t>(dtype_size(launch.dtype))}, {19, launch.predicate}});
             context.dispatch(uses, {.pipeline = pipeline,
                                     .buffers = {addresses[0], addresses[1], addresses[2], addresses[3]},
                                     .params = param_bytes(params),
@@ -1248,8 +1219,7 @@ namespace lfs::core::internal {
             PredicateScan(Context& owner, const uint32_t predicate, const StorageRef mask, const size_t count)
                 : Scratch(owner, count * sizeof(uint32_t)) {
                 storage.dtype = DataType::Int32;
-                encode_mask(owner, {.mode = kMaskScan, .dtype = DataType::UInt8, .count = count, .mask = mask,
-                                    .scan = storage, .predicate = predicate});
+                encode_mask(owner, {.mode = kMaskScan, .dtype = DataType::UInt8, .count = count, .mask = mask, .scan = storage, .predicate = predicate});
                 encode_scan(owner, storage, 1, count, 1);
             }
         };
@@ -1263,8 +1233,7 @@ namespace lfs::core::internal {
                 return 0;
             const auto context = acquire_context();
             const PredicateScan scan(*context, predicate, input, program.count);
-            encode_mask(*context, {.mode = kNonzeroPositions, .dtype = DataType::Int64, .count = program.count,
-                                   .mask = input, .source = output, .scan = scan.storage, .predicate = predicate});
+            encode_mask(*context, {.mode = kNonzeroPositions, .dtype = DataType::Int64, .count = program.count, .mask = input, .source = output, .scan = scan.storage, .predicate = predicate});
             context->wait(context->pending(scan.storage));
             uint32_t total = 0;
             std::memcpy(&total, context->host(scan.storage) + (program.count - 1) * sizeof(uint32_t), sizeof(total));
@@ -1517,10 +1486,11 @@ namespace lfs::core::internal {
                         const size_t work) override {
                 std::vector<StorageRef> uses(reads.begin(), reads.end());
                 uses.insert(uses.end(), writes.begin(), writes.end());
+                const size_t width = std::string_view(module) == "export_kmeans_screen" ? 128 : kThreadgroupWidth;
                 context_->dispatch(uses, {.pipeline = context_->pipeline(module, {{0, phase}}),
                                           .params = params,
-                                          .grid = thread_groups(work),
-                                          .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+                                          .grid = MTLSizeMake((work + width - 1) / width, 1, 1),
+                                          .group_size = MTLSizeMake(width, 1, 1)});
             }
 
             void submit() override { context_->flush(); }
@@ -1644,8 +1614,7 @@ namespace lfs::core::internal {
         params.ops = fused.ops;
         const bool vectorized = fused.aligned && input_at.offset % 16 == 0 && output_at.offset % 16 == 0;
         const auto pipeline = context->pipeline(
-            "pointwise_chain", {{4, vectorized ? 1u : 0u}, {8, fused.length},
-                                {9, fused.kinds[0]}, {10, fused.kinds[1]}, {11, fused.kinds[2]}});
+            "pointwise_chain", {{4, vectorized ? 1u : 0u}, {8, fused.length}, {9, fused.kinds[0]}, {10, fused.kinds[1]}, {11, fused.kinds[2]}});
         std::vector<StorageRef> uses{input, output};
         uses.insert(uses.end(), rhs_storages.begin(), rhs_storages.end());
         context->dispatch(uses, {.pipeline = pipeline,
@@ -1990,8 +1959,7 @@ namespace lfs::core::internal {
         const std::array uses{input, output};
         const uint32_t dtype = static_cast<uint32_t>(input.dtype);
         context->dispatch(uses, {.pipeline = context->pipeline(
-                                     "cat_pad", {{0, 1}, {1, dtype}, {2, dtype},
-                                                 {5, static_cast<uint32_t>(dtype_size(input.dtype))}}),
+                                     "cat_pad", {{0, 1}, {1, dtype}, {2, dtype}, {5, static_cast<uint32_t>(dtype_size(input.dtype))}}),
                                  .buffers = {input_at.address, output_at.address},
                                  .params = param_bytes(params),
                                  .grid = threads(input_layout.element_count)});
@@ -2001,8 +1969,7 @@ namespace lfs::core::internal {
                                      const size_t extent, ExecContext) {
         LFS_FACADE_TRACE(index_cast);
         encode_index(*acquire_context(),
-                     {.mode = kIndexCastMode, .dtype = DataType::Int32, .total = count, .input = input, .values = output,
-                      .params = {.dim_size = checked_u32(extent, "Metal index extent exceeds uint32")}});
+                     {.mode = kIndexCastMode, .dtype = DataType::Int32, .total = count, .input = input, .values = output, .params = {.dim_size = checked_u32(extent, "Metal index extent exceeds uint32")}});
     }
 
     void MetalBackendOps::gather(const StorageRef input, const StorageRef indices, const StorageRef output,
@@ -2013,13 +1980,7 @@ namespace lfs::core::internal {
                            index_layout.rank <= MAX_TENSOR_RANK,
                        "gather rank exceeds MAX_TENSOR_RANK");
         encode_index(*acquire_context(),
-                     {.mode = kGatherMode, .dtype = input.dtype, .total = program.total_elements, .input = input,
-                      .indices = indices, .values = output, .boundary = static_cast<uint32_t>(program.boundary_mode),
-                      .params = {.rank = static_cast<uint32_t>(input_layout.rank),
-                                 .index_rank = static_cast<uint32_t>(index_layout.rank),
-                                 .dim = static_cast<uint32_t>(program.dim),
-                                 .input_dims = shader_dims(input_layout),
-                                 .index_dims = shader_dims(index_layout)}});
+                     {.mode = kGatherMode, .dtype = input.dtype, .total = program.total_elements, .input = input, .indices = indices, .values = output, .boundary = static_cast<uint32_t>(program.boundary_mode), .params = {.rank = static_cast<uint32_t>(input_layout.rank), .index_rank = static_cast<uint32_t>(index_layout.rank), .dim = static_cast<uint32_t>(program.dim), .input_dims = shader_dims(input_layout), .index_dims = shader_dims(index_layout)}});
     }
 
     void MetalBackendOps::gather_fused_unary(const StorageRef input, const StorageRef indices, const StorageRef output,
@@ -2032,9 +1993,7 @@ namespace lfs::core::internal {
                                                                                                 : 0u;
         LFS_ASSERT_MSG(unary_code != 0, "unsupported fused gather unary operation");
         encode_index(*acquire_context(),
-                     {.mode = kTakeMode, .dtype = DataType::Float32, .total = program.index_size, .input = input,
-                      .indices = indices, .values = output, .unary = unary_code,
-                      .params = {.input_size = checked_u32(program.input_size, "Metal gather input size exceeds uint32")}});
+                     {.mode = kTakeMode, .dtype = DataType::Float32, .total = program.index_size, .input = input, .indices = indices, .values = output, .unary = unary_code, .params = {.input_size = checked_u32(program.input_size, "Metal gather input size exceeds uint32")}});
     }
 
     void MetalBackendOps::index_select(const StorageRef input, const StorageRef indices, const StorageRef output,
@@ -2051,13 +2010,7 @@ namespace lfs::core::internal {
             shape.inner = row_bytes / 8;
         }
         encode_index(*acquire_context(),
-                     {.mode = kIndexSelectMode, .dtype = moved,
-                      .total = shape.outer * program.index_size * shape.inner, .input = input, .indices = indices,
-                      .values = output, .boundary = static_cast<uint32_t>(program.boundary_mode),
-                      .params = {.outer = checked_u32(shape.outer, "Metal index_select outer size exceeds uint32"),
-                                 .dim_size = checked_u32(shape.dim_size, "Metal index_select dimension exceeds uint32"),
-                                 .inner = checked_u32(shape.inner, "Metal index_select inner size exceeds uint32"),
-                                 .index_size = checked_u32(program.index_size, "Metal index_select index count exceeds uint32")}});
+                     {.mode = kIndexSelectMode, .dtype = moved, .total = shape.outer * program.index_size * shape.inner, .input = input, .indices = indices, .values = output, .boundary = static_cast<uint32_t>(program.boundary_mode), .params = {.outer = checked_u32(shape.outer, "Metal index_select outer size exceeds uint32"), .dim_size = checked_u32(shape.dim_size, "Metal index_select dimension exceeds uint32"), .inner = checked_u32(shape.inner, "Metal index_select inner size exceeds uint32"), .index_size = checked_u32(program.index_size, "Metal index_select index count exceeds uint32")}});
     }
 
     void MetalBackendOps::scatter(const StorageRef output, const StorageRef indices, const StorageRef source,
@@ -2105,9 +2058,7 @@ namespace lfs::core::internal {
                                     const IndexProgram& program, ExecContext) {
         LFS_FACADE_TRACE(index_put);
         encode_index(*acquire_context(),
-                     {.mode = kIndexPutMode, .dtype = output.dtype, .total = program.index_size, .input = output,
-                      .indices = indices, .values = values,
-                      .params = {.input_size = checked_u32(program.input_size, "Metal index_put size exceeds uint32")}});
+                     {.mode = kIndexPutMode, .dtype = output.dtype, .total = program.index_size, .input = output, .indices = indices, .values = values, .params = {.input_size = checked_u32(program.input_size, "Metal index_put size exceeds uint32")}});
     }
 
     void metal_where_into(Tensor& output, const Tensor& condition, const float value, const Tensor& source) {
@@ -2127,9 +2078,7 @@ namespace lfs::core::internal {
     void MetalBackendOps::masked_fill(const StorageRef output, const StorageRef mask, const MaskProgram& program,
                                       ExecContext) {
         LFS_FACADE_TRACE(masked_fill);
-        encode_mask(*acquire_context(), {.mode = kMaskFill, .dtype = output.dtype, .count = program.count,
-                                         .data = output, .mask = mask,
-                                         .fill = fill_bits(output.dtype, program.value)});
+        encode_mask(*acquire_context(), {.mode = kMaskFill, .dtype = output.dtype, .count = program.count, .data = output, .mask = mask, .fill = fill_bits(output.dtype, program.value)});
     }
 
     size_t MetalBackendOps::masked_select(const StorageRef input, const StorageRef mask, const StorageRef output,
@@ -2139,8 +2088,7 @@ namespace lfs::core::internal {
             return 0;
         const auto context = acquire_context();
         const PredicateScan scan(*context, kBytePredicate, mask, program.count);
-        encode_mask(*context, {.mode = kCompactSelect, .dtype = input.dtype, .count = program.count, .data = input,
-                               .mask = mask, .source = output, .scan = scan.storage});
+        encode_mask(*context, {.mode = kCompactSelect, .dtype = input.dtype, .count = program.count, .data = input, .mask = mask, .source = output, .scan = scan.storage});
         // The host sized the output from the same mask; like CUDA, the launch trusts it.
         return program.selected_count;
     }
@@ -2152,15 +2100,13 @@ namespace lfs::core::internal {
             return;
         const auto context = acquire_context();
         const PredicateScan scan(*context, kBytePredicate, mask, program.count);
-        encode_mask(*context, {.mode = kCompactScatter, .dtype = output.dtype, .count = program.count, .data = output,
-                               .mask = mask, .source = source, .scan = scan.storage});
+        encode_mask(*context, {.mode = kCompactScatter, .dtype = output.dtype, .count = program.count, .data = output, .mask = mask, .source = source, .scan = scan.storage});
     }
 
     void MetalBackendOps::and_live(const StorageRef mask, const StorageRef live_mask, const MaskProgram& program,
                                    ExecContext) {
         LFS_FACADE_TRACE(and_live);
-        encode_mask(*acquire_context(), {.mode = kAndLive, .dtype = DataType::UInt8, .count = program.count,
-                                         .data = mask, .mask = live_mask});
+        encode_mask(*acquire_context(), {.mode = kAndLive, .dtype = DataType::UInt8, .count = program.count, .data = mask, .mask = live_mask});
     }
 
     size_t MetalBackendOps::nonzero(const StorageRef input, const StorageRef output, const MaskProgram& program,
@@ -2241,8 +2187,7 @@ namespace lfs::core::internal {
             // near 2^0, which keeps the sums finite.
             const uint32_t blocks = (categories + kSumBlock - 1) / kSumBlock;
             const Scratch sums(*context, (program.count + blocks + 1) * sizeof(float));
-            const RandomParams params{.seed = program.seed, .count = categories, .sample_count = samples,
-                                      .first = multinomial_scale(statistics.maximum)};
+            const RandomParams params{.seed = program.seed, .count = categories, .sample_count = samples, .first = multinomial_scale(statistics.maximum)};
             encode_random(*context, kRunningSums, {}, weights, sums.storage, params, thread_groups(blocks));
             encode_random(*context, kBlockOffsets, {}, weights, sums.storage, params, MTLSizeMake(1, 1, 1));
             encode_random(*context, kMultinomialReplacement, output, weights, sums.storage, params,
@@ -2329,7 +2274,7 @@ namespace lfs::core::internal {
             .padding = 0,
         };
         std::array<StorageRef, 10> uses{program.positions, program.colors, program.parameters,
-                                        program.scratch,   program.image,  program.depth};
+                                        program.scratch, program.image, program.depth};
         size_t used = 6;
         for (const auto& operand : {program.transforms, program.indices, program.visibility, program.deleted}) {
             if (operand)
@@ -2907,8 +2852,8 @@ namespace lfs::core::internal {
         // as many images as fit 64 MiB go at once.
         API_AVAILABLE(macos(26.0))
         void encode_conv_transpose(Context& context, const StorageRef input, const StorageRef weight,
-                              const std::optional<StorageRef> bias, const StorageRef output,
-                              const ConvProgram& program) {
+                                   const std::optional<StorageRef> bias, const StorageRef output,
+                                   const ConvProgram& program) {
             const InferenceGeometry& g = program.geometry;
             const size_t in_group = static_cast<size_t>(g.channels), out_group = program.out_channels / program.groups;
             const size_t plane = static_cast<size_t>(g.height) * static_cast<size_t>(g.width);
@@ -3243,7 +3188,8 @@ namespace lfs::core::internal {
         const auto last = static_cast<size_t>(axes[program.axis_count - 1]);
         size_t outer = 1, reduce = 1, inner = 1;
         for (size_t axis = 0; axis < rank; ++axis)
-            (axis < first ? outer : axis <= last ? reduce : inner) *= input_layout.dims[axis];
+            (axis < first ? outer : axis <= last ? reduce
+                                                 : inner) *= input_layout.dims[axis];
         reduce_axes(*context, program.op, source, output, program.result_dtype, outer, reduce, inner);
     }
 

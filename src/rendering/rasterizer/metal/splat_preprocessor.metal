@@ -207,7 +207,7 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     const bool orthographic=frame.extent.z==1u;
     const float projection_depth=equirectangular?length(view):view.z;
     if(!all(isfinite(view)) || projection_depth<=frame.clip_scale.x || projection_depth>=frame.clip_scale.y) return;
-    if(frame.display.w==1.f && primitive_mode==0u) {
+    if(frame.display.w==1.f && primitive_mode==0u && !equirectangular) {
         // Desktop GS survivor admission: reject off-frustum means before
         // covariance/SH work, even if a large footprint reaches the viewport.
         // Use full-camera coordinates during cropped/high-resolution exports.
@@ -286,11 +286,24 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
             const float2 positive=(float2(frame.extent.xy)-frame.intrinsics.zw)/frame.intrinsics.xy+margin;
             const float2 negative=frame.intrinsics.zw/frame.intrinsics.xy+margin;
             const float2 ratio=portal?view.xy/view.z:clamp(view.xy/view.z,-negative,positive);
-            const float3 jx=orthographic?float3(frame.intrinsics.x,0,0):float3(frame.intrinsics.x/view.z,0,-frame.intrinsics.x*ratio.x/view.z);
-            const float3 jy=orthographic?float3(0,frame.intrinsics.y,0):float3(0,frame.intrinsics.y/view.z,-frame.intrinsics.y*ratio.y/view.z);
+            float3 jx=orthographic?float3(frame.intrinsics.x,0,0):float3(frame.intrinsics.x/view.z,0,-frame.intrinsics.x*ratio.x/view.z);
+            float3 jy=orthographic?float3(0,frame.intrinsics.y,0):float3(0,frame.intrinsics.y/view.z,-frame.intrinsics.y*ratio.y/view.z);
+            if(equirectangular) {
+                const float horizontal2=max(dot(view.xz,view.xz),1e-16f);
+                const float horizontal=sqrt(horizontal2),distance2=max(dot(view,view),1e-16f);
+                jx=float3(view.z,0,-view.x)*(frame.panorama.x/(2.f*M_PI_F*horizontal2));
+                jy=float3(-view.y*view.x,horizontal2,-view.y*view.z)*(frame.panorama.y/(M_PI_F*distance2*horizontal));
+            }
             const float3 u=float3(dot(jx,a),dot(jx,b),dot(jx,c));
             const float3 v=float3(dot(jy,a),dot(jy,b),dot(jy,c));
             raw_covariance=float3(dot(u,u),dot(u,v),dot(v,v));
+            if(equirectangular && dot(view.xz,view.xz)<=1e-16f) {
+                // Longitude is undefined at a pole. Reserve the full periodic
+                // width and the finite latitude footprint instead of culling it.
+                const float latitude_scale=frame.panorama.y/(M_PI_F*max(length(view),1e-8f));
+                raw_covariance=float3(frame.panorama.x*frame.panorama.x,0,
+                    latitude_scale*latitude_scale*max(dot(a,a),max(dot(b,b),dot(c,c))));
+            }
         }
         if(primitive_mode==3u) {
             // Match project_gaussian_to_camera_gut, including FP32 UT weights.

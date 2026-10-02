@@ -17,7 +17,12 @@ layout(binding=1) RWByteAddressBuffer coverage_mask;
 
 static const uint kBlockX = 8u;
 static const uint kBlockY = 8u;
+#ifdef LFS_VULKAN_MACOS_REFERENCE
+// Larger polygons already fall back to global reads for the remaining vertices.
+static const uint kMaxSharedVertices = 1024u;
+#else
 static const uint kMaxSharedVertices = 4096u;
+#endif
 groupshared float2 shared_vertices[kMaxSharedVertices];
 
 [shader("compute")]

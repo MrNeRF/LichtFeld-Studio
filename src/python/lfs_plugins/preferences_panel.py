@@ -182,10 +182,6 @@ class PreferencesPanel(Panel):
             "tensor_metal_available",
             lambda: bool(lf.ui.get_tensor_backend_preferences()["metal_available"]),
         )
-        model.bind("viewer_backend", lf.ui.get_viewer_backend_preference,
-                   self._set_viewer_backend_preference)
-        model.bind_func("viewer_metal_available",
-                        lambda: bool(lf.ui.get_tensor_backend_preferences()["metal_available"]))
         model.bind("theme_family_idx", self._theme_family_index, self._set_theme_family_index)
         model.bind_func("theme_has_variants", self._theme_has_variants)
         model.bind("progress_bar_idx", self._progress_bar_index, self._set_progress_bar_index)
@@ -408,22 +404,14 @@ class PreferencesPanel(Panel):
         lf.ui.message_dialog(
             lf.ui.tr(title_key), lf.ui.tr("preferences.backend_unavailable"), "error")
 
-    def _set_viewer_backend_preference(self, value):
-        if value == "metal" and not lf.ui.get_tensor_backend_preferences()["metal_available"]:
-            self._reject_backend_preference("viewer_backend", "preferences.viewer_backend")
-            return
-        try:
-            lf.ui.set_viewer_backend_preference(value)
-        except ValueError:
-            self._reject_backend_preference("viewer_backend", "preferences.viewer_backend")
-            return
-        if self._handle:
-            self._handle.dirty("viewer_backend")
-
     def _set_tensor_preference(self, key, value):
         state = dict(lf.ui.get_tensor_backend_preferences())
+        if state.get(key) == value:
+            return
         if key == "backend" and value in ("cuda", "metal") and not state[f"{value}_available"]:
             self._reject_backend_preference("tensor_backend", "preferences.tensor_backend")
+            return
+        if state.get(key) == value:
             return
         state.pop("cuda_available", None)
         state.pop("metal_available", None)
@@ -1649,7 +1637,6 @@ class PreferencesPanel(Panel):
             self._notify_project_manager_preferences_changed()
             self._read_project_location()
         elif section == "appearance":
-            lf.ui.set_viewer_backend_preference()
             lf.ui.set_theme("dark")
             lf.ui.set_progress_bar_style("classic")
             lf.ui.set_viewport_chrome_style("translucent")

@@ -713,8 +713,8 @@ namespace lfs::vis {
         }
 
 #ifdef __APPLE__
-        LOG_INFO("Viewer GPU backend preference: requested={} (effective backend reported on scene rendering); tensor={}",
-                 lfs::rendering::viewerBackendName(UserPreferences::instance().viewerBackend()),
+        LOG_INFO("Scene renderer={} tensor={}",
+                 lfs::rendering::viewerBackendName(lfs::rendering::desktopViewerBackend()),
                  lfs::core::gpu_backend_name(lfs::core::configured_gpu_backend()));
         LOG_INFO("Desktop compositor uses Vulkan for presentation, UI and editor overlays, including with the Metal viewer");
 #endif

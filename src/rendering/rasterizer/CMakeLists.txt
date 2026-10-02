@@ -2,7 +2,9 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-add_subdirectory(vulkan)
+if(NOT APPLE OR BUILD_TESTS)
+    add_subdirectory(vulkan)
+endif()
 
 # Native Metal viewer stages; desktop presentation remains Vulkan until parity.
 if(APPLE)

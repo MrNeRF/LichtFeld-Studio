@@ -15,6 +15,8 @@
 #include "output_image_pool.hpp"
 #include "output_slot_ring.hpp"
 #include "readback_ticket_ring.hpp"
+#include "scene_overlay_params.hpp"
+#include "scene_renderer.hpp"
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
 #include <cuda_runtime.h>
 #endif
@@ -41,38 +43,15 @@
 #include <vector>
 
 namespace lfs::vis {
-#ifdef __APPLE__
-    class MetalViewportRenderer;
-#endif
 
     // Starts with file-only work: shader blobs are cached for the first
     // renderer initialization without touching Vulkan.
     LFS_VIS_API void preloadVkSplatSpirvFiles();
 
-    class VksplatViewportRenderer {
+    class VksplatViewportRenderer : public SceneRenderer {
         friend struct VksplatScratchReleaseTestAccess;
 
     public:
-        struct RenderResult {
-            VkImage image = VK_NULL_HANDLE;
-            VkImageView image_view = VK_NULL_HANDLE;
-            VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-            std::uint64_t generation = 0;
-            VkImage depth_image = VK_NULL_HANDLE;
-            VkImageView depth_image_view = VK_NULL_HANDLE;
-            VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-            std::uint64_t depth_generation = 0;
-            glm::ivec2 size{0, 0};       // valid/logical extent (compose/readback)
-            glm::ivec2 alloc_size{0, 0}; // bucketed VkImage extent (may exceed size)
-            bool flip_y = false;
-            VkSemaphore completion_semaphore = VK_NULL_HANDLE;
-            std::uint64_t completion_value = 0;
-            std::uint64_t lod_page_generation = 0;
-            // True while page decodes/uploads are still in flight.
-            bool lod_streaming_active = false;
-            rendering::ViewerBackend viewer_backend = rendering::ViewerBackend::Vulkan;
-        };
-
         struct ModelInputSnapshot {
             const lfs::core::SplatData* model = nullptr;
             std::size_t count = 0;
@@ -106,34 +85,6 @@ namespace lfs::vis {
             [[nodiscard]] bool valid() const { return model != nullptr && count > 0; }
             [[nodiscard]] friend bool operator==(const ModelInputSnapshot& a,
                                                  const ModelInputSnapshot& b) = default;
-        };
-
-        enum class SelectionMaskShape : std::uint32_t {
-            Brush = 0,
-            Rectangle = 1,
-            Polygon = 2,
-            Ring = 3,
-        };
-
-        struct SelectionMaskRequest {
-            lfs::rendering::FrameView frame_view;
-            lfs::rendering::GaussianSceneState scene;
-            SelectionMaskShape shape = SelectionMaskShape::Brush;
-            std::vector<glm::vec4> primitives;
-            std::vector<glm::vec2> polygon_vertices;
-            bool gut = false;
-            bool equirectangular = false;
-            bool mip_filter = false;
-            float ring_width = 0.01f;
-            std::uint32_t* picked_ring_id_out = nullptr;
-        };
-
-        struct DepthSampleRequest {
-            glm::ivec2 pixel{0, 0};
-            // Coordinate space of `pixel`. When positive, the renderer maps the
-            // sample into the actual output image size for the selected slot.
-            glm::ivec2 source_size{0, 0};
-            RenderTargetId target{};
         };
 
         LFS_VIS_API VksplatViewportRenderer();
@@ -246,11 +197,7 @@ namespace lfs::vis {
 
         // Async readback tickets (#1574). Destination buffers must remain valid until
         // the ticket is Ready (poll/wait delivers) or Failed.
-        enum class ReadbackTicketStatus : std::uint8_t {
-            NotReady = 0,
-            Ready = 1,
-            Failed = 2,
-        };
+
         [[nodiscard]] std::expected<std::uint64_t, std::string> submitReadOutputImageIntoCpuHwcTicket(
             VulkanContext& context,
             RenderTargetId target,
@@ -281,10 +228,6 @@ namespace lfs::vis {
 
         [[nodiscard]] bool hasRenderTarget(RenderTargetId target) const {
             std::lock_guard lock(target_mutex_);
-#ifdef __APPLE__
-            if (metal_output_.contains(target))
-                return true;
-#endif
             return ring_.contains(target);
         }
         [[nodiscard]] LFS_VIS_API bool releaseRenderTarget(RenderTargetId target);
@@ -307,29 +250,10 @@ namespace lfs::vis {
 
         // Snapshot of the GPU LoD selector for stats overlays; counts are from
         // the deferred readback (one frame stale).
-        struct GpuLodSelectionStatus {
-            bool active = false;
-            std::size_t selected = 0;
-            std::size_t capacity = 0;
-            std::size_t overflow = 0;
-            float pixel_scale_feedback = 1.0f;
-            std::size_t resident_chunks = 0;
-            std::size_t chunk_count = 0;
-            std::size_t touched_chunks = 0;
-            std::size_t miss_chunks = 0;
-            std::size_t deferred_requests = 0;
-            bool admission_frozen = false;
-            std::size_t pool_pages = 0;
-            std::size_t streaming_jobs = 0;
-        };
+
         [[nodiscard]] GpuLodSelectionStatus gpuLodSelectionStatus(RenderTargetId target) const;
 
     private:
-#ifdef __APPLE__
-        std::unique_ptr<MetalViewportRenderer> metal_viewport_;
-        std::unordered_set<RenderTargetId, RenderTargetIdHash> metal_output_;
-        std::unordered_map<RenderTargetId, int, RenderTargetIdHash> metal_route_;
-#endif
         struct ResidentRasterScratchProvenance {
             RenderTargetId target{};
             glm::ivec2 size{0, 0};
@@ -811,50 +735,5 @@ namespace lfs::vis {
         std::uint64_t lod_upload_log_batches_ = 0;
         bool lod_upload_log_converged_ = false;
     };
-
-    namespace detail {
-        // Slot indices for the overlay parameter table. Defined here (not in the .cpp anonymous
-        // namespace) so the slot-12 packing test can name detail::ViewIntrinsics.
-        enum OverlayParamIndex : std::size_t {
-            CropFlags = 0,
-            CropMin = 1,
-            CropMax = 2,
-            CropTransform = 3,
-            EllipsoidFlags = 7,
-            EllipsoidRadii = 8,
-            EllipsoidTransform = 9,
-            ViewIntrinsics = 12,
-            ViewFlags = 13,
-            ViewMin = 14,
-            ViewMax = 15,
-            ViewTransform = 16,
-            EmphasisFlags = 20,
-            CursorFlags = 21,
-            MarkerFlags = 22,
-            SelectionCursor = 23,
-            SelectionFlags = 24,
-            VisibilityFlags = 25,
-            CropExtraBase = 26,
-            CropParamStride = 7,
-            CropExtraCount = 15,
-            EllipsoidExtraBase = CropExtraBase + CropParamStride * CropExtraCount,
-            EllipsoidParamStride = 5,
-            EllipsoidExtraCount = 15,
-            ViewWindow = EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount,
-            ParamCount = ViewWindow + 1,
-        };
-        static_assert(EllipsoidFlags + EllipsoidParamStride <= ViewIntrinsics);
-        static_assert(EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount == ViewWindow);
-
-        // Exposed for tests (O4): pure function over the request, no device state.
-        [[nodiscard]] LFS_VIS_API std::expected<std::vector<float>, std::string>
-        buildOverlayParamsCpuFloats(
-            const lfs::rendering::ViewportRenderRequest& request,
-            bool selection_enabled,
-            bool preview_enabled,
-            bool transform_indices_enabled,
-            std::size_t node_mask_count,
-            bool node_visibility_cull);
-    } // namespace detail
 
 } // namespace lfs::vis

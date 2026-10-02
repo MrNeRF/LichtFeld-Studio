@@ -46,8 +46,8 @@
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/model_renderability.hpp"
+#include "rendering/scene_renderer.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
-#include "rendering/vksplat_viewport_renderer.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/builtin_tools.hpp"
@@ -2806,7 +2806,7 @@ namespace lfs::vis {
         if (first_gui_frame) {
             pipeline_cache_flush_due_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
             vksplat_spirv_preload_future_ = std::async(
-                std::launch::async, [] { preloadVkSplatSpirvFiles(); });
+                std::launch::async, [] { preloadSceneRenderer(); });
         }
         update_work_processed_ = false;
 

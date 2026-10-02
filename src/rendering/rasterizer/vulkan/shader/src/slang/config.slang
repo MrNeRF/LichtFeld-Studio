@@ -18,7 +18,11 @@
 #define TILE_WIDTH 16
 #define TILE_SIZE (TILE_HEIGHT*TILE_WIDTH)
 
+#ifdef LFS_VULKAN_MACOS_REFERENCE
+#define RASTER_BATCH_SIZE 256u
+#else
 #define RASTER_BATCH_SIZE 1024u
+#endif
 #define RASTER_DENSE_TILE_THRESHOLD RASTER_BATCH_SIZE
 
 // HiGS macro-tile pipeline. Mirrors config.h; the tile count per macro tile
@@ -94,4 +98,10 @@ static const float M_PI = 3.14159265358979;
 
 #ifndef USE_EMULATED_INT64
 #define USE_EMULATED_INT64 0
+#endif
+
+#ifdef LFS_VULKAN_MACOS_REFERENCE
+#define RADIX_PARTITION_SIZE (256u * 8u)
+#else
+#define RADIX_PARTITION_SIZE (512u * 8u)
 #endif

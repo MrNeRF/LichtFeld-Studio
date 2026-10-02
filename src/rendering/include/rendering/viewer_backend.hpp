@@ -27,8 +27,8 @@ namespace lfs::rendering {
             return ViewerBackend::Metal;
         return std::nullopt;
     }
-    // A presented split can contain both APIs. Zero means no scene backend was
-    // published; it must never be interpreted as the requested Automatic policy.
+    // Zero means no scene backend was published. Metadata retains explicit
+    // backend identity for diagnostic captures and reference tests.
     [[nodiscard]] constexpr uint32_t viewerBackendBit(ViewerBackend backend) {
         return backend == ViewerBackend::Vulkan ? 1u : backend == ViewerBackend::Metal ? 2u
                                                                                        : 0u;
@@ -36,51 +36,12 @@ namespace lfs::rendering {
     // Software point-cloud panels can participate in a mixed split frame.
     inline constexpr uint32_t softwareViewerBackendBit = 4u;
 
-    struct ViewerBackendCapabilities {
-        bool vulkan = false;
-        bool metal = false;
-        // Enabled by the host only after its native presentation and frame contracts
-        // are supported. Merely compiling a Metal shader does not satisfy this gate.
-        bool prefer_metal = false;
-    };
-    enum class ViewerBackendReason { None,
-                                     Unavailable,
-                                     UnsupportedFrame,
-                                     NoAvailableBackend };
-    struct ViewerBackendSelection {
-        ViewerBackend requested;
-        std::optional<ViewerBackend> effective;
-        ViewerBackendReason reason;
-        [[nodiscard]] constexpr bool fallback() const {
-            return effective && requested != ViewerBackend::Automatic && requested != *effective;
-        }
-    };
-    [[nodiscard]] constexpr ViewerBackendSelection selectViewerBackend(
-        ViewerBackend requested, ViewerBackendCapabilities capabilities, bool metal_supports_frame = true) {
-        const bool metal = capabilities.metal && metal_supports_frame;
-        if (requested == ViewerBackend::Automatic) {
-            if (metal && (capabilities.prefer_metal || !capabilities.vulkan))
-                return {requested, ViewerBackend::Metal, ViewerBackendReason::None};
-            if (capabilities.vulkan)
-                return {requested, ViewerBackend::Vulkan, ViewerBackendReason::None};
-        } else if (requested == ViewerBackend::Metal) {
-            if (metal)
-                return {requested, ViewerBackend::Metal, ViewerBackendReason::None};
-            if (capabilities.vulkan)
-                return {requested, ViewerBackend::Vulkan,
-                        capabilities.metal ? ViewerBackendReason::UnsupportedFrame : ViewerBackendReason::Unavailable};
-        } else if (requested == ViewerBackend::Vulkan) {
-            if (capabilities.vulkan)
-                return {requested, ViewerBackend::Vulkan, ViewerBackendReason::None};
-            if (metal)
-                return {requested, ViewerBackend::Metal, ViewerBackendReason::Unavailable};
-        }
-        return {requested, std::nullopt, ViewerBackendReason::NoAvailableBackend};
-    }
-    // The desktop compositor is Vulkan. A compatible native Metal scene
-    // renderer is preferred by Auto without coupling it to the selected tensor API.
-    [[nodiscard]] constexpr ViewerBackendSelection selectDesktopViewerBackend(
-        ViewerBackend requested, bool metal_available, bool metal_supports_frame = true) {
-        return selectViewerBackend(requested, {true, metal_available, true}, metal_supports_frame);
+    // Scene rendering is fixed by the platform; the compositor remains Vulkan.
+    [[nodiscard]] constexpr ViewerBackend desktopViewerBackend() {
+#ifdef __APPLE__
+        return ViewerBackend::Metal;
+#else
+        return ViewerBackend::Vulkan;
+#endif
     }
 } // namespace lfs::rendering

@@ -18,6 +18,7 @@
 #include <RmlUi/Core/RenderInterface.h>
 
 #include <cassert>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -255,6 +256,37 @@ namespace {
         for (int i = 0; i < element->GetNumChildren(); ++i)
             assertFlexSiblingsDoNotOverlap(element->GetChild(i));
     }
+
+    class ScopedStatusBarHome {
+        std::optional<std::string> previous_;
+        std::filesystem::path path_;
+
+    public:
+        ScopedStatusBarHome() {
+            if (const char* value = std::getenv("LFS_HOME"))
+                previous_ = value;
+            path_ = std::filesystem::temp_directory_path() /
+                    ("lfs_status_bar_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+            std::filesystem::create_directories(path_);
+#ifdef _WIN32
+            (void)_putenv_s("LFS_HOME", path_.string().c_str());
+#else
+            (void)setenv("LFS_HOME", path_.string().c_str(), 1);
+#endif
+        }
+        ~ScopedStatusBarHome() {
+#ifdef _WIN32
+            (void)_putenv_s("LFS_HOME", previous_ ? previous_->c_str() : "");
+#else
+            if (previous_)
+                (void)setenv("LFS_HOME", previous_->c_str(), 1);
+            else
+                (void)unsetenv("LFS_HOME");
+#endif
+            std::error_code error;
+            std::filesystem::remove_all(path_, error);
+        }
+    };
 
     class StatusBarFitTest : public ::testing::Test {
     protected:
@@ -555,12 +587,7 @@ namespace {
     }
 
     TEST_F(StatusBarFitTest, BadgesReadEachPublishedBackendIncludingFallbackAndClose) {
-        auto& preferences = lfs::vis::UserPreferences::instance();
-        struct RestorePreference {
-            lfs::rendering::ViewerBackend previous;
-            ~RestorePreference() { lfs::vis::UserPreferences::instance().setViewerBackend(previous); }
-        } restore{preferences.viewerBackend()};
-        preferences.setViewerBackend(lfs::rendering::ViewerBackend::Metal);
+        const ScopedStatusBarHome scoped_home;
         lfs::vis::ViewportArtifactService artifacts;
         lfs::vis::gui::RmlStatusBarTestAccess::bindStore(status_bar_);
         auto& store = lfs::vis::app_store();
@@ -595,23 +622,11 @@ namespace {
         context_->Update();
 #ifdef __APPLE__
         EXPECT_EQ(model_.renderer_value,
-                  lfs::core::gpu_backend_available(lfs::core::GpuBackend::Metal) ? "Metal" : "Vulkan");
+                  "Metal");
 #else
         EXPECT_EQ(model_.renderer_value, "Vulkan");
 #endif // Configured renderer, no scene frame.
         EXPECT_EQ(store.viewer_backend_mask.get(), 0u);
-        preferences.setViewerBackend(lfs::rendering::ViewerBackend::Vulkan);
-        lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_);
-        context_->Update();
-        EXPECT_EQ(model_.renderer_value, "Vulkan");
-        preferences.setViewerBackend(lfs::rendering::ViewerBackend::Automatic);
-        lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_);
-#ifdef __APPLE__
-        EXPECT_EQ(model_.renderer_value,
-                  lfs::core::gpu_backend_available(lfs::core::GpuBackend::Metal) ? "Metal" : "Vulkan");
-#else
-        EXPECT_EQ(model_.renderer_value, "Vulkan");
-#endif
     }
 
     TEST_F(StatusBarFitTest, McpDetailsReserveOnlyTheirMeasuredOverlayArea) {

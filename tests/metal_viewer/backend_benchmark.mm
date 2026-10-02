@@ -5,7 +5,9 @@
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "metal_viewport_renderer.hpp"
+#include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
+#include "vksplat_viewport_renderer.hpp"
 #import <Metal/Metal.h>
 #include <Python.h>
 #include <algorithm>
@@ -495,17 +497,6 @@ namespace {
         vis::VulkanContext context;
         if (!context.initHeadless())
             throw std::runtime_error(context.lastError());
-        // Preferences use a unique temporary home. Auto can choose Metal now,
-        // so force only the production reference adapter to Vulkan.
-        auto& preferences = vis::UserPreferences::instance();
-        const auto previous_backend = preferences.viewerBackend();
-        struct RestoreBackend {
-            rendering::ViewerBackend value;
-            ~RestoreBackend() { vis::UserPreferences::instance().setViewerBackend(value); }
-        } restore_backend{previous_backend};
-        preferences.setViewerBackend(rendering::ViewerBackend::Vulkan);
-        if (preferences.viewerBackend() != rendering::ViewerBackend::Vulkan)
-            throw std::runtime_error("Benchmark reference must explicitly select Vulkan");
         std::shared_ptr<core::SplatData> imported;
         rendering::FrameView imported_view;
         std::vector<glm::mat4> imported_transforms;
@@ -1030,11 +1021,12 @@ namespace {
             // is zero. Its full error remains reported; common coverage keeps
             // the original straight-RGB max gate, with full-image black/white
             // composite and alpha gates enforced above (no pixels omitted).
-            const double local_error = o.depth ? double(difference["depth_valid_max_error"])
-                                       : o.transparent ? double(difference["transparent_valid_max_error"])
+            const double local_error = o.depth                                ? double(difference["depth_valid_max_error"])
+                                       : o.transparent                        ? double(difference["transparent_valid_max_error"])
                                        : o.equirect && o.overlay == "markers" ? double(difference["marker_stable_max_error"])
-                                                                             : double(difference["max_error"]);
-            const double rms_error = double(difference[o.depth ? "depth_valid_rmse" : o.transparent ? "transparent_visible_rmse" : "rmse"]);
+                                                                              : double(difference["max_error"]);
+            const double rms_error = double(difference[o.depth ? "depth_valid_rmse" : o.transparent ? "transparent_visible_rmse"
+                                                                                                    : "rmse"]);
             if (o.verify_parity && (local_error > 4. / 255 + 1e-7 ||
                                     double(difference["depth_coverage_disagreement_fraction"]) > .001 ||
                                     (difference.contains("marker_boundary_disagreement_fraction") && double(difference["marker_boundary_disagreement_fraction"]) > .001) ||

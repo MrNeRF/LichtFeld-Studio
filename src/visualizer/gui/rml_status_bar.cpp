@@ -1732,7 +1732,7 @@ namespace lfs::vis::gui {
         // Read published frame metadata, never predict the API from a preference
         // or initialize a GPU just to paint the status bar.
         const uint32_t backend_mask = active_view_mask.value_or(lfs::vis::app_store().viewer_backend_mask.get());
-        const auto requested = UserPreferences::instance().viewerBackend();
+        constexpr auto requested = rendering::desktopViewerBackend();
         const auto tensor_backend = core::configured_gpu_backend();
         const BackendStatusStamp stamp{backend_mask, static_cast<int>(requested),
                                        static_cast<int>(tensor_backend),
@@ -1755,13 +1755,8 @@ namespace lfs::vis::gui {
         // The tooltip distinguishes this idle state from actual frame telemetry;
         // the UI compositor is not the scene renderer represented by R.
         if (active_renderer.empty()) {
-#ifdef __APPLE__
-            const bool metal_available = core::gpu_backend_available(core::GpuBackend::Metal);
-#else
-            constexpr bool metal_available = false;
-#endif
-            const auto selected = rendering::selectDesktopViewerBackend(requested, metal_available);
-            active_renderer = selected.effective == rendering::ViewerBackend::Metal ? "Metal" : "Vulkan";
+            active_renderer = std::string(rendering::viewerBackendName(requested));
+            active_renderer[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(active_renderer[0])));
         }
         setModelString("renderer_label", model_.renderer_label, LOC("status_bar.renderer_backend_short"));
         setModelString("renderer_value", model_.renderer_value, active_renderer);
@@ -1769,9 +1764,6 @@ namespace lfs::vis::gui {
                                 LOC("status_bar.renderer_backend_tooltip");
         if (!backend_mask)
             renderer_tooltip += std::string("\n") + LOC("status_bar.backend_no_frame");
-        else if (requested == rendering::ViewerBackend::Metal &&
-                 backend_mask == rendering::viewerBackendBit(rendering::ViewerBackend::Vulkan))
-            renderer_tooltip += std::string("\n") + LOC("status_bar.backend_fallback");
         setModelString("renderer_tooltip", model_.renderer_tooltip, std::move(renderer_tooltip));
         setModelString("tensor_label", model_.tensor_label, LOC("status_bar.tensor_backend_short"));
         setModelString("tensor_value", model_.tensor_value,

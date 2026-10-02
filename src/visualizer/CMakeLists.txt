@@ -316,10 +316,14 @@ endif()
 target_sources(lfs_visualizer
         PRIVATE
         gui/rmlui/rmlui_vk_backend.cpp
+        rendering/scene_renderer.cpp
         rendering/vksplat_input_packer.cpp
-        rendering/vksplat_viewport_renderer.cpp
         rendering/vulkan_external_tensor.cpp
-        rendering/point_cloud_vulkan_renderer.cpp)
+        rendering/scene_overlay_params.cpp)
+if(NOT APPLE)
+    target_sources(lfs_visualizer PRIVATE
+        rendering/vksplat_viewport_renderer.cpp rendering/point_cloud_vulkan_renderer.cpp)
+endif()
 
 set(glslang_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/glslang"
     CACHE PATH "Path to vcpkg-installed glslang config" FORCE)
@@ -378,7 +382,11 @@ target_link_libraries(lfs_visualizer
         GPUOpen::VulkanMemoryAllocator
         volk::volk_headers
         ${CMAKE_DL_LIBS})
-target_link_libraries(lfs_visualizer PRIVATE lfs_vulkan_rasterizer)
+if(NOT APPLE)
+    target_link_libraries(lfs_visualizer PRIVATE lfs_vulkan_rasterizer)
+else()
+    target_link_libraries(lfs_visualizer PRIVATE lfs_vulkan_runtime)
+endif()
 if(APPLE)
     enable_language(OBJCXX)
     file(READ "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/vulkan/shader/src/slang/display_color.inc" LFS_METAL_DISPLAY_COLOR)

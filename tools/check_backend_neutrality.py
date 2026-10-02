@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".cuh", ".cu"}
+SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".cuh", ".cu", ".m", ".mm"}
 # Native API rules apply to the viewer, trainer and their tensor consumers.
 VIEWER_ROOTS = (
     "src/visualizer/", "src/app/", "src/python/", "src/mcp/",

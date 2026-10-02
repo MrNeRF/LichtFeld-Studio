@@ -222,15 +222,6 @@
         </div>
         <div class="section-content" data-if="scene_rendering_expanded">
           <div class="preferences-row">
-            <span class="preferences-label">@tr:preferences.viewer_backend</span>
-            <select class="preferences-select" data-value="viewer_backend">
-              <option value="auto">@tr:preferences.tensor_auto</option>
-              <option value="vulkan">@tr:preferences.tensor_vulkan</option>
-              <option value="metal" data-if="viewer_metal_available">@tr:preferences.tensor_metal</option>
-            </select>
-          </div>
-          <span class="preferences-description">@tr:preferences.viewer_backend_description</span>
-          <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.scene_reconstruction</span>
             <select class="preferences-select" data-value="scene_upscaler_idx" data-attrif-disabled="mcp_safe_mode">
               <option data-for="upscaler : scene_upscalers" data-attr-value="upscaler.index">{{ upscaler.label }}</option>

@@ -3,11 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "point_cloud_vulkan_renderer.hpp"
-#ifdef __APPLE__
-#include "metal_viewport_renderer.hpp"
-#include "core/tensor_backend.hpp"
-#include "preferences.hpp"
-#endif
 #include <unordered_map>
 #include <unordered_set>
 
@@ -409,11 +404,6 @@ namespace lfs::vis {
     } // namespace
 
     struct PointCloudVulkanRenderer::Impl {
-#ifdef __APPLE__
-        std::unique_ptr<MetalViewportRenderer> metal;
-        std::unordered_set<RenderTargetId, RenderTargetIdHash> metal_output;
-        std::unordered_map<RenderTargetId, int, RenderTargetIdHash> metal_route;
-#endif
         VulkanContext* context = nullptr;
         VkDevice device = VK_NULL_HANDLE;
         VmaAllocator allocator = VK_NULL_HANDLE;
@@ -528,17 +518,6 @@ namespace lfs::vis {
             std::unique_lock lock(command_mutex, std::try_to_lock);
             if (!lock || !target.valid() || released_targets.contains(target))
                 return false;
-#ifdef __APPLE__
-            if (metal) {
-                const auto result = legacyMetalResult(metal->release(target));
-                if (!result) {
-                    LOG_WARN("Metal point target {} release failed: {}", target.value, result.error());
-                    return false;
-                }
-            }
-            metal_output.erase(target);
-            metal_route.erase(target);
-#endif
             if (auto it = slots.find(target); it != slots.end()) {
                 retireOutput(it->second);
                 slots.erase(it);
@@ -2306,85 +2285,19 @@ namespace lfs::vis {
     std::expected<PointCloudVulkanRenderer::RenderResult, std::string>
     PointCloudVulkanRenderer::render(VulkanContext& context, const RenderRequest& request,
                                      RenderTargetId target) {
-#ifdef __APPLE__
-        std::unique_lock native_lock(impl_->command_mutex);
-        if (!target.valid() || impl_->released_targets.contains(target))
-            return std::unexpected("Invalid or released point render target");
-        const auto preference = UserPreferences::instance().viewerBackend();
-        const bool metal_available = core::gpu_backend_available(core::GpuBackend::Metal);
-        const auto selection = rendering::selectDesktopViewerBackend(
-            preference, metal_available, MetalViewportRenderer::supportsPoints(request));
-        if (selection.effective == rendering::ViewerBackend::Metal) {
-            try {
-                if (!impl_->metal)
-                    impl_->metal = std::make_unique<MetalViewportRenderer>();
-                auto result = legacyMetalResult(impl_->metal->renderPoints(context, request, target));
-                if (result) {
-                    const auto slot = target;
-                    impl_->metal_output.insert(slot);
-                    const int route = preference == rendering::ViewerBackend::Automatic ? 4 : 0;
-                    if (!impl_->metal_route.contains(slot) || impl_->metal_route[slot] != route) {
-                        LOG_INFO("Point viewer GPU backend: requested={} effective=metal slot={}",
-                                 rendering::viewerBackendName(preference), slot.value);
-                        impl_->metal_route[slot] = route;
-                    }
-                }
-                return result;
-            } catch (const std::exception& e) { return std::unexpected(e.what()); }
-        }
-        impl_->metal_output.erase(target);
-        native_lock.unlock();
-#endif
         if (auto r = impl_->ensureInitialized(context); !r) {
             return std::unexpected<std::string>(r.error());
         }
-#ifdef __APPLE__
-        auto result = impl_->doRender(request, target);
-        if (result) {
-            std::lock_guard route_lock(impl_->command_mutex);
-            const auto slot = target;
-            const int route = preference == rendering::ViewerBackend::Metal       ? 1
-                              : preference == rendering::ViewerBackend::Automatic ? 2
-                                                                                  : 3;
-            if (!impl_->metal_route.contains(slot) || impl_->metal_route[slot] != route) {
-                impl_->metal_route[slot] = route;
-                LOG_INFO("Point viewer GPU backend: requested={} effective=vulkan slot={} reason={}",
-                         rendering::viewerBackendName(preference), slot.value,
-                         preference != rendering::ViewerBackend::Vulkan && metal_available ? "unsupported tensor storage" : "none");
-            }
-        }
-        return result;
-#else
         return impl_->doRender(request, target);
-#endif
     }
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
     PointCloudVulkanRenderer::readOutputImage(VulkanContext& context, RenderTargetId target) {
-#ifdef __APPLE__
-        std::unique_lock native_lock(impl_->command_mutex);
-        if (impl_->metal_output.contains(target)) {
-            const auto slot = target;
-            const auto size = impl_->metal->size(slot);
-            auto image = core::Tensor::empty({size_t(size.y), size_t(size.x), 3}, core::Device::CPU, core::DataType::Float32);
-            const auto read = legacyMetalResult(impl_->metal->readColor(slot, image, 0, 0));
-            if (!read)
-                return std::unexpected(read.error());
-            return std::make_shared<core::Tensor>(std::move(image));
-        }
-#endif
-#ifdef __APPLE__
-        native_lock.unlock();
-#endif
         return impl_->readOutputImage(context, target);
     }
 
     bool PointCloudVulkanRenderer::hasRenderTarget(RenderTargetId target) const {
         std::lock_guard lock(impl_->command_mutex);
-#ifdef __APPLE__
-        if (impl_->metal_output.contains(target))
-            return true;
-#endif
         return impl_->slots.contains(target);
     }
 
@@ -2393,11 +2306,6 @@ namespace lfs::vis {
     }
 
     void PointCloudVulkanRenderer::reset() {
-#ifdef __APPLE__
-        impl_->metal.reset();
-        impl_->metal_output.clear();
-        impl_->metal_route.clear();
-#endif
         impl_->destroy();
     }
 

@@ -6,7 +6,6 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/tensor_backend.hpp"
-#include "rendering/viewer_backend.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -110,9 +109,6 @@ namespace lfs::vis {
 
         void setTensorBackend(const TensorPreferenceState& state);
         [[nodiscard]] TensorPreferenceState tensorBackend();
-
-        void setViewerBackend(rendering::ViewerBackend backend);
-        [[nodiscard]] rendering::ViewerBackend viewerBackend();
 
         void setProjectManagerDefaultView(std::string_view value);
         [[nodiscard]] std::string projectManagerDefaultView();

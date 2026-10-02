@@ -3,9 +3,8 @@
 #pragma once
 #ifdef __APPLE__
 #include "core/error.hpp"
+#include "scene_renderer.hpp"
 #include <array>
-#include "point_cloud_vulkan_renderer.hpp"
-#include "vksplat_viewport_renderer.hpp"
 
 namespace lfs::vis {
     // Explicit adapter at the pre-existing desktop string-error boundary.
@@ -34,14 +33,16 @@ namespace lfs::vis {
             std::array<double, 5> gpu_stage_ms{}; // projection, instances, sort, blend, present
         };
         void setProfilingEnabled(bool);
+        // Wake only when a completed frame needs a larger reservation.
+        void setRetryCallback(std::function<void()>);
         lfs::Result<FrameDiagnostics> frameDiagnostics(RenderTargetId) const;
         void setLodSettings(size_t pool_splats, float vram_fraction, uint32_t fade_frames);
-        static bool supportsSelection(const core::SplatData&, const VksplatViewportRenderer::SelectionMaskRequest&);
-        lfs::Result<core::Tensor> buildSelectionMask(VulkanContext&, const core::SplatData&, const VksplatViewportRenderer::SelectionMaskRequest&);
-        static bool supportsPoints(const PointCloudVulkanRenderer::RenderRequest&);
-        lfs::Result<PointCloudVulkanRenderer::RenderResult> renderPoints(
-            VulkanContext&, const PointCloudVulkanRenderer::RenderRequest&, RenderTargetId);
-        lfs::Result<VksplatViewportRenderer::RenderResult> render(
+        static bool supportsSelection(const core::SplatData&, const SceneRenderer::SelectionMaskRequest&);
+        lfs::Result<core::Tensor> buildSelectionMask(VulkanContext&, const core::SplatData&, const SceneRenderer::SelectionMaskRequest&);
+        static bool supportsPoints(const PointSceneRenderer::RenderRequest&);
+        lfs::Result<PointSceneRenderer::RenderResult> renderPoints(
+            VulkanContext&, const PointSceneRenderer::RenderRequest&, RenderTargetId);
+        lfs::Result<SceneRenderer::RenderResult> render(
             VulkanContext&, const core::SplatData&, const rendering::ViewportRenderRequest&,
             RenderTargetId, bool expected_depth = false, bool wait_for_pages = false);
         glm::ivec2 size(RenderTargetId) const;
@@ -49,15 +50,15 @@ namespace lfs::vis {
         // distinguishes a complete image from capacity-overflow fallback output.
         lfs::Result<bool> outputComplete(RenderTargetId) const;
         // Deferred diagnostic readback: never waits for the live GPU cut.
-        VksplatViewportRenderer::GpuLodSelectionStatus gpuLodSelectionStatus(RenderTargetId) const;
+        SceneRenderer::GpuLodSelectionStatus gpuLodSelectionStatus(RenderTargetId) const;
         lfs::Status readColor(RenderTargetId,
                               core::Tensor&, int x, int y) const;
-        lfs::Result<float> readDepth(const VksplatViewportRenderer::DepthSampleRequest&) const;
+        lfs::Result<float> readDepth(const SceneRenderer::DepthSampleRequest&) const;
         // Ticket storage retains GPU staging, never a host destination after abandon.
         static bool nativeTicket(uint64_t ticket) { return (ticket >> 63) != 0; }
         lfs::Result<uint64_t> submitReadback(RenderTargetId,
                                              core::Tensor&, int x, int y, bool depth) const;
-        lfs::Result<VksplatViewportRenderer::ReadbackTicketStatus> pollReadback(uint64_t, bool wait) const;
+        lfs::Result<SceneRenderer::ReadbackTicketStatus> pollReadback(uint64_t, bool wait) const;
         void abandonReadback(uint64_t) const;
         size_t outstandingReadbacks() const;
         lfs::Status release(RenderTargetId);

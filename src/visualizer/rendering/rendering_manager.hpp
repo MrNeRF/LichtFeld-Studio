@@ -86,8 +86,8 @@ namespace lfs::vis::op {
 
 namespace lfs::vis {
     class VulkanContext;
-    class VksplatViewportRenderer;
-    class PointCloudVulkanRenderer;
+    class SceneRenderer;
+    class PointSceneRenderer;
     struct VulkanViewportPassParams;
 
     class SceneManager;
@@ -893,8 +893,8 @@ namespace lfs::vis {
         unsigned import_render_frames_ = 0;
         std::optional<std::string> import_render_result_;
         [[nodiscard]] float trainingRefreshIntervalSec(const ViewRenderState& view) const;
-        std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
-        std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
+        std::unique_ptr<SceneRenderer> vksplat_viewport_renderer_;
+        std::unique_ptr<PointSceneRenderer> point_cloud_vulkan_renderer_;
         std::unique_ptr<SparkLodController> lod_controller_;
         const lfs::core::SplatData* lod_controller_model_ = nullptr;
         bool lod_controller_needs_sync_traversal_ = false;

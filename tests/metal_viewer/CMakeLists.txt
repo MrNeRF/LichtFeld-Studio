@@ -59,6 +59,17 @@ if(TARGET lfs_core)
     set_property(TEST MetalViewerTensorReaderContracts APPEND PROPERTY LABELS metal4)
 endif()
 if(TARGET lfs_visualizer)
+    add_library(lfs_viewer_vulkan_reference STATIC
+        ../../src/visualizer/rendering/vksplat_viewport_renderer.cpp
+        ../../src/visualizer/rendering/point_cloud_vulkan_renderer.cpp)
+    target_compile_features(lfs_viewer_vulkan_reference PRIVATE cxx_std_23)
+    set_target_properties(lfs_viewer_vulkan_reference PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_include_directories(lfs_viewer_vulkan_reference PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>
+        "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/src/visualizer"
+        "${CMAKE_BINARY_DIR}/src/visualizer/generated/shaders")
+    target_compile_definitions(lfs_viewer_vulkan_reference PRIVATE LFS_HAS_CUDA=0 LFS_BUILD_TRAINER=0)
+    target_link_libraries(lfs_viewer_vulkan_reference PUBLIC lfs_visualizer lfs_vulkan_rasterizer)
     find_package(Python REQUIRED COMPONENTS Development.Embed)
     # These upstream viewer contracts are otherwise in the CUDA-only test list.
     # Run them on Mac too; do not add GPU requirements to the CPU visualizer suite.
@@ -94,7 +105,7 @@ if(TARGET lfs_visualizer)
     set_property(TEST MetalViewerRadPagerContracts APPEND PROPERTY LABELS metal4)
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
         lfs_add_metal_contract(metal_selection_viewport_contracts selection_viewport_contracts.mm MetalViewerSelectionViewportContracts --native-only)
-        target_link_libraries(metal_selection_viewport_contracts PRIVATE lfs_visualizer lfs_core Python::Python)
+        target_link_libraries(metal_selection_viewport_contracts PRIVATE lfs_viewer_vulkan_reference lfs_visualizer lfs_core Python::Python)
         target_include_directories(metal_selection_viewport_contracts PRIVATE
             "${CMAKE_SOURCE_DIR}/src/visualizer/rendering"
             "${CMAKE_SOURCE_DIR}/src/visualizer"
@@ -111,7 +122,7 @@ if(TARGET lfs_visualizer)
             LABELS "metal;gpu;metal4;parity" TIMEOUT 120 SKIP_RETURN_CODE 77)
     endif()
     lfs_add_metal_contract(metal_viewport_contracts viewport_contracts.mm MetalViewerViewportContracts --native-only)
-    target_link_libraries(metal_viewport_contracts PRIVATE lfs_visualizer lfs_core Python::Python)
+    target_link_libraries(metal_viewport_contracts PRIVATE lfs_viewer_vulkan_reference lfs_visualizer lfs_core Python::Python)
     target_include_directories(metal_viewport_contracts PRIVATE
         "${CMAKE_SOURCE_DIR}/src/visualizer/rendering"
         "${CMAKE_SOURCE_DIR}/src/visualizer"
@@ -134,7 +145,7 @@ if(TARGET lfs_visualizer)
         option(LFS_BUILD_MAC_VIEWER_BENCHMARK "Build the native Metal versus Vulkan viewer benchmark" ON)
         if(LFS_BUILD_MAC_VIEWER_BENCHMARK)
             add_executable(mac_viewer_backend_benchmark backend_benchmark.mm)
-            target_link_libraries(mac_viewer_backend_benchmark PRIVATE lfs_metal_viewer lfs_visualizer lfs_core lfs_io Python::Python)
+            target_link_libraries(mac_viewer_backend_benchmark PRIVATE lfs_viewer_vulkan_reference lfs_metal_viewer lfs_visualizer lfs_core lfs_io Python::Python)
             target_compile_options(mac_viewer_backend_benchmark PRIVATE -fobjc-arc)
             target_include_directories(mac_viewer_backend_benchmark PRIVATE
                 "${CMAKE_SOURCE_DIR}/src/visualizer/rendering"

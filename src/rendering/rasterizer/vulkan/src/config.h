@@ -10,7 +10,13 @@
 #define TILE_HEIGHT 16
 #define TILE_WIDTH  16
 
-#define RASTER_BATCH_SIZE           1024
+// macOS builds this rasterizer only for parity tests. Smaller batches keep
+// FP32/overlay staging within Apple's 32 KiB limit under GPU validation.
+#ifdef __APPLE__
+#define RASTER_BATCH_SIZE 256
+#else
+#define RASTER_BATCH_SIZE 1024
+#endif
 #define RASTER_DENSE_TILE_THRESHOLD RASTER_BATCH_SIZE
 
 // HiGS macro-tile inference pipeline (viewer forward only).
@@ -67,3 +73,10 @@ typedef int32_t sortingKey_t;
 
 #define _CEIL_DIV(x, m)   (((x) + (m) - 1) / (m))
 #define _CEIL_ROUND(x, m) (_CEIL_DIV(x, m) * (m))
+
+#ifdef __APPLE__
+#define RADIX_WORKGROUP_SIZE 256u
+#else
+#define RADIX_WORKGROUP_SIZE 512u
+#endif
+#define RADIX_PARTITION_SIZE (RADIX_WORKGROUP_SIZE * 8u)

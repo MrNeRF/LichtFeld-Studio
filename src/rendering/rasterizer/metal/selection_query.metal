@@ -126,10 +126,20 @@ bool project_query(uint id, constant Parameters& p, Buffers b, bool ring,
         const float2 positive=(float2(p.image.xy)-p.intrinsics.zw)/p.intrinsics.xy+margin;
         const float2 negative=p.intrinsics.zw/p.intrinsics.xy+margin;
         const float2 ratio=clamp(view.xy/view.z,-negative,positive);
-        const float3 jx=p.image.z==1u?float3(p.intrinsics.x,0,0):float3(p.intrinsics.x/view.z,0,-p.intrinsics.x*ratio.x/view.z);
-        const float3 jy=p.image.z==1u?float3(0,p.intrinsics.y,0):float3(0,p.intrinsics.y/view.z,-p.intrinsics.y*ratio.y/view.z);
+        float3 jx=p.image.z==1u?float3(p.intrinsics.x,0,0):float3(p.intrinsics.x/view.z,0,-p.intrinsics.x*ratio.x/view.z);
+        float3 jy=p.image.z==1u?float3(0,p.intrinsics.y,0):float3(0,p.intrinsics.y/view.z,-p.intrinsics.y*ratio.y/view.z);
+        if(p.image.z==2u) {
+            const float h2=max(dot(view.xz,view.xz),1e-16f),h=sqrt(h2),r2=max(dot(view,view),1e-16f);
+            jx=float3(view.z,0,-view.x)*(float(p.image.x)/(2.f*M_PI_F*h2));
+            jy=float3(-view.y*view.x,h2,-view.y*view.z)*(float(p.image.y)/(M_PI_F*r2*h));
+        }
         const float3 u=float3(dot(jx,a),dot(jx,bb),dot(jx,c)),v=float3(dot(jy,a),dot(jy,bb),dot(jy,c));
         covariance=float3(dot(u,u),dot(u,v),dot(v,v));
+        if(p.image.z==2u && dot(view.xz,view.xz)<=1e-16f) {
+            const float latitude_scale=float(p.image.y)/(M_PI_F*max(length(view),1e-8f));
+            covariance=float3(float(p.image.x)*float(p.image.x),0,
+                latitude_scale*latitude_scale*max(dot(a,a),max(dot(bb,bb),dot(c,c))));
+        }
     }
     const float before=covariance.x*covariance.z-covariance.y*covariance.y;
     const float dilation=p.payload.y?.1f:.3f;
@@ -149,12 +159,13 @@ bool primitive_hit(float2 point, float4 primitive, uint shape) {
     const float2 delta=point-primitive.xy;
     return dot(delta,delta)<=primitive.z;
 }
-bool ring_hit(float2 point,float3 conic,float opacity,float4 primitive,float width) {
+bool ring_hit(float2 point,float3 conic,float opacity,float4 primitive,float width,float period) {
     const float boundary=(.5f/255.f)/max(opacity,1e-7f),band=max(width,0.f)*10.f;
     const float outer=boundary*(1.f+band),inner=boundary*max(0.f,1.f-band),padding=max(primitive.z,0.f);
     const float2 samples[5]={primitive.xy,primitive.xy+float2(padding,0),primitive.xy-float2(padding,0),primitive.xy+float2(0,padding),primitive.xy-float2(0,padding)};
     for(uint n=0;n<(padding>0?5u:1u);++n) {
-        const float2 d=samples[n]-point;
+        float2 d=samples[n]-point;
+        if(period>0)d.x-=period*round(d.x/period);
         const float power=.5f*(conic.x*d.x*d.x+conic.z*d.y*d.y)+conic.y*d.x*d.y;
         if(power<0||!isfinite(power))continue;
         const float value=exp(-power);
@@ -200,7 +211,7 @@ kernel void selection_query(constant Parameters& p [[buffer(0)]],device const pa
             const int2 at=int2(floor(point))-int2(p.aabb.xy);
             selected=all(at>=0)&&all(uint2(at)<p.aabb.zw)&&coverage[uint(at.y)*p.aabb.z+uint(at.x)]!=0;
         } else for(uint n=0;n<p.source.z;++n)
-            if(p.source.y==3u?ring_hit(point,conic,alpha,primitives[n],p.ring.x):primitive_hit(point,primitives[n],p.source.y)) {selected=true;break;}
+            if(p.source.y==3u?ring_hit(point,conic,alpha,primitives[n],p.ring.x,p.image.z==2u?float(p.image.x):0.f):primitive_hit(point,primitives[n],p.source.y)) {selected=true;break;}
     }
     if(p.source.y==3u) {
         if(selected&&isfinite(depth)&&depth>0) {

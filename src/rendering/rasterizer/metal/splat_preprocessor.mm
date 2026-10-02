@@ -1,13 +1,14 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "splat_preprocessor.hpp"
-#include "gpu_profile.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
+#include "gpu_profile.hpp"
 #include "shader_source.hpp"
 
 #include <array>
 #include <cmath>
+#include <format>
 #include <map>
 #include <mutex>
 #include <stdexcept>
@@ -28,7 +29,7 @@ namespace lfs::rendering::metal {
                          id<MTLDevice> device, const char* name) {
             if (!view.buffer || view.buffer.device != device || view.offset % alignment ||
                 view.offset > view.buffer.length || bytes > view.buffer.length - view.offset)
-                throw std::invalid_argument(std::string("Invalid Metal splat buffer: ") + name);
+                throw std::invalid_argument(std::format("Invalid Metal splat buffer: {} (offset={}, length={}, required_bytes={}, alignment={}, same_device={})", name, view.offset, view.buffer.length, bytes, alignment, view.buffer.device == device));
         }
 
         void check_projection(const Projection& p) {
@@ -50,18 +51,18 @@ namespace lfs::rendering::metal {
                 p.clip_scale.y <= p.clip_scale.x || p.clip_scale.z <= 0 || p.clip_scale.w < 0 ||
                 (p.display.z != 0 && p.display.z != 1) || (p.display.w != 0 && p.display.w != 1) ||
                 !std::isfinite(p.rasterization.w) || (p.rasterization.w != 0.f && p.rasterization.w != 1.f))
-                throw std::invalid_argument("Invalid Metal splat projection");
+                throw std::invalid_argument(std::format("Invalid Metal splat projection (extent={}x{}, camera={}, orthographic={}, focal=({}, {}), clip=({}, {}), scale={}, finite={})", p.extent.x, p.extent.y, p.extent.z, p.extent.w, p.intrinsics.x, p.intrinsics.y, p.clip_scale.x, p.clip_scale.y, p.clip_scale.z, finite));
             if (p.extent.z == uint32_t(CameraModel::Equirectangular) || (p.display.w == 1 && (p.panorama.x != 0 || p.panorama.y != 0))) {
                 for (int i = 0; i < 4; ++i)
                     if (!std::isfinite(p.panorama[i]))
-                        throw std::invalid_argument("Invalid Metal full-camera dimensions");
+                        throw std::invalid_argument(std::format("Invalid Metal full-camera dimensions (component={}, value={})", i, p.panorama[i]));
                 if (p.panorama.x < p.extent.x || p.panorama.y < p.extent.y ||
                     p.panorama.x > 65535 || p.panorama.y > 65535 ||
                     p.panorama.z < 0 || p.panorama.w < 0 ||
                     p.panorama.z + p.extent.x > p.panorama.x || p.panorama.w + p.extent.y > p.panorama.y)
-                    throw std::invalid_argument("Invalid Metal full-camera subregion");
+                    throw std::invalid_argument(std::format("Invalid Metal full-camera subregion (camera={}x{}, origin=({}, {}), extent={}x{})", p.panorama.x, p.panorama.y, p.panorama.z, p.panorama.w, p.extent.x, p.extent.y));
             } else if (p.display.w == 1 && (p.panorama.z != 0 || p.panorama.w != 0)) {
-                throw std::invalid_argument("Metal GS subregions require full-camera dimensions");
+                throw std::invalid_argument(std::format("Metal GS subregions require full-camera dimensions (origin=({}, {}), camera={}x{})", p.panorama.z, p.panorama.w, p.panorama.x, p.panorama.y));
             }
         }
     } // namespace
@@ -76,7 +77,7 @@ namespace lfs::rendering::metal {
         id<MTLComputePipelineState> pipeline(ShStorage storage, uint32_t degree, PrimitiveMode mode, bool tight_bounds) {
             const uint32_t format = static_cast<uint32_t>(storage), primitive = static_cast<uint32_t>(mode);
             if (format > 4 || degree > 3 || primitive > 3)
-                throw std::invalid_argument("Unsupported Metal splat specialization");
+                throw std::invalid_argument(std::format("Unsupported Metal splat specialization (storage={}, degree={}, primitive={}, tight_bounds={})", format, degree, primitive, tight_bounds));
             const uint32_t key = (format * 16 + degree * 4 + primitive) | (tight_bounds ? 128u : 0u);
             std::lock_guard lock(mutex);
             if (auto found = pipelines.find(key); found != pipelines.end())
@@ -105,7 +106,7 @@ namespace lfs::rendering::metal {
 
     SplatPreprocessor::SplatPreprocessor(id<MTLDevice> device) : impl_(std::make_unique<Impl>()) {
         if (!device)
-            throw std::invalid_argument("Metal viewer requires a device");
+            throw std::invalid_argument(std::format("Metal viewer requires a device (device_present={})", device != nil));
         impl_->device = device;
         MTLCompileOptions* options = [MTLCompileOptions new];
         // Q16 fma and near-plane finite checks are contractual.
@@ -127,7 +128,7 @@ namespace lfs::rendering::metal {
         const std::array<uint32_t, 24> zero{};
         impl_->empty = [device newBufferWithBytes:zero.data() length:sizeof(zero) options:MTLResourceStorageModeShared];
         if (!impl_->empty)
-            throw std::runtime_error("Cannot allocate Metal placeholder buffer");
+            throw std::runtime_error(std::format("Cannot allocate Metal placeholder buffer (bytes={})", sizeof(zero)));
     }
     SplatPreprocessor::~SplatPreprocessor() = default;
 
@@ -138,24 +139,22 @@ namespace lfs::rendering::metal {
     void SplatPreprocessor::encode(id<MTLCommandBuffer> command, const SplatBuffers& in,
                                    const Projection& projection, uint32_t degree, PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene, const OverlayBuffers& overlay, BufferSlice gut_output, const LodSelection& lod, GpuProfile* profile, bool tight_bounds) {
         if (!command || command.commandQueue.device != impl_->device || command.status != MTLCommandBufferStatusNotEnqueued)
-            throw std::invalid_argument("Metal viewer requires an uncommitted command buffer on the same device");
+            throw std::invalid_argument(std::format("Metal viewer requires an uncommitted command buffer on the same device (present={}, same_device={}, status={})", command != nil, command.commandQueue.device == impl_->device, long(command.status)));
         if (degree > 3 || (in.layout_rest != 0 && in.layout_rest != 3 && in.layout_rest != 8 && in.layout_rest != 15) ||
             core::sh_rest_coefficients_for_degree(degree) > in.layout_rest || static_cast<uint32_t>(in.storage) > 4 ||
             static_cast<uint32_t>(mode) > 3)
-            throw std::invalid_argument("Active SH degree does not fit resident Metal storage");
+            throw std::invalid_argument(std::format("Active SH degree does not fit resident Metal storage (degree={}, rest={}, storage={}, primitive={})", degree, in.layout_rest, uint32_t(in.storage), uint32_t(mode)));
         check_projection(projection);
-        if (projection.extent.z == uint32_t(CameraModel::Equirectangular) && mode != PrimitiveMode::Gut)
-            throw std::invalid_argument("Metal panoramas require the 3DGUT ray rasterizer");
         if (!in.count)
             return;
         const bool rad = in.storage == ShStorage::RadSigned8;
         if (rad && (!in.rad_page_splats || in.rad_page_splats % 32))
-            throw std::invalid_argument("RAD pool page size must be an explicit multiple of the SH cell width");
+            throw std::invalid_argument(std::format("RAD pool page size must be an explicit multiple of the SH cell width (page_splats={}, cell_width=32)", in.rad_page_splats));
         const size_t n = in.count, draw_count = lod.enabled ? lod.count : n;
         const uint32_t logical_count = lod.enabled && lod.logical_count ? lod.logical_count : in.count;
         const uint32_t deleted_count = in.deleted_count ? in.deleted_count : in.count;
         if (lod.enabled && lod.source_count != in.count)
-            throw std::invalid_argument("Metal resident LOD source extent mismatch");
+            throw std::invalid_argument(std::format("Metal resident LOD source extent mismatch (lod_source={}, resident={})", lod.source_count, in.count));
         const std::array<BufferSlice, 4> lod_buffers = {lod.indices, lod.logical_indices, lod.levels, lod.weights};
         for (size_t j = 0; j < lod_buffers.size(); ++j) {
             const auto input = lod_buffers[j];
@@ -164,18 +163,18 @@ namespace lfs::rendering::metal {
             if (draw_count)
                 check_slice(input, draw_count * 4, 4, impl_->device, "LOD selection");
             if (input.buffer && (input.buffer == output.buffer || input.buffer == gut_output.buffer || input.buffer == overlay.flags.buffer))
-                throw std::invalid_argument("Metal LOD input overlaps projection output");
+                throw std::invalid_argument(std::format("Metal LOD input overlaps projection output (input_index={}, offset={}, length={}, projected_overlap={}, gut_overlap={}, flags_overlap={})", j, input.offset, input.buffer.length, input.buffer == output.buffer, input.buffer == gut_output.buffer, input.buffer == overlay.flags.buffer));
         }
         if (lod.enabled && lod.counter.buffer) {
             check_slice(lod.counter, 4, 4, impl_->device, "GPU LOD count");
             if (lod.counter.buffer == output.buffer || lod.counter.buffer == gut_output.buffer || lod.counter.buffer == overlay.flags.buffer)
-                throw std::invalid_argument("Metal GPU LOD counter overlaps projection output");
+                throw std::invalid_argument(std::format("Metal GPU LOD counter overlaps projection output (offset={}, length={}, projected_overlap={}, gut_overlap={}, flags_overlap={})", lod.counter.offset, lod.counter.buffer.length, lod.counter.buffer == output.buffer, lod.counter.buffer == gut_output.buffer, lod.counter.buffer == overlay.flags.buffer));
         }
         if (!draw_count)
             return;
         if (overlay.parameter_count) {
             if (overlay.parameter_count != 207)
-                throw std::invalid_argument("Metal overlay parameter ABI mismatch");
+                throw std::invalid_argument(std::format("Metal overlay parameter ABI mismatch (actual={}, expected=207)", overlay.parameter_count));
             check_slice(overlay.parameters, 207 * 16, 16, impl_->device, "overlay parameters");
             check_slice(overlay.flags, draw_count * 4, 4, impl_->device, "overlay flags");
             if (overlay.node_count)
@@ -207,10 +206,10 @@ namespace lfs::rendering::metal {
         if (mode == PrimitiveMode::Gut) {
             check_slice(gut_output, draw_count * sizeof(GutSplat), 16, impl_->device, "3DGUT output");
             if (gut_output.buffer == output.buffer)
-                throw std::invalid_argument("Metal 3DGUT geometry overlaps projection output");
+                throw std::invalid_argument(std::format("Metal 3DGUT geometry overlaps projection output (geometry_offset={}, projection_offset={}, draw_count={})", gut_output.offset, output.offset, draw_count));
             for (const auto input : inputs)
                 if (input.buffer && input.buffer == gut_output.buffer)
-                    throw std::invalid_argument("Metal 3DGUT geometry overlaps source storage");
+                    throw std::invalid_argument(std::format("Metal 3DGUT geometry overlaps source storage (input_offset={}, geometry_offset={}, input_length={}, draw_count={})", input.offset, gut_output.offset, input.buffer.length, draw_count));
         }
         for (size_t i = 0; i < inputs.size(); ++i) {
             if (!lengths[i])
@@ -218,15 +217,15 @@ namespace lfs::rendering::metal {
             check_slice(inputs[i], lengths[i], alignments[i], impl_->device, names[i]);
             if (inputs[i].buffer == output.buffer && inputs[i].offset < output.offset + draw_count * sizeof(ProjectedSplat) &&
                 output.offset < inputs[i].offset + lengths[i])
-                throw std::invalid_argument("Metal projection output overlaps input");
+                throw std::invalid_argument(std::format("Metal projection output overlaps input (input={}, input_offset={}, input_bytes={}, output_offset={}, output_bytes={})", names[i], inputs[i].offset, lengths[i], output.offset, draw_count * sizeof(ProjectedSplat)));
         }
         if (scene.count > 1 && !scene.object_indices.buffer)
-            throw std::invalid_argument("Multiple Metal scene objects require primitive indices");
+            throw std::invalid_argument(std::format("Multiple Metal scene objects require primitive indices (objects={}, logical_splats={})", scene.count, logical_count));
         // Resolve/compile before opening an encoder so failure leaves the command usable.
         auto pipeline = impl_->pipeline(in.storage, degree, mode, tight_bounds);
         id<MTLComputeCommandEncoder> encoder = profiledCompute(command, profile, GpuStage::Projection);
         if (!encoder)
-            throw std::runtime_error("Cannot create Metal projection encoder");
+            throw std::runtime_error(std::format("Cannot create Metal projection encoder (source_count={}, draw_count={}, degree={}, primitive={})", n, draw_count, degree, uint32_t(mode)));
         encoder.label = @"LichtFeld splat projection";
         [encoder setComputePipelineState:pipeline];
         for (NSUInteger i = 0; i < inputs.size(); ++i)

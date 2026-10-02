@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "metal_rad_pager.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/sh_layout.hpp"
 #include "core/tensor_backend.hpp"
 #include "frame_budget.hpp"
@@ -11,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <format>
 #include <limits>
 #include <stdexcept>
 #include <thread>
@@ -46,7 +48,7 @@ namespace lfs::vis {
                                   void* consumer, Settings settings) {
         auto& i = *impl_;
         if (!std::isfinite(settings.vram_fraction) || settings.vram_fraction <= 0 || settings.vram_fraction > 1)
-            throw std::invalid_argument("Metal RAD pool fraction must be in (0, 1]");
+            throw std::invalid_argument(std::format("Metal RAD pool fraction must be in (0, 1] (fraction={})", settings.vram_fraction));
         if (i.model == &model && i.tree == model.lod_tree.get() && i.settings.pool_splats == settings.pool_splats && i.settings.vram_fraction == settings.vram_fraction) {
             i.settings.fade_frames = settings.fade_frames;
             return;
@@ -54,23 +56,23 @@ namespace lfs::vis {
         const auto* tree = model.lod_tree.get();
         if (!tree || !tree->rad_source.valid() || tree->rad_source.chunk_size < kPage || tree->rad_source.chunk_size % kPage != 0 ||
             !tree->has_tree() || !tree->total_nodes() || tree->total_nodes() > std::numeric_limits<uint32_t>::max())
-            throw std::invalid_argument("Metal RAD paging requires the native ordered chunk hierarchy");
+            throw std::invalid_argument(std::format("Metal RAD paging requires the native ordered chunk hierarchy (tree_present={}, source_valid={}, chunk_splats={}, required_page_splats={}, ordered_tree={}, nodes={})", tree != nullptr, tree && tree->rad_source.valid(), tree ? tree->rad_source.chunk_size : 0, kPage, tree && tree->has_tree(), tree ? tree->total_nodes() : 0));
         auto meta = tree->meta_view;
         if (!meta.valid()) {
             auto opened = io::open_rad_meta_sidecar(tree->rad_source.path);
             if (!opened) {
                 const auto built = io::build_rad_meta_sidecar(tree->rad_source.path);
                 if (!built)
-                    throw std::runtime_error("Metal RAD metadata sidecar build failed: " + built.error().message);
+                    throw std::runtime_error(std::format("Metal RAD metadata sidecar build failed (path={}, error={})", tree->rad_source.path.string(), built.error().message));
                 opened = io::open_rad_meta_sidecar(tree->rad_source.path);
             }
             if (!opened)
-                throw std::runtime_error("Metal RAD metadata sidecar unavailable: " + opened.error());
+                throw std::runtime_error(std::format("Metal RAD metadata sidecar unavailable (path={}, error={})", tree->rad_source.path.string(), opened.error()));
             meta = std::move(*opened);
         }
         const size_t nodes = tree->total_nodes(), chunks = (nodes + kPage - 1) / kPage;
         if (meta.node_count != nodes || meta.chunk_count != chunks || tree->rad_source.chunks.size() != chunks)
-            throw std::invalid_argument("Metal RAD metadata and payload chunk extents differ");
+            throw std::invalid_argument(std::format("Metal RAD metadata and payload chunk extents differ (meta_nodes={}, tree_nodes={}, meta_chunks={}, expected_chunks={}, source_chunks={})", meta.node_count, nodes, meta.chunk_count, chunks, tree->rad_source.chunks.size()));
         // Stop producers before draining or replacing storage. Neither worker
         // calls back into the renderer; no renderer lock is acquired here.
         i.cache.reset();
@@ -95,7 +97,7 @@ namespace lfs::vis {
         const size_t affordable = pool_budget > staging ? size_t((pool_budget - staging) / page_bytes) : 0;
         const size_t pages = std::min({chunks, requested, affordable, size_t(std::numeric_limits<uint32_t>::max() / kPage)});
         if (!pages)
-            throw std::bad_alloc();
+            throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = staging + page_bytes * std::max<size_t>(1, requested), .label = "viewer.rad.pool", .operation = "rad.pool.admission"});
         core::RadPagePool pool;
         pool.page_splats = uint32_t(kPage);
         pool.sh_slots = slots;
@@ -115,7 +117,7 @@ namespace lfs::vis {
                                                                                                                     std::span<const uint8_t> bytes) -> std::string {
             auto* slot = engine->acquireStagingSlot();
             if (!slot)
-                return "Metal RAD upload engine unavailable";
+                return std::format("Metal RAD upload engine unavailable (chunk={}, page={}, generation={}, bytes={})", chunk, page, generation, bytes.size());
             try {
                 auto decoded = io::decode_rad_chunk_packed(bytes, degree, encoded, kPage, meta, chunk,
                                                            std::span<uint8_t>(slot->data, engine->stagingBytes()));
@@ -142,7 +144,7 @@ namespace lfs::vis {
     void MetalRadPager::advance(std::span<const uint32_t> touches) {
         auto& i = *impl_;
         if (!i.model)
-            throw std::logic_error("Metal RAD pager is not configured");
+            throw std::logic_error(std::format("Metal RAD pager is not configured (signature={}, nodes={}, model_present={})", i.signature, i.nodes, i.model != nullptr));
         i.cache.beginFrame();
         auto published = i.engine.collectPublished();
         for (const auto& page : published)
@@ -155,7 +157,7 @@ namespace lfs::vis {
         // collectPublished after completion, never through this pending list.
         const auto pending = i.cache.drainPendingUploads();
         if (!pending.empty())
-            throw std::logic_error("Disk-backed Metal RAD cache produced a resident-tensor upload");
+            throw std::logic_error(std::format("Disk-backed Metal RAD cache produced a resident-tensor upload (uploads={}, frame={})", pending.size(), i.cache.frameIndex()));
         std::vector<LodPageCache::ChunkRequest> requests;
         std::vector<uint32_t> protected_chunks;
         for (size_t chunk = 0; chunk < std::min(touches.size(), i.cache.snapshot().logical_chunks); ++chunk) {
@@ -187,7 +189,7 @@ namespace lfs::vis {
             if (rootReady())
                 return;
             if (std::chrono::steady_clock::now() >= deadline)
-                throw std::runtime_error("Metal RAD pinned root did not become resident before capture");
+                throw std::runtime_error(std::format("Metal RAD pinned root did not become resident before capture (timeout_ms=5000, nodes={}, chunks={}, pending={}, frozen={})", impl_->nodes, impl_->cache.snapshot().logical_chunks, pending(), frozen()));
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }

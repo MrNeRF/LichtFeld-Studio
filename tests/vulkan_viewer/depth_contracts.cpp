@@ -60,7 +60,8 @@ namespace {
             std::memset(data, 0, bytes);
         }
         ~HostBuffer() { vmaDestroyBuffer(allocator, view.buffer, view.allocation); }
-        template <class T> T* as() { return static_cast<T*>(data); }
+        template <class T>
+        T* as() { return static_cast<T*>(data); }
         void flush() { check(vmaFlushAllocation(allocator, view.allocation, 0, VK_WHOLE_SIZE), "vmaFlushAllocation"); }
         void invalidate() { check(vmaInvalidateAllocation(allocator, view.allocation, 0, VK_WHOLE_SIZE), "vmaInvalidateAllocation"); }
     };
@@ -166,10 +167,11 @@ namespace {
         }
         const float actual = buffers[10]->as<float>()[0];
         require(actual == expected, "Incorrect median: got " + std::to_string(actual) + " expected " + std::to_string(expected) +
-                                       " (profile=" + std::to_string(profile) + ", overlays=" + std::to_string(overlays) +
-                                       ", alpha=" + std::to_string(first_alpha) + ")");
+                                        " (profile=" + std::to_string(profile) + ", overlays=" + std::to_string(overlays) +
+                                        ", alpha=" + std::to_string(first_alpha) + ")");
         require(buffers[10]->as<float>()[pixels] == kGuard && buffers[11]->as<float>()[pixels] == kGuard &&
-                    buffers[9]->as<float>()[pixels * 4] == kGuard, "Partial edge dispatch wrote outside the output extent");
+                    buffers[9]->as<float>()[pixels * 4] == kGuard,
+                "Partial edge dispatch wrote outside the output extent");
         // Source zero is centered only on pixel (0,0); other pixels cannot
         // cross 50%. This also exercises inactive lanes as source broadcasters.
         for (size_t p = 1; p < pixels; ++p)
@@ -205,13 +207,12 @@ int main(int argc, char** argv) {
         size_t cases = 0;
         for (bool overlays : {false, true}) {
             for (uint32_t profile : {0u, 1u}) {
-                for (const auto& [alpha, expected] : std::array<std::pair<float, float>, 4>{{
-                         {.49995f, 6.f}, {.50005f, 4.f}, {.5f, 4.f}, {.1f, kFarDepth}}}) {
-                    test_case(pipeline, allocator.value, overlays, profile, alpha, expected, 1025, 8, false);
+                for (const auto& [alpha, expected] : std::array<std::pair<float, float>, 4>{{{.49995f, 6.f}, {.50005f, 4.f}, {.5f, 4.f}, {.1f, kFarDepth}}}) {
+                    test_case(pipeline, allocator.value, overlays, profile, alpha, expected, RASTER_BATCH_SIZE + 1, 8, false);
                     ++cases;
                 }
-                test_case(pipeline, allocator.value, overlays, profile, .49995f, 6.f, 1056, 1, false);
-                test_case(pipeline, allocator.value, overlays, profile, .49995f, 6.f, 1025, 8, true);
+                test_case(pipeline, allocator.value, overlays, profile, .49995f, 6.f, RASTER_BATCH_SIZE + 32, 1, false);
+                test_case(pipeline, allocator.value, overlays, profile, .49995f, 6.f, RASTER_BATCH_SIZE + 1, 8, true);
                 cases += 2;
             }
         }

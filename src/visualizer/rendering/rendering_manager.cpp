@@ -10,20 +10,20 @@
 #include "core/tensor_backend.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
-#include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
 #include "rendering/export_post_process.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/selection_ops.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene_renderer.hpp"
 #include "theme/theme.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
 #endif
 #include "core/training_manager.hpp"
+#include "scene_renderer.hpp"
 #include "visualizer/app_store.hpp"
-#include "vksplat_viewport_renderer.hpp"
 
 #include <algorithm>
 #include <cassert>

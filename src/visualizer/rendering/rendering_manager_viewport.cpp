@@ -15,8 +15,8 @@
 #include "training/trainer.hpp"
 #endif
 #include "core/training_manager.hpp"
+#include "scene_renderer.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
-#include "vksplat_viewport_renderer.hpp"
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -33,8 +33,8 @@ namespace lfs::vis {
             (std::size_t{4} << 30) - (std::size_t{64} << 20);
         constexpr float kMaxValidDepth = 1e9f;
         constexpr int kMinPreviewSubdivisionHeight = 512;
-        constexpr int kPreviewTileHeightAlignment = HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT;
-        static_assert(kPreviewTileHeightAlignment % TILE_HEIGHT == 0);
+        // Capture strips preserve the shared 32-pixel macro-tile boundaries.
+        constexpr int kPreviewTileHeightAlignment = 32;
         static_assert(kMinPreviewSubdivisionHeight % kPreviewTileHeightAlignment == 0);
 
         [[nodiscard]] bool isTileInstanceOverflow(const std::string_view error) {
@@ -479,11 +479,11 @@ namespace lfs::vis {
         // force the legacy per-pixel chain for the depth-capture render so the
         // readback matches the image resolution.
         if (!vksplat_viewport_renderer_) {
-            vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+            vksplat_viewport_renderer_ = createSceneRenderer();
         }
         vksplat_viewport_renderer_->setDepthCaptureMode(true, expected_depth);
         struct DepthCaptureModeGuard {
-            VksplatViewportRenderer* renderer;
+            SceneRenderer* renderer;
             ~DepthCaptureModeGuard() { renderer->setDepthCaptureMode(false); }
         } depth_capture_guard{vksplat_viewport_renderer_.get()};
 
@@ -1103,7 +1103,7 @@ namespace lfs::vis {
         }
 
         if (!vksplat_viewport_renderer_) {
-            vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+            vksplat_viewport_renderer_ = createSceneRenderer();
         }
 
         // Preview/export uses the renderer's exact two-batch count gate; one
@@ -1279,7 +1279,7 @@ namespace lfs::vis {
 
         const auto depth = vksplat_viewport_renderer_->sampleDepthAtPixel(
             *last_vulkan_context_,
-            VksplatViewportRenderer::DepthSampleRequest{
+            SceneRenderer::DepthSampleRequest{
                 .pixel = {x, y},
                 .source_size = source_size,
                 .target = target,

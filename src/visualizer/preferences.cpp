@@ -643,26 +643,6 @@ namespace lfs::vis {
         return std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
     }
 
-    void UserPreferences::setViewerBackend(const rendering::ViewerBackend backend) {
-        const auto name = rendering::viewerBackendName(backend);
-        if (name.empty())
-            throw std::invalid_argument("Unsupported viewer backend");
-        std::scoped_lock lock(impl_->mutex);
-        impl_->loadLocked();
-        impl_->values["viewer_backend"] = std::string(name);
-        impl_->saveLocked();
-    }
-
-    rendering::ViewerBackend UserPreferences::viewerBackend() {
-        std::scoped_lock lock(impl_->mutex);
-        impl_->loadLocked();
-        const auto it = impl_->values.find("viewer_backend");
-        if (it == impl_->values.end() || !it->is_string())
-            return rendering::ViewerBackend::Automatic;
-        return rendering::parseViewerBackend(it->get<std::string>())
-            .value_or(rendering::ViewerBackend::Automatic);
-    }
-
     void UserPreferences::setTensorBackend(const TensorPreferenceState& state) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
@@ -675,13 +655,16 @@ namespace lfs::vis {
         if (state.backend == core::GpuBackend::Metal)
             backend = "metal";
 #endif
-        impl_->values["tensor_backend"] = {
+        const nlohmann::json values = {
             {"backend", backend},
             {"vulkan_device", state.options.vulkan_device},
             {"vulkan_validation", std::clamp(state.options.vulkan_validation, 0, 2)},
             {"force_fp32_half", state.options.force_fp32_half},
             {"force_no_atomic_float", state.options.force_no_atomic_float},
         };
+        if (impl_->values.contains("tensor_backend") && impl_->values["tensor_backend"] == values)
+            return;
+        impl_->values["tensor_backend"] = values;
         impl_->saveLocked();
     }
 

@@ -1,9 +1,11 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "selection_query.hpp"
+#include "core/memory_pressure.hpp"
 #include "selection_shader_source.hpp"
 #include <array>
 #include <cmath>
+#include <format>
 #include <limits>
 #include <stdexcept>
 namespace lfs::rendering::metal {
@@ -14,7 +16,7 @@ namespace lfs::rendering::metal {
     };
     SelectionQuery::SelectionQuery(id<MTLDevice> device) : impl_(std::make_unique<Impl>()) {
         if (!device)
-            throw std::invalid_argument("Metal selection query requires a device");
+            throw std::invalid_argument(std::format("Metal selection query requires a device (device_present={})", device != nil));
         auto& i = *impl_;
         i.device = device;
         auto options = [MTLCompileOptions new];
@@ -37,7 +39,7 @@ namespace lfs::rendering::metal {
             throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal selection pipeline creation failed");
         i.dummy = [device newBufferWithLength:64 options:MTLResourceStorageModeShared];
         if (!i.dummy)
-            throw std::bad_alloc();
+            throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = 64, .label = "viewer.selection", .operation = "selection.dummy.allocate"});
     }
     SelectionQuery::~SelectionQuery() = default;
     void SelectionQuery::encode(id<MTLCommandBuffer> command, const SelectionBuffers& buffers, SelectionParameters p) {
@@ -47,21 +49,21 @@ namespace lfs::rendering::metal {
             !std::isfinite(p.intrinsics.x) || !std::isfinite(p.intrinsics.y) || p.intrinsics.x <= 0 || p.intrinsics.y <= 0 ||
             !std::isfinite(p.intrinsics.z) || !std::isfinite(p.intrinsics.w) || !std::isfinite(p.ring.x) || !std::isfinite(p.ring.y) || p.ring.y <= 0 ||
             p.scene.w > p.source.x || p.scene.x > uint32_t(std::numeric_limits<int32_t>::max()) ||
-            uint64_t(p.aabb.z) * p.aabb.w > std::numeric_limits<uint32_t>::max() || (!p.image.w && p.image.z == 2))
-            throw std::invalid_argument("Invalid native Metal selection parameters");
+            uint64_t(p.aabb.z) * p.aabb.w > std::numeric_limits<uint32_t>::max())
+            throw std::invalid_argument(std::format("Invalid native Metal selection parameters (image={}x{}, camera={}, gut={}, source={}, shape={}, payload=({}, {}), objects={}, deleted={}, focal=({}, {}), ring=({}, {}), command_present={}, same_device={})", uint32_t(p.image.x), uint32_t(p.image.y), uint32_t(p.image.z), uint32_t(p.image.w), uint32_t(p.source.x), uint32_t(p.source.y), uint32_t(p.payload.x), uint32_t(p.payload.y), uint32_t(p.scene.x), uint32_t(p.scene.w), float(p.intrinsics.x), float(p.intrinsics.y), float(p.ring.x), float(p.ring.y), command != nil, command.commandQueue.device == i.device));
         for (size_t col = 0; col < 4; ++col)
             for (size_t row = 0; row < 4; ++row)
                 if (!std::isfinite(p.world_to_camera.columns[col][row]))
-                    throw std::invalid_argument("Invalid native Metal selection camera matrix");
+                    throw std::invalid_argument(std::format("Invalid native Metal selection camera matrix (column={}, row={}, value={})", col, row, float(p.world_to_camera.columns[col][row])));
         const bool polygon = p.source.y == uint32_t(SelectionShape::Polygon), ring = p.source.y == uint32_t(SelectionShape::Ring);
         if ((polygon && p.source.w < 3) || (!polygon && !p.source.z) || p.aabb.x > p.image.x || p.aabb.z > p.image.x - p.aabb.x ||
             p.aabb.y > p.image.y || p.aabb.w > p.image.y - p.aabb.y)
-            throw std::invalid_argument("Invalid native Metal selection shape extent");
+            throw std::invalid_argument(std::format("Invalid native Metal selection shape extent (shape={}, primitives={}, vertices={}, origin=({}, {}), extent={}x{}, image={}x{})", uint32_t(p.source.y), uint32_t(p.source.z), uint32_t(p.source.w), uint32_t(p.aabb.x), uint32_t(p.aabb.y), uint32_t(p.aabb.z), uint32_t(p.aabb.w), uint32_t(p.image.x), uint32_t(p.image.y)));
         const auto validate = [&](BufferSlice slice, size_t bytes, size_t alignment) {
             if (!bytes)
                 return;
             if (!slice.buffer || slice.buffer.device != i.device || slice.offset % alignment || slice.offset > slice.buffer.length || bytes > slice.buffer.length - slice.offset)
-                throw std::invalid_argument("Invalid native Metal selection buffer extent or alignment");
+                throw std::invalid_argument(std::format("Invalid native Metal selection buffer extent or alignment (offset={}, length={}, required_bytes={}, alignment={}, same_device={})", slice.offset, slice.buffer.length, bytes, alignment, slice.buffer.device == i.device));
         };
         const size_t count = p.source.x;
         validate(buffers.means, count * 12, 4);

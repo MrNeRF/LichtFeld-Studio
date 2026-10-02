@@ -11,7 +11,6 @@ add_library(lfs_vulkan_rasterizer STATIC
         # Phase 7A: shared bounded-wait + SubmissionState + VulkanDispatch seam.
         # Lives under src/rendering/ so visualizer and tests include it without
         # depending on the visualizer module.
-        ${CMAKE_SOURCE_DIR}/src/rendering/vulkan_wait.cpp
 )
 
 target_include_directories(lfs_vulkan_rasterizer
@@ -27,6 +26,7 @@ target_link_libraries(lfs_vulkan_rasterizer
         Vulkan::Vulkan
         GPUOpen::VulkanMemoryAllocator
         lfs_core
+        lfs_vulkan_runtime
         PRIVATE
         lfs_diagnostics
 )
@@ -112,10 +112,16 @@ set(_VULKAN_SLANG_FLAGS
         -line-directive-mode none
         -target spirv
 )
+if(APPLE)
+    list(APPEND _VULKAN_SLANG_FLAGS -DLFS_VULKAN_MACOS_REFERENCE=1)
+endif()
 set(_VULKAN_GLSL_FLAGS
         -V
         --target-env vulkan1.2
 )
+if(APPLE)
+    list(APPEND _VULKAN_GLSL_FLAGS -DLFS_VULKAN_MACOS_REFERENCE=1)
+endif()
 if(LFS_ENABLE_VULKAN_SHADER_DEBUG_INFO)
         list(APPEND _VULKAN_SLANG_FLAGS -g3)
         list(APPEND _VULKAN_GLSL_FLAGS -gVS)

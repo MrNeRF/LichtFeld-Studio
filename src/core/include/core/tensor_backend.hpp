@@ -81,6 +81,9 @@ namespace lfs::core {
     // device. Metal tensors reach the window through their own interop, so
     // adopting a device for them would only allocate an unused context.
     LFS_CORE_API bool tensor_backend_shares_vulkan_device();
+    // Native Metal readers accept resident Metal and exportable MoltenVK storage.
+    LFS_CORE_API bool tensor_supports_metal_access(const Tensor& tensor);
+    LFS_CORE_API bool tensor_backend_supports_metal_access();
     // Whether this session's tensors live on another API's device, which the
     // window's Vulkan device reaches through external memory and semaphores.
     LFS_CORE_API bool tensor_backend_needs_vulkan_interop();
