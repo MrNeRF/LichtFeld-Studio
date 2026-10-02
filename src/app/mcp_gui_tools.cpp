@@ -1828,8 +1828,10 @@ namespace lfs::app {
                     return std::unexpected(result.error().message);
                 break;
             }
-            case core::ExportFormat::SPZ: {
-                if (auto result = io::save_spz(*merged, io::SpzSaveOptions{.output_path = path, .provenance = stamp}); !result)
+            case core::ExportFormat::SPZ:
+            case core::ExportFormat::GLB: {
+                // GLB wraps the SPZ payload, as in the GUI export.
+                if (auto result = io::save_spz(*merged, io::SpzSaveOptions{.output_path = path, .provenance = stamp, .glb = format == core::ExportFormat::GLB}); !result)
                     return std::unexpected(result.error().message);
                 break;
             }

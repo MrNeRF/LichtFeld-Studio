@@ -42,6 +42,8 @@ namespace lfs::app {
             vis::gui::PanelSpace::ViewportOverlay,
             vis::gui::PanelSpace::MainPanelTab,
             vis::gui::PanelSpace::SceneHeader,
+            vis::gui::PanelSpace::BottomArea,
+            vis::gui::PanelSpace::LeftArea,
             vis::gui::PanelSpace::StatusBar,
         };
 
@@ -110,6 +112,10 @@ namespace lfs::app {
                 return "main_panel_tab";
             case vis::gui::PanelSpace::SceneHeader:
                 return "scene_header";
+            case vis::gui::PanelSpace::BottomArea:
+                return "bottom_dock";
+            case vis::gui::PanelSpace::LeftArea:
+                return "left_dock";
             case vis::gui::PanelSpace::StatusBar:
                 return "status_bar";
             }
@@ -127,6 +133,10 @@ namespace lfs::app {
                 return vis::gui::PanelSpace::MainPanelTab;
             if (value == "scene_header")
                 return vis::gui::PanelSpace::SceneHeader;
+            if (value == "bottom_dock")
+                return vis::gui::PanelSpace::BottomArea;
+            if (value == "left_dock")
+                return vis::gui::PanelSpace::LeftArea;
             if (value == "status_bar")
                 return vis::gui::PanelSpace::StatusBar;
             return std::nullopt;
@@ -1174,7 +1184,7 @@ namespace lfs::app {
                         {"enabled", json{{"type", "boolean"}, {"description", "Enable or disable the panel"}}},
                         {"label", json{{"type", "string"}, {"description", "Override the display label"}}},
                         {"order", json{{"type", "integer"}, {"description", "Change the panel sort order"}}},
-                        {"space", json{{"type", "string"}, {"enum", json::array({"side_panel", "floating", "viewport_overlay", "main_panel_tab", "scene_header", "status_bar"})}, {"description", "Move the panel to a different panel space"}}},
+                        {"space", json{{"type", "string"}, {"enum", json::array({"side_panel", "floating", "viewport_overlay", "main_panel_tab", "scene_header", "bottom_dock", "left_dock", "status_bar"})}, {"description", "Move the panel to a different panel space"}}},
                         {"parent_id", json{{"type", "string"}, {"description", "Set or clear the parent panel id (use empty string to clear)"}}}},
                     .required = {"panel_id"}},
                 .metadata = mcp::McpToolMetadata{
