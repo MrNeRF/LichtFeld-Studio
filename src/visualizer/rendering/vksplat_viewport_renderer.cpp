@@ -8123,8 +8123,15 @@ namespace lfs::vis {
         active_tensor_backend_ = lfs::core::gpu_backend_of(splat_data.means_raw()).value_or(lfs::core::default_gpu_backend());
         const auto tensor_scope = context.tensorInterop().execution_scope(active_tensor_backend_);
 
-        std::erase_if(retired_inputs_, [this](const RetiredInputs& retired) {
-            if (!renderTimelineValueRetired(retired.completion))
+        // Frames submitted after a target was released can still read its
+        // per-frame inputs, so a released target's cells are only cleared once
+        // every submitted frame has finished. Releases are rare (closed views).
+        const bool retired_ready = std::ranges::any_of(retired_inputs_, [this](const RetiredInputs& retired) {
+            return renderTimelineValueRetired(retired.completion);
+        });
+        const bool frames_done = !retired_ready || context.waitForSubmittedFrames();
+        std::erase_if(retired_inputs_, [this, frames_done](const RetiredInputs& retired) {
+            if (!frames_done || !renderTimelineValueRetired(retired.completion))
                 return false;
             for (std::size_t cell = retired.base; cell < retired.base + kFrameRingSize; ++cell) {
                 overlays_[cell] = {};
