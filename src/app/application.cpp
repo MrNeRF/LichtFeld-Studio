@@ -54,7 +54,7 @@
 #include "preprocessing/preprocess.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
-#include "rendering/vksplat_viewport_renderer.hpp"
+#include "rendering/scene_renderer.hpp"
 #include "sequencer/timeline.hpp"
 #include "visualizer/gui/layout_state.hpp"
 #include "visualizer/gui/panels/python_scripts_panel.hpp"
@@ -62,6 +62,7 @@
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include "visualizer/input/input_bindings.hpp"
 #include "visualizer/preferences.hpp"
+#include "window/vulkan_context.hpp"
 #include <cmath>
 #include <condition_variable>
 #if LFS_HAS_CUDA
@@ -1096,7 +1097,7 @@ namespace lfs::app {
                         LOG_WARN("Failed to shut down tensor backend: {}", result.error().detail());
                 }
             } backend_lifetime;
-            vis::VksplatViewportRenderer renderer;
+            auto renderer = vis::createSceneRenderer();
             const auto splat_allocator = context.tensorInterop().splat_allocator(true);
 
             // Pipeline creation does not read the scene. Overlap it with the load.
@@ -1136,7 +1137,7 @@ namespace lfs::app {
                 }
                 return model;
             });
-            const auto pipelines = renderer.prepareDevice(context);
+            const auto pipelines = renderer->prepareDevice(context);
             auto loaded = loading.get();
             if (!pipelines) {
                 LOG_ERROR("Off-screen renderer initialization failed: {}", pipelines.error());
@@ -1190,13 +1191,13 @@ namespace lfs::app {
                 request.frame_view.focal_length_mm = cam_state.focal_length_mm;
                 // The loaded scene is immutable for the whole path. The live-training
                 // upload flag shares the training arena and disables the immutable HiGS chain.
-                auto rendered = renderer.render(context, *model, request, frame == 0,
-                                                target, false, true);
+                auto rendered = renderer->render(context, *model, request, frame == 0,
+                                                 target, false, true);
                 if (!rendered) {
                     LOG_ERROR("Failed to render frame {}: {}", frame, rendered.error());
                     return 1;
                 }
-                auto image = renderer.readOutputImage(context, target);
+                auto image = renderer->readOutputImage(context, target);
                 if (!image) {
                     LOG_ERROR("Failed to read frame {}: {}", frame, image.error());
                     return 1;

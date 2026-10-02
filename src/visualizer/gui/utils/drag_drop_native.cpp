@@ -388,6 +388,51 @@ namespace lfs::vis::gui {
     }
 
 // ============================================================================
+// macOS Implementation
+// ============================================================================
+#elif defined(__APPLE__)
+
+    struct NativeDragDrop::PlatformData {};
+
+    bool NativeDragDrop::init(SDL_Window* window) {
+        if (initialized_)
+            return true;
+        if (!window || !SDL_GetWindowID(window))
+            return false;
+        window_ = window;
+        // SDL's Cocoa NSDraggingDestination resolves Finder file URLs and aliases.
+        // Observe hover/cancel events; WindowManager retains sole file delivery so
+        // one native drop cannot import the same scene twice.
+        if (!SDL_AddEventWatch(&NativeDragDrop::macEventWatch, this)) {
+            window_ = nullptr;
+            return false;
+        }
+        initialized_ = true;
+        LOG_INFO("Native drag-drop initialized (macOS Cocoa via SDL)");
+        return true;
+    }
+
+    void NativeDragDrop::shutdown() {
+        if (initialized_)
+            SDL_RemoveEventWatch(&NativeDragDrop::macEventWatch, this);
+        initialized_ = false;
+        window_ = nullptr;
+        setDragHovering(false);
+    }
+
+    void NativeDragDrop::pollEvents() {}
+
+    bool SDLCALL NativeDragDrop::macEventWatch(void* userdata, SDL_Event* event) {
+        auto* const self = static_cast<NativeDragDrop*>(userdata);
+        if ((event->type == SDL_EVENT_DROP_BEGIN || event->type == SDL_EVENT_DROP_POSITION ||
+             event->type == SDL_EVENT_DROP_COMPLETE) &&
+            event->drop.windowID == SDL_GetWindowID(self->window_)) {
+            self->setDragHovering(event->type != SDL_EVENT_DROP_COMPLETE);
+        }
+        return true;
+    }
+
+// ============================================================================
 // Unsupported Platform
 // ============================================================================
 #else

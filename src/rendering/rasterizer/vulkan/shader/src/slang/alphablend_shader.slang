@@ -99,27 +99,33 @@ uint32_t computeTileOverlapBitmask(bool exact, float2 g_xy, float4 g_inv_cov_opa
 
 // forward
 
+#ifdef LFS_VULKAN_MACOS_REFERENCE
+#define SPLAT_BATCH_SIZE 128
+#else
+#define SPLAT_BATCH_SIZE TILE_SIZE
+#endif
+
 #if SHARED_STRUCT
 #if LFS_3DGUT_RASTERIZE
-groupshared Splat_3D_GUT_AlphaBlend collected_gut_splats[TILE_SIZE];
+groupshared Splat_3D_GUT_AlphaBlend collected_gut_splats[SPLAT_BATCH_SIZE];
 #else
-groupshared Splat_2D_AlphaBlend collected_splats[TILE_SIZE];
+groupshared Splat_2D_AlphaBlend collected_splats[SPLAT_BATCH_SIZE];
 #endif
 #else
-groupshared float2 collected_xy_vs[TILE_SIZE];
-groupshared float4 collected_inv_cov_vs_opacity[TILE_SIZE];
+groupshared float2 collected_xy_vs[SPLAT_BATCH_SIZE];
+groupshared float4 collected_inv_cov_vs_opacity[SPLAT_BATCH_SIZE];
 #endif
 
 groupshared uint32_t active_subgroups[TILE_SIZE / SUBGROUP_SIZE];
-groupshared uint32_t collected_gauss_idx[TILE_SIZE];
+groupshared uint32_t collected_gauss_idx[SPLAT_BATCH_SIZE];
 #if LFS_RASTER_OVERLAYS
 // Packed flags | selection_byte | preview_byte — one global load set per splat
 // per workgroup instead of per pixel.
-groupshared uint32_t collected_overlay[TILE_SIZE];
+groupshared uint32_t collected_overlay[SPLAT_BATCH_SIZE];
 #endif
 
 #if SUBTILE_SIZE > 0
-groupshared uint32_t subtile_overlap_bitmasks[TILE_SIZE];
+groupshared uint32_t subtile_overlap_bitmasks[SPLAT_BATCH_SIZE];
 #endif
 
 
@@ -313,7 +319,7 @@ void main(
     thread_active = thread_active && ray.valid;
 #endif
 
-    const int shared_memory_rounds = ((tile_idx_end - tile_idx_start + TILE_SIZE - 1) / TILE_SIZE);
+    const int shared_memory_rounds = ((tile_idx_end - tile_idx_start + SPLAT_BATCH_SIZE - 1) / SPLAT_BATCH_SIZE);
 
   #if LFS_RASTER_OVERLAYS
     // Hoist uniform overlay scalars once per thread; hot loop never reloads
@@ -344,8 +350,8 @@ void main(
             break;
 
         // Collectively fetch per-Gaussian data from global to shared
-        int splat_pointer_offset = i * TILE_SIZE + thread_rank;
-        if (tile_idx_start + splat_pointer_offset < tile_idx_end) {
+        int splat_pointer_offset = i * SPLAT_BATCH_SIZE + thread_rank;
+        if (thread_rank < SPLAT_BATCH_SIZE && tile_idx_start + splat_pointer_offset < tile_idx_end) {
             uint32_t coll_id = uint32_t(sorted_gauss_idx[tile_idx_start + splat_pointer_offset]);
             #if SHARED_STRUCT
               #if LFS_3DGUT_RASTERIZE
@@ -369,7 +375,7 @@ void main(
 
         // check if each splat overlaps with each subtile
         #if SUBTILE_SIZE > 0
-        if (thread_rank < min(TILE_SIZE, splats_left_to_process)) {
+        if (thread_rank < min(SPLAT_BATCH_SIZE, splats_left_to_process)) {
             #if LFS_3DGUT_RASTERIZE
                 subtile_overlap_bitmasks[thread_rank] = 0xffffffffu;
             #else
@@ -389,7 +395,7 @@ void main(
         #endif
 
         if (thread_active) {
-            for (int j = 0; j < min(TILE_SIZE, splats_left_to_process); j++) {
+            for (int j = 0; j < min(SPLAT_BATCH_SIZE, splats_left_to_process); j++) {
                 local_n_contrib++;
 
                 // subtile culling
@@ -532,7 +538,7 @@ void main(
                 curr_pixel_state = new_pixel_state;
             }
         }
-        splats_left_to_process -= TILE_SIZE;
+        splats_left_to_process -= SPLAT_BATCH_SIZE;
         GroupMemoryBarrierWithGroupSync();
     }
 

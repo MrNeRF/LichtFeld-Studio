@@ -877,12 +877,15 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "tensor_auto": "Automatisch",
+    "tensor_auto": "Auto",
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
+    "viewer_backend": "Viewer-backend",
+    "viewer_backend_description": "Wordt direct toegepast. Auto geeft de voorkeur aan Metal op compatibele Macs en elders aan Vulkan. Niet-ondersteunde frames gebruiken Vulkan.",
     "tensor_backend": "Tensor backend",
-    "tensor_restart": "Changes apply after restarting LichtFeld Studio. Automatic picks CUDA where it is built, else Metal where the GPU supports it, else Vulkan. Vulkan and Metal support viewing and inference; training requires CUDA.",
+    "tensor_restart": "Regelt GPU-tensorberekeningen onafhankelijk van de viewer-renderer. Wijzigingen worden toegepast na het herstarten van LichtFeld Studio. Automatisch kiest CUDA, Metal of Vulkan op basis van deze build en de GPU.",
+    "backend_unavailable": "De geselecteerde backend is niet beschikbaar op dit apparaat. Uw instellingen zijn niet gewijzigd.",
     "tensor_device": "Vulkan device",
     "tensor_device_hint": "Leave empty for automatic selection, or enter a device index or UUID. CUDA rendering must use the CUDA device.",
     "tensor_validation": "Vulkan diagnostics",
@@ -2070,6 +2073,13 @@
     "reload": "Herladen"
   },
   "status_bar": {
+    "renderer_backend": "Renderer",
+    "tensor_backend": "Tensoren",
+    "renderer_backend_tooltip": "Backend voor scènerendering.",
+    "tensor_backend_tooltip": "Backend voor tensorberekeningen.",
+    "backend_requested": "Gevraagd: {}",
+    "backend_no_frame": "Ingestelde renderer; nog geen scèneframe.",
+    "backend_fallback": "Metal is niet beschikbaar voor dit frame; Vulkan wordt gebruikt.",
     "preview_reduced": "Voorbeeldresolutie verlaagd (GPU-geheugen)",
     "safe_mode": "VEILIGE MODUS",
     "mcp_preferences": "Bewerken",
@@ -2107,7 +2117,9 @@
     "gpu_budget": "GPU-budget",
     "strategy_default": "Standaard",
     "split": "Splitsing:",
-    "ui_fps": "UI FPS"
+    "ui_fps": "UI FPS",
+    "renderer_backend_short": "R",
+    "tensor_backend_short": "T"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub-URL of verkorte vorm:",

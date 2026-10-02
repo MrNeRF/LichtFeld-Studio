@@ -21,7 +21,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GUI_ROOT = PROJECT_ROOT / "src" / "visualizer" / "gui"
 PYTHON_GUI_ROOT = PROJECT_ROOT / "src" / "python" / "lfs_plugins"
-SOURCE_SUFFIXES = {".cpp", ".hpp", ".h", ".py"}
+SOURCE_SUFFIXES = {".cpp", ".hpp", ".h", ".py", ".mm", ".m"}
 RML_SUFFIXES = {".rml"}
 STRING_LITERAL = re.compile(r'"((?:\\.|[^"\\])*)"')
 RML_TEXT = re.compile(r">([^<>{}][^<>{}]*[A-Za-z][^<>{}]*)<")

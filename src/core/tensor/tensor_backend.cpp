@@ -990,6 +990,9 @@ namespace lfs::core {
             .cooperative_matrix = handles.cooperative_matrix,
             .external_memory = handles.external_memory,
             .external_semaphore = handles.external_semaphore,
+#ifdef __APPLE__
+            .metal_objects = handles.metal_objects,
+#endif
             .consumer_queue = static_cast<VkQueue>(handles.consumer_queue),
             .consumer_queue_mutex = handles.consumer_queue_mutex,
         });
@@ -1001,6 +1004,24 @@ namespace lfs::core {
             .user_message = "this build has no Vulkan tensor backend",
             .detection = LFS_SOURCE_SITE_CURRENT(),
         }));
+#endif
+    }
+
+    bool tensor_supports_metal_access(const Tensor& tensor) {
+#ifdef __APPLE__
+        const auto backend = gpu_backend_of(tensor);
+        return backend == GpuBackend::Metal || backend == GpuBackend::Vulkan;
+#else
+        return false;
+#endif
+    }
+
+    bool tensor_backend_supports_metal_access() {
+#ifdef __APPLE__
+        const auto backend = default_gpu_backend();
+        return backend == GpuBackend::Metal || backend == GpuBackend::Vulkan;
+#else
+        return false;
 #endif
     }
 

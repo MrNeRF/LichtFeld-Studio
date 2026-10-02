@@ -115,6 +115,14 @@
             <span id="fps-value" data-style-color="fps_color">{{ fps_value }}</span>
             <span id="fps-label" class="dim">{{ fps_label }}</span>
         </div>
+        <div id="renderer-backend-chip" class="backend-chip" data-attr-title="renderer_tooltip">
+            <span class="backend-label">{{ renderer_label }}</span>
+            <span class="backend-value">{{ renderer_value }}</span>
+        </div>
+        <div id="tensor-backend-chip" class="backend-chip" data-attr-title="tensor_tooltip">
+            <span class="backend-label">{{ tensor_label }}</span>
+            <span class="backend-value">{{ tensor_value }}</span>
+        </div>
         <span id="git-commit" class="dim">{{ git_commit }}</span>
     </div>
   </div>

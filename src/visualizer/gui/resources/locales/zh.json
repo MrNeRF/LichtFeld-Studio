@@ -877,12 +877,15 @@
     "zoom": "缩放"
   },
   "preferences": {
-    "tensor_auto": "自动",
+    "tensor_auto": "Auto",
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
+    "viewer_backend": "查看器后端",
+    "viewer_backend_description": "立即生效。Auto 在兼容的 Mac 上优先使用 Metal，在其他系统上使用 Vulkan。不支持的帧使用 Vulkan。",
     "tensor_backend": "Tensor backend",
-    "tensor_restart": "Changes apply after restarting LichtFeld Studio. Automatic picks CUDA where it is built, else Metal where the GPU supports it, else Vulkan. Vulkan and Metal support viewing and inference; training requires CUDA.",
+    "tensor_restart": "独立于查看器渲染器控制 GPU 张量计算。更改在重启 LichtFeld Studio 后生效。自动模式根据此构建和 GPU 选择 CUDA、Metal 或 Vulkan。",
+    "backend_unavailable": "所选后端在此设备上不可用。设置未更改。",
     "tensor_device": "Vulkan device",
     "tensor_device_hint": "Leave empty for automatic selection, or enter a device index or UUID. CUDA rendering must use the CUDA device.",
     "tensor_validation": "Vulkan diagnostics",
@@ -2070,6 +2073,13 @@
     "reload": "重新加载"
   },
   "status_bar": {
+    "renderer_backend": "渲染器",
+    "tensor_backend": "张量",
+    "renderer_backend_tooltip": "场景渲染后端。",
+    "tensor_backend_tooltip": "张量计算后端。",
+    "backend_requested": "请求：{}",
+    "backend_no_frame": "已配置的渲染器；尚无场景帧。",
+    "backend_fallback": "此帧无法使用 Metal，正在使用 Vulkan。",
     "preview_reduced": "预览分辨率已降低（GPU 显存）",
     "safe_mode": "安全模式",
     "mcp_preferences": "编辑",
@@ -2107,7 +2117,9 @@
     "gpu_budget": "GPU 显存预算",
     "strategy_default": "默认",
     "split": "分割：",
-    "ui_fps": "UI FPS"
+    "ui_fps": "UI FPS",
+    "renderer_backend_short": "R",
+    "tensor_backend_short": "T"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL 或简写：",

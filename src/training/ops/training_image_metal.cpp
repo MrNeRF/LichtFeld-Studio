@@ -101,8 +101,8 @@ namespace lfs::training {
             const CannyParams params{mk::address(image), mk::address(edges), height, width};
             const bool bytes = image.dtype() == core::DataType::UInt8;
             mk::launch_2d("training_image_canny", params, {&image, &edges},
-                          core::GpuKernelModule::groups_for(width, 32), core::GpuKernelModule::groups_for(height, 32),
-                          32, 32, {{0, bytes ? 1u : 0u}});
+                          core::GpuKernelModule::groups_for(width, 16), core::GpuKernelModule::groups_for(height, 16),
+                          16, 16, {{0, bytes ? 1u : 0u}});
         }
 
         struct NormalizeScalarParams {

@@ -217,6 +217,13 @@ namespace lfs::core::internal {
             exports_memory_ = true;
 #endif
         }
+#ifdef __APPLE__
+        if (context_.caps().metal_objects) {
+            metal_export_info_.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_BUFFER_BIT_EXT;
+            metal_export_info_.pNext = pool_info.pMemoryAllocateNext;
+            pool_info.pMemoryAllocateNext = &metal_export_info_;
+        }
+#endif
         VkResult pool_result = vmaCreatePool(context_.allocator(), &pool_info, &device_pool_);
         if (exports_memory_ && pool_result != VK_SUCCESS) {
             LOG_WARN("Exportable Vulkan tensor pool failed (VkResult {}); using a non-exportable pool",
@@ -226,6 +233,25 @@ namespace lfs::core::internal {
             pool_result = vmaCreatePool(context_.allocator(), &pool_info, &device_pool_);
         }
         vk_check(&context_, pool_result, "vmaCreatePool");
+#ifdef __APPLE__
+        if (context_.caps().metal_objects) {
+            VmaAllocationCreateInfo host_info{};
+            host_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                              VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            host_info.usage = VMA_MEMORY_USAGE_AUTO;
+            host_info.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+            uint32_t host_type = 0;
+            vk_check(&context_, vmaFindMemoryTypeIndexForBufferInfo(context_.allocator(), &buffer_info, &host_info, &host_type),
+                     "Find exportable host pool memory type");
+            VmaPoolCreateInfo host_pool_info{};
+            host_pool_info.memoryTypeIndex = host_type;
+            host_pool_info.blockSize = 0; // Let VMA size blocks for the requested host allocation.
+            host_pool_info.pMemoryAllocateNext = &metal_export_info_;
+            vk_check(&context_, vmaCreatePool(context_.allocator(), &host_pool_info, &host_pool_),
+                     "Create exportable host-visible tensor pool");
+        }
+#endif
         if (exports_memory_) {
             LOG_INFO("Tensor Vulkan backend exports device-local memory for CUDA views");
         }
@@ -418,6 +444,7 @@ namespace lfs::core::internal {
                 VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
             external_buffer.handleTypes = kVulkanExportMemoryHandleType;
 #endif
+            auto buffer_creation = context_.lock_buffer_creation();
             VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
             buffer_info.size = record->allocated_size;
             buffer_info.usage = kStorageUsage;
@@ -438,6 +465,10 @@ namespace lfs::core::internal {
                 allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
                                         VMA_ALLOCATION_CREATE_MAPPED_BIT;
                 allocation_info.usage = VMA_MEMORY_USAGE_AUTO;
+#ifdef __APPLE__
+                if (!direct)
+                    allocation_info.pool = host_pool_;
+#endif
                 allocation_info.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
             } else {
@@ -446,8 +477,16 @@ namespace lfs::core::internal {
                 if (!direct)
                     allocation_info.pool = device_pool_;
             }
+#ifdef __APPLE__
+            // Private blocks must declare native export too; this includes large
+            // scene attributes and host-visible scalar/readback allocations.
+            const bool metal_export = context_.caps().metal_objects;
+            if (direct) {
+                if (!pooled_export && !metal_export) {
+#else
             if (direct) {
                 if (!pooled_export) {
+#endif
                     allocation_info.pool = VK_NULL_HANDLE;
                     allocation_info.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
                 } else {
@@ -475,7 +514,11 @@ namespace lfs::core::internal {
                                 "vmaFindMemoryTypeIndexForBufferInfo(export block)");
                     pool_info.blockSize = align_up(requirements.size, std::max<VkDeviceSize>(requirements.alignment, 65536));
                     pool_info.maxBlockCount = 1;
+#ifdef __APPLE__
+                    pool_info.pMemoryAllocateNext = metal_export ? &metal_export_info_ : static_cast<void*>(&export_alloc_info_);
+#else
                     pool_info.pMemoryAllocateNext = &export_alloc_info_;
+#endif
                     record->private_pool = std::make_unique<AllocationRecord::PrivatePool>();
                     record->private_pool->allocator = context_.allocator();
                     check_setup(vmaCreatePool(context_.allocator(), &pool_info, &record->private_pool->pool),
@@ -486,6 +529,7 @@ namespace lfs::core::internal {
             VkResult result = vmaCreateBuffer(
                 context_.allocator(), &buffer_info, &allocation_info,
                 &record->buffer, &record->allocation, &mapping_info);
+            buffer_creation = VulkanContext::BufferCreationLocks{};
             if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
                 result == VK_ERROR_OUT_OF_HOST_MEMORY ||
                 result == VK_ERROR_OUT_OF_POOL_MEMORY ||
@@ -496,9 +540,11 @@ namespace lfs::core::internal {
                     collect_retired_locked(context_.completed_timeline());
                     destroy_free_when_idle_locked();
                 }
+                buffer_creation = context_.lock_buffer_creation();
                 result = vmaCreateBuffer(
                     context_.allocator(), &buffer_info, &allocation_info,
                     &record->buffer, &record->allocation, &mapping_info);
+                buffer_creation = VulkanContext::BufferCreationLocks{};
             }
             if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
                 result == VK_ERROR_OUT_OF_HOST_MEMORY ||
@@ -1066,6 +1112,12 @@ namespace lfs::core::internal {
             staging_allocation_ = VK_NULL_HANDLE;
             staging_mapped_ = nullptr;
         }
+#ifdef __APPLE__
+        if (host_pool_ != VK_NULL_HANDLE) {
+            vmaDestroyPool(context_.allocator(), host_pool_);
+            host_pool_ = VK_NULL_HANDLE;
+        }
+#endif
         if (device_pool_ != VK_NULL_HANDLE) {
             vmaDestroyPool(context_.allocator(), device_pool_);
             device_pool_ = VK_NULL_HANDLE;

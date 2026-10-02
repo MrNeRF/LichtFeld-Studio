@@ -877,12 +877,15 @@
     "zoom": "줌"
   },
   "preferences": {
-    "tensor_auto": "자동",
+    "tensor_auto": "Auto",
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
+    "viewer_backend": "뷰어 백엔드",
+    "viewer_backend_description": "즉시 적용됩니다. Auto는 호환되는 Mac에서 Metal을, 다른 시스템에서는 Vulkan을 우선 사용합니다. 지원되지 않는 프레임은 Vulkan을 사용합니다.",
     "tensor_backend": "Tensor backend",
-    "tensor_restart": "Changes apply after restarting LichtFeld Studio. Automatic picks CUDA where it is built, else Metal where the GPU supports it, else Vulkan. Vulkan and Metal support viewing and inference; training requires CUDA.",
+    "tensor_restart": "뷰어 렌더러와 독립적으로 GPU 텐서 계산을 제어합니다. 변경 사항은 LichtFeld Studio를 다시 시작한 후 적용됩니다. 자동은 이 빌드와 GPU에 따라 CUDA, Metal 또는 Vulkan을 선택합니다.",
+    "backend_unavailable": "선택한 백엔드는 이 기기에서 사용할 수 없습니다. 설정은 변경되지 않았습니다.",
     "tensor_device": "Vulkan device",
     "tensor_device_hint": "Leave empty for automatic selection, or enter a device index or UUID. CUDA rendering must use the CUDA device.",
     "tensor_validation": "Vulkan diagnostics",
@@ -2070,6 +2073,13 @@
     "reload": "다시 로드"
   },
   "status_bar": {
+    "renderer_backend": "렌더러",
+    "tensor_backend": "텐서",
+    "renderer_backend_tooltip": "장면 렌더링 백엔드.",
+    "tensor_backend_tooltip": "텐서 계산 백엔드.",
+    "backend_requested": "요청: {}",
+    "backend_no_frame": "설정된 렌더러입니다. 아직 장면 프레임이 없습니다.",
+    "backend_fallback": "이 프레임에서는 Metal을 사용할 수 없어 Vulkan을 사용합니다.",
     "preview_reduced": "미리 보기 해상도 감소 (GPU 메모리)",
     "safe_mode": "안전 모드",
     "mcp_preferences": "편집",
@@ -2107,7 +2117,9 @@
     "gpu_budget": "GPU 메모리 예산",
     "strategy_default": "기본값",
     "split": "분할:",
-    "ui_fps": "UI FPS"
+    "ui_fps": "UI FPS",
+    "renderer_backend_short": "R",
+    "tensor_backend_short": "T"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL 또는 단축 형식:",

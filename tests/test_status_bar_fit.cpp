@@ -3,9 +3,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "core/tensor_backend.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/rml_status_bar.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "rendering/viewport_artifact_service.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/preferences.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
@@ -14,12 +18,14 @@
 #include <RmlUi/Core/RenderInterface.h>
 
 #include <cassert>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace lfs::vis::gui {
@@ -39,6 +45,26 @@ namespace lfs::vis::gui {
 
     class RmlStatusBarTestAccess {
     public:
+        using ModelState = RmlStatusBar::ModelState;
+        static ModelState& model(RmlStatusBar& status_bar) { return status_bar.model_; }
+        static void setModelHandle(RmlStatusBar& status_bar, Rml::DataModelHandle handle) {
+            status_bar.model_handle_ = handle;
+        }
+        static void updateBackends(RmlStatusBar& status_bar, std::optional<uint32_t> active_view_mask = std::nullopt) {
+            status_bar.updateBackendContent(active_view_mask);
+        }
+        static bool applyTooltip(RmlStatusBar& status_bar, int width = 2400, int bar_height = 22) {
+            return status_bar.applyHoverTooltip(width, bar_height, 700);
+        }
+        static auto tooltipDeadline(const RmlStatusBar& status_bar) {
+            return status_bar.tooltip_.revealDeadline();
+        }
+        static void detach(RmlStatusBar& status_bar) {
+            status_bar.model_handle_ = {};
+            status_bar.rml_context_ = nullptr;
+            status_bar.document_ = nullptr;
+            status_bar.rml_manager_ = nullptr;
+        }
         static void attach(RmlStatusBar& status_bar,
                            Rml::Context* context,
                            Rml::ElementDocument* document) {
@@ -108,79 +134,89 @@ namespace {
         void SetScissorRegion(Rml::Rectanglei) override {}
     };
 
-    // Keep this test model in sync with RmlStatusBar::ModelState in rml_status_bar.hpp.
-    struct StatusBarModel {
-        bool safe_mode = false;
-        std::string safe_mode_text = "Safe Mode";
-        std::string mode_text = "Training (Default/3DGS)";
-        std::string mode_color = "#ffffff";
-        bool show_training = true;
-        bool progress_miner = false;
-        bool miner_raised = false;
-        bool miner_step_a = false;
-        bool miner_strike = false;
-        bool miner_step_b = false;
-        bool miner_smoke_1 = false;
-        bool miner_smoke_2 = false;
-        bool miner_smoke_3 = false;
-        bool miner_smoke_4 = false;
-        bool miner_smoke_5 = false;
-        bool miner_smoke_6 = false;
-        std::string progress_width = "50%";
-        std::string progress_text_left = "0dp";
-        std::string progress_text = "50%";
-        std::string step_label = "Step:";
-        std::string step_value = "15000/30000";
-        std::string loss_label = "Loss:";
-        std::string loss_value = "0.1234";
-        bool show_eval_metrics = true;
-        std::string eval_metrics_value = "PSNR 31.25 / SSIM 0.9876";
-        std::string gaussians_label = "Gaussians";
-        std::string gaussians_value = "1.25M/1.50M";
-        std::string time_value = "1:23:45";
-        std::string eta_label = "ETA:";
-        std::string eta_value = "2:34:56";
-        bool show_splats = false;
-        std::string splat_text = "1.25M Gaussians";
-        std::string splat_color = "#ffffff";
-        bool show_split = false;
-        std::string split_mode = "Ground Truth Comparison";
-        std::string split_mode_color = "#ffffff";
-        std::string split_detail = "Camera 123 / 500";
-        bool show_wasd = true;
-        std::string wasd_text = "WASD: 100";
-        std::string wasd_color = "#ffffff";
-        std::string wasd_sep_color = "#ffffff";
-        bool show_zoom = true;
-        std::string zoom_text = "Zoom: 100";
-        std::string zoom_color = "#ffffff";
-        std::string zoom_sep_color = "#ffffff";
-        std::string lfs_mem_text = "LFS 12.34 GiB";
-        std::string lfs_mem_color = "#ffffff";
-        bool show_gpu_model = true;
-        bool gpu_panel_active = false;
-        std::string gpu_model_text = "NVIDIA GeForce RTX 5090";
-        std::string gpu_mem_text = "GPU 18.75/31.99 GiB";
-        std::string gpu_mem_color = "#ffffff";
-        std::string fps_value = "144";
-        std::string fps_color = "#ffffff";
-        std::string fps_label = " FPS";
-        std::string git_commit = "abcdef12";
-        bool mcp_details_expanded = false;
-        std::string mcp_summary = "MCP Local";
-        std::string mcp_details = "http://127.0.0.1:45677/mcp";
-        std::string mcp_tooltip = "MCP is listening only on this computer";
-        std::string mcp_color = "#ffffff";
-        std::string mcp_preferences_label = "Edit";
-        bool mcp_server_enabled = true;
-        std::string mcp_toggle_label = "Turn off";
-        std::string mcp_total_text = "2 requests";
-        std::string mcp_success_text = "2 successful";
-        std::string mcp_error_text = "0 errors";
-        bool show_status_message = false;
-        std::string status_message_text = "A long transient status message that must remain on one line";
-        std::string status_message_color = "#ffffff";
-    };
+    void populateStatusBarModel(lfs::vis::gui::RmlStatusBarTestAccess::ModelState& model) {
+        model.safe_mode = false;
+        model.safe_mode_text = "Safe Mode";
+        model.mode_text = "Training (Default/3DGS)";
+        model.mode_color = "#ffffff";
+        model.show_training = true;
+        model.progress_miner = false;
+        model.miner_raised = false;
+        model.miner_step_a = false;
+        model.miner_strike = false;
+        model.miner_step_b = false;
+        model.miner_smoke_1 = false;
+        model.miner_smoke_2 = false;
+        model.miner_smoke_3 = false;
+        model.miner_smoke_4 = false;
+        model.miner_smoke_5 = false;
+        model.miner_smoke_6 = false;
+        model.progress_width = "50%";
+        model.progress_text_left = "0dp";
+        model.progress_text = "50%";
+        model.step_label = "Step:";
+        model.step_value = "15000/30000";
+        model.loss_label = "Loss:";
+        model.loss_value = "0.1234";
+        model.show_eval_metrics = true;
+        model.eval_metrics_value = "PSNR 31.25 / SSIM 0.9876";
+        model.gaussians_label = "Gaussians";
+        model.gaussians_value = "1.25M/1.50M";
+        model.time_value = "1:23:45";
+        model.eta_label = "ETA:";
+        model.eta_value = "2:34:56";
+        model.show_splats = false;
+        model.splat_text = "1.25M Gaussians";
+        model.splat_color = "#ffffff";
+        model.show_split = false;
+        model.split_mode = "Ground Truth Comparison";
+        model.split_mode_color = "#ffffff";
+        model.split_detail = "Camera 123 / 500";
+        model.show_wasd = true;
+        model.wasd_text = "WASD: 100";
+        model.wasd_color = "#ffffff";
+        model.wasd_sep_color = "#ffffff";
+        model.show_zoom = true;
+        model.zoom_text = "Zoom: 100";
+        model.zoom_color = "#ffffff";
+        model.zoom_sep_color = "#ffffff";
+        model.show_lfs_memory = true;
+        model.preview_reduced = false;
+        model.preview_reduced_text = "Reduced preview resolution";
+        model.input_device = "mouse";
+        model.input_device_tooltip = "Mouse navigation";
+        model.lfs_mem_text = "LFS 12.34 GiB";
+        model.lfs_mem_color = "#ffffff";
+        model.show_gpu_model = true;
+        model.gpu_panel_active = false;
+        model.gpu_model_text = "NVIDIA GeForce RTX 5090";
+        model.gpu_mem_text = "GPU 18.75/31.99 GiB";
+        model.gpu_mem_color = "#ffffff";
+        model.fps_value = "144";
+        model.fps_color = "#ffffff";
+        model.fps_label = " FPS";
+        model.renderer_label = "R";
+        model.renderer_value = "Metal / Vulkan";
+        model.renderer_tooltip = "Scene renderer";
+        model.tensor_label = "T";
+        model.tensor_value = "CUDA";
+        model.tensor_tooltip = "Tensor compute backend";
+        model.git_commit = "abcdef12";
+        model.mcp_details_expanded = false;
+        model.mcp_summary = "MCP Local";
+        model.mcp_details = "http://127.0.0.1:45677/mcp";
+        model.mcp_tooltip = "MCP is listening only on this computer";
+        model.mcp_color = "#ffffff";
+        model.mcp_preferences_label = "Edit";
+        model.mcp_server_enabled = true;
+        model.mcp_toggle_label = "Turn off";
+        model.mcp_total_text = "2 requests";
+        model.mcp_success_text = "2 successful";
+        model.mcp_error_text = "0 errors";
+        model.show_status_message = false;
+        model.status_message_text = "A long transient status message that must remain on one line";
+        model.status_message_color = "#ffffff";
+    }
 
     std::string readResource(const std::string& name) {
         const std::ifstream file(std::filesystem::path(PROJECT_ROOT_PATH) /
@@ -221,6 +257,37 @@ namespace {
             assertFlexSiblingsDoNotOverlap(element->GetChild(i));
     }
 
+    class ScopedStatusBarHome {
+        std::optional<std::string> previous_;
+        std::filesystem::path path_;
+
+    public:
+        ScopedStatusBarHome() {
+            if (const char* value = std::getenv("LFS_HOME"))
+                previous_ = value;
+            path_ = std::filesystem::temp_directory_path() /
+                    ("lfs_status_bar_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+            std::filesystem::create_directories(path_);
+#ifdef _WIN32
+            (void)_putenv_s("LFS_HOME", path_.string().c_str());
+#else
+            (void)setenv("LFS_HOME", path_.string().c_str(), 1);
+#endif
+        }
+        ~ScopedStatusBarHome() {
+#ifdef _WIN32
+            (void)_putenv_s("LFS_HOME", previous_ ? previous_->c_str() : "");
+#else
+            if (previous_)
+                (void)setenv("LFS_HOME", previous_->c_str(), 1);
+            else
+                (void)unsetenv("LFS_HOME");
+#endif
+            std::error_code error;
+            std::filesystem::remove_all(path_, error);
+        }
+    };
+
     class StatusBarFitTest : public ::testing::Test {
     protected:
         static void SetUpTestSuite() {
@@ -235,6 +302,7 @@ namespace {
         }
 
         void SetUp() override {
+            populateStatusBarModel(model_);
             context_ = Rml::CreateContext("status_bar_fit", {2400, 22}, &render_interface_);
             ASSERT_TRUE(context_);
             context_->SetDensityIndependentPixelRatio(1.0f);
@@ -287,6 +355,11 @@ namespace {
             bound &= constructor.Bind("zoom_text", &model_.zoom_text);
             bound &= constructor.Bind("zoom_color", &model_.zoom_color);
             bound &= constructor.Bind("zoom_sep_color", &model_.zoom_sep_color);
+            bound &= constructor.Bind("show_lfs_memory", &model_.show_lfs_memory);
+            bound &= constructor.Bind("preview_reduced", &model_.preview_reduced);
+            bound &= constructor.Bind("preview_reduced_text", &model_.preview_reduced_text);
+            bound &= constructor.Bind("input_device", &model_.input_device);
+            bound &= constructor.Bind("input_device_tooltip", &model_.input_device_tooltip);
             bound &= constructor.Bind("lfs_mem_text", &model_.lfs_mem_text);
             bound &= constructor.Bind("lfs_mem_color", &model_.lfs_mem_color);
             bound &= constructor.Bind("show_gpu_model", &model_.show_gpu_model);
@@ -297,6 +370,12 @@ namespace {
             bound &= constructor.Bind("fps_value", &model_.fps_value);
             bound &= constructor.Bind("fps_color", &model_.fps_color);
             bound &= constructor.Bind("fps_label", &model_.fps_label);
+            bound &= constructor.Bind("renderer_label", &model_.renderer_label);
+            bound &= constructor.Bind("renderer_value", &model_.renderer_value);
+            bound &= constructor.Bind("renderer_tooltip", &model_.renderer_tooltip);
+            bound &= constructor.Bind("tensor_label", &model_.tensor_label);
+            bound &= constructor.Bind("tensor_value", &model_.tensor_value);
+            bound &= constructor.Bind("tensor_tooltip", &model_.tensor_tooltip);
             bound &= constructor.Bind("git_commit", &model_.git_commit);
             bound &= constructor.Bind("mcp_details_expanded", &model_.mcp_details_expanded);
             bound &= constructor.Bind("mcp_summary", &model_.mcp_summary);
@@ -314,6 +393,7 @@ namespace {
             bound &= constructor.Bind("status_message_color", &model_.status_message_color);
             ASSERT_TRUE(bound);
             model_handle_ = constructor.GetModelHandle();
+            lfs::vis::gui::RmlStatusBarTestAccess::setModelHandle(status_bar_, model_handle_);
 
             const auto document_path = std::filesystem::path(PROJECT_ROOT_PATH) /
                                        "src/visualizer/gui/rmlui/resources/statusbar.rml";
@@ -333,6 +413,7 @@ namespace {
         }
 
         void TearDown() override {
+            lfs::vis::gui::RmlStatusBarTestAccess::detach(status_bar_);
             model_handle_ = {};
             ASSERT_TRUE(Rml::RemoveContext("status_bar_fit"));
             context_ = nullptr;
@@ -343,12 +424,13 @@ namespace {
         Rml::Context* context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
         Rml::DataModelHandle model_handle_;
-        StatusBarModel model_;
         lfs::vis::gui::RmlStatusBar status_bar_;
+        lfs::vis::gui::RmlStatusBarTestAccess::ModelState& model_ =
+            lfs::vis::gui::RmlStatusBarTestAccess::model(status_bar_);
     };
 
     TEST_F(StatusBarFitTest, KeepsSingleLineNonOverlappingLayoutAcrossWidths) {
-        const std::vector<int> widths = {2400, 1600, 1200, 900, 700, 500, 320};
+        const std::vector<int> widths = {3000, 2400, 1600, 1200, 900, 700, 500, 320};
         int previous_fit_level = 0;
 
         for (const int width : widths) {
@@ -372,6 +454,179 @@ namespace {
         EXPECT_LT(expanded_fit_level, previous_fit_level);
         assertNoVerticalOverflow(document_);
         assertFlexSiblingsDoNotOverlap(document_);
+    }
+
+    TEST_F(StatusBarFitTest, BackendBadgesKeepDistinctRolesAndUpdateTooltips) {
+        auto* renderer = document_->GetElementById("renderer-backend-chip");
+        auto* tensor = document_->GetElementById("tensor-backend-chip");
+        auto* fps = document_->GetElementById("fps-group");
+        ASSERT_NE(renderer, nullptr);
+        ASSERT_NE(tensor, nullptr);
+        ASSERT_NE(fps, nullptr);
+        EXPECT_EQ(renderer->GetAttribute<Rml::String>("title", ""), model_.renderer_tooltip);
+        EXPECT_EQ(tensor->GetAttribute<Rml::String>("title", ""), model_.tensor_tooltip);
+        EXPECT_LT(renderer->GetAbsoluteOffset().x, tensor->GetAbsoluteOffset().x);
+        EXPECT_LT(fps->GetAbsoluteOffset().x, renderer->GetAbsoluteOffset().x);
+        EXPECT_NE(renderer->GetInnerRML().find(">R<"), Rml::String::npos);
+        EXPECT_NE(tensor->GetInnerRML().find(">T<"), Rml::String::npos);
+
+        model_.renderer_value = "Vulkan";
+        model_.renderer_tooltip = "Metal requested; Vulkan fallback";
+        model_handle_.DirtyVariable("renderer_value");
+        model_handle_.DirtyVariable("renderer_tooltip");
+        context_->Update();
+        EXPECT_EQ(renderer->GetAttribute<Rml::String>("title", ""), model_.renderer_tooltip);
+        EXPECT_NE(renderer->GetInnerRML().find("Vulkan"), Rml::String::npos);
+        EXPECT_EQ(renderer->GetInnerRML().find("Metal / Vulkan"), Rml::String::npos);
+
+        context_->SetDimensions({320, 22});
+        context_->Update();
+        lfs::vis::gui::RmlStatusBarTestAccess::fit(status_bar_);
+        EXPECT_TRUE(renderer->IsVisible(true));
+        EXPECT_TRUE(tensor->IsVisible(true));
+        EXPECT_TRUE(renderer->GetChild(0)->IsVisible(true));
+        EXPECT_TRUE(tensor->GetChild(0)->IsVisible(true));
+        EXPECT_LE(tensor->GetAbsoluteOffset().x + tensor->GetOffsetWidth(), 320.5f);
+        EXPECT_EQ(renderer->GetAttribute<Rml::String>("title", ""), model_.renderer_tooltip);
+        assertNoVerticalOverflow(document_);
+        assertFlexSiblingsDoNotOverlap(document_);
+    }
+
+    TEST_F(StatusBarFitTest, BackendBadgeFollowsActiveViewInsteadOfLastPublishedView) {
+        auto& store = lfs::vis::app_store();
+        const auto previous = store.viewer_backend_mask.get();
+        struct Restore {
+            uint32_t value;
+            ~Restore() { lfs::vis::app_store().viewer_backend_mask.set(value); }
+        } restore{previous};
+        store.viewer_backend_mask.set(lfs::rendering::viewerBackendBit(lfs::rendering::ViewerBackend::Vulkan));
+        lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(
+            status_bar_, lfs::rendering::viewerBackendBit(lfs::rendering::ViewerBackend::Metal));
+        EXPECT_EQ(lfs::vis::gui::RmlStatusBarTestAccess::model(status_bar_).renderer_value, "Metal");
+        store.viewer_backend_mask.set(lfs::rendering::viewerBackendBit(lfs::rendering::ViewerBackend::Metal));
+        lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(
+            status_bar_, lfs::rendering::viewerBackendBit(lfs::rendering::ViewerBackend::Vulkan));
+        EXPECT_EQ(lfs::vis::gui::RmlStatusBarTestAccess::model(status_bar_).renderer_value, "Vulkan");
+    }
+
+    TEST_F(StatusBarFitTest, BackendTooltipRevealsAboveBarAndClearsOnPointerLeave) {
+        auto* chip = document_->GetElementById("renderer-backend-chip");
+        ASSERT_NE(chip, nullptr);
+        // Exercise the real input -> delayed reveal -> tooltip layout path, not
+        // just the presence of a title attribute. Rich text must be escaped.
+        model_.renderer_tooltip = "Scene renderer <actual> & requested\n" +
+                                  std::string(500, 'W');
+        model_handle_.DirtyVariable("renderer_tooltip");
+        context_->Update();
+        lfs::vis::gui::RmlUIManager manager;
+        manager.beginFrameCursorTracking();
+        lfs::vis::gui::RmlStatusBarTestAccess::trackRenderedFrame(status_bar_, manager, 0.0f, 700.0f);
+        const auto offset = chip->GetAbsoluteOffset(Rml::BoxArea::Border);
+        lfs::vis::gui::PanelInputState input{};
+        input.mouse_x = offset.x + chip->GetOffsetWidth() * 0.5f;
+        input.mouse_y = 711.0f;
+        status_bar_.processInput(input, 0.0f, 700.0f, 2400.0f, 22.0f);
+        const auto deadline = lfs::vis::gui::RmlStatusBarTestAccess::tooltipDeadline(status_bar_);
+        ASSERT_TRUE(deadline);
+        EXPECT_EQ(status_bar_.overlayHeight(), 0.0f); // no enlarged render surface during delay
+        EXPECT_TRUE(manager.secondsUntilTooltipReveal().has_value());
+        EXPECT_FALSE(status_bar_.animationFrameDue(std::chrono::steady_clock::now()));
+        std::this_thread::sleep_until(*deadline);
+        EXPECT_TRUE(status_bar_.animationFrameDue(std::chrono::steady_clock::now()));
+        EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::applyTooltip(status_bar_));
+        context_->Update();
+        auto* tooltip = document_->GetElementById("frame-tooltip");
+        ASSERT_NE(tooltip, nullptr);
+        ASSERT_TRUE(tooltip->IsVisible());
+        EXPECT_NE(tooltip->GetInnerRML().find("&lt;actual&gt;"), Rml::String::npos);
+        const auto position = tooltip->GetAbsoluteOffset(Rml::BoxArea::Border);
+        EXPECT_GE(position.x, 0.0f);
+        EXPECT_GE(position.y, 0.0f);
+        EXPECT_LE(position.x + tooltip->GetOffsetWidth(), 2400.5f);
+        EXPECT_LE(position.y + tooltip->GetOffsetHeight(), status_bar_.overlayHeight() + 0.5f);
+        EXPECT_FALSE(manager.secondsUntilTooltipReveal().has_value());
+        EXPECT_FALSE(status_bar_.animationFrameDue(std::chrono::steady_clock::now()));
+        EXPECT_FALSE(status_bar_.secondsUntilAnimationFrame(std::chrono::steady_clock::now()).has_value());
+        EXPECT_FALSE(status_bar_.isOverlayPoint(input.mouse_x, -5.0f, 2400.0f));
+        EXPECT_FALSE(lfs::vis::gui::RmlStatusBarTestAccess::applyTooltip(status_bar_));
+
+        input.mouse_y = 200.0f;
+        status_bar_.processInput(input, 0.0f, 700.0f, 2400.0f, 22.0f);
+        EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::applyTooltip(status_bar_));
+        context_->Update();
+        EXPECT_FALSE(tooltip->IsVisible());
+        EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
+        EXPECT_EQ(context_->GetDimensions().y, 22);
+    }
+
+    TEST_F(StatusBarFitTest, TensorTooltipUsesOneTargetAcrossLetterAndValue) {
+        auto* chip = document_->GetElementById("tensor-backend-chip");
+        ASSERT_NE(chip, nullptr);
+        ASSERT_GE(chip->GetNumChildren(), 2);
+        lfs::vis::gui::PanelInputState input{};
+        input.mouse_y = 711.0f;
+        const auto hover_child = [&](int child) {
+            auto* element = chip->GetChild(child);
+            input.mouse_x = element->GetAbsoluteOffset(Rml::BoxArea::Border).x + element->GetOffsetWidth() * 0.5f;
+            status_bar_.processInput(input, 0.0f, 700.0f, 2400.0f, 22.0f);
+        };
+        hover_child(0);
+        const auto deadline = lfs::vis::gui::RmlStatusBarTestAccess::tooltipDeadline(status_bar_);
+        ASSERT_TRUE(deadline);
+        hover_child(1);
+        EXPECT_EQ(deadline, lfs::vis::gui::RmlStatusBarTestAccess::tooltipDeadline(status_bar_));
+        EXPECT_FALSE(status_bar_.animationFrameDue(std::chrono::steady_clock::now()));
+        std::this_thread::sleep_until(*deadline);
+        EXPECT_TRUE(status_bar_.animationFrameDue(std::chrono::steady_clock::now()));
+        EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::applyTooltip(status_bar_));
+        context_->Update();
+        auto* tooltip = document_->GetElementById("frame-tooltip");
+        ASSERT_NE(tooltip, nullptr);
+        EXPECT_TRUE(tooltip->IsVisible());
+        EXPECT_EQ(tooltip->GetInnerRML(), model_.tensor_tooltip);
+    }
+
+    TEST_F(StatusBarFitTest, BadgesReadEachPublishedBackendIncludingFallbackAndClose) {
+        const ScopedStatusBarHome scoped_home;
+        lfs::vis::ViewportArtifactService artifacts;
+        lfs::vis::gui::RmlStatusBarTestAccess::bindStore(status_bar_);
+        auto& store = lfs::vis::app_store();
+        store.viewer_backend_mask.set(0);
+        (void)store.store().drain_dirty_into_frame();
+        const auto publish = [&](uint32_t mask, const char* expected) {
+            lfs::rendering::FrameMetadata frame;
+            frame.viewer_backend_mask = mask;
+            artifacts.setLazyCapture({}, frame, {64, 48});
+            (void)store.store().drain_dirty_into_frame();
+            EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar_));
+            lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_);
+            context_->Update();
+            EXPECT_EQ(model_.renderer_value, expected);
+            auto* chip = document_->GetElementById("renderer-backend-chip");
+            EXPECT_NE(chip->GetInnerRML().find(expected), Rml::String::npos);
+            EXPECT_EQ(model_.tensor_value,
+                      lfs::core::gpu_backend_name(lfs::core::configured_gpu_backend()));
+            lfs::vis::gui::RmlStatusBarTestAccess::clearRedraw(status_bar_);
+            artifacts.setLazyCaptureForCurrentOutput({}, frame, {64, 48});
+            EXPECT_FALSE(store.store().has_dirty());
+            EXPECT_FALSE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar_));
+        };
+        publish(2, "Metal");
+        publish(1, "Vulkan");
+        publish(3, "Metal / Vulkan");
+        publish(4, "CPU");
+        artifacts.clearViewportOutput();
+        (void)store.store().drain_dirty_into_frame();
+        EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar_));
+        lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_);
+        context_->Update();
+#ifdef __APPLE__
+        EXPECT_EQ(model_.renderer_value,
+                  "Metal");
+#else
+        EXPECT_EQ(model_.renderer_value, "Vulkan");
+#endif // Configured renderer, no scene frame.
+        EXPECT_EQ(store.viewer_backend_mask.get(), 0u);
     }
 
     TEST_F(StatusBarFitTest, McpDetailsReserveOnlyTheirMeasuredOverlayArea) {

@@ -1531,7 +1531,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     auto& n_contributors = resize_scratch(buffers.n_contributors, alloc_pixels);
 
     constexpr size_t kRadix = 256u;
-    constexpr size_t kPartitionSize = 512u * 8u;
+    constexpr size_t kPartitionSize = RADIX_PARTITION_SIZE;
     const size_t radix_passes = _CEIL_DIV(static_cast<size_t>(sort_bits), size_t{8});
     resizeDeviceBuffer(buffers._sorting_histogram, radix_passes * kRadix);
     resizeDeviceBuffer(buffers._sorting_histogram_cumsum,
@@ -2248,7 +2248,7 @@ void VulkanGSRenderer::executeSortIndirectCountImpl(
     };
 
     const int RADIX = 256;
-    const int WORKGROUP_SIZE = 512;
+    const int WORKGROUP_SIZE = RADIX_WORKGROUP_SIZE;
     const int PARTITION_DIVISION = 8;
     const int PARTITION_SIZE = PARTITION_DIVISION * WORKGROUP_SIZE;
 
@@ -2444,7 +2444,7 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         uint32_t num_splats;
         uint32_t sort_partition_size;
         uint32_t pad0, pad1;
-    } prepare_uniforms{static_cast<uint32_t>(num_splats), 512u * 8u, 0, 0};
+    } prepare_uniforms{static_cast<uint32_t>(num_splats), RADIX_PARTITION_SIZE, 0, 0};
 
     {
         PerfTimer::Timer<PerfTimer::PrepareVisibleSort> gpu_timer(this);
@@ -2810,7 +2810,7 @@ void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
         static_cast<uint32_t>(
             std::min<size_t>(visible_capacity,
                              static_cast<size_t>(std::numeric_limits<uint32_t>::max()))),
-        512u * 8u, 0, 0};
+        RADIX_PARTITION_SIZE, 0, 0};
 
     using lfs::rendering::vulkan::BufferUse;
     using lfs::rendering::vulkan::DeclaredAccess;
@@ -3095,7 +3095,7 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     auto& n_contributors = resize_scratch(buffers.n_contributors, alloc_pixels);
 
     constexpr size_t kRadix = 256u;
-    constexpr size_t kPartitionSize = 512u * 8u;
+    constexpr size_t kPartitionSize = RADIX_PARTITION_SIZE;
     const size_t radix_passes = _CEIL_DIV(static_cast<size_t>(sort_bits), size_t{8});
     resizeDeviceBuffer(buffers._sorting_histogram, radix_passes * kRadix);
     resizeDeviceBuffer(buffers._sorting_histogram_cumsum,

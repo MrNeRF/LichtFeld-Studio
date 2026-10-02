@@ -113,19 +113,23 @@ void finishGradient(Params p, uint i, int x, int y, float m[4]) {
 // Both separable passes stay in one workgroup. Preserve the original FMA
 // order and half-rounded partials, including zero padding at image edges.
 // Keep the existing device workspace sizes to preserve allocation placement.
-groupshared float verticalTile[6][576];
-groupshared float fusedInput[4][676];
+#ifndef PHOTO_TILE_SIZE
+#define PHOTO_TILE_SIZE 16
+#endif
+static const uint PHOTO_INPUT_SIZE = PHOTO_TILE_SIZE + 10;
+groupshared float verticalTile[6][PHOTO_TILE_SIZE * PHOTO_INPUT_SIZE];
+groupshared float fusedInput[4][PHOTO_INPUT_SIZE * PHOTO_INPUT_SIZE];
 void fusedFilter(Params p, uint group, uint lane, uint groupCount) {
-    uint columns = (p.width + 15) / 16, rows = (p.height + 15) / 16;
+    uint columns = (p.width + PHOTO_TILE_SIZE - 1) / PHOTO_TILE_SIZE, rows = (p.height + PHOTO_TILE_SIZE - 1) / PHOTO_TILE_SIZE;
     uint tiles = columns * rows * p.batch * p.channels, pixels = p.width * p.height;
     static const bool moments = PHOTO_MOMENTS != 0;
     uint fields = moments ? 6 : decoupled(p) ? 4
                                              : 3;
     for (uint tile = group; tile < tiles; tile += groupCount) {
         uint base = (tile / (columns * rows)) * pixels;
-        int ox = int((tile % columns) * 16), oy = int(((tile / columns) % rows) * 16);
-        for (uint j = lane; j < 676; j += 256) {
-            int x = ox + int(j % 26) - 5, y = oy + int(j / 26) - 5;
+        int ox = int((tile % columns) * PHOTO_TILE_SIZE), oy = int(((tile / columns) % rows) * PHOTO_TILE_SIZE);
+        for (uint j = lane; j < PHOTO_INPUT_SIZE * PHOTO_INPUT_SIZE; j += 256) {
+            int x = ox + int(j % PHOTO_INPUT_SIZE) - 5, y = oy + int(j / PHOTO_INPUT_SIZE) - 5;
             if (moments) {
                 fusedInput[0][j] = moment(p, base, x, y, 0);
                 fusedInput[1][j] = decoupled(p) ? moment(p, base, x, y, 1) : fusedInput[0][j];
@@ -135,8 +139,8 @@ void fusedFilter(Params p, uint group, uint lane, uint groupCount) {
             }
         }
         GroupMemoryBarrierWithGroupSync();
-        for (uint j = lane; j < 416; j += 256) {
-            uint center = (j / 16) * 26 + (j % 16) + 5;
+        for (uint j = lane; j < PHOTO_INPUT_SIZE * PHOTO_TILE_SIZE; j += 256) {
+            uint center = (j / PHOTO_TILE_SIZE) * PHOTO_INPUT_SIZE + (j % PHOTO_TILE_SIZE) + 5;
             float sums[6] = {0, 0, 0, 0, 0, 0};
             [loop] for (uint d = 1; d <= 5; ++d) {
                 if (moments) {
@@ -162,9 +166,9 @@ void fusedFilter(Params p, uint group, uint lane, uint groupCount) {
             }
         }
         GroupMemoryBarrierWithGroupSync();
-        int x = ox + int(lane % 16), y = oy + int(lane / 16);
-        if (x < int(p.width) && y < int(p.height)) {
-            uint center = lane + 80;
+        int x = ox + int(lane % PHOTO_TILE_SIZE), y = oy + int(lane / PHOTO_TILE_SIZE);
+        if (lane < PHOTO_TILE_SIZE * PHOTO_TILE_SIZE && x < int(p.width) && y < int(p.height)) {
+            uint center = lane + 5 * PHOTO_TILE_SIZE;
             float m[6] = {0, 0, 0, 0, 0, 0};
             [loop] for (uint f = 0; f < 6; ++f) {
                 if (f >= fields)
@@ -174,7 +178,7 @@ void fusedFilter(Params p, uint group, uint lane, uint groupCount) {
                     continue;
                 }
                 float sum = 0;
-                [loop] for (uint d = 1; d <= 5; ++d) sum = fma(verticalTile[f][center - d * 16] + verticalTile[f][center + d * 16], weights[d], sum);
+                [loop] for (uint d = 1; d <= 5; ++d) sum = fma(verticalTile[f][center - d * PHOTO_TILE_SIZE] + verticalTile[f][center + d * PHOTO_TILE_SIZE], weights[d], sum);
                 m[f] = fma(verticalTile[f][center], weights[0], sum);
             }
             uint i = base + uint(y) * p.width + uint(x);

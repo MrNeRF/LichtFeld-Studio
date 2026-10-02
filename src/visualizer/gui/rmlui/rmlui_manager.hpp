@@ -178,7 +178,7 @@ namespace lfs::vis::gui {
             std::optional<std::chrono::steady_clock::time_point> deadline);
         // Seconds until the earliest pending tooltip is due across all contexts,
         // or empty when none is counting down.
-        [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
+        [[nodiscard]] LFS_VIS_API std::optional<double> secondsUntilTooltipReveal() const;
         RmlCursorRequest consumeCursorRequest();
         [[nodiscard]] LFS_VIS_API bool passiveMouseMoveNeedsRender(float window_x, float window_y) const;
         [[nodiscard]] LFS_VIS_API bool activeOverlayContainsPoint(float window_x,

@@ -24,6 +24,7 @@ namespace lfs::vis {
         ViewportArtifactService& operator=(const ViewportArtifactService&) = delete;
 
         [[nodiscard]] bool hasGpuFrame() const;
+        [[nodiscard]] uint32_t viewerBackendMask() const { return metadata_.viewer_backend_mask; }
 
         [[nodiscard]] const std::optional<lfs::rendering::GpuFrame>& gpuFrame() const { return gpu_frame_; }
         [[nodiscard]] glm::ivec2 renderedSize() const { return rendered_size_; }
@@ -62,6 +63,7 @@ namespace lfs::vis {
 
     private:
         void invalidateCapture();
+        void setMetadata(const CachedRenderMetadata& metadata);
         CachedRenderMetadata metadata_;
         std::optional<lfs::rendering::GpuFrame> gpu_frame_;
         glm::ivec2 rendered_size_{0};

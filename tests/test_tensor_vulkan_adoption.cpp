@@ -5,8 +5,16 @@
 #include "core/gpu_device_runtime.hpp"
 #include "core/headless_vulkan_device.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/vulkan/vk_context.hpp"
+#include "core/tensor/backend/vulkan/vk_memory.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_splat.hpp"
+#include <chrono>
+#include <cstdio>
+#include <set>
+#ifdef __APPLE__
+#include <vulkan/vulkan_metal.h>
+#endif
 
 #include <gtest/gtest.h>
 
@@ -129,3 +137,54 @@ TEST(TensorVulkanAdoption, RejectsIncompleteHandlesAndStaysUsable) {
     const Tensor tensor = Tensor::from_vector(std::vector<float>{5.0f, 7.0f}, {2}, Device::GPU);
     EXPECT_FLOAT_EQ(tensor.sum_scalar(), 12.0f);
 }
+
+#ifdef __APPLE__
+TEST(TensorVulkanAdoption, ExportableHostReadbacksShareBackingAcrossSizeSweep) {
+    ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
+    auto adopted = HeadlessAdoptedDevice::try_create(false, true);
+    if (!adopted || !adopted->handles().metal_objects)
+        GTEST_SKIP() << "A Vulkan device exporting Metal memory is required";
+    ASSERT_TRUE(adopt_vulkan_device(adopted->handles()));
+    {
+        auto context = internal::acquire_vulkan_context();
+        auto export_objects = reinterpret_cast<PFN_vkExportMetalObjectsEXT>(
+            vkGetDeviceProcAddr(context->device(), "vkExportMetalObjectsEXT"));
+        ASSERT_NE(export_objects, nullptr);
+        for (const size_t bytes : {size_t{4}, size_t{256}, size_t{4096}, size_t{65536}, size_t{1} << 20}) {
+            SCOPED_TRACE(bytes);
+            struct Readbacks {
+                internal::VulkanMemory& memory;
+                std::vector<internal::StorageRef> storage;
+                ~Readbacks() {
+                    for (auto ref : storage)
+                        memory.deallocate(ref);
+                }
+            } readbacks{context->memory(), {}};
+            std::set<VkDeviceMemory> backing;
+            const auto started = std::chrono::steady_clock::now();
+            for (size_t index = 0; index < 128; ++index) {
+                const auto storage = context->memory().allocate_readback(bytes);
+                readbacks.storage.push_back(storage);
+                VmaAllocationInfo2 info{};
+                vmaGetAllocationInfo2(context->allocator(),
+                                      reinterpret_cast<VmaAllocation>(static_cast<uintptr_t>(storage.meta->gpu_descriptor.native_allocation)), &info);
+                EXPECT_FALSE(info.dedicatedMemory) << "Small exported readbacks must share the host-visible pool";
+                backing.insert(info.allocationInfo.deviceMemory);
+                VkExportMetalBufferInfoEXT metal{VK_STRUCTURE_TYPE_EXPORT_METAL_BUFFER_INFO_EXT};
+                metal.memory = info.allocationInfo.deviceMemory;
+                VkExportMetalObjectsInfoEXT objects{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT};
+                objects.pNext = &metal;
+                export_objects(context->device(), &objects);
+                EXPECT_NE(metal.mtlBuffer, nullptr) << "The shared pool lost its Metal export contract";
+                EXPECT_EQ(*static_cast<const std::byte*>(info.allocationInfo.pMappedData), std::byte{0});
+            }
+            const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+            EXPECT_LT(backing.size(), readbacks.storage.size() / 4);
+            std::printf("Exported host allocator sweep: bytes=%zu allocations=%zu backing_blocks=%zu allocation_ms=%.3f\n",
+                        bytes, readbacks.storage.size(), backing.size(), elapsed);
+        }
+    }
+    ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
+    EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), 0u);
+}
+#endif

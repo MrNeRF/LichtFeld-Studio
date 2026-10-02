@@ -1069,7 +1069,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMENT "Creating resource directory structure"
 )
 
-if(TARGET lfs_vulkan_rasterizer)
+if(TARGET lfs_vulkan_rasterizer AND NOT APPLE)
     get_target_property(_LFS_VULKAN_RASTERIZER_SPV_DIR
         lfs_vulkan_rasterizer
         LFS_VULKAN_RASTERIZER_SPV_DIR)

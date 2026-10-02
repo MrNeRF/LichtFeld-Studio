@@ -2,6 +2,12 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+add_library(lfs_vulkan_runtime STATIC vulkan_wait.cpp)
+target_include_directories(lfs_vulkan_runtime PUBLIC
+    "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/src/core/include")
+target_compile_features(lfs_vulkan_runtime PUBLIC cxx_std_23)
+set_target_properties(lfs_vulkan_runtime PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(lfs_vulkan_runtime PUBLIC Vulkan::Vulkan lfs_core)
 add_subdirectory(rasterizer)
 
 # Local to this target: mesh2splat.cpp compiles GLSL → SPIR-V at runtime via glslang.
@@ -35,8 +41,8 @@ target_link_libraries(lfs_rendering_tensor
         spdlog::spdlog
         TBB::tbb
         # Phase 7C-P3: mesh2splat submitAndWait uses wait_fence_bounded
-        # (implemented in lfs_vulkan_rasterizer's vulkan_wait.cpp).
-        lfs_vulkan_rasterizer
+        # (implemented in lfs_vulkan_runtime).
+        lfs_vulkan_runtime
 )
 
 target_include_directories(lfs_rendering_tensor

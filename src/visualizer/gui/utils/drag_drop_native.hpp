@@ -66,6 +66,9 @@ namespace lfs::vis::gui {
 
         void setDragHovering(bool hovering);
         void handleFileDrop(const std::vector<std::string>& paths);
+#ifdef __APPLE__
+        static bool SDLCALL macEventWatch(void* userdata, SDL_Event* event);
+#endif
 #ifdef __linux__
         static bool SDLCALL waylandEventWatch(void* userdata, SDL_Event* event);
         static bool x11EventHook(void* userdata, union _XEvent* xevent);

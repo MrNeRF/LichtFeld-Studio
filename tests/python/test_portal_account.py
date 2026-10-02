@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from lfs_plugins import portal_account
+from lfs_plugins import credential_storage, portal_account
 from lfs_plugins.ui.store import RuntimeState
 
 
@@ -78,7 +78,8 @@ def token_pair(access="access-new", refresh="refresh-new"):
 
 @pytest.mark.parametrize("worker", ["_flow_thread", "_sync_thread", "_sign_out_thread"])
 def test_busy_tracks_account_worker_lifetime(tmp_path, worker):
-    account = portal_account.PortalAccountService(credentials_path=tmp_path / "credentials.json")
+    account = portal_account.PortalAccountService(credentials_path=tmp_path / "credentials.json",
+                                                  storage_backend=credential_storage.FileBackend(tmp_path / "credentials.json"))
     assert account.busy is False
     release = threading.Event()
     thread = threading.Thread(target=release.wait)
@@ -98,7 +99,7 @@ def test_saved_authorization_is_visible_while_connection_is_switched_off(tmp_pat
     path = tmp_path / "credentials.json"
     write_credentials(path, connection_enabled=False)
 
-    account = portal_account.PortalAccountService(credentials_path=path)
+    account = portal_account.PortalAccountService(credentials_path=path, storage_backend=credential_storage.FileBackend(path))
 
     assert account.snapshot().signed_in is False
     assert account.snapshot().authorized is True
@@ -158,7 +159,7 @@ def test_cancelled_connection_drops_pending_action(tmp_path, monkeypatch):
 def test_gallery_request_rejects_different_session_before_network(tmp_path, monkeypatch):
     path = tmp_path / "credentials.json"
     write_credentials(path)
-    account = portal_account.PortalAccountService(credentials_path=path)
+    account = portal_account.PortalAccountService(credentials_path=path, storage_backend=credential_storage.FileBackend(path))
     network = StubUrlopen()
     monkeypatch.setattr(portal_account, "urlopen", network)
     with pytest.raises(portal_account.PortalProtocolError, match="account changed"):
@@ -172,7 +173,7 @@ def test_gallery_delete_preserves_revision_body_on_explicit_retry_after_refresh(
     from lfs_plugins.portal_gallery import PortalGalleryClient
     path = tmp_path / 'credentials.json'
     write_credentials(path)
-    account = portal_account.PortalAccountService(credentials_path=path)
+    account = portal_account.PortalAccountService(credentials_path=path, storage_backend=credential_storage.FileBackend(path))
     old = account._current_credentials()
     network = StubUrlopen((401, {'error': 'invalid_token'}), (204, None))
     monkeypatch.setattr(portal_account, 'urlopen', network)
@@ -195,7 +196,7 @@ def test_gallery_request_does_not_retry_under_account_changed_during_refresh(tmp
     from dataclasses import replace
     path = tmp_path / "credentials.json"
     write_credentials(path)
-    account = portal_account.PortalAccountService(credentials_path=path)
+    account = portal_account.PortalAccountService(credentials_path=path, storage_backend=credential_storage.FileBackend(path))
     old = account._current_credentials()
     network = StubUrlopen((401, {"error": "invalid_token"}))
     monkeypatch.setattr(portal_account, "urlopen", network)
@@ -283,6 +284,7 @@ def make_service(tmp_path, *, waiter=None, base_url=None):
     return portal_account.PortalAccountService(
         base_url=base_url,
         credentials_path=tmp_path / "account" / "credentials.json",
+        storage_backend=credential_storage.FileBackend(tmp_path / "account" / "credentials.json"),
         client_version="1.2.3",
         platform="TestOS",
         waiter=waiter,

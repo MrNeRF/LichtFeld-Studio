@@ -22,7 +22,7 @@ except ImportError:
 class WindowsBuildPreflightTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary_directory.name)
+        self.root = Path(self.temporary_directory.name).resolve()
         (self.root / ".git").mkdir()
         (self.root / "src" / "visualizer" / "gui").mkdir(parents=True)
         (self.root / "tests").mkdir()

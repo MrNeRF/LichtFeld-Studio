@@ -12,11 +12,13 @@ body {
     padding: 0;
     margin: 0;
     background-color: transparent;
+    pointer-events: none;
     white-space: nowrap;
     overflow: hidden;
 }
 
 #status-row {
+    pointer-events: auto;
     position: absolute;
     left: 0;
     right: 0;
@@ -65,6 +67,7 @@ body {
 }
 
 #mcp-popup {
+    pointer-events: auto;
     position: absolute;
     right: 0;
     bottom: 20dp;
@@ -524,4 +527,33 @@ body.fit-9 #gpu-mem {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.backend-chip {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 5dp;
+    align-self: center;
+    height: 18dp;
+    margin-left: 8dp;
+    padding: 0 6dp;
+    border-width: 1dp;
+    border-radius: 4dp;
+    box-sizing: border-box;
+    flex-shrink: 0;
+}
+
+.backend-label {
+    font-size: 10dp;
+}
+
+.backend-value {
+    font-size: 11dp;
+    font-weight: bold;
+}
+
+body.fit-8 .backend-chip {
+    margin-left: 4dp;
+    padding: 0 4dp;
 }

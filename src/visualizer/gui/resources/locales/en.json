@@ -873,12 +873,15 @@
     "zoom": "Zoom"
   },
   "preferences": {
-    "tensor_auto": "Automatic",
+    "tensor_auto": "Auto",
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
+    "viewer_backend": "Viewer backend",
+    "viewer_backend_description": "Applies immediately. Auto prefers Metal on compatible Macs and Vulkan elsewhere. Unsupported frames use Vulkan.",
     "tensor_backend": "Tensor backend",
-    "tensor_restart": "Changes apply after restarting LichtFeld Studio. Automatic picks CUDA where it is built, else Metal where the GPU supports it, else Vulkan. Vulkan and Metal support viewing and inference; training requires CUDA.",
+    "tensor_restart": "Controls GPU tensor computation, independently of the viewer renderer. Changes apply after restarting LichtFeld Studio. Automatic selects CUDA, Metal or Vulkan according to this build and GPU.",
+    "backend_unavailable": "The selected backend is unavailable on this machine. Your settings have not changed.",
     "tensor_device": "Vulkan device",
     "tensor_device_hint": "Leave empty for automatic selection, or enter a device index or UUID. CUDA rendering must use the CUDA device.",
     "tensor_validation": "Vulkan diagnostics",
@@ -2068,6 +2071,13 @@
     "reload": "Reload"
   },
   "status_bar": {
+    "renderer_backend": "Renderer",
+    "tensor_backend": "Tensors",
+    "renderer_backend_tooltip": "Scene rendering backend.",
+    "tensor_backend_tooltip": "Tensor computation backend.",
+    "backend_requested": "Requested: {}",
+    "backend_no_frame": "Configured renderer; no scene frame yet.",
+    "backend_fallback": "Metal is unavailable for this frame; Vulkan is in use.",
     "preview_reduced": "Preview resolution reduced (GPU memory)",
     "safe_mode": "SAFE MODE",
     "mcp_preferences": "Edit",
@@ -2105,7 +2115,9 @@
     "gpu_budget": "GPU budget",
     "strategy_default": "Default",
     "split": "Split:",
-    "ui_fps": "UI FPS"
+    "ui_fps": "UI FPS",
+    "renderer_backend_short": "R",
+    "tensor_backend_short": "T"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL or shorthand:",

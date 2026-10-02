@@ -119,6 +119,8 @@ namespace lfs::core::internal::metal {
         // reaches `value`. The host does not wait. Returns the serial of an
         // empty batch that completes once the wait is over.
         uint64_t queue_wait(id<MTLSharedEvent> event, uint64_t value);
+        // Completion-handler safe: no allocation, recording lock or callback.
+        void record_external_write_failure() noexcept;
         // Writes a GPU timestamp after all earlier work; returns its batch serial.
         uint64_t write_timestamp(id<MTL4CounterHeap> heap, NSUInteger index);
         void wait(uint64_t serial);
@@ -188,6 +190,7 @@ namespace lfs::core::internal::metal {
         struct Failure {
             std::mutex mutex;
             std::string message;
+            std::atomic_bool external_write_failed{false};
         };
 
         struct PipelineKey {
@@ -211,6 +214,7 @@ namespace lfs::core::internal::metal {
         size_t acquire_frame_locked();
         void commit_locked();
         void wait_signaled(uint64_t serial);
+        void check_external_write_failure() const;
         void check_failures() const;
         void check_fault();
         void consume_fault_locked(size_t slot);

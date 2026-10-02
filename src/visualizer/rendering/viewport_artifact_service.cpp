@@ -5,6 +5,7 @@
 #include "viewport_artifact_service.hpp"
 #include "core/tensor.hpp"
 #include "rendering/rendering.hpp"
+#include "visualizer/app_store.hpp"
 #include <cmath>
 
 namespace lfs::vis {
@@ -61,8 +62,17 @@ namespace lfs::vis {
         }
     }
 
+    void ViewportArtifactService::setMetadata(const CachedRenderMetadata& metadata) {
+        const bool backend_changed = metadata_.viewer_backend_mask != metadata.viewer_backend_mask;
+        metadata_ = metadata;
+        // Wake the UI after publishing the actual output, including mixed split
+        // panels and fallbacks. Repeated frames using the same API stay silent.
+        if (backend_changed)
+            app_store().viewer_backend_mask.set(metadata_.viewer_backend_mask);
+    }
+
     void ViewportArtifactService::clearViewportOutput() {
-        metadata_ = {};
+        setMetadata({});
         gpu_frame_.reset();
         rendered_size_ = {0, 0};
         lazy_capture_ = {};
@@ -75,7 +85,7 @@ namespace lfs::vis {
 
     void ViewportArtifactService::updateFromFrameResources(const FrameResources& resources,
                                                            const bool viewport_output_updated) {
-        metadata_ = resources.cached_metadata;
+        setMetadata(resources.cached_metadata);
         gpu_frame_ = resources.cached_gpu_frame;
         rendered_size_ = resources.cached_result_size;
         if (viewport_output_updated) {
@@ -87,7 +97,7 @@ namespace lfs::vis {
                                                         const lfs::rendering::FrameMetadata& metadata,
                                                         const glm::ivec2& rendered_size,
                                                         const bool viewport_output_updated) {
-        metadata_ = makeCachedRenderMetadata(metadata);
+        setMetadata(makeCachedRenderMetadata(metadata));
         gpu_frame_.reset();
         rendered_size_ = rendered_size;
         lazy_capture_ = {};
@@ -107,7 +117,7 @@ namespace lfs::vis {
     void ViewportArtifactService::setLazyCapture(LazyCaptureFn fn,
                                                  const lfs::rendering::FrameMetadata& metadata,
                                                  const glm::ivec2& rendered_size) {
-        metadata_ = makeCachedRenderMetadata(metadata);
+        setMetadata(makeCachedRenderMetadata(metadata));
         gpu_frame_.reset();
         rendered_size_ = rendered_size;
         invalidateCapture();
@@ -118,7 +128,7 @@ namespace lfs::vis {
         LazyCaptureFn fn,
         const lfs::rendering::FrameMetadata& metadata,
         const glm::ivec2& rendered_size) {
-        metadata_ = makeCachedRenderMetadata(metadata);
+        setMetadata(makeCachedRenderMetadata(metadata));
         gpu_frame_.reset();
         rendered_size_ = rendered_size;
         lazy_captured_image_.reset();

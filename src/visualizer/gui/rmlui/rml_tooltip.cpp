@@ -104,7 +104,7 @@ namespace lfs::vis::gui {
     }
 
     bool RmlTooltipController::apply(Rml::Element* body, const int mouse_x, const int mouse_y,
-                                     const int doc_w, const int doc_h) {
+                                     const int doc_w, const int doc_h, const bool force_position) {
         if (!body)
             return false;
 
@@ -146,7 +146,7 @@ namespace lfs::vis::gui {
         // Anchor like a DCC tooltip: once shown it stays where it first
         // appeared and does not chase the cursor. Only (re)place it on the
         // reveal frame or when the text changes.
-        if (visible_ && !text_changed)
+        if (visible_ && !text_changed && !force_position)
             return false;
 
         if (text_changed)

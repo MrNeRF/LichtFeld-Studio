@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "point_cloud_vulkan_renderer.hpp"
+#include "vulkan_scene_output.hpp"
 #include <unordered_map>
 #include <unordered_set>
 
@@ -1985,13 +1986,13 @@ namespace lfs::vis {
             ++slot.generation;
 
             RenderResult result{};
-            result.image = slot.color_image;
-            result.image_view = slot.color_view;
-            result.image_layout = slot.color_layout;
+            result.image = sceneImageHandle(slot.color_image);
+            result.image_view = sceneImageViewHandle(slot.color_view);
+            result.image_layout = sceneImageLayout(slot.color_layout);
             result.generation = slot.generation;
-            result.depth_image = slot.depth_image;
-            result.depth_image_view = slot.depth_view;
-            result.depth_image_layout = slot.depth_layout;
+            result.depth_image = sceneImageHandle(slot.depth_image);
+            result.depth_image_view = sceneImageViewHandle(slot.depth_view);
+            result.depth_image_layout = sceneImageLayout(slot.depth_layout);
             result.depth_generation = slot.generation;
             result.size = slot.size;
             result.flip_y = false;

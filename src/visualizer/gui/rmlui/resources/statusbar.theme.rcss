@@ -108,3 +108,13 @@ body,
 #gpu-icon {
     image-color: @{text_dim};
 }
+
+.backend-chip {
+    color: @{text};
+    background-color: @{alpha(surface_bright,0.30)};
+    border-color: @{alpha(text_dim,0.35)};
+}
+
+.backend-label {
+    color: @{text_dim};
+}
