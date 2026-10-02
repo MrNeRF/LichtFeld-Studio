@@ -599,9 +599,14 @@ else()
         DESTINATION "${PYTHON_INSTALL_DIR}"
         FILES_MATCHING PATTERN "*.py"
     )
+    if(LFS_MACOS_PORTABLE_APP)
+        file(GLOB _lfs_python_helpers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.py")
+        install(FILES ${_lfs_python_helpers} DESTINATION "${PYTHON_INSTALL_DIR}")
+    else()
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py"
         DESTINATION "${PYTHON_INSTALL_DIR}"
     )
+    endif()
 endif()
 
 # Stubs: use generated when available, otherwise committed from source tree

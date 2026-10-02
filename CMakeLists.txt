@@ -1645,6 +1645,8 @@ if(BUILD_PORTABLE)
 endif()
 
 if(LFS_MACOS_PORTABLE_APP)
+    get_filename_component(_lfs_portable_python_tools "${Python_EXECUTABLE}" DIRECTORY)
+    get_filename_component(_lfs_portable_python_stdlib "${_lfs_portable_python_tools}/../../lib/python3.12" ABSOLUTE)
     configure_file("${CMAKE_SOURCE_DIR}/cmake/templates/VerifyMacPortableApp.cmake.in"
         "${CMAKE_BINARY_DIR}/VerifyMacPortableApp.cmake" @ONLY)
     install(SCRIPT "${CMAKE_BINARY_DIR}/VerifyMacPortableApp.cmake" COMPONENT runtime)

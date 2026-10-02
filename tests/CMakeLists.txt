@@ -17,6 +17,9 @@ if(BUILD_LOCALIZATION_TESTS)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         TIMEOUT 30
     )
+    add_test(NAME MacosPortableInventory
+        COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/python/test_macos_portable_inventory.py)
+    set_tests_properties(MacosPortableInventory PROPERTIES TIMEOUT 30)
     if(APPLE)
         add_test(NAME MacosPortableResourcePaths
             COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/python/test_macos_portable_resource_paths.py)
