@@ -83,6 +83,8 @@ namespace lfs::vis::gui {
                 case '<': out += "&lt;"; break;
                 case '>': out += "&gt;"; break;
                 case '"': out += "&quot;"; break;
+                case '{': out += "&#123;"; break;
+                case '}': out += "&#125;"; break;
                 case '\'': out += "&#39;"; break;
                 default: out.push_back(c); break;
                 }

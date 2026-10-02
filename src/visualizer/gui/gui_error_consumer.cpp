@@ -27,6 +27,8 @@ namespace lfs::vis::gui {
             case '&': out += "&amp;"; break;
             case '<': out += "&lt;"; break;
             case '>': out += "&gt;"; break;
+            case '{': out += "&#123;"; break;
+            case '}': out += "&#125;"; break;
             case '\n': out += "<br/>"; break;
             case '\r': break;
             default: out += c; break;

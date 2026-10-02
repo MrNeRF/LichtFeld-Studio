@@ -41,6 +41,8 @@ namespace lfs::python {
                 case '>': result += "&gt;"; break;
                 case '&': result += "&amp;"; break;
                 case '"': result += "&quot;"; break;
+                case '{': result += "&#123;"; break;
+                case '}': result += "&#125;"; break;
                 case '\n': result += "<br/>"; break;
                 default: result += c;
                 }
