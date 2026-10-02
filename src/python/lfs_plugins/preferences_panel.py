@@ -411,8 +411,6 @@ class PreferencesPanel(Panel):
         if key == "backend" and value in ("cuda", "metal") and not state[f"{value}_available"]:
             self._reject_backend_preference("tensor_backend", "preferences.tensor_backend")
             return
-        if state.get(key) == value:
-            return
         state.pop("cuda_available", None)
         state.pop("metal_available", None)
         if key == "vulkan_validation":
