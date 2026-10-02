@@ -611,3 +611,27 @@ dedicated allocations, encoding failure recovery and owner retirement; native
 selection adapter cases run on both. The bridge and Vulkan export declarations
 are compiled only on Apple; Windows/Linux Vulkan allocations are unchanged.
 Use `--tensor-backend vulkan` to benchmark the bridged configuration explicitly.
+
+### Perspective median snapshots in CI
+
+`MetalViewerRasterContracts` runs the device-independent raster and Depth
+contracts, including independent coverage/median oracles and optimized-path
+comparisons. The two captured Racoon perspective regressions run separately as
+`MetalViewerPerspectiveDepthSnapshot` and
+`MetalViewerReversePerspectiveDepthSnapshot`. Both still execute projection,
+sorting and rasterization in the default viewer CI tier.
+
+These native-device snapshots sit within a few FP32 rounding steps of 50%
+transmittance, where a small arithmetic difference can move the median across
+a large depth gap. On the known `Apple Paravirtual device` CI GPU only, a
+snapshot mismatch returns CTest's skip code 77 after checking that coverage
+matches an independent double-precision oracle, the median is a contributing
+source at the threshold crossing and the projected transmittance is within
+1e-4 of the threshold.
+The log records the device, pixel, exact-median mode, actual/expected depth,
+coverage and distance from the threshold. Matching snapshots pass normally.
+
+Physical-device snapshot mismatches, stable-threshold mismatches, invalid
+depth/coverage, allocation/command errors and other raster contracts still
+fail. This qualification does not alter production shaders or their median
+threshold, and does not establish snapshot parity on a virtual GPU.

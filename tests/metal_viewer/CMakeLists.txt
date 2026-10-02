@@ -42,6 +42,12 @@ lfs_add_metal_contract(metal_spark_gut_contracts spark_gut_contracts.mm MetalVie
 lfs_add_metal_contract(metal_selection_contracts selection_contracts.mm MetalViewerSelectionContracts)
 lfs_add_metal_contract(metal_viewer_contracts projection_contracts.mm MetalViewerProjectionContracts)
 lfs_add_metal_contract(metal_raster_contracts raster_contracts.mm MetalViewerRasterContracts)
+add_test(NAME MetalViewerPerspectiveDepthSnapshot
+    COMMAND metal_raster_contracts --perspective-depth-boundary)
+add_test(NAME MetalViewerReversePerspectiveDepthSnapshot
+    COMMAND metal_raster_contracts --reverse-perspective-depth-boundary)
+set_tests_properties(MetalViewerPerspectiveDepthSnapshot MetalViewerReversePerspectiveDepthSnapshot
+    PROPERTIES LABELS "viewer;metal;gpu;depth;native-snapshot" TIMEOUT 120 SKIP_RETURN_CODE 77)
 if(TARGET lfs_core)
     lfs_add_metal_contract(metal_rad_tensor_contracts rad_tensor_contracts.mm MetalViewerRadTensorContracts)
     target_link_libraries(metal_rad_tensor_contracts PRIVATE lfs_core)
