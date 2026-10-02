@@ -200,6 +200,8 @@ option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path tests (no CUDA runtime l
 option(BUILD_LOCALIZATION_TESTS "Register headless localization contract tests without LibTorch" OFF)
 option(BUILD_TEMPORAL_CPU_TESTS "Build standalone temporal reconstruction contract tests without GPU execution" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
+# Cannot catch MSVC-specific dllimport template issues in third-party DLLs (e.g. Rml::ObserverPtr).
+option(LFS_HIDDEN_SYMBOLS "Check Windows DLL export boundaries with hidden visibility on non-Windows" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeveloperOptions.cmake")
@@ -666,6 +668,25 @@ endif()
 add_subdirectory(src/geometry)   # Geometry utilities
 add_subdirectory(src/mcp)        # MCP server (AI agent integration)
 add_subdirectory(src/python)
+
+if(LFS_HIDDEN_SYMBOLS AND NOT WIN32)
+    # Match the libraries using LFS_*_API DLL exports; leave static libraries alone.
+    set_target_properties(lfs_logger lfs_core lfs_visualizer lfs_mcp PROPERTIES
+        CXX_VISIBILITY_PRESET hidden
+        CUDA_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
+    )
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # ELF shared links otherwise defer missing exports until Python imports the module.
+        foreach(_lfs_export_consumer IN ITEMS lfs_logger lfs_core lfs_visualizer lfs_mcp lfs_py)
+            target_link_options(${_lfs_export_consumer} PRIVATE "LINKER:--no-undefined")
+        endforeach()
+        # FFmpeg assembly uses direct references to archive-local data in the shared visualizer.
+        # SPZ globals must stay local too: the Python module links another copy of its archive.
+        target_link_options(lfs_visualizer PRIVATE
+            "LINKER:--exclude-libs,libavcodec.a:libavutil.a:libspz_lib.a")
+    endif()
+endif()
 
 # =============================================================================
 # MAIN EXECUTABLES

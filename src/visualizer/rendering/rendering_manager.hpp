@@ -293,6 +293,9 @@ namespace lfs::vis {
         // unrelated redraw happens to notice it is due.
         void pollTrainingRefresh(bool is_training);
         [[nodiscard]] double secondsUntilTrainingRefresh() const;
+        // Seconds until an over-budget navigation render may run (camera at
+        // rest); +inf when no settle is pending.
+        [[nodiscard]] double secondsUntilCameraSettle() const;
         // Re-arms a parked passive training refresh once its render can claim the arena.
         void pollParkedArenaRetry();
         [[nodiscard]] bool hasParkedArenaRetry() const {
@@ -886,6 +889,7 @@ namespace lfs::vis {
         uint64_t import_render_generation_ = 0;
         unsigned import_render_frames_ = 0;
         std::optional<std::string> import_render_result_;
+        [[nodiscard]] float trainingRefreshIntervalSec(const ViewRenderState& view) const;
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
         std::unique_ptr<SparkLodController> lod_controller_;

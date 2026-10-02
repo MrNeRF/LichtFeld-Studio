@@ -3,12 +3,52 @@
 
 #pragma once
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <thread>
 
 namespace lfs::vis {
+
+    // Both tenants share one scratch. Budget the viewer's GPU turn plus the
+    // CPU recording that holds the arena, so training retains its chosen share.
+    // Navigation retains its one-step minimum for inexpensive frames; idle
+    // preview cadence adapts to the full measured cost of every viewer turn.
+    inline constexpr double kNavigationTrainingShare = 0.30;
+    inline constexpr double kIdlePreviewTrainingShare = 0.89;
+    // Above this a full-quality frame cannot be interactive; while the camera
+    // moves the viewport keeps the last complete frame and renders once the
+    // camera rests, so training stalls once per rest instead of once per frame.
+    inline constexpr double kInteractiveViewerBudgetMs = 500.0;
+    inline constexpr std::chrono::milliseconds kCameraSettle{150};
+
+    // Training steps the viewer owes after a navigation frame so that training
+    // keeps at least kNavigationTrainingShare of the GPU: k*T / (k*T + V) >= s.
+    [[nodiscard]] inline std::uint32_t trainingTurnsPerViewerFrame(const double viewer_turn_ms,
+                                                                   const double training_step_ms,
+                                                                   const std::uint32_t minimum) {
+        if (!(viewer_turn_ms > 0.0) || !(training_step_ms > 0.0)) {
+            return minimum;
+        }
+        const double share = kNavigationTrainingShare / (1.0 - kNavigationTrainingShare);
+        const double turns = std::ceil(viewer_turn_ms * share / training_step_ms);
+        return std::clamp<std::uint32_t>(
+            static_cast<std::uint32_t>(std::min(turns, 64.0)), minimum, 64u);
+    }
+
+    // Idle rest interval keeping training near kIdlePreviewTrainingShare while
+    // allowing full-quality previews at up to roughly one every 9 viewer turns.
+    // A submit-to-submit clock must also include the viewer turn itself.
+    [[nodiscard]] inline double idlePreviewIntervalSec(const double setting_sec, const double viewer_turn_ms) {
+        const double share = (1.0 - kIdlePreviewTrainingShare) / kIdlePreviewTrainingShare;
+        return std::max(setting_sec, viewer_turn_ms * 1e-3 / share);
+    }
+
+    [[nodiscard]] inline bool navigationRendersOnlyAtRest(const double viewer_turn_ms) {
+        return viewer_turn_ms > kInteractiveViewerBudgetMs;
+    }
 
     // Called for a retained viewer block BEFORE capacity reuse or growth. B3
     // can detach the arena backing without updating the renderer's cached flag.
@@ -64,18 +104,20 @@ namespace lfs::vis {
             if (now >= deadline) {
                 return false;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
         }
     }
 
-    // Releases a viewer arena frame. With a turn given, the next window is
-    // reserved before the release and training gets that many frames first;
-    // the reservation lapses on its own once the viewer stops asking.
+    // The measured next request replaces the standing reservation once a
+    // navigation cadence is known. The short lease covers its first frame.
     template <typename Arena, typename Token>
     void releaseViewerArenaFrame(Arena& arena, const std::uint64_t frame_id, Token* const handoff_token,
                                  const std::optional<std::uint32_t> training_frames_before_next_render) {
-        if (training_frames_before_next_render && handoff_token) {
-            *handoff_token = arena.request_render_handoff(*handoff_token, *training_frames_before_next_render);
+        if (training_frames_before_next_render) {
+            arena.owe_training_frames(*training_frames_before_next_render);
+            if (handoff_token) {
+                *handoff_token = arena.reserve_next_viewer_turn(*handoff_token);
+            }
         }
         arena.end_frame(frame_id, true);
     }

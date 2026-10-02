@@ -2452,6 +2452,19 @@ namespace lfs::vis {
         EXPECT_EQ(service.handleTrainingRefresh(false, interval), 0u);
     }
 
+    TEST(ViewportFrameLifecycleServiceTest, RestRenderRestartsTheIdlePreviewBudget) {
+        ViewportFrameLifecycleService service;
+        constexpr float interval = 0.05f;
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), DirtyFlag::SPLATS);
+        // Motion deferred the requested preview until the camera came to rest.
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        service.noteTrainingRender();
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), 0u);
+        EXPECT_GT(service.secondsUntilTrainingRefresh(interval), 0.0);
+        // A pause still publishes the final training state immediately.
+        EXPECT_EQ(service.handleTrainingRefresh(false, interval), DirtyFlag::SPLATS);
+    }
+
     TEST(ViewportFrameLifecycleServiceTest, ResizeActiveDefersFullRefreshUntilDebounceCompletes) {
         ViewportFrameLifecycleService service;
 

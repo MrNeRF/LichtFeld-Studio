@@ -156,7 +156,7 @@ Getting started:
   <a href="https://web.volinga.ai/">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/media/volinga-dark.svg">
-      <img src="docs/media/volinga.svg" alt="Volinga" height="108">
+      <img src="docs/media/volinga.svg" alt="Volinga" height="50">
     </picture>
   </a>
 </p>
