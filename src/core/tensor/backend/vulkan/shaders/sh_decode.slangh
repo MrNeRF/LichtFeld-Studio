@@ -1,0 +1,25 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#ifndef LFS_SH_DECODE_SLANGH
+#define LFS_SH_DECODE_SLANGH
+uint shOffset(uint row, uint cell, uint rest, bool q16) {
+    if (q16)
+        return (row / 32 * (rest * 3) + cell) * 32 + row % 32;
+    return ((row / 32 * ((rest * 3 + 3) / 4) + cell / 4) * 32 + row % 32) * 4 + cell % 4;
+}
+float shReadCell(uint64_t source, uint64_t bounds, uint format, uint rest, uint rows, uint row, uint c) {
+    uint width = format == 1 || format == 2 ? (rest * 3 + 3) / 4 * 4 : rest * 3;
+    if (row >= rows || c >= width)
+        return 0;
+    uint offset = format == 0 ? row * rest * 3 + c : shOffset(row, c, rest, format == 3);
+    if (format == 3) {
+        float lo = ((Ptr<float, Access.Read>)bounds)[row / 256 * 2];
+        float hi = ((Ptr<float, Access.Read>)bounds)[row / 256 * 2 + 1];
+        uint code = ((Ptr<uint16_t, Access.Read>)source)[offset];
+        return fma(hi - lo, float(code) * (1.0f / 65535.0f), lo);
+    }
+    if (format == 2)
+        return f16tof32(((Ptr<uint16_t, Access.Read>)source)[offset]);
+    return ((Ptr<float, Access.Read>)source)[offset];
+}
+#endif

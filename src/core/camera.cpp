@@ -5,6 +5,7 @@
 #include "core/camera.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/shared_image_ops.hpp"
 #if LFS_HAS_CUDA
 #include "core/cuda_error_typed.hpp"
 #endif
@@ -34,6 +35,40 @@ namespace lfs::core {
             LFS_CUDA_TRY(cudaStreamSynchronize(stream), stream, what);
         }
 #endif
+    }
+
+    static Tensor resize_prior(const Tensor& source, const int height, const int width,
+                               const gpu_ops::Resample mode, cudaStream_t stream) {
+        if (const auto backend = gpu_backend_of(source)) {
+            if (const auto* ops = shared_image_ops(*backend); ops && ops->resize) {
+#if LFS_HAS_CUDA
+                if (*backend == GpuBackend::CUDA) {
+                    const CUDAStreamGuard execution_scope(stream);
+                    return ops->resize(source, height, width, mode, 2);
+                }
+#endif
+                return ops->resize(source, height, width, mode, 2);
+            }
+        }
+        return mode == gpu_ops::Resample::NormalPrior
+                   ? resize_normal_prior(source, height, width, stream)
+                   : resize_depth_prior(source, height, width, stream);
+    }
+
+    static Tensor undistort_prior(const Tensor& source, const UndistortParams& params,
+                                  const bool mask, cudaStream_t stream) {
+        if (const auto backend = gpu_backend_of(source)) {
+            if (const auto* ops = shared_image_ops(*backend); ops && ops->undistort) {
+#if LFS_HAS_CUDA
+                if (*backend == GpuBackend::CUDA) {
+                    const CUDAStreamGuard execution_scope(stream);
+                    return ops->undistort(source, params, mask);
+                }
+#endif
+                return ops->undistort(source, params, mask);
+            }
+        }
+        return mask ? undistort_mask(source, params, stream) : undistort_image(source, params, stream);
     }
 
     static Tensor world_to_view(const Tensor& R, const Tensor& t) {
@@ -657,7 +692,7 @@ namespace lfs::core {
                 static_cast<int>(mask.shape()[1]),
                 static_cast<int>(mask.shape()[0]),
                 max_width);
-            mask = undistort_mask(mask, scaled, _stream);
+            mask = undistort_prior(mask, scaled, true, _stream);
         }
 
         if (binarize) {
@@ -733,7 +768,8 @@ namespace lfs::core {
 
         if (!_image_size_loaded)
             load_image_size(resize_factor, max_width);
-        depth = resize_depth_prior(depth.contiguous(), _image_height, _image_width, _stream);
+        depth = resize_prior(depth.contiguous(), _image_height, _image_width,
+                             gpu_ops::Resample::DepthPrior, _stream);
 
         if (_undistort_prepared) {
             const auto scaled = scale_undistort_params(
@@ -741,7 +777,7 @@ namespace lfs::core {
                 static_cast<int>(depth.shape()[1]),
                 static_cast<int>(depth.shape()[0]),
                 max_width);
-            depth = undistort_mask(depth, scaled, _stream);
+            depth = undistort_prior(depth, scaled, true, _stream);
         }
 
         _cached_depth = depth.contiguous();
@@ -843,7 +879,8 @@ namespace lfs::core {
 
         if (!_image_size_loaded)
             load_image_size(resize_factor, max_width);
-        normal = resize_normal_prior(normal.contiguous(), _image_height, _image_width, _stream);
+        normal = resize_prior(normal.contiguous(), _image_height, _image_width,
+                              gpu_ops::Resample::NormalPrior, _stream);
 
         if (_undistort_prepared) {
             const auto scaled = scale_undistort_params(
@@ -851,8 +888,9 @@ namespace lfs::core {
                 static_cast<int>(normal.shape()[2]),
                 static_cast<int>(normal.shape()[1]),
                 max_width);
-            normal = undistort_image(normal, scaled, _stream);
-            normal = resize_normal_prior(normal.contiguous(), normal.shape()[1], normal.shape()[2], _stream);
+            normal = undistort_prior(normal, scaled, false, _stream);
+            normal = resize_prior(normal.contiguous(), normal.shape()[1], normal.shape()[2],
+                                  gpu_ops::Resample::NormalPrior, _stream);
         }
 
         _cached_normal = normal.contiguous();

@@ -9,6 +9,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "lfs/training/ops/gsplat.hpp"
 #include "lfs/training/ops/loss.hpp"
 #include "lfs/training/ops/raster.hpp"
 #include <cmath>
@@ -209,6 +210,11 @@ namespace lfs::training {
             _fast_saved = saved;
         }
 
+        void set_gsplat(const lfs::gpu_ops::GsplatRasterOps* ops, lfs::gpu_ops::GsplatSaved* saved) {
+            _gsplat_ops = ops;
+            _gsplat_saved = saved;
+        }
+
         void set_appearance(AppearanceFn fn) { appearance_ = std::move(fn); }
         [[nodiscard]] bool has_appearance() const { return static_cast<bool>(appearance_); }
 
@@ -269,6 +275,9 @@ namespace lfs::training {
         const lfs::gpu_ops::FastRasterOps* _fast_ops = nullptr;
         lfs::gpu_ops::FastSaved* _fast_saved = nullptr;
         lfs::gpu_ops::FastSaved _fast_owned{};
+        const lfs::gpu_ops::GsplatRasterOps* _gsplat_ops = nullptr;
+        lfs::gpu_ops::GsplatSaved* _gsplat_saved = nullptr;
+        lfs::gpu_ops::GsplatSaved _gsplat_owned{};
 
         // Helper functions
         lfs::core::Tensor load_eval_mask(lfs::core::Camera* cam, lfs::core::Tensor& gt_image,

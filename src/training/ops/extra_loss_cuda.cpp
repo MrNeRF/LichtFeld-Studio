@@ -4,7 +4,7 @@
 #include "lfs/training/ops/extra_loss_cuda.hpp"
 
 #include "components/sparsity_optimizer_kernels.hpp"
-#include "lfs/kernels/regularization.cuh"
+#include "training/kernels/regularization.cuh"
 
 namespace lfs::training {
     namespace {

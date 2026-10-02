@@ -3,6 +3,7 @@
 
 #include "lfs/training/ops/mrnf_cuda.hpp"
 
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "kernels/mrnf_kernels.hpp"
 #include "lfs/training/refine_scratch.hpp"
@@ -233,6 +234,21 @@ namespace lfs::training {
                 lfs::core::getCurrentCUDAStream());
         }
 
+        size_t compact_bool_indices(const Tensor& mask, Tensor& indices, size_t count) {
+            return core::tensor_ops::launch_nonzero_bool(mask.ptr<unsigned char>(), indices.ptr<int64_t>(),
+                                                         mask.numel(), count, mask.stream());
+        }
+        void prune_bounds(const Tensor& means, const Tensor& scale_max, Tensor& mask,
+                          std::array<float, 3> center, float maximum, float log_maximum) {
+            mrnf_strategy::launch_prune_bounds_or(means.ptr<float>(), scale_max.ptr<float>(), mask.ptr<bool>(),
+                                                  means.size(0), center.data(), maximum, log_maximum);
+        }
+        void replace_parent_weights(const Tensor& opacity, const Tensor& visibility, const Tensor& active,
+                                    const Tensor& trainable, const Tensor& edge, Tensor& weights) {
+            mrnf_strategy::launch_replace_parent_weights(opacity.ptr<float>(), visibility.ptr<float>(),
+                                                         active.is_valid() ? active.ptr<bool>() : nullptr, trainable.is_valid() ? trainable.ptr<bool>() : nullptr,
+                                                         edge.is_valid() ? edge.ptr<float>() : nullptr, weights.ptr<float>(), opacity.numel());
+        }
         const lfs::gpu_ops::MrnfOps kCudaMrnfOps{
             .noise = noise,
             .decay = decay,
@@ -249,6 +265,9 @@ namespace lfs::training {
             .gather_seeds = gather_seeds,
             .sorted_median = sorted_median,
             .starvation_weights = starvation_weights,
+            .compact_bool_indices = compact_bool_indices,
+            .prune_bounds = prune_bounds,
+            .replace_parent_weights = replace_parent_weights,
         };
 
     } // namespace

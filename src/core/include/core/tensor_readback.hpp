@@ -4,6 +4,7 @@
 
 #include "core/export.hpp"
 #include "core/gpu_backend_fwd.hpp"
+#include "core/tensor_execution.hpp"
 
 #include <cstddef>
 #include <memory>
@@ -29,14 +30,18 @@ namespace lfs::core {
         // Complete the previous download before reusing this slot.
         void enqueue(const Tensor& source);
         void enqueue(const Tensor& source, TensorWorkQueue& queue);
+        void enqueue(const Tensor& source, TensorExecutionTarget target);
         // Byte range is measured in the source's contiguous logical layout.
         void enqueue_range(const Tensor& source, std::size_t byte_offset,
                            std::size_t byte_count);
-        // Bind contiguous CUDA input and pinned CPU output once for recurring
-        // downloads. Both tensors are retained; their storage must not be replaced
-        // while bound; do not mutate or create lazy consumers of the destination
-        // until unbound. Read its bytes only after poll/wait completes. prepare allocates the reusable ordering/completion markers.
-        // Vulkan direct destinations are explicitly unsupported.
+        void enqueue_range(const Tensor& source, std::size_t byte_offset,
+                           std::size_t byte_count, TensorExecutionTarget target);
+        // Bind contiguous GPU input and CPU output once for recurring downloads.
+        // CUDA destinations must be pinned. Vulkan and Metal copy into the CPU
+        // tensor when the download completes. Both tensors are retained; their storage must not
+        // be replaced while bound; do not mutate or create lazy consumers of the
+        // destination until unbound. Read its bytes only after poll/wait completes.
+        // prepare allocates the reusable ordering/completion markers.
         void prepare(const Tensor& source, const Tensor& destination);
         void enqueue(TensorWorkQueue& queue);
         [[nodiscard]] bool poll();
@@ -63,7 +68,8 @@ namespace lfs::core {
     // Packed asynchronous downloads into reusable pinned slots. Calls on a slot
     // must be serialized; distinct slots may be drained concurrently. Sources
     // remain retained until release(). Slot bytes are readable after wait/poll.
-    // CUDA implemented; Vulkan reports unsupported before allocating resources.
+    // CUDA uses pinned host slots. Vulkan uses host-visible readback storage on
+    // the queue's recorder. Metal slots are shared storage the CPU reads in place.
     class LFS_CORE_API TensorReadbackRing {
     public:
         // Optional staging is borrowed for device staging: the caller owns it and

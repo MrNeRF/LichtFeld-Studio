@@ -6,16 +6,14 @@
 #include "core/alloc_counter.hpp"
 #include "core/assert.hpp"
 #include "core/camera.hpp"
-#include "core/cuda_error.hpp"
 #include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
-#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
-#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
-#include "kernels/densification_kernels.hpp"
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/ops/registry.hpp"
@@ -28,7 +26,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <limits>
 #include <numeric>
 #include <random>
@@ -57,15 +54,13 @@ namespace lfs::training {
             const lfs::core::Tensor& mask, size_t count) {
             using namespace lfs::core;
             LFS_ASSERT_MSG(mask.ndim() == 1 && mask.is_contiguous() &&
-                               mask.device() == Device::CUDA && mask.dtype() == DataType::Bool,
+                               mask.device() == Device::GPU && mask.dtype() == DataType::Bool,
                            "MRNF index compaction requires a contiguous CUDA bool vector");
             LFS_ASSERT_MSG(count <= mask.numel(), "MRNF index count exceeds mask length");
-            auto indices = Tensor::empty({count}, Device::CUDA, DataType::Int64);
-            indices.set_stream(mask.stream());
+            auto indices = Tensor::empty({count}, Device::GPU, DataType::Int64);
+            indices.set_stream(mask.execution_target());
             if (count != 0) {
-                const size_t actual = tensor_ops::launch_nonzero_bool(
-                    mask.ptr<unsigned char>(), indices.ptr<int64_t>(), mask.numel(), count,
-                    mask.stream());
+                const size_t actual = training_ops(default_gpu_backend()).mrnf->compact_bool_indices(mask, indices, count);
                 if (actual != count)
                     throw std::runtime_error("MRNF index compaction count mismatch");
             }
@@ -113,7 +108,7 @@ namespace lfs::training {
         }
 
         void ensure_cuda_float_exact(lfs::core::Tensor& tensor, const lfs::core::TensorShape& shape) {
-            if (tensor.is_valid() && tensor.device() == lfs::core::Device::CUDA &&
+            if (tensor.is_valid() && tensor.device() == lfs::core::Device::GPU &&
                 tensor.dtype() == lfs::core::DataType::Float32 && tensor.shape() == shape) {
                 return;
             }
@@ -121,7 +116,7 @@ namespace lfs::training {
         }
 
         [[nodiscard]] lfs::core::Tensor zero_splat_vector(const size_t n, const lfs::core::Device device) {
-            if (device != lfs::core::Device::CUDA) {
+            if (device != lfs::core::Device::GPU) {
                 return lfs::core::Tensor::zeros({n}, device);
             }
             auto tensor = lfs::core::Tensor::empty_exact({n}, lfs::core::DataType::Float32);
@@ -362,7 +357,7 @@ namespace lfs::training {
                         auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
                                            ? indices
                                            : indices.to(lfs::core::DataType::Int32);
-                        const auto stream = lfs::core::getCurrentCUDAStream();
+                        const auto stream = lfs::core::TensorExecutionTarget::current();
                         idx_i32.sync_to_stream(stream);
                         state->grad.set_stream(stream);
                         training_sh_ops().zero_rows(state->grad, idx_i32, layout_rest);
@@ -562,7 +557,7 @@ namespace lfs::training {
             if (tensor.device() == lfs::core::Device::GPU &&
                 tensor.dtype() == lfs::core::DataType::Float32 &&
                 tensor.is_valid() && tensor.numel() > 0) {
-                kernels::launch_normalize_by_positive_median(tensor.ptr<float>(), tensor.numel());
+                training_ops(lfs::core::default_gpu_backend()).refine->normalize_positive_median(tensor);
                 return;
             }
             // CPU fallback (tests / rare).
@@ -1270,7 +1265,8 @@ namespace lfs::training {
 
         if (_splat_data->_max_screen_share.is_valid() &&
             _splat_data->_max_screen_share.numel() > 0) {
-            core::gpu_device_barrier(core::GpuBackend::CUDA);
+            core::gpu_device_barrier(core::gpu_backend_of(_splat_data->_max_screen_share)
+                                         .value_or(core::default_gpu_backend()));
         }
 
         if (_params && screen_share_shrink_active(iter) &&
@@ -1279,22 +1275,9 @@ namespace lfs::training {
             _splat_data->_max_screen_share.numel() == n) {
             auto& log_scales_clip = _splat_data->scaling_raw();
             assert(log_scales_clip.shape()[0] == n && log_scales_clip.shape()[1] == 3);
-            const bool* frozen = nullptr;
-            size_t frozen_n = 0;
-            if (_optimizer) {
-                const auto& mask = _optimizer->frozen_mask();
-                if (mask.is_valid()) {
-                    frozen = mask.ptr<bool>();
-                    frozen_n = mask.numel();
-                }
-            }
-            kernels::launch_clip_log_scale_by_screen_share(
-                log_scales_clip.ptr<float>(),
-                _splat_data->_max_screen_share.ptr<float>(),
-                frozen,
-                frozen_n,
-                _params->max_screen_share,
-                n);
+            const lfs::core::Tensor no_frozen;
+            const auto& frozen = _optimizer ? _optimizer->frozen_mask() : no_frozen;
+            training_ops(lfs::core::default_gpu_backend()).refine->clip_scales(log_scales_clip, _splat_data->_max_screen_share, frozen, _params->max_screen_share);
         }
 
         auto raw_opacities = _splat_data->opacity_raw();
@@ -1323,9 +1306,7 @@ namespace lfs::training {
                     ? _bounds.max_extent * 100.0f
                     : std::numeric_limits<float>::max();
             const float log_max_allowed = std::log(max_allowed);
-            mrnf_strategy::launch_prune_bounds_or(
-                means.ptr<float>(), scale_max.ptr<float>(), prune_mask.ptr<bool>(),
-                n, _bounds.center, max_allowed, log_max_allowed);
+            training_ops(lfs::core::default_gpu_backend()).mrnf->prune_bounds(means, scale_max, prune_mask, {_bounds.center[0], _bounds.center[1], _bounds.center[2]}, max_allowed, log_max_allowed);
         }
 
         if (_free_mask.is_valid() && n > 0) {
@@ -1337,12 +1318,7 @@ namespace lfs::training {
         if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
             _refine_counts_dev = Tensor::zeros({4}, Device::GPU, DataType::Int64);
         }
-        kernels::launch_packed_refine_counts(
-            prune_mask.ptr<bool>(), n,
-            nullptr, 0,
-            nullptr, 0,
-            nullptr, 0,
-            _refine_counts_dev.ptr<int64_t>());
+        training_ops(lfs::core::default_gpu_backend()).refine->counts(prune_mask, {}, {}, {}, _refine_counts_dev);
         const auto host_counts = _refine_counts_dev.to_vector_int64();
         const int pruned_count = static_cast<int>(host_counts[0]);
 
@@ -1814,11 +1790,7 @@ namespace lfs::training {
         auto weights_out = weights.masked_fill(_far_growth.outside_mask.logical_not(), 0.0f);
         auto weights_in = weights.masked_fill(_far_growth.outside_mask, 0.0f);
 
-        kernels::launch_packed_refine_counts(
-            nullptr, 0, nullptr, 0,
-            weights_out.ptr<float>(), n,
-            weights_in.ptr<float>(), n,
-            _refine_counts_dev.ptr<int64_t>());
+        training_ops(lfs::core::default_gpu_backend()).refine->counts({}, {}, weights_out, weights_in, _refine_counts_dev);
         const auto host_counts = _refine_counts_dev.to_vector_int64();
         const int selectable_out = static_cast<int>(host_counts[2]);
         const int selectable_in = static_cast<int>(host_counts[3]);
@@ -1983,13 +1955,7 @@ namespace lfs::training {
         if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
             _refine_counts_dev = Tensor::zeros({4}, Device::GPU, DataType::Int64);
         }
-        kernels::launch_packed_refine_counts(
-            refine_candidates.ptr<bool>(), n,
-            nullptr, 0,
-            (replace_weights.is_valid() ? replace_weights.ptr<float>() : nullptr),
-            (replace_weights.is_valid() ? n : 0),
-            nullptr, 0,
-            _refine_counts_dev.ptr<int64_t>());
+        training_ops(lfs::core::default_gpu_backend()).refine->counts(refine_candidates, {}, replace_weights, {}, _refine_counts_dev);
         auto host_counts = _refine_counts_dev.to_vector_int64();
         int desired_total = static_cast<int>(
             std::round(static_cast<float>(host_counts[0]) * _params->grow_fraction));
@@ -2060,23 +2026,9 @@ namespace lfs::training {
                 }
                 error_score = error_score.contiguous();
                 Tensor oversize_weights = Tensor::zeros({n}, Device::GPU);
-                const bool* frozen = nullptr;
-                size_t frozen_n = 0;
-                if (_optimizer) {
-                    const auto& mask = _optimizer->frozen_mask();
-                    if (mask.is_valid()) {
-                        frozen = mask.ptr<bool>();
-                        frozen_n = mask.numel();
-                    }
-                }
-                kernels::launch_oversize_split_scores(
-                    error_score.ptr<float>(),
-                    _splat_data->_max_screen_share.ptr<float>(),
-                    frozen,
-                    frozen_n,
-                    oversize_weights.ptr<float>(),
-                    _params->max_screen_share,
-                    n);
+                const lfs::core::Tensor no_frozen;
+                const auto& frozen = _optimizer ? _optimizer->frozen_mask() : no_frozen;
+                training_ops(lfs::core::default_gpu_backend()).refine->oversize_scores(error_score, _splat_data->_max_screen_share, frozen, oversize_weights, _params->max_screen_share);
                 if (active_mask.is_valid()) {
                     oversize_weights = oversize_weights * active_mask;
                 }
@@ -2086,11 +2038,7 @@ namespace lfs::training {
                 if (replace_mask.is_valid()) {
                     oversize_weights = oversize_weights.masked_fill(replace_mask, 0.0f);
                 }
-                kernels::launch_packed_refine_counts(
-                    nullptr, 0, nullptr, 0,
-                    oversize_weights.ptr<float>(), n,
-                    nullptr, 0,
-                    _refine_counts_dev.ptr<int64_t>());
+                training_ops(lfs::core::default_gpu_backend()).refine->counts({}, {}, oversize_weights, {}, _refine_counts_dev);
                 host_counts = _refine_counts_dev.to_vector_int64();
                 const int selectable_oversize = static_cast<int>(host_counts[2]);
                 if (selectable_oversize > 0) {
@@ -2135,11 +2083,7 @@ namespace lfs::training {
             }
 
             // Growth nnz is data-dependent on replace_mask — second packed slot.
-            kernels::launch_packed_refine_counts(
-                nullptr, 0, nullptr, 0,
-                growth_weights.ptr<float>(), n,
-                nullptr, 0,
-                _refine_counts_dev.ptr<int64_t>());
+            training_ops(lfs::core::default_gpu_backend()).refine->counts({}, {}, growth_weights, {}, _refine_counts_dev);
             host_counts = _refine_counts_dev.to_vector_int64();
             const int selectable_growth = static_cast<int>(host_counts[2]);
             if (selectable_growth > 0) {
@@ -2189,11 +2133,7 @@ namespace lfs::training {
                     if (!explore_weights.is_valid() || explore_weights.numel() != n) {
                         n_explore = 0;
                     } else {
-                        kernels::launch_packed_refine_counts(
-                            nullptr, 0, nullptr, 0,
-                            explore_weights.ptr<float>(), n,
-                            nullptr, 0,
-                            _refine_counts_dev.ptr<int64_t>());
+                        training_ops(lfs::core::default_gpu_backend()).refine->counts({}, {}, explore_weights, {}, _refine_counts_dev);
                         host_counts = _refine_counts_dev.to_vector_int64();
                         const int selectable_explore = static_cast<int>(host_counts[2]);
                         n_explore = std::min(n_explore, selectable_explore);
@@ -2284,7 +2224,7 @@ namespace lfs::training {
         // Local to the refine event so the staging storage returns to the CUDA
         // pool before the next phase; no later refine reads the prior children.
         DensifyChildWorkspace densify_ws;
-        densify_ws.ensure(std::min(K, chunk_rows), sh_rest, use_shN, /*sh0_flat_layout=*/false, Device::CUDA);
+        densify_ws.ensure(std::min(K, chunk_rows), sh_rest, use_shN, /*sh0_flat_layout=*/false, Device::GPU);
         _densify_child_required_peak_bytes = std::max(
             _densify_child_required_peak_bytes, densify_ws.required_bytes());
         _densify_child_allocated_peak_bytes = std::max(
@@ -2306,23 +2246,7 @@ namespace lfs::training {
             // The LAS kernel only needs linear shN to copy child rows. shN itself is unchanged
             // for the parent rows, so keep the resident swizzled buffer in place and gather the
             // selected child rows below.
-            kernels::launch_long_axis_split_gaussians_inplace(
-                _splat_data->means().ptr<float>(),
-                _splat_data->rotation_raw().ptr<float>(),
-                _splat_data->scaling_raw().ptr<float>(),
-                _splat_data->sh0().ptr<float>(),
-                nullptr,
-                _splat_data->opacity_raw().ptr<float>(),
-                child_means.ptr<float>(),
-                child_rotations.ptr<float>(),
-                child_log_scales.ptr<float>(),
-                child_sh0.ptr<float>(),
-                nullptr,
-                child_raw_opacities.ptr<float>(),
-                chunk_indices.ptr<int64_t>(),
-                static_cast<int>(count),
-                0,
-                nullptr);
+            training_ops(lfs::core::default_gpu_backend()).refine->split({_splat_data->means(), _splat_data->rotation_raw(), _splat_data->scaling_raw(), _splat_data->sh0(), _splat_data->opacity_raw()}, {child_means, child_rotations, child_log_scales, child_sh0, child_raw_opacities}, chunk_indices);
 
             if (use_shN) {
                 lfs::training::sh_value::gather_shN_to_canonical(
@@ -2378,12 +2302,7 @@ namespace lfs::training {
         assert(!trainable_mask.is_valid() || (trainable_mask.ndim() == 1 && trainable_mask.numel() == n));
         assert(!edge_guidance.is_valid() || (edge_guidance.ndim() == 1 && edge_guidance.numel() == n));
         auto w_view = _densify_n_scratch.f32_a_view(n);
-        mrnf_strategy::launch_replace_parent_weights(
-            opacities.ptr<float>(), visibility.ptr<float>(),
-            active_mask.is_valid() ? active_mask.ptr<bool>() : nullptr,
-            trainable_mask.is_valid() ? trainable_mask.ptr<bool>() : nullptr,
-            edge_guidance.is_valid() ? edge_guidance.ptr<float>() : nullptr,
-            w_view.ptr<float>(), n);
+        training_ops(default_gpu_backend()).mrnf->replace_parent_weights(opacities, visibility, active_mask, trainable_mask, edge_guidance, w_view);
         return w_view;
     }
 
@@ -2430,7 +2349,7 @@ namespace lfs::training {
             const size_t cap_floats = cap_rows > 0 ? lfs::core::sh_swizzled_float_count(cap_rows, layout_rest_u32)
                                                    : lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
             const size_t logical_floats = lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
-            const auto stream = getCurrentCUDAStream();
+            const auto stream = lfs::core::TensorExecutionTarget::current();
             t.sync_to_stream(stream);
             idx_i32.sync_to_stream(stream);
             auto fresh = Tensor::zeros_direct(TensorShape({logical_floats}), cap_floats, t.device(), t.dtype());
@@ -2727,11 +2646,7 @@ namespace lfs::training {
             if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
                 _refine_counts_dev = Tensor::zeros({4}, Device::GPU, DataType::Int64);
             }
-            kernels::launch_packed_refine_counts(
-                nullptr, 0, nullptr, 0,
-                opacities.ptr<float>(), n,
-                nullptr, 0,
-                _refine_counts_dev.ptr<int64_t>());
+            training_ops(lfs::core::default_gpu_backend()).refine->counts({}, {}, opacities, {}, _refine_counts_dev);
             const auto host_counts = _refine_counts_dev.to_vector_int64();
             auto keep_indices = Tensor::empty({keep_budget}, Device::GPU, DataType::Int64);
             mrnf_ops().gumbel(
@@ -2844,29 +2759,13 @@ namespace lfs::training {
         const int64_t slots_to_fill = std::min(count, num_free);
         auto target_indices = free_indices.slice(0, 0, slots_to_fill);
 
-        const int opacity_dim = (_splat_data->opacity_raw().ndim() == 2) ? 1 : 0;
         auto pos_slice = positions.slice(0, 0, slots_to_fill);
         auto rot_slice = rotations.slice(0, 0, slots_to_fill);
         auto scale_slice = scales.slice(0, 0, slots_to_fill);
         auto sh0_slice = sh0.slice(0, 0, slots_to_fill);
         auto opac_slice = opacities.slice(0, 0, slots_to_fill);
 
-        kernels::launch_fill_free_slots_fused(
-            target_indices.ptr<int64_t>(),
-            static_cast<size_t>(slots_to_fill),
-            pos_slice.ptr<float>(),
-            rot_slice.ptr<float>(),
-            scale_slice.ptr<float>(),
-            sh0_slice.ptr<float>(),
-            opac_slice.ptr<float>(),
-            _splat_data->means().ptr<float>(),
-            _splat_data->rotation_raw().ptr<float>(),
-            _splat_data->scaling_raw().ptr<float>(),
-            _splat_data->sh0().ptr<float>(),
-            _splat_data->opacity_raw().ptr<float>(),
-            opacity_dim,
-            _free_mask.ptr<bool>(),
-            current_size);
+        training_ops(lfs::core::default_gpu_backend()).refine->fill_slots(target_indices, {pos_slice, rot_slice, scale_slice, sh0_slice, opac_slice}, {_splat_data->means(), _splat_data->rotation_raw(), _splat_data->scaling_raw(), _splat_data->sh0(), _splat_data->opacity_raw()}, _free_mask);
 
         const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
         if (layout_rest > 0 && shN.is_valid() && shN.numel() > 0 &&
@@ -3087,11 +2986,7 @@ namespace lfs::training {
         if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
             _refine_counts_dev = Tensor::zeros({4}, Device::GPU, DataType::Int64);
         }
-        kernels::launch_packed_refine_counts(
-            nullptr, 0, nullptr, 0,
-            seed_weights.ptr<float>(), hw,
-            nullptr, 0,
-            _refine_counts_dev.ptr<int64_t>());
+        training_ops(lfs::core::default_gpu_backend()).refine->counts({}, {}, seed_weights, {}, _refine_counts_dev);
         const auto host_counts = _refine_counts_dev.to_vector_int64();
         n_seed = std::min(n_seed, static_cast<int>(host_counts[2]));
         if (n_seed <= 0) {

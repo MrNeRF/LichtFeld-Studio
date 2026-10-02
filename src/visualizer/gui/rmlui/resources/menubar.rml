@@ -26,18 +26,7 @@
             </div>
             <div class="menu-toolbar-separator"></div>
             <div class="icon-btn menu-toolbar-btn"
-                 data-for="button : menu_render_buttons"
-                 data-attr-id="button.button_id"
-                 data-class-selected="button.selected"
-                 data-attr-data-action="button.action"
-                 data-attr-data-value="button.value"
-                 data-attr-data-tooltip="button.tooltip_key"
-                 data-attr-title="button.tooltip_text">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            <div class="menu-toolbar-separator"></div>
-            <div class="icon-btn menu-toolbar-btn"
-                 data-for="button : menu_projection_buttons"
+                 data-for="button : menu_snap_buttons"
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-action="button.action"
@@ -72,8 +61,8 @@
                 <div class="menu-window-separator"></div>
                 <div id="menu-window-split-view"
                      class="icon-btn menu-window-btn menu-window-utility-btn"
-                     data-action="toggle_independent_split_view"
-                     title="@tr:ui.independent_split_view">
+                     data-action="toggle_split_viewport"
+                     title="@tr:ui.split_viewport">
                     <img src="../icon/layout-columns.png" />
                 </div>
                 <div id="menu-window-toggle-ui"

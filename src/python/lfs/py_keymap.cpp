@@ -125,7 +125,7 @@ namespace lfs::python {
             .value("ZOOM_SPEED_UP", Action::ZOOM_SPEED_UP)
             .value("ZOOM_SPEED_DOWN", Action::ZOOM_SPEED_DOWN)
             .value("TOGGLE_SPLIT_VIEW", Action::TOGGLE_SPLIT_VIEW)
-            .value("TOGGLE_INDEPENDENT_SPLIT_VIEW", Action::TOGGLE_INDEPENDENT_SPLIT_VIEW)
+            .value("TOGGLE_SPLIT_VIEWPORT", Action::TOGGLE_SPLIT_VIEWPORT)
             .value("TOGGLE_GT_COMPARISON", Action::TOGGLE_GT_COMPARISON)
             .value("TOGGLE_DEPTH_MODE", Action::TOGGLE_DEPTH_MODE)
             .value("CYCLE_PLY", Action::CYCLE_PLY)
@@ -192,6 +192,16 @@ namespace lfs::python {
             .value("ASSET_GALLERY_PRIMARY", Action::ASSET_GALLERY_PRIMARY)
             .value("ASSET_GALLERY_COPY_LINK", Action::ASSET_GALLERY_COPY_LINK)
             .value("ASSET_REFRESH", Action::ASSET_REFRESH)
+            .value("VIEW_AXIS_TOP", Action::VIEW_AXIS_TOP)
+            .value("VIEW_AXIS_BOTTOM", Action::VIEW_AXIS_BOTTOM)
+            .value("VIEW_AXIS_FRONT", Action::VIEW_AXIS_FRONT)
+            .value("VIEW_AXIS_BACK", Action::VIEW_AXIS_BACK)
+            .value("VIEW_AXIS_RIGHT", Action::VIEW_AXIS_RIGHT)
+            .value("VIEW_AXIS_LEFT", Action::VIEW_AXIS_LEFT)
+            .value("VIEW_TOGGLE_PERSPECTIVE", Action::VIEW_TOGGLE_PERSPECTIVE)
+            .value("VIEW_FRAME_ALL", Action::VIEW_FRAME_ALL)
+            .value("TOGGLE_QUAD_VIEW", Action::TOGGLE_QUAD_VIEW)
+            .value("TOGGLE_MAXIMIZE_AREA", Action::TOGGLE_MAXIMIZE_AREA)
             .value("DEPTH_WINDOW_DRAG", Action::DEPTH_WINDOW_DRAG);
 
         // Expose ToolMode enum

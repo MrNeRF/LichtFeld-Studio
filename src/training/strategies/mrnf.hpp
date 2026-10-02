@@ -7,7 +7,6 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "istrategy.hpp"
-#include "kernels/mrnf_kernels.hpp"
 #include "lfs/training/ops/mrnf.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "optimizer/adam_optimizer.hpp"

@@ -26,7 +26,10 @@
 #include "licht_matrix_test_data.hpp"
 #include "licht_test_support.hpp"
 #include "project/session_state.hpp"
+#include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_types.hpp"
+#include "screen/screen.hpp"
+#include "screen/view3d_space.hpp"
 #include "sequencer/timeline.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/project_snapshot_chapters.hpp"
@@ -38,6 +41,7 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <limits>
@@ -63,7 +67,7 @@ namespace lfs::vis {
             // arrives during initialize(). Capture needs its real state, not
             // a window, an event loop, or GPU initialization.
             viewer.input_controller_ = std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         }
     };
 
@@ -81,6 +85,32 @@ namespace {
     using lfs::test::licht::rolled_panel_camera;
     using lfs::test::licht::TemporaryDirectory;
     using namespace lfs::vis::project;
+
+    class ScopedLfsHome {
+    public:
+        explicit ScopedLfsHome(const fs::path& path) {
+            if (const char* previous = std::getenv("LFS_HOME"))
+                previous_ = previous;
+#ifdef _WIN32
+            (void)_putenv_s("LFS_HOME", path.string().c_str());
+#else
+            (void)setenv("LFS_HOME", path.string().c_str(), 1);
+#endif
+        }
+        ~ScopedLfsHome() {
+#ifdef _WIN32
+            (void)_putenv_s("LFS_HOME", previous_ ? previous_->c_str() : "");
+#else
+            if (previous_)
+                (void)setenv("LFS_HOME", previous_->c_str(), 1);
+            else
+                (void)unsetenv("LFS_HOME");
+#endif
+        }
+
+    private:
+        std::optional<std::string> previous_;
+    };
 
     void overwrite_f32_le(
         std::vector<std::byte>& bytes,
@@ -804,13 +834,14 @@ namespace {
         EXPECT_TRUE(restored->gut);
 
         Viewport viewport;
+        lfs::vis::ViewSettings view_settings;
         auto expected = rolled_panel_camera(7.0f);
         expected.ortho_extent_world = static_cast<float>(viewport.windowSize.y) / *expected.ortho_scale;
         applyPanelCameraProjectState(
-            viewport, expected);
+            viewport, view_settings, expected);
         EXPECT_EQ(
             capturePanelCameraProjectState(
-                viewport),
+                viewport, view_settings.ortho_scale),
             expected);
     }
 
@@ -823,15 +854,15 @@ namespace {
         EXPECT_EQ(restored->ortho_extent_world, state.ortho_extent_world);
         for (const int height : {480, 1080}) {
             Viewport viewport(1280, height);
-            applyPanelCameraProjectState(viewport, *restored);
-            ASSERT_TRUE(viewport.ortho_scale_override);
-            EXPECT_FLOAT_EQ(height / *viewport.ortho_scale_override, 6.25f);
-            const auto saved = capturePanelCameraProjectState(viewport);
+            lfs::vis::ViewSettings settings;
+            applyPanelCameraProjectState(viewport, settings, *restored);
+            EXPECT_FLOAT_EQ(height / settings.ortho_scale, 6.25f);
+            const auto saved = capturePanelCameraProjectState(viewport, settings.ortho_scale);
             ASSERT_TRUE(saved.ortho_extent_world);
             EXPECT_FLOAT_EQ(*saved.ortho_extent_world, 6.25f);
             Viewport reopened(1280, height * 2);
-            applyPanelCameraProjectState(reopened, saved);
-            EXPECT_FLOAT_EQ(reopened.windowSize.y / *reopened.ortho_scale_override, 6.25f);
+            applyPanelCameraProjectState(reopened, settings, saved);
+            EXPECT_FLOAT_EQ(reopened.windowSize.y / settings.ortho_scale, 6.25f);
         }
         json["ortho_extent_world"] = -1;
         EXPECT_FALSE(panelCameraProjectStateFromJson(json));
@@ -839,20 +870,13 @@ namespace {
         EXPECT_TRUE(panelCameraProjectStateFromJson(json));
     }
 
-    TEST(P5SessionChapterTest, CaptureUsesRenderSettingsOrthoScaleWhenOverrideMissing) {
+    TEST(P5SessionChapterTest, CaptureUsesViewSettingsOrthoScale) {
         Viewport viewport(1280, 720);
         const float fallback = 720.0f / 6.25f;
         auto captured = capturePanelCameraProjectState(viewport, fallback);
-        EXPECT_FALSE(captured.ortho_scale.has_value());
+        EXPECT_EQ(captured.ortho_scale, fallback);
         ASSERT_TRUE(captured.ortho_extent_world.has_value());
         EXPECT_FLOAT_EQ(*captured.ortho_extent_world, 6.25f);
-
-        viewport.ortho_scale_override = 720.0f / 5.0f;
-        captured = capturePanelCameraProjectState(viewport, fallback);
-        ASSERT_TRUE(captured.ortho_scale.has_value());
-        EXPECT_FLOAT_EQ(*captured.ortho_scale, 720.0f / 5.0f);
-        ASSERT_TRUE(captured.ortho_extent_world.has_value());
-        EXPECT_FLOAT_EQ(*captured.ortho_extent_world, 5.0f);
 
         Viewport empty(1280, 0);
         captured = capturePanelCameraProjectState(empty, fallback);
@@ -984,7 +1008,7 @@ namespace {
         auto prepared = require_result(
             prepareGuiSessionRestore(std::move(session)));
 
-        viewer.getGuiManager()->panelLayout().setShowSequencer(true);
+        viewer.getGuiManager()->setSequencerVisible(true);
         applyGuiSessionTools(viewer, prepared);
 
         EXPECT_EQ(
@@ -1002,7 +1026,7 @@ namespace {
             viewer.getGuiManager()->gizmo().getSelectionSubMode(),
             lfs::vis::SelectionSubMode::Rectangle);
         EXPECT_TRUE(
-            viewer.getGuiManager()->panelLayout().isShowSequencer());
+            viewer.getGuiManager()->isSequencerVisible());
     }
 
     TEST(P5SessionChapterTest,
@@ -1246,7 +1270,7 @@ namespace {
         lfs::vis::ViewerOptions options;
         options.show_startup_overlay = false;
         lfs::vis::VisualizerImpl viewer(options);
-        viewer.getGuiManager()->panelLayout().setShowSequencer(true);
+        viewer.getGuiManager()->setSequencerVisible(true);
 
         auto session = make_populated_session_chapters();
         auto view = json_root(session.view.dom());
@@ -1261,7 +1285,7 @@ namespace {
             viewer.getEditorContext().getActiveTool(),
             lfs::vis::ToolType::None);
         EXPECT_TRUE(
-            viewer.getGuiManager()->panelLayout().isShowSequencer());
+            viewer.getGuiManager()->isSequencerVisible());
     }
 
     TEST(P5SessionChapterTest,
@@ -1280,8 +1304,7 @@ namespace {
         staged.split_view_offset = saved_offset;
         rendering->updateSettings(staged);
         rendering->restoreSplitViewMode(
-            lfs::vis::SplitViewMode::PLYComparison,
-            viewer.getViewport());
+            lfs::vis::SplitViewMode::PLYComparison);
         EXPECT_EQ(
             rendering->getSettings().split_view_offset,
             0u);
@@ -2227,7 +2250,7 @@ namespace {
         expect_bool(render, "/show_camera_frustums", true);
         expect_bool(render, "/show_pivot", true);
         prove("VIEW-197");
-        expect_json(render, "/split_view_mode", 3);
+        expect_json(render, "/split_view_mode", 1);
         expect_json(render, "/gt_comparison_mode", 2);
         expect_json(render, "/raster_backend", "3dgut");
         EXPECT_FALSE(render.contains("gut"));
@@ -2253,17 +2276,17 @@ namespace {
         expect_json(render, "/lod_page_pool_splats", 765'432);
         expect_bool(render, "/lod_debug_colors", true);
         prove("VIEW-202");
-        expect_json(view, "/split/panel_grid_planes", Json::array({0, 2}));
+        EXPECT_FALSE(at(view, "/split").contains("panel_grid_planes"));
         prove("VIEW-203");
-        ASSERT_EQ(at(view, "/panel_cameras").size(), 2u);
+        ASSERT_EQ(at(view, "/panel_cameras").size(), 1u);
         expect_json(view, "/panel_cameras/0/R",
                     Json::array({0.0f, 1.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f}));
-        EXPECT_TRUE(at(view, "/panel_cameras/1/ortho_scale").is_number());
+        EXPECT_TRUE(at(view, "/panel_cameras/0/ortho_scale").is_number());
         prove("VIEW-204");
         expect_json(view, "/navigation/mode", "drone");
         expect_bool(view, "/navigation/view_snap", true);
         prove("VIEW-205");
-        expect_json(view, "/split/focused_panel", "right");
+        EXPECT_FALSE(at(view, "/split").contains("focused_panel"));
         expect_json(view, "/split/gt_camera_id", 41);
         prove("VIEW-206");
         ASSERT_EQ(at(view, "/camera_bookmarks").size(), 1u);
@@ -2595,6 +2618,189 @@ namespace {
             scene, params, lfs::core::generate_uuid_v4(), 1, cpu);
         ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
         EXPECT_TRUE(cpu.parameters.dataset.data_path.is_absolute());
+    }
+
+    Json find_space_payload_for_test(const Json& root, const std::string_view type) {
+        for (const auto& layout : root.at("layouts")) {
+            for (const auto& area : layout.at("areas")) {
+                for (const auto& space : area.at("spaces")) {
+                    if (space.value("type", std::string{}) == type)
+                        return space.at("opaque_payload");
+                }
+            }
+        }
+        return Json::object();
+    }
+
+    TEST(P5SessionChapterTest, MultiAreaScreenRoundTripsCamerasAndViewSettings) {
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        lfs::vis::P5SessionCaptureTestAccess::initializeInputController(viewer);
+        ASSERT_NE(viewer.getGuiManager(), nullptr);
+        ASSERT_NE(viewer.getRenderingManager(), nullptr);
+
+        lfs::vis::screen::AreaId view;
+        lfs::vis::screen::AreaId other;
+        viewer.screens().edit([&](lfs::vis::screen::Screen& screen) {
+            view = screen.activeView();
+            other = screen.split(view, lfs::vis::screen::SplitAxis::Columns, 0.5f);
+        });
+        ASSERT_TRUE(view.valid());
+        ASSERT_TRUE(other.valid());
+        auto* first = viewer.screens().view3D(view);
+        auto* second = viewer.screens().view3D(other);
+        ASSERT_NE(first, nullptr);
+        ASSERT_NE(second, nullptr);
+        first->camera.setViewMatrix(glm::mat3(1.0f), glm::vec3(1.0f, 2.0f, 3.0f));
+        first->camera.camera.pivot = glm::vec3(0.25f, 0.5f, 0.75f);
+        first->settings.show_grid = false;
+        first->settings.orthographic = true;
+        first->settings.focal_length_mm = 85.0f;
+        second->camera.setViewMatrix(glm::mat3(1.0f), glm::vec3(9.0f, 8.0f, 7.0f));
+        second->camera.camera.pivot = glm::vec3(4.0f, 5.0f, 6.0f);
+        second->settings.point_cloud_mode = true;
+        second->settings.show_camera_frustums = true;
+        second->settings.focal_length_mm = 24.0f;
+
+        auto& properties = viewer.getGuiManager()->screenHost().properties();
+        properties.setActiveTab("lfs.training");
+        properties.setScroll(0.375f);
+
+        auto session = make_populated_session_chapters();
+        const auto captured = require_result(captureGuiSession(viewer, session, {}));
+        const Json gui = json_root(captured.gui_layout.dom());
+        const Json screen_json = find_space_payload_for_test(gui, "screen");
+        ASSERT_TRUE(screen_json.contains("layout"));
+        ASSERT_TRUE(screen_json.contains("areas"));
+        EXPECT_EQ(screen_json["properties"]["active_tab"], "lfs.training");
+        EXPECT_FLOAT_EQ(screen_json["properties"]["scroll"].get<float>(), 0.375f);
+        int view_count = 0;
+        for (const auto& area : screen_json["areas"]) {
+            if (area.value("editor", std::string{}) == "view3d")
+                ++view_count;
+        }
+        EXPECT_EQ(view_count, 2);
+
+        const Json view_json = json_root(captured.view.dom());
+        EXPECT_FALSE(view_json.contains("panel_cameras"));
+        EXPECT_FALSE(view_json["render_settings"].contains("focal_length_mm"));
+        EXPECT_TRUE(view_json["render_settings"].contains("antialiasing"));
+
+        viewer.screens().resetToDefault();
+        properties.setActiveTab("lfs.preferences");
+        properties.setScroll(0.0f);
+        auto prepared = require_result(prepareGuiSessionRestore(captured));
+        std::vector<CameraBookmarkProjectState> bookmarks;
+        applyGuiSession(viewer, prepared, bookmarks);
+
+        EXPECT_EQ(properties.activeTab(), "lfs.training");
+        EXPECT_FLOAT_EQ(properties.scroll(), 0.375f);
+
+        auto* restored_first = viewer.screens().view3D(view);
+        auto* restored_second = viewer.screens().view3D(other);
+        ASSERT_NE(restored_first, nullptr);
+        ASSERT_NE(restored_second, nullptr);
+        EXPECT_EQ(restored_first->camera.camera.t, glm::vec3(1.0f, 2.0f, 3.0f));
+        EXPECT_EQ(restored_first->camera.camera.pivot, glm::vec3(0.25f, 0.5f, 0.75f));
+        EXPECT_FALSE(restored_first->settings.show_grid);
+        EXPECT_TRUE(restored_first->settings.orthographic);
+        EXPECT_FLOAT_EQ(restored_first->settings.focal_length_mm, 85.0f);
+        EXPECT_EQ(restored_second->camera.camera.t, glm::vec3(9.0f, 8.0f, 7.0f));
+        EXPECT_EQ(restored_second->camera.camera.pivot, glm::vec3(4.0f, 5.0f, 6.0f));
+        EXPECT_TRUE(restored_second->settings.point_cloud_mode);
+        EXPECT_TRUE(restored_second->settings.show_camera_frustums);
+        EXPECT_FLOAT_EQ(restored_second->settings.focal_length_mm, 24.0f);
+        EXPECT_EQ(viewer.screens().screen().views().size(), 2u);
+    }
+
+    TEST(P5SessionChapterTest, ResetLayoutRestoresDefaultScreenAndMarksRenderingDirty) {
+        TemporaryDirectory temporary{"licht-screen-reset"};
+        const ScopedLfsHome home(temporary.path);
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        auto* gui = viewer.getGuiManager();
+        auto* rendering = viewer.getRenderingManager();
+        ASSERT_NE(gui, nullptr);
+        ASSERT_NE(rendering, nullptr);
+
+        const auto initial_area_count = viewer.screens().screen().areas().size();
+        const auto active = viewer.screens().screen().activeView();
+        ASSERT_TRUE(viewer.screens().screen().split(active, lfs::vis::screen::SplitAxis::Columns, 0.5f).valid());
+        ASSERT_GT(viewer.screens().screen().areas().size(), initial_area_count);
+        (void)rendering->pollDirtyState();
+
+        const auto reset = gui->resetLayout();
+        ASSERT_TRUE(reset) << reset.error();
+        EXPECT_EQ(viewer.screens().screen().areas().size(), initial_area_count);
+        EXPECT_NE(rendering->pendingDirtyMask() & lfs::vis::DirtyFlag::ALL, 0u);
+    }
+
+    TEST(P5SessionChapterTest, OldFormatProjectOpensWithDefaultScreenAndLegacyView) {
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        lfs::vis::P5SessionCaptureTestAccess::initializeInputController(viewer);
+        ASSERT_NE(viewer.getGuiManager(), nullptr);
+        ASSERT_NE(viewer.getRenderingManager(), nullptr);
+
+        auto prepared = require_result(
+            prepareGuiSessionRestore(make_populated_session_chapters()));
+        std::vector<CameraBookmarkProjectState> bookmarks;
+        applyGuiSession(viewer, prepared, bookmarks);
+
+        const auto& screen = viewer.screens().screen();
+        EXPECT_EQ(screen.areas().size(), 3u);
+        EXPECT_TRUE(screen.findEditor(lfs::vis::screen::editors::kView3D).valid());
+        EXPECT_TRUE(screen.findEditor(lfs::vis::screen::editors::kScene).valid());
+        EXPECT_TRUE(screen.findEditor(lfs::vis::screen::editors::kProperties).valid());
+        auto* view = viewer.screens().view3D(screen.activeView().value);
+        ASSERT_NE(view, nullptr);
+        const auto expected = rolled_panel_camera(1.0f);
+        EXPECT_EQ(view->camera.camera.t, glm::vec3(expected.translation[0],
+                                                   expected.translation[1],
+                                                   expected.translation[2]));
+        EXPECT_FLOAT_EQ(view->settings.focal_length_mm, 73.0f);
+        EXPECT_TRUE(view->settings.orthographic);
+        EXPECT_TRUE(view->settings.point_cloud_mode);
+        EXPECT_TRUE(view->settings.depth_view);
+        EXPECT_TRUE(view->settings.show_camera_frustums);
+        EXPECT_EQ(view->settings.grid_plane, 2);
+        EXPECT_TRUE(viewer.getRenderingManager()->getSettings().antialiasing);
+        EXPECT_EQ(viewer.getRenderingManager()->getSettings().sh_degree, 2);
+    }
+
+    TEST(P5SessionChapterTest, MalformedScreenJsonIsRejectedWithoutPartialState) {
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        lfs::vis::P5SessionCaptureTestAccess::initializeInputController(viewer);
+        const auto before = viewer.screens().read(
+            [](const lfs::vis::screen::Screen& screen) { return screen.save(); });
+        const auto before_generation = viewer.screens().screen().generation();
+
+        auto session = make_populated_session_chapters();
+        auto gui = json_root(session.gui_layout.dom());
+        gui["layouts"][0]["areas"][0]["spaces"][0] = Json{
+            {"type", "screen"},
+            {"version", 1},
+            {"opaque_payload",
+             Json{
+                 {"version", 1},
+                 {"layout", {{"area", 1}}},
+                 {"areas", Json::array()},
+             }},
+        };
+        session.gui_layout = require_result(GuiLayoutChapter::parse(gui.dump()));
+        const auto prepared = prepareGuiSessionRestore(std::move(session));
+        ASSERT_FALSE(prepared);
+        EXPECT_EQ(prepared.error().code(), lfs::ErrorCode::DataLoss);
+
+        EXPECT_EQ(viewer.screens().screen().generation(), before_generation);
+        const auto after = viewer.screens().read(
+            [](const lfs::vis::screen::Screen& screen) { return screen.save(); });
+        EXPECT_EQ(after, before);
     }
 
 } // namespace

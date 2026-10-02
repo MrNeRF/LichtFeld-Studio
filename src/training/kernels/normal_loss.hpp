@@ -3,35 +3,11 @@
 
 #pragma once
 
-#include <cstddef>
+#include "lfs/training/ops/geometry_types.hpp"
+
 #include <cuda_runtime.h>
 
 namespace lfs::training::kernels {
-
-    // Final/diagnostic slots at the front of the partials buffer. kSlotCount
-    // must stay even: the double-precision block partials start right after
-    // the float slots and need 8-byte alignment.
-    namespace normal_loss_slots {
-        constexpr int kValid = 0;
-        constexpr int kSumAlpha = 1;
-        constexpr int kCount = 2;
-        constexpr int kMeanCos = 3;
-        constexpr int kInvNorm = 4;
-        constexpr int kSlotCount = 6;
-    } // namespace normal_loss_slots
-
-    constexpr float kNormalLossMinAlpha = 1.0e-3f;
-    // Priors encode "no prediction" (sky, matting holes) as ~(0.5,0.5,0.5),
-    // which decodes to a near-zero vector; a real unit normal decodes to ~1.
-    constexpr float kNormalLossMinPriorNorm = 0.5f;
-    // Skip pixels whose blended normal nearly cancels (opposing primitives at
-    // silhouettes): the direction is ambiguous there and 1/|n| in the cosine
-    // gradient would amplify it into the dominant term of the whole image.
-    constexpr float kNormalLossMinRenderNorm = 0.1f;
-    constexpr float kNormalLossMinValidCount = 64.0f;
-    constexpr float kNormalLossMinValidWeight = 16.0f;
-
-    [[nodiscard]] size_t normal_loss_partial_count(size_t num_pixels);
 
     // Alpha-weighted cosine supervision of the accumulated camera-space normal
     // map against a decoded prior:

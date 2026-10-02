@@ -38,8 +38,7 @@ namespace lfs::vis {
     enum class SplitViewMode {
         Disabled,
         PLYComparison,
-        GTComparison,
-        IndependentDual
+        GTComparison
     };
 
     enum class GTComparisonMode {
@@ -147,12 +146,19 @@ namespace lfs::vis {
         return std::nullopt;
     }
 
-    [[nodiscard]] inline bool splitViewUsesGTComparison(const SplitViewMode mode) {
-        return mode == SplitViewMode::GTComparison;
+    // Select a validation pair containing the provisional node without changing
+    // the stored comparison offset. Keep the displayed left model when possible.
+    [[nodiscard]] inline size_t plyComparisonImportOffset(size_t count, size_t offset, size_t provisional) {
+        const auto displayed = plyComparisonPairForOffset(count, offset);
+        if (!displayed || provisional >= count || displayed->first == provisional || displayed->second == provisional)
+            return offset;
+        const size_t left = std::min(displayed->first, provisional);
+        const size_t right = std::max(displayed->first, provisional);
+        return left * (2 * count - left - 1) / 2 + right - left - 1;
     }
 
-    [[nodiscard]] inline bool splitViewUsesIndependentPanels(const SplitViewMode mode) {
-        return mode == SplitViewMode::IndependentDual;
+    [[nodiscard]] inline bool splitViewUsesGTComparison(const SplitViewMode mode) {
+        return mode == SplitViewMode::GTComparison;
     }
 
     [[nodiscard]] inline float effectiveSceneRenderScale(
@@ -287,7 +293,103 @@ namespace lfs::vis {
 
     using PPISPOverrides = lfs::training::PPISPViewportOverrides;
 
-    struct RenderSettings {
+    // Settings that belong to one 3D view: lens, projection, overlays, display
+    // mode, comparison mode and selection depth filter. Every 3D view owns one.
+    struct ViewSettings {
+        float focal_length_mm = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
+        bool equirectangular = false;
+        bool orthographic = false;
+        float ortho_scale = 100.0f; // Pixels per world unit (larger = more zoomed in)
+
+        // Coordinate axes
+        bool show_coord_axes = false;
+        float axes_size = 2.0f;
+        std::array<bool, 3> axes_visibility = {true, true, true};
+
+        // Grid
+        bool show_grid = true;
+        int grid_plane = 1;
+        float grid_opacity = 0.5f;
+
+        // Point cloud
+        bool point_cloud_mode = false;
+        float voxel_size = 0.01f;
+
+        // Ring mode (only active in splat mode)
+        bool show_rings = false;
+        float ring_width = 0.01f;
+        bool show_center_markers = false;
+
+        // Camera frustums
+        bool show_camera_frustums = false; // Master toggle for camera frustum rendering
+        float camera_frustum_scale = 0.25f;
+
+        // Pivot point visualization
+        bool show_pivot = false;
+
+        // Comparison inside this view
+        SplitViewMode split_view_mode = SplitViewMode::Disabled;
+        GTComparisonMode gt_comparison_mode = GTComparisonMode::RGB;
+        float split_position = 0.5f;
+        size_t split_view_offset = 0;
+
+        bool depth_view = false;
+        float depth_view_min = lfs::rendering::DEFAULT_DEPTH_VIEW_MIN;
+        float depth_view_max = lfs::rendering::DEFAULT_DEPTH_VIEW_MAX;
+        lfs::rendering::DepthVisualizationMode depth_visualization_mode =
+            lfs::rendering::DepthVisualizationMode::Palette;
+
+        // Depth filter (Selection tool only - separate from crop box)
+        bool depth_filter_enabled = false;
+        glm::vec3 depth_filter_min = glm::vec3(-50.0f, -10000.0f, 0.0f);
+        glm::vec3 depth_filter_max = glm::vec3(50.0f, 10000.0f, 100.0f);
+        lfs::geometry::EuclideanTransform depth_filter_transform;
+        float depth_filter_scale_x = 0.35f;
+        float depth_filter_scale_y = 0.35f;
+        float depth_filter_offset_x = 0.0f;
+        float depth_filter_offset_y = 0.0f;
+        int depth_filter_viz_mode = 1;
+        [[nodiscard]] bool operator==(const ViewSettings& other) const {
+            return focal_length_mm == other.focal_length_mm &&
+                   equirectangular == other.equirectangular &&
+                   orthographic == other.orthographic &&
+                   ortho_scale == other.ortho_scale &&
+                   show_coord_axes == other.show_coord_axes &&
+                   axes_size == other.axes_size &&
+                   axes_visibility == other.axes_visibility &&
+                   show_grid == other.show_grid &&
+                   grid_plane == other.grid_plane &&
+                   grid_opacity == other.grid_opacity &&
+                   point_cloud_mode == other.point_cloud_mode &&
+                   voxel_size == other.voxel_size &&
+                   show_rings == other.show_rings &&
+                   ring_width == other.ring_width &&
+                   show_center_markers == other.show_center_markers &&
+                   show_camera_frustums == other.show_camera_frustums &&
+                   camera_frustum_scale == other.camera_frustum_scale &&
+                   show_pivot == other.show_pivot &&
+                   split_view_mode == other.split_view_mode &&
+                   gt_comparison_mode == other.gt_comparison_mode &&
+                   split_position == other.split_position &&
+                   split_view_offset == other.split_view_offset &&
+                   depth_view == other.depth_view &&
+                   depth_view_min == other.depth_view_min &&
+                   depth_view_max == other.depth_view_max &&
+                   depth_visualization_mode == other.depth_visualization_mode &&
+                   depth_filter_enabled == other.depth_filter_enabled &&
+                   depth_filter_min == other.depth_filter_min &&
+                   depth_filter_max == other.depth_filter_max &&
+                   depth_filter_transform.toMat4() == other.depth_filter_transform.toMat4() &&
+                   depth_filter_scale_x == other.depth_filter_scale_x &&
+                   depth_filter_scale_y == other.depth_filter_scale_y &&
+                   depth_filter_offset_x == other.depth_filter_offset_x &&
+                   depth_filter_offset_y == other.depth_filter_offset_y &&
+                   depth_filter_viz_mode == other.depth_filter_viz_mode;
+        }
+    };
+
+    // Settings shared by every view of the scene.
+    struct SceneRenderSettings {
         enum class CameraMetricsMode {
             Off = 0,
             PSNR = 1,
@@ -295,7 +397,6 @@ namespace lfs::vis {
         };
 
         // Core rendering settings
-        float focal_length_mm = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
         float scaling_modifier = 1.0f;
         bool antialiasing = false;
         bool mip_filter = false;
@@ -335,50 +436,11 @@ namespace lfs::vis {
         float environment_exposure = 0.0f;
         float environment_rotation_degrees = 0.0f;
 
-        // Coordinate axes
-        bool show_coord_axes = false;
-        float axes_size = 2.0f;
-        std::array<bool, 3> axes_visibility = {true, true, true};
-
-        // Grid
-        bool show_grid = true;
-        int grid_plane = 1;
-        float grid_opacity = 0.5f;
-
-        // Point cloud
-        bool point_cloud_mode = false;
-        float voxel_size = 0.01f;
-
-        // Ring mode (only active in splat mode)
-        bool show_rings = false;
-        float ring_width = 0.01f;
-        bool show_center_markers = false;
-
-        // Camera frustums
-        bool show_camera_frustums = false; // Master toggle for camera frustum rendering
-        float camera_frustum_scale = 0.25f;
         glm::vec3 train_camera_color = glm::vec3(1.0f, 1.0f, 1.0f);
         glm::vec3 eval_camera_color = glm::vec3(1.0f, 0.0f, 0.0f);
 
-        // Pivot point visualization
-        bool show_pivot = false;
-
-        // Split view
-        SplitViewMode split_view_mode = SplitViewMode::Disabled;
-        GTComparisonMode gt_comparison_mode = GTComparisonMode::RGB;
-        float split_position = 0.5f;
-        size_t split_view_offset = 0;
-
         lfs::rendering::GaussianRasterBackend raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgs;
         bool gut = false;
-        bool equirectangular = false;
-        bool orthographic = false;
-        float ortho_scale = 100.0f; // Pixels per world unit (larger = more zoomed in)
-        bool depth_view = false;
-        float depth_view_min = lfs::rendering::DEFAULT_DEPTH_VIEW_MIN;
-        float depth_view_max = lfs::rendering::DEFAULT_DEPTH_VIEW_MAX;
-        lfs::rendering::DepthVisualizationMode depth_visualization_mode =
-            lfs::rendering::DepthVisualizationMode::Palette;
 
         // Selection colors (RGB: committed=219,83,83 preview=0,222,76 center=0,154,187)
         glm::vec3 selection_color_committed{0.859f, 0.325f, 0.325f};
@@ -399,17 +461,6 @@ namespace lfs::vis {
         bool mesh_shadow_enabled = false;
         int mesh_shadow_resolution = 2048;
 
-        // Depth filter (Selection tool only - separate from crop box)
-        bool depth_filter_enabled = false;
-        glm::vec3 depth_filter_min = glm::vec3(-50.0f, -10000.0f, 0.0f);
-        glm::vec3 depth_filter_max = glm::vec3(50.0f, 10000.0f, 100.0f);
-        lfs::geometry::EuclideanTransform depth_filter_transform;
-        float depth_filter_scale_x = 0.35f;
-        float depth_filter_scale_y = 0.35f;
-        float depth_filter_offset_x = 0.0f;
-        float depth_filter_offset_y = 0.0f;
-        int depth_filter_viz_mode = 1;
-
         // ---- LOD (Spark-style) ----
         bool lod_enabled = false;                       // Master toggle
         bool lod_auto_enable_rad = false;               // Keep LOD off by default, even for .rad
@@ -422,10 +473,26 @@ namespace lfs::vis {
         size_t lod_page_pool_splats = DEFAULT_LOD_PAGE_POOL_SPLATS;    // VRAM page-pool budget for RAD streaming (0 = auto)
         float lod_pool_vram_fraction = DEFAULT_LOD_POOL_VRAM_FRACTION; // out-of-core pool share of free VRAM
         int lod_fade_frames = DEFAULT_LOD_FADE_FRAMES;                 // newly streamed pages fade in over N frames
-        bool lod_debug_colors = false;                                 // Per-level color tinting
+        [[nodiscard]] bool operator==(const SceneRenderSettings&) const = default;
+
+        bool lod_debug_colors = false; // Per-level color tinting
     };
 
-    inline void sanitizeDepthViewSettings(RenderSettings& settings) {
+    // What one render of one view uses: the scene's settings combined with
+    // that view's. Only this composed type carries both halves.
+    struct RenderSettings : SceneRenderSettings, ViewSettings {
+        RenderSettings() = default;
+        RenderSettings(const SceneRenderSettings& scene, const ViewSettings& view)
+            : SceneRenderSettings(scene),
+              ViewSettings(view) {}
+
+        [[nodiscard]] SceneRenderSettings& scene() { return *this; }
+        [[nodiscard]] const SceneRenderSettings& scene() const { return *this; }
+        [[nodiscard]] ViewSettings& view() { return *this; }
+        [[nodiscard]] const ViewSettings& view() const { return *this; }
+    };
+
+    inline void sanitizeDepthViewSettings(ViewSettings& settings) {
         constexpr float kMinGap = 1.0e-4f;
 
         if (!std::isfinite(settings.depth_view_min)) {
@@ -453,7 +520,7 @@ namespace lfs::vis {
         }
     }
 
-    inline void sanitizeGTComparisonSettings(RenderSettings& settings) {
+    inline void sanitizeGTComparisonSettings(ViewSettings& settings) {
         switch (settings.gt_comparison_mode) {
         case GTComparisonMode::RGB:
         case GTComparisonMode::Normal:

@@ -45,7 +45,7 @@ namespace lfs::training {
             if (n == 0 || n_capacity >= n) {
                 return;
             }
-            if (device != Device::CUDA) {
+            if (device != Device::GPU) {
                 throw std::invalid_argument("GumbelTopKScratch requires CUDA storage");
             }
             const size_t new_cap = detail::grow_only_capacity(n_capacity, n);
@@ -63,7 +63,7 @@ namespace lfs::training {
             if (bytes == 0 || cub_bytes >= bytes) {
                 return;
             }
-            if (device != Device::CUDA) {
+            if (device != Device::GPU) {
                 throw std::invalid_argument("GumbelTopKScratch requires CUDA storage");
             }
             const size_t new_cap = detail::grow_only_capacity(cub_bytes, bytes);

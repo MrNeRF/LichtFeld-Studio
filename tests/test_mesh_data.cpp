@@ -254,6 +254,20 @@ TEST_F(MeshDataTest, MoveAssignmentTakesAFreshId) {
     EXPECT_NE(target.id(), source_id);
 }
 
+TEST_F(MeshDataTest, MoveAssignmentRebindsTensorMembersThatAreViews) {
+    auto target = make_triangle();
+    auto target_storage = Tensor::zeros({3, 3}, Device::CPU);
+    target.vertices = target_storage;
+    target.vertices = target_storage.slice(0, 0, 3);
+    auto source = make_triangle();
+    source.vertices.fill_(17.0f);
+
+    target = std::move(source);
+
+    EXPECT_EQ(target_storage.to_vector(), std::vector<float>(9, 0.0f));
+    EXPECT_EQ(target.vertices.to_vector(), std::vector<float>(9, 17.0f));
+}
+
 TEST_F(MeshDataTest, DeviceCopyGetsItsOwnId) {
     auto mesh = make_triangle();
     auto copy = mesh.to(Device::CPU);

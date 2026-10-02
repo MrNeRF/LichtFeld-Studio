@@ -11,10 +11,34 @@
 #include <SDL3/SDL_video.h>
 #include <cassert>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace lfs::vis {
+
+    enum class FrameInputEventKind { KeyDown,
+                                     KeyUp,
+                                     Text,
+                                     TextEditing,
+                                     MouseButton };
+
+    struct InputEventDispatch {
+        bool consumed = false;
+    };
+
+    struct FrameInputEvent {
+        FrameInputEventKind kind = FrameInputEventKind::KeyDown;
+        SDL_Scancode scancode = SDL_SCANCODE_UNKNOWN;
+        SDL_Keymod modifiers = SDL_KMOD_NONE;
+        bool repeat = false;
+        std::string text{};
+        int editing_start = -1;
+        int editing_length = -1;
+        size_t mouse_button_index = 0;
+        // Shared by transient panel adapters during one global dispatch.
+        InputEventDispatch* dispatch = nullptr;
+    };
 
     struct FrameMouseButtonEvent {
         uint8_t button = 0;
@@ -23,6 +47,7 @@ namespace lfs::vis {
         float y = 0.0f;
         uint64_t timestamp = 0;
         uint8_t clicks = 0;
+        bool ctrl = false;
         // GUI ownership from GuiManager::hitTestMouseButton, recorded by the window
         // layer at the SDL event through notePressOwner(). Keep it with event coordinates:
         // later bounds checks cannot recover ownership after DPI, resize or dock changes.
@@ -43,15 +68,10 @@ namespace lfs::vis {
         float mouse_wheel = 0;
         float mouse_wheel_x = 0;
         std::vector<FrameMouseButtonEvent> mouse_button_events;
+        std::vector<FrameInputEvent> input_events;
+        // Aggregate key state for shortcuts; text consumers replay input_events only.
         std::vector<SDL_Scancode> keys_pressed;
-        std::vector<SDL_Scancode> keys_repeated;
-        std::vector<SDL_Scancode> keys_released;
-        std::vector<uint32_t> text_codepoints;
-        std::vector<std::string> text_inputs;
-        std::string text_editing;
-        int text_editing_start = -1;
-        int text_editing_length = -1;
-        bool has_text_editing = false;
+
         bool had_event = false;
         bool mouse_moved = false;
         bool window_event = false;
@@ -68,18 +88,16 @@ namespace lfs::vis {
             // Keep press_open_ / press_owner_ across frames so UP retains its DOWN's verdict.
             // Reset only the index into the event vector being cleared.
             pending_owner_index_ = -1;
+            if (!event_mods_initialized_) {
+                event_mods_ = SDL_GetModState();
+                event_mods_initialized_ = true;
+            }
             mouse_wheel = 0;
             mouse_wheel_x = 0;
             mouse_button_events.clear();
+            input_events.clear();
             keys_pressed.clear();
-            keys_repeated.clear();
-            keys_released.clear();
-            text_codepoints.clear();
-            text_inputs.clear();
-            text_editing.clear();
-            text_editing_start = -1;
-            text_editing_length = -1;
-            has_text_editing = false;
+
             had_event = false;
             mouse_moved = false;
             window_event = false;
@@ -114,8 +132,11 @@ namespace lfs::vis {
                         .y = event.button.y,
                         .timestamp = event.button.timestamp,
                         .clicks = event.button.clicks,
+                        .ctrl = (event_mods_ & SDL_KMOD_CTRL) != 0,
                         .gui_owned = released_owner,
                     });
+                    input_events.push_back({.kind = FrameInputEventKind::MouseButton,
+                                            .mouse_button_index = mouse_button_events.size() - 1});
                     if (down) {
                         // Mark this DOWN as awaiting the GUI verdict; window_manager.cpp supplies it
                         // before polling the next event. Every DOWN starts a new press lifecycle,
@@ -137,24 +158,25 @@ namespace lfs::vis {
                 mouse_wheel_x += event.wheel.x;
                 break;
             case SDL_EVENT_KEY_DOWN:
-                if (event.key.repeat)
-                    keys_repeated.push_back(event.key.scancode);
-                else
+                event_mods_ = event.key.mod;
+                input_events.push_back({.kind = FrameInputEventKind::KeyDown, .scancode = event.key.scancode, .modifiers = event.key.mod, .repeat = event.key.repeat});
+                if (!event.key.repeat)
                     keys_pressed.push_back(event.key.scancode);
                 break;
             case SDL_EVENT_KEY_UP:
-                keys_released.push_back(event.key.scancode);
+                event_mods_ = event.key.mod;
+                input_events.push_back({.kind = FrameInputEventKind::KeyUp, .scancode = event.key.scancode, .modifiers = event.key.mod});
+
                 break;
             case SDL_EVENT_TEXT_INPUT:
                 if (event.text.text)
-                    text_inputs.emplace_back(event.text.text);
-                decodeUtf8(event.text.text, text_codepoints);
+                    input_events.push_back({.kind = FrameInputEventKind::Text, .text = event.text.text});
                 break;
             case SDL_EVENT_TEXT_EDITING:
-                text_editing = event.edit.text ? event.edit.text : "";
-                text_editing_start = event.edit.start;
-                text_editing_length = event.edit.length;
-                has_text_editing = true;
+                input_events.push_back({.kind = FrameInputEventKind::TextEditing,
+                                        .text = event.edit.text ? event.edit.text : "",
+                                        .editing_start = event.edit.start,
+                                        .editing_length = event.edit.length});
                 break;
             default:
                 break;
@@ -203,6 +225,8 @@ namespace lfs::vis {
         // or -1 if none. beginFrame() clears it with the vector; notePressOwner()
         // consumes it.
         int pending_owner_index_ = -1;
+        SDL_Keymod event_mods_ = SDL_KMOD_NONE;
+        bool event_mods_initialized_ = false;
 
         // Per-button open DOWN and ownership verdict. Preserve across beginFrame()
         // so the matching UP inherits its press's verdict, even in a later frame.
@@ -236,72 +260,6 @@ namespace lfs::vis {
                 return event.drop.windowID == target_window_id;
             default:
                 return true;
-            }
-        }
-
-        static bool isContinuationByte(const unsigned char c) {
-            return (c & 0xC0u) == 0x80u;
-        }
-
-        static void decodeUtf8(const char* text, std::vector<uint32_t>& out) {
-            if (!text)
-                return;
-            for (size_t i = 0; text[i] != '\0';) {
-                uint32_t cp = 0;
-                const auto c = static_cast<unsigned char>(text[i]);
-                if (c < 0x80) {
-                    cp = c;
-                    i += 1;
-                } else if ((c & 0xE0u) == 0xC0u) {
-                    if (!text[i + 1] ||
-                        !isContinuationByte(static_cast<unsigned char>(text[i + 1]))) {
-                        i += 1;
-                        continue;
-                    }
-                    cp = (c & 0x1F) << 6;
-                    cp |= static_cast<unsigned char>(text[i + 1]) & 0x3F;
-                    if (cp < 0x80) {
-                        i += 1;
-                        continue;
-                    }
-                    i += 2;
-                } else if ((c & 0xF0u) == 0xE0u) {
-                    if (!text[i + 1] || !text[i + 2] ||
-                        !isContinuationByte(static_cast<unsigned char>(text[i + 1])) ||
-                        !isContinuationByte(static_cast<unsigned char>(text[i + 2]))) {
-                        i += 1;
-                        continue;
-                    }
-                    cp = (c & 0x0F) << 12;
-                    cp |= (static_cast<unsigned char>(text[i + 1]) & 0x3F) << 6;
-                    cp |= static_cast<unsigned char>(text[i + 2]) & 0x3F;
-                    if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF)) {
-                        i += 1;
-                        continue;
-                    }
-                    i += 3;
-                } else if ((c & 0xF8u) == 0xF0u) {
-                    if (!text[i + 1] || !text[i + 2] || !text[i + 3] ||
-                        !isContinuationByte(static_cast<unsigned char>(text[i + 1])) ||
-                        !isContinuationByte(static_cast<unsigned char>(text[i + 2])) ||
-                        !isContinuationByte(static_cast<unsigned char>(text[i + 3]))) {
-                        i += 1;
-                        continue;
-                    }
-                    cp = (c & 0x07) << 18;
-                    cp |= (static_cast<unsigned char>(text[i + 1]) & 0x3F) << 12;
-                    cp |= (static_cast<unsigned char>(text[i + 2]) & 0x3F) << 6;
-                    cp |= static_cast<unsigned char>(text[i + 3]) & 0x3F;
-                    if (cp < 0x10000 || cp > 0x10FFFF) {
-                        i += 1;
-                        continue;
-                    }
-                    i += 4;
-                } else {
-                    i += 1;
-                    continue;
-                }
-                out.push_back(cp);
             }
         }
 

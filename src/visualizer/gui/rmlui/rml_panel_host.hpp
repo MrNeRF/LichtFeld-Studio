@@ -11,6 +11,7 @@
 #include <core/export.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -25,7 +26,8 @@ namespace Rml {
 
 namespace lfs::vis {
     struct Theme;
-}
+    struct FrameInputEvent;
+} // namespace lfs::vis
 namespace lfs::vis::gui {
 
     class RmlUIManager;
@@ -52,6 +54,7 @@ namespace lfs::vis::gui {
         void releaseRendererResources();
 
         void setInput(const PanelInputState* input) { input_ = input; }
+        void setKeyboardHandler(std::function<bool(const FrameInputEvent&)> handler) { keyboard_handler_ = std::move(handler); }
         bool hasInput() const { return input_ != nullptr; }
         bool wantsKeyboard() const { return wants_keyboard_; }
 
@@ -114,6 +117,7 @@ namespace lfs::vis::gui {
         void renderIfDirty(int pw, int ph, float& display_h);
         void compositeDirectToScreen(float x, float y, float w, float h);
 
+        std::function<bool(const FrameInputEvent&)> keyboard_handler_;
         RmlUIManager* manager_;
         std::string context_name_;
         std::string rml_path_;

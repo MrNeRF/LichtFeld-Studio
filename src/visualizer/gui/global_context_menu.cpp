@@ -6,8 +6,9 @@
 #include "core/logger.hpp"
 #include "gui/context_menu_placement.hpp"
 #include "gui/gui_focus_state.hpp"
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
+#include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "internal/resource_paths.hpp"
@@ -61,6 +62,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("is_submenu_item", &ContextMenuItem::is_submenu_item);
             handle.RegisterMember("is_active", &ContextMenuItem::is_active);
             handle.RegisterMember("icon", &ContextMenuItem::icon);
+            handle.RegisterMember("shortcut", &ContextMenuItem::shortcut);
         }
         ctor.RegisterArray<std::vector<ContextMenuItem>>();
         ctor.Bind("items", &items_);
@@ -179,6 +181,17 @@ namespace lfs::vis::gui {
         pending_x_ = screen_x;
         pending_y_ = screen_y;
         pending_open_ = true;
+        initContext();
+        if (ctx_ && el_ctx_menu_ && el_backdrop_) {
+            items_ = pending_items_;
+            menu_model_.DirtyVariable("items");
+            el_ctx_menu_->SetClass("visible", true);
+            el_backdrop_->SetProperty("display", "block");
+            open_ = true;
+            ctx_->Update();
+            mgr_->activateInput(ctx_, [this](const PanelInputState& event) { processInput(event); });
+            focusFirstItem();
+        }
         focus_first_item_ = true;
         render_needed_ = true;
         last_mouse_valid_ = false;
@@ -197,6 +210,8 @@ namespace lfs::vis::gui {
             return;
 
         open_ = false;
+        pending_open_ = false;
+        mgr_->deactivateInput(ctx_);
         focus_first_item_ = false;
         callback_ = {};
         el_ctx_menu_->SetClass("visible", false);
@@ -223,6 +238,8 @@ namespace lfs::vis::gui {
         if (mgr_)
             mgr_->trackContextFrame(ctx_, 0, 0);
 
+        if (mgr_ && ctx_ && mgr_->routeInput(ctx_, input, [this](const PanelInputState& event) { processInput(event); }, true))
+            return;
         const float mx = input.mouse_x - input.screen_x;
         const float my = input.mouse_y - input.screen_y;
 
@@ -263,23 +280,12 @@ namespace lfs::vis::gui {
         focus.want_capture_mouse = true;
         focus.want_capture_keyboard = true;
 
-        for (const int sc : input.keys_pressed) {
-            if (sc == SDL_SCANCODE_ESCAPE) {
+        for (const auto& event : input.input_events) {
+            if (event.kind == FrameInputEventKind::KeyDown && event.scancode == SDL_SCANCODE_ESCAPE) {
                 hide();
                 return;
             }
-            const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-            if (rml_key != Rml::Input::KI_UNKNOWN) {
-                ctx_->ProcessKeyDown(rml_key, mods);
-                render_needed_ = true;
-            }
-        }
-        for (const int sc : input.keys_released) {
-            const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-            if (rml_key != Rml::Input::KI_UNKNOWN) {
-                ctx_->ProcessKeyUp(rml_key, mods);
-                render_needed_ = true;
-            }
+            render_needed_ |= rml_input::processKeyboardEvent(*ctx_, event);
         }
 
         if (input.mouse_clicked[0] || input.mouse_clicked[1])
@@ -303,6 +309,9 @@ namespace lfs::vis::gui {
             if (el_ctx_menu_ && el_backdrop_) {
                 items_ = pending_items_;
                 menu_model_.DirtyVariable("items");
+                el_ctx_menu_->SetClass("has-shortcuts", std::ranges::any_of(items_, [](const auto& item) {
+                                           return !item.shortcut.empty();
+                                       }));
                 const float dp = std::max(mgr_ ? mgr_->getDpRatio() : 1.0f, 1.0f);
                 // Keep the initial layout near the pointer. Once RmlUi has
                 // measured the menu, the final position is clamped to the

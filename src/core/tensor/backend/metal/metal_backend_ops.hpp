@@ -184,6 +184,9 @@ namespace lfs::core::internal {
         SyncToken bridge(ExecContext, ExecContext) override;
         PointerClass classify_pointer(const void*) override;
         bool stream_is_capturing(ExecContext) override;
+        // Signpost intervals, shown by Instruments.
+        void push_range(const char* name) override;
+        void pop_range() override;
     };
 
 } // namespace lfs::core::internal

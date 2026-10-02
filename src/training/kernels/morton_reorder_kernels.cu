@@ -7,8 +7,8 @@
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "kernel_stream.hpp"
-#include "lfs/training/joint_adam_codec.cuh"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "training/kernels/joint_adam_codec.cuh"
 
 #include <algorithm>
 #include <cstdint>

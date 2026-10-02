@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -190,19 +191,22 @@ namespace gsplat_lfs {
 
     using StreamOrderedDeviceBuffer = ExactAsyncDeviceBuffer;
 
-    /// Grow-only CUB temp storage shared by gsplat scan/sort (thread-local).
-    /// Returns a workspace of at least @p bytes; never shrinks until release.
-    [[nodiscard]] void* ensure_gsplat_cub_workspace(size_t bytes, cudaStream_t stream);
-    bool release_gsplat_cub_workspace() noexcept;
+    struct Workspace {
+        struct Intersections;
+        std::unique_ptr<Intersections> intersections;
+        StreamOrderedDeviceBuffer cub, color_grad;
+        size_t cub_capacity = 0, color_grad_capacity = 0;
+        Workspace();
+        ~Workspace();
+        bool release() noexcept;
+    };
 
-    /// Grow-only intermediate for fused SH backward color grads (thread-local).
-    /// Replaces per-backward StreamOrderedDeviceBuffer malloc/free of C×N×ch floats.
-    [[nodiscard]] void* ensure_gsplat_color_grad_workspace(size_t bytes, cudaStream_t stream);
-    bool release_gsplat_color_grad_workspace() noexcept;
+    [[nodiscard]] void* ensure_gsplat_cub_workspace(Workspace&, size_t bytes, cudaStream_t stream);
+    [[nodiscard]] void* ensure_gsplat_color_grad_workspace(Workspace&, size_t bytes, cudaStream_t stream);
 
     /// Run a CUB query+execute pair against the pooled grow-only workspace.
     template <typename Operation>
-    void run_cub_operation(const std::string_view name,
+    void run_cub_operation(Workspace& saved, const std::string_view name,
                            const cudaStream_t stream,
                            Operation&& operation) {
         size_t workspace_bytes = 0;
@@ -211,7 +215,7 @@ namespace gsplat_lfs {
         LFS_ASSERT_MSG(
             workspace_bytes > 0,
             std::string(name) + " returned an empty workspace for a nonempty operation");
-        void* const workspace = ensure_gsplat_cub_workspace(workspace_bytes, stream);
+        void* const workspace = ensure_gsplat_cub_workspace(saved, workspace_bytes, stream);
         size_t storage_bytes = workspace_bytes;
         LFS_CUDA_CHECK_MSG(operation(workspace, storage_bytes),
                            "gsplat CUB workspace operation: {}", name);

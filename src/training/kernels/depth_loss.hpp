@@ -5,46 +5,11 @@
 
 #include "lfs/training/ops/geometry_types.hpp"
 
-#include <cstddef>
 #include <cuda_runtime.h>
 #include <vector>
 
 namespace lfs::training::kernels {
 
-    enum class DepthPriorType : int {
-        Auto = 0,
-        Disparity = 1,
-        Depth = 2,
-    };
-
-    // Final/diagnostic slots at the front of the partials buffer.
-    namespace depth_loss_slots {
-        constexpr int kValid = 0;
-        constexpr int kModel = 1; // 0 = disparity-space anchor, 1 = depth-space anchor
-        constexpr int kScale = 2;
-        constexpr int kShift = 3;
-        constexpr int kFloor = 4;
-        constexpr int kInvNorm = 5;
-        constexpr int kSumAlpha = 6;
-        constexpr int kCount = 7;
-        constexpr int kMeanExpectedDepth = 8;
-        constexpr int kSigmaP = 9;
-        constexpr int kSlotCount = 10;
-    } // namespace depth_loss_slots
-
-    // Softening floor for depth inversion, as a fraction of the weighted mean
-    // expected depth. Bounds the leverage of near-camera floaters in both the
-    // alignment fit and the gradients.
-    constexpr float kDepthLossFloorFraction = 0.05f;
-    constexpr float kDepthLossMinAlpha = 1.0e-3f;
-    // Geman-McClure influence peaks at |r| ~ 1.15*sigma and decays beyond; bounded influence replaces validity gates.
-    constexpr float kDepthLossResidualScale = 2.0f;
-    // Ridge term on the prior variance in the affine fits. Near the 8-bit
-    // quantization noise floor the slope shrinks toward zero.
-    constexpr float kDepthLossTargetVarRidge = 1.5e-5f;
-    // Below this prior variance the prior is considered flat and is rejected for
-    // anchored supervision. A constant target has no geometry signal.
-    constexpr float kDepthLossFlatPriorVar = 4.0f * kDepthLossTargetVarRidge;
     // Projects the anchor cloud into the prior and
     // returns the raw (prior value, camera-space depth) sample pairs. Empty when
     // too few samples land in view. Synchronizes the stream; startup use only.
@@ -63,12 +28,6 @@ namespace lfs::training::kernels {
         const float aabb_lo[3],
         const float aabb_hi[3],
         cudaStream_t stream = nullptr);
-
-    // Robust affine fits over collected samples.
-    // Pure host work — safe to run across a worker thread pool.
-    [[nodiscard]] DepthAnchor fit_depth_anchor_from_samples(const std::vector<lfs::gpu_ops::AnchorSample>& pairs);
-
-    [[nodiscard]] size_t depth_loss_partial_count(size_t num_pixels);
 
     // Scale-and-shift-invariant depth supervision on alpha-normalized expected
     // depth in inverse-depth space using a fixed per-camera anchor alignment.

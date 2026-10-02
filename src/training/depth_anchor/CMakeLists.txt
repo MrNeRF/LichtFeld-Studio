@@ -7,13 +7,13 @@
 add_library(lfs_depth_anchor STATIC
     depth_anchor_cache.cpp
     depth_anchor_cache.hpp
+    depth_anchor_fit.cpp
 )
 
 target_include_directories(lfs_depth_anchor
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-    PRIVATE
-        ${CMAKE_SOURCE_DIR}/src          # For training/kernels/depth_loss.hpp
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/training/include>
 )
 
 target_include_directories(lfs_depth_anchor SYSTEM PRIVATE
@@ -23,7 +23,6 @@ target_include_directories(lfs_depth_anchor SYSTEM PRIVATE
 target_link_libraries(lfs_depth_anchor
     PUBLIC
         lfs_core
-        lfs_training_kernels             # collect_depth_anchor_samples / fit_depth_anchor_from_samples
     PRIVATE
         lfs_io                           # ScopedAtomicOutputFile
 )

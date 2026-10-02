@@ -176,6 +176,37 @@ namespace {
         }
     }
 
+    void write_named_table(const char* path, const char* namespace_name,
+                           const char* function_name,
+                           const std::vector<std::pair<std::string, std::string>>& modules) {
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        stream << "// Generated from finalized SPIR-V modules; do not edit.\n"
+               << "#include \"training_shader_table.hpp\"\n\n"
+               << "#include <array>\n\nnamespace " << namespace_name << " {\nnamespace {\n";
+        for (const auto& [name, file] : modules) {
+            const std::vector<uint32_t> words = read_words(file.c_str());
+            const std::string id = identifier(name);
+            stream << "const std::array<uint32_t, " << words.size() << "> kWords_" << id << "{";
+            for (size_t index = 0; index < words.size(); ++index) {
+                if (index % 8 == 0)
+                    stream << "\n    ";
+                char text[16];
+                std::snprintf(text, sizeof(text), " 0x%08xu,", words[index]);
+                stream << text;
+            }
+            stream << "\n};\n";
+        }
+        stream << "const std::array<EmbeddedShader, " << modules.size() << "> kModules{{\n";
+        for (const auto& [name, file] : modules) {
+            const std::string id = identifier(name);
+            stream << "    {\"" << name << "\", kWords_" << id << "},\n";
+        }
+        stream << "}};\n} // namespace\n\nstd::span<const EmbeddedShader> " << function_name
+               << "() { return kModules; }\n\n} // namespace " << namespace_name << "\n";
+        if (!stream)
+            fail(std::string("cannot write ") + path);
+    }
+
     int run(const int argc, char** const argv) {
         if (argc >= 5 && std::string_view(argv[1]) == "embed") {
             if ((argc - 3) % 2 != 0) {
@@ -187,6 +218,17 @@ namespace {
                 modules.emplace_back(argv[index], argv[index + 1]);
             }
             write_table(argv[2], modules);
+            return 0;
+        }
+        if (argc >= 7 && std::string_view(argv[1]) == "embed-named") {
+            if ((argc - 5) % 2 != 0) {
+                std::fprintf(stderr, "usage: %s embed-named <table.cpp> <namespace> <function> <name> <finalized.spv> ...\n", argv[0]);
+                return 2;
+            }
+            std::vector<std::pair<std::string, std::string>> modules;
+            for (int index = 5; index + 1 < argc; index += 2)
+                modules.emplace_back(argv[index], argv[index + 1]);
+            write_named_table(argv[2], argv[3], argv[4], modules);
             return 0;
         }
         if (argc != 4) {

@@ -15,6 +15,7 @@
 #include "gui/layout_state.hpp"
 #include "gui/rmlui/elements/vram_timeline_element.hpp"
 #include "gui/string_keys.hpp"
+#include "gui/vram_hud_geometry.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
 #endif
@@ -35,7 +36,6 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
-#include <limits>
 #include <numeric>
 #include <string_view>
 #include <unordered_map>
@@ -52,7 +52,6 @@ namespace lfs::vis::gui {
         constexpr std::size_t kMaxAnnotationRows = 512;
         constexpr float kMinHudWidthPx = 360.0f;
         constexpr float kMinHudHeightPx = 200.0f;
-        constexpr float kHudViewportPaddingPx = 16.0f;
         constexpr std::array<std::string_view, lfs::diagnostics::kVramOwnerCount> kOwnerKeys{
             "ui.vram_model", "ui.vram_optimizer", "ui.vram_rasterizer", "ui.vram_loss_step",
             "ui.vram_densification", "ui.vram_image_io", "ui.vram_viewer",
@@ -229,44 +228,23 @@ namespace lfs::vis::gui {
             };
         }
 
-        [[nodiscard]] float finiteOr(float value, float fallback) {
-            return std::isfinite(value) ? value : fallback;
+        [[nodiscard]] Rml::Vector2f viewportOrigin(Rml::Element* root,
+                                                   Rml::Vector2f supplied_origin,
+                                                   bool has_supplied_geometry) {
+            if (has_supplied_geometry)
+                return supplied_origin;
+            auto* const parent = root ? root->GetOffsetParent() : nullptr;
+            return parent ? parent->GetAbsoluteOffset() : Rml::Vector2f{};
         }
 
-        [[nodiscard]] float maxHudExtent(float viewport_extent, float origin) {
-            if (!std::isfinite(viewport_extent) || viewport_extent <= 0.0f)
-                return std::numeric_limits<float>::infinity();
-            const float leading_padding = origin >= 0.0f ? origin : kHudViewportPaddingPx;
-            return std::max(1.0f, viewport_extent - leading_padding - kHudViewportPaddingPx);
-        }
-
-        [[nodiscard]] float clampHudExtent(float requested,
-                                           float min_extent,
-                                           float viewport_extent,
-                                           float origin) {
-            requested = finiteOr(requested, min_extent);
-            if (requested <= 0.0f)
-                requested = min_extent;
-
-            const float max_extent = maxHudExtent(viewport_extent, origin);
-            if (!std::isfinite(max_extent))
-                return std::max(min_extent, requested);
-
-            const float effective_min = std::min(min_extent, max_extent);
-            return std::clamp(requested, effective_min, max_extent);
-        }
-
-        [[nodiscard]] float clampHudPosition(float requested,
-                                             float extent,
-                                             float viewport_extent) {
-            if (!std::isfinite(requested) || requested < 0.0f)
-                return -1.0f;
-            if (!std::isfinite(viewport_extent) || viewport_extent <= 0.0f)
-                return std::max(0.0f, requested);
-
-            const float safe_extent = std::max(1.0f, finiteOr(extent, 1.0f));
-            const float max_pos = std::max(0.0f, viewport_extent - safe_extent - kHudViewportPaddingPx);
-            return std::clamp(requested, 0.0f, max_pos);
+        [[nodiscard]] Rml::Vector2f viewportSize(Rml::Element* root,
+                                                 Rml::ElementDocument* document,
+                                                 Rml::Vector2f supplied_size,
+                                                 bool has_supplied_geometry) {
+            if (has_supplied_geometry)
+                return supplied_size;
+            auto* const parent = root ? root->GetOffsetParent() : nullptr;
+            return parent ? parent->GetBox().GetSize() : contextSize(document);
         }
 
     } // namespace
@@ -349,6 +327,7 @@ namespace lfs::vis::gui {
 
     void VramHudOverlay::onDocumentLoaded(Rml::ElementDocument* document) {
         document_ = document;
+        geometry_initialized_ = false;
         listeners_attached_ = false;
         rows_by_path_.clear();
         counter_rows_by_key_.clear();
@@ -562,7 +541,6 @@ namespace lfs::vis::gui {
         }
         updateFilterClearVisibility();
 
-        applyPersistedGeometry();
         refreshTabClasses();
         attachListeners();
         apply();
@@ -571,6 +549,8 @@ namespace lfs::vis::gui {
     void VramHudOverlay::onDocumentDestroyed() {
         persistNow();
         document_ = nullptr;
+        geometry_initialized_ = false;
+        has_viewport_geometry_ = false;
         root_ = nullptr;
         header_ = nullptr;
         resize_handle_ = nullptr;
@@ -786,6 +766,11 @@ namespace lfs::vis::gui {
     void VramHudOverlay::applyPersistedGeometry() {
         if (!root_)
             return;
+        const auto measured = root_->GetBox().GetSize();
+        if (size_w_ <= 0.0f && measured.x > 0.0f)
+            size_w_ = measured.x;
+        if (size_h_ <= 0.0f && measured.y > 0.0f)
+            size_h_ = measured.y;
         if (sanitizeGeometry())
             schedulePersistSave();
         if (pos_x_ >= 0.0f && pos_y_ >= 0.0f) {
@@ -799,19 +784,45 @@ namespace lfs::vis::gui {
             root_->SetProperty("height", std::format("{:.1f}px", size_h_));
     }
 
+    bool VramHudOverlay::initializeGeometryAfterLayout() {
+        if (geometry_initialized_ || !root_ || !isVisible())
+            return false;
+        const auto bounds = viewportSize(
+            root_, document_, viewport_size_, has_viewport_geometry_);
+        if (bounds.x <= 0.0f || bounds.y <= 0.0f)
+            return false;
+        applyPersistedGeometry();
+        geometry_initialized_ = true;
+        return true;
+    }
+
+    void VramHudOverlay::setViewportGeometry(const float origin_x,
+                                             const float origin_y,
+                                             const float width,
+                                             const float height) {
+        viewport_origin_ = {origin_x, origin_y};
+        viewport_size_ = {std::max(0.0f, width), std::max(0.0f, height)};
+        has_viewport_geometry_ = true;
+    }
+
     bool VramHudOverlay::sanitizeGeometry() {
         const float old_pos_x = pos_x_;
         const float old_pos_y = pos_y_;
         const float old_size_w = size_w_;
         const float old_size_h = size_h_;
 
-        const auto bounds = contextSize(document_);
+        const auto bounds = viewportSize(
+            root_, document_, viewport_size_, has_viewport_geometry_);
         if (size_w_ > 0.0f || !std::isfinite(size_w_))
-            size_w_ = clampHudExtent(size_w_, kMinHudWidthPx, bounds.x, pos_x_);
+            size_w_ = vram_hud_geometry::clampExtent(
+                size_w_, kMinHudWidthPx, bounds.x, pos_x_);
         if (size_h_ > 0.0f || !std::isfinite(size_h_))
-            size_h_ = clampHudExtent(size_h_, kMinHudHeightPx, bounds.y, pos_y_);
-        pos_x_ = clampHudPosition(pos_x_, size_w_ > 0.0f ? size_w_ : kMinHudWidthPx, bounds.x);
-        pos_y_ = clampHudPosition(pos_y_, size_h_ > 0.0f ? size_h_ : kMinHudHeightPx, bounds.y);
+            size_h_ = vram_hud_geometry::clampExtent(
+                size_h_, kMinHudHeightPx, bounds.y, pos_y_);
+        pos_x_ = vram_hud_geometry::clampPosition(
+            pos_x_, size_w_ > 0.0f ? size_w_ : kMinHudWidthPx, bounds.x);
+        pos_y_ = vram_hud_geometry::clampPosition(
+            pos_y_, size_h_ > 0.0f ? size_h_ : kMinHudHeightPx, bounds.y);
 
         return old_pos_x != pos_x_ || old_pos_y != pos_y_ ||
                old_size_w != size_w_ || old_size_h != size_h_;
@@ -955,9 +966,7 @@ namespace lfs::vis::gui {
                                                       memory.device_estimated ? "≈" : "",
                                                       formatBytes(total_bytes)));
         if (perf_vram_value_)
-            perf_vram_value_->SetAttribute("title", LOC(memory.process_estimated
-                                                            ? "ui.vram_process_estimate_tooltip"
-                                                            : "ui.vram_process_nvml_tooltip"));
+            perf_vram_value_->SetAttribute("title", LOC(gpuProcessMemoryTooltipKey(memory)));
         if (perf_vram_badge_) {
             // Unknown when profiler off, no standing amber GAP.
             if (!s.ledger_valid)
@@ -1147,9 +1156,7 @@ namespace lfs::vis::gui {
                                                         formatBytes(points.back().capacity_bytes),
                                                         points.back().capacity_bytes > ceiling ? " ↑" : ""));
         if (timeline_capacity_)
-            timeline_capacity_->SetAttribute("title", LOC(queryGpuMemory().device_estimated
-                                                              ? "ui.vram_device_cuda_tooltip"
-                                                              : "ui.vram_device_nvml_tooltip"));
+            timeline_capacity_->SetAttribute("title", LOC(gpuDeviceMemoryTooltipKey(queryGpuMemory())));
         if (auto* scale = document_->GetElementById("vram-hud-scale-toggle"))
             scale->SetInnerRML(device_scale_ ? LOC("ui.vram_scale_device") : LOC("ui.vram_scale_fit"));
         if (panel_overview_) {
@@ -1376,9 +1383,7 @@ namespace lfs::vis::gui {
         write("process", std::format("{}{}", memory.process_estimated ? "≤" : "", formatBytes(process_used)),
               formatPercent(process_used, process_total));
         if (auto it = summary_by_key_.find("process"); it != summary_by_key_.end())
-            it->second.value->SetAttribute("title", LOC(memory.process_estimated
-                                                            ? "ui.vram_process_estimate_tooltip"
-                                                            : "ui.vram_process_nvml_tooltip"));
+            it->second.value->SetAttribute("title", LOC(gpuProcessMemoryTooltipKey(memory)));
         write("cuda_context", formatBytes(s.process.cuda_used),
               formatPercent(s.process.cuda_used, s.process.cuda_total));
         write("cuda_pool_used",
@@ -2510,23 +2515,28 @@ namespace lfs::vis::gui {
             dragging_header_ = true;
             pointer_captured_ = true;
             const auto box = root_->GetAbsoluteOffset();
-            drag_start_pos_x_ = box.x;
-            drag_start_pos_y_ = box.y;
+            const auto origin = viewportOrigin(
+                root_, viewport_origin_, has_viewport_geometry_);
+            drag_start_pos_x_ = vram_hud_geometry::toLocal(box.x, origin.x);
+            drag_start_pos_y_ = vram_hud_geometry::toLocal(box.y, origin.y);
             drag_start_mouse_x_ = mx;
             drag_start_mouse_y_ = my;
             event.StopPropagation();
         } else if (type == Rml::EventId::Drag && dragging_header_) {
             const float dx = mx - drag_start_mouse_x_;
             const float dy = my - drag_start_mouse_y_;
-            const auto bounds = contextSize(document_);
-            pos_x_ = std::max(0.0f,
-                              clampHudPosition(drag_start_pos_x_ + dx,
-                                               size_w_ > 0.0f ? size_w_ : root_->GetBox().GetSize().x,
-                                               bounds.x));
-            pos_y_ = std::max(0.0f,
-                              clampHudPosition(drag_start_pos_y_ + dy,
-                                               size_h_ > 0.0f ? size_h_ : root_->GetBox().GetSize().y,
-                                               bounds.y));
+            const auto bounds = viewportSize(
+                root_, document_, viewport_size_, has_viewport_geometry_);
+            pos_x_ = std::max(
+                0.0f, vram_hud_geometry::clampPosition(
+                          drag_start_pos_x_ + dx,
+                          size_w_ > 0.0f ? size_w_ : root_->GetBox().GetSize().x,
+                          bounds.x));
+            pos_y_ = std::max(
+                0.0f, vram_hud_geometry::clampPosition(
+                          drag_start_pos_y_ + dy,
+                          size_h_ > 0.0f ? size_h_ : root_->GetBox().GetSize().y,
+                          bounds.y));
             root_->SetProperty("right", "auto");
             root_->SetProperty("left", std::format("{:.1f}px", pos_x_));
             root_->SetProperty("top", std::format("{:.1f}px", pos_y_));
@@ -2534,7 +2544,8 @@ namespace lfs::vis::gui {
         } else if (type == Rml::EventId::Dragend && dragging_header_) {
             dragging_header_ = false;
             pointer_captured_ = dragging_resize_;
-            const auto bounds = contextSize(document_);
+            const auto bounds = viewportSize(
+                root_, document_, viewport_size_, has_viewport_geometry_);
             const auto extent = root_->GetBox().GetSize();
             const auto left = pos_x_ < 24.0f;
             const auto right = bounds.x - pos_x_ - extent.x < 24.0f;
@@ -2573,9 +2584,12 @@ namespace lfs::vis::gui {
         } else if (type == Rml::EventId::Drag && dragging_resize_) {
             const float dx = mx - drag_start_mouse_x_;
             const float dy = my - drag_start_mouse_y_;
-            const auto bounds = contextSize(document_);
-            size_w_ = clampHudExtent(drag_start_size_w_ + dx, kMinHudWidthPx, bounds.x, pos_x_);
-            size_h_ = clampHudExtent(drag_start_size_h_ + dy, kMinHudHeightPx, bounds.y, pos_y_);
+            const auto bounds = viewportSize(
+                root_, document_, viewport_size_, has_viewport_geometry_);
+            size_w_ = vram_hud_geometry::clampExtent(
+                drag_start_size_w_ + dx, kMinHudWidthPx, bounds.x, pos_x_);
+            size_h_ = vram_hud_geometry::clampExtent(
+                drag_start_size_h_ + dy, kMinHudHeightPx, bounds.y, pos_y_);
             root_->SetProperty("width", std::format("{:.1f}px", size_w_));
             root_->SetProperty("height", std::format("{:.1f}px", size_h_));
             event.StopPropagation();

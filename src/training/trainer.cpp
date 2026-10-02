@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "trainer.hpp"
-#include "backward.h" // BWD-A T_eff hist arm/flush
 #include "components/bilateral_grid.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
@@ -12,10 +11,6 @@
 #include "core/assert.hpp"
 #include "core/checked_arithmetic.hpp"
 #include "core/checkpoint_format.hpp"
-#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
-#include "core/cuda/memory_arena.hpp"
-#include "core/cuda_error.hpp"
-#include "core/cuda_error_typed.hpp"
 #include "core/environment.hpp"
 #include "core/event_bridge/command_api.hpp"
 #include "core/events.hpp"
@@ -27,28 +22,24 @@
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
+#include "core/shared_image_ops.hpp"
 #include "core/splat_data_transform.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
-#include "core/tensor/backend/cuda/runtime/size_bucketed_pool.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
+#include "core/tensor_execution.hpp"
 #include "depth_anchor_cache.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
-#include "io/cuda/image_format_kernels.cuh"
 #include "io/filesystem_utils.hpp"
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
-#include "kernels/densification_kernels.hpp"
-#include "lfs/kernels/ssim.cuh"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/morton_reorder.hpp"
-#include "lfs/training/ops/fast_cuda.hpp"
-#include "lfs/training/ops/photometric_cuda.hpp"
+#include "lfs/training/ops/fast_services.hpp"
+#include "lfs/training/ops/gsplat_services.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/screen_share.cuh"
 #include "lfs/training/sh_value_codec.hpp"
@@ -59,17 +50,10 @@
 #include "optimizer/adam_optimizer.hpp"
 #include "python/runner.hpp"
 #include "rasterization/fast_rasterizer.hpp"
-#include "rasterization/gsplat/Ops.h"
-#include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/mcmc.hpp"
 #include "strategies/strategy_factory.hpp"
 #include "strategies/strategy_utils.hpp"
 #include "training/control/control_boundary.hpp"
-#include "training/kernels/depth_loss.hpp"
-#include "training/kernels/mask_preprocess.hpp"
-#include "training/kernels/mrnf_kernels.hpp"
-#include "training/kernels/normal_consistency_loss.hpp"
-#include "training/kernels/normal_loss.hpp"
 #include "training/training_setup.hpp"
 #include "training_cropbox_mask.hpp"
 
@@ -85,11 +69,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <cuda_profiler_api.h>
-#include <cuda_runtime.h>
 #include <expected>
 #include <format>
 #include <future>
@@ -97,15 +78,12 @@
 #include <memory>
 #include <mutex>
 #include <numeric>
-#include <nvtx3/nvToolsExt.h>
-#include <nvtx3/nvToolsExtCudaRt.h>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #if defined(__linux__)
@@ -117,6 +95,32 @@ namespace lfs::training {
     namespace {
         constexpr float CAMERA_LOSS_EMA_ALPHA = 0.2f;
         constexpr int CAMERA_LOSS_PUBLISH_INTERVAL = 16;
+
+        // Streak of iterations without a visible primitive after which a finite
+        // model is declared degenerate (every camera several times over).
+        constexpr int INVISIBLE_ITERATION_LIMIT = 1000;
+
+        // Name of the first float parameter holding NaN or Inf. Two scalar readbacks
+        // per tensor, so it only runs off the per-step path.
+        [[nodiscard]] std::optional<std::string_view> first_non_finite_parameter(
+            const lfs::core::SplatData& model) {
+            const std::array<std::pair<std::string_view, const lfs::core::Tensor*>, 6> parameters{{
+                {"means", &model.means()},
+                {"scaling", &model.scaling_raw()},
+                {"rotation", &model.rotation_raw()},
+                {"opacity", &model.opacity_raw()},
+                {"sh0", &model.sh0()},
+                {"shN", &model.shN()},
+            }};
+            for (const auto& [name, tensor] : parameters) {
+                if (tensor->is_valid() && tensor->numel() > 0 &&
+                    tensor->dtype() == lfs::core::DataType::Float32 &&
+                    (tensor->has_nan() || tensor->has_inf())) {
+                    return name;
+                }
+            }
+            return std::nullopt;
+        }
 
         [[nodiscard]] lfs::Error project_snapshot_error(
             const lfs::ErrorCode code,
@@ -613,37 +617,6 @@ namespace lfs::training {
             return lfs::diagnostics::VramProfiler::instance().enabled();
         }
 
-        void resize_rasterizer_arena_at_boundary(std::string_view boundary,
-                                                 bool release_all) {
-            auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
-            if (!arena) {
-                return;
-            }
-            const bool resized = release_all
-                                     ? arena->release_at_boundary()
-                                     : arena->shrink_to_current_at_boundary();
-            if (!resized) {
-                LOG_WARN("Rasterizer arena {} boundary could not drain every CUDA device",
-                         boundary);
-            }
-            if (release_all) {
-                // B3/B6: gsplat's exact high-water workspaces are retained
-                // across iterations (EXACT-2) and released only at a named
-                // boundary after the arena has drained.
-                (void)release_gsplat_rasterizer_thread_local_caches();
-                (void)gsplat_lfs::release_intersect_thread_local_cache();
-
-                // The viewer may have installed its exportable block as the
-                // arena backing. release_at_boundary intentionally preserves
-                // such a block for the peer owner; once the trainer is idle it
-                // must relinquish the arena's reference so the next resume
-                // starts from a zero-sized training arena.
-                if (arena->using_external_backing()) {
-                    lfs::core::GlobalArenaManager::instance().clear_external_backing();
-                }
-            }
-        }
-
         void record_vram_entries(std::string_view scope,
                                  const std::vector<std::pair<std::string, size_t>>& entries) {
             for (const auto& [name, bytes] : entries) {
@@ -683,7 +656,7 @@ namespace lfs::training {
         void record_optimizer_vram_breakdown(const AdamOptimizer& optimizer) {
             lfs::diagnostics::VramProfiler::instance().setGauge(
                 "vram.audit.tensor.cuda_direct_live_bytes",
-                static_cast<double>(lfs::core::Tensor::cuda_direct_storage_live_bytes()));
+                static_cast<double>(training_session_ops().direct_storage_live_bytes()));
             for (const auto type : AdamOptimizer::all_param_types()) {
                 const auto* state = optimizer.get_state(type);
                 if (!state) {
@@ -699,33 +672,6 @@ namespace lfs::training {
                 record_vram_tensor("optimizer.adam", prefix + ".grad", state->grad);
                 record_vram_tensor("optimizer.adam", prefix + ".exp_avg", state->exp_avg);
             }
-        }
-
-        void record_gsplat_vram_breakdown(const GsplatRasterizeContext& ctx,
-                                          const RenderOutput& output,
-                                          const lfs::core::Tensor& gt_tile,
-                                          const lfs::core::Tensor& bg_tile,
-                                          const lfs::core::Tensor& tile_error_map) {
-            constexpr std::string_view scope = "rasterizer.gsplat";
-            if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
-                std::size_t frame_bytes = 0;
-                for (const auto& buffer : arena->get_frame_buffers(ctx.frame_id)) {
-                    frame_bytes += buffer.size;
-                }
-                record_vram_current(scope, "arena.frame_buffers", frame_bytes);
-            }
-            record_rasterizer_arena_disclosure(scope);
-            record_vram_current(scope, "forward.isect_ids", static_cast<std::size_t>(ctx.n_isects) * sizeof(std::int64_t));
-            record_vram_current(scope, "forward.flatten_ids", static_cast<std::size_t>(ctx.n_isects) * sizeof(std::int32_t));
-            record_vram_tensor(scope, "output.image", output.image);
-            record_vram_tensor(scope, "output.alpha", output.alpha);
-            record_vram_tensor(scope, "camera.K_tensor", ctx.K_tensor);
-            record_vram_tensor(scope, "camera.radial_cuda", ctx.radial_cuda);
-            record_vram_tensor(scope, "camera.tangential_cuda", ctx.tangential_cuda);
-            record_vram_tensor(scope, "camera.thin_prism_cuda", ctx.thin_prism_cuda);
-            record_vram_tensor("train.inputs", "gt_tile", gt_tile);
-            record_vram_tensor("train.inputs", "background_tile", bg_tile);
-            record_vram_tensor("train.losses", "densification_error_map.live", tile_error_map);
         }
 
         void syncTrainingSceneTopology(lfs::core::Scene* const scene,
@@ -861,7 +807,8 @@ namespace lfs::training {
             constexpr size_t JPEG_HOT_OUTPUT_QUEUE_SIZE = 2;
             constexpr size_t JPEG_HOT_DECODER_POOL_SIZE = 2;
             const float non_jpeg_ratio = dataset ? dataset->get_non_jpeg_ratio() : 0.0f;
-            if (non_jpeg_ratio <= NON_JPEG_THRESHOLD) {
+            // The JPEG hot path decodes on the GPU; CPU decoding keeps its queues.
+            if (lfs::io::PipelinedImageLoader::decodes_on_gpu(config.backend) && non_jpeg_ratio <= NON_JPEG_THRESHOLD) {
                 if (config.output_queue_size > JPEG_HOT_OUTPUT_QUEUE_SIZE) {
                     LOG_INFO(
                         "Reducing JPEG image ready queue {} -> {} (hot path keeps compressed prefetch)",
@@ -962,6 +909,8 @@ namespace lfs::training {
         pipelined_normal_ = {};
 
         photo_saved_ = {};
+        gsplat_saved_ = {};
+        metrics_gsplat_saved_ = {};
         fast_saved_ = {};
         photo_loss_ = {};
         photo_grad_corrected_ = {};
@@ -1512,6 +1461,22 @@ namespace lfs::training {
 
     } // namespace
 
+    void Trainer::prepare_evaluation_workspaces() {
+        if (!training_session_ops().release_workspaces_before_evaluation)
+            return;
+        photo_saved_ = {};
+        fast_saved_ = {};
+        gsplat_saved_ = {};
+        photo_loss_ = {};
+        photo_grad_corrected_ = {};
+        photo_grad_raw_ = {};
+        bind_training_ops();
+        // Retired storage can be reclaimed after this training queue completes.
+        if (training_queue_)
+            training_queue_->wait();
+        core::Tensor::trim_memory_pool();
+    }
+
     void Trainer::bind_training_ops() {
         const core::GpuBackend backend = core::default_gpu_backend();
         training_ops_ = &training_ops(backend);
@@ -1521,7 +1486,11 @@ namespace lfs::training {
         if (training_ops_->fast != nullptr && !fast_saved_.backend) {
             fast_saved_.backend = training_ops_->fast->create();
         }
+        if (training_ops_->gsplat != nullptr && !gsplat_saved_.backend) {
+            gsplat_saved_.backend = training_ops_->gsplat->create();
+        }
         if (evaluator_) {
+            evaluator_->set_gsplat(training_ops_->gsplat, &gsplat_saved_);
             evaluator_->set_photometric(training_ops_->photometric);
             evaluator_->set_fast(training_ops_->fast, &fast_saved_);
         }
@@ -1796,6 +1765,18 @@ namespace lfs::training {
         if (!morton_reorder_due(iter) || !strategy_) {
             return;
         }
+        if (training_session_ops().release_workspaces_before_reorder) {
+            // Backward has consumed the saved frame; its inputs and scratch
+            // must not overlap the temporary reordered model and optimizer.
+            if (training_ops_ && training_ops_->fast) {
+                training_ops_->fast->release(fast_saved_);
+                training_ops_->fast->release_caches(fast_saved_);
+            }
+            if (training_ops_ && training_ops_->gsplat) {
+                training_ops_->gsplat->release(gsplat_saved_);
+                training_ops_->gsplat->release_caches(gsplat_saved_);
+            }
+        }
         auto& model = strategy_->get_model();
         const auto result = morton::apply_morton_reorder(model, &strategy_->get_optimizer());
         if (!result.applied) {
@@ -1876,9 +1857,9 @@ namespace lfs::training {
         project_snapshot_service_ =
             std::make_unique<TrainingSnapshotService>();
 
-        const int device_count = lfs::core::gpu_device_count(lfs::core::GpuBackend::CUDA);
-        LFS_ASSERT_MSG(device_count > 0, "CUDA is not available - aborting");
-        createCudaResources();
+        const int device_count = lfs::core::gpu_device_count(lfs::core::default_gpu_backend());
+        LFS_ASSERT_MSG(device_count > 0, "The selected GPU backend is not available - aborting");
+        createGpuResources();
 
         // One-lock: bind Scene live-model readers to this trainer's step-boundary
         // mutex for the lifetime of the trainer. TrainerManager::setTrainer also
@@ -1889,23 +1870,23 @@ namespace lfs::training {
         LOG_DEBUG("Trainer constructed from Scene with {} cameras", scene.getAllCameras().size());
     }
 
-    void Trainer::createCudaResources() {
+    void Trainer::createGpuResources() {
         using namespace lfs::core;
-        callback_queue_ = std::make_unique<TensorWorkQueue>(GpuBackend::CUDA);
+        const GpuBackend backend = default_gpu_backend();
+        callback_queue_ = std::make_unique<TensorWorkQueue>(backend);
         // Preserve legacy-default ordering for cold uploads and readbacks.
-        training_queue_ = std::make_unique<TensorWorkQueue>(GpuBackend::CUDA, TensorWorkQueue::Mode::LegacyOrdered);
-        metrics_queue_ = std::make_unique<TensorWorkQueue>(GpuBackend::CUDA);
-        nvtxNameCudaStreamA(static_cast<cudaStream_t>(training_queue_->native_handle()), "lfs.train");
-        nvtxNameCudaStreamA(static_cast<cudaStream_t>(callback_queue_->native_handle()), "lfs.train.callback");
-        nvtxNameCudaStreamA(static_cast<cudaStream_t>(metrics_queue_->native_handle()), "lfs.metrics");
+        training_queue_ = std::make_unique<TensorWorkQueue>(backend, TensorWorkQueue::Mode::LegacyOrdered);
+        metrics_queue_ = std::make_unique<TensorWorkQueue>(backend);
+        PerfBenchCollector::name_queues(*training_queue_, *callback_queue_, *metrics_queue_);
         createSyncPrimitives();
-        PerfBenchCollector::instance().set_timing_stream(static_cast<cudaStream_t>(training_queue_->native_handle()));
+        PerfBenchCollector::instance().set_timing_queue(*training_queue_);
     }
 
     void Trainer::createSyncPrimitives() {
-        params_ready_event_ = std::make_unique<lfs::core::TensorFence>(lfs::core::GpuBackend::CUDA);
+        const auto backend = lfs::core::default_gpu_backend();
+        params_ready_event_ = std::make_unique<lfs::core::TensorFence>(backend);
         for (auto& event : reader_done_events_)
-            event = std::make_unique<lfs::core::TensorFence>(lfs::core::GpuBackend::CUDA);
+            event = std::make_unique<lfs::core::TensorFence>(backend);
     }
 
     void Trainer::destroySyncPrimitives() {
@@ -1996,14 +1977,46 @@ namespace lfs::training {
         return {};
     }
 
-    void Trainer::beginModelRead(void* reader_stream) {
+    std::optional<lfs::Error> Trainer::check_invisible_iteration(const int iter) {
+        ++invisible_iteration_streak_;
+        if (invisible_iteration_streak_ != 1 &&
+            invisible_iteration_streak_ < INVISIBLE_ITERATION_LIMIT) {
+            return std::nullopt;
+        }
+        const auto& model = strategy_->get_model();
+        if (const auto parameter = first_non_finite_parameter(model)) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = std::format("Model parameters became NaN/Inf at iteration {}", iter),
+                .detail = std::format("Parameter '{}' of the {}-primitive model holds NaN/Inf at "
+                                      "iteration {}; nothing is visible to train",
+                                      *parameter, model.size(), iter),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+        if (invisible_iteration_streak_ >= INVISIBLE_ITERATION_LIMIT) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = std::format("No primitive was visible for {} iterations", invisible_iteration_streak_),
+                .detail = std::format("None of the {} primitives was visible from any camera for {} "
+                                      "consecutive iterations up to iteration {}; the model degenerated",
+                                      model.size(), invisible_iteration_streak_, iter),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+        return std::nullopt;
+    }
+
+    void Trainer::beginModelRead(lfs::core::TensorExecutionTarget reader_queue) {
         std::lock_guard<std::mutex> lock(stream_sync_mutex_);
         if (params_ready_event_ && params_ready_recorded_) {
-            params_ready_event_->wait_on(reader_stream);
+            params_ready_event_->wait_on(reader_queue);
         }
     }
 
-    void Trainer::endModelRead(void* reader_stream) {
+    void Trainer::endModelRead(lfs::core::TensorExecutionTarget reader_queue) {
         std::lock_guard<std::mutex> lock(stream_sync_mutex_);
         auto& slot = reader_done_events_[reader_done_head_];
         if (!slot) {
@@ -2016,7 +2029,7 @@ namespace lfs::training {
             // drop the older reader's edge.
             slot->wait();
         }
-        slot->record(reader_stream);
+        slot->record(reader_queue);
         reader_done_pending_ |= bit;
         reader_done_head_ = (reader_done_head_ + 1) % READER_DONE_RING;
     }
@@ -2111,7 +2124,7 @@ namespace lfs::training {
     // cloud once, so the supervision target is absolute and multi-view
     // consistent instead of chasing the current render.
     void Trainer::fitDepthAnchors(const size_t cameras_with_depth) {
-        nvtxRangePush("fit_depth_anchors");
+        lfs::core::push_gpu_range("fit_depth_anchors");
         const auto fit_start = std::chrono::steady_clock::now();
         const auto phase_ms = [](std::chrono::steady_clock::time_point start) {
             return std::chrono::duration<double, std::milli>(
@@ -2128,7 +2141,7 @@ namespace lfs::training {
         const auto num_points = static_cast<size_t>(model.size());
         if (num_points == 0) {
             LOG_WARN("Depth anchors: no initial point cloud available; depth supervision is disabled without anchors");
-            nvtxRangePop();
+            lfs::core::pop_gpu_range();
             return;
         }
         depth_anchor_fit_attempted_ = true;
@@ -2138,30 +2151,30 @@ namespace lfs::training {
         const auto& cameras = train_dataset_->get_cameras();
         const auto sidecar = depthAnchorSidecarPath(cameras);
 
-        nvtxRangePush("depth_anchors/fingerprint");
+        lfs::core::push_gpu_range("depth_anchors/fingerprint");
         const auto fingerprint_start = std::chrono::steady_clock::now();
         const auto fingerprint = computeAnchorFingerprint(cameras);
         const auto fingerprint_ms = phase_ms(fingerprint_start);
-        nvtxRangePop();
+        lfs::core::pop_gpu_range();
 
         RawDepthAnchorMap raw;
-        nvtxRangePush("depth_anchors/read_sidecar");
+        lfs::core::push_gpu_range("depth_anchors/read_sidecar");
         const auto read_start = std::chrono::steady_clock::now();
         auto cached = readDepthAnchorSidecar(sidecar, fingerprint);
         const auto read_ms = phase_ms(read_start);
-        nvtxRangePop();
+        lfs::core::pop_gpu_range();
 
         double source_ms = read_ms;
         if (cached) {
             raw = std::move(*cached);
             LOG_INFO("Depth anchors: loaded {} cached anchors from {}", raw.size(), sidecar.string());
         } else {
-            nvtxRangePush("depth_anchors/compute");
+            lfs::core::push_gpu_range("depth_anchors/compute");
             const auto compute_start = std::chrono::steady_clock::now();
             raw = computeRawDepthAnchors(
                 *training_ops_->geometry, means, cameras, params_.dataset.resize_factor, params_.dataset.max_width);
             source_ms = phase_ms(compute_start);
-            nvtxRangePop();
+            lfs::core::pop_gpu_range();
             if (!sidecar.empty() && !writeDepthAnchorSidecar(sidecar, raw, fingerprint)) {
                 LOG_WARN("Depth anchors: failed to write sidecar {}", sidecar.string());
             }
@@ -2169,7 +2182,7 @@ namespace lfs::training {
         LOG_INFO("Depth anchors: fingerprint {:.1f} ms, {} {:.1f} ms",
                  fingerprint_ms, cached ? "sidecar load" : "recompute", source_ms);
 
-        nvtxRangePush("depth_anchors/resolve");
+        lfs::core::push_gpu_range("depth_anchors/resolve");
         size_t processed = 0;
         for (const auto& cam : cameras) {
             if (!cam || !cam->has_depth()) {
@@ -2249,7 +2262,7 @@ namespace lfs::training {
             ++reliable_anchors;
             reliable_corr_sum += std::fabs(anchor.corr);
         }
-        nvtxRangePop(); // depth_anchors/resolve
+        lfs::core::pop_gpu_range(); // depth_anchors/resolve
 
         const auto fit_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now() - fit_start)
@@ -2264,7 +2277,7 @@ namespace lfs::training {
                      "({} cameras with depth); depth loss will be skipped for this anchored dataset",
                      cameras_with_depth);
         }
-        nvtxRangePop();
+        lfs::core::pop_gpu_range();
     }
 
     bool Trainer::fillCameraLossColors(
@@ -2353,7 +2366,7 @@ namespace lfs::training {
         heatmap->staging_valid.resize(heatmap->camera_uids.size());
 
         try {
-            heatmap->copy_queue = std::make_unique<lfs::core::TensorWorkQueue>(lfs::core::GpuBackend::CUDA);
+            heatmap->copy_queue = std::make_unique<lfs::core::TensorWorkQueue>(lfs::core::default_gpu_backend());
             heatmap->readback.prepare(heatmap->ema_loss_gpu, heatmap->ema_loss_stage_cpu);
         } catch (const std::exception& e) {
             return std::unexpected(std::format("Failed to create camera-loss queue: {}", e.what()));
@@ -2376,7 +2389,7 @@ namespace lfs::training {
             return;
         }
 
-        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        const lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::current();
         image_loss.sync_to_stream(stream);
         // Keep the tensors' producer metadata aligned with the existing kernel
         // queue so asynchronous readback waits only for that producer.
@@ -2752,8 +2765,7 @@ namespace lfs::training {
                     auto& loader = lfs::io::CacheLoader::getInstance();
                     lfs::io::LoadParams load_params{
                         .resize_factor = 1,
-                        .max_width = 0, // No max width limit
-                        .cuda_stream = nullptr};
+                        .max_width = 0};
                     bg_image_base_ = loader.load_cached_image(params.optimization.bg_image_path, load_params);
                     if (bg_image_base_.device() != lfs::core::Device::GPU) {
                         bg_image_base_ = bg_image_base_.to(lfs::core::Device::GPU);
@@ -2810,7 +2822,7 @@ namespace lfs::training {
                     !bg_image_base_.is_valid()) {
                     try {
                         auto& loader = lfs::io::CacheLoader::getInstance();
-                        lfs::io::LoadParams load_params{.resize_factor = 1, .max_width = 0, .cuda_stream = nullptr};
+                        lfs::io::LoadParams load_params{.resize_factor = 1, .max_width = 0};
                         bg_image_base_ = loader.load_cached_image(params_.optimization.bg_image_path, load_params);
                         if (bg_image_base_.device() != lfs::core::Device::GPU) {
                             bg_image_base_ = bg_image_base_.to(lfs::core::Device::GPU);
@@ -3059,10 +3071,10 @@ namespace lfs::training {
             // arena acquisition so a refining iteration holding the arena can't
             // deadlock this reader (which holds render_mutex_ shared) — on
             // timeout the rasterizer throws and the metric is skipped this call.
-            void* reader_stream = metrics_queue_->native_handle();
-            const lfs::core::RasterizerMemoryArena::ScopedBeginFrameTimeout arena_timeout(100);
+            lfs::core::TensorExecutionTarget reader_queue = *metrics_queue_;
+            const ops::ScopedArenaTimeout arena_timeout(training_session_ops(), 100);
             try {
-                beginModelRead(reader_stream);
+                beginModelRead(reader_queue);
             } catch (const std::exception& e) {
                 return std::unexpected(std::format("metric read window unavailable: {}", e.what()));
             }
@@ -3073,9 +3085,15 @@ namespace lfs::training {
             try {
                 RenderOutput output;
                 if (params.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
-                    output = gsplat_rasterize(
-                        camera, model, background,
-                        1.0f, false, GsplatRenderMode::RGB, true);
+                    if (training_ops_ == nullptr || training_ops_->gsplat == nullptr) {
+                        throw std::runtime_error(*unavailable_training_family(
+                            lfs::core::default_gpu_backend(), Family::Gsplat));
+                    }
+                    if (!metrics_gsplat_saved_.backend) {
+                        metrics_gsplat_saved_.backend = training_ops_->gsplat->create();
+                    }
+                    output = gsplat_infer(*training_ops_->gsplat, metrics_gsplat_saved_,
+                                          camera, model, background);
                 } else {
                     if (training_ops_ == nullptr || training_ops_->fast == nullptr) {
                         throw std::runtime_error(*unavailable_training_family(
@@ -3100,7 +3118,7 @@ namespace lfs::training {
                 // Arena busy (refining trainer holds the frame) or render error:
                 // skip this metric sample; the panel retries on its next update.
                 try {
-                    endModelRead(reader_stream);
+                    endModelRead(reader_queue);
                 } catch (const std::exception& end_error) {
                     LOG_ERROR("computeCameraMetrics: reader-done record failed during degradation: {}",
                               end_error.what());
@@ -3108,7 +3126,7 @@ namespace lfs::training {
                 return std::unexpected(std::format("metric render unavailable: {}", e.what()));
             }
             try {
-                endModelRead(reader_stream);
+                endModelRead(reader_queue);
             } catch (const std::exception& e) {
                 // Without the reader-done edge the trainer may not order writes
                 // against this reader's pending kernels — discard the sample.
@@ -3202,12 +3220,12 @@ namespace lfs::training {
 
         try {
             lfs::core::TensorCompletion completion;
-            completion.include(lfs::core::GpuBackend::CUDA);
+            completion.include(lfs::core::default_gpu_backend());
             completion.wait();
         } catch (const std::exception& e) {
-            LOG_ERROR("Trainer::shutdown CUDA barrier failed (continuing): {}", e.what());
+            LOG_ERROR("Trainer::shutdown device barrier failed (continuing): {}", e.what());
         } catch (...) {
-            LOG_ERROR("Trainer::shutdown CUDA barrier failed (unknown; continuing)");
+            LOG_ERROR("Trainer::shutdown device barrier failed (unknown; continuing)");
         }
 
         finish_project_writer();
@@ -3227,6 +3245,8 @@ namespace lfs::training {
         pipelined_depth_ = {};
         pipelined_normal_ = {};
         photo_saved_ = {};
+        gsplat_saved_ = {};
+        metrics_gsplat_saved_ = {};
         fast_saved_ = {};
         metrics_fast_saved_ = {};
         photo_loss_ = {};
@@ -3280,22 +3300,26 @@ namespace lfs::training {
             } catch (...) {
                 LOG_ERROR("Trainer::shutdown trim_memory_pool failed (unknown; continuing)");
             }
-            try {
-                lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
-            } catch (const std::exception& e) {
-                LOG_ERROR("Trainer::shutdown arena full_reset failed (continuing): {}",
-                          e.what());
-            } catch (...) {
-                LOG_ERROR("Trainer::shutdown arena full_reset failed (unknown; continuing)");
+            // Only a bound session (the CUDA table today) owns the rasterizer arena.
+            if (training_ops_ != nullptr && training_ops_->session != nullptr &&
+                training_ops_->session->reset_arena != nullptr) {
+                try {
+                    training_ops_->session->reset_arena();
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Trainer::shutdown arena full_reset failed (continuing): {}",
+                              e.what());
+                } catch (...) {
+                    LOG_ERROR("Trainer::shutdown arena full_reset failed (unknown; continuing)");
+                }
             }
             try {
                 lfs::core::TensorCompletion completion;
-                completion.include(lfs::core::GpuBackend::CUDA);
+                completion.include(lfs::core::default_gpu_backend());
                 completion.wait();
             } catch (const std::exception& e) {
-                LOG_ERROR("Trainer::shutdown final CUDA barrier failed (continuing): {}", e.what());
+                LOG_ERROR("Trainer::shutdown final device barrier failed (continuing): {}", e.what());
             } catch (...) {
-                LOG_ERROR("Trainer::shutdown final CUDA barrier failed (unknown; continuing)");
+                LOG_ERROR("Trainer::shutdown final device barrier failed (unknown; continuing)");
             }
         }
         LOG_DEBUG("GPU memory released");
@@ -3376,8 +3400,7 @@ namespace lfs::training {
                 auto& loader = lfs::io::CacheLoader::getInstance();
                 lfs::io::LoadParams load_params{
                     .resize_factor = 1,
-                    .max_width = 0,
-                    .cuda_stream = nullptr};
+                    .max_width = 0};
                 bg_image_base_ = loader.load_cached_image(params.optimization.bg_image_path, load_params);
                 if (bg_image_base_.device() != lfs::core::Device::GPU) {
                     bg_image_base_ = bg_image_base_.to(lfs::core::Device::GPU);
@@ -3625,11 +3648,11 @@ namespace lfs::training {
         }
         const auto checkpoint_params =
             params_for_project_snapshot();
-        const std::array<void*, 3>
-            mutating_streams{
-                training_queue_->native_handle(),
-                metrics_queue_->native_handle(),
-                callback_queue_->native_handle(),
+        const std::array<lfs::core::TensorExecutionTarget, 3>
+            mutating_queues{
+                *training_queue_,
+                *metrics_queue_,
+                *callback_queue_,
             };
         const TrainingSnapshotCaptureRequest request{
             .iteration = current_iteration_.load(),
@@ -3644,7 +3667,7 @@ namespace lfs::training {
                 dynamic_cast<
                     const ADMMSparsityOptimizer*>(
                     sparsity_optimizer_.get()),
-            .mutating_streams = mutating_streams,
+            .mutating_queues = mutating_queues,
         };
         return project_snapshot_service_->initialize(
             request);
@@ -3927,11 +3950,11 @@ namespace lfs::training {
 
         const auto checkpoint_params =
             params_for_project_snapshot();
-        const std::array<void*, 3>
-            mutating_streams{
-                training_queue_->native_handle(),
-                metrics_queue_->native_handle(),
-                callback_queue_->native_handle(),
+        const std::array<lfs::core::TensorExecutionTarget, 3>
+            mutating_queues{
+                *training_queue_,
+                *metrics_queue_,
+                *callback_queue_,
             };
         const TrainingSnapshotCaptureRequest request{
             .iteration = capture_iteration,
@@ -3950,7 +3973,7 @@ namespace lfs::training {
                 dynamic_cast<
                     const ADMMSparsityOptimizer*>(
                     sparsity_optimizer_.get()),
-            .mutating_streams = mutating_streams,
+            .mutating_queues = mutating_queues,
         };
         auto prepared =
             project_snapshot_service_->prepare(request);
@@ -4157,11 +4180,11 @@ namespace lfs::training {
         }
         const auto checkpoint_params =
             params_for_project_snapshot();
-        const std::array<void*, 3>
-            mutating_streams{
-                training_queue_->native_handle(),
-                metrics_queue_->native_handle(),
-                callback_queue_->native_handle(),
+        const std::array<lfs::core::TensorExecutionTarget, 3>
+            mutating_queues{
+                *training_queue_,
+                *metrics_queue_,
+                *callback_queue_,
             };
         const auto snapshot_uuid =
             prepared_project_snapshot_->snapshot_uuid();
@@ -4198,7 +4221,7 @@ namespace lfs::training {
                 dynamic_cast<
                     const ADMMSparsityOptimizer*>(
                     sparsity_optimizer_.get()),
-            .mutating_streams = mutating_streams,
+            .mutating_queues = mutating_queues,
             .capture_additional_cpu_state =
                 [this, cpu_state, chapters,
                  cpu_write_kind, iteration,
@@ -4348,7 +4371,8 @@ namespace lfs::training {
             return;
         }
 
-        photo_shrink_to_required(photo_saved_);
+        if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
+            training_ops_->photometric->shrink_to_required(photo_saved_);
 
         std::optional<std::filesystem::path> headless_source_path;
         bool first_publish_to_destination =
@@ -5259,9 +5283,13 @@ namespace lfs::training {
                 progress_->pause();
             }
             // B3: the previous step is complete; release the production loss arena.
-            photo_reset(photo_saved_);
-            fast_release_caches(fast_saved_);
-            resize_rasterizer_arena_at_boundary("B3 pause", true);
+            if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
+                training_ops_->photometric->reset(photo_saved_);
+            if (training_ops_ != nullptr && training_ops_->fast != nullptr)
+                training_ops_->fast->release_caches(fast_saved_);
+            training_session_ops().resize_arena("B3 pause", true);
+            if (training_ops_ != nullptr && training_ops_->gsplat != nullptr)
+                training_ops_->gsplat->release_caches(gsplat_saved_);
             LOG_INFO("Training paused at iteration {}", iter);
             lfs::diagnostics::VramProfiler::instance().mark("training_pause");
             LOG_DEBUG("Click 'Resume Training' to continue.");
@@ -5281,7 +5309,8 @@ namespace lfs::training {
         // Handle stop request - this permanently stops training
         if (stop_requested_.load()) {
             // B3: no new forward work will consume these views.
-            photo_reset(photo_saved_);
+            if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
+                training_ops_->photometric->reset(photo_saved_);
             LOG_INFO("Stopping training permanently at iteration {}...", iter);
             lfs::diagnostics::VramProfiler::instance().mark("training_stop");
         }
@@ -5343,7 +5372,7 @@ namespace lfs::training {
         if (bg_mix_buffer_.is_empty()) {
             bg_mix_buffer_ = lfs::core::Tensor::empty(
                 {3}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
-            bg_mix_buffer_.set_stream(static_cast<cudaStream_t>(training_queue_->native_handle()));
+            bg_mix_buffer_.set_stream(*training_queue_);
         }
 
         // This buffer and its consumers share the training queue, so each upload
@@ -5354,7 +5383,7 @@ namespace lfs::training {
         if (upload.pending() && !upload.poll())
             upload.wait();
         upload.enqueue(bg_mix_buffer_, std::as_bytes(std::span(result)),
-                       training_queue_->native_handle());
+                       *training_queue_);
         return bg_mix_buffer_;
     }
 
@@ -5389,7 +5418,7 @@ namespace lfs::training {
                        "edge-weight map byte size overflow");
         const lfs::core::TensorShape map_shape{height, width};
         const size_t map_bytes = height * width * sizeof(float);
-        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        const lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::current();
         gt_image.sync_to_stream(stream);
 
         if (auto it = edge_weight_cache_.find(camera_uid);
@@ -5413,8 +5442,7 @@ namespace lfs::training {
         }
         edge_map_buffer_.set_stream(stream);
         training_ops_->training_image->canny(gt_image, edge_map_buffer_);
-        kernels::launch_normalize_by_positive_median(
-            edge_map_buffer_.ptr<float>(), height * width, stream);
+        training_ops_->refine->normalize_positive_median(edge_map_buffer_);
 
         lfs::core::Tensor map;
         const bool cacheable = map_bytes <= EDGE_WEIGHT_CACHE_BUDGET_BYTES;
@@ -5487,13 +5515,13 @@ namespace lfs::training {
             lfs::core::Device::GPU,
             lfs::core::DataType::Float32);
 
-        bg_image_base_.sync_to_stream(lfs::core::getCurrentCUDAStream());
+        bg_image_base_.sync_to_stream(lfs::core::TensorExecutionTarget::current());
         // Use bilinear resize kernel
         training_ops_->training_image->resize_background(bg_image_base_, resized);
 
         // Cache only if this physical bucket can fit under the hard byte ceiling.
         // Returned Tensor copies retain storage safely if an older entry is evicted.
-        const auto allocation_bytes = lfs::core::SizeBucketedPool::get_bucket_size(resized.bytes());
+        const auto allocation_bytes = training_session_ops().allocation_bytes(resized.bytes());
         if (allocation_bytes <= BG_IMAGE_CACHE_BUDGET_BYTES) {
             while (!bg_image_cache_.empty() &&
                    bg_image_cache_bytes_ > BG_IMAGE_CACHE_BUDGET_BYTES - allocation_bytes) {
@@ -5531,7 +5559,7 @@ namespace lfs::training {
                 lfs::core::DataType::Float32);
         }
 
-        random_bg_buffer_.set_stream(lfs::core::getCurrentCUDAStream());
+        random_bg_buffer_.set_stream(lfs::core::TensorExecutionTarget::current());
         training_ops_->training_image->random_background(random_bg_buffer_, static_cast<uint64_t>(iteration));
 
         return random_bg_buffer_;
@@ -5551,21 +5579,14 @@ namespace lfs::training {
     }
 
     lfs::Status Trainer::recover_forward_oom(const lfs::Error& cause) {
-        if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
-            const auto info = arena->get_memory_info();
-            lfs::core::log_arena_failure_vram_snapshot(
-                "trainer.recover_forward_oom", info.arena_capacity, info.peak_usage);
-        } else {
-            lfs::core::log_arena_failure_vram_snapshot(
-                "trainer.recover_forward_oom", 0, 0);
-        }
+        training_session_ops().log_arena_failure("trainer.recover_forward_oom");
         const auto synchronize = [this] {
             if (recovery_sync_for_testing_) {
                 recovery_sync_for_testing_();
                 return;
             }
             lfs::core::TensorCompletion completion;
-            completion.include(lfs::core::GpuBackend::CUDA);
+            completion.include(lfs::core::default_gpu_backend());
             completion.wait();
         };
         const auto cuda_recovery_error = [&cause](const std::string_view operation,
@@ -5603,7 +5624,7 @@ namespace lfs::training {
                 std::move(typed).error().with_suppressed(cause));
         }
 
-        lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
+        training_session_ops().reset_arena();
         if (auto loader = getActiveImageLoader())
             loader->reclaim_idle_decoded_frames();
         lfs::core::Tensor::trim_memory_pool();
@@ -5622,13 +5643,13 @@ namespace lfs::training {
 
     namespace {
         // Profiling hooks for perf_campaign/profile.sh via CLI `--profile-window=START:STOP`.
-        // cudaProfilerStart/Stop at [START, STOP); NVTX per-iter ranges while the window
-        // is active (nvtxRange* are no-ops when NVTX is compiled out / unused by nsys).
-        struct NvtxIterationGuard {
+        // Session profiling at [START, STOP); NVTX per-iter ranges while the window
+        // is active; the backend owns the diagnostic ranges.
+        struct DiagnosticIterationGuard {
             bool active = false;
-            ~NvtxIterationGuard() {
+            ~DiagnosticIterationGuard() {
                 if (active)
-                    nvtxRangePop();
+                    lfs::core::pop_gpu_range();
             }
         };
     } // namespace
@@ -5645,15 +5666,15 @@ namespace lfs::training {
         const bool profile_window_active =
             prof_start >= 0 && prof_stop > prof_start && iter >= prof_start && iter < prof_stop;
         if (iter == prof_start)
-            cudaProfilerStart();
+            training_ops_->session->profile(true);
         if (iter == prof_stop)
-            cudaProfilerStop();
-        NvtxIterationGuard nvtx_iter_guard;
+            training_ops_->session->profile(false);
+        DiagnosticIterationGuard diagnostic_iter_guard;
         if (profile_window_active) {
             char range_name[32];
             std::snprintf(range_name, sizeof(range_name), "train_step:%d", iter);
-            nvtxRangePushA(range_name);
-            nvtx_iter_guard.active = true;
+            lfs::core::push_gpu_range(range_name);
+            diagnostic_iter_guard.active = true;
         }
         auto result = [&]() -> lfs::Result<StepDisposition> {
             try {
@@ -5666,7 +5687,7 @@ namespace lfs::training {
                 if (live_vram_profiler_enabled()) {
                     auto& profiler = lfs::diagnostics::VramProfiler::instance();
                     profiler.beginIteration(iter);
-                    profiler.sampleCudaMemory();
+                    training_session_ops().sample_memory();
                 }
 
                 if (params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
@@ -5755,11 +5776,11 @@ namespace lfs::training {
 
                 lfs::core::Tensor* bg_ptr = nullptr;
                 {
-                    nvtxRangePush("background_for_step");
+                    lfs::core::push_gpu_range("background_for_step");
                     LFS_VRAM_SCOPE("train.background");
                     LOG_VRAM_DIFF("train.background");
                     bg_ptr = &background_for_step(iter);
-                    nvtxRangePop();
+                    lfs::core::pop_gpu_range();
                 }
                 lfs::core::Tensor& bg = *bg_ptr;
 
@@ -5952,7 +5973,7 @@ namespace lfs::training {
                         recordParamsReady();
                     }
                     if (refining) {
-                        resize_rasterizer_arena_at_boundary("B1 refine", false);
+                        training_session_ops().resize_arena("B1 refine", false);
                     }
                     // densify_barrier dtor runs when leaving this block — topology
                     // fan-out only after q16 commit is stable (see defer above).
@@ -6096,7 +6117,7 @@ namespace lfs::training {
                 }
 
                 {
-                    nvtxRangePush("rasterize");
+                    lfs::core::push_gpu_range("rasterize");
 
                     lfs::core::Tensor gt_tile = gt_image;
                     lfs::core::Tensor bg_tile;
@@ -6105,12 +6126,12 @@ namespace lfs::training {
                     }
 
                     // Render the tile
-                    nvtxRangePush("rasterize_forward");
+                    lfs::core::push_gpu_range("rasterize_forward");
                     PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::FwdBegin, iter);
 
                     // Storage for render output (used by both paths)
                     RenderOutput output;
-                    std::optional<GsplatRasterizeContext> gsplat_ctx;
+                    bool gsplat_frame = false;
 
                     {
                         LFS_VRAM_SCOPE("train.rasterize_forward");
@@ -6124,40 +6145,24 @@ namespace lfs::training {
                             for (;;) {
                                 ++forward_attempts;
                                 try {
-                                    auto rasterize_result = gsplat_rasterize_forward(
+                                    const auto result = gsplat_render(
+                                        *training_ops_->gsplat, gsplat_saved_,
                                         *cam, strategy_->get_model(), bg,
-                                        0, 0, 0, 0,
-                                        1.0f, false, GsplatRenderMode::RGB, true, bg_tile);
-                                    if (!rasterize_result) {
-                                        auto typed = lfs::from_legacy_expected<
-                                            std::pair<RenderOutput, GsplatRasterizeContext>>(
-                                            std::move(rasterize_result),
-                                            lfs::LegacyErrorContext{
-                                                .code = lfs::ErrorCode::Internal,
-                                                .domain = lfs::ErrorDomain::Rendering,
-                                                .operation = "gsplat_rasterize_forward",
-                                                .source = LFS_SOURCE_SITE_CURRENT(),
-                                            });
-                                        if (!typed) {
-                                            nvtxRangePop(); // rasterize_forward
-                                            nvtxRangePop(); // tile
-                                            return std::move(typed).error();
-                                        }
-                                        auto gut_result = std::move(typed).value();
-                                        output = std::move(gut_result.first);
-                                        gsplat_ctx.emplace(std::move(gut_result.second));
-                                    } else {
-                                        output = std::move(rasterize_result->first);
-                                        gsplat_ctx.emplace(std::move(rasterize_result->second));
+                                        0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB, bg_tile, output);
+                                    if (result.code != lfs::gpu_ops::RasterResult::Code::Success) {
+                                        lfs::core::pop_gpu_range();
+                                        lfs::core::pop_gpu_range();
+                                        return gsplat_raster_error(result);
                                     }
+                                    gsplat_frame = true;
                                     break;
                                 } catch (const lfs::Exception& exception) {
                                     const lfs::Error forward_error = exception.error();
                                     const RetryDecision decision = classify_forward_retry(
                                         forward_error, forward_stamp, forward_attempts);
                                     if (decision == RetryDecision::DoNotRetry) {
-                                        nvtxRangePop(); // rasterize_forward
-                                        nvtxRangePop(); // tile
+                                        lfs::core::pop_gpu_range(); // rasterize_forward
+                                        lfs::core::pop_gpu_range(); // tile
                                         return forward_error;
                                     }
                                     LOG_ERROR(
@@ -6165,8 +6170,8 @@ namespace lfs::training {
                                         forward_attempts, forward_error.detail());
                                     if (lfs::Status recovery = recover_forward_oom(forward_error);
                                         !recovery) {
-                                        nvtxRangePop(); // rasterize_forward
-                                        nvtxRangePop(); // tile
+                                        lfs::core::pop_gpu_range(); // rasterize_forward
+                                        lfs::core::pop_gpu_range(); // tile
                                         return std::move(recovery).error();
                                     }
                                 }
@@ -6192,8 +6197,8 @@ namespace lfs::training {
                                 ++forward_attempts;
                                 if (training_ops_ == nullptr || training_ops_->fast == nullptr ||
                                     !fast_saved_.backend) {
-                                    nvtxRangePop();
-                                    nvtxRangePop();
+                                    lfs::core::pop_gpu_range();
+                                    lfs::core::pop_gpu_range();
                                     return fast_raster_error(lfs::gpu_ops::RasterResult{
                                         .code = lfs::gpu_ops::RasterResult::Code::Failed,
                                         .message = "Fast raster ops are not available",
@@ -6219,8 +6224,8 @@ namespace lfs::training {
                                         "(bad frame, training continues): {}",
                                         iter,
                                         forward_error.detail());
-                                    nvtxRangePop();
-                                    nvtxRangePop();
+                                    lfs::core::pop_gpu_range();
+                                    lfs::core::pop_gpu_range();
                                     return iter < get_total_iterations() &&
                                                    !stop_requested_.load() &&
                                                    !stop_token.stop_requested()
@@ -6230,8 +6235,8 @@ namespace lfs::training {
                                 const RetryDecision decision = classify_forward_retry(
                                     forward_error, forward_stamp, forward_attempts);
                                 if (decision == RetryDecision::DoNotRetry) {
-                                    nvtxRangePop();
-                                    nvtxRangePop();
+                                    lfs::core::pop_gpu_range();
+                                    lfs::core::pop_gpu_range();
                                     return std::move(forward_error);
                                 }
 
@@ -6240,8 +6245,8 @@ namespace lfs::training {
                                     forward_attempts, forward_error.detail());
                                 if (lfs::Status recovery = recover_forward_oom(forward_error);
                                     !recovery) {
-                                    nvtxRangePop();
-                                    nvtxRangePop();
+                                    lfs::core::pop_gpu_range();
+                                    lfs::core::pop_gpu_range();
                                     // recover_forward_oom is the sole attachment point for
                                     // the initiating OOM; do not suppress it a second time.
                                     return std::move(recovery).error();
@@ -6250,8 +6255,10 @@ namespace lfs::training {
 
                             if (!fast_has_work) {
                                 training_ops_->fast->release(fast_saved_);
-                                nvtxRangePop();
-                                nvtxRangePop();
+                                lfs::core::pop_gpu_range();
+                                lfs::core::pop_gpu_range();
+                                if (auto degenerate = check_invisible_iteration(iter))
+                                    return std::move(*degenerate);
                                 LOG_DEBUG("Skipping iteration {} - no visible primitives", iter);
                                 return iter < get_total_iterations() && !stop_requested_.load() && !stop_token.stop_requested()
                                            ? StepDisposition::Continue
@@ -6263,7 +6270,7 @@ namespace lfs::training {
                     r_output = output; // Save last tile for densification
                     r_output.camera = cam;
                     r_output.target_image = gt_image;
-                    nvtxRangePop();
+                    lfs::core::pop_gpu_range();
 
                     bool tile_context_cleaned = false;
                     auto cleanup_tile_context = [&]() {
@@ -6277,14 +6284,9 @@ namespace lfs::training {
                             if (training_ops_ != nullptr && training_ops_->fast != nullptr) {
                                 training_ops_->fast->release(fast_saved_);
                             }
-                        } else if (gsplat_ctx) {
-                            // Isect/flatten ids belong to the TLS VMM cache, not
-                            // the context; only end the arena frame here.
-                            auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-                            gsplat_ctx->isect_ids_ptr = nullptr;
-                            gsplat_ctx->flatten_ids_ptr = nullptr;
-                            arena.end_frame(gsplat_ctx->frame_id, lfs::core::getCurrentCUDAStream());
-                            gsplat_ctx.reset();
+                        } else if (gsplat_frame) {
+                            training_ops_->gsplat->release(gsplat_saved_);
+                            gsplat_frame = false;
                         }
                     };
 
@@ -6300,7 +6302,7 @@ namespace lfs::training {
                         const lfs::core::TensorShape roi_shape{
                             static_cast<size_t>(output.height),
                             static_cast<size_t>(output.width)};
-                        const cudaStream_t roi_stream = lfs::core::getCurrentCUDAStream();
+                        const lfs::core::TensorExecutionTarget roi_stream = lfs::core::TensorExecutionTarget::current();
                         output.image.sync_to_stream(roi_stream);
                         if (!roi_weight_map_.is_valid() ||
                             roi_weight_map_.shape() != roi_shape) {
@@ -6309,7 +6311,7 @@ namespace lfs::training {
                                 lfs::core::Device::GPU,
                                 lfs::core::DataType::Float32);
                         }
-                        if (roi_weight_map_.stream() != roi_stream) {
+                        if (roi_weight_map_.execution_target() != roi_stream) {
                             roi_weight_map_.set_stream(roi_stream);
                         }
 
@@ -6328,14 +6330,14 @@ namespace lfs::training {
                         training_ops_->training_image->roi(
                             cam->world_view_transform(), cam->cam_position(), roi_weight_map_, roi_params);
                         roi_weight = roi_weight_map_;
-                        roi_weight.sync_to_stream(lfs::core::getCurrentCUDAStream());
+                        roi_weight.sync_to_stream(lfs::core::TensorExecutionTarget::current());
                     }
 
                     current_phase = StepPhase::Loss;
                     if (in_controller_phase) {
                         // Controller phase: forward through ISP with controller params, photometric loss,
                         // backward only through controller (base params frozen)
-                        nvtxRangePush("controller_phase");
+                        lfs::core::push_gpu_range("controller_phase");
                         LFS_VRAM_SCOPE("train.controller_phase");
                         LOG_VRAM_DIFF("train.controller_phase");
                         auto tile_context_guard = makeScopeGuard(cleanup_tile_context);
@@ -6363,7 +6365,7 @@ namespace lfs::training {
                         const lfs::core::Tensor raw_loss_input = output.image;
 
                         // Photometric loss
-                        nvtxRangePush("compute_photometric_loss");
+                        lfs::core::push_gpu_range("compute_photometric_loss");
                         PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::LossBegin, iter);
                         lfs::core::Tensor tile_loss;
                         lfs::core::Tensor tile_grad;
@@ -6394,9 +6396,9 @@ namespace lfs::training {
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
                                     params_.optimization, raw_loss_input);
                                 if (!result) {
-                                    nvtxRangePop();
-                                    nvtxRangePop();
-                                    nvtxRangePop();
+                                    lfs::core::pop_gpu_range();
+                                    lfs::core::pop_gpu_range();
+                                    lfs::core::pop_gpu_range();
                                     return lfs::from_legacy_expected<StepDisposition>(
                                                std::unexpected(result.error()),
                                                lfs::LegacyErrorContext{
@@ -6413,9 +6415,9 @@ namespace lfs::training {
                                 auto result = compute_photometric_loss_with_gradient(
                                     corrected_image, gt_tile, params_.optimization, raw_loss_input);
                                 if (!result) {
-                                    nvtxRangePop();
-                                    nvtxRangePop();
-                                    nvtxRangePop();
+                                    lfs::core::pop_gpu_range();
+                                    lfs::core::pop_gpu_range();
+                                    lfs::core::pop_gpu_range();
                                     return lfs::from_legacy_expected<StepDisposition>(
                                                std::unexpected(result.error()),
                                                lfs::LegacyErrorContext{
@@ -6433,14 +6435,14 @@ namespace lfs::training {
 
                         loss_tensor_gpu = loss_tensor_gpu + tile_loss;
                         tiles_processed++;
-                        nvtxRangePop(); // compute_photometric_loss
+                        lfs::core::pop_gpu_range(); // compute_photometric_loss
                         if (live_vram_profiler_enabled()) {
                             record_vram_tensor("train.losses", "controller.tile_loss", tile_loss);
                             record_vram_tensor("train.losses", "controller.tile_grad", tile_grad);
                             record_vram_tensor("train.appearance", "ppisp_controller.prediction", pred);
                             {
                                 const auto loss_ws =
-                                    photo_workspace_bytes(photo_saved_);
+                                    training_ops_->photometric->workspace_bytes(photo_saved_);
                                 record_vram_current("train.losses", "loss_workspace_arena",
                                                     loss_ws.allocated);
                                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
@@ -6463,7 +6465,7 @@ namespace lfs::training {
                             ppisp_controller_pool_->backward(ppisp_cam_idx, ctrl_grad);
                         }
 
-                        nvtxRangePop(); // controller_phase
+                        lfs::core::pop_gpu_range(); // controller_phase
                     } else {
                         // Normal phase: full forward + backward through all components
                         auto tile_context_guard = makeScopeGuard(cleanup_tile_context);
@@ -6482,40 +6484,40 @@ namespace lfs::training {
                         lfs::core::Tensor grid_input;
                         if (exposure_correction) {
                             if (ppisp_on) {
-                                nvtxRangePush("ppisp_forward");
+                                lfs::core::push_gpu_range("ppisp_forward");
                                 LFS_VRAM_SCOPE("train.ppisp.forward");
                                 LOG_VRAM_DIFF("train.ppisp.forward");
                                 ppisp_input = output.image;
                                 corrected_image = ppisp_->apply(
                                     ppisp_input, cam->camera_id(), cam->uid());
-                                nvtxRangePop();
+                                lfs::core::pop_gpu_range();
                             }
                             grid_input = corrected_image;
                             if (grid_active_this_iter) {
-                                nvtxRangePush("bilateral_grid_forward");
+                                lfs::core::push_gpu_range("bilateral_grid_forward");
                                 LFS_VRAM_SCOPE("train.bilateral_grid.forward");
                                 LOG_VRAM_DIFF("train.bilateral_grid.forward");
                                 corrected_image = bilateral_grid_->apply(grid_input, cam->uid());
-                                nvtxRangePop();
+                                lfs::core::pop_gpu_range();
                             }
                             corrected_image.clamp_(0.0f, 1.0f);
                         } else {
                             if (grid_on) {
-                                nvtxRangePush("bilateral_grid_forward");
+                                lfs::core::push_gpu_range("bilateral_grid_forward");
                                 LFS_VRAM_SCOPE("train.bilateral_grid.forward");
                                 LOG_VRAM_DIFF("train.bilateral_grid.forward");
                                 corrected_image = bilateral_grid_->apply(output.image, cam->uid());
-                                nvtxRangePop();
+                                lfs::core::pop_gpu_range();
                             }
 
                             if (ppisp_on) {
-                                nvtxRangePush("ppisp_forward");
+                                lfs::core::push_gpu_range("ppisp_forward");
                                 LFS_VRAM_SCOPE("train.ppisp.forward");
                                 LOG_VRAM_DIFF("train.ppisp.forward");
                                 ppisp_input = corrected_image;
                                 corrected_image = ppisp_->apply(
                                     ppisp_input, cam->camera_id(), cam->uid());
-                                nvtxRangePop();
+                                lfs::core::pop_gpu_range();
                             }
                             // Final tonemapping: clamp to [0, 1] for loss computation.
                             // skip when PPISP is active — CRF already clamps.
@@ -6528,7 +6530,7 @@ namespace lfs::training {
                         const lfs::core::Tensor raw_loss_input =
                             (grid_on || ppisp_on) ? output.image : lfs::core::Tensor{};
 
-                        nvtxRangePush("compute_photometric_loss");
+                        lfs::core::push_gpu_range("compute_photometric_loss");
                         PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::LossBegin, iter);
                         lfs::core::Tensor tile_loss;
                         lfs::core::Tensor tile_grad;
@@ -6542,7 +6544,7 @@ namespace lfs::training {
                         lfs::core::Tensor normal_terms_weight;
                         bool depth_grad_buffers_active = false;
                         const auto roi_weight_on_stream =
-                            [&](const cudaStream_t stream) -> const lfs::core::Tensor& {
+                            [&](const lfs::core::TensorExecutionTarget stream) -> const lfs::core::Tensor& {
                             if (!roi_weight.is_valid()) {
                                 return roi_weight;
                             }
@@ -6552,7 +6554,7 @@ namespace lfs::training {
                         };
 
                         const auto normal_weight_on_stream =
-                            [&](const cudaStream_t stream) -> const lfs::core::Tensor& {
+                            [&](const lfs::core::TensorExecutionTarget stream) -> const lfs::core::Tensor& {
                             if (!normal_terms_weight.is_valid()) {
                                 return roi_weight_on_stream(stream);
                             }
@@ -6563,7 +6565,7 @@ namespace lfs::training {
 
                         const auto ensure_depth_grad_buffers =
                             [&](const lfs::core::Tensor& rendered_depth,
-                                const cudaStream_t stream,
+                                const lfs::core::TensorExecutionTarget stream,
                                 const bool clear_for_accumulation) {
                                 if (!depth_loss_grad_.is_valid() ||
                                     depth_loss_grad_.shape() != rendered_depth.shape()) {
@@ -6626,8 +6628,8 @@ namespace lfs::training {
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
                                     params_.optimization, raw_loss_input);
                                 if (!result) {
-                                    nvtxRangePop();
-                                    nvtxRangePop();
+                                    lfs::core::pop_gpu_range();
+                                    lfs::core::pop_gpu_range();
                                     return lfs::from_legacy_expected<StepDisposition>(
                                                std::unexpected(result.error()),
                                                lfs::LegacyErrorContext{
@@ -6647,8 +6649,8 @@ namespace lfs::training {
                                 auto result = compute_photometric_loss_with_gradient(
                                     corrected_image, gt_tile, params_.optimization, raw_loss_input);
                                 if (!result) {
-                                    nvtxRangePop();
-                                    nvtxRangePop();
+                                    lfs::core::pop_gpu_range();
+                                    lfs::core::pop_gpu_range();
                                     return lfs::from_legacy_expected<StepDisposition>(
                                                std::unexpected(result.error()),
                                                lfs::LegacyErrorContext{
@@ -6711,7 +6713,7 @@ namespace lfs::training {
                                     rendered_alpha = rendered_alpha.contiguous();
                                 }
 
-                                const cudaStream_t depth_stream = lfs::core::getCurrentCUDAStream();
+                                const lfs::core::TensorExecutionTarget depth_stream = lfs::core::TensorExecutionTarget::current();
                                 rendered_depth.sync_to_stream(depth_stream);
                                 rendered_alpha.sync_to_stream(depth_stream);
                                 target_depth.sync_to_stream(depth_stream);
@@ -6721,8 +6723,7 @@ namespace lfs::training {
                                      target_depth.shape()[1] != rendered_depth.shape()[1])) {
                                     const int render_h = static_cast<int>(rendered_depth.shape()[0]);
                                     const int render_w = static_cast<int>(rendered_depth.shape()[1]);
-                                    target_depth = lfs::core::lanczos_resize_grayscale(
-                                        target_depth, render_h, render_w, 2, depth_stream);
+                                    target_depth = training_ops_->shared_image->resize(target_depth, render_h, render_w, lfs::gpu_ops::Resample::LanczosGray, 2);
                                 }
 
                                 const bool depth_shape_matches =
@@ -6824,7 +6825,7 @@ namespace lfs::training {
                                     rendered_alpha = rendered_alpha.contiguous();
                                 }
 
-                                const cudaStream_t normal_stream = lfs::core::getCurrentCUDAStream();
+                                const lfs::core::TensorExecutionTarget normal_stream = lfs::core::TensorExecutionTarget::current();
                                 rendered_normal.sync_to_stream(normal_stream);
                                 rendered_alpha.sync_to_stream(normal_stream);
                                 target_normal.sync_to_stream(normal_stream);
@@ -6834,8 +6835,7 @@ namespace lfs::training {
                                 if (target_normal.ndim() == 3 &&
                                     (target_normal.shape()[1] != rendered_normal.shape()[1] ||
                                      target_normal.shape()[2] != rendered_normal.shape()[2])) {
-                                    target_normal = lfs::core::lanczos_resize_float_chw(
-                                        target_normal, render_h, render_w, 2, normal_stream);
+                                    target_normal = training_ops_->shared_image->resize(target_normal, render_h, render_w, lfs::gpu_ops::Resample::LanczosFloatCHW, 2);
                                 }
 
                                 const bool normal_shape_matches =
@@ -6986,7 +6986,7 @@ namespace lfs::training {
                                 cam->focal_x() > 0.0f && cam->focal_y() > 0.0f;
 
                             if (consistency_shapes_match) {
-                                const cudaStream_t consistency_stream = lfs::core::getCurrentCUDAStream();
+                                const lfs::core::TensorExecutionTarget consistency_stream = lfs::core::TensorExecutionTarget::current();
                                 rendered_normal.sync_to_stream(consistency_stream);
                                 rendered_depth.sync_to_stream(consistency_stream);
                                 rendered_alpha.sync_to_stream(consistency_stream);
@@ -7139,14 +7139,15 @@ namespace lfs::training {
                         if (live_vram_profiler_enabled()) {
                             if (params_.optimization.raster_backend() !=
                                 lfs::core::param::RasterBackendId::ThreeDGUT) {
-                                fast_record_vram(
+                                training_ops_->fast->record_vram(
                                     fast_saved_, output.image, output.alpha,
                                     run_fastgs_gaussian_backward,
                                     static_cast<std::size_t>(strategy_->get_model().size()));
                                 record_vram_tensor("train.inputs", "gt_tile", gt_tile);
                                 record_vram_tensor("train.inputs", "background_tile", bg_tile);
-                            } else if (gsplat_ctx) {
-                                record_gsplat_vram_breakdown(*gsplat_ctx, output, gt_tile, bg_tile, tile_error_map);
+                            } else if (gsplat_frame) {
+                                training_ops_->gsplat->record_vram(
+                                    gsplat_saved_, output.image, output.alpha, gt_tile, bg_tile, tile_error_map);
                             }
                             record_vram_tensor("train.losses", "tile_loss", tile_loss);
                             record_vram_tensor("train.losses", "tile_grad_corrected", tile_grad);
@@ -7155,7 +7156,7 @@ namespace lfs::training {
                             record_vram_tensor("train.losses", "densification_error_map.live", tile_error_map);
                             {
                                 const auto loss_ws =
-                                    photo_workspace_bytes(photo_saved_);
+                                    training_ops_->photometric->workspace_bytes(photo_saved_);
                                 record_vram_current("train.losses", "loss_workspace_arena",
                                                     loss_ws.allocated);
                                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
@@ -7169,26 +7170,26 @@ namespace lfs::training {
                                 }
                             }
                             record_vram_current("train.losses", "densification_ssim.workspace",
-                                                photo_workspace_bytes(photo_saved_).error_map);
+                                                training_ops_->photometric->workspace_bytes(photo_saved_).error_map);
                             record_vram_tensor("train.losses", "densification_error_map.buffer", densification_error_map_);
                             record_vram_tensor("train.losses", "edge_map_buffer", edge_map_buffer_);
                         }
 
                         loss_tensor_gpu = loss_tensor_gpu + tile_loss;
                         tiles_processed++;
-                        nvtxRangePop();
+                        lfs::core::pop_gpu_range();
 
                         lfs::core::Tensor raster_grad = tile_grad;
                         if (exposure_correction) {
                             if (grid_active_this_iter) {
-                                nvtxRangePush("bilateral_grid_backward");
+                                lfs::core::push_gpu_range("bilateral_grid_backward");
                                 LFS_VRAM_SCOPE("train.bilateral_grid.backward");
                                 LOG_VRAM_DIFF("train.bilateral_grid.backward");
                                 raster_grad = bilateral_grid_->backward(grid_input, raster_grad, cam->uid());
-                                nvtxRangePop();
+                                lfs::core::pop_gpu_range();
                             }
                             if (ppisp_on) {
-                                nvtxRangePush("ppisp_backward");
+                                lfs::core::push_gpu_range("ppisp_backward");
                                 LFS_VRAM_SCOPE("train.ppisp.backward");
                                 LOG_VRAM_DIFF("train.ppisp.backward");
                                 raster_grad = ppisp_->backward(
@@ -7196,11 +7197,11 @@ namespace lfs::training {
                                 if (ppisp_frozen) {
                                     ppisp_->zero_grad();
                                 }
-                                nvtxRangePop();
+                                lfs::core::pop_gpu_range();
                             }
                         } else {
                             if (ppisp_on) {
-                                nvtxRangePush("ppisp_backward");
+                                lfs::core::push_gpu_range("ppisp_backward");
                                 LFS_VRAM_SCOPE("train.ppisp.backward");
                                 LOG_VRAM_DIFF("train.ppisp.backward");
                                 raster_grad = ppisp_->backward(
@@ -7208,15 +7209,15 @@ namespace lfs::training {
                                 if (ppisp_frozen) {
                                     ppisp_->zero_grad();
                                 }
-                                nvtxRangePop();
+                                lfs::core::pop_gpu_range();
                             }
 
                             if (grid_on) {
-                                nvtxRangePush("bilateral_grid_backward");
+                                lfs::core::push_gpu_range("bilateral_grid_backward");
                                 LFS_VRAM_SCOPE("train.bilateral_grid.backward");
                                 LOG_VRAM_DIFF("train.bilateral_grid.backward");
                                 raster_grad = bilateral_grid_->backward(output.image, raster_grad, cam->uid());
-                                nvtxRangePop();
+                                lfs::core::pop_gpu_range();
                             }
                         }
 
@@ -7225,21 +7226,26 @@ namespace lfs::training {
                         }
 
                         current_phase = StepPhase::Backward;
-                        nvtxRangePush("rasterize_backward");
+                        lfs::core::push_gpu_range("rasterize_backward");
                         PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::BwdBegin, iter);
                         {
                             LFS_VRAM_SCOPE("train.rasterize_backward");
                             LOG_VRAM_DIFF("train.rasterize_backward");
-                            if (gsplat_ctx) {
+                            if (gsplat_frame) {
                                 auto grad_alpha = tile_grad_alpha.is_valid()
                                                       ? tile_grad_alpha
                                                       : lfs::core::Tensor::zeros_like(output.alpha);
                                 tile_context_guard.release();
-                                gsplat_rasterize_backward(*gsplat_ctx, raster_grad, grad_alpha,
-                                                          strategy_->get_model(), strategy_->get_optimizer(),
-                                                          use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
-                                                          edge_weight_scoring_active_ ? edge_weight_map : lfs::core::Tensor{},
-                                                          edge_weight_scoring_active_ ? edge_score_scratch : lfs::core::Tensor{});
+                                auto& model = strategy_->get_model();
+                                auto& optimizer = strategy_->get_optimizer();
+                                lfs::core::Tensor unused;
+                                training_ops_->gsplat->backward(gsplat_saved_, raster_grad, grad_alpha,
+                                                                gsplat_gradients(optimizer),
+                                                                model._densification_info,
+                                                                use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
+                                                                edge_weight_scoring_active_ ? edge_weight_map : lfs::core::Tensor{},
+                                                                edge_weight_scoring_active_ ? edge_score_scratch : unused,
+                                                                optimizer.collect_projected_screen_share() ? model._max_screen_share : unused);
                                 if (edge_weight_scoring_active_) {
                                     strategy_->on_edge_score_accumulated(iter);
                                 }
@@ -7263,7 +7269,7 @@ namespace lfs::training {
                                         model_write_lock.lock();
                                     auto& model = strategy_->get_model();
                                     auto& optimizer = strategy_->get_optimizer();
-                                    const cudaStream_t backward_stream = lfs::core::getCurrentCUDAStream();
+                                    const lfs::core::TensorExecutionTarget backward_stream = lfs::core::TensorExecutionTarget::current();
                                     const auto prepared = optimizer.prepare_fastgs_fused_adam(iter, backward_stream);
                                     lfs::core::Tensor none;
                                     const auto* admm = dynamic_cast<const ADMMSparsityOptimizer*>(sparsity_optimizer_.get());
@@ -7321,21 +7327,24 @@ namespace lfs::training {
                                 }
                             }
                         }
-                        nvtxRangePop();
+                        lfs::core::pop_gpu_range();
                     }
 
-                    nvtxRangePop(); // End rasterize
+                    lfs::core::pop_gpu_range(); // End rasterize
                     if (strategy_ && !in_sparsification) {
                         strategy_->post_render(iter, r_output);
                     }
                 }
 
                 if (tiles_processed == 0) {
+                    if (auto degenerate = check_invisible_iteration(iter))
+                        return std::move(*degenerate);
                     LOG_DEBUG("Skipping iteration {} - no visible primitives", iter);
                     return iter < get_total_iterations() && !stop_requested_.load() && !stop_token.stop_requested()
                                ? StepDisposition::Continue
                                : StepDisposition::Stop;
                 }
+                invisible_iteration_streak_ = 0;
 
                 update_camera_loss_heatmap(*cam, loss_tensor_gpu);
                 maybe_publish_camera_loss_heatmap(iter);
@@ -7343,7 +7352,7 @@ namespace lfs::training {
                 if (in_controller_phase) {
                     current_phase = StepPhase::OptimizerCommit;
                     // Controller phase: only update controller weights
-                    nvtxRangePush("controller_optimizer_step");
+                    lfs::core::push_gpu_range("controller_optimizer_step");
                     PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::OptBegin, iter);
                     LFS_VRAM_SCOPE("train.optimizer.ppisp_controller_step");
                     LOG_VRAM_DIFF("train.optimizer.ppisp_controller_step");
@@ -7352,7 +7361,7 @@ namespace lfs::training {
                     ppisp_controller_pool_->scheduler_step(ppisp_cam_idx);
                     ++mutation_epoch_;
                     persistent_commit = true;
-                    nvtxRangePop();
+                    lfs::core::pop_gpu_range();
                 } else {
                     // Default path has no controller_optimizer_step NVTX; mark the
                     // same OptBegin boundary at the start of the optimizer region.
@@ -7360,7 +7369,7 @@ namespace lfs::training {
                     // Normal phase: regularization losses + optimizer steps for all components
 
                     if (params_.optimization.scale_reg > 0.0f) {
-                        nvtxRangePush("compute_scale_reg_loss");
+                        lfs::core::push_gpu_range("compute_scale_reg_loss");
                         LFS_VRAM_SCOPE("train.regularizers.scale_loss");
                         LOG_VRAM_DIFF("train.regularizers.scale_loss");
                         if (three_dgs_path) {
@@ -7380,11 +7389,11 @@ namespace lfs::training {
                             }
                             loss_tensor_gpu = loss_tensor_gpu + *scale_loss_result;
                         }
-                        nvtxRangePop();
+                        lfs::core::pop_gpu_range();
                     }
 
                     if (params_.optimization.opacity_reg > 0.0f) {
-                        nvtxRangePush("compute_opacity_reg_loss");
+                        lfs::core::push_gpu_range("compute_opacity_reg_loss");
                         LFS_VRAM_SCOPE("train.regularizers.opacity_loss");
                         LOG_VRAM_DIFF("train.regularizers.opacity_loss");
                         if (three_dgs_path) {
@@ -7405,7 +7414,7 @@ namespace lfs::training {
                             }
                             loss_tensor_gpu = loss_tensor_gpu + *opacity_loss_result;
                         }
-                        nvtxRangePop();
+                        lfs::core::pop_gpu_range();
                     }
 
                     if (bilateral_grid_ && params_.optimization.bilateral_grid_active()) {
@@ -7427,7 +7436,7 @@ namespace lfs::training {
 
                     if (ppisp_ && params_.optimization.ppisp_active() && !ppisp_frozen) {
                         current_phase = StepPhase::OptimizerCommit;
-                        nvtxRangePush("ppisp_reg_and_step");
+                        lfs::core::push_gpu_range("ppisp_reg_and_step");
                         LFS_VRAM_SCOPE("train.ppisp.reg_and_step");
                         LOG_VRAM_DIFF("train.ppisp.reg_and_step");
 
@@ -7435,16 +7444,16 @@ namespace lfs::training {
                         ppisp_->reg_backward();
                         ppisp_->optimizer_step();
                         if (params_.optimization.use_exposure_correction) {
-                            nvtxRangePush("ppisp_project_mean");
+                            lfs::core::push_gpu_range("ppisp_project_mean");
                             ppisp_->project_mean();
-                            nvtxRangePop();
+                            lfs::core::pop_gpu_range();
                         }
                         ppisp_->zero_grad();
                         ppisp_->scheduler_step();
                         ++mutation_epoch_;
                         persistent_commit = true;
 
-                        nvtxRangePop();
+                        lfs::core::pop_gpu_range();
                     }
                 }
 
@@ -7452,13 +7461,13 @@ namespace lfs::training {
                 if (sparsity_optimizer_ &&
                     sparsity_optimizer_->should_apply_loss(iter) &&
                     (!three_dgs_path || update_gaussians_this_iter)) {
-                    nvtxRangePush("sparsity_loss");
+                    lfs::core::push_gpu_range("sparsity_loss");
                     LFS_VRAM_SCOPE("train.regularizers.sparsity_loss");
                     LOG_VRAM_DIFF("train.regularizers.sparsity_loss");
                     if (!run_fastgs_gaussian_backward) {
                         auto sparsity_result = compute_sparsity_loss_forward(iter, strategy_->get_model());
                         if (!sparsity_result) {
-                            nvtxRangePop();
+                            lfs::core::pop_gpu_range();
                             return lfs::from_legacy_expected<StepDisposition>(
                                        std::unexpected(sparsity_result.error()),
                                        lfs::LegacyErrorContext{
@@ -7476,7 +7485,7 @@ namespace lfs::training {
                             if (auto result = sparsity_optimizer_->compute_loss_backward(
                                     ctx, 1.0f, strategy_->get_optimizer().get_grad(ParamType::Opacity));
                                 !result) {
-                                nvtxRangePop();
+                                lfs::core::pop_gpu_range();
                                 return lfs::from_legacy_expected<StepDisposition>(
                                            std::unexpected(result.error()),
                                            lfs::LegacyErrorContext{
@@ -7489,7 +7498,7 @@ namespace lfs::training {
                             }
                         }
                     }
-                    nvtxRangePop();
+                    lfs::core::pop_gpu_range();
                 }
 
                 // Sparsification phase logging (once per phase transition)
@@ -7741,13 +7750,14 @@ namespace lfs::training {
                         current_phase = StepPhase::Publish;
                         recordParamsReady();
                         if (refining && !fastgs_strategy_hooks_at_start) {
-                            resize_rasterizer_arena_at_boundary("B1 refine", false);
+                            training_session_ops().resize_arena("B1 refine", false);
                         }
                     }
 
                     // Clean evaluation - let the evaluator handle everything
                     if (evaluator_->is_enabled() && evaluator_->should_evaluate(iter, get_total_iterations())) {
                         lfs::diagnostics::VramProfiler::instance().mark("evaluation");
+                        prepare_evaluation_workspaces();
                         evaluator_->print_evaluation_header(iter);
                         eval_ppisp_applied_.store(0);
                         eval_ppisp_exif_.store(0);
@@ -7783,7 +7793,8 @@ namespace lfs::training {
                             bilateral_grid_->log_eval_diagnostics();
                         }
                         // B2: retain only the current active shape after evaluation.
-                        photo_shrink_to_required(photo_saved_);
+                        if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
+                            training_ops_->photometric->shrink_to_required(photo_saved_);
                     }
 
                     current_phase = StepPhase::TerminalCleanup;
@@ -7824,8 +7835,8 @@ namespace lfs::training {
 
                                 RenderOutput rendered_timelapse_output;
                                 if (params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
-                                    rendered_timelapse_output = gsplat_rasterize(*cam_to_use, strategy_->get_model(), background_,
-                                                                                 1.0f, false, GsplatRenderMode::RGB, true);
+                                    rendered_timelapse_output = gsplat_infer(
+                                        *training_ops_->gsplat, gsplat_saved_, *cam_to_use, strategy_->get_model(), background_);
                                 } else {
                                     rendered_timelapse_output = fast_infer(
                                         *training_ops_->fast, fast_saved_, *cam_to_use, strategy_->get_model(),
@@ -7938,7 +7949,7 @@ namespace lfs::training {
                     record_optimizer_vram_breakdown(strategy_->get_optimizer());
                     publish_training_state_ledger(strategy_->get_model(),
                                                   &strategy_->get_optimizer());
-                    lfs::diagnostics::VramProfiler::instance().sampleCudaMemory();
+                    training_session_ops().sample_memory();
                 }
                 PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::StepEnd, iter);
                 if (PerfBenchCollector::enabled() && strategy_) {
@@ -8096,7 +8107,7 @@ namespace lfs::training {
                 // initialize() ran on another thread; order all of its CUDA work
                 // before the first training-stream kernel.
                 lfs::core::TensorCompletion completion;
-                completion.include(lfs::core::GpuBackend::CUDA);
+                completion.include(lfs::core::default_gpu_backend());
                 completion.wait();
             }
 
@@ -8119,17 +8130,21 @@ namespace lfs::training {
             pipelined_config.io_threads = 2;
             pipelined_config.use_16bit_color = params_.dataset.loading_params.use_16bit_color;
 
-            // Non-JPEG images (PNG, WebP) need CPU decoding - use more threads until cache warms
+            // Non-JPEG images (PNG, WebP) need CPU decoding - use more threads until cache warms.
+            // Without CUDA every image decodes on the CPU.
             constexpr float NON_JPEG_THRESHOLD = 0.1f;
             constexpr size_t MIN_COLD_THREADS = 4;
             constexpr size_t COLD_PREFETCH_COUNT = 16;
             const float non_jpeg_ratio = train_dataset_->get_non_jpeg_ratio();
-            if (non_jpeg_ratio > NON_JPEG_THRESHOLD) {
+            const bool cpu_decode = !lfs::io::PipelinedImageLoader::decodes_on_gpu(pipelined_config.backend);
+            if (cpu_decode || non_jpeg_ratio > NON_JPEG_THRESHOLD) {
                 const size_t cold_threads = std::max(MIN_COLD_THREADS,
                                                      static_cast<size_t>(std::thread::hardware_concurrency() / 2));
                 pipelined_config.cold_process_threads = cold_threads;
                 pipelined_config.prefetch_count = COLD_PREFETCH_COUNT;
-                LOG_INFO("{:.0f}% non-JPEG images, using {} cold threads", non_jpeg_ratio * 100.0f, cold_threads);
+                LOG_INFO("{} images decode on the CPU, using {} cold threads",
+                         cpu_decode ? std::string("All") : std::format("{:.0f}% non-JPEG", non_jpeg_ratio * 100.0f),
+                         cold_threads);
             }
 
             const bool alpha_available = scene_ && scene_->imagesHaveAlpha();
@@ -8212,14 +8227,14 @@ namespace lfs::training {
                     LOG_INFO("Normal maps available for {}/{} training cameras",
                              normal_cameras.size(), train_dataset_->get_cameras().size());
 
-                    nvtxRangePush("resolve_normal_prior_convention");
+                    lfs::core::push_gpu_range("resolve_normal_prior_convention");
                     const auto normal_resolve_start = std::chrono::steady_clock::now();
                     const auto convention = resolve_normal_prior_convention(
                         normal_cameras, params_.optimization.normal_loss_space);
                     const auto normal_resolve_ms = std::chrono::duration<double, std::milli>(
                                                        std::chrono::steady_clock::now() - normal_resolve_start)
                                                        .count();
-                    nvtxRangePop();
+                    lfs::core::pop_gpu_range();
                     LOG_INFO("Normal priors: convention resolve {:.1f} ms", normal_resolve_ms);
                     normal_prior_usable_ = convention.usable;
                     normal_prior_flip_yz_ = convention.flip_yz;
@@ -8391,18 +8406,16 @@ namespace lfs::training {
                 // Loss, edge weighting and MRNF accept the decoded uint8 image.
                 // Keep the decoder lease alive until train_step has consumed it.
                 if (gt_image.dtype() == lfs::core::DataType::UInt8) {
-                    gt_image.sync_to_stream(static_cast<cudaStream_t>(training_queue_->native_handle()));
+                    gt_image.sync_to_stream(*training_queue_);
                 }
 
-                for (auto* event : {&example.depth_ready_event, &example.normal_ready_event}) {
-                    if (!*event)
+                for (auto* fence : {&example.depth_ready, &example.normal_ready}) {
+                    if (!*fence)
                         continue;
-                    auto fence = lfs::core::TensorFence::adopt(lfs::core::GpuBackend::CUDA, *event);
-                    *event = nullptr;
                     try {
-                        training_queue_->wait_for(fence);
+                        training_queue_->wait_for(**fence);
                     } catch (...) {
-                        orphaned_sidecar_events_.push_back(std::move(fence));
+                        orphaned_sidecar_events_.push_back(std::move(**fence));
                         throw;
                     }
                 }
@@ -8411,16 +8424,16 @@ namespace lfs::training {
                 pipelined_depth_ = example.depth.has_value() ? std::move(*example.depth) : lfs::core::Tensor();
                 pipelined_normal_ = example.normal.has_value() ? std::move(*example.normal) : lfs::core::Tensor();
                 if (pipelined_depth_.is_valid()) {
-                    pipelined_depth_.set_stream(static_cast<cudaStream_t>(training_queue_->native_handle()));
+                    pipelined_depth_.set_stream(*training_queue_);
                 }
                 if (pipelined_normal_.is_valid()) {
-                    pipelined_normal_.set_stream(static_cast<cudaStream_t>(training_queue_->native_handle()));
+                    pipelined_normal_.set_stream(*training_queue_);
                 }
                 if (gt_image.is_valid()) {
-                    gt_image.set_stream(static_cast<cudaStream_t>(training_queue_->native_handle()));
+                    gt_image.set_stream(*training_queue_);
                 }
                 if (pipelined_mask_.is_valid()) {
-                    pipelined_mask_.set_stream(static_cast<cudaStream_t>(training_queue_->native_handle()));
+                    pipelined_mask_.set_stream(*training_queue_);
                 }
 
                 if (!logged_epoch2_loader_cache && epoch2_loader_sample_count > 0 &&
@@ -8493,6 +8506,7 @@ namespace lfs::training {
                 evaluator_->is_enabled() &&
                 evaluator_->should_evaluate(current_iteration_.load(), get_total_iterations())) {
                 const int eval_iteration = current_iteration_.load();
+                prepare_evaluation_workspaces();
                 evaluator_->print_evaluation_header(eval_iteration);
                 lfs::diagnostics::VramProfiler::instance().mark("evaluation");
                 eval_ppisp_applied_.store(0);
@@ -8502,7 +8516,8 @@ namespace lfs::training {
                                                     val_dataset_,
                                                     background_);
                 LOG_INFO("{}", metrics.to_string());
-                photo_shrink_to_required(photo_saved_);
+                if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
+                    training_ops_->photometric->shrink_to_required(photo_saved_);
             }
 
             clearActiveImageLoader();
@@ -8520,6 +8535,16 @@ namespace lfs::training {
                         .source = LFS_SOURCE_SITE_CURRENT(),
                     });
                 append_terminal_error(std::move(typed).error());
+            } else if (const auto parameter = first_non_finite_parameter(strategy_->get_model())) {
+                // Culled NaN primitives never reach the loss; refuse to finish on them.
+                append_terminal_error(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::Internal,
+                    .domain = lfs::ErrorDomain::Training,
+                    .user_message = "Training finished with NaN/Inf model parameters",
+                    .detail = std::format("Parameter '{}' holds NaN/Inf after iteration {}",
+                                          *parameter, current_iteration_.load()),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
             }
         } catch (const lfs::Exception& e) {
             append_terminal_error(e.error());
@@ -8632,7 +8657,8 @@ namespace lfs::training {
                     }
                     const auto params = getParams();
                     if (!params.optimization.headless) {
-                        export_final_splats(*this, params);
+                        // Failures are logged per format; the GUI run already finished.
+                        static_cast<void>(export_final_splats(*this, params));
                     }
                 }
             } catch (const std::exception& e) {
@@ -8716,14 +8742,13 @@ namespace lfs::training {
 
         // B3: training has stopped or completed; the editor may remain alive.
         release_training_transient_state_at_boundary();
-        fast_release_caches(fast_saved_);
-        resize_rasterizer_arena_at_boundary("B3 training end", true);
+        if (training_ops_ != nullptr && training_ops_->fast != nullptr)
+            training_ops_->fast->release_caches(fast_saved_);
+        training_session_ops().resize_arena("B3 training end", true);
+        if (training_ops_ != nullptr && training_ops_->gsplat != nullptr)
+            training_ops_->gsplat->release_caches(gsplat_saved_);
         lfs::core::Tensor::trim_memory_pool();
-        if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
-            // Emit arena growth and cross-module churn totals while the
-            // training-end counters still include the terminal trim.
-            arena->dump_statistics();
-        }
+        training_session_ops().dump_arena_statistics();
 
         auto& command_center = lfs::training::CommandCenter::instance();
         auto snapshot_guard = makeScopeGuard([&command_center, this]() {

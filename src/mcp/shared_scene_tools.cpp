@@ -63,8 +63,12 @@ namespace lfs::mcp {
 
             if (args.contains("images_folder"))
                 params.dataset.images = args["images_folder"].get<std::string>();
-            if (args.contains("max_iterations"))
-                params.optimization.iterations = args["max_iterations"].get<size_t>();
+            if (args.contains("max_iterations")) {
+                const auto max_iterations = args["max_iterations"].get<int64_t>();
+                if (max_iterations < 1)
+                    return std::unexpected("max_iterations must be 1 or greater");
+                params.optimization.iterations = static_cast<size_t>(max_iterations);
+            }
             if (args.contains("output_path"))
                 params.dataset.output_path = args["output_path"].get<std::string>();
             if (args.contains("min_track_length")) {
@@ -75,6 +79,10 @@ namespace lfs::mcp {
             }
             if (params.dataset.output_path.empty())
                 params.dataset.output_path = core::param::default_dataset_output_path(params.dataset.data_path);
+
+            // Reject before the backend stages these as the next-run preset.
+            if (auto invalid = params.optimization.validate(); !invalid.empty())
+                return std::unexpected(std::move(invalid));
 
             return {};
         }
@@ -95,7 +103,7 @@ namespace lfs::mcp {
                         {"images_folder", json{{"type", "string"}, {"description", "Images subfolder (default: images)"}}},
                         {"output_path", json{{"type", "string"}, {"description", "Optional output directory for project saves and exports (default: <dataset>/output)"}}},
                         {"min_track_length", json{{"type", "integer"}, {"minimum", 0}, {"description", "Minimum COLMAP track length for sparse point import; 0 disables filtering"}}},
-                        {"max_iterations", json{{"type", "integer"}, {"description", "Maximum training iterations (default: 30000)"}}},
+                        {"max_iterations", json{{"type", "integer"}, {"minimum", 1}, {"description", "Maximum training iterations (default: 30000)"}}},
                         {"strategy", json{{"type", "string"}, {"enum", json::array({"default", "mcmc", "mrnf", "igs+"})}, {"description", "Training strategy or 'default' to keep the built-in default"}}}},
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", true)},
@@ -171,10 +179,14 @@ namespace lfs::mcp {
             McpTool{
                 .name = "training.start",
                 .description = "Start training in the current runtime",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"overwrite", json{{"type", "boolean"}, {"default", false}, {"description", "Explicitly authorize replacing a finished training run with a new run from iteration 0"}}}},
+                    .required = {}},
                 .metadata = command_metadata(backend, "training", false, true)},
-            [backend](const json&) -> json {
-                auto result = backend.start_training();
+            [backend](const json& args) -> json {
+                auto result = backend.start_training(args.value("overwrite", false));
                 if (!result)
                     return json{{"error", result.error()}};
                 return json{{"success", true}, {"message", "Training started"}};
@@ -183,28 +195,23 @@ namespace lfs::mcp {
         registry.register_tool(
             McpTool{
                 .name = "render.capture",
-                .description = "Capture the current scene. Omit camera_index to grab the live viewport region only; pass camera_index to render from a dataset camera. By default this reads the renderer's internal raster when available; set presented=true to capture the presented viewport (window crop after Spatial/Temporal reconstruction, includes viewport overlays). Scenes with no Gaussian or point-cloud content (meshes and environment backgrounds alone) are composited straight into the window, so their capture is cropped from it and includes any viewport overlays such as the axis gizmo and floating toolbars.",
+                .description = "Capture the live viewport region of the current scene. By default this reads the renderer's internal raster when available; set presented=true to capture the presented viewport (window crop after Spatial/Temporal reconstruction, includes viewport overlays). Scenes with no Gaussian or point-cloud content (meshes and environment backgrounds alone) are composited straight into the window, so their capture is cropped from it and includes any viewport overlays such as the axis gizmo and floating toolbars.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"camera_index", json{{"type", "integer"}, {"description", "Dataset camera index; omit to capture the live viewport region only"}}},
-                        {"width", json{{"type", "integer"}, {"description", "Optional output width; preserves aspect ratio when height is omitted"}}},
-                        {"height", json{{"type", "integer"}, {"description", "Optional output height; preserves aspect ratio when width is omitted"}}},
+                        {"width", capture_size_schema("Optional output width in pixels; preserves aspect ratio when height is omitted")},
+                        {"height", capture_size_schema("Optional output height in pixels; preserves aspect ratio when width is omitted")},
                         {"presented", json{{"type", "boolean"}, {"default", false}, {"description", "Capture the presented viewport (window crop after Spatial/Temporal reconstruction, includes viewport overlays) instead of the renderer's internal raster"}}}},
                     .required = {}},
                 .metadata = query_metadata(backend, "render")},
             [backend](const json& args) -> json {
-                const std::optional<int> camera_index =
-                    args.contains("camera_index")
-                        ? std::optional<int>(args["camera_index"].get<int>())
-                        : std::nullopt;
                 const int width = args.value("width", 0);
                 const int height = args.value("height", 0);
                 const bool presented = args.value("presented", false);
 
-                auto result = backend.render_capture(camera_index, width, height, presented);
+                auto result = backend.render_capture(width, height, presented);
                 if (!result)
-                    return json{{"error", result.error()}};
+                    return json{{"error", core::to_wire_envelope(result.error())}};
 
                 return json{
                     {"success", true},

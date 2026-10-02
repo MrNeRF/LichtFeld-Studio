@@ -46,6 +46,8 @@ namespace lfs::core {
             features.features.shaderInt16 = VK_TRUE;
             features11.storageBuffer16BitAccess = VK_TRUE;
             features12.storageBuffer8BitAccess = VK_TRUE;
+            // The training shaders compute on uint8_t (SPIR-V Int8 capability).
+            features12.shaderInt8 = VK_TRUE;
             features12.timelineSemaphore = VK_TRUE;
             features12.bufferDeviceAddress = VK_TRUE;
             features13.synchronization2 = VK_TRUE;
@@ -181,6 +183,7 @@ namespace lfs::core {
         require(f.features.shaderInt16, "shaderInt16");
         require(f11.storageBuffer16BitAccess, "storageBuffer16BitAccess");
         require(f12.storageBuffer8BitAccess, "storageBuffer8BitAccess");
+        require(f12.shaderInt8, "shaderInt8");
         require(f12.timelineSemaphore, "timelineSemaphore");
         require(f12.bufferDeviceAddress, "bufferDeviceAddress");
         require(f13.synchronization2, "synchronization2");

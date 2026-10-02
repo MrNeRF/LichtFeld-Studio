@@ -8,7 +8,7 @@
 #include <torch/torch.h>
 
 #include "cuda_backend_test.hpp"
-#include "lfs/kernels/ppisp.cuh"
+#include "training/kernels/ppisp.cuh"
 
 namespace {
 

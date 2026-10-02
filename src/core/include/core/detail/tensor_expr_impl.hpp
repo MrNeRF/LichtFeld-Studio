@@ -531,6 +531,50 @@ namespace lfs::core {
                             }
                         }
                     }
+                } else if (left_tensor.dtype() == DataType::UInt32 && right_tensor.dtype() == DataType::UInt32) {
+                    // UInt32,UInt32 -> UInt32 operations
+                    if (device == Device::GPU) {
+                        if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        }
+                    } else {
+                        // CPU fallback
+                        if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            const uint32_t* left_ptr = left_tensor.template ptr<uint32_t>();
+                            const uint32_t* right_ptr = right_tensor.template ptr<uint32_t>();
+                            uint32_t* out_ptr = result.template ptr<uint32_t>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        } else {
+                            Tensor left_broadcast = left_tensor;
+                            Tensor right_broadcast = right_tensor;
+                            if (left_tensor.shape() != shape) {
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            }
+                            if (right_tensor.shape() != shape) {
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                            }
+                            pin_operands({&left_broadcast, &right_broadcast});
+                            const uint32_t* left_ptr = left_broadcast.template ptr<uint32_t>();
+                            const uint32_t* right_ptr = right_broadcast.template ptr<uint32_t>();
+                            uint32_t* out_ptr = result.template ptr<uint32_t>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        }
+                    }
                 } else {
                     // Float32,Float32 -> Float32 operations (default case)
                     if (device == Device::GPU) {
@@ -786,6 +830,50 @@ namespace lfs::core {
                             pin_operands({&left_broadcast, &right_broadcast});
                             const int* left_ptr = left_broadcast.template ptr<int>();
                             const int* right_ptr = right_broadcast.template ptr<int>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        }
+                    }
+                } else if (left_tensor.dtype() == DataType::UInt32 && right_tensor.dtype() == DataType::UInt32) {
+                    // UInt32,UInt32 -> Bool (comparison operations on UInt32 tensors)
+                    if (device == Device::GPU) {
+                        if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        }
+                    } else {
+                        // CPU fallback
+                        if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            const uint32_t* left_ptr = left_tensor.template ptr<uint32_t>();
+                            const uint32_t* right_ptr = right_tensor.template ptr<uint32_t>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        } else {
+                            Tensor left_broadcast = left_tensor;
+                            Tensor right_broadcast = right_tensor;
+                            if (left_tensor.shape() != shape) {
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            }
+                            if (right_tensor.shape() != shape) {
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                            }
+                            pin_operands({&left_broadcast, &right_broadcast});
+                            const uint32_t* left_ptr = left_broadcast.template ptr<uint32_t>();
+                            const uint32_t* right_ptr = right_broadcast.template ptr<uint32_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {

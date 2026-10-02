@@ -7,6 +7,8 @@
 
 namespace lfs::io::cuda {
 
+    using lfs::gpu_ops::NormalPriorTransform;
+
     namespace {
         constexpr int BLOCK_SIZE = 256;
         constexpr float NORMALIZE_SCALE_U8 = 1.0f / 255.0f;
@@ -100,17 +102,6 @@ namespace lfs::io::cuda {
 
         const size_t out_idx = c * (H * W) + h * W + w;
         output[out_idx] = static_cast<float>(input[idx]) * NORMALIZE_SCALE_U8;
-    }
-
-    __global__ void uint8_chw_to_float32_chw_kernel(
-        const uint8_t* __restrict__ input,
-        float* __restrict__ output,
-        const size_t elements) {
-
-        const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= elements)
-            return;
-        output[idx] = static_cast<float>(input[idx]) * NORMALIZE_SCALE_U8;
     }
 
     __global__ void uint16_hwc_to_float32_chw_kernel(
@@ -311,18 +302,6 @@ namespace lfs::io::cuda {
         uint8_hwc_to_float32_chw_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, height, width, channels);
         LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u8_hwc_to_f32_chw");
-    }
-
-    void launch_uint8_chw_to_float32_chw(
-        const uint8_t* input,
-        float* output,
-        const size_t elements,
-        cudaStream_t stream) {
-
-        const int num_blocks = static_cast<int>((elements + BLOCK_SIZE - 1) / BLOCK_SIZE);
-        uint8_chw_to_float32_chw_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
-            input, output, elements);
-        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u8_chw_to_f32_chw");
     }
 
     void launch_uint16_hwc_to_float32_chw(

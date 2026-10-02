@@ -1226,7 +1226,12 @@ namespace lfs::io {
     // -----------------------------------------------------------------------------
     //  Helper to extract scale factor from folder name
     // -----------------------------------------------------------------------------
-    static float extract_scale_from_folder(const std::string& folder_name) {
+    static float extract_scale_from_folder(const std::string& images_folder) {
+        auto folder_path = lfs::core::utf8_to_path(images_folder);
+        if (!folder_path.has_filename()) {
+            folder_path = folder_path.parent_path();
+        }
+        const std::string folder_name = lfs::core::path_to_utf8(folder_path.filename());
         size_t underscore_pos = folder_name.rfind('_');
         if (underscore_pos != std::string::npos) {
             std::string suffix = folder_name.substr(underscore_pos + 1);
@@ -3799,15 +3804,20 @@ namespace lfs::io {
                            std::format("COLMAP point track count must match its stored track "
                                        "(point3D_id={}, declared_count={}, stored_count={})",
                                        point.point3D_id, point.track_count, point.track.size()));
-            std::unordered_set<uint32_t> track_images;
+            // A track may observe the same image through several 2D points; only the
+            // (image, point2D) observation itself must be unique.
+            std::unordered_set<uint64_t> track_observations;
             for (const auto& track : point.track) {
                 const auto image = image_by_id.find(track.image_id);
                 LFS_ASSERT_MSG(image != image_by_id.end(),
                                std::format("COLMAP point {} track references missing image {}",
                                            point.point3D_id, track.image_id));
-                LFS_ASSERT_MSG(track_images.insert(track.image_id).second,
-                               std::format("COLMAP point {} track repeats image {}",
-                                           point.point3D_id, track.image_id));
+                LFS_ASSERT_MSG(track_observations
+                                   .insert((static_cast<uint64_t>(track.image_id) << 32) | track.point2D_idx)
+                                   .second,
+                               std::format("COLMAP point track repeats an observation "
+                                           "(point3D_id={}, image_id={}, point2D_index={})",
+                                           point.point3D_id, track.image_id, track.point2D_idx));
                 LFS_ASSERT_MSG(track.point2D_idx < image->second->points2D.size(),
                                std::format("COLMAP point track index must be in bounds for its image "
                                            "(point3D_id={}, image_id={}, point2D_index={}, point2D_count={})",

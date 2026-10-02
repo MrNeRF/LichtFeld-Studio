@@ -45,7 +45,7 @@ namespace lfs::core {
     // handles are the dispatchable VkInstance, VkPhysicalDevice, VkDevice and
     // VkQueue; the queue belongs to the backend alone. The device must have
     // shaderInt64, shaderInt16, storageBuffer16BitAccess, storageBuffer8BitAccess,
-    // timelineSemaphore, bufferDeviceAddress and synchronization2 enabled; the
+    // shaderInt8, timelineSemaphore, bufferDeviceAddress and synchronization2 enabled; the
     // flags say which optional features are on. The device must outlive the
     // backend: call shutdown_gpu_backend(GpuBackend::Vulkan) before destroying it.
     struct VulkanDeviceHandles {

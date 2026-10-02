@@ -112,25 +112,25 @@ TEST(StridedTensorHardening, A2_CPUCopyFromWritesLogicalDestinationCells) {
     expect_float_values_match(base, torch_base, "A2 CPU copy_from");
 }
 
-TEST(StridedTensorHardening, A3_ViewCopyAssignmentUsesBothTensorStrides) {
+TEST(StridedTensorHardening, A3_ViewCopyFromUsesBothTensorStrides) {
     auto base = Tensor::zeros({3, 3}, Device::CPU);
     auto destination = base.slice(1, 0, 1);
     const auto source = Tensor::full({3, 1}, 9.0f, Device::CPU);
-    destination = source;
+    destination.copy_from(source);
 
     auto torch_base = torch::zeros({3, 3});
     torch_base.slice(1, 0, 1).copy_(torch::full({3, 1}, 9.0f));
-    expect_float_values_match(base, torch_base, "A3 copy assignment");
+    expect_float_values_match(base, torch_base, "A3 copy_from");
 }
 
-TEST(StridedTensorHardening, A3_ViewMoveAssignmentUsesBothTensorStrides) {
+TEST(StridedTensorHardening, A3_ViewCopyFromTemporaryUsesBothTensorStrides) {
     auto base = Tensor::zeros({3, 3}, Device::CPU);
     auto destination = base.slice(1, 0, 1);
-    destination = Tensor::full({3, 1}, 7.0f, Device::CPU);
+    destination.copy_from(Tensor::full({3, 1}, 7.0f, Device::CPU));
 
     auto torch_base = torch::zeros({3, 3});
     torch_base.slice(1, 0, 1).copy_(torch::full({3, 1}, 7.0f));
-    expect_float_values_match(base, torch_base, "A3 move assignment");
+    expect_float_values_match(base, torch_base, "A3 copy_from temporary");
 }
 
 TEST(StridedTensorHardening, A4_RangeSlicePreservesExistingStorageOffset) {

@@ -524,9 +524,10 @@ namespace lfs::vis::gui {
         }
     } // namespace
 
+    void beginBoundsGizmoFrame() { g_hovered = false; }
+
     BoundsGizmoResult drawBoundsGizmo(const BoundsGizmoConfig& config) {
         BoundsGizmoResult result;
-        g_hovered = false;
 
         if (!config.draw_list || config.viewport_size.x <= 1.0f || config.viewport_size.y <= 1.0f) {
             return result;
@@ -587,7 +588,7 @@ namespace lfs::vis::gui {
 
         result.hovered_handle = hovered_hit.handle;
         result.hovered = hovered_hit.handle != BoundsGizmoHandle::None;
-        g_hovered = result.hovered || result.active;
+        g_hovered |= result.hovered || result.active;
 
         const HandleHit highlighted = result.active
                                           ? HandleHit{g_active.handle,

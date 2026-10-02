@@ -6,8 +6,8 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
+#include "gsplat_raster_test_helpers.hpp"
 #include "training/rasterization/gsplat/Ops.h"
-#include "training/rasterization/gsplat_rasterizer.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -18,14 +18,13 @@
 using namespace lfs::core;
 using namespace lfs::training;
 
-class GutUndistortParity : public lfs::test::CudaBackendTest {
+class GutUndistortParity : public lfs::test::GsplatBackendTest {
 protected:
     void TearDown() override {
         if (IsSkipped()) {
             return;
         }
-        (void)gsplat_lfs::release_intersect_thread_local_cache();
-        (void)lfs::training::release_gsplat_rasterizer_thread_local_caches();
+        (void)release_gsplat_caches();
         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
     }
 };

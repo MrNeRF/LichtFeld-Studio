@@ -84,7 +84,7 @@ def _install_recording_lf(monkeypatch):
         "ZOOM_SPEED_UP",
         "ZOOM_SPEED_DOWN",
         "TOGGLE_SPLIT_VIEW",
-        "TOGGLE_INDEPENDENT_SPLIT_VIEW",
+        "TOGGLE_SPLIT_VIEWPORT",
         "TOGGLE_GT_COMPARISON",
         "TOGGLE_DEPTH_MODE",
         "CYCLE_PLY",
@@ -139,6 +139,16 @@ def _install_recording_lf(monkeypatch):
         "SELECT_MODE_BOX",
         "SELECT_MODE_SPHERE",
         "CUT_SELECTION",
+        "VIEW_AXIS_TOP",
+        "VIEW_AXIS_BOTTOM",
+        "VIEW_AXIS_FRONT",
+        "VIEW_AXIS_BACK",
+        "VIEW_AXIS_RIGHT",
+        "VIEW_AXIS_LEFT",
+        "VIEW_TOGGLE_PERSPECTIVE",
+        "VIEW_FRAME_ALL",
+        "TOGGLE_QUAD_VIEW",
+        "TOGGLE_MAXIMIZE_AREA",
     )
     tool_mode = IntEnum("ToolMode", {name: i for i, name in enumerate(tool_mode_names)})
     action_enum = IntEnum("Action", {name: i for i, name in enumerate(action_names)})

@@ -2325,7 +2325,7 @@ TEST_F(MRNFStrategyTest, HardRemovalRepublishesFarMaskForDegenerateModel) {
     EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     EXPECT_EQ(optimizer.mean_step_far_mask_n(), splat.means().shape()[0]);
     EXPECT_LT(splat.means().cpu().ptr<float>()[0], 3.0f);
-    const auto fused = optimizer.prepare_fastgs_fused_adam(2, nullptr);
+    const auto fused = optimizer.prepare_fastgs_fused_adam(2);
     EXPECT_EQ(adam_far_mask(fused), optimizer.mean_step_far_mask());
     EXPECT_EQ(adam_far_mask_n(fused), 1);
 }
@@ -2443,7 +2443,7 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByFusedAdam) {
         optimizer.set_mean_step_far_mask(mask);
         FarMaskWarningCapture warnings;
 
-        const auto fused = optimizer.prepare_fastgs_fused_adam(1, nullptr);
+        const auto fused = optimizer.prepare_fastgs_fused_adam(1);
         EXPECT_TRUE(fastgs_adam_enabled(fused));
         EXPECT_TRUE(adam_group(fused, lfs::gpu_ops::AdamSlot::Means).enabled);
         EXPECT_TRUE(fused.per_splat_mean_step);
@@ -2453,12 +2453,12 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByFusedAdam) {
         EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
         ASSERT_EQ(warnings.messages.size(), 1u);
         EXPECT_NE(warnings.messages[0].find("mask=" + std::to_string(mask_n) + ", means=2"), std::string::npos);
-        optimizer.prepare_fastgs_fused_adam(2, nullptr);
+        optimizer.prepare_fastgs_fused_adam(2);
         EXPECT_EQ(warnings.messages.size(), 1u);
 
         const auto current_mask = Tensor::zeros_bool({2}, Device::CUDA);
         optimizer.set_mean_step_far_mask(current_mask);
-        const auto republished = optimizer.prepare_fastgs_fused_adam(3, nullptr);
+        const auto republished = optimizer.prepare_fastgs_fused_adam(3);
         EXPECT_EQ(adam_far_mask(republished), current_mask.ptr<bool>());
         EXPECT_EQ(adam_far_mask_n(republished), 2);
         EXPECT_EQ(warnings.messages.size(), 1u);
@@ -2500,7 +2500,7 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskUploadsHostStorageBeforeAdam) {
                   cudaSuccess);
         EXPECT_TRUE(values[0]);
         EXPECT_FALSE(values[1]);
-        const auto fused = optimizer.prepare_fastgs_fused_adam(1, nullptr);
+        const auto fused = optimizer.prepare_fastgs_fused_adam(1);
         EXPECT_EQ(adam_far_mask(fused), optimizer.mean_step_far_mask());
         EXPECT_EQ(adam_far_mask_n(fused), 2);
         optimizer.get_grad(ParamType::Means).fill_(0.2f);
@@ -2573,7 +2573,7 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskEmptyBindingsClearExplicitAndFusedAdam) 
         optimizer.set_mean_step_far_mask(Tensor::empty({0}, device, DataType::Bool));
         EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
         EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
-        const auto fused = optimizer.prepare_fastgs_fused_adam(1, nullptr);
+        const auto fused = optimizer.prepare_fastgs_fused_adam(1);
         EXPECT_EQ(adam_far_mask(fused), nullptr);
         EXPECT_EQ(adam_far_mask_n(fused), 0);
         optimizer.get_grad(ParamType::Means).fill_(0.2f);
@@ -2612,7 +2612,7 @@ TEST_F(MRNFStrategyTest, BackgroundToggleBuildsAndClearsFarMaskBeforeNextAdamSte
                   cudaSuccess);
         EXPECT_FALSE(values[0]);
         EXPECT_TRUE(values[3]);
-        const auto fused = optimizer.prepare_fastgs_fused_adam(iteration, nullptr);
+        const auto fused = optimizer.prepare_fastgs_fused_adam(iteration);
         EXPECT_EQ(adam_far_mask(fused), optimizer.mean_step_far_mask());
         optimizer.get_grad(ParamType::Means).fill_(0.2f);
         optimizer.step(iteration);

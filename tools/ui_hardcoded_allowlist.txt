@@ -30,9 +30,19 @@ Starting
 
 # Canonical keyboard, URL and renderer-backend identifiers must match their protocols.
 Esc
+F
+Home
+Numpad 5
+Ctrl Space
 owner/repo
 3DGS
 3DGUT
+
+# Screen area action ids and view-command tokens are protocol, not UI copy.
+re:area:[a-z_]+
+re:overlay:[a-z_]+
+Ctrl Alt Q
+re:\{\} \(Ctrl Space\)
 
 # CSS class passed through the widget helper; it is not user-facing copy.
 setting-row__control-col

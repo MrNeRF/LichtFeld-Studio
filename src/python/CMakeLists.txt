@@ -214,6 +214,7 @@ nanobind_add_module(
     lfs/py_ui_hooks.cpp
     lfs/py_ui_menus.cpp
     lfs/py_ui_panels.cpp
+    lfs/py_screen.cpp
     lfs/py_uilist.cpp
     lfs/py_viewport.cpp
     viewport_overlay.cpp
@@ -566,7 +567,7 @@ install_uv()
 set(PYTHON_INSTALL_DIR "${CMAKE_INSTALL_LIBDIR}/python")
 
 # Install lichtfeld Python module (.so/.pyd) to bin for portable builds
-if(BUILD_PORTABLE)
+if(BUILD_PORTABLE AND NOT LFS_MACOS_PORTABLE_APP)
     install(TARGETS lfs_py
         LIBRARY DESTINATION "${CMAKE_INSTALL_BINDIR}"
         RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"  # Windows DLLs
@@ -585,7 +586,7 @@ install(TARGETS lfs_python_runtime
 )
 
 # Install lfs_plugins Python package to bin for portable builds
-if(BUILD_PORTABLE)
+if(BUILD_PORTABLE AND NOT LFS_MACOS_PORTABLE_APP)
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins"
         DESTINATION "${CMAKE_INSTALL_BINDIR}"
         FILES_MATCHING PATTERN "*.py"
@@ -610,7 +611,7 @@ else()
     set(STUBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/stubs")
 endif()
 
-if(BUILD_PORTABLE)
+if(BUILD_PORTABLE AND NOT LFS_MACOS_PORTABLE_APP)
     install(DIRECTORY "${STUBS_DIR}/" DESTINATION "${CMAKE_INSTALL_BINDIR}" OPTIONAL)
 else()
     install(DIRECTORY "${STUBS_DIR}/" DESTINATION "${PYTHON_INSTALL_DIR}" OPTIONAL)

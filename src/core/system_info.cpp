@@ -158,7 +158,7 @@ namespace lfs::core::system_info {
         }
 
         std::uint64_t collect_ram_mb() {
-            struct sysinfo state{};
+            struct sysinfo state {};
             if (::sysinfo(&state) != 0)
                 return 0;
             const auto bytes = static_cast<std::uint64_t>(state.totalram) *

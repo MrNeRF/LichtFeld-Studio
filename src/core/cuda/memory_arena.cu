@@ -218,6 +218,12 @@ namespace lfs::core {
         thread_local uint32_t tl_begin_frame_timeout_ms = 0;
     } // namespace
 
+    uint32_t RasterizerMemoryArena::set_begin_frame_timeout(uint32_t timeout_ms) {
+        const auto previous = tl_begin_frame_timeout_ms;
+        tl_begin_frame_timeout_ms = timeout_ms;
+        return previous;
+    }
+
     RasterizerMemoryArena::ScopedBeginFrameTimeout::ScopedBeginFrameTimeout(uint32_t timeout_ms)
         : previous_(tl_begin_frame_timeout_ms) {
         tl_begin_frame_timeout_ms = timeout_ms;

@@ -200,6 +200,7 @@ namespace lfs::core::internal {
                 LFS_LAUNCH_BROADCAST_SAME(__half, Float16);
                 LFS_LAUNCH_BROADCAST_SAME(int, Int32);
                 LFS_LAUNCH_BROADCAST_SAME(int64_t, Int64);
+                LFS_LAUNCH_BROADCAST_SAME(uint32_t, UInt32);
                 LFS_LAUNCH_BROADCAST_SAME(uint8_t, UInt8);
             default:
                 LFS_ASSERT_MSG(false, "broadcast op/dtype pair has no CUDA instantiation");
@@ -229,6 +230,7 @@ namespace lfs::core::internal {
                 LFS_LAUNCH_BROADCAST_BOOL(__half, Float16);
                 LFS_LAUNCH_BROADCAST_BOOL(int, Int32);
                 LFS_LAUNCH_BROADCAST_BOOL(int64_t, Int64);
+                LFS_LAUNCH_BROADCAST_BOOL(uint32_t, UInt32);
                 LFS_LAUNCH_BROADCAST_BOOL(unsigned char, UInt8);
                 LFS_LAUNCH_BROADCAST_BOOL(unsigned char, Bool);
             default:
@@ -290,18 +292,6 @@ namespace lfs::core::internal {
                 }
             }
             LFS_ASSERT_MSG(false, "scalar arithmetic op has no CUDA instantiation");
-        }
-
-        template <class BinaryOp>
-        void dispatch_scalar_integer_only(const PointwiseProgram& program,
-                                          const StorageRef input, const StorageRef output,
-                                          const size_t count, const ExecContext context) {
-            LFS_ASSERT_MSG(program.scalar.scalar_on_right &&
-                               program.scalar.kind == ScalarKind::Int32,
-                           "scalar op has no CUDA instantiation for this scalar type");
-            launch_scalar_right_same<BinaryOp>(
-                program, input, output, count, context,
-                program.scalar.value.int32_value);
         }
 
         template <class BinaryOp>
@@ -442,10 +432,10 @@ namespace lfs::core::internal {
             dispatch_scalar_arithmetic<ops::mod_op, false>(program, input, output, count, context);
             return;
         case PointwiseOp::MaximumScalar:
-            dispatch_scalar_integer_only<ops::maximum_op>(program, input, output, count, context);
+            dispatch_scalar_arithmetic<ops::maximum_op, false>(program, input, output, count, context);
             return;
         case PointwiseOp::MinimumScalar:
-            dispatch_scalar_integer_only<ops::minimum_op>(program, input, output, count, context);
+            dispatch_scalar_arithmetic<ops::minimum_op, false>(program, input, output, count, context);
             return;
         case PointwiseOp::EqualScalar:
             dispatch_scalar_comparison<ops::equal_op>(program, input, output, count, context);

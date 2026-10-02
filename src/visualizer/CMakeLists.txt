@@ -67,6 +67,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/appearance_tensor_model.cpp
         rendering/viewport_request_builder.cpp
         rendering/passes/vulkan_scene_image_uploader.cpp
+        rendering/passes/shared_viewport_gpu_assets.cpp
         rendering/passes/vulkan_viewport_pass.cpp
         rendering/passes/vulkan_mesh_pass.cpp
         rendering/passes/vulkan_scene_motion_pass.cpp
@@ -84,6 +85,14 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/passes/vulkan_split_view_pass.cpp
         rendering/framerate_controller.cpp
 
+        # Screen: areas, layout and editors
+        screen/screen_layout.cpp
+        screen/editor_type.cpp
+        screen/screen.cpp
+        screen/view3d_space.cpp
+        screen/area_gestures.cpp
+        screen/screen_service.cpp
+
         # Preferences and theme system
         preferences.cpp
         theme/theme.cpp
@@ -94,10 +103,11 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/global_context_menu.cpp
         gui/gizmo_manager.cpp
         gui/pie_menu.cpp
-        gui/panel_layout.cpp
         gui/panel_registry.cpp
         gui/native_panels.cpp
         gui/layout_state.cpp
+        gui/screen_host.cpp
+        gui/area_editors.cpp
         gui/async_task_manager.cpp
         gui/gallery_scene_publication.cpp
         gui/bounds_gizmo.cpp
@@ -107,8 +117,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/video_export_utils.cpp
         gui/startup_overlay.cpp
         gui/rml_menu_bar.cpp
-        gui/rml_right_panel.cpp
-        gui/rml_bottom_dock.cpp
+
         gui/rml_shell_frame.cpp
         gui/rml_viewport_overlay.cpp
         gui/vram_hud_overlay.cpp
@@ -436,6 +445,8 @@ set_target_properties(lfs_visualizer PROPERTIES
 )
 if(APPLE)
     target_link_options(lfs_visualizer PRIVATE "LINKER:-undefined,dynamic_lookup")
+    # GPU utilization and allocation for the status bar come from IOKit.
+    target_link_libraries(lfs_visualizer PRIVATE "-framework IOKit" "-framework CoreFoundation")
 endif()
 if(WIN32)
     set_target_properties(lfs_visualizer PROPERTIES
@@ -546,25 +557,27 @@ if(NOT BUILD_PORTABLE)
             DESTINATION include/visualizer)
 endif()
 
-# Optionally install resources
-install(FILES ${RENDERING_SOURCE_RESOURCE_DIR}/assets/JetBrainsMono-Regular.ttf
-        DESTINATION share/LichtFeld-Studio/visualizer/resources/assets/fonts)
+# The macOS portable app installs these same resources under Contents/share
+# in the top-level CMakeLists.txt. Keep the legacy destinations elsewhere.
+if(NOT LFS_MACOS_PORTABLE_APP)
+    install(FILES ${RENDERING_SOURCE_RESOURCE_DIR}/assets/JetBrainsMono-Regular.ttf
+            DESTINATION share/LichtFeld-Studio/visualizer/resources/assets/fonts)
 
-install(DIRECTORY ${VISUALIZER_SOURCE_RESOURCE_DIR}/
-        DESTINATION share/LichtFeld-Studio/visualizer/resources
-        FILES_MATCHING
-        PATTERN "*.ttf"
-)
+    install(DIRECTORY ${VISUALIZER_SOURCE_RESOURCE_DIR}/
+            DESTINATION share/LichtFeld-Studio/visualizer/resources
+            FILES_MATCHING
+            PATTERN "*.ttf"
+    )
 
-# Install locale files
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/
-        DESTINATION share/LichtFeld-Studio/locales
-        FILES_MATCHING
-        PATTERN "*.json"
-)
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locale_index.json
-        DESTINATION share/LichtFeld-Studio
-)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/
+            DESTINATION share/LichtFeld-Studio/locales
+            FILES_MATCHING
+            PATTERN "*.json"
+    )
+    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locale_index.json
+            DESTINATION share/LichtFeld-Studio
+    )
+endif()
 
 # Add custom target for resource files (makes them show up in IDEs)
 file(GLOB_RECURSE VISUALIZER_RESOURCE_FILES

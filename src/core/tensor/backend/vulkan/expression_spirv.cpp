@@ -5,6 +5,7 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <spirv/unified1/GLSL.std.450.h>
 #include <stdexcept>
@@ -97,6 +98,31 @@ namespace lfs::core::internal {
             Value neg(Value a) { return instruction(spv::OpFNegate, float_, {a}); }
             Value finite(Value a) {
                 return cmp(spv::OpULessThan, u(spv::OpBitwiseAnd, raw(a), literal(0x7fffffffu)), literal(0x7f800000u));
+            }
+            // C powf. GLSL Pow reaches Metal as powr, undefined for x < 0 and 0^y<=0.
+            Value c_pow(Value x, Value y) {
+                const auto both = [&](Value a, Value b) { return instruction(spv::OpLogicalAnd, bool_, {a, b}); };
+                const auto either = [&](Value a, Value b) { return instruction(spv::OpLogicalOr, bool_, {a, b}); };
+                const auto inf = f(std::numeric_limits<float>::infinity());
+                const auto ax = ext(GLSLstd450FAbs, {x});
+                const auto y_negative = cmp(spv::OpFOrdLessThan, y, f(0));
+                const auto integral = cmp(spv::OpFOrdEqual, ext(GLSLstd450Floor, {y}), y);
+                const auto odd = both(both(integral, cmp(spv::OpFOrdLessThan, ext(GLSLstd450FAbs, {y}), f(16777216.0f))),
+                                      cmp(spv::OpFOrdNotEqual, fp(spv::OpFRem, y, f(2)), f(0)));
+                auto magnitude = ext(GLSLstd450Pow, {ax, y});
+                magnitude = choose(instruction(spv::OpIsInf, bool_, {ax}), choose(y_negative, f(0), inf, float_), magnitude, float_);
+                magnitude = choose(cmp(spv::OpFOrdEqual, ax, f(0)), choose(y_negative, inf, f(0), float_), magnitude, float_);
+                const auto sign_bit = cmp(spv::OpSLessThan, as_int(x), as_int(literal(0)));
+                auto result = choose(both(odd, sign_bit), neg(magnitude), magnitude, float_);
+                result = choose(both(both(cmp(spv::OpFOrdLessThan, x, f(0)), instruction(spv::OpLogicalNot, bool_, {integral})), instruction(spv::OpLogicalNot, bool_, {instruction(spv::OpIsInf, bool_, {x})})),
+                                f(std::numeric_limits<float>::quiet_NaN()), result, float_);
+                const auto greater = cmp(spv::OpFOrdGreaterThan, ax, f(1));
+                const auto infinite_y = choose(cmp(spv::OpFOrdEqual, ax, f(1)), f(1),
+                                               choose(instruction(spv::OpLogicalEqual, bool_, {greater, cmp(spv::OpFOrdGreaterThan, y, f(0))}), inf, f(0), float_),
+                                               float_);
+                result = choose(instruction(spv::OpIsInf, bool_, {y}), infinite_y, result, float_);
+                result = choose(either(instruction(spv::OpIsNan, bool_, {x}), instruction(spv::OpIsNan, bool_, {y})), add(x, y), result, float_);
+                return choose(either(cmp(spv::OpFOrdEqual, y, f(0)), cmp(spv::OpFOrdEqual, x, f(1))), f(1), result, float_);
             }
             Value ieee_minmax(Value x, Value y, bool maximum) {
                 auto xb = raw(x), yb = raw(y);
@@ -262,7 +288,7 @@ namespace lfs::core::internal {
                 case ExprOp::Mul: result = mul(x, y); break;
                 case ExprOp::Div: result = div(x, y); break;
                 case ExprOp::Mod: result = fp(spv::OpFRem, x, y); break;
-                case ExprOp::Pow: result = choose(cmp(spv::OpFOrdEqual, y, f(2)), mul(x, x), ext(GLSLstd450Pow, {x, y}), float_); break;
+                case ExprOp::Pow: result = choose(cmp(spv::OpFOrdEqual, y, f(2)), mul(x, x), c_pow(x, y), float_); break;
                 case ExprOp::Min: result = ieee_minmax(x, y, false); break;
                 case ExprOp::Max: result = ieee_minmax(x, y, true); break;
                 case ExprOp::Atan2: result = ext(GLSLstd450Atan2, {x, y}); break;
@@ -301,7 +327,8 @@ namespace lfs::core::internal {
                 case ExprOp::Tan: result = ext(GLSLstd450Tan, {x}); break;
                 case ExprOp::Asin:
                 case ExprOp::Acos: {
-                    auto bounded = ext(GLSLstd450FClamp, {x, f(-1), f(1)});
+                    // Clamp rounding overshoot, but keep NaN.
+                    auto bounded = choose(instruction(spv::OpIsNan, bool_, {x}), x, ext(GLSLstd450FClamp, {x, f(-1), f(1)}), float_);
                     auto root = ext(GLSLstd450Sqrt, {ext(GLSLstd450FMax, {f(0), sub(f(1), mul(bounded, bounded))})});
                     result = op == ExprOp::Asin ? ext(GLSLstd450Atan2, {bounded, root}) : ext(GLSLstd450Atan2, {root, bounded});
                     break;

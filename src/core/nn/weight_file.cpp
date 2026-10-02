@@ -68,8 +68,8 @@ namespace lfs::core::nn {
             }
             return cpu;
         }
-        if (default_gpu_backend() != GpuBackend::CUDA) {
-            auto tensor = Tensor::empty(found->shape, device, found->dtype);
+        auto tensor = Tensor::empty(found->shape, device, found->dtype);
+        if (gpu_backend_of(tensor) != GpuBackend::CUDA) {
             if (found->length > 0) {
                 TensorUpload upload;
                 upload.enqueue(tensor, Tensor::from_blob(const_cast<void*>(src), found->shape,
@@ -80,20 +80,18 @@ namespace lfs::core::nn {
         }
 #if LFS_HAS_CUDA
         if (dest_dtype == found->dtype) {
-            auto gpu = Tensor::empty(found->shape, Device::GPU, dest_dtype);
             if (found->length > 0) {
-                LFS_CUDA_CHECK(cudaMemcpyAsync(gpu.data_ptr(), src,
+                LFS_CUDA_CHECK(cudaMemcpyAsync(tensor.data_ptr(), src,
                                                static_cast<std::size_t>(found->length),
-                                               cudaMemcpyHostToDevice, gpu.stream()));
+                                               cudaMemcpyHostToDevice, tensor.stream()));
             }
-            return gpu;
+            return tensor;
         }
-        auto tmp = Tensor::empty(found->shape, Device::GPU, found->dtype);
         if (found->length > 0) {
-            LFS_CUDA_CHECK(cudaMemcpyAsync(tmp.data_ptr(), src, static_cast<std::size_t>(found->length),
-                                           cudaMemcpyHostToDevice, tmp.stream()));
+            LFS_CUDA_CHECK(cudaMemcpyAsync(tensor.data_ptr(), src, static_cast<std::size_t>(found->length),
+                                           cudaMemcpyHostToDevice, tensor.stream()));
         }
-        return tmp.to(dest_dtype);
+        return tensor.to(dest_dtype);
 #else
         return io_error(lfs::ErrorCode::Unsupported,
                         "the requested GPU backend is not compiled into this build");

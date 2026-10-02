@@ -10,6 +10,7 @@
 #include "../tensor_completion.hpp"
 #include "../tensor_vulkan_interop.hpp"
 #include "metal_context.hpp"
+#include "metal_queue.hpp"
 
 #include "core/tensor_backend.hpp"
 #include "core/vulkan_helpers.hpp"
@@ -301,3 +302,14 @@ namespace lfs::core::internal {
         throw TensorError("Metal tensors require macOS 26");
     }
 } // namespace lfs::core::internal
+
+namespace lfs::core::internal::metal_queue {
+    void wait_vulkan_timeline(void* const device, void* const semaphore, const uint64_t value) {
+        if (@available(macOS 26.0, *)) {
+            metal::acquire_context()->queue_wait(
+                shared_event(static_cast<VkDevice>(device), static_cast<VkSemaphore>(semaphore)), value);
+            return;
+        }
+        throw TensorError("Metal tensors require macOS 26");
+    }
+} // namespace lfs::core::internal::metal_queue

@@ -11,6 +11,7 @@
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_types.hpp"
 #include "rendering/selection_ops.hpp"
+#include "rendering/view_source.hpp"
 #include <array>
 #include <cstdint>
 #include <expected>
@@ -208,7 +209,6 @@ namespace lfs::vis {
         void setTestingViewport(ViewportInfo viewport);
         void setTestingContainmentIntrinsics(std::optional<rendering::CameraIntrinsics> intrinsics);
         void setTestingHoveredGaussianId(std::optional<int> hovered_gaussian_id);
-        void setTestingPanel(SplitViewPanelId panel);
         // Applies completed GPU count readbacks without waiting. The scene
         // manager calls this once per render-state build; selection commands
         // also poll before starting a new commit.
@@ -243,6 +243,8 @@ namespace lfs::vis {
         bool pollPendingPassiveRingCount() const;
 
         struct ViewerViewportContext {
+            ViewId view = kNoView;
+            std::uint64_t screen_epoch = 0;
             SplitViewPanelId panel = SplitViewPanelId::Left;
             ViewportInfo info;
             const Viewport* viewport = nullptr;
@@ -300,7 +302,8 @@ namespace lfs::vis {
                                                            const core::Tensor* affinity = nullptr);
         [[nodiscard]] std::optional<ViewerViewportContext> resolveViewerViewportContext(
             std::optional<glm::vec2> screen_point = std::nullopt,
-            std::optional<SplitViewPanelId> panel_override = std::nullopt) const;
+            std::optional<SplitViewPanelId> panel_override = std::nullopt,
+            ViewId view = kNoView) const;
         [[nodiscard]] std::optional<int> resolveCommandHoveredGaussianId(float x, float y, int camera_index,
                                                                          const SelectionFilterState& filters,
                                                                          const SelectionProjectionContext& projection_context);
@@ -417,7 +420,6 @@ namespace lfs::vis {
         std::optional<ViewportInfo> testing_viewport_;
         std::optional<rendering::CameraIntrinsics> testing_containment_intrinsics_;
         std::optional<int> testing_hovered_gaussian_id_;
-        std::optional<SplitViewPanelId> testing_panel_;
         mutable bool passive_ring_preview_key_valid_ = false;
         mutable std::size_t passive_ring_preview_key_ = 0;
         mutable bool passive_ring_has_hit_ = false;

@@ -19,6 +19,7 @@ namespace lfs::core {
         uint32_t source_rest = 0, destination_rest = 0;
         size_t source_offset = 0, destination_offset = 0;
         bool scatter = false;
+        bool match_cpu_rounding = false;
     };
 
     // Convert/copy a row range, or gather/scatter indexed rows. Canonical is

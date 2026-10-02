@@ -98,7 +98,15 @@ namespace lfs::vis {
         [[nodiscard]] const input::InputRouter& inputRouter() const { return input_router_; }
 
     private:
+        friend class WindowInputDispatchTest;
         void processEvent(const ::SDL_Event& event);
+        void dispatchQueuedEvent(const ::SDL_Event& event);
+        void dispatchPolledEvent(const ::SDL_Event& event);
+        bool drainQueuedEvents();
+        static bool watchEvent(void* userdata, ::SDL_Event* event);
+        bool pumping_events_ = false;
+        bool watching_event_ = false;
+        std::vector<std::pair<Uint32, Uint64>> dispatched_events_;
         [[nodiscard]] bool shouldSuppressGuiRoutingForResize(const ::SDL_Event& event,
                                                              unsigned int main_window_id) const;
 

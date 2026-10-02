@@ -27,6 +27,8 @@ namespace lfs::gpu_ops {
         void (*random_background)(Out destination, uint64_t seed);
         void (*canny)(In image, Out edges);
         void (*normalize_scalar)(Out values, In scalar, float skip_below);
+        // Optional upload/layout specialization; callers retain their default path.
+        Tensor (*upload_image_chw)(In cpu_hwc) = nullptr;
     };
 
 } // namespace lfs::gpu_ops

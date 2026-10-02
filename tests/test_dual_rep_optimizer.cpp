@@ -736,7 +736,7 @@ TEST_F(DualRepOptimizer, FusedStepBindingsJoinExecutionQueue) {
     {
         TensorWorkQueue::Scope consumer_scope(consumer);
         const auto bindings = optimizer.prepare_fastgs_fused_adam(
-            1001, static_cast<cudaStream_t>(consumer.native_handle()));
+            1001, consumer);
         ASSERT_TRUE(fastgs_adam_enabled(bindings));
         EXPECT_EQ(model.means().stream(), consumer.native_handle());
         EXPECT_EQ(model.shN().stream(), consumer.native_handle());

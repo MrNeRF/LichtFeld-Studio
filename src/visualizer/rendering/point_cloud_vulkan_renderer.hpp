@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include "render_target_id.hpp"
 #include "rendering/rendering.hpp"
 #include "window/vulkan_context.hpp"
 
@@ -28,6 +29,8 @@ namespace lfs::vis {
     // manager can route them through the same external-image plumbing as
     // VkSplat (no CUDA tensor staging on the display path).
     class LFS_VIS_API PointCloudVulkanRenderer {
+        friend struct PointCloudOutputOwnershipTestAccess;
+
     public:
         struct RenderResult {
             VkImage image = VK_NULL_HANDLE;
@@ -109,12 +112,6 @@ namespace lfs::vis {
                 lfs::rendering::DepthVisualizationMode::Palette;
         };
 
-        enum class OutputSlot : std::size_t {
-            Main = 0,
-            SplitLeft = 1,
-            SplitRight = 2,
-        };
-
         PointCloudVulkanRenderer();
         ~PointCloudVulkanRenderer();
 
@@ -124,16 +121,23 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<RenderResult, std::string> render(
             VulkanContext& context,
             const RenderRequest& request,
-            OutputSlot output_slot = OutputSlot::Main);
+            RenderTargetId target);
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
-            OutputSlot output_slot = OutputSlot::Main);
+            RenderTargetId target);
 
+        [[nodiscard]] bool hasRenderTarget(RenderTargetId target) const;
+        [[nodiscard]] bool releaseRenderTarget(RenderTargetId target);
         void reset();
 
     private:
         struct Impl;
         std::unique_ptr<Impl> impl_;
+    };
+
+    struct LFS_VIS_API PointCloudOutputOwnershipTestAccess {
+        static const void* createEmptyOutput(PointCloudVulkanRenderer& renderer, RenderTargetId target);
+        static const void* outputIdentity(const PointCloudVulkanRenderer& renderer, RenderTargetId target);
     };
 
 } // namespace lfs::vis

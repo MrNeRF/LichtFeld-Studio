@@ -4,6 +4,7 @@
 
 #include "io/ply_to_rad_lod.hpp"
 #include "core/bhatt_lod.hpp"
+#include "core/host_metrics.hpp"
 #include "core/logger.hpp"
 #include "core/mapped_file.hpp"
 #include "core/octree_lod.hpp"
@@ -988,23 +989,8 @@ namespace lfs::io {
         };
 
         std::size_t available_memory_bytes() {
-#ifdef _WIN32
-            MEMORYSTATUSEX status{};
-            status.dwLength = sizeof(status);
-            if (GlobalMemoryStatusEx(&status)) {
-                return static_cast<std::size_t>(status.ullAvailPhys);
-            }
-#else
-            std::ifstream meminfo("/proc/meminfo");
-            std::string line;
-            while (std::getline(meminfo, line)) {
-                if (line.starts_with("MemAvailable:")) {
-                    std::uint64_t kb = 0;
-                    std::sscanf(line.c_str(), "MemAvailable: %lu kB", &kb);
-                    return static_cast<std::size_t>(kb) * 1024;
-                }
-            }
-#endif
+            if (const auto memory = core::host_metrics::memory())
+                return memory->available_bytes;
             return std::size_t{8} * 1024 * 1024 * 1024;
         }
 

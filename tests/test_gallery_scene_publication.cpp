@@ -217,14 +217,7 @@ TEST(GalleryScenePublicationTest, PublishedCameraRecordsWorldExtentFromSettingsS
     const auto json = lfs::vis::project::panelCameraProjectStateToJson("primary", state);
     ASSERT_TRUE(json.contains("ortho_extent_world"));
     EXPECT_FLOAT_EQ(json["ortho_extent_world"].get<float>(), 6.25f);
-    EXPECT_TRUE(json["ortho_scale"].is_null());
-
-    Viewport secondary(960, 540);
-    secondary.ortho_scale_override = 540.0f / 3.0f;
-    const auto secondary_state =
-        lfs::vis::project::capturePanelCameraProjectState(secondary, settings_scale);
-    ASSERT_TRUE(secondary_state.ortho_extent_world.has_value());
-    EXPECT_FLOAT_EQ(*secondary_state.ortho_extent_world, 3.0f);
+    EXPECT_FLOAT_EQ(json["ortho_scale"].get<float>(), settings_scale);
 }
 
 TEST(GalleryScenePublicationTest, StudioPreservesCleanCompressedSourceAndExplicitSogMatchesSog) {
@@ -537,7 +530,7 @@ TEST(GalleryScenePublicationTest, GallerySpzPublicationCountMatchesVisibleAfterS
     auto snapshot = cpu_snapshot();
     ASSERT_EQ(snapshot.row_count, 8u);
     lfs::core::Tensor del = lfs::core::Tensor::zeros_bool({8}, snapshot.data->means().device());
-    del.slice(0, 2, 5) = lfs::core::Tensor::ones_bool({3}, snapshot.data->means().device());
+    del.slice(0, 2, 5).copy_from(lfs::core::Tensor::ones_bool({3}, snapshot.data->means().device()));
     snapshot.data->soft_delete(del);
     // Snapshot row_count covers stored rows; the deletion mask selects live rows.
     ASSERT_EQ(snapshot.row_count, 8u);
@@ -569,7 +562,7 @@ TEST(GalleryScenePublicationTest, GallerySogPublicationCountMatchesVisibleAfterS
     auto snapshot = cpu_snapshot();
     ASSERT_EQ(snapshot.row_count, 8u);
     lfs::core::Tensor del = lfs::core::Tensor::zeros_bool({8}, snapshot.data->means().device());
-    del.slice(0, 2, 5) = lfs::core::Tensor::ones_bool({3}, snapshot.data->means().device());
+    del.slice(0, 2, 5).copy_from(lfs::core::Tensor::ones_bool({3}, snapshot.data->means().device()));
     snapshot.data->soft_delete(del);
     ASSERT_EQ(snapshot.data->visible_count(), 5u);
 

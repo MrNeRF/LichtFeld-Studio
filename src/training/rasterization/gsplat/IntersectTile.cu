@@ -290,6 +290,7 @@ namespace gsplat_lfs {
     }
 
     void radix_sort_double_buffer(
+        Workspace& saved,
         int64_t n_isects,
         uint32_t tile_n_bits,
         uint32_t cam_n_bits,
@@ -332,7 +333,7 @@ namespace gsplat_lfs {
 
         cub::DoubleBuffer<int64_t> d_keys(isect_ids, isect_ids_sorted);
         cub::DoubleBuffer<int32_t> d_values(flatten_ids, flatten_ids_sorted);
-        void* const workspace = ensure_gsplat_cub_workspace(cub_ws_bytes, stream);
+        void* const workspace = ensure_gsplat_cub_workspace(saved, cub_ws_bytes, stream);
         size_t storage_bytes = cub_ws_bytes;
         LFS_CUDA_CHECK_MSG(
             cub::DeviceRadixSort::SortPairs(
@@ -348,6 +349,7 @@ namespace gsplat_lfs {
     }
 
     void compute_cumsum_gpu(
+        Workspace& saved,
         const int32_t* input,
         int64_t* output,
         uint32_t n_elements,
@@ -359,12 +361,12 @@ namespace gsplat_lfs {
         auto cast_op = [] __host__ __device__(int32_t x) { return static_cast<int64_t>(x); };
         auto cast_iter = thrust::make_transform_iterator(input, cast_op);
 
-        run_cub_operation(
-            "cub::DeviceScan::InclusiveSum", stream,
-            [&](void* workspace, size_t& workspace_bytes) {
-                return cub::DeviceScan::InclusiveSum(
-                    workspace, workspace_bytes, cast_iter, output, n_elements, stream);
-            });
+        run_cub_operation(saved,
+                          "cub::DeviceScan::InclusiveSum", stream,
+                          [&](void* workspace, size_t& workspace_bytes) {
+                              return cub::DeviceScan::InclusiveSum(
+                                  workspace, workspace_bytes, cast_iter, output, n_elements, stream);
+                          });
     }
 
 } // namespace gsplat_lfs

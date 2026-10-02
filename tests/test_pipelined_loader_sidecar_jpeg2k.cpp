@@ -84,15 +84,8 @@ namespace {
         if (!ready) {
             throw std::runtime_error("Timed out waiting for pipelined loader output");
         }
-        if (ready->depth_ready_event) {
-            const cudaError_t wait_status = cudaEventSynchronize(ready->depth_ready_event);
-            if (wait_status != cudaSuccess) {
-                throw std::runtime_error(std::string("depth event wait failed: ") +
-                                         cudaGetErrorString(wait_status));
-            }
-            cudaEventDestroy(ready->depth_ready_event);
-            ready->depth_ready_event = nullptr;
-        }
+        if (ready->depth_ready)
+            ready->depth_ready->wait();
         return std::move(*ready);
     }
 

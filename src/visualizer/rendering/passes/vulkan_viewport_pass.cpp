@@ -11,6 +11,7 @@
 #include "rendering/nvidia_dlss_plugin.hpp"
 #include "rendering/output_image_pool.hpp"
 #include "rendering/vulkan_wait.hpp"
+#include "shared_viewport_gpu_assets.hpp"
 #include "viewport_pass_graph.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
@@ -41,10 +42,12 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <span>
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis {
@@ -238,6 +241,7 @@ namespace lfs::vis {
         VkDescriptorSetLayout scene_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool scene_descriptor_pool = VK_NULL_HANDLE;
         VulkanSceneImageUploader scene_image_uploader;
+        std::shared_ptr<SharedViewportGpuAssets> gpu_assets;
         VulkanMeshPass mesh_pass;
         VulkanEnvironmentPass environment_pass;
         VulkanDepthBlitPass depth_blit_pass;
@@ -335,12 +339,20 @@ namespace lfs::vis {
                 reset();
                 return false;
             }
-            if (!mesh_pass.init(ctx, color_format, depth_stencil_format)) {
+            if (!gpu_assets) {
+                gpu_assets = std::make_shared<SharedViewportGpuAssets>();
+            }
+            if (!gpu_assets->ensureContext(ctx)) {
+                LOG_ERROR("Vulkan viewport pass: shared scene GPU assets init failed");
+                reset();
+                return false;
+            }
+            if (!mesh_pass.init(ctx, color_format, depth_stencil_format, gpu_assets)) {
                 LOG_ERROR("Vulkan viewport pass: mesh sub-pass init failed");
                 reset();
                 return false;
             }
-            if (!environment_pass.init(ctx, color_format, depth_stencil_format, quad_buffer)) {
+            if (!environment_pass.init(ctx, color_format, depth_stencil_format, quad_buffer, gpu_assets)) {
                 LOG_ERROR("Vulkan viewport pass: environment sub-pass init failed");
                 reset();
                 return false;
@@ -1834,9 +1846,7 @@ namespace lfs::vis {
                 return true;
             }
 
-            // The guide-panel producer emits one grid normally and two for an
-            // independent split view. Reserve both slots up front so toggling
-            // split view does not replace a descriptor-backed buffer mid-run.
+            // Reserve spare overlay slots to avoid replacing a descriptor-backed buffer.
             std::size_t capacity = 2;
             while (capacity < grid_count) {
                 capacity *= 2;
@@ -3412,6 +3422,11 @@ namespace lfs::vis {
 
     VulkanViewportPass::VulkanViewportPass() = default;
 
+    VulkanViewportPass::VulkanViewportPass(std::shared_ptr<SharedViewportGpuAssets> shared_assets)
+        : impl_(std::make_unique<Impl>()) {
+        impl_->gpu_assets = std::move(shared_assets);
+    }
+
     VulkanViewportPass::~VulkanViewportPass() {
         shutdown();
     }
@@ -3423,8 +3438,53 @@ namespace lfs::vis {
         return impl_->init(context);
     }
 
+    void VulkanViewportPass::discardImportMesh(uint64_t mesh_id) {
+        if (impl_)
+            impl_->mesh_pass.discardImport(mesh_id);
+    }
+
+    void VulkanViewportPass::prepareImport(VulkanContext& context, const VulkanViewportPassParams& params,
+                                           VulkanViewportPass* resident_mesh_resources) {
+        std::string error;
+        VulkanImportErrorScope capture(error);
+        if (!init(context) || (resident_mesh_resources && !resident_mesh_resources->init(context)))
+            throw std::runtime_error(error.empty() ? "Could not prepare the viewport" : error);
+        if (!context.waitForSubmittedFrames())
+            throw std::runtime_error("Could not finish the previous viewport work");
+        {
+            const auto slot = params.frame_slot;
+            const VulkanMeshPassParams mesh_params{
+                .view_projection = params.mesh_view_projection,
+                .camera_position = params.mesh_camera_position,
+                .items = params.mesh_items,
+                .frame_slot = slot,
+                .draw_group_count = std::max<size_t>(1, params.mesh_panels.size())};
+            // Preparation does not write per-draw presentation uniforms. Reuse the
+            // resident geometry, material textures and shadows without copying
+            // them into the temporary pass. Missing uploads are retained there.
+            auto& mesh_owner = resident_mesh_resources ? *resident_mesh_resources : *this;
+            mesh_owner.impl_->mesh_pass.prepare(context, mesh_params);
+            impl_->environment_pass.prepare(params.environment, slot);
+            impl_->depth_blit_pass.prepare(params.depth_blit, slot);
+            impl_->split_view_pass.prepare(params.split_view, slot);
+            if (!error.empty())
+                throw std::runtime_error(error);
+            LOG_DEBUG("Prepared import viewport resources: meshes={}, frame_slot={}", params.mesh_items.size(), slot);
+        }
+    }
+
     void VulkanViewportPass::prepare(VulkanContext& context, const VulkanViewportPassParams& params) {
-        if (!impl_ && !init(context)) {
+        if (!impl_) {
+            impl_ = std::make_unique<Impl>();
+        }
+        if (impl_->device != VK_NULL_HANDLE &&
+            (impl_->context != &context || impl_->device != context.device() ||
+             impl_->allocator != context.allocator())) {
+            auto assets = impl_->gpu_assets;
+            impl_->reset();
+            impl_->gpu_assets = std::move(assets);
+        }
+        if (impl_->device == VK_NULL_HANDLE && !impl_->init(context)) {
             return;
         }
         impl_->prepare(params);

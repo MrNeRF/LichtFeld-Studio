@@ -13,6 +13,7 @@
 #include <SDL3/SDL_video.h>
 #include <nfd.h>
 
+#include <cassert>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -355,8 +356,26 @@ namespace lfs::vis::gui {
             return handle;
         }
 
+        thread_local int dialog_block_depth = 0;
+        thread_local std::uint64_t suppressed_dialog_count = 0;
+
+        [[nodiscard]] const char* dialogKindName(const DialogKind kind) {
+            switch (kind) {
+            case DialogKind::OpenFile: return "open-file";
+            case DialogKind::SaveFile: return "save-file";
+            case DialogKind::PickFolder: return "pick-folder";
+            }
+            return "unknown";
+        }
+
         bool runDialog(const DialogRequest& request, std::filesystem::path& resultPath) {
             resultPath.clear();
+            if (dialog_block_depth > 0) {
+                ++suppressed_dialog_count;
+                LOG_WARN("Native {} dialog suppressed: requested while serving an MCP call, which cannot answer it",
+                         dialogKindName(request.kind));
+                return false;
+            }
             if (!ensureDialogBackendInitialized()) {
                 return false;
             }
@@ -509,6 +528,11 @@ namespace lfs::vis::gui {
             const char* title,
             const GtkFileChooserAction action,
             const bool returnCurrentFolder) {
+            if (dialog_block_depth > 0) {
+                ++suppressed_dialog_count;
+                LOG_WARN("Native GTK path picker suppressed: requested while serving an MCP call, which cannot answer it");
+                return {};
+            }
             if (!ensureDialogBackendInitialized()) {
                 return {};
             }
@@ -564,6 +588,20 @@ namespace lfs::vis::gui {
 #endif
 
     } // namespace
+
+    ScopedNativeFileDialogBlock::ScopedNativeFileDialogBlock()
+        : suppressed_before_(suppressed_dialog_count) {
+        ++dialog_block_depth;
+    }
+
+    ScopedNativeFileDialogBlock::~ScopedNativeFileDialogBlock() {
+        assert(dialog_block_depth > 0);
+        --dialog_block_depth;
+    }
+
+    bool ScopedNativeFileDialogBlock::suppressedDialog() const {
+        return suppressed_dialog_count != suppressed_before_;
+    }
 
     void warmupNativeFileDialogBackend() {
         (void)ensureDialogBackendInitialized();

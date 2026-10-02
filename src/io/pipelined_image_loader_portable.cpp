@@ -46,6 +46,25 @@ namespace lfs::io {
                                                std::shared_ptr<void>(data, release));
         }
 
+        // Takes ownership of decoded interleaved 8-bit samples and returns them
+        // planar, so the device copy needs no transpose.
+        Tensor host_uint8_planar(void* const data, const int height, const int width, const int channels,
+                                 const ReleaseFn release) {
+            const std::unique_ptr<void, ReleaseFn> owner(data, release);
+            const size_t pixels = static_cast<size_t>(height) * static_cast<size_t>(width);
+            const auto c = static_cast<size_t>(channels);
+            auto planar = Tensor::empty_pageable_host(
+                TensorShape({c, static_cast<size_t>(height), static_cast<size_t>(width)}), DataType::UInt8);
+            const auto* const src = static_cast<const uint8_t*>(data);
+            auto* const dst = planar.ptr<uint8_t>();
+            for (size_t ch = 0; ch < c; ++ch) {
+                uint8_t* const plane = dst + ch * pixels;
+                for (size_t i = 0; i < pixels; ++i)
+                    plane[i] = src[i * c + ch];
+            }
+            return planar;
+        }
+
         // 16-bit samples have no tensor dtype; Int32 holds them exactly.
         Tensor host_uint16(void* const data, TensorShape shape, const ReleaseFn release) {
             const std::unique_ptr<void, ReleaseFn> owner(data, release);
@@ -59,6 +78,8 @@ namespace lfs::io {
             upload.wait();
             auto device = Tensor::empty(host.shape(), Device::GPU, host.dtype());
             upload.enqueue(device, host);
+            // The upload retains its source; GPU consumers follow the
+            // destination timeline without blocking this decode worker.
             return device;
         }
 
@@ -147,35 +168,40 @@ namespace lfs::io {
     lfs::core::Tensor PipelinedImageLoader::decode_portable_rgb(
         const std::filesystem::path& path,
         const LoadParams& params,
-        lfs::core::TensorUpload& upload) const {
+        lfs::core::TensorUpload& upload,
+        const std::vector<uint8_t>* const encoded) const {
+        // Like the CUDA path, only encoded bytes are cached; every request
+        // decodes, and every consumer gets a new asynchronously uploaded image.
         {
-            std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+            std::lock_guard stats_lock(stats_mutex_);
             ++stats_.cpu_decode_calls;
         }
-
-        Tensor image;
+        Tensor host;
         if (config_.use_16bit_color) {
-            auto [data, width, height, channels] =
-                lfs::core::load_image_u16(path, params.resize_factor, params.max_width);
+            auto [data, width, height, channels] = lfs::core::load_image_u16(path, params.resize_factor, params.max_width);
             if (!data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
-            image = to_device(upload, host_uint16(data, image_shape(height, width, channels),
-                                                  lfs::core::free_image))
-                        .permute({2, 0, 1})
-                        .to(DataType::Float32)
-                        .mul(UINT16_SCALE);
-            if (params.output_uint8)
-                image = float_to_uint8(image);
+            host = host_uint16(data, image_shape(height, width, channels), lfs::core::free_image)
+                       .permute({2, 0, 1})
+                       .contiguous();
         } else {
             auto [data, width, height, channels] =
-                lfs::core::load_image(path, params.resize_factor, params.max_width);
+                encoded != nullptr
+                    ? lfs::core::load_image_from_memory(encoded->data(), encoded->size(), params.resize_factor,
+                                                        params.max_width)
+                    : lfs::core::load_image(path, params.resize_factor, params.max_width);
             if (!data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
-            image = to_device(upload, host_uint8(data, image_shape(height, width, channels),
-                                                 lfs::core::free_image))
-                        .permute({2, 0, 1});
-            if (!params.output_uint8)
-                image = image.to(DataType::Float32).mul(UINT8_SCALE);
+            // Planar bytes avoid a second device image and a per-step GPU transpose.
+            host = host_uint8_planar(data, height, width, channels, lfs::core::free_image);
+        }
+        Tensor image = to_device(upload, host);
+        if (config_.use_16bit_color) {
+            image = image.to(DataType::Float32).mul(UINT16_SCALE);
+            if (params.output_uint8)
+                image = float_to_uint8(image);
+        } else if (!params.output_uint8) {
+            image = image.to(DataType::Float32).mul(UINT8_SCALE);
         }
 
         if (params.undistort) {
@@ -192,6 +218,14 @@ namespace lfs::io {
 
     void PipelinedImageLoader::portable_process_thread_func() {
         const lfs::core::GpuBackendScope backend(config_.backend);
+        // A worker upload must not order unrelated prefetched images against
+        // the legacy training queue. Consumers follow each image storage fence.
+        std::unique_ptr<lfs::core::TensorWorkQueue> queue;
+        std::unique_ptr<lfs::core::TensorWorkQueue::Scope> queue_scope;
+        if (config_.backend == lfs::core::GpuBackend::Vulkan) {
+            queue = std::make_unique<lfs::core::TensorWorkQueue>(config_.backend);
+            queue_scope = std::make_unique<lfs::core::TensorWorkQueue::Scope>(*queue);
+        }
         lfs::core::TensorUpload upload;
         while (running_) {
             PrefetchedImage item;
@@ -217,7 +251,7 @@ namespace lfs::io {
                             }
                         }
                         try_complete_pair(item.sequence_id, item.loader_generation, std::move(image),
-                                          std::nullopt, nullptr);
+                                          std::nullopt);
                     } catch (const std::exception& e) {
                         LOG_ERROR("[PipelinedImageLoader] RGB fallback also failed {}: {}",
                                   lfs::core::path_to_utf8(item.path), e.what());
@@ -243,7 +277,7 @@ namespace lfs::io {
                 if (item.alpha_as_mask) {
                     auto [rgb, alpha] = decode_rgba(item.path, params, upload);
                     try_complete_pair(item.sequence_id, item.loader_generation, std::move(rgb),
-                                      finish_mask(std::move(alpha), item.alpha_mask_params), nullptr);
+                                      finish_mask(std::move(alpha), item.alpha_mask_params));
                 } else if (item.is_mask) {
                     int width = 0, height = 0, channels = 0;
                     stbi_uc* const gray = stbi_load(lfs::core::path_to_utf8(item.path).c_str(),
@@ -271,7 +305,7 @@ namespace lfs::io {
                             mask.contiguous(), undistort_for(*item.undistort, mask, params.max_width), nullptr);
                     }
                     try_complete_pair(item.sequence_id, item.loader_generation, std::nullopt,
-                                      finish_mask(std::move(mask), item.mask_params), nullptr);
+                                      finish_mask(std::move(mask), item.mask_params));
                 } else if (item.is_depth || item.is_normal) {
                     const std::string path_utf8 = lfs::core::path_to_utf8(item.path);
                     const int channels = item.is_depth ? 1 : 3;
@@ -326,15 +360,15 @@ namespace lfs::io {
                     prior = prior.contiguous();
                     if (item.is_depth) {
                         try_complete_pair(item.sequence_id, item.loader_generation, std::nullopt,
-                                          std::nullopt, nullptr, std::move(prior));
+                                          std::nullopt, std::move(prior));
                     } else {
                         try_complete_pair(item.sequence_id, item.loader_generation, std::nullopt,
-                                          std::nullopt, nullptr, std::nullopt, std::move(prior));
+                                          std::nullopt, std::nullopt, std::move(prior));
                     }
                 } else {
-                    auto image = decode_portable_rgb(item.path, params, upload);
+                    auto image = decode_portable_rgb(item.path, params, upload, item.jpeg_data.get());
                     try_complete_pair(item.sequence_id, item.loader_generation, std::move(image),
-                                      std::nullopt, nullptr);
+                                      std::nullopt);
                 }
             } catch (const std::exception& e) {
                 LOG_WARN("[PipelinedImageLoader] Host processing failed {}: {}",

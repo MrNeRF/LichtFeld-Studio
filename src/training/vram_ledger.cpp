@@ -3,8 +3,8 @@
 
 #include "lfs/training/vram_ledger.hpp"
 
-#include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 
 namespace lfs::training {
@@ -50,11 +50,11 @@ namespace lfs::training {
     }
 
     void record_rasterizer_arena_disclosure(std::string_view scope) {
-        auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
-        if (!arena) {
+        const auto info_optional = training_session_ops().arena_memory_info();
+        if (!info_optional) {
             return;
         }
-        const auto info = arena->get_memory_info();
+        const auto info = *info_optional;
         record_vram_current(scope, "arena.capacity", info.arena_capacity);
         record_vram_current(scope, "arena.current_usage", info.current_usage);
         record_vram_current(scope, "arena.peak_usage", info.peak_usage);

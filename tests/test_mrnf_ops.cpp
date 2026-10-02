@@ -7,6 +7,7 @@
 #include "cuda_backend_test.hpp"
 #include "kernels/mrnf_kernels.hpp"
 #include "lfs/training/ops/mrnf_cuda.hpp"
+#include "lfs/training/ops/mrnf_vulkan.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/refine_scratch.hpp"
 
@@ -80,14 +81,15 @@ namespace {
     }
 } // namespace
 
-TEST(MrnfOpsCapability, OnlyCudaProvidesTheFamily) {
+TEST(MrnfOpsCapability, ProvidesCudaAndVulkanFamilies) {
     using namespace lfs::training;
     EXPECT_EQ(training_ops(lfs::core::GpuBackend::CUDA).mrnf, &cuda_mrnf_ops());
     EXPECT_FALSE(unavailable_training_family(lfs::core::GpuBackend::CUDA, Family::Mrnf));
     FamilySet required;
     required.set(static_cast<size_t>(Family::Mrnf));
     EXPECT_EQ(missing_training_families(TrainingOps{}, required), std::vector<std::string_view>{"Mrnf"});
-    for (auto backend : {lfs::core::GpuBackend::Vulkan, lfs::core::GpuBackend::Metal}) {
+    EXPECT_EQ(training_ops(lfs::core::GpuBackend::Vulkan).mrnf, &vulkan_mrnf_ops());
+    for (auto backend : {lfs::core::GpuBackend::Metal}) {
         EXPECT_EQ(training_ops(backend).mrnf, nullptr);
         const auto reason = unavailable_training_family(backend, Family::Mrnf);
         ASSERT_TRUE(reason.has_value());

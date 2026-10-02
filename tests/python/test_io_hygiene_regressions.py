@@ -13,7 +13,7 @@ def _read(relative: str) -> str:
 
 
 def test_mask_cache_and_eight_bit_staging_contracts():
-    pipeline = _read("src/io/pipelined_image_loader.cpp")
+    pipeline = _read("src/io/pipelined_image_loader_cuda.cpp")
     nvcodec = _read("src/io/nvcodec_image_loader.cpp")
 
     mask_start = pipeline.index("} else if (batch[i].is_mask) {")

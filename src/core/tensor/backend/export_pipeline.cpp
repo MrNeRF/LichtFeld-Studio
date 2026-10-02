@@ -4,7 +4,9 @@
 
 #include "core/assert.hpp"
 #include "core/decimate/math.hpp"
+#include "core/sh_layout.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_sh.hpp"
 
 #include <algorithm>
 #include <array>
@@ -131,6 +133,43 @@ namespace lfs::core::internal {
                                  : phase == 15            ? "export_kmeans_pack"
                                                           : "export_kmeans";
             launch(kernels, module, phase, push, reads, writes, std::max<size_t>(work, 1));
+        }
+
+        // The brute-force assignment costs n * k * dims multiply-adds. It is issued in point
+        // ranges of at most this many, each in its own submission, so no command buffer
+        // approaches the macOS GPU watchdog however large the model or palette is.
+        constexpr uint64_t kAssignMultiplyAddsPerSubmit = uint64_t{1} << 34;
+
+        // Phase 2 (11 for SH3) over swizzled points, split into submitted point ranges.
+        // Ranges start on swizzle blocks, so offset base addresses address them directly.
+        void assign_nearest(ExportKernels& kernels, const Tensor& sh, const Tensor& centroids, const Tensor& norms,
+                            Tensor& labels, const uint32_t n, const uint32_t k, const uint32_t dims,
+                            const uint32_t slots) {
+            constexpr uint32_t block = kShReorderSize;
+            const uint64_t per_point = std::max<uint64_t>(uint64_t(k) * dims, 1);
+            const uint64_t fitting = std::max<uint64_t>(kAssignMultiplyAddsPerSubmit / per_point / block, 1) * block;
+            const auto range = static_cast<uint32_t>(std::min<uint64_t>(fitting, n));
+            const uint64_t block_bytes = uint64_t(slots) * block * 4u * sizeof(float);
+            for (uint32_t first = 0; first < n; first += range) {
+                const uint32_t count = std::min(range, n - first);
+                const KPush push{kernels.address(sh) + uint64_t(first / block) * block_bytes,
+                                 kernels.address(centroids),
+                                 0,
+                                 kernels.address(labels) + uint64_t(first) * sizeof(int32_t),
+                                 0,
+                                 0,
+                                 kernels.address(norms),
+                                 count,
+                                 k,
+                                 dims,
+                                 slots,
+                                 0,
+                                 0};
+                launch(kernels, "export_kmeans", dims == 45 ? 11u : 2u, push,
+                       {storage_ref(sh), storage_ref(centroids), storage_ref(norms)}, {storage_ref(labels)},
+                       std::max<size_t>(count, 1));
+                kernels.submit();
+            }
         }
 
         // An even number of 4-bit passes lands sorted pairs in the caller's buffers.
@@ -268,6 +307,36 @@ namespace lfs::core::internal {
     std::tuple<Tensor, Tensor> export_kmeans_sh(ExportKernels& kernels, const Tensor& sh, const int n_points,
                                                 const int sh_coeffs, const int k, const int iterations) {
         const GpuBackendScope scope(kernels.backend());
+        if (sh_coeffs > 0 && sh_coeffs < int(kShMaxCoeffsRest) && n_points > k) {
+            // Only SH3 has the hierarchical and screened assignment; other degrees would
+            // assign by brute force against the whole palette every iteration. Zero
+            // coefficients add nothing to a distance and their centroid means stay zero,
+            // so lower degrees are clustered as zero-padded SH3 and the padding dropped.
+            const auto rows = static_cast<size_t>(n_points);
+            const auto rest = static_cast<uint32_t>(sh_coeffs);
+            auto canonical = Tensor::empty({rows, size_t(rest), size_t{3}}, Device::GPU, DataType::Float32);
+            sh_codec(sh, canonical,
+                     {.source_format = ShFormat::Float32,
+                      .destination_format = ShFormat::Canonical,
+                      .source_rows = rows,
+                      .destination_rows = rows,
+                      .count = rows,
+                      .source_rest = rest,
+                      .destination_rest = rest});
+            auto padded = Tensor::empty({sh_swizzled_float_count(rows, kShMaxCoeffsRest)}, Device::GPU,
+                                        DataType::Float32);
+            sh_codec(canonical, padded,
+                     {.source_format = ShFormat::Canonical,
+                      .destination_format = ShFormat::Float32,
+                      .source_rows = rows,
+                      .destination_rows = rows,
+                      .count = rows,
+                      .source_rest = rest,
+                      .destination_rest = kShMaxCoeffsRest});
+            auto [centroids, labels] =
+                export_kmeans_sh(kernels, padded, n_points, int(kShMaxCoeffsRest), k, iterations);
+            return {centroids.slice(1, 0, size_t(sh_coeffs) * 3u).contiguous(), labels};
+        }
         const uint32_t n = static_cast<uint32_t>(n_points);
         const uint32_t kk = static_cast<uint32_t>(k);
         const uint32_t dims = static_cast<uint32_t>(sh_coeffs * 3);
@@ -311,7 +380,7 @@ namespace lfs::core::internal {
                 if (iter > 0)
                     super_step(kernels, centroids, supers, centroid_supers, super_norms, kk, dims, static_cast<uint32_t>(iter * 111));
                 kmeans_pass(kernels, sh, supers, dummy, point_supers, dummy, dummy, super_norms, n, 256, dims, slots, 1, 0);
-                kmeans_pass(kernels, sh, supers, dummy, point_supers, dummy, dummy, super_norms, n, 256, dims, slots, 2, 0);
+                assign_nearest(kernels, sh, supers, super_norms, point_supers, n, 256, dims, slots);
                 kmeans_pass(kernels, sh, centroids, dummy, labels, dummy, dummy, norms, n, kk, dims, slots, 1, 0);
                 assign_grouped(kernels, sh, centroids, norms, labels, supers, centroid_supers, point_supers, n, slots);
             } else if (screen && last) {
@@ -319,13 +388,14 @@ namespace lfs::core::internal {
                 export_assign_sh3(kernels, sh, centroids, norms, labels, true, iter > 0);
             } else {
                 kmeans_pass(kernels, sh, centroids, dummy, labels, dummy, dummy, norms, n, kk, dims, slots, 1, 0);
-                kmeans_pass(kernels, sh, centroids, dummy, labels, dummy, dummy, norms, n, kk, dims, slots, 2, 0);
+                assign_nearest(kernels, sh, centroids, norms, labels, n, kk, dims, slots);
             }
             auto sums = Tensor::zeros({kk, dims}, Device::GPU, DataType::Float32);
             auto counts = Tensor::zeros({kk}, Device::GPU, DataType::Int32);
             accumulate(kernels, sh, centroids, labels, sums, counts, n, kk, dims, slots, false);
             kmeans_pass(kernels, sh, centroids, dummy, labels, sums, counts, norms, n, kk, dims, slots, 4,
                         static_cast<uint32_t>(iter * 12345 + 67890));
+            kernels.submit();
         }
         return {centroids, labels};
     }
@@ -359,7 +429,7 @@ namespace lfs::core::internal {
                    {storage_ref(labels)}, size_t(n) * 2u);
             return;
         }
-        kmeans_pass(kernels, sh, centroids, dummy, labels, dummy, dummy, norms, n, k, 45, 12, 2, 0);
+        assign_nearest(kernels, sh, centroids, norms, labels, n, k, 45, 12);
     }
 
     void export_decimate_candidates(ExportKernels& kernels, const Tensor& position, const Tensor& rotation,

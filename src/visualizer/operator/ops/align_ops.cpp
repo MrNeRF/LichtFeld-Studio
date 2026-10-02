@@ -513,11 +513,11 @@ namespace lfs::vis::op {
 
         const auto viewport_pos = gm->getViewportPos();
         const auto viewport_size = gm->getViewportSize();
-        const auto panel_info = rm->resolveViewerPanel(
-            gm->getViewer()->getViewport(),
-            viewport_pos,
-            viewport_size,
-            glm::vec2(static_cast<float>(x), static_cast<float>(y)));
+        const auto panel_info = rm->resolveViewerPanel(rm->activeViewId(),
+                                                       gm->getViewer()->getViewport(),
+                                                       viewport_pos,
+                                                       viewport_size,
+                                                       glm::vec2(static_cast<float>(x), static_cast<float>(y)));
         if (!panel_info || !panel_info->valid()) {
             return std::nullopt;
         }
@@ -577,12 +577,12 @@ namespace lfs::vis::op {
 
         const auto viewport_pos = gm->getViewportPos();
         const auto viewport_size = gm->getViewportSize();
-        const auto panel_info = rm->resolveViewerPanel(
-            gm->getViewer()->getViewport(),
-            viewport_pos,
-            viewport_size,
-            std::nullopt,
-            pick_panel_);
+        const auto panel_info = rm->resolveViewerPanel(rm->activeViewId(),
+                                                       gm->getViewer()->getViewport(),
+                                                       viewport_pos,
+                                                       viewport_size,
+                                                       std::nullopt,
+                                                       pick_panel_);
         if (!panel_info || !panel_info->valid() || !panel_info->viewport) {
             return gm->getViewer()->getViewport().camera.t;
         }
@@ -601,11 +601,11 @@ namespace lfs::vis::op {
         const auto viewport_pos = gm->getViewportPos();
         const auto viewport_size = gm->getViewportSize();
 
-        const auto panel_info = rm->resolveViewerPanel(
-            gm->getViewer()->getViewport(),
-            viewport_pos,
-            viewport_size,
-            glm::vec2(static_cast<float>(x), static_cast<float>(y)));
+        const auto panel_info = rm->resolveViewerPanel(rm->activeViewId(),
+                                                       gm->getViewer()->getViewport(),
+                                                       viewport_pos,
+                                                       viewport_size,
+                                                       glm::vec2(static_cast<float>(x), static_cast<float>(y)));
         if (!panel_info || !panel_info->valid()) {
             return glm::vec3(Viewport::INVALID_WORLD_POS);
         }
@@ -627,7 +627,7 @@ namespace lfs::vis::op {
         const int depth_y = static_cast<int>(render_y);
 
         // Hover, placement and marker dragging all follow the displayed surface.
-        const float depth = rm->getDepthAtPixel(depth_x, depth_y, panel_info->panel);
+        const float depth = rm->getDepthAtPixel(rm->activeViewId(), depth_x, depth_y, panel_info->panel);
         if (!std::isfinite(depth) || depth <= 0.0f || depth >= 1e9f) {
             return glm::vec3(Viewport::INVALID_WORLD_POS);
         }

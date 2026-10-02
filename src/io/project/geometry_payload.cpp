@@ -55,7 +55,7 @@ namespace lfs::io::project {
 
         struct PointProperty {
             std::string_view name;
-            lfs::core::Tensor lfs::core::PointCloud::* tensor;
+            lfs::core::Tensor lfs::core::PointCloud::*tensor;
             std::uint16_t components;
         };
 
@@ -73,7 +73,7 @@ namespace lfs::io::project {
 
         struct MeshProperty {
             std::string_view name;
-            lfs::core::Tensor lfs::core::MeshData::* tensor;
+            lfs::core::Tensor lfs::core::MeshData::*tensor;
             std::uint16_t components;
         };
 

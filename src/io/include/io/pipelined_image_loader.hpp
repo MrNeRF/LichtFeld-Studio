@@ -27,10 +27,6 @@
 #include <utility>
 #include <vector>
 
-struct CUstream_st;
-using cudaStream_t = CUstream_st*;
-struct CUevent_st;
-
 namespace lfs::io {
 
     class NvCodecImageLoader;
@@ -137,15 +133,14 @@ namespace lfs::io {
         size_t sequence_id;
         lfs::core::Tensor tensor;              // Image tensor [C,H,W], float32
         std::optional<lfs::core::Tensor> mask; // Optional mask [H,W], float32
-        cudaStream_t stream = nullptr;
         std::optional<lfs::core::TensorFence> image_ready = {};
         std::optional<lfs::core::TensorFence> mask_ready = {};
         std::optional<lfs::core::Tensor> depth;  // Optional depth [H,W], float32
         std::optional<lfs::core::Tensor> normal; // Optional normals [3,H,W], float32 in [-1,1]
-        // Depth and normal record readiness on different worker streams, so
-        // each carries its own event; consumers must wait on both.
-        CUevent_st* depth_ready_event = nullptr;
-        CUevent_st* normal_ready_event = nullptr;
+        // Depth and normal record readiness on different worker queues, so
+        // each carries its own fence; consumers must wait on both.
+        std::optional<lfs::core::TensorFence> depth_ready = {};
+        std::optional<lfs::core::TensorFence> normal_ready = {};
         std::vector<std::shared_ptr<void>> decoded_frame_leases;
         std::string error; // Non-empty for a failed primary image request
     };
@@ -242,6 +237,10 @@ namespace lfs::io {
         [[nodiscard]] std::optional<LoaderCompletion> try_get_completion_for(
             std::chrono::milliseconds timeout);
 
+        // True when images for `backend` decode on the GPU (nvImageCodec) rather
+        // than on CPU worker threads.
+        [[nodiscard]] static bool decodes_on_gpu(lfs::core::GpuBackend backend);
+
         lfs::core::Tensor load_image_immediate(
             const std::filesystem::path& path, const LoadParams& params);
 
@@ -299,11 +298,10 @@ namespace lfs::io {
             std::optional<lfs::core::Tensor> mask;
             std::optional<lfs::core::Tensor> depth;
             std::optional<lfs::core::Tensor> normal;
-            cudaStream_t stream = nullptr;
             std::optional<lfs::core::TensorFence> image_ready = {};
             std::optional<lfs::core::TensorFence> mask_ready = {};
-            CUevent_st* depth_ready_event = nullptr;
-            CUevent_st* normal_ready_event = nullptr;
+            std::optional<lfs::core::TensorFence> depth_ready = {};
+            std::optional<lfs::core::TensorFence> normal_ready = {};
             bool mask_expected = false; // True if a mask was requested for this sequence_id
             bool depth_expected = false;
             bool normal_expected = false;
@@ -425,9 +423,11 @@ namespace lfs::io {
         void gpu_batch_decode_thread_func();
         void cold_process_thread_func(size_t worker_index);
         void portable_process_thread_func();
+        // Decodes `encoded` (the file's bytes) when given, else reads `path`.
         lfs::core::Tensor decode_portable_rgb(const std::filesystem::path& path,
                                               const LoadParams& params,
-                                              lfs::core::TensorUpload& upload) const;
+                                              lfs::core::TensorUpload& upload,
+                                              const std::vector<uint8_t>* encoded = nullptr) const;
 
         std::string make_cache_key(const std::filesystem::path& path, const LoadParams& params) const;
         bool is_jpeg_data(const std::vector<uint8_t>& data) const;
@@ -454,7 +454,7 @@ namespace lfs::io {
         lfs::core::Tensor decode_cached_sidecar(NvCodecImageLoader& nvcodec,
                                                 const PrefetchedImage& item,
                                                 void* cuda_stream);
-        CUevent_st* record_sidecar_ready_event(cudaStream_t stream);
+        std::optional<lfs::core::TensorFence> record_sidecar_ready_event(void* stream);
         std::pair<int, int> sidecar_target_size(const PrefetchedImage& item, int src_w, int src_h) const;
 
         std::shared_ptr<std::vector<uint8_t>> get_from_jpeg_cache(const std::string& cache_key);
@@ -478,10 +478,9 @@ namespace lfs::io {
             std::uint64_t loader_generation,
             std::optional<lfs::core::Tensor> image,
             std::optional<lfs::core::Tensor> mask,
-            cudaStream_t stream,
             std::optional<lfs::core::Tensor> depth = std::nullopt,
             std::optional<lfs::core::Tensor> normal = std::nullopt,
-            CUevent_st* sidecar_ready_event = nullptr,
+            std::optional<lfs::core::TensorFence> sidecar_ready = std::nullopt,
             std::shared_ptr<void> decoded_frame_lease = nullptr);
         void try_push_ready_locked(size_t sequence_id,
                                    PendingPairIterator it,
@@ -507,7 +506,11 @@ namespace lfs::io {
         void reconcile_ledger_on_shutdown();
         [[nodiscard]] std::optional<LoaderCompletion> take_completion(std::uint64_t sequence_id);
         void erase_pending_pair_locked(PendingPairIterator it);
-        void destroy_sidecar_ready_event(CUevent_st*& event);
+        void destroy_sidecar_ready_event(std::optional<lfs::core::TensorFence>& fence);
+        bool attach_cuda_decode_stage();
+        void start_cuda_decode_workers();
+        void release_cuda_decode_stage();
+        lfs::core::Tensor load_image_cuda(const std::filesystem::path& path, const LoadParams& params);
         void reset_pipeline_gpu_bytes();
 
         void publish_loader_vram_gauges() const;
@@ -523,8 +526,9 @@ namespace lfs::io {
         // Images are still stream-synced before handoff (materialized on arrival).
         std::unique_ptr<lfs::core::TensorWorkQueue> decode_queue_;
         std::vector<std::unique_ptr<lfs::core::TensorWorkQueue>> sidecar_queues_;
-        mutable cudaStream_t decode_stream_ = nullptr;
-        std::vector<cudaStream_t> sidecar_streams_;
+        bool nvcodec_hot_path_ = false;
+        lfs::core::Tensor (PipelinedImageLoader::*cuda_immediate_)(
+            const std::filesystem::path&, const LoadParams&) = nullptr;
 
         ThreadSafeQueue<ImageRequest> prefetch_queue_;
         ThreadSafeQueue<PrefetchedImage> hot_queue_;

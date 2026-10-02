@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -167,9 +168,9 @@ namespace {
                 return {};
             }
             auto& ready = *completion->outcome;
-            for (auto* event : {&ready.depth_ready_event, &ready.normal_ready_event}) {
-                if (*event)
-                    TensorFence::adopt(GpuBackend::CUDA, std::exchange(*event, nullptr)).wait();
+            for (auto* fence : {&ready.depth_ready, &ready.normal_ready}) {
+                if (*fence)
+                    (*fence)->wait();
             }
             EXPECT_TRUE(gpu_backend_of(ready.tensor) == GetParam());
             // Exercise a consumer GPU operation on a different thread before readback.
@@ -233,7 +234,9 @@ namespace {
         for (size_t i = 0; i < size_t(WIDTH) * HEIGHT; ++i)
             std::copy_n(&rgba_[i * 4], 3, &rgb[i * 3]);
         expect_close(split.image, host(planar(rgb, 3, UINT8_SCALE), {3, HEIGHT, WIDTH}), 0.0f);
-        expect_close(split.mask, host(alpha, hw), 0.0f);
+        // A driver may contract 1 - a / 255 into one fma (MoltenVK does); the
+        // host reference rounds twice, so allow the last bit.
+        expect_close(split.mask, host(alpha, hw), 1e-6f);
 
         auto binary = request("rgb8.png");
         binary.mask_path = path("mask.png");
@@ -296,6 +299,59 @@ namespace {
     INSTANTIATE_TEST_SUITE_P(Backends, PipelinedLoaderBackends,
                              ::testing::Values(GpuBackend::CUDA, GpuBackend::Vulkan),
                              [](const auto& info) { return std::string(gpu_backend_name(info.param)); });
+
+    TEST(PipelinedLoaderVulkan, PortableLoaderDecodesEveryRequestAndCachesOnlyEncodedBytes) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        const GpuBackendScope backend(GpuBackend::Vulkan);
+        const auto directory = fixture_directory() / "rgb_cache";
+        std::filesystem::create_directories(directory);
+        const auto first = directory / "first.jpg", second = directory / "second.jpg";
+        const auto pixels = samples<uint8_t>(3, 255, 17);
+        auto encoded = pixels;
+        const auto host_pixels = lfs::core::Tensor::from_blob(encoded.data(), {size_t(HEIGHT), size_t(WIDTH), size_t(3)}, lfs::core::Device::CPU,
+                                                              DataType::UInt8);
+        lfs::core::save_image_u8(first, host_pixels, 95);
+        lfs::core::save_image_u8(second, host_pixels, 95);
+        {
+            PipelinedLoaderConfig config;
+            config.backend = GpuBackend::Vulkan;
+            PipelinedImageLoader loader(config);
+            lfs::io::LoadParams params;
+            auto initial = loader.load_image_immediate(first, params);
+            const auto expected = initial.cpu();
+            initial.fill_(0.f);
+            // No decoded image is kept: the second request decodes again and
+            // does not see the first output's writes.
+            expect_close(loader.load_image_immediate(first, params), expected, 0.f);
+            EXPECT_EQ(loader.get_stats().cpu_decode_calls, 2u);
+            params.output_uint8 = true;
+            EXPECT_EQ(loader.load_image_immediate(first, params).dtype(), DataType::UInt8);
+            params.output_uint8 = false;
+            params.resize_factor = 2;
+            EXPECT_NE(loader.load_image_immediate(first, params).shape(), expected.shape());
+            params.resize_factor = -1;
+
+            // Prefetched JPEGs decode from the encoded-bytes cache, like CUDA.
+            std::vector<ImageRequest> requests;
+            for (size_t i = 0; i < 6; ++i) {
+                ImageRequest request;
+                request.sequence_id = i;
+                request.path = i % 2 ? second : first;
+                requests.push_back(request);
+            }
+            loader.prefetch(requests);
+            for (size_t i = 0; i < requests.size(); ++i) {
+                auto completion = loader.try_get_completion_for(std::chrono::seconds(20));
+                ASSERT_TRUE(completion);
+                ASSERT_TRUE(completion->outcome);
+                expect_close(completion->outcome->tensor, expected, 0.f);
+            }
+            EXPECT_EQ(loader.get_stats().cpu_decode_calls, 10u);
+            EXPECT_GT(loader.release_host_cache(std::numeric_limits<size_t>::max()), 0u);
+        }
+        std::filesystem::remove_all(directory);
+    }
 
     // Runs in a fresh process: an earlier codec probe elsewhere would otherwise hide one here.
     TEST(PipelinedLoaderVulkan, NeverProbesOrCreatesTheCudaCodec) {

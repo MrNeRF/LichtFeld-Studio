@@ -90,77 +90,6 @@ namespace lfs::app {
 
     namespace {
 
-        const char* final_export_extension(const core::param::OutputFormat format) {
-            using core::param::OutputFormat;
-            switch (format) {
-            case OutputFormat::PLY: return ".ply";
-            case OutputFormat::SOG: return ".sog";
-            case OutputFormat::SPZ: return ".spz";
-            case OutputFormat::HTML: return ".html";
-            case OutputFormat::USD: return ".usd";
-            case OutputFormat::USDA: return ".usda";
-            case OutputFormat::USDC: return ".usdc";
-            case OutputFormat::RAD: return ".rad";
-            }
-            return ".ply";
-        }
-
-        io::Result<void> save_final_splat(const core::SplatData& splat,
-                                          const std::filesystem::path& output,
-                                          const core::param::OutputFormat format,
-                                          const core::ProvenanceStamp& provenance) {
-            using core::param::OutputFormat;
-            switch (format) {
-            case OutputFormat::PLY:
-                return io::save_ply(splat, {.output_path = output, .binary = true, .provenance = provenance});
-            case OutputFormat::SOG:
-                return io::save_sog(splat, {.output_path = output, .kmeans_iterations = 10, .provenance = provenance});
-            case OutputFormat::SPZ:
-                return io::save_spz(splat, {.output_path = output, .version = 4, .provenance = provenance});
-            case OutputFormat::HTML:
-                return io::export_html(splat, {.output_path = output, .kmeans_iterations = 10, .provenance = provenance});
-            case OutputFormat::USD:
-            case OutputFormat::USDA:
-            case OutputFormat::USDC:
-                return io::save_usd(splat, {.output_path = output, .provenance = provenance});
-            case OutputFormat::RAD:
-                return io::save_rad(splat, {.output_path = output, .provenance = provenance});
-            }
-            return io::save_ply(splat, {.output_path = output, .binary = true, .provenance = provenance});
-        }
-
-#if LFS_BUILD_TRAINER
-        void export_final_splats(const training::Trainer& trainer,
-                                 const core::param::TrainingParameters& params) {
-            if (params.export_formats.empty()) {
-                return;
-            }
-            const auto& model = trainer.get_strategy().get_model();
-            const std::filesystem::path out_dir = params.dataset.output_path;
-            const std::string stem = params.dataset.output_name.empty()
-                                         ? std::format("splat_{}", trainer.get_current_iteration())
-                                         : params.dataset.output_name;
-
-            core::ProvenanceStamp stamp = params.include_provenance
-                                              ? core::make_provenance_stamp()
-                                              : core::make_minimal_provenance_stamp();
-            if (params.include_provenance) {
-                stamp.iteration = trainer.get_current_iteration();
-                stamp.strategy = params.optimization.strategy;
-            }
-
-            for (const auto format : params.export_formats) {
-                const std::filesystem::path path = out_dir / (stem + final_export_extension(format));
-                if (const auto result = save_final_splat(model, path, format, stamp); !result) {
-                    LOG_ERROR("Failed to export final splat to {}: {}",
-                              core::path_to_utf8(path), result.error().message);
-                } else {
-                    LOG_INFO("Exported final splat: {}", core::path_to_utf8(path));
-                }
-            }
-        }
-#endif
-
         struct HeadlessPluginSignalGuard {
             HeadlessPluginSignalGuard() {
                 python::set_plugin_preload_completion_hook(
@@ -916,6 +845,13 @@ namespace lfs::app {
             HeadlessRunCoordinator coordinator;
             HeadlessPluginSignalGuard plugin_signals;
 
+            bool final_export_failed = false;
+            const auto record_final_export = [&](const lfs::Status& exported) {
+                if (!exported) {
+                    LOG_ERROR("{}", lfs::format_for_developer(exported.error()));
+                    final_export_failed = true;
+                }
+            };
             {
                 core::Scene scene;
 
@@ -1015,7 +951,7 @@ namespace lfs::app {
                                 rebound.error()));
                         return 1;
                     }
-                    training::export_final_splats(*trainer, *params);
+                    record_final_export(training::export_final_splats(*trainer, *params));
                     trainer->shutdown();
                     static_cast<void>(
                         trainer.release());
@@ -1061,7 +997,7 @@ namespace lfs::app {
                         }
                         return 1;
                     }
-                    training::export_final_splats(*trainer, *params);
+                    record_final_export(training::export_final_splats(*trainer, *params));
                     trainer->shutdown();
                     static_cast<void>(trainer.release());
                 } else {
@@ -1111,16 +1047,20 @@ namespace lfs::app {
                         }
                         return 1;
                     }
-                    training::export_final_splats(*trainer, *params);
+                    record_final_export(training::export_final_splats(*trainer, *params));
                     trainer->shutdown();
                     static_cast<void>(trainer.release());
                 }
 
-                LOG_INFO("Headless training {}",
-                         coordinator.interrupted() ? "stopped by user" : "completed");
+                if (final_export_failed) {
+                    LOG_ERROR("Headless training finished but a final export failed");
+                } else {
+                    LOG_INFO("Headless training {}",
+                             coordinator.interrupted() ? "stopped by user" : "completed");
+                }
                 core::teardown_gpu_before_exit();
                 core::mark_clean_exit();
-                core::flush_and_exit(0);
+                core::flush_and_exit(final_export_failed ? 1 : 0);
             }
 
             core::teardown_gpu_before_exit();
@@ -1233,6 +1173,8 @@ namespace lfs::app {
                      total_frames, duration, cfg.fps,
                      core::path_to_utf8(cfg.camera_path), core::path_to_utf8(cfg.output_path));
 
+            vis::RenderTargetRegistry targets;
+            const auto target = targets.allocate();
             for (int frame = 0; frame < total_frames; ++frame) {
                 const float t = std::min(static_cast<float>(frame) / static_cast<float>(cfg.fps), duration);
                 const auto cam_state = timeline.evaluate(t);
@@ -1246,12 +1188,12 @@ namespace lfs::app {
                 // The loaded scene is immutable for the whole path. The live-training
                 // upload flag shares the training arena and disables the immutable HiGS chain.
                 auto rendered = renderer.render(context, *model, request, frame == 0,
-                                                vis::VksplatViewportRenderer::OutputSlot::Preview, false, true);
+                                                target, false, true);
                 if (!rendered) {
                     LOG_ERROR("Failed to render frame {}: {}", frame, rendered.error());
                     return 1;
                 }
-                auto image = renderer.readOutputImage(context, vis::VksplatViewportRenderer::OutputSlot::Preview);
+                auto image = renderer.readOutputImage(context, target);
                 if (!image) {
                     LOG_ERROR("Failed to read frame {}: {}", frame, image.error());
                     return 1;
@@ -1317,9 +1259,10 @@ namespace lfs::app {
     bool preflightGpu(const bool show_dialog, const bool viewer_only) {
         // Falling back changes the default, so it must not be resolved yet.
         if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::Metal) {
+            // Training reaches Trainer::initialize, which names any missing families.
+            if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Metal))
+                return true;
             if (viewer_only) {
-                if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Metal))
-                    return true;
                 if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan) &&
                     lfs::core::set_default_gpu_backend(lfs::core::GpuBackend::Vulkan).has_value()) {
                     LOG_WARN("The Metal tensor backend needs macOS 26 and a Metal 4 GPU; the viewer runs "
@@ -1329,28 +1272,23 @@ namespace lfs::app {
             }
             reportFatalStartupError(
                 "LichtFeld Studio - No usable GPU",
-                "The selected Metal tensor backend requires a Metal 4 or Vulkan GPU and a viewer-only session.",
+                "The selected Metal tensor backend requires macOS 26 and a Metal 4 GPU; only the viewer can fall back to Vulkan.",
                 show_dialog);
             return false;
         }
+#if LFS_HAS_CUDA
         if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
-            if (viewer_only &&
-                lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
+            if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
+                // Training has no Vulkan kernels yet. Let startup reach
+                // Trainer::initialize, which names the missing families.
                 return true;
             }
             reportFatalStartupError(
                 "LichtFeld Studio - No usable GPU",
-                "The selected Vulkan tensor backend requires a Vulkan GPU and a viewer-only session.",
+                "The selected Vulkan tensor backend requires a Vulkan GPU.",
                 show_dialog);
             return false;
         }
-#if !LFS_HAS_CUDA
-        reportFatalStartupError(
-            "LichtFeld Studio - No usable GPU",
-            "CUDA is not compiled into this build; select the Vulkan tensor backend.",
-            show_dialog);
-        return false;
-#else
         const bool cuda_usable =
             lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
         const bool vulkan_usable =
@@ -1425,6 +1363,17 @@ namespace lfs::app {
             return false;
         }
         return true;
+#else
+        if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
+            // Training has no Vulkan kernels yet. Let startup reach
+            // Trainer::initialize, which names the missing families.
+            return true;
+        }
+        reportFatalStartupError(
+            "LichtFeld Studio - No usable GPU",
+            "CUDA is not compiled into this build and no Vulkan GPU is available.",
+            show_dialog);
+        return false;
 #endif
     }
 

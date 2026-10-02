@@ -9,7 +9,6 @@
 #include <nvsdk_ngx_vk.h>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +18,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 namespace {
     constexpr std::string_view NVIDIA_DLSS_SDK_URL = "https://github.com/NVIDIA/DLSS";
@@ -27,7 +27,6 @@ namespace {
 
     constexpr std::string_view PLUGIN_ID = "nvidia-dlss";
     constexpr std::string_view DISPLAY_NAME = "NVIDIA DLSS";
-    constexpr std::size_t VIEW_COUNT = LFS_SCENE_UPSCALER_PLUGIN_VIEW_COUNT;
 
     [[nodiscard]] NVSDK_NGX_PerfQuality_Value ngxQuality(
         const std::uint32_t quality) noexcept {
@@ -43,7 +42,7 @@ namespace {
     }
 
     [[nodiscard]] bool validView(const std::uint32_t view) noexcept {
-        return static_cast<std::size_t>(view) < VIEW_COUNT;
+        return lfs_scene_upscaler_plugin_view_id_valid(view) != 0;
     }
 
     [[nodiscard]] bool validQuality(const std::uint32_t quality) noexcept {
@@ -287,7 +286,7 @@ namespace {
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_INVALID_ARGUMENT,
                             "invalid DLSS feature configuration");
             }
-            auto& view = views_[static_cast<std::size_t>(config.view)];
+            auto& view = views_[config.view];
             if (view.feature != nullptr && sameFeatureConfig(view.config, config)) {
                 last_error_.clear();
                 return LFS_SCENE_UPSCALER_PLUGIN_OK;
@@ -341,7 +340,7 @@ namespace {
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_INVALID_ARGUMENT,
                             "invalid DLSS evaluation resources");
             }
-            auto& view = views_[static_cast<std::size_t>(evaluation.view)];
+            auto& view = views_[evaluation.view];
             if (view.feature == nullptr || !view.configured)
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_UNAVAILABLE,
                             "DLSS feature is not configured for this view");
@@ -408,8 +407,10 @@ namespace {
 
         void releaseFeature(const std::uint32_t view) {
             std::scoped_lock lock(mutex_);
-            if (validView(view))
-                releaseFeatureLocked(views_[static_cast<std::size_t>(view)]);
+            if (auto it = views_.find(view); it != views_.end()) {
+                releaseFeatureLocked(it->second);
+                views_.erase(it);
+            }
         }
 
         void shutdownRuntime() {
@@ -520,8 +521,9 @@ namespace {
         }
 
         void shutdownRuntimeLocked() {
-            for (auto& view : views_)
+            for (auto& [id, view] : views_)
                 releaseFeatureLocked(view);
+            views_.clear();
             if (parameters_ != nullptr)
                 NVSDK_NGX_VULKAN_DestroyParameters(parameters_);
             parameters_ = nullptr;
@@ -541,7 +543,7 @@ namespace {
         NVSDK_NGX_FeatureCommonInfo feature_common_info_{};
         VkDevice device_ = VK_NULL_HANDLE;
         NVSDK_NGX_Parameter* parameters_ = nullptr;
-        std::array<ViewState, VIEW_COUNT> views_{};
+        std::unordered_map<std::uint32_t, ViewState> views_;
         std::string last_error_;
         bool runtime_initialized_ = false;
     };
@@ -716,6 +718,7 @@ namespace {
         .release_feature = &releaseFeature,
         .shutdown_runtime = &shutdownRuntime,
         .last_error = &lastError,
+        .capabilities = LFS_SCENE_UPSCALER_PLUGIN_CAPABILITY_DYNAMIC_VIEW_IDS,
     };
 } // namespace
 

@@ -12,8 +12,8 @@
 #include "core/services.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/gpu_memory_query.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/gui_manager.hpp"
-#include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -1655,13 +1655,9 @@ namespace lfs::vis::gui {
         setModelString("gpu_mem_color", model_.gpu_mem_color, colorToRml(mem_color));
         if (document_) {
             if (auto* element = document_->GetElementById("lfs-mem"))
-                element->SetAttribute("title", LOC(mem.process_estimated
-                                                       ? "ui.vram_process_estimate_tooltip"
-                                                       : "ui.vram_process_nvml_tooltip"));
+                element->SetAttribute("title", LOC(gpuProcessMemoryTooltipKey(mem)));
             if (auto* element = document_->GetElementById("gpu-mem"))
-                element->SetAttribute("title", LOC(mem.device_estimated
-                                                       ? "ui.vram_device_cuda_tooltip"
-                                                       : "ui.vram_device_nvml_tooltip"));
+                element->SetAttribute("title", LOC(gpuDeviceMemoryTooltipKey(mem)));
         }
 
         // FPS: prefer scene-render rate when scene frames are in the measurement

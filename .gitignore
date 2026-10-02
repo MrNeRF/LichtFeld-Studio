@@ -15,6 +15,7 @@ output*
 !src/visualizer/rendering/output_slot_ring.cpp
 results
 .idea
+.DS_Store
 data
 !tests/data/
 tests/data/*
@@ -57,6 +58,7 @@ vcpkg_*/**
 vcpkg_*/
 build*/
 build*/**
+dist-macos-portable/
 !tools/build/
 !tools/build/check_build_deps.sh
 

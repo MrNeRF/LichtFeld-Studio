@@ -6,14 +6,12 @@
 #include "core/alloc_counter.hpp"
 #include "core/assert.hpp"
 #include "core/checkpoint_format.hpp"
-#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_exportable_storage.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/internal/tensor_serialization.hpp"
 #include "core/tensor_completion.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
@@ -23,7 +21,6 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <cuda_runtime.h>
 #include <limits>
 #include <optional>
 #include <span>
@@ -48,6 +45,29 @@ namespace lfs::training {
                 row_size *= tensor.shape()[i];
             }
             return row_size;
+        }
+
+        // A materialized gradient must cover state.size rows: zero_grad and the unfused
+        // step index it up to state.size. shN grads are created lazily (3DGUT requests
+        // them once SH bands activate), so every site that grows state.size grows them.
+        void grow_grad_rows(lfs::core::Tensor& grad, const std::string& name,
+                            const size_t old_rows, const size_t new_rows,
+                            const size_t capacity_rows) {
+            if (!grad.is_valid() || grad.numel() == 0) {
+                return;
+            }
+            const size_t rows = grad.shape()[0];
+            LFS_ASSERT_MSG(rows >= old_rows,
+                           std::format("AdamOptimizer: {} grad has {} rows but optimizer state "
+                                       "already had {} before growing to {}",
+                                       name, rows, old_rows, new_rows));
+            if (rows >= new_rows) {
+                return;
+            }
+            if (grad.capacity() < new_rows) {
+                grad.reserve(std::max(capacity_rows, new_rows));
+            }
+            grad.append_zeros(new_rows - rows);
         }
 
     } // namespace
@@ -222,14 +242,14 @@ namespace lfs::training {
                        "AdamOptimizer mean-step far mask must be a 1D bool tensor");
         LFS_ASSERT_MSG(mask.numel() <= static_cast<size_t>(std::numeric_limits<int>::max()),
                        "AdamOptimizer mean-step far mask exceeds the supported row count");
-        // Construct fresh handles: assignment to a view copies into its existing
-        // storage, even for mask = mask.cuda() or mask = mask.clone().
-        auto uploaded = mask.device() == lfs::core::Device::CUDA ? mask : mask.cuda();
+        // Retain owned, contiguous device storage for the raw mask pointer.
+        // Upload and materialize before publishing the pointer and its owner.
+        auto uploaded = mask.device() == lfs::core::Device::GPU ? mask : mask.gpu();
         auto storage = uploaded.is_contiguous() && uploaded.owns_memory()
                            ? uploaded
                            : uploaded.clone();
         const auto* pointer = storage.ptr<bool>();
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(pointer, "mean_step_far_mask");
+        adam_ops().validate_far_mask(pointer);
         // A raw pointer alone cannot keep a replaced strategy tensor alive.
         mean_step_far_mask_storage_ = std::move(storage);
         mean_step_far_mask_ = pointer;
@@ -279,7 +299,7 @@ namespace lfs::training {
         }
         last_step_zeroed_gradients_ = false;
 
-        const cudaStream_t batch_stream = lfs::core::getCurrentCUDAStream();
+        const lfs::core::TensorExecutionTarget batch_stream = lfs::core::TensorExecutionTarget::current();
         bool mean_step_scaled = false;
         int n_present = 0;
 
@@ -456,12 +476,16 @@ namespace lfs::training {
             last_step_zeroed_gradients_ = false;
             return;
         }
-        for (auto& [_, state] : states_) {
+        for (auto& [name, state] : states_) {
             if (state.grad.is_valid() && state.grad.numel() > 0) {
+                LFS_ASSERT_MSG(state.size <= state.grad.shape()[0],
+                               std::format("AdamOptimizer::zero_grad: {} optimizer state has {} rows "
+                                           "but its grad buffer only {}",
+                                           name, state.size, state.grad.shape()[0]));
                 const size_t elements =
                     state.size * (state.grad.numel() / state.grad.shape()[0]);
                 if (elements > 0) {
-                    const auto stream = lfs::core::getCurrentCUDAStream();
+                    const auto stream = lfs::core::TensorExecutionTarget::current();
                     state.grad.set_stream(stream);
                     state.grad.flatten().slice(0, 0, elements).fill_(0.0f, stream);
                 }
@@ -697,7 +721,7 @@ namespace lfs::training {
         const double bias_correction2_sqrt_rcp = 1.0 / std::sqrt(1.0 - std::pow(config_.beta2, state.step_count));
         const float param_lr = static_cast<float>(get_param_lr(ParamType::ShN));
 
-        const cudaStream_t execution_stream = lfs::core::getCurrentCUDAStream();
+        const lfs::core::TensorExecutionTarget execution_stream = lfs::core::TensorExecutionTarget::current();
         param_live.sync_to_stream(execution_stream);
         state.exp_avg.sync_to_stream(execution_stream);
         if (state.joint_bounds.is_valid())
@@ -766,7 +790,7 @@ namespace lfs::training {
 
     lfs::gpu_ops::BackwardAdam AdamOptimizer::prepare_fastgs_fused_adam(
         const int iteration,
-        const cudaStream_t execution_stream) {
+        const lfs::core::TensorExecutionTarget execution_stream) {
         validate_mean_step_far_mask();
         if (mean_step_far_mask_storage_.is_valid()) {
             mean_step_far_mask_storage_.sync_to_stream(execution_stream);
@@ -861,6 +885,7 @@ namespace lfs::training {
                     if (moment_cap_floats >= float_layout && state.size < float_layout) {
                         // Capacity reserved at max_cap: advance logical size (new slots
                         // already zero-initialized under joint bounds when pre-allocated).
+                        grow_grad_rows(state.grad, name, state.size, float_layout, moment_cap_floats);
                         state.size = float_layout;
                     } else if (state.size < float_layout) {
                         // Pad-aware: derive n_new from prim count, not float/N (pad jumps).
@@ -892,6 +917,7 @@ namespace lfs::training {
                                                   : state.exp_avg.capacity())
                                            : 0);
                             if (cap2 >= float_layout && state.size < float_layout) {
+                                grow_grad_rows(state.grad, name, state.size, float_layout, cap2);
                                 state.size = float_layout;
                             }
                         }
@@ -1096,14 +1122,14 @@ namespace lfs::training {
             return;
         }
         // Encode true (m,v)=(0,0) under current block bounds (u=0,log_s=0).
-        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        const lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::current();
         if (reset_indices_upload_.pending() && !reset_indices_upload_.poll())
             reset_indices_upload_.wait();
         lfs::core::Tensor d_indices_tensor = lfs::core::Tensor::empty(
             {indices.size()}, lfs::core::Device::GPU, lfs::core::DataType::Int64);
         d_indices_tensor.set_stream(stream);
         reset_indices_upload_.enqueue(
-            d_indices_tensor, std::as_bytes(std::span(indices)), reinterpret_cast<void*>(stream));
+            d_indices_tensor, std::as_bytes(std::span(indices)), stream);
         state.exp_avg.sync_to_stream(stream);
         state.joint_bounds.sync_to_stream(stream);
         if (type == ParamType::ShN) {
@@ -1147,13 +1173,13 @@ namespace lfs::training {
             throw std::runtime_error("reset_state_at_indices: indices must be int32 or int64");
         }
 
-        if (indices.device() == lfs::core::Device::CUDA) {
+        if (indices.device() == lfs::core::Device::GPU) {
             auto device_indices = indices.is_contiguous() ? indices : indices.contiguous();
             if (device_indices.dtype() != lfs::core::DataType::Int64) {
                 device_indices = device_indices.to(lfs::core::DataType::Int64);
             }
-            const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-            lfs::core::waitForCUDAStream(stream, device_indices.stream());
+            const lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::current();
+            stream.wait_for(device_indices.execution_target());
             relocate_params_at_indices_gpu(type, device_indices);
             device_indices.set_stream(stream);
             return;
@@ -1226,8 +1252,7 @@ namespace lfs::training {
                               packed_new_rows <= state.exp_avg.capacity() &&
                               (!state.grad.is_valid() || new_size <= state.grad.capacity());
             if (fits) {
-                if (state.grad.is_valid())
-                    state.grad.append_zeros(growth);
+                grow_grad_rows(state.grad, name, state.size, new_size, new_size);
                 if (type == ParamType::ShN) {
                     state.exp_avg.append_zeros(packed_growth);
                 } else {
@@ -1253,8 +1278,7 @@ namespace lfs::training {
                 if (state.exp_avg.is_valid() && state.exp_avg.capacity() < moment_cap) {
                     state.exp_avg.reserve(moment_cap);
                 }
-                if (state.grad.is_valid())
-                    state.grad.reserve(moment_cap);
+                grow_grad_rows(state.grad, name, state.size, new_size, moment_cap);
                 if (old_packed.is_valid() && old_packed.numel() > 0 &&
                     state.exp_avg.is_valid() && state.exp_avg.numel() > 0) {
                     const size_t copy_n = std::min(old_packed.numel(), state.exp_avg.numel());
@@ -1282,7 +1306,7 @@ namespace lfs::training {
                 std::vector<int64_t> new_idx(n_new);
                 for (size_t i = 0; i < n_new; ++i)
                     new_idx[i] = static_cast<int64_t>(old_prims + i);
-                const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+                const lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::current();
                 if (extend_indices_upload_.pending() && !extend_indices_upload_.poll())
                     extend_indices_upload_.wait();
                 lfs::core::Tensor d_idx_tensor = lfs::core::Tensor::empty(
@@ -1290,7 +1314,7 @@ namespace lfs::training {
                 d_idx_tensor.set_stream(stream);
                 extend_indices_upload_.enqueue(
                     d_idx_tensor, std::as_bytes(std::span(new_idx)),
-                    reinterpret_cast<void*>(stream));
+                    stream);
                 state.exp_avg.sync_to_stream(stream);
                 state.joint_bounds.sync_to_stream(stream);
                 if (type == ParamType::ShN) {
@@ -1507,7 +1531,7 @@ namespace lfs::training {
             }
 
             auto gather_new_swizzled_rows = [&](lfs::core::Tensor& tensor) {
-                const auto stream = lfs::core::getCurrentCUDAStream();
+                const auto stream = lfs::core::TensorExecutionTarget::current();
                 (indices_are_i64 ? indices : indices_i32).sync_to_stream(stream);
                 tensor.set_stream(stream);
                 training_sh_ops().gather_swizzled(
@@ -1542,6 +1566,9 @@ namespace lfs::training {
             const auto name = param_name(type);
             if (states_.contains(name)) {
                 auto& state = states_[name];
+
+                grow_grad_rows(state.grad, name, state.size, new_floats,
+                               std::max(state.capacity, new_floats));
 
                 // Joint states grow packed exp_avg directly.
                 if (state.is_joint() && state.exp_avg.is_valid()) {
@@ -1582,7 +1609,7 @@ namespace lfs::training {
                         std::vector<int64_t> new_idx(n_new);
                         for (size_t i = 0; i < n_new; ++i)
                             new_idx[i] = static_cast<int64_t>(old_N + i);
-                        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+                        const lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::current();
                         if (add_indices_upload_.pending() && !add_indices_upload_.poll())
                             add_indices_upload_.wait();
                         lfs::core::Tensor d_idx_tensor = lfs::core::Tensor::empty(
@@ -1590,7 +1617,7 @@ namespace lfs::training {
                         d_idx_tensor.set_stream(stream);
                         add_indices_upload_.enqueue(
                             d_idx_tensor, std::as_bytes(std::span(new_idx)),
-                            reinterpret_cast<void*>(stream));
+                            stream);
                         const int slots = static_cast<int>(
                             lfs::core::sh_float4_slots_for_rest(layout_rest));
                         if (slots > 0) {
@@ -1664,7 +1691,7 @@ namespace lfs::training {
                 LOG_WARN("relocate_params_at_indices_gpu: {} joint bounds invalid", name);
                 return;
             }
-            const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+            const lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::current();
             state.exp_avg.sync_to_stream(stream);
             state.joint_bounds.sync_to_stream(stream);
             if (type == ParamType::ShN) {
@@ -1937,7 +1964,7 @@ namespace lfs::training {
 
         const auto cpu_decode_finished = std::chrono::steady_clock::now();
         // Tensor::to(CUDA, stream) rehomes onto that handle; do not destroy it.
-        const cudaStream_t upload_stream = lfs::core::getCurrentCUDAStream();
+        const lfs::core::TensorExecutionTarget upload_stream = lfs::core::TensorExecutionTarget::current();
         for (auto& [state_name, state] : loaded_states) {
             (void)state_name;
             auto upload = [&](lfs::core::Tensor& tensor) {
@@ -1950,7 +1977,7 @@ namespace lfs::training {
             upload(state.exp_avg);
             upload(state.joint_bounds);
         }
-        if (upload_stream != nullptr) {
+        if (!upload_stream.is_default_queue()) {
             lfs::core::TensorCompletion completion;
             for (const auto& [state_name, state] : loaded_states) {
                 (void)state_name;

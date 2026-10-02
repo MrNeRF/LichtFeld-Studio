@@ -4,19 +4,16 @@
 
 #include "strategy_utils.hpp"
 #include "core/assert.hpp"
-#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_completion.hpp"
-#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/training_churn_metrics.hpp"
-#include "kernels/pruning_kernels.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <vector>
 
 namespace lfs::training {
@@ -378,12 +375,7 @@ namespace lfs::training {
         assert(rotations.shape()[0] == n);
 
         auto dead_mask = Tensor::empty({n}, Device::GPU, DataType::Bool);
-        pruning::launch_compute_dead_mask(
-            flat_opacities.ptr<float>(),
-            rotations.ptr<float>(),
-            dead_mask.ptr<uint8_t>(),
-            n,
-            min_opacity);
+        training_ops(lfs::core::default_gpu_backend()).refine->dead_mask(flat_opacities, rotations, dead_mask, min_opacity);
         return dead_mask;
     }
 
@@ -395,10 +387,7 @@ namespace lfs::training {
         assert(rotations.ndim() == 2 && rotations.shape()[1] == 4);
 
         auto near_zero_mask = Tensor::empty({n}, Device::GPU, DataType::Bool);
-        pruning::launch_compute_near_zero_rotation_mask(
-            rotations.ptr<float>(),
-            near_zero_mask.ptr<uint8_t>(),
-            n);
+        training_ops(lfs::core::default_gpu_backend()).refine->rotation_mask(rotations, near_zero_mask);
         return near_zero_mask;
     }
 
@@ -417,7 +406,7 @@ namespace lfs::training {
                                    ? n
                                    : std::max(
                                          n, static_cast<size_t>(static_cast<double>(std::max(n_capacity, n)) * 1.2) + 1);
-        LFS_ASSERT_MSG(device == Device::CUDA, "DensifyNScratch requires CUDA storage");
+        LFS_ASSERT_MSG(device == Device::GPU, "DensifyNScratch requires CUDA storage");
         f32_a = Tensor::empty_exact({new_cap}, DataType::Float32);
         bool_a = Tensor::empty_exact({new_cap}, DataType::Bool);
         f32_a.zero_();
@@ -650,7 +639,7 @@ namespace lfs::training {
                     auto idx_i32 = indices.dtype() == DataType::Int32
                                        ? indices
                                        : indices.to(DataType::Int32);
-                    const auto stream = lfs::core::getCurrentCUDAStream();
+                    const auto stream = lfs::core::TensorExecutionTarget::current();
                     idx_i32.sync_to_stream(stream);
                     state->grad.set_stream(stream);
                     training_sh_ops().zero_rows(state->grad, idx_i32, shN_layout_rest);

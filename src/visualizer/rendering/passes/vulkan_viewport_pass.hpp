@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
+#include "shared_viewport_gpu_assets.hpp"
 #include "vulkan_depth_blit_pass.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
@@ -193,6 +194,7 @@ namespace lfs::vis {
     class LFS_VIS_API VulkanViewportPass {
     public:
         VulkanViewportPass();
+        explicit VulkanViewportPass(std::shared_ptr<SharedViewportGpuAssets> shared_assets);
         ~VulkanViewportPass();
 
         VulkanViewportPass(const VulkanViewportPass&) = delete;
@@ -203,10 +205,15 @@ namespace lfs::vis {
         [[nodiscard]] bool hasPreRenderWork(const VulkanViewportPassParams& params) const;
         [[nodiscard]] bool recordPreRenderWork(VkCommandBuffer command_buffer,
                                                const VulkanViewportPassParams& params);
+        // Validation borrows the live mesh cache synchronously; only presentation
+        // resources belong to the temporary pass. New uploads stay in the live cache.
+        void prepareImport(VulkanContext& context, const VulkanViewportPassParams& params,
+                           VulkanViewportPass* resident_mesh_resources = nullptr);
         void record(VkCommandBuffer command_buffer,
                     VkExtent2D framebuffer_extent,
                     const VulkanViewportPassParams& params);
         [[nodiscard]] SceneUpscalerSelection sceneUpscalerSelection() const;
+        void discardImportMesh(uint64_t mesh_id);
         void shutdown();
 
     private:

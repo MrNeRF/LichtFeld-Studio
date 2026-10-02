@@ -262,7 +262,7 @@ TEST_F(LossWorkspaceUnionTest, PhotometricOpsUsesSharedArena) {
             loss, grad, grad_raw);
     };
     const auto expect_layout = [&](const size_t required) {
-        const auto bytes = lfs::training::photo_workspace_bytes(saved);
+        const auto bytes = ops.workspace_bytes(saved);
         EXPECT_EQ(bytes.required, required);
         EXPECT_EQ(bytes.allocated, align_arena_bytes(required));
     };

@@ -10,6 +10,37 @@
 #include <optional>
 
 namespace lfs::test {
+    // --tensor-backend freezes the process default. Tests that switch it call this first.
+    inline void reset_gpu_backend_for_testing() {
+        core::internal::gpu_backend_reset_for_testing();
+    }
+
+    // Makes `backend` the process default, as a training session does, and
+    // restores the previous default on destruction. The trainer resolves its
+    // families through the default backend.
+    class DefaultGpuBackendForTesting {
+    public:
+        explicit DefaultGpuBackendForTesting(const core::GpuBackend backend)
+            : previous_(core::default_gpu_backend()) {
+            core::internal::gpu_backend_reset_for_testing();
+            switched_ = core::set_default_gpu_backend(backend).has_value();
+            scope_.emplace(backend);
+        }
+        ~DefaultGpuBackendForTesting() {
+            scope_.reset();
+            core::internal::gpu_backend_reset_for_testing();
+            (void)core::set_default_gpu_backend(previous_);
+        }
+        DefaultGpuBackendForTesting(const DefaultGpuBackendForTesting&) = delete;
+        DefaultGpuBackendForTesting& operator=(const DefaultGpuBackendForTesting&) = delete;
+        [[nodiscard]] bool switched() const { return switched_; }
+
+    private:
+        core::GpuBackend previous_;
+        bool switched_ = false;
+        std::optional<core::GpuBackendScope> scope_;
+    };
+
     // Skips without a CUDA device; tensors stay on the backend --tensor-backend selects.
     class CudaDeviceTest : public ::testing::Test {
     protected:

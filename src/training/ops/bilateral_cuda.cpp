@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "lfs/training/ops/bilateral_cuda.hpp"
-#include "lfs/kernels/bilateral_grid.cuh"
+#include "core/cuda_error.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "training/kernels/bilateral_grid.cuh"
 
 namespace lfs::training {
     namespace {
@@ -67,6 +69,14 @@ namespace lfs::training {
         void scale_moments(Out moment1, Out moment2, float scale1, float scale2) {
             kernels::launch_bilateral_grid_scale_moments(moment1.ptr<float>(), moment2.ptr<float>(), static_cast<int>(moment1.numel()), scale1, scale2, nullptr);
         }
+        void upload_slice(Out host, Out device, size_t host_offset, size_t device_offset, size_t elements) {
+            LFS_CUDA_CHECK(cudaMemcpyAsync(device.ptr<float>() + device_offset, host.ptr<float>() + host_offset,
+                                           elements * sizeof(float), cudaMemcpyHostToDevice, core::getCurrentCUDAStream()));
+        }
+        void download_slice(Out host, Out device, size_t host_offset, size_t device_offset, size_t elements) {
+            LFS_CUDA_CHECK(cudaMemcpyAsync(host.ptr<float>() + host_offset, device.ptr<float>() + device_offset,
+                                           elements * sizeof(float), cudaMemcpyDeviceToHost, core::getCurrentCUDAStream()));
+        }
         const BilateralOps kCudaBilateralOps{
             .slice_forward = slice_forward,
             .slice_backward = slice_backward,
@@ -76,6 +86,8 @@ namespace lfs::training {
             .update_offset = update_offset,
             .adam = adam,
             .scale_moments = scale_moments,
+            .upload_slice = upload_slice,
+            .download_slice = download_slice,
         };
     } // namespace
     const lfs::gpu_ops::BilateralOps& cuda_bilateral_ops() { return kCudaBilateralOps; }

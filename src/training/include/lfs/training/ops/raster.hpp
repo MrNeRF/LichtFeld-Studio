@@ -7,6 +7,7 @@
 #include "lfs/training/ops/types.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -131,6 +132,13 @@ namespace lfs::gpu_ops {
 
         void (*release)(FastSaved&) noexcept;
         void (*warmup)();
+
+        // Rasterizer-owned VRAM rows. Image and alpha are the bound outputs.
+        void (*record_vram)(
+            const FastSaved&, In image, In alpha,
+            bool run_gaussian_backward, size_t num_primitives);
+        // Drops cached output tensors. The live forward frame stays owned by release.
+        void (*release_caches)(FastSaved&) noexcept;
     };
 
 } // namespace lfs::gpu_ops

@@ -1,7 +1,7 @@
 /* Scene tree, history, and logging theme overrides. */
 
 body {
-    border-color: @{right_panel.border};
+    border-color: @{panel.border};
 }
 
 #search-container {

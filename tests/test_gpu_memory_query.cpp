@@ -67,4 +67,30 @@ namespace {
         EXPECT_EQ(sum, 3620 * static_cast<std::int64_t>(MiB));
         EXPECT_EQ(display.back(), 0);
     }
+
+    TEST(GpuMemoryQuery, UnifiedMemoryAvailabilityIsCappedByTheGpuAndTheHost) {
+        constexpr std::size_t GiB = std::size_t{1} << 30;
+        using lfs::vis::gui::selectUnifiedGpuMemory;
+
+        // Other GPU clients bind first: 28 GiB working set, 10 GiB allocated.
+        auto status = selectUnifiedGpuMemory(4 * GiB, 28 * GiB, 10 * GiB, 20 * GiB);
+        EXPECT_TRUE(status.unified_memory);
+        EXPECT_FALSE(status.uses_process_budget);
+        EXPECT_EQ(status.process_used, 4 * GiB);
+        EXPECT_EQ(status.total, 28 * GiB);
+        EXPECT_EQ(status.total_used, 10 * GiB);
+
+        // Host memory held by other processes binds first.
+        status = selectUnifiedGpuMemory(4 * GiB, 28 * GiB, 10 * GiB, 3 * GiB);
+        EXPECT_EQ(status.total_used, 25 * GiB);
+
+        // Allocation beyond the working set saturates.
+        status = selectUnifiedGpuMemory(4 * GiB, 28 * GiB, 40 * GiB, 20 * GiB);
+        EXPECT_EQ(status.total_used, 28 * GiB);
+
+        // Device usage never reads below the process's own usage.
+        status = selectUnifiedGpuMemory(6 * GiB, 28 * GiB, 2 * GiB, 30 * GiB);
+        EXPECT_EQ(status.total_used, 6 * GiB);
+    }
+
 } // namespace

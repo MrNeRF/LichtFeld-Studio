@@ -15,6 +15,7 @@
 #include "undo_history.hpp"
 #include <algorithm>
 #include <array>
+#include <format>
 #include <limits>
 #include <set>
 #include <stdexcept>
@@ -392,7 +393,7 @@ namespace lfs::vis::op {
             auto normalized = lfs::core::Tensor::zeros({total_size}, device, dtype);
             const size_t copy_count = std::min(total_size, normalized_dtype.numel());
             if (copy_count > 0 && normalized_dtype.ndim() == 1) {
-                normalized.slice(0, 0, copy_count) = normalized_dtype.slice(0, 0, copy_count);
+                normalized.slice(0, 0, copy_count).copy_from(normalized_dtype.slice(0, 0, copy_count));
             }
             return normalized;
         }
@@ -1733,6 +1734,14 @@ namespace lfs::vis::op {
             }
         }
 
+        // Keyframe nodes project the sequencer timeline into the scene graph. They are
+        // rebuilt with fresh UUIDs on every timeline change and never recorded in scene
+        // history, so an unscoped topology proof must not depend on them.
+        [[nodiscard]] bool isSequencerProjectionNode(const lfs::core::NodeType type) {
+            return type == lfs::core::NodeType::KEYFRAME ||
+                   type == lfs::core::NodeType::KEYFRAME_GROUP;
+        }
+
         [[nodiscard]] SceneTopologyProof captureTopologyProof(
             const lfs::core::Scene& scene,
             const SceneGraphStateSnapshot* scope = nullptr) {
@@ -1755,14 +1764,16 @@ namespace lfs::vis::op {
             } else {
                 proof.roots.reserve(scene.getRootNodes().size());
                 for (const auto root_id : scene.getRootNodes()) {
-                    if (const auto* root = scene.getNodeById(root_id)) {
+                    if (const auto* root = scene.getNodeById(root_id);
+                        root && !isSequencerProjectionNode(root->type)) {
                         proof.roots.push_back(root->uuid);
                     }
                 }
             }
             proof.nodes.reserve(proof.scoped ? scoped_uuids.size() : nodes.size());
             for (const auto* node : nodes) {
-                if (!node || (proof.scoped && !scoped_uuids.contains(node->uuid))) {
+                if (!node || (proof.scoped ? !scoped_uuids.contains(node->uuid)
+                                           : isSequencerProjectionNode(node->type))) {
                     continue;
                 }
                 SceneTopologyNodeProof item{
@@ -1820,7 +1831,8 @@ namespace lfs::vis::op {
                     if (const auto* child =
                             scene.getNodeById(
                                 child_id)) {
-                        if (!proof.scoped || scoped_uuids.contains(child->uuid)) {
+                        if (proof.scoped ? scoped_uuids.contains(child->uuid)
+                                         : !isSequencerProjectionNode(child->type)) {
                             item.children.push_back(child->uuid);
                         }
                     }
@@ -1842,13 +1854,40 @@ namespace lfs::vis::op {
             return proof;
         }
 
+        void stripPayloadExtents(SceneTopologyProof& proof) {
+            for (auto& node : proof.nodes) {
+                node.primary_extent = 0;
+                node.secondary_extent = 0;
+            }
+            proof.consolidated_extent = 0;
+        }
+
+        enum class TopologyProofDepth : uint8_t {
+            // Graph structure plus payload extents (Gaussian/point/vertex counts).
+            Payload,
+            // Graph structure only, for entries that edit node-level state (transforms,
+            // names, flags) and must survive payload growth such as densification.
+            NodeLevel,
+        };
+
         void requireTopologyProof(
             const lfs::core::Scene& scene,
-            const SceneTopologyProof& expected,
+            const SceneTopologyProof& recorded,
             const std::string_view entry_name,
-            const SceneTopologyProof* allowed_compound_transition = nullptr) {
-            const SceneTopologyProof current =
+            const SceneTopologyProof* allowed_compound_transition = nullptr,
+            const TopologyProofDepth depth = TopologyProofDepth::Payload) {
+            SceneTopologyProof current =
                 captureTopologyProof(scene);
+            SceneTopologyProof node_level_expected;
+            if (depth == TopologyProofDepth::NodeLevel) {
+                assert(!allowed_compound_transition &&
+                       "node-level proofs do not support compound topology transitions");
+                node_level_expected = recorded;
+                stripPayloadExtents(node_level_expected);
+                stripPayloadExtents(current);
+            }
+            const SceneTopologyProof& expected =
+                depth == TopologyProofDepth::NodeLevel ? node_level_expected : recorded;
             if (current == expected ||
                 (allowed_compound_transition &&
                  current == *allowed_compound_transition)) {
@@ -1954,7 +1993,7 @@ namespace lfs::vis::op {
                 if (difference.empty()) {
                     return;
                 }
-                throw HistoryCorruptionError(
+                throw HistoryStaleEntryError(
                     "Cannot replay undo entry '" + std::string(entry_name) +
                     "' after scene topology changed (" + difference + ")");
             }
@@ -2027,7 +2066,7 @@ namespace lfs::vis::op {
             if (difference.empty())
                 difference = "unknown topology-proof mismatch";
 
-            throw HistoryCorruptionError(
+            throw HistoryStaleEntryError(
                 "Cannot replay undo entry '" +
                 std::string(entry_name) +
                 "' after scene topology changed (" + difference + ")");
@@ -2394,8 +2433,10 @@ namespace lfs::vis::op {
         if (selection_mask_storage_.hasChanges() &&
             current_total !=
                 selection_mask_storage_.total_size) {
-            throw HistoryCorruptionError(
-                "Cannot replay selection history after scene topology changed");
+            throw HistoryStaleEntryError(
+                std::format("Cannot replay selection history after scene topology changed "
+                            "(recorded_gaussians={}, current_gaussians={})",
+                            selection_mask_storage_.total_size, current_total));
         }
 
         const size_t total_size = std::max({selection_mask_storage_.total_size,
@@ -2515,7 +2556,9 @@ namespace lfs::vis::op {
             expected_topology_, name_,
             hasFlag(captured_, ModifiesFlag::TOPOLOGY)
                 ? &topology_before_
-                : nullptr);
+                : nullptr,
+            captured_ == ModifiesFlag::TRANSFORMS ? TopologyProofDepth::NodeLevel
+                                                  : TopologyProofDepth::Payload);
         if (hasFlag(captured_, ModifiesFlag::SELECTION)) {
             applySelection(true);
         }
@@ -2537,7 +2580,9 @@ namespace lfs::vis::op {
     void SceneSnapshot::redo() {
         requireTopologyProof(
             scene_.getScene(),
-            expected_topology_, name_);
+            expected_topology_, name_, nullptr,
+            captured_ == ModifiesFlag::TRANSFORMS ? TopologyProofDepth::NodeLevel
+                                                  : TopologyProofDepth::Payload);
         if (hasFlag(captured_, ModifiesFlag::SELECTION)) {
             applySelection(false);
         }
@@ -2726,7 +2771,7 @@ namespace lfs::vis::op {
         }
 
         const int flat_size = static_cast<int>(element_count_);
-        auto flat = current->contiguous().reshape({flat_size});
+        auto flat = current->contiguous().reshape({flat_size}).clone();
         applyTensorSwapStorage(flat, storage_);
         *current = flat.reshape(tensor_shape_).contiguous();
         if (scene_) {
@@ -3221,7 +3266,7 @@ namespace lfs::vis::op {
     void SceneGraphMetadataEntry::apply(const bool use_after_state) {
         requireTopologyProof(
             scene_.getScene(),
-            expected_topology_, name_);
+            expected_topology_, name_, nullptr, TopologyProofDepth::NodeLevel);
         lfs::core::Scene::Transaction txn(scene_.getScene());
 
         struct AppliedMetadataSnapshot {

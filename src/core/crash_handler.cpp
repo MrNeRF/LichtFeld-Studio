@@ -259,7 +259,7 @@ namespace lfs::core {
                     ::close(fd);
             }
 
-            struct sigaction action{};
+            struct sigaction action {};
             action.sa_handler = SIG_DFL;
             sigemptyset(&action.sa_mask);
             action.sa_flags = 0;

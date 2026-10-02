@@ -18,6 +18,10 @@
 
 namespace lfs::mcp {
 
+    // Tool result for an argument that passes the schema but is still invalid: the same
+    // InvalidArgument envelope ToolRegistry returns for schema violations.
+    LFS_MCP_API json invalid_argument_result(const std::string& message, const std::string& parameter);
+
     class LFS_MCP_API ToolRegistry {
     public:
         using ToolHandler = std::function<json(const json& params)>;

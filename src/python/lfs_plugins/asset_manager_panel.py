@@ -336,7 +336,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._verify_results: Dict[str, str] = {}
         self._observed_outer_panel_width = None
         self._outer_panel_width_save_deadline = 0.0
-        self._remembered_left_dock_width: Optional[float] = None
         self._init_gallery()
         self._restore_project_manager_preferences()
         self._start_catalog_preview_prefetch()
@@ -418,8 +417,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     and math.isfinite(panel_width)
                     and panel_width > 0.0
                 ):
-                    self._remembered_left_dock_width = float(panel_width)
-                    self._restore_remembered_left_dock_width()
+                    self._observed_outer_panel_width = float(panel_width)
             view_mode = payload.get("view_mode")
             if preferences["defaultView"] == "remember" and view_mode in {"gallery", "list"}:
                 self._view_mode = view_mode
@@ -496,31 +494,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._handle.dirty_all()
 
     def _restore_project_manager_preferences(self) -> None:
-        self._remembered_left_dock_width = None
         preferences = read_project_manager_preferences()
         payload = read_project_manager_state() if preferences["rememberState"] else {}
         self._apply_chrome_payload(payload, preferences, device_state=bool(payload))
-
-    def _restore_remembered_left_dock_width(self, panel_space=None) -> None:
-        width = self._remembered_left_dock_width
-        if width is None:
-            return
-        if panel_space is None:
-            get_panel = getattr(lf.ui, "get_panel", None)
-            try:
-                info = get_panel(self.id) if callable(get_panel) else None
-            except Exception:
-                info = None
-            if info is None:
-                return
-            panel_space = getattr(info, "space", None)
-        if panel_space != lf.ui.PanelSpace.LEFT_DOCK:
-            return
-        set_left_dock_width = getattr(lf.ui, "set_left_dock_width", None)
-        if not callable(set_left_dock_width):
-            return
-        set_left_dock_width(width)
-        self._remembered_left_dock_width = None
 
     def reload_project_manager_preferences(self) -> None:
         self._restore_project_manager_preferences()
@@ -545,11 +521,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             state.pop("panel_open", None)
             if self._panel_space == lf.ui.PanelSpace.LEFT_DOCK:
                 panel_width = self._observed_outer_panel_width
-                get_left_dock_width = getattr(lf.ui, "get_left_dock_width", None)
-                if callable(get_left_dock_width):
-                    current_width = float(get_left_dock_width())
-                    if math.isfinite(current_width) and current_width > 0.0:
-                        panel_width = current_width
                 if (isinstance(panel_width, (int, float))
                         and math.isfinite(panel_width) and panel_width > 0.0):
                     state["panel_width"] = float(panel_width)
@@ -3415,46 +3386,63 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if asset.get("recent_only"):
             asset = self._asset_with_inspection(asset)
             items = [{"label": tr("projects.action.open"), "action": "load"}]
-            if self._project_available(asset):
+            details = self._inspection_by_asset.get(str(asset.get("id") or ""), {}).get("details")
+            if details is not None:
+                labels = {
+                    "rename": "projects.action.rename",
+                    "update_thumbnail": "projects.action.update_thumbnail",
+                    "inspector": "projects.inspector.title",
+                }
+                operations = operation_actions(asset)
+                available = {str(operation.get("action") or "") for operation in operations}
+                for action in ("rename", "update_thumbnail", "inspector"):
+                    if action in available:
+                        items.append({
+                            "label": tr(labels[action]),
+                            "action": action if action == "inspector" else "project:" + action,
+                        })
+                if self._project_available(asset):
+                    items.append({
+                        "label": tr("projects.action.show_in_folder"),
+                        "action": "show_in_folder",
+                        "separator_before": True,
+                    })
+                if any(operation.get("action") == "export_as" for operation in operations):
+                    items.append({
+                        "label": tr("projects.action.export_as"),
+                        "action": "project:export_as",
+                        "separator_before": True,
+                    })
+            elif self._project_available(asset):
                 items.append({
                     "label": tr("projects.action.show_in_folder"),
                     "action": "show_in_folder",
                     "separator_before": True,
                 })
-            details = self._inspection_by_asset.get(str(asset.get("id") or ""), {}).get("details")
-            if details is not None:
-                labels = {
-                    "inspector": "projects.inspector.title",
-                    "export_as": "projects.action.export_as",
-                    "update_thumbnail": "projects.action.update_thumbnail",
-                    "rename": "projects.action.rename",
-                }
-                for operation in operation_actions(asset):
-                    action = str(operation.get("action") or "")
-                    if action in labels:
-                        items.append({
-                            "label": tr(labels[action]),
-                            "action": action if action == "inspector" else "project:" + action,
-                            "separator_before": action == "inspector",
-                        })
             return items
         items: List[Dict[str, Any]] = []
         if not asset.get("remote_only") and self._project_available(asset):
             items.append({"label": tr("projects.action.open"), "action": "load"})
-        if not asset.get("remote_only"):
-            items.append({"label": tr("projects.inspector.title"), "action": "inspector"})
-        items.extend(self._gallery_context_items(asset))
         if asset.get("remote_only"):
+            items.extend(self._gallery_context_items(asset))
             return items
-        if str(asset.get("relocation_candidate") or ""):
-            items.append(
-                {
-                    "label": tr("projects.action.use_found_location"),
-                    "action": "use_found_location",
-                }
-            )
-        if any(operation.get("action") == "rename" for operation in operation_actions(asset)):
+
+        operations = operation_actions(asset)
+        operation_ids = {str(operation.get("action") or "") for operation in operations}
+        if "rename" in operation_ids:
             items.append({"label": tr("projects.action.rename"), "action": "project:rename"})
+
+        details = self._inspection_by_asset.get(
+            str(asset.get("id") or asset.get("project_uuid") or ""), {}
+        ).get("details")
+        has_project_operations = details is not None or asset.get("status") == "REPAIR_ONLY"
+        if has_project_operations and "update_thumbnail" in operation_ids:
+            items.append({
+                "label": tr("projects.action.update_thumbnail"),
+                "action": "project:update_thumbnail",
+            })
+        items.append({"label": tr("projects.inspector.title"), "action": "inspector"})
+
         items.extend(
             [
                 {
@@ -3463,31 +3451,47 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     "separator_before": True,
                 },
                 {"label": tr("projects.action.remove_from_library"), "action": "remove"},
-                {
-                    "label": tr("projects.action.move_to_trash"),
-                    "action": "trash",
-                    "separator_before": True,
-                },
+                {"label": tr("projects.action.move_to_trash"), "action": "trash"},
             ]
         )
-        details = self._inspection_by_asset.get(str(asset.get("id") or asset.get("project_uuid") or ""), {}).get("details")
-        if details is not None or asset.get("status") == "REPAIR_ONLY":
+        if str(asset.get("relocation_candidate") or ""):
+            items.append({
+                "label": tr("projects.action.use_found_location"),
+                "action": "use_found_location",
+            })
+
+        if has_project_operations:
             labels = {
                 "repair": "projects.action.repair",
                 "embed_dataset": "projects.action.embed_dataset",
                 "locate_dataset": "projects.action.locate_dataset",
-                "export_as": "projects.action.export_as",
-                "update_thumbnail": "projects.action.update_thumbnail",
             }
-            for operation in operation_actions(asset):
+            for operation in operations:
                 action = str(operation.get("action") or "")
                 if action in ("rename", "inspector") or action not in labels:
                     continue
                 items.append({
                     "label": tr(labels[action]),
                     "action": "project:" + action,
-                    "separator_before": action == "export_as",
                 })
+
+        export = next(
+            (operation for operation in operations if operation.get("action") == "export_as"),
+            None,
+        )
+        gallery_items = self._gallery_context_items(asset)
+        show_export = has_project_operations and export is not None
+        if show_export:
+            items.append({
+                "label": tr("projects.action.export_as"),
+                "action": "project:export_as",
+                "separator_before": True,
+            })
+        for index, gallery_item in enumerate(gallery_items):
+            gallery_item = dict(gallery_item)
+            if index == 0:
+                gallery_item["separator_before"] = not show_export
+            items.append(gallery_item)
         return items
 
     def _handle_asset_context_action(self, action: str, asset_id: str) -> None:
@@ -5039,34 +5043,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         changed = panel_space != self._panel_space or is_floating != self._is_floating
         self._panel_space = panel_space
         self._is_floating = is_floating
-        if info is not None:
-            self._restore_remembered_left_dock_width(panel_space)
         if changed:
             self._layout_signature = None
             self._dirty_layout_fields()
         return changed
 
     def _sync_outer_panel_width_preference(self) -> None:
-        if self._is_floating or not read_project_manager_preferences()["rememberState"]:
-            self._outer_panel_width_save_deadline = 0.0
-            return
-        getter = getattr(lf.ui, "get_left_dock_width", None)
-        if not callable(getter):
-            return
-        width = float(getter())
-        if not math.isfinite(width) or width <= 0.0:
-            return
-        now = time.monotonic()
-        if self._observed_outer_panel_width is None:
-            self._observed_outer_panel_width = width
-            return
-        if abs(width - self._observed_outer_panel_width) > 0.5:
-            self._observed_outer_panel_width = width
-            self._outer_panel_width_save_deadline = now + 0.25
-            return
-        if self._outer_panel_width_save_deadline and now >= self._outer_panel_width_save_deadline:
-            self._outer_panel_width_save_deadline = 0.0
-            self._persist_project_manager_state()
+        self._outer_panel_width_save_deadline = 0.0
 
     def _refresh_after_project_write(self) -> bool:
         poll_write = getattr(lf, "project_poll_write", None)

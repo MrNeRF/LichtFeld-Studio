@@ -33,7 +33,7 @@ namespace lfs::core::internal {
             } else if (ids)
                 sh_value_quant::decode_shN_u16_gathered_to_float4(data<uint16_t>(source), bounds, ids, out, 0, p.count, p.source_rows, p.source_rest, stream);
             else
-                sh_value_quant::decode_shN_u16_range_to_float4(data<uint16_t>(source), bounds, out, p.source_offset, p.count, p.source_rows, p.source_rest, stream);
+                sh_value_quant::decode_shN_u16_range_to_float4(data<uint16_t>(source), bounds, out, p.source_offset, p.count, p.source_rows, p.source_rest, stream, p.match_cpu_rounding);
         } else if (p.source_format == ShFormat::Float16) {
             sh_value_quant::decode_shN_f16_range_to_canonical(data<uint16_t>(source), out + p.destination_offset * p.destination_rest * 3,
                                                               p.source_offset * p.destination_rest * 3, p.count * p.destination_rest * 3, p.source_rows, p.destination_rest, p.source_rest, stream);

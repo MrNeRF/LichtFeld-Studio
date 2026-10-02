@@ -101,7 +101,7 @@ namespace lfs::io::usd_flat {
 #else
                 result.fd_ = ::open(path.c_str(), O_RDONLY);
                 if (result.fd_ >= 0) {
-                    struct stat file_status{};
+                    struct stat file_status {};
                     if (::fstat(result.fd_, &file_status) == 0 && file_status.st_size >= 0) {
                         result.size_ = static_cast<std::size_t>(file_status.st_size);
                         if (result.size_ != 0) {

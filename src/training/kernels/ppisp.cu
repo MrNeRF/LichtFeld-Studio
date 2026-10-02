@@ -6,9 +6,9 @@
  */
 
 #include "core/cuda_error.hpp"
-#include "lfs/kernels/ppisp.cuh"
 #include "ppisp_math.cuh"
 #include "ppisp_math_bwd.cuh"
+#include "training/kernels/ppisp.cuh"
 #include <cassert>
 #include <cub/cub.cuh>
 

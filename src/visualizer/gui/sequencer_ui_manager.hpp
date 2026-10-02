@@ -5,9 +5,9 @@
 #pragma once
 
 #include "gui/film_strip_renderer.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/keyframe_scene_sync.hpp"
 #include "gui/line_renderer.hpp"
-#include "gui/panel_layout.hpp"
 #include "gui/sequencer_ui_state.hpp"
 #include "gui/sequencer_viewport_edit_mode.hpp"
 #include "gui/ui_context.hpp"
@@ -50,6 +50,7 @@ namespace lfs::vis {
             void render(const UIContext& ctx, const ViewportLayout& viewport,
                         float panel_x, float panel_y, float panel_width, float panel_height,
                         const PanelInputState& panel_input);
+            void renderViewOverlay(const UIContext& ctx, const ViewportLayout& viewport);
             void setSequencerEnabled(bool enabled);
             void reloadRmlResources();
 

@@ -23,6 +23,7 @@ endif()
 # Core CUDA library (STATIC, linked privately)
 if(LFS_HAS_CUDA)
     add_subdirectory(cuda)
+    include(cuda/shared_image_kernels.cmake)
 endif()
 
 # Event bridge shared library
@@ -47,8 +48,11 @@ set(TENSOR_SOURCES
         tensor/tensor_fused.cpp
         tensor/tensor_backend.cpp
         tensor/tensor_gpu_elapsed.cpp
+        tensor/tensor_execution.cpp
         tensor/tensor_backend_selftest.cpp
         tensor/backend/backend_registry.cpp
+        tensor/backend/splat_block.cpp
+        tensor/backend/device_splat_block.cpp
         tensor/backend/portable_nn_ops.cpp
         tensor/backend/dedicated_nn_ops.cpp
         tensor/backend/facade_trace.cpp
@@ -99,6 +103,7 @@ set(TENSOR_SOURCES
         tensor/tensor_export.cpp
         tensor/tensor_readback.cpp
         tensor/backend/tensor_upload.cpp
+        tensor/backend/gpu_kernel_module.cpp
         tensor/tensor_rad.cpp
         tensor/backend/cuda/cuda_ops_rad.cpp
         tensor/backend/cuda/kernels/rad_page.cu
@@ -116,6 +121,10 @@ set(TENSOR_SOURCES
         nn/models/lpips.cpp
         nn/models/romav1.cpp
 )
+
+if(LFS_HAS_CUDA)
+    list(APPEND TENSOR_SOURCES tensor/backend/cuda/cuda_splat_block.cpp)
+endif()
 
 if(NOT LFS_HAS_CUDA)
     list(FILTER TENSOR_SOURCES EXCLUDE REGEX "tensor/backend/cuda/")
@@ -170,7 +179,8 @@ endif()
 if(APPLE)
     set(_lfs_metal_kernels_cpp ${CMAKE_CURRENT_BINARY_DIR}/lfs_metal_kernels.cpp)
     set(_lfs_metal_sources tensor/backend/metal/kernels.metal tensor/backend/metal/export.metal
-                           tensor/backend/metal/nn.metal tensor/backend/metal/raster.metal)
+                           tensor/backend/metal/nn.metal tensor/backend/metal/raster.metal
+                           tensor/backend/metal/image.metal)
     list(TRANSFORM _lfs_metal_sources PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/ OUTPUT_VARIABLE _lfs_metal_inputs)
     string(REPLACE ";" "$<SEMICOLON>" _lfs_metal_inputs "${_lfs_metal_inputs}")
     add_custom_command(
@@ -186,11 +196,15 @@ if(APPLE)
         tensor/backend/metal/expression_msl.cpp
         tensor/backend/metal/metal_context.mm
         tensor/backend/metal/metal_ops.mm
+        tensor/backend/metal/metal_shared_image.mm
+        tensor/backend/metal/metal_module.mm
         ${_lfs_metal_kernels_cpp}
     )
     if(LFS_TENSOR_VULKAN)
         list(APPEND TENSOR_SOURCES tensor/backend/metal/metal_vulkan_interop.mm)
     endif()
+else()
+    list(APPEND TENSOR_SOURCES tensor/backend/metal/metal_unavailable.cpp)
 endif()
 
 # Core module sources
@@ -217,6 +231,7 @@ set(CORE_SOURCES
         cuda/vmm_device_buffer.cpp
         memory_pressure.cpp
         memory_domain.cpp
+        raster_arena.cpp
         operator_callbacks.cpp
         animatable_property.cpp
         camera.cpp
@@ -259,20 +274,21 @@ if(NOT LFS_HAS_CUDA)
         cuda_error_typed.cpp
         device_fault.cpp
         cuda/memory_arena_owner.cpp
-        cuda/vmm_device_buffer.cpp
-        splat_exportable_storage.cpp)
+        cuda/vmm_device_buffer.cpp)
     list(APPEND CORE_SOURCES
-        cuda_error_no_cuda.cpp
-        splat_exportable_storage_no_cuda.cpp)
+        cuda_error_no_cuda.cpp)
     list(APPEND TENSOR_SOURCES
         tensor/tensor_cuda_interop_no_cuda.cpp)
 endif()
 
-add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})
+add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES} shared_image_ops.cpp)
+if(LFS_HAS_CUDA)
+    target_sources(lfs_core PRIVATE cuda/shared_image_cuda.cpp)
+endif()
 
 if(LFS_TENSOR_VULKAN)
     add_dependencies(lfs_core lfs_tensor_vulkan_shaders)
-    target_sources(lfs_core PRIVATE ${LFS_TENSOR_SHADER_TABLE})
+    target_sources(lfs_core PRIVATE ${LFS_TENSOR_SHADER_TABLE} tensor/backend/vulkan/vk_shared_image_ops.cpp)
     target_compile_definitions(lfs_core PRIVATE LFS_TENSOR_VULKAN=1)
 endif()
 if(APPLE)
@@ -358,6 +374,7 @@ target_link_libraries(lfs_core
         GPUOpen::VulkanMemoryAllocator
     PRIVATE
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_core_cuda>
+        $<$<BOOL:${LFS_HAS_CUDA}>:lfs_shared_image_cuda>
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_tensor_kernels>
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_nn_kernels>
         JPEG::JPEG

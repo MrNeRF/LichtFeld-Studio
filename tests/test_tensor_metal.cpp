@@ -2128,9 +2128,12 @@ namespace {
 
     // Seeds are random, but the last update leaves every used centroid at the
     // mean of the points labelled with it. Both backends run the same driver.
+    // Lower SH degrees are clustered as zero-padded SH3; the last case also splits
+    // the brute-force assignment into several submitted point ranges.
     TEST_F(TensorMetal, PaletteCentroidsAreTheMeansOfTheirPoints) {
         for (const auto [points, coefficients, palette] :
-             {std::tuple{3000, 3, 64}, std::tuple{3000, 15, 64}, std::tuple{8192, 15, 4096}}) {
+             {std::tuple{3000, 3, 64}, std::tuple{3000, 15, 64}, std::tuple{8192, 15, 4096},
+              std::tuple{200000, 8, 2048}}) {
             const size_t dims = size_t(coefficients) * 3;
             const Tensor sh = random_tensor((size_t(points) + 31) / 32 * ((dims + 3) / 4) * 32 * 4, -1.0f, 1.0f, 92);
             const auto values = sh.to_vector();

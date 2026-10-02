@@ -99843,6 +99843,8 @@ const initUI = (global) => {
         'buttonContainer',
         'play', 'pause',
         'settings', 'settingsPanel',
+        'screenshot', 'screenshotPanel', 'screenshotToast',
+        'screenshot1080p', 'screenshot2k', 'screenshot4k', 'screenshot8k',
         'orbitCamera', 'flyCamera', 'orthoCamera',
         'hqCheck', 'hqOption', 'lqCheck', 'lqOption',
         'reset', 'frame',
@@ -99967,6 +99969,7 @@ const initUI = (global) => {
             // close info panel on cancel
             dom.infoPanel.classList.add('hidden');
             dom.settingsPanel.classList.add('hidden');
+            closeScreenshotPanel();
             // close fullscreen on cancel
             if (state.isFullscreen) {
                 exitFullscreen();
@@ -99974,6 +99977,7 @@ const initUI = (global) => {
         }
         else if (event === 'interrupt') {
             dom.settingsPanel.classList.add('hidden');
+            closeScreenshotPanel();
         }
     });
     // fade ui controls after 5 seconds of inactivity
@@ -100070,6 +100074,7 @@ const initUI = (global) => {
     });
     dom.settings.addEventListener('click', () => {
         dom.settingsPanel.classList.toggle('hidden');
+        closeScreenshotPanel();
     });
     dom.orbitCamera.addEventListener('click', () => {
         state.cameraMode = 'orbit';
@@ -100084,6 +100089,130 @@ const initUI = (global) => {
             : PROJECTION_ORTHOGRAPHIC;
         dom.orthoCamera.classList[cameraComponent.projection === PROJECTION_ORTHOGRAPHIC ? 'add' : 'remove']('active');
     });
+    // Export the current view as a JPG image at a user-chosen resolution.
+    // Renders frames at the target size (keeping the current aspect ratio and
+    // framing), grabs the canvas drawing buffer in 'frameend' before the
+    // browser composites it, then restores the regular canvas resolution.
+    const closeScreenshotPanel = () => {
+        dom.screenshotPanel.classList.add('hidden');
+        dom.screenshot.classList.remove('active');
+    };
+    let capturingScreenshot = false;
+    let screenshotToastTimeout = null;
+    // brief on-screen status message for screenshot capture progress
+    const showScreenshotToast = (text, duration) => {
+        dom.screenshotToast.textContent = text;
+        dom.screenshotToast.classList.remove('hidden');
+        if (screenshotToastTimeout) {
+            clearTimeout(screenshotToastTimeout);
+        }
+        screenshotToastTimeout = duration ? setTimeout(() => {
+            screenshotToastTimeout = null;
+            dom.screenshotToast.classList.add('hidden');
+        }, duration) : null;
+    };
+    const captureScreenshot = (targetHeight) => {
+        if (capturingScreenshot) {
+            return;
+        }
+        if (!state.readyToRender) {
+            console.log('[screenshot] ignored: scene is still loading');
+            showScreenshotToast('Scene is still loading', 2000);
+            return;
+        }
+        capturingScreenshot = true;
+        const { app, camera } = global;
+        const { graphicsDevice } = app;
+        const canvas = graphicsDevice.canvas;
+        const prevWidth = graphicsDevice.width;
+        const prevHeight = graphicsDevice.height;
+        // keep the current framing: scale to the requested height at the current aspect ratio
+        const aspect = prevWidth / prevHeight;
+        let width = Math.round(targetHeight * aspect);
+        let height = targetHeight;
+        // clamp to what the GPU can render in a single pass
+        const maxSize = graphicsDevice.maxTextureSize || 8192;
+        if (Math.max(width, height) > maxSize) {
+            const scale = maxSize / Math.max(width, height);
+            width = Math.round(width * scale);
+            height = Math.round(height * scale);
+            console.log(`[screenshot] clamped to GPU max render size (${maxSize}): ${width}x${height}`);
+        }
+        console.log(`[screenshot] capture start: render target ${prevWidth}x${prevHeight} -> ${width}x${height}`);
+        showScreenshotToast(`Capturing ${width} x ${height}...`);
+        // Freeze the engine's per-frame auto-resize: AppBase.render() calls
+        // updateCanvasSize() every frame, which in RESOLUTION_AUTO mode resets
+        // the canvas to the window size and would silently discard the capture
+        // resolution before the frame is rendered. Pin RESOLUTION_FIXED with
+        // pixel ratio 1 so the backing store stays at exactly width x height.
+        const prevMaxPixelRatio = graphicsDevice.maxPixelRatio;
+        graphicsDevice.maxPixelRatio = 1;
+        app.setCanvasResolution(RESOLUTION_FIXED, width, height);
+        // setCanvasResolution resizes via device.resizeCanvas which scales by
+        // the pixel ratio; force the exact pixel dimensions
+        graphicsDevice.setResolution(width, height);
+        camera.camera.aspectRatio = width / height;
+        app.renderNextFrame = true;
+        let renderedFrames = 0;
+        const onFrameEnd = () => {
+            renderedFrames++;
+            if (renderedFrames < 2) {
+                // render one extra frame so async gsplat updates settle at the new resolution
+                app.renderNextFrame = true;
+                return;
+            }
+            app.off('frameend', onFrameEnd);
+            // confirm the actual WebGL render target dimensions at the capture frame
+            console.log(`[screenshot] capture frame: render target ${graphicsDevice.width}x${graphicsDevice.height}, ` +
+                `canvas backing store ${canvas.width}x${canvas.height}, max pixel ratio ${graphicsDevice.maxPixelRatio}`);
+            // snapshot the drawing buffer synchronously (before it is
+            // composited/cleared); JPEG encoding and download happen async
+            canvas.toBlob((blob) => {
+                if (blob) {
+                    const sizeMb = (blob.size / (1024 * 1024)).toFixed(1);
+                    const url = URL.createObjectURL(blob);
+                    const anchor = document.createElement('a');
+                    anchor.href = url;
+                    anchor.download = `lichtfeld-view-${width}x${height}.jpg`;
+                    anchor.click();
+                    console.log(`[screenshot] saved ${anchor.download} (${sizeMb} MB, ${blob.type})`);
+                    showScreenshotToast(`Saved ${width} x ${height} JPG (${sizeMb} MB)`, 3000);
+                    setTimeout(() => URL.revokeObjectURL(url), 10000);
+                }
+                else {
+                    console.error('[screenshot] canvas.toBlob returned no data');
+                    showScreenshotToast('Capture failed', 3000);
+                }
+            }, 'image/jpeg', 0.92);
+            // restore the regular canvas resolution immediately
+            graphicsDevice.maxPixelRatio = prevMaxPixelRatio;
+            app.setCanvasResolution(RESOLUTION_AUTO);
+            camera.camera.aspectRatio = graphicsDevice.width / graphicsDevice.height;
+            app.renderNextFrame = true;
+            capturingScreenshot = false;
+            console.log(`[screenshot] restored render target: ${graphicsDevice.width}x${graphicsDevice.height}`);
+        };
+        app.on('frameend', onFrameEnd);
+    };
+    dom.screenshot.addEventListener('click', () => {
+        const hidden = dom.screenshotPanel.classList.toggle('hidden');
+        dom.screenshot.classList[hidden ? 'remove' : 'add']('active');
+        if (!hidden) {
+            dom.settingsPanel.classList.add('hidden');
+        }
+    });
+    const screenshotResolutions = {
+        screenshot1080p: 1080,
+        screenshot2k: 1440,
+        screenshot4k: 2160,
+        screenshot8k: 4320
+    };
+    for (const [id, targetHeight] of Object.entries(screenshotResolutions)) {
+        dom[id].addEventListener('click', () => {
+            closeScreenshotPanel();
+            captureScreenshot(targetHeight);
+        });
+    }
     dom.reset.addEventListener('click', (event) => {
         events.fire('inputEvent', 'reset', event);
     });
@@ -100137,6 +100266,7 @@ const initUI = (global) => {
     tooltip.register(dom.fovSlider, 'Camera Field of View', 'top');
     tooltip.register(dom.fovReset, 'Reset FOV', 'bottom');
     tooltip.register(dom.settings, 'Settings', 'top');
+    tooltip.register(dom.screenshot, 'Export View as JPG', 'top');
     tooltip.register(dom.info, 'Help', 'top');
     tooltip.register(dom.arMode, 'Enter AR', 'top');
     tooltip.register(dom.vrMode, 'Enter VR', 'top');

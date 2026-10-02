@@ -1,0 +1,17 @@
+<!-- SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+     SPDX-License-Identifier: GPL-3.0-or-later -->
+<rml>
+<head>
+    <link type="text/rcss" href="screen_overlay.rcss"/>
+</head>
+<body id="screen-overlay">
+    <div id="active-outline"></div>
+    <div id="divider-highlight"></div>
+    <div id="corner-hint"></div>
+    <div id="split-new"></div>
+    <div id="split-line"></div>
+    <div id="join-target"><div id="join-arrow"></div></div>
+    <div id="swap-source"></div>
+    <div id="swap-target"></div>
+</body>
+</rml>

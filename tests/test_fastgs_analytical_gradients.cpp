@@ -1213,6 +1213,8 @@ TEST_F(CUDAKernelGradientTest, SHDegree0_CUDA_vs_Autograd) {
 
     gsplat_lfs::launch_spherical_harmonics_swizzled_bwd_kernel(
         0,       // degrees_to_use
+        0,       // layout_degree
+        3,       // color_stride
         nullptr, // dirs (not needed for degree 0)
         split_sh.sh0.data_ptr<float>(),
         nullptr,
@@ -1303,6 +1305,8 @@ TEST_F(CUDAKernelGradientTest, SHDegree1_CUDA_vs_Autograd) {
 
     gsplat_lfs::launch_spherical_harmonics_swizzled_bwd_kernel(
         degree,
+        degree,
+        3,
         dirs.data_ptr<float>(),
         split_sh.sh0.data_ptr<float>(),
         split_sh.shN.data_ptr<float>(),
@@ -1411,6 +1415,8 @@ TEST_F(CUDAKernelGradientTest, SHDegree2_CUDA_vs_Autograd) {
 
     gsplat_lfs::launch_spherical_harmonics_swizzled_bwd_kernel(
         degree,
+        degree,
+        3,
         dirs.data_ptr<float>(),
         split_sh.sh0.data_ptr<float>(),
         split_sh.shN.data_ptr<float>(),
@@ -1524,6 +1530,8 @@ TEST_F(CUDAKernelGradientTest, SHDegree3_CUDA_vs_Autograd) {
 
     gsplat_lfs::launch_spherical_harmonics_swizzled_bwd_kernel(
         degree,
+        degree,
+        3,
         dirs.data_ptr<float>(),
         split_sh.sh0.data_ptr<float>(),
         split_sh.shN.data_ptr<float>(),
@@ -1570,6 +1578,8 @@ TEST_F(CUDAKernelGradientTest, SH_ForwardBackward_RoundTrip) {
 
     gsplat_lfs::launch_spherical_harmonics_swizzled_fwd_kernel(
         degree,
+        degree,
+        3,
         dirs.data_ptr<float>(),
         split_sh.sh0.data_ptr<float>(),
         split_sh.shN.data_ptr<float>(),
@@ -1633,6 +1643,8 @@ TEST_F(CUDAKernelGradientTest, SH_ForwardBackward_RoundTrip) {
 
     gsplat_lfs::launch_spherical_harmonics_swizzled_bwd_kernel(
         degree,
+        degree,
+        3,
         dirs.data_ptr<float>(),
         split_sh.sh0.data_ptr<float>(),
         split_sh.shN.data_ptr<float>(),

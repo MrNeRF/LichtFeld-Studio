@@ -4,17 +4,17 @@
 }
 
 .tab:hover {
-    background-color: @{right_panel.tab_hover};
+    background-color: @{panel_tabs.hover};
 }
 
 .tab:focus-visible {
-    background-color: @{right_panel.tab_hover};
+    background-color: @{panel_tabs.hover};
     color: @{text};
     border-bottom-color: @{primary};
 }
 
 .tab.active {
-    background-color: @{right_panel.tab_active_bg};
+    background-color: @{panel_tabs.active_bg};
     color: @{text};
     border-bottom-color: @{primary};
 }
@@ -25,27 +25,27 @@
 
 .tab-close:hover,
 .tab-close:focus-visible {
-    background-color: @{right_panel.tab_hover};
+    background-color: @{panel_tabs.hover};
     color: @{text};
 }
 
 .tab-nav {
-    background-color: @{right_panel.tab_nav_bg};
+    background-color: @{panel_tabs.nav_bg};
     color: @{text_dim};
 }
 
 .tab-nav:hover {
-    background-color: @{right_panel.tab_nav_hover};
+    background-color: @{panel_tabs.nav_hover};
     color: @{text};
 }
 
 .tab-nav.disabled,
 .tab-nav.disabled:hover {
     background-color: transparent;
-    color: @{right_panel.tab_nav_disabled};
+    color: @{panel_tabs.nav_disabled};
     opacity: 0.55;
 }
 
 #tab-separator {
-    background-color: @{right_panel.separator};
+    background-color: @{panel.separator};
 }

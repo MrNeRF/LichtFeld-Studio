@@ -25,11 +25,15 @@ def _install_stub_modules(monkeypatch):
         remove_hook=lambda panel, section, callback: remove_calls.append(
             (panel, section, callback)
         ),
+        get_active_view_id=lambda: 1,
         get_active_tool=lambda: "",
         get_active_submode=lambda: "",
         get_panel=lambda _panel_id: SimpleNamespace(space="BOTTOM_DOCK"),
-        get_bottom_dock_active_tab=lambda: "",
-        set_bottom_dock_active_tab=lambda _panel_id: None,
+        screen=SimpleNamespace(
+            areas=lambda: [],
+            open_editor=lambda _editor: 0,
+            close_editor=lambda _editor: False,
+        ),
         set_sequencer_visible=lambda _visible: None,
         is_sequencer_visible=lambda: False,
         set_panel_enabled=lambda _panel_id, _enabled: None,
@@ -270,7 +274,6 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "crop_transform_buttons" in model.bound_record_lists
     assert "crop_action_buttons" in model.bound_record_lists
     assert "align_action_buttons" in model.bound_record_lists
-    assert "utility_primary_buttons" in model.bound_record_lists
     assert "camera_mode_buttons" in model.bound_record_lists
     assert "show_transform_space_controls" in model.bound_funcs
     assert "show_transform_pivot_controls" in model.bound_funcs
@@ -319,51 +322,47 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "viewport_export_action" in model.bound_events
 
 
-def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkeypatch):
+def test_editor_toolbar_selection_and_dispatch_rules(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
     spaces = {
         module._SEQUENCER_PANEL_ID: lf_stub.ui.PanelSpace.BOTTOM_DOCK,
         module._HISTOGRAM_PANEL_ID: lf_stub.ui.PanelSpace.BOTTOM_DOCK,
     }
-    visible = {module._SEQUENCER_PANEL_ID: False, module._HISTOGRAM_PANEL_ID: False}
-    active = [""]
+    open_editors = []
     monkeypatch.setattr(
         lf_stub.ui,
         "get_panel",
         lambda panel_id: SimpleNamespace(space=spaces[panel_id]),
         raising=False,
     )
-    monkeypatch.setattr(lf_stub.ui, "get_bottom_dock_active_tab", lambda: active[0], raising=False)
+    lf_stub.ui.screen = SimpleNamespace(
+        areas=lambda: [{"editor": editor} for editor in open_editors],
+        open_editor=lambda editor: open_editors.append(editor) or 1,
+        close_editor=lambda editor: open_editors.remove(editor) if editor in open_editors else False,
+    )
 
-    assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, False)
-    visible[module._HISTOGRAM_PANEL_ID] = True
-    assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
-    active[0] = module._HISTOGRAM_PANEL_ID
-    assert module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
+    assert not module._editor_panel_selected(module._HISTOGRAM_PANEL_ID, False)
+    assert not module._editor_panel_selected(module._HISTOGRAM_PANEL_ID, True)
+    open_editors.append(module._HISTOGRAM_PANEL_ID)
+    assert module._editor_panel_selected(module._HISTOGRAM_PANEL_ID, True)
 
     calls = []
     set_visible = lambda value: calls.append(("visible", value))
-    set_active = lambda panel_id: (calls.append(("active", panel_id)), active.__setitem__(0, panel_id))
-    monkeypatch.setattr(lf_stub.ui, "set_bottom_dock_active_tab", set_active, raising=False)
 
-    active[0] = ""
-    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, False, set_visible)
-    assert calls[-2:] == [("visible", True), ("active", module._HISTOGRAM_PANEL_ID)]
-
-    calls.clear()
-    active[0] = module._SEQUENCER_PANEL_ID
-    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
-    assert calls == [("active", module._HISTOGRAM_PANEL_ID)]
+    open_editors.clear()
+    module._toggle_editor_panel(module._HISTOGRAM_PANEL_ID, False, set_visible)
+    assert module._HISTOGRAM_PANEL_ID in open_editors
+    assert calls[-1] == ("visible", True)
 
     calls.clear()
-    active[0] = module._HISTOGRAM_PANEL_ID
-    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    module._toggle_editor_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    assert module._HISTOGRAM_PANEL_ID not in open_editors
     assert calls == [("visible", False)]
 
     spaces[module._HISTOGRAM_PANEL_ID] = lf_stub.ui.PanelSpace.FLOATING
     calls.clear()
-    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    module._toggle_editor_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
     assert calls == [("visible", False)]
 
 
@@ -1403,8 +1402,6 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
         "selection_depth_size",
         "selection_depth_offset_x",
         "selection_depth_offset_y",
-        "selection_depth_panel_chip",
-        "selection_depth_sync",
         "selection_viz_mode",
         "selection_depth_mode",
         "selection_delete",
@@ -1422,48 +1419,43 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "primary-pivot-toolbar" not in rml
     assert "secondary-pivot-toolbar" not in rml
     assert "toolbar-context-stack" not in rml
-    assert rml.count('data-for="button : gizmo_buttons"') == 2
+    assert rml.count('data-for="button : gizmo_buttons"') == 1
     assert rml.count('data-for="button : camera_mode_buttons"') == 0
-    assert rml.count('data-for="button : utility_primary_buttons"') == 2
-    assert rml.count('data-for="button : submode_buttons"') == 3
+    assert 'data-for="button : utility_primary_buttons"' not in rml
+    assert rml.count('data-for="button : submode_buttons"') == 2
     assert rml.count('data-for="button : pivot_buttons"') == 1
-    assert rml.count('data-for="button : mirror_group_buttons"') == 2
-    assert rml.count('data-for="button : crop_group_buttons"') == 2
-    assert rml.count('data-for="button : crop_enable_buttons"') == 2
-    assert rml.count('data-for="button : crop_settings_buttons"') == 2
-    assert rml.count('data-for="button : crop_object_buttons"') == 2
-    assert rml.count('data-for="button : crop_transform_buttons"') == 2
-    assert rml.count('data-for="button : crop_action_buttons"') == 2
-    assert rml.count('data-for="button : align_action_buttons"') == 2
+    assert rml.count('data-for="button : mirror_group_buttons"') == 1
+    assert rml.count('data-for="button : crop_group_buttons"') == 1
+    assert rml.count('data-for="button : crop_enable_buttons"') == 1
+    assert rml.count('data-for="button : crop_settings_buttons"') == 1
+    assert rml.count('data-for="button : crop_object_buttons"') == 1
+    assert rml.count('data-for="button : crop_transform_buttons"') == 1
+    assert rml.count('data-for="button : crop_action_buttons"') == 1
+    assert rml.count('data-for="button : align_action_buttons"') == 1
     assert rml.count('data-for="button : selection_volume_gizmo_buttons"') == 1
     assert 'class="toolbar-flyout-divider hidden"' not in rml
     assert "toolbar-flyout" not in rml
-    assert rml.count('data-for="button : selection_group_buttons"') == 2
-    assert rml.count('class="toolbar-separator"') == 6
+    assert rml.count('data-for="button : selection_group_buttons"') == 1
+    assert rml.count('class="toolbar-separator"') == 3
     assert 'class="toolbar-separator hidden"' in rml
-    assert rml.count('class="viewport-gizmo-controls"') == 2
-    assert rml.count('class="viewport-gizmo-control-row"') == 2
-    assert 'id="primary-viewport-gizmo-controls" class="viewport-gizmo-controls"' in rml
-    assert 'id="secondary-viewport-gizmo-controls" class="viewport-gizmo-controls"' in rml
+    assert 'class="viewport-gizmo-controls"' not in rml
+    assert 'class="viewport-gizmo-control-row"' not in rml
     assert "viewport-nav-toolbar" not in rml
     assert "viewport-nav-separator" not in rml
     primary_left = rml[
-        rml.index('id="primary-utility-toolbar"') : rml.index('id="primary-viewport-gizmo-controls"')
+        rml.index('id="view-utility-toolbar"') : rml.index('id="primary-transform-toolbar"')
     ]
-    secondary_left = rml[
-        rml.index('id="secondary-utility-toolbar"') : rml.index('id="secondary-viewport-gizmo-controls"')
-    ]
-    for toolbar_markup in (primary_left, secondary_left):
+    for toolbar_markup in (primary_left,):
         assert 'data-for="button : camera_mode_buttons"' not in toolbar_markup
         assert 'data-for="button : utility_primary_buttons"' not in toolbar_markup
     assert 'data-attr-data-shortcut="button.shortcut_text"' not in rml
-    assert rml.count('data-attr-data-action="button.action_id"') >= 31
+    assert rml.count('data-attr-data-action="button.action_id"') >= 16
     assert "data-attr-data-tooltip" not in rml
     assert 'data-attr-title="button.tooltip_text"' in rml
     assert rml.count('data-for="button : selection_mode_buttons"') == 1
     assert 'data-class-hidden="!show_selection_volume_gizmos"' in rml
-    assert rml.count('data-for="button : transform_group_buttons"') == 2
-    assert rml.count('data-for="button : transform_tool_buttons"') == 3
+    assert rml.count('data-for="button : transform_group_buttons"') == 1
+    assert rml.count('data-for="button : transform_tool_buttons"') == 2
     assert 'id="selection-block"' in rml
     assert 'class="viewport-selection-overlay hidden"' in rml
     assert 'class="viewport-selection-row"' in rml
@@ -1486,13 +1478,13 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "../icon/select-invert.png" in rml
     assert "../icon/scene/trash.png" in rml
     assert "../icon/deselect.png" in rml
-    assert rml.count('class="crop-roi-popover hidden"') == 2
-    assert rml.count('data-class-hidden="!crop_roi_settings_open"') == 2
-    assert rml.count('data-value="cropbox_lr_scale"') == 2
-    assert rml.count('data-value="cropbox_loss_weight"') == 2
+    assert rml.count('class="crop-roi-popover hidden"') == 1
+    assert rml.count('data-class-hidden="!crop_roi_settings_open"') == 1
+    assert rml.count('data-value="cropbox_lr_scale"') == 1
+    assert rml.count('data-value="cropbox_loss_weight"') == 1
     assert rml.count('min="0"') >= 4
-    assert rml.count('max="1"') >= 4
-    assert rml.count('step="0.01"') >= 4
+    assert rml.count('max="1"') >= 2
+    assert rml.count('step="0.01"') >= 2
     assert 'data-tooltip="tooltip.cropbox_lr_scale"' in rml
     assert 'data-tooltip="tooltip.cropbox_loss_weight"' in rml
     assert 'id="transform-block"' in rml
@@ -1777,8 +1769,8 @@ def test_viewport_toolbar_position_modes_keep_drag_explicit_and_persisted():
         encoding="utf-8"
     )
 
-    assert rml.count('class="toolbar-drag-handle"') == 2
-    assert rml.count('title="@tr:preferences.viewport_toolbar_drag"') == 2
+    assert rml.count('class="toolbar-drag-handle"') == 1
+    assert rml.count('title="@tr:preferences.viewport_toolbar_drag"') == 1
     assert ".panel-toolbar-root.toolbar-position-top" in rcss
     assert ".panel-toolbar-root.toolbar-position-free" in rcss
     assert ".toolbar-position-free .toolbar-drag-handle" in rcss
@@ -1799,16 +1791,20 @@ def test_python_theme_mutations_are_marshaled_to_viewer_thread():
         project_root / "src/python/stubs/lichtfeld/ui/__init__.pyi"
     ).read_text(encoding="utf-8")
 
+    dispatch = (
+        project_root / "src/python/lfs/py_viewer_dispatch.hpp"
+    ).read_text(encoding="utf-8")
+    assert "viewer->isOnViewerThread()" in dispatch
+    assert "nb::gil_scoped_release release;" in dispatch
+    assert "vis::post_work_and_wait(" in dispatch
     for source in (py_ui, py_ui_theme):
-        assert "viewer->isOnViewerThread()" in source
-        assert "nb::gil_scoped_release release;" in source
-        assert "vis::post_work_and_wait(" in source
+        assert '#include "py_viewer_dispatch.hpp"' in source
 
     for source, binding, helper in (
         (py_ui, "set_theme", "invoke_on_viewer("),
         (py_ui, "set_theme_family", "invoke_on_viewer("),
-        (py_ui_theme, "set_viewport_chrome_style", "invoke_on_viewer_thread("),
-        (py_ui_theme, "set_viewport_toolbar_position", "invoke_on_viewer_thread("),
+        (py_ui_theme, "set_viewport_chrome_style", "invoke_on_viewer("),
+        (py_ui_theme, "set_viewport_toolbar_position", "invoke_on_viewer("),
     ):
         start = source.index(f'"{binding}",')
         end = source.index("nb::arg", start)
@@ -1820,144 +1816,33 @@ def test_python_theme_mutations_are_marshaled_to_viewer_thread():
     assert "def set_viewport_toolbar_position(position: str) -> None:" in ui_stub
 
 
-def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui():
-    project_root = Path(__file__).parent.parent.parent
-    input_header = (
-        project_root / "src/visualizer/input/input_controller.hpp"
-    ).read_text(encoding="utf-8")
-    input_source = (
-        project_root / "src/visualizer/input/input_controller.cpp"
-    ).read_text(encoding="utf-8")
-    gui_manager = (
-        project_root / "src/visualizer/gui/gui_manager.cpp"
-    ).read_text(encoding="utf-8")
-
-    assert "void toggleIndependentSplitView();" in input_header
-
-    toggle_start = input_source.index(
-        "void InputController::toggleIndependentSplitView()"
-    )
-    toggle_end = input_source.index(
-        "SplitViewPanelId InputController::splitPanelForScreenX", toggle_start
-    )
-    toggle_block = input_source[toggle_start:toggle_end]
-
-    assert "if (!isIndependentSplitViewActive())" in toggle_block
-    assert "services().sceneOrNull()" in toggle_block
-    assert "!scene_manager || scene_manager->isEmpty()" in toggle_block
-    assert "ToggleIndependentSplitView{.viewport = &viewport_}.emit();" in toggle_block
-
-    key_action_start = input_source.index(
-        "case input::Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:"
-    )
-    key_action_end = input_source.index("return;", key_action_start)
-    key_action_block = input_source[key_action_start:key_action_end]
-    assert "toggleIndependentSplitView();" in key_action_block
-    assert "ToggleIndependentSplitView" not in key_action_block
-
-    toolbar_start = gui_manager.index("bool show_secondary_toolbar = false;")
-    toolbar_end = gui_manager.index(
-        "rml_viewport_overlay_.setToolbarPanels(", toolbar_start
-    )
-    toolbar_block = gui_manager[toolbar_start:toolbar_end]
-
-    assert "rendering->isIndependentSplitViewActive() && !editor_ctx.isEmpty()" in toolbar_block
-    assert "show_secondary_toolbar = secondary_panel->valid();" in toolbar_block
-
-    divider_start = gui_manager.index(
-        "RmlViewportOverlay::SplitDividerOverlayState split_divider_state;"
-    )
-    divider_end = gui_manager.index(
-        "rml_viewport_overlay_.setSplitDividerOverlay(split_divider_state);",
-        divider_start,
-    )
-    divider_block = gui_manager[divider_start:divider_end]
-
-    assert (
-        "rendering && rendering->isSplitViewActive() && "
-        "!rendering->isIndependentSplitViewActive())"
-        in divider_block
-    )
-    assert "rendering->getSplitDividerScreenX" in divider_block
-    assert "rendering->getContentBounds" in divider_block
-
-
-def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
+def test_screen_chrome_view_label_is_pointer_transparent_and_legible():
     project_root = Path(__file__).parent.parent.parent
     resources = project_root / "src/visualizer/gui/rmlui/resources"
-    right_panel_rcss = (resources / "right_panel.rcss").read_text(encoding="utf-8")
-    panel_tabs_theme = (resources / "panel_tabs.theme.rcss").read_text(
-        encoding="utf-8"
-    )
-    right_panel_theme = (resources / "right_panel.theme.rcss").read_text(encoding="utf-8")
-    right_panel_rml = (resources / "right_panel.rml").read_text(encoding="utf-8")
-    right_panel_cpp = (
-        project_root / "src/visualizer/gui/rml_right_panel.cpp"
-    ).read_text(encoding="utf-8")
-    shell_theme = (resources / "shell.theme.rcss").read_text(encoding="utf-8")
-    panel_host_theme = (resources / "panel_host.theme.rcss").read_text(encoding="utf-8")
-    scene_tree_rcss = (resources / "scene_tree.rcss").read_text(encoding="utf-8")
-    scene_tree_theme = (resources / "scene_tree.theme.rcss").read_text(encoding="utf-8")
-    resolver = (
-        project_root / "src/visualizer/gui/rmlui/rml_theme.cpp"
-    ).read_text(encoding="utf-8")
+    rml = (resources / "screen_chrome.rml").read_text(encoding="utf-8")
+    rcss = (resources / "screen_chrome.rcss").read_text(encoding="utf-8")
+    theme = (resources / "screen_chrome.theme.rcss").read_text(encoding="utf-8")
 
-    tab_start = right_panel_rcss.index(".tab {")
-    tab_end = right_panel_rcss.index("\n}", tab_start)
-    tab_rule = right_panel_rcss[tab_start:tab_end]
-    assert "box-sizing: border-box;" in tab_rule
-    assert "border-width: 1dp;" in tab_rule
-    assert "border-bottom-width: 2dp;" in tab_rule
-    assert "transition: none;" in tab_rule
-    assert "0.15s" not in tab_rule
+    assert 'class="view-label"' in rml
+    assert "data-if=\"area.is_view\"" in rml
+    assert "{{ area.view_label }}" in rml
 
-    assert right_panel_rml.index('href="panel_tabs.rcss"') < right_panel_rml.index(
-        'href="right_panel.rcss"'
-    )
-    assert right_panel_cpp.index('loadBaseRCSS("rmlui/panel_tabs.rcss")') < (
-        right_panel_cpp.index('loadBaseRCSS("rmlui/right_panel.rcss")')
-    )
+    label_start = rcss.index(".view-label {")
+    label_end = rcss.index("\n}", label_start)
+    label_rule = rcss[label_start:label_end]
+    assert "pointer-events: none;" in label_rule
+    assert "color:" not in label_rule
+    assert "text-shadow:" not in label_rule
 
-    for token in (
-        "right_panel.tab_border",
-        "right_panel.tab_bottom_border",
-        "right_panel.tab_active_border",
-        "right_panel.tab_active_bottom_border",
-    ):
-        assert f"@{{{token}}}" in right_panel_theme
-        assert f'"{token}"' in resolver
-
-    for shared_token in (
-        "right_panel.tab_active_bg",
-        "right_panel.separator",
-    ):
-        assert f"@{{{shared_token}}}" in panel_tabs_theme
-        assert f'{{"{shared_token}"' in resolver
-
-    hover_start = right_panel_theme.index(".tab:hover {")
-    hover_end = right_panel_theme.index("\n}", hover_start)
-    hover_rule = right_panel_theme[hover_start:hover_end]
-    assert "border-color:" not in hover_rule
-    assert "border-bottom-color:" not in hover_rule
-
-    active_start = right_panel_theme.index(".tab.active {")
-    active_end = right_panel_theme.index("\n}", active_start)
-    active_rule = right_panel_theme[active_start:active_end]
-    assert "border-bottom-color: @{right_panel.tab_active_bottom_border};" in active_rule
-
-    assert "@{panel.body_decor};" in shell_theme
-    assert "@{chrome.right_panel_decor};" in right_panel_theme
-    assert "@{panel.host_body_decor};" in panel_host_theme
-    assert '{"panel.host_body_decor"' in resolver
-
-    scene_body_start = scene_tree_rcss.index("body {")
-    scene_body_end = scene_tree_rcss.index("\n}", scene_body_start)
-    scene_body_rule = scene_tree_rcss[scene_body_start:scene_body_end]
-    assert "box-sizing: border-box;" in scene_body_rule
-    assert "border-width: 1dp;" in scene_body_rule
-    assert "border-radius: 5dp;" in scene_body_rule
-    assert "overflow: hidden;" in scene_body_rule
-    assert "border-color: @{right_panel.border};" in scene_tree_theme
+    theme_start = theme.index(".view-label {")
+    theme_end = theme.index("\n}", theme_start)
+    theme_rule = theme[theme_start:theme_end]
+    assert "color:" in theme_rule
+    assert "background-color: #00000040;" in theme_rule
+    assert "font-effect: shadow(" in theme_rule
+    assert "border:" not in label_rule + theme_rule
+    assert "border-color:" not in label_rule + theme_rule
+    assert "border-radius:" in theme_rule
 
 
 def test_every_depth_slider_carries_its_own_tooltip_in_every_locale():
@@ -2089,7 +1974,6 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     module.update_overlay(SimpleNamespace())
 
     camera_buttons = model.handle.record_updates["camera_mode_buttons"]
-    primary_buttons = model.handle.record_updates["utility_primary_buttons"]
     extra_buttons = model.handle.record_updates["utility_extra_buttons"]
     assert len(camera_buttons) == 4
     assert [button["value"] for button in camera_buttons] == [
@@ -2099,12 +1983,6 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
         "drone",
     ]
     assert camera_buttons[3]["icon_src"] == "../icon/drone.png"
-    assert [button["action"] for button in primary_buttons] == [
-        "home",
-        "focus_selection",
-    ]
-    assert primary_buttons[1]["icon_src"] == "../icon/focus-selection.png"
-    assert primary_buttons[1]["tooltip_text"] == "Focus Selection"
     assert [button["button_id"] for button in extra_buttons] == [
         "util-preferences",
         "util-viewport-export",
@@ -2413,92 +2291,9 @@ def test_toolbar_tool_action_refreshes_button_records_immediately(toolbar_module
     assert rotate_button["selected"] is True
 
 
-def test_each_gizmo_group_stamps_its_own_panel_into_the_toolbar_event():
-    """Both gizmo groups render the same records. Their event literal distinguishes
-    primary left from secondary right; no other toolbar_action call site stamps a panel.
-    """
-    project_root = Path(__file__).parent.parent.parent
-    resources = project_root / "src/visualizer/gui/rmlui/resources"
-    rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
-
-    primary_group = rml[rml.index('id="primary-viewport-gizmo-controls"') :]
-    primary_group = primary_group[: primary_group.index("</div>")]
-    secondary_group = rml[rml.index('id="secondary-viewport-gizmo-controls"') :]
-    secondary_group = secondary_group[: secondary_group.index("</div>")]
-
-    assert (
-        "toolbar_action(button.action, button.value, 'left')" in primary_group
-    ), "the primary panel's gizmo group must address its own panel"
-    assert (
-        "toolbar_action(button.action, button.value, 'right')" in secondary_group
-    ), "the secondary panel's gizmo group must address its own panel"
-    assert "'right'" not in primary_group
-    assert "'left'" not in secondary_group
 
 
 
-def test_toolbar_action_forwards_the_group_panel_to_the_camera_actions(
-    toolbar_module, monkeypatch
-):
-    """The panel identity survives the Python hop, and an action that
-    carries none calls exactly what it called before -- no keyword at all."""
-    module, _hook_calls, _remove_calls = toolbar_module
-    model = _DataModelStub()
-    lf_stub = sys.modules["lichtfeld"]
-    calls = []
-
-    lf_stub.RenderMode = SimpleNamespace(
-        SPLATS="splats", POINTS="points", RINGS="rings", CENTERS="centers"
-    )
-    lf_stub.get_camera_navigation_mode = lambda: "orbit"
-    lf_stub.get_camera_view_snap_enabled = lambda: False
-    lf_stub.get_render_mode = lambda: lf_stub.RenderMode.SPLATS
-    lf_stub.is_fullscreen = lambda: False
-    lf_stub.is_orthographic = lambda: False
-    lf_stub.get_depth_view = lambda: False
-    lf_stub.get_selected_node_names = lambda: []
-
-    def _reset_camera(**kwargs):
-        calls.append(("reset_camera", kwargs))
-
-    def _focus_selection(**kwargs):
-        calls.append(("focus_selection", kwargs))
-
-    lf_stub.reset_camera = _reset_camera
-    lf_stub.focus_selection = _focus_selection
-
-    monkeypatch.setattr(lf_stub.ui, "context", lambda: SimpleNamespace(), raising=False)
-    monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "", raising=False)
-    monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: "", raising=False)
-    monkeypatch.setattr(lf_stub.ui, "get_transform_space", lambda: 1, raising=False)
-    monkeypatch.setattr(lf_stub.ui, "get_multi_transform_mode", lambda: 0, raising=False)
-    monkeypatch.setattr(lf_stub.ui, "get_pivot_mode", lambda: 0, raising=False)
-    monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "single", raising=False)
-    monkeypatch.setattr(lf_stub.ui, "is_sequencer_visible", lambda: False, raising=False)
-    monkeypatch.setattr(lf_stub.ui, "is_panel_enabled", lambda _panel_id: False, raising=False)
-    monkeypatch.setattr(module, "histogram_mode_available", lambda _context: False)
-
-    module.reset_overlay_state()
-    module.bind_overlay_model(model)
-    module.attach_overlay_model_handle(model.handle)
-    dispatch = model.bound_events["toolbar_action"]
-
-    dispatch(None, None, ["home", "", "right"])
-    dispatch(None, None, ["focus_selection", "", "right"])
-    dispatch(None, None, ["home", "", "left"])
-    dispatch(None, None, ["focus_selection", "", "left"])
-    # No third argument: the pre-panel-addressing call, unchanged.
-    dispatch(None, None, ["home", ""])
-    dispatch(None, None, ["focus_selection", ""])
-
-    assert calls == [
-        ("reset_camera", {"panel": "right"}),
-        ("focus_selection", {"panel": "right"}),
-        ("reset_camera", {"panel": "left"}),
-        ("focus_selection", {"panel": "left"}),
-        ("reset_camera", {}),
-        ("focus_selection", {}),
-    ]
 
 
 def _real_lichtfeld():
@@ -2515,27 +2310,8 @@ def _real_lichtfeld():
 
 
 @pytest.mark.parametrize("action_name", ["reset_camera", "focus_selection"])
-def test_camera_actions_accept_the_main_panel_token(action_name):
-    """Accept None for legacy routing, main for explicit focused-panel routing, and
-    left/right for named panels. No visualizer is attached, so this checks parser
-    acceptance only.
-    """
-    action = getattr(_real_lichtfeld(), action_name)
-    for token in ("main", "left", "right"):
-        action(panel=token)
-    action(panel=None)
-    action()
-
-
-@pytest.mark.parametrize("action_name", ["reset_camera", "focus_selection"])
-def test_camera_actions_reject_an_unknown_panel_token(action_name):
-    """The rejection message names the full panel vocabulary, so a caller that
-    guesses wrong is told what 'main' is. Same wording py_selection.cpp's
-    parseDepthWindowPanelArg already uses."""
-    action = getattr(_real_lichtfeld(), action_name)
-    with pytest.raises(ValueError) as excinfo:
-        action(panel="middle")
-    assert "'main', 'left', or 'right'" in str(excinfo.value)
+def test_camera_actions_use_the_active_view(action_name):
+    getattr(_real_lichtfeld(), action_name)()
 
 
 def test_align_toolbar_signature_tracks_can_apply(toolbar_module):

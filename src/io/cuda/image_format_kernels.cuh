@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "core/shared_image_ops.hpp"
+
 #include <cstdint>
 #include <cuda_runtime.h>
 
@@ -32,13 +34,6 @@ namespace lfs::io::cuda {
         size_t height,
         size_t width,
         size_t channels,
-        cudaStream_t stream = nullptr);
-
-    // Fused kernel: uint8 CHW -> float32 CHW normalized [0,1]
-    void launch_uint8_chw_to_float32_chw(
-        const uint8_t* input,
-        float* output,
-        size_t elements,
         cudaStream_t stream = nullptr);
 
     // Fused kernel: uint16 HWC -> float32 CHW normalized [0,1]
@@ -84,14 +79,6 @@ namespace lfs::io::cuda {
         size_t width,
         cudaStream_t stream = nullptr);
 
-    // Decode-side transform parameters for normal priors (v = n*0.5 + 0.5 file encoding).
-    struct NormalPriorTransform {
-        bool srgb = false;
-        bool flip_yz = false;
-        bool world_to_camera = false;
-        float w2c[9] = {};
-    };
-
     // Fused kernel: RGB HWC (uint8) -> float32 CHW normals in [-1, 1], with optional
     // sRGB->linear, Y/Z flip, and world->camera rotation applied per pixel.
     void launch_normal_prior_u8_hwc_to_float32_chw(
@@ -99,7 +86,7 @@ namespace lfs::io::cuda {
         float* output,
         size_t height,
         size_t width,
-        const NormalPriorTransform& transform,
+        const lfs::gpu_ops::NormalPriorTransform& transform,
         cudaStream_t stream = nullptr);
 
     // Fused kernel: RGB HWC (uint16) -> float32 CHW normals in [-1, 1].
@@ -108,7 +95,7 @@ namespace lfs::io::cuda {
         float* output,
         size_t height,
         size_t width,
-        const NormalPriorTransform& transform,
+        const lfs::gpu_ops::NormalPriorTransform& transform,
         cudaStream_t stream = nullptr);
 
     // Fused kernel: uint8 HWC -> uint8 CHW

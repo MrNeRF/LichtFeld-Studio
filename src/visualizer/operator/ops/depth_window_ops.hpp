@@ -17,7 +17,7 @@ namespace lfs::vis::op {
     // returns the cursor for the handle under the pointer.
     // Exported (LFS_VIS_API) so tests can drive the hover/overlay state.
     [[nodiscard]] LFS_VIS_API DepthWindowCursor updateDepthWindowHover(
-        const glm::vec2& screen,
+        ViewId view, const glm::vec2& screen,
         const glm::vec4& viewport_bounds,
         bool modifiers_held);
     LFS_VIS_API void clearDepthWindowHover();

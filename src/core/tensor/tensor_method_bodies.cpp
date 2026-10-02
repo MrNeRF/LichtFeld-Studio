@@ -849,7 +849,8 @@ namespace lfs::core {
     }
 
     float Tensor::mean_scalar() const {
-        if (device_ == Device::GPU && dtype_ == DataType::Float32 && is_contiguous_) {
+        // Empty inputs take the generic path, which defines their result.
+        if (device_ == Device::GPU && dtype_ == DataType::Float32 && is_contiguous_ && numel() > 0) {
             return internal::backend_ops_for(*this).mean_scalar(
                 internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
         }
@@ -857,7 +858,8 @@ namespace lfs::core {
     }
 
     float Tensor::min_scalar() const {
-        if (device_ == Device::GPU && dtype_ == DataType::Float32 && is_contiguous_) {
+        // Empty inputs take the generic path, which defines their result.
+        if (device_ == Device::GPU && dtype_ == DataType::Float32 && is_contiguous_ && numel() > 0) {
             return internal::backend_ops_for(*this).min_scalar(
                 internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
         }
@@ -865,7 +867,8 @@ namespace lfs::core {
     }
 
     float Tensor::max_scalar() const {
-        if (device_ == Device::GPU && dtype_ == DataType::Float32 && is_contiguous_) {
+        // Empty inputs take the generic path, which defines their result.
+        if (device_ == Device::GPU && dtype_ == DataType::Float32 && is_contiguous_ && numel() > 0) {
             return internal::backend_ops_for(*this).max_scalar(
                 internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
         }

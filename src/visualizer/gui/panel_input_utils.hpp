@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
 
@@ -12,8 +12,7 @@
 
 namespace lfs::vis::gui {
 
-    inline PanelInputState buildPanelInputFromSDL(const FrameInputBuffer& buf) {
-        PanelInputState input;
+    inline void buildPanelInputFromSDL(const FrameInputBuffer& buf, PanelInputState& input) {
         input.mouse_x = buf.mouse_x;
         input.mouse_y = buf.mouse_y;
         for (int i = 0; i < 3; ++i) {
@@ -32,21 +31,39 @@ namespace lfs::vis::gui {
         input.key_shift = (buf.key_mods & SDL_KMOD_SHIFT) != 0;
         input.key_alt = (buf.key_mods & SDL_KMOD_ALT) != 0;
         input.key_super = (buf.key_mods & SDL_KMOD_GUI) != 0;
+        input.input_events = buf.input_events;
+        input.keys_pressed.clear();
         input.keys_pressed.reserve(buf.keys_pressed.size());
         for (auto sc : buf.keys_pressed)
             input.keys_pressed.push_back(static_cast<int>(sc));
-        input.keys_repeated.reserve(buf.keys_repeated.size());
-        for (auto sc : buf.keys_repeated)
-            input.keys_repeated.push_back(static_cast<int>(sc));
-        input.keys_released.reserve(buf.keys_released.size());
-        for (auto sc : buf.keys_released)
-            input.keys_released.push_back(static_cast<int>(sc));
-        input.text_codepoints = buf.text_codepoints;
-        input.text_inputs = buf.text_inputs;
-        input.text_editing = buf.text_editing;
-        input.text_editing_start = buf.text_editing_start;
-        input.text_editing_length = buf.text_editing_length;
-        input.has_text_editing = buf.has_text_editing;
+    }
+
+    inline PanelInputState buildPanelInputFromSDL(const FrameInputBuffer& buf) {
+        PanelInputState input;
+        buildPanelInputFromSDL(buf, input);
+        return input;
+    }
+
+    inline PanelInputState fromSequencerPanelInput(const lfs::vis::PanelInputState& source) {
+        PanelInputState input;
+        input.mouse_x = source.mouse_x;
+        input.mouse_y = source.mouse_y;
+        input.screen_x = source.screen_x;
+        input.screen_y = source.screen_y;
+        input.screen_w = source.screen_w;
+        input.screen_h = source.screen_h;
+        for (int i = 0; i < 3; ++i) {
+            input.mouse_down[i] = source.mouse_down[i];
+            input.mouse_clicked[i] = source.mouse_clicked[i];
+            input.mouse_released[i] = source.mouse_released[i];
+        }
+        input.mouse_wheel = source.mouse_wheel;
+        input.key_ctrl = source.key_ctrl;
+        input.key_shift = source.key_shift;
+        input.key_alt = source.key_alt;
+        input.key_super = source.key_super;
+        input.input_events = source.input_events;
+        input.keys_pressed = source.keys_pressed;
         return input;
     }
 
@@ -69,14 +86,9 @@ namespace lfs::vis::gui {
         input.key_delete_pressed =
             std::find(panel_input.keys_pressed.begin(), panel_input.keys_pressed.end(),
                       SDL_SCANCODE_DELETE) != panel_input.keys_pressed.end();
+        input.input_events = panel_input.input_events;
         input.keys_pressed = panel_input.keys_pressed;
-        input.keys_released = panel_input.keys_released;
-        input.text_codepoints = panel_input.text_codepoints;
-        input.text_inputs = panel_input.text_inputs;
-        input.text_editing = panel_input.text_editing;
-        input.text_editing_start = panel_input.text_editing_start;
-        input.text_editing_length = panel_input.text_editing_length;
-        input.has_text_editing = panel_input.has_text_editing;
+
         input.screen_w = panel_input.screen_w;
         input.screen_h = panel_input.screen_h;
         return input;

@@ -1,0 +1,388 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+struct mat3x3 {
+    float m11, m12, m13, m21, m22, m23, m31, m32, m33;
+    __init(float a, float b, float c, float d, float e, float f, float g, float h, float i) {
+        m11 = a;
+        m12 = b;
+        m13 = c;
+        m21 = d;
+        m22 = e;
+        m23 = f;
+        m31 = g;
+        m32 = h;
+        m33 = i;
+    }
+};
+struct mat3x3_triu {
+    float m11, m12, m13, m22, m23, m33;
+    __init(float a, float b, float c, float d, float e, float f) {
+        m11 = a;
+        m12 = b;
+        m13 = c;
+        m22 = d;
+        m23 = e;
+        m33 = f;
+    }
+};
+float4 clampGradient4(float4 g) { return float4(clampGradient(g.x), clampGradient(g.y), clampGradient(g.z), clampGradient(g.w)); }
+float scaleRegularization(BackPush back, uint cell) { return back.scaleWeight > 0 && back.scaleElements > 0 ? back.scaleWeight * exp(loadFloat(back.forward.scales, cell)) / float(back.scaleElements) : 0; }
+void flattenRegularization(BackPush back, uint i, inout float grads[3]) {
+    if (back.flattenWeight <= 0 || back.scaleElements == 0)
+        return;
+    float3 s = load3(back.forward.scales, i);
+    uint axis = s.x <= s.y && s.x <= s.z ? 0 : s.y <= s.z ? 1
+                                                          : 2;
+    grads[axis] += 3 * back.flattenWeight * exp(s[axis]) / float(back.scaleElements);
+}
+float opacityRegularization(BackPush back, uint i) {
+    float opacity = 1 / (1 + exp(-loadFloat(back.forward.opacities, i)));
+    float g = back.opacityWeight > 0 && back.opacityElements > 0 ? back.opacityWeight * opacity * (1 - opacity) / float(back.opacityElements) : 0;
+    if (back.sigmoid != 0 && i < back.sparsityCount) {
+        float o = loadFloat(back.sigmoid, i);
+        g += back.rho * (o - loadFloat(back.z, i) + loadFloat(back.u, i)) * o * (1 - o) * back.gradLoss;
+    }
+    return g;
+}
+float3 shPositionGradient(FastPush p, uint primitive_idx, float3 grad_color) {
+    float3 position = load3(p.means, primitive_idx), cam_position = load3(p.camera, 0), dcolor_dposition = 0;
+    if (p.activeBases <= 1)
+        return dcolor_dposition;
+    const float3 raw_direction = position - cam_position;
+    const float x_raw = raw_direction.x;
+    const float y_raw = raw_direction.y;
+    const float z_raw = raw_direction.z;
+    const float3 c0 = shColor(p, primitive_idx, 0);
+    const float3 c1 = shColor(p, primitive_idx, 1);
+    const float3 c2 = shColor(p, primitive_idx, 2);
+    float3 grad_direction_x = -0.48860251190291987f * c2;
+    float3 grad_direction_y = -0.48860251190291987f * c0;
+    float3 grad_direction_z = 0.48860251190291987f * c1;
+    if (p.activeBases > 4) {
+        const float3 direction = direction(raw_direction);
+        const float x = direction.x;
+        const float y = direction.y;
+        const float z = direction.z;
+        const float xx = x * x, yy = y * y, zz = z * z;
+        const float xy = x * y, xz = x * z, yz = y * z;
+        const float3 c3 = shColor(p, primitive_idx, 3);
+        const float3 c4 = shColor(p, primitive_idx, 4);
+        const float3 c5 = shColor(p, primitive_idx, 5);
+        const float3 c6 = shColor(p, primitive_idx, 6);
+        const float3 c7 = shColor(p, primitive_idx, 7);
+        grad_direction_x = grad_direction_x + (1.0925484305920792f * y) * c3 + (-1.0925484305920792f * z) * c6 + (1.0925484305920792f * x) * c7;
+        grad_direction_y = grad_direction_y + (1.0925484305920792f * x) * c3 + (-1.0925484305920792f * z) * c4 + (-1.0925484305920792f * y) * c7;
+        grad_direction_z = grad_direction_z + (-1.0925484305920792f * y) * c4 + (1.8923493915151202f * z) * c5 + (-1.0925484305920792f * x) * c6;
+        if (p.activeBases > 9) {
+            const float3 c8 = shColor(p, primitive_idx, 8);
+            const float3 c9 = shColor(p, primitive_idx, 9);
+            const float3 c10 = shColor(p, primitive_idx, 10);
+            const float3 c11 = shColor(p, primitive_idx, 11);
+            const float3 c12 = shColor(p, primitive_idx, 12);
+            const float3 c13 = shColor(p, primitive_idx, 13);
+            const float3 c14 = shColor(p, primitive_idx, 14);
+            grad_direction_x = grad_direction_x + (-3.5402615395598609f * xy) * c8 + (2.8906114426405538f * yz) * c9 + (0.45704579946446572f - 2.2852289973223288f * zz) * c12 + (2.8906114426405538f * xz) * c13 + (-1.7701307697799304f * xx + 1.7701307697799304f * yy) * c14;
+            grad_direction_y = grad_direction_y + (-1.7701307697799304f * xx + 1.7701307697799304f * yy) * c8 + (2.8906114426405538f * xz) * c9 + (0.45704579946446572f - 2.2852289973223288f * zz) * c10 + (-2.8906114426405538f * yz) * c13 + (3.5402615395598609f * xy) * c14;
+            grad_direction_z = grad_direction_z + (2.8906114426405538f * xy) * c9 + (-4.5704579946446566f * yz) * c10 + (5.597644988851731f * zz - 1.1195289977703462f) * c11 + (-4.5704579946446566f * xz) * c12 + (1.4453057213202769f * xx - 1.4453057213202769f * yy) * c13;
+        }
+    }
+
+    const float3 grad_direction = float3(
+        dot(grad_direction_x, grad_color),
+        dot(grad_direction_y, grad_color),
+        dot(grad_direction_z, grad_color));
+    const float xx_raw = x_raw * x_raw, yy_raw = y_raw * y_raw, zz_raw = z_raw * z_raw;
+    const float xy_raw = x_raw * y_raw, xz_raw = x_raw * z_raw, yz_raw = y_raw * z_raw;
+    const float norm_sq = xx_raw + yy_raw + zz_raw;
+    const float NORM_SQ_GRAD_MIN = 1e-6f;
+    const float INV_NORM_CUBED_MAX = 1e6f;
+    const float norm_sq_safe = max(norm_sq, NORM_SQ_GRAD_MIN);
+    const float inv_norm_cubed = min(rsqrt(norm_sq_safe * norm_sq_safe * norm_sq_safe), INV_NORM_CUBED_MAX);
+    dcolor_dposition = float3(
+                           (yy_raw + zz_raw) * grad_direction.x - xy_raw * grad_direction.y - xz_raw * grad_direction.z,
+                           -xy_raw * grad_direction.x + (xx_raw + zz_raw) * grad_direction.y - yz_raw * grad_direction.z,
+                           -xz_raw * grad_direction.x - yz_raw * grad_direction.y + (xx_raw + yy_raw) * grad_direction.z) *
+                       inv_norm_cubed;
+
+    return dcolor_dposition;
+}
+void projectionBackward(BackPush back, uint primitive_idx) {
+    FastPush p = back.forward;
+    uint work_idx = loadUint(p.originalToWork, primitive_idx);
+    float mean_grads[3] = {0, 0, 0}, scale_grads[3] = {0, 0, 0}, rotation_grads[4] = {0, 0, 0, 0}, opacity_grads[1] = {0};
+    if (work_idx != 0xffffffffu) {
+        float4 w2c[3];
+        [unroll] for (uint j = 0; j < 3; ++j)
+            w2c[j] = ((Ptr<float4, Access.Read>)p.view)[j];
+        float3 gc = screen3(back, work_idx, 6);
+        float3 dL_dmean3d_from_color = shPositionGradient(p, primitive_idx, gc);
+        store3(back.dcGradient, primitive_idx, 0.28209479177387814f * gc);
+        float basis[16];
+        shBasis(direction(load3(p.means, primitive_idx) - load3(p.camera, 0)), basis);
+        [unroll] for (uint slot = 0; slot < 12; ++slot) if (slot < (p.rest * 3 + 3) / 4) {
+            float4 value;
+            [unroll] for (uint c = 0; c < 4; ++c) {
+                uint a = slot * 4 + c;
+                value[c] = a < p.rest * 3 && a / 3 + 1 < p.activeBases ? basis[min(a / 3 + 1, 15u)] * gc[a % 3] : 0;
+            }
+            uint cell = (primitive_idx / 32 * ((p.rest * 3 + 3) / 4) + slot) * 32 + primitive_idx % 32;
+            ((Ptr<float4, Access.ReadWrite>)back.shGradient)[cell] = value;
+        }
+        const float3 mean3d = load3(p.means, primitive_idx);
+
+        const float4 w2c_r3 = w2c[2];
+        const float depth = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;
+        const float depth_safe = max(depth, 1e-4f);
+        const float inv_depth = 1.0f / depth_safe;
+        const float4 w2c_r1 = w2c[0];
+        const float x = (w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w) * inv_depth;
+        const float4 w2c_r2 = w2c[1];
+        const float y = (w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w) * inv_depth;
+
+        // compute 3d covariance from raw scale and rotation
+        const float3 raw_scale = load3(p.scales, primitive_idx);
+        const float3 clamped_scale = float3(
+            min(raw_scale.x, 20.0f),
+            min(raw_scale.y, 20.0f),
+            min(raw_scale.z, 20.0f));
+        const float3 variance = float3(exp(2.0f * clamped_scale.x), exp(2.0f * clamped_scale.y), exp(2.0f * clamped_scale.z));
+        const float4 raw_rotation = ((Ptr<float4, Access.Read>)p.rotations)[primitive_idx];
+        const float qr = raw_rotation.x;
+        const float qx = raw_rotation.y;
+        const float qy = raw_rotation.z;
+        const float qz = raw_rotation.w;
+        const float qrr_raw = qr * qr, qxx_raw = qx * qx, qyy_raw = qy * qy, qzz_raw = qz * qz;
+        const float q_norm_sq = qrr_raw + qxx_raw + qyy_raw + qzz_raw;
+        const float q_norm_sq_safe = max(q_norm_sq, 1e-8f);
+        const float inv_q_norm_sq = 2.0f / q_norm_sq_safe;
+        const float qxx = qxx_raw * inv_q_norm_sq, qyy = qyy_raw * inv_q_norm_sq, qzz = qzz_raw * inv_q_norm_sq;
+        const float qxy = qx * qy * inv_q_norm_sq, qxz = qx * qz * inv_q_norm_sq, qyz = qy * qz * inv_q_norm_sq;
+        const float qrx = qr * qx * inv_q_norm_sq, qry = qr * qy * inv_q_norm_sq, qrz = qr * qz * inv_q_norm_sq;
+        const mat3x3 rotation = mat3x3(
+            1.0f - (qyy + qzz), qxy - qrz, qry + qxz,
+            qrz + qxy, 1.0f - (qxx + qzz), qyz - qrx,
+            qxz - qry, qrx + qyz, 1.0f - (qxx + qyy));
+        const mat3x3 rotation_scaled = mat3x3(
+            rotation.m11 * variance.x, rotation.m12 * variance.y, rotation.m13 * variance.z,
+            rotation.m21 * variance.x, rotation.m22 * variance.y, rotation.m23 * variance.z,
+            rotation.m31 * variance.x, rotation.m32 * variance.y, rotation.m33 * variance.z);
+        const mat3x3_triu cov3d = mat3x3_triu(
+            rotation_scaled.m11 * rotation.m11 + rotation_scaled.m12 * rotation.m12 + rotation_scaled.m13 * rotation.m13,
+            rotation_scaled.m11 * rotation.m21 + rotation_scaled.m12 * rotation.m22 + rotation_scaled.m13 * rotation.m23,
+            rotation_scaled.m11 * rotation.m31 + rotation_scaled.m12 * rotation.m32 + rotation_scaled.m13 * rotation.m33,
+            rotation_scaled.m21 * rotation.m21 + rotation_scaled.m22 * rotation.m22 + rotation_scaled.m23 * rotation.m23,
+            rotation_scaled.m21 * rotation.m31 + rotation_scaled.m22 * rotation.m32 + rotation_scaled.m23 * rotation.m33,
+            rotation_scaled.m31 * rotation.m31 + rotation_scaled.m32 * rotation.m32 + rotation_scaled.m33 * rotation.m33, );
+
+        // ewa splatting gradient helpers (clip box is grid-uniform; computed once on the host)
+        const float tx = clamp(x, p.clipLeft, p.clipRight);
+        const float ty = clamp(y, p.clipTop, p.clipBottom);
+        const float j11 = p.fx * inv_depth;
+        const float j13 = -j11 * tx;
+        const float j22 = p.fy * inv_depth;
+        const float j23 = -j22 * ty;
+        const float3 jw_r1 = float3(
+            j11 * w2c_r1.x + j13 * w2c_r3.x,
+            j11 * w2c_r1.y + j13 * w2c_r3.y,
+            j11 * w2c_r1.z + j13 * w2c_r3.z);
+        const float3 jw_r2 = float3(
+            j22 * w2c_r2.x + j23 * w2c_r3.x,
+            j22 * w2c_r2.y + j23 * w2c_r3.y,
+            j22 * w2c_r2.z + j23 * w2c_r3.z);
+        const float3 jwc_r1 = float3(
+            jw_r1.x * cov3d.m11 + jw_r1.y * cov3d.m12 + jw_r1.z * cov3d.m13,
+            jw_r1.x * cov3d.m12 + jw_r1.y * cov3d.m22 + jw_r1.z * cov3d.m23,
+            jw_r1.x * cov3d.m13 + jw_r1.y * cov3d.m23 + jw_r1.z * cov3d.m33);
+        const float3 jwc_r2 = float3(
+            jw_r2.x * cov3d.m11 + jw_r2.y * cov3d.m12 + jw_r2.z * cov3d.m13,
+            jw_r2.x * cov3d.m12 + jw_r2.y * cov3d.m22 + jw_r2.z * cov3d.m23,
+            jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
+
+        // 2d covariance gradient (use same dilation as forward pass)
+        const float kernel_size = p.mip != 0 ? 0.1f : 0.3f;
+        const float raw_a = dot(jwc_r1, jw_r1);
+        const float raw_b = dot(jwc_r1, jw_r2);
+        const float raw_c = dot(jwc_r2, jw_r2);
+        const float a = raw_a + kernel_size, b = raw_b, c = raw_c + kernel_size;
+        const float aa = a * a, bb = b * b, cc = c * c;
+        const float ac = a * c, ab = a * b, bc = b * c;
+        const float determinant = ac - bb;
+        const float determinant_safe = max(determinant, 1e-6f);
+        const float determinant_rcp = 1.0f / determinant_safe;
+        const float determinant_rcp_sq = determinant_rcp * determinant_rcp;
+        const float3 dL_dconic = screen3(back, work_idx, 2);
+        float3 dL_dcov2d = determinant_rcp_sq * float3(
+                                                    2.0f * bc * dL_dconic.y - cc * dL_dconic.x - bb * dL_dconic.z,
+                                                    bc * dL_dconic.x - (ac + bb) * dL_dconic.y + ab * dL_dconic.z,
+                                                    2.0f * ab * dL_dconic.y - bb * dL_dconic.x - aa * dL_dconic.z);
+
+        const float original_opacity = 1.0f / (1.0f + exp(-loadFloat(p.opacities, primitive_idx)));
+        const float grad_compensated_opacity = screen(back, work_idx, 5);
+        float opacity_compensation = 1.0f;
+        if (p.mip != 0) {
+            const float det_raw = raw_a * raw_c - raw_b * raw_b;
+            if (det_raw > 1e-6f && determinant > 1e-6f) {
+                opacity_compensation = sqrt(det_raw * determinant_rcp);
+            } else {
+                opacity_compensation = 0.0f;
+            }
+        }
+
+        const float sigmoid_derivative = original_opacity * (1.0f - original_opacity);
+        opacity_grads[0] = grad_compensated_opacity * opacity_compensation * sigmoid_derivative +
+                           opacityRegularization(back, primitive_idx);
+
+        // 3d covariance gradient
+        const mat3x3_triu dL_dcov3d = mat3x3_triu(
+            (jw_r1.x * jw_r1.x) * dL_dcov2d.x + 2.0f * (jw_r1.x * jw_r2.x) * dL_dcov2d.y + (jw_r2.x * jw_r2.x) * dL_dcov2d.z,
+            (jw_r1.x * jw_r1.y) * dL_dcov2d.x + (jw_r1.x * jw_r2.y + jw_r1.y * jw_r2.x) * dL_dcov2d.y + (jw_r2.x * jw_r2.y) * dL_dcov2d.z,
+            (jw_r1.x * jw_r1.z) * dL_dcov2d.x + (jw_r1.x * jw_r2.z + jw_r1.z * jw_r2.x) * dL_dcov2d.y + (jw_r2.x * jw_r2.z) * dL_dcov2d.z,
+            (jw_r1.y * jw_r1.y) * dL_dcov2d.x + 2.0f * (jw_r1.y * jw_r2.y) * dL_dcov2d.y + (jw_r2.y * jw_r2.y) * dL_dcov2d.z,
+            (jw_r1.y * jw_r1.z) * dL_dcov2d.x + (jw_r1.y * jw_r2.z + jw_r1.z * jw_r2.y) * dL_dcov2d.y + (jw_r2.y * jw_r2.z) * dL_dcov2d.z,
+            (jw_r1.z * jw_r1.z) * dL_dcov2d.x + 2.0f * (jw_r1.z * jw_r2.z) * dL_dcov2d.y + (jw_r2.z * jw_r2.z) * dL_dcov2d.z, );
+
+        // gradient of J * W
+        const float3 dL_djw_r1 = 2.0f * float3(
+                                            jwc_r1.x * dL_dcov2d.x + jwc_r2.x * dL_dcov2d.y,
+                                            jwc_r1.y * dL_dcov2d.x + jwc_r2.y * dL_dcov2d.y,
+                                            jwc_r1.z * dL_dcov2d.x + jwc_r2.z * dL_dcov2d.y);
+        const float3 dL_djw_r2 = 2.0f * float3(
+                                            jwc_r1.x * dL_dcov2d.y + jwc_r2.x * dL_dcov2d.z,
+                                            jwc_r1.y * dL_dcov2d.y + jwc_r2.y * dL_dcov2d.z,
+                                            jwc_r1.z * dL_dcov2d.y + jwc_r2.z * dL_dcov2d.z);
+
+        // gradient of non-zero entries in J
+        const float dL_dj11 = w2c_r1.x * dL_djw_r1.x + w2c_r1.y * dL_djw_r1.y + w2c_r1.z * dL_djw_r1.z;
+        const float dL_dj22 = w2c_r2.x * dL_djw_r2.x + w2c_r2.y * dL_djw_r2.y + w2c_r2.z * dL_djw_r2.z;
+        const float dL_dj13 = w2c_r3.x * dL_djw_r1.x + w2c_r3.y * dL_djw_r1.y + w2c_r3.z * dL_djw_r1.z;
+        const float dL_dj23 = w2c_r3.x * dL_djw_r2.x + w2c_r3.y * dL_djw_r2.y + w2c_r3.z * dL_djw_r2.z;
+
+        // mean3d camera space gradient from J and mean2d (accounts for tx/ty clipping)
+        const float2 dL_dmean2d = float2(screen(back, work_idx, 0), screen(back, work_idx, 1));
+        const float dL_ddepth = screen(back, work_idx, 9);
+        float3 dL_dmean3d_cam = float3(
+            j11 * dL_dmean2d.x,
+            j22 * dL_dmean2d.y,
+            -j11 * x * dL_dmean2d.x - j22 * y * dL_dmean2d.y + dL_ddepth);
+        const bool valid_x = x >= p.clipLeft && x <= p.clipRight;
+        const bool valid_y = y >= p.clipTop && y <= p.clipBottom;
+        if (valid_x)
+            dL_dmean3d_cam.x -= j11 * dL_dj13 * inv_depth;
+        if (valid_y)
+            dL_dmean3d_cam.y -= j22 * dL_dj23 * inv_depth;
+        const float factor_x = 1.0f + (valid_x ? 1.0f : 0.0f);
+        const float factor_y = 1.0f + (valid_y ? 1.0f : 0.0f);
+        dL_dmean3d_cam.z += (j11 * (factor_x * tx * dL_dj13 - dL_dj11) + j22 * (factor_y * ty * dL_dj23 - dL_dj22)) * inv_depth;
+
+        // Combine the splatting gradient with the saved SH color gradient.
+        const float3 dL_dmean3d_from_splatting = float3(
+            w2c_r1.x * dL_dmean3d_cam.x + w2c_r2.x * dL_dmean3d_cam.y + w2c_r3.x * dL_dmean3d_cam.z,
+            w2c_r1.y * dL_dmean3d_cam.x + w2c_r2.y * dL_dmean3d_cam.y + w2c_r3.y * dL_dmean3d_cam.z,
+            w2c_r1.z * dL_dmean3d_cam.x + w2c_r2.z * dL_dmean3d_cam.y + w2c_r3.z * dL_dmean3d_cam.z);
+
+        const float3 dL_dmean3d = dL_dmean3d_from_splatting + dL_dmean3d_from_color;
+        const float3 clamped_mean = clampGradient3(dL_dmean3d);
+        mean_grads[0] = clamped_mean.x;
+        mean_grads[1] = clamped_mean.y;
+        mean_grads[2] = clamped_mean.z;
+
+        // raw scale gradient (zero gradient for clamped scales)
+        const float dL_dvariance_x = rotation.m11 * rotation.m11 * dL_dcov3d.m11 + rotation.m21 * rotation.m21 * dL_dcov3d.m22 + rotation.m31 * rotation.m31 * dL_dcov3d.m33 +
+                                     2.0f * (rotation.m11 * rotation.m21 * dL_dcov3d.m12 + rotation.m11 * rotation.m31 * dL_dcov3d.m13 + rotation.m21 * rotation.m31 * dL_dcov3d.m23);
+        const float dL_dvariance_y = rotation.m12 * rotation.m12 * dL_dcov3d.m11 + rotation.m22 * rotation.m22 * dL_dcov3d.m22 + rotation.m32 * rotation.m32 * dL_dcov3d.m33 +
+                                     2.0f * (rotation.m12 * rotation.m22 * dL_dcov3d.m12 + rotation.m12 * rotation.m32 * dL_dcov3d.m13 + rotation.m22 * rotation.m32 * dL_dcov3d.m23);
+        const float dL_dvariance_z = rotation.m13 * rotation.m13 * dL_dcov3d.m11 + rotation.m23 * rotation.m23 * dL_dcov3d.m22 + rotation.m33 * rotation.m33 * dL_dcov3d.m33 +
+                                     2.0f * (rotation.m13 * rotation.m23 * dL_dcov3d.m12 + rotation.m13 * rotation.m33 * dL_dcov3d.m13 + rotation.m23 * rotation.m33 * dL_dcov3d.m23);
+        const float3 dL_draw_scale = float3(
+            (raw_scale.x < 20.0f) ? 2.0f * variance.x * dL_dvariance_x : 0.0f,
+            (raw_scale.y < 20.0f) ? 2.0f * variance.y * dL_dvariance_y : 0.0f,
+            (raw_scale.z < 20.0f) ? 2.0f * variance.z * dL_dvariance_z : 0.0f);
+        const float3 clamped_scale_grad = clampGradient3(dL_draw_scale);
+        const uint scale_base = primitive_idx * 3;
+        scale_grads[0] = clamped_scale_grad.x + scaleRegularization(back, scale_base + 0);
+        scale_grads[1] = clamped_scale_grad.y + scaleRegularization(back, scale_base + 1);
+        scale_grads[2] = clamped_scale_grad.z + scaleRegularization(back, scale_base + 2);
+        flattenRegularization(back, primitive_idx, scale_grads);
+
+        // raw rotation gradient
+        mat3x3 dL_drotation = mat3x3(
+            2.0f * (rotation_scaled.m11 * dL_dcov3d.m11 + rotation_scaled.m21 * dL_dcov3d.m12 + rotation_scaled.m31 * dL_dcov3d.m13),
+            2.0f * (rotation_scaled.m12 * dL_dcov3d.m11 + rotation_scaled.m22 * dL_dcov3d.m12 + rotation_scaled.m32 * dL_dcov3d.m13),
+            2.0f * (rotation_scaled.m13 * dL_dcov3d.m11 + rotation_scaled.m23 * dL_dcov3d.m12 + rotation_scaled.m33 * dL_dcov3d.m13),
+            2.0f * (rotation_scaled.m11 * dL_dcov3d.m12 + rotation_scaled.m21 * dL_dcov3d.m22 + rotation_scaled.m31 * dL_dcov3d.m23),
+            2.0f * (rotation_scaled.m12 * dL_dcov3d.m12 + rotation_scaled.m22 * dL_dcov3d.m22 + rotation_scaled.m32 * dL_dcov3d.m23),
+            2.0f * (rotation_scaled.m13 * dL_dcov3d.m12 + rotation_scaled.m23 * dL_dcov3d.m22 + rotation_scaled.m33 * dL_dcov3d.m23),
+            2.0f * (rotation_scaled.m11 * dL_dcov3d.m13 + rotation_scaled.m21 * dL_dcov3d.m23 + rotation_scaled.m31 * dL_dcov3d.m33),
+            2.0f * (rotation_scaled.m12 * dL_dcov3d.m13 + rotation_scaled.m22 * dL_dcov3d.m23 + rotation_scaled.m32 * dL_dcov3d.m33),
+            2.0f * (rotation_scaled.m13 * dL_dcov3d.m13 + rotation_scaled.m23 * dL_dcov3d.m23 + rotation_scaled.m33 * dL_dcov3d.m33));
+
+        if (p.renderNormal != 0) {
+            const float3 g_cam = screen3(back, work_idx, 10);
+            const float3 g_world = float3(
+                w2c_r1.x * g_cam.x + w2c_r2.x * g_cam.y + w2c_r3.x * g_cam.z,
+                w2c_r1.y * g_cam.x + w2c_r2.y * g_cam.y + w2c_r3.y * g_cam.z,
+                w2c_r1.z * g_cam.x + w2c_r2.z * g_cam.y + w2c_r3.z * g_cam.z);
+            const float3 view_dir = mean3d - load3(p.camera, 0);
+            if (variance.x <= variance.y && variance.x <= variance.z) {
+                const float axis_dot = rotation.m11 * view_dir.x + rotation.m21 * view_dir.y + rotation.m31 * view_dir.z;
+                const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
+                dL_drotation.m11 += sign * g_world.x;
+                dL_drotation.m21 += sign * g_world.y;
+                dL_drotation.m31 += sign * g_world.z;
+            } else if (variance.y <= variance.z) {
+                const float axis_dot = rotation.m12 * view_dir.x + rotation.m22 * view_dir.y + rotation.m32 * view_dir.z;
+                const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
+                dL_drotation.m12 += sign * g_world.x;
+                dL_drotation.m22 += sign * g_world.y;
+                dL_drotation.m32 += sign * g_world.z;
+            } else {
+                const float axis_dot = rotation.m13 * view_dir.x + rotation.m23 * view_dir.y + rotation.m33 * view_dir.z;
+                const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
+                dL_drotation.m13 += sign * g_world.x;
+                dL_drotation.m23 += sign * g_world.y;
+                dL_drotation.m33 += sign * g_world.z;
+            }
+        }
+
+        const float dL_dqxx = -dL_drotation.m22 - dL_drotation.m33;
+        const float dL_dqyy = -dL_drotation.m11 - dL_drotation.m33;
+        const float dL_dqzz = -dL_drotation.m11 - dL_drotation.m22;
+        const float dL_dqxy = dL_drotation.m12 + dL_drotation.m21;
+        const float dL_dqxz = dL_drotation.m13 + dL_drotation.m31;
+        const float dL_dqyz = dL_drotation.m23 + dL_drotation.m32;
+        const float dL_dqrx = dL_drotation.m32 - dL_drotation.m23;
+        const float dL_dqry = dL_drotation.m13 - dL_drotation.m31;
+        const float dL_dqrz = dL_drotation.m21 - dL_drotation.m12;
+        const float dL_dq_norm_helper = qxx * dL_dqxx + qyy * dL_dqyy + qzz * dL_dqzz + qxy * dL_dqxy + qxz * dL_dqxz + qyz * dL_dqyz + qrx * dL_dqrx + qry * dL_dqry + qrz * dL_dqrz;
+        const float4 dL_draw_rotation = float4(qx * dL_dqrx + qy * dL_dqry + qz * dL_dqrz - qr * dL_dq_norm_helper, 2.0f * qx * dL_dqxx + qy * dL_dqxy + qz * dL_dqxz + qr * dL_dqrx - qx * dL_dq_norm_helper, 2.0f * qy * dL_dqyy + qx * dL_dqxy + qz * dL_dqyz + qr * dL_dqry - qy * dL_dq_norm_helper, 2.0f * qz * dL_dqzz + qx * dL_dqxz + qy * dL_dqyz + qr * dL_dqrz - qz * dL_dq_norm_helper) * inv_q_norm_sq;
+        const float4 clamped_rotation = clampGradient4(dL_draw_rotation);
+        rotation_grads[0] = clamped_rotation.x;
+        rotation_grads[1] = clamped_rotation.y;
+        rotation_grads[2] = clamped_rotation.z;
+        rotation_grads[3] = clamped_rotation.w;
+
+        // Visibility statistics without blend densification (fastgs backward.cu).
+        if (back.densify == 0 && back.densification != 0) {
+            Ptr<float, Access.ReadWrite> stats = (Ptr<float, Access.ReadWrite>)back.densification;
+            stats[primitive_idx] += 1.0f;
+            stats[p.count + primitive_idx] += length(dL_dmean2d * float2(0.5f * p.width, 0.5f * p.height));
+        }
+    } else {
+        store3(back.dcGradient, primitive_idx, float3(0));
+        [unroll] for (uint slot = 0; slot < 12; ++slot) if (slot < (p.rest * 3 + 3) / 4) {
+            uint cell = (primitive_idx / 32 * ((p.rest * 3 + 3) / 4) + slot) * 32 + primitive_idx % 32;
+            ((Ptr<float4, Access.ReadWrite>)back.shGradient)[cell] = float4(0);
+        }
+        [unroll] for (uint a = 0; a < 3; ++a)
+            scale_grads[a] = scaleRegularization(back, primitive_idx * 3 + a);
+        flattenRegularization(back, primitive_idx, scale_grads);
+        opacity_grads[0] = opacityRegularization(back, primitive_idx);
+    }
+    [unroll] for (uint a = 0; a < 3; ++a) {
+        storeFloat(back.meanGradient, primitive_idx * 3 + a, mean_grads[a]);
+        storeFloat(back.scaleGradient, primitive_idx * 3 + a, scale_grads[a]);
+    }
+    [unroll] for (uint a = 0; a < 4; ++a)
+        storeFloat(back.rotationGradient, primitive_idx * 4 + a, rotation_grads[a]);
+    storeFloat(back.opacityGradient, primitive_idx, opacity_grads[0]);
+}

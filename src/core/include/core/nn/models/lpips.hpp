@@ -5,6 +5,7 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/nn/activation_arena.hpp"
+#include "core/nn/lpips_dispatch.hpp"
 #include "core/nn/ops.hpp"
 #include "core/nn/weight_file.hpp"
 #include "core/tensor.hpp"
@@ -17,6 +18,8 @@
 #include <unordered_map>
 
 namespace lfs::core::nn::models {
+
+    [[nodiscard]] LFS_CORE_API std::size_t default_lpips_activation_budget();
 
     enum class InputScaling {
         Identity,
@@ -52,7 +55,12 @@ namespace lfs::core::nn::models {
         [[nodiscard]] std::size_t tile_size_for(int height, int width) const;
         // Extra free VRAM needed for the next call; includes allocator rounding.
         [[nodiscard]] std::size_t estimated_peak_bytes(int height, int width) const;
+        [[nodiscard]] bool prefers_independent_queue() const {
+            return dispatch_ && dispatch_->prefer_independent_queue;
+        }
         void release_activations();
+        // The binding must outlive this model; training tables have static lifetime.
+        void set_dispatch(const LpipsDispatch& dispatch) { dispatch_ = &dispatch; }
 
     private:
         lfs::Result<float> run(const Tensor& pred, const Tensor& target, InputScaling scaling,
@@ -82,6 +90,7 @@ namespace lfs::core::nn::models {
         std::array<Tensor, 4> fast_features_;
         Tensor fast_scores_;
         Tensor fast_weight_taps_;
+        const LpipsDispatch* dispatch_ = nullptr;
         std::array<std::size_t, 13> fast_weight_tap_offsets_{};
         std::array<float, 3> scaling_shift_{};
         std::array<float, 3> scaling_scale_{};

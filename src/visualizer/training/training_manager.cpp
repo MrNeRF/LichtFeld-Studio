@@ -17,16 +17,17 @@
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/shareable_allocation_limit.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
+#if LFS_HAS_CUDA
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/backend/cuda/runtime/size_bucketed_pool.hpp"
+#endif
 #include "core/tensor_backend.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
-#include "training/rasterization/gsplat/Ops.h"
-#include "training/rasterization/gsplat_rasterizer.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
@@ -39,7 +40,9 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <expected>
 #include <filesystem>
 #include <format>
@@ -80,11 +83,11 @@ namespace lfs::vis {
         };
 
         void release_training_thread_local_cuda_caches() noexcept {
-            (void)lfs::training::release_gsplat_rasterizer_thread_local_caches();
-            (void)gsplat_lfs::release_intersect_thread_local_cache();
+#if LFS_HAS_CUDA
             (void)lfs::core::tensor_ops::release_nan_check_thread_buffers();
             // sort workspaces — explicit release before thread join so
             // high-water VRAM is not held until TLS dtor races CUDA teardown.
+#endif
         }
 
         [[nodiscard]] std::uint64_t thread_id_for_logging(const std::thread::id id) noexcept {
@@ -349,7 +352,7 @@ namespace lfs::vis {
             lfs::core::SplatExportableStorage::growthCapacity(live_estimate, configured_capacity);
         std::size_t reserve_capacity = configured_capacity;
         if (reserve_capacity == 0) {
-            const auto memory = lfs::core::gpu_backend_memory_info(lfs::core::GpuBackend::CUDA);
+            const auto memory = lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend());
             const std::size_t total_mem = memory.total_bytes;
             if (total_mem > 0) {
                 const std::size_t per_splat =
@@ -372,58 +375,72 @@ namespace lfs::vis {
         const bool vulkan_interop_available =
             vk_ctx && vk_ctx->externalMemoryInteropEnabled();
 
-        if (vulkan_interop_available && exportable_capacity > 0) {
+        if (exportable_capacity > 0 &&
+            (vulkan_interop_available ||
+             lfs::core::default_gpu_backend() != lfs::core::GpuBackend::CUDA)) {
             auto storage_result = lfs::core::SplatExportableStorage::create(
                 exportable_capacity, sh_degree, /*device=*/0, reserve_capacity);
             if (storage_result) {
                 splat_storage_ = std::move(*storage_result);
-                auto make_interop_allocator = [this, vk_ctx] {
-                    return makeSplatExportableInteropAllocator(
-                        *vk_ctx, *splat_storage_, &splat_interop_parent_);
-                };
-                auto interop_alloc_result = viewer_ && !viewer_->isOnViewerThread()
-                                                ? post_work_and_wait(
-                                                      [this](Visualizer::WorkItem work) {
-                                                          return viewer_->postWork(std::move(work));
-                                                      },
-                                                      make_interop_allocator,
-                                                      []() -> lfs::Result<lfs::core::SplatTensorAllocator> {
-                                                          return lfs::Result<lfs::core::SplatTensorAllocator>(
-                                                              lfs::make_error(lfs::ErrorInit{
-                                                                  .code = lfs::ErrorCode::Cancelled,
-                                                                  .domain = lfs::ErrorDomain::Vulkan,
-                                                                  .user_message =
-                                                                      "Vulkan interop import cancelled during viewer shutdown",
-                                                                  .detection = LFS_SOURCE_SITE_CURRENT(),
-                                                              }));
-                                                      })
-                                                : make_interop_allocator();
-                if (interop_alloc_result) {
-                    splat_interop_allocator_ = std::move(*interop_alloc_result);
-                    tensor_allocator = splat_interop_allocator_;
-                    LOG_INFO("Training tensors share one CUDA-exportable VMM block "
-                             "imported into Vulkan (live≈{}, capacity={}, reserve={}, "
-                             "sh_degree={}, committed={} MiB reserved={} MiB chunks={}) "
-                             "— zero-copy viewer interop during live-N growth",
+                if (!(vulkan_interop_available &&
+                      lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA)) {
+                    tensor_allocator = splat_storage_->make_allocator();
+                    LOG_INFO("Training tensors use device splat storage "
+                             "(live≈{}, capacity={}, reserve={}, sh_degree={}, committed={} MiB)",
                              live_estimate,
                              exportable_capacity,
                              reserve_capacity,
                              sh_degree,
-                             splat_storage_->block->committed_bytes >> 20,
-                             splat_storage_->block->reserved_bytes >> 20,
-                             splat_storage_->block->chunks.size());
+                             splat_storage_->block->committed_bytes >> 20);
                 } else {
-                    LOG_WARN("Exportable-interop allocator failed ({}); dropping storage "
-                             "and falling back to legacy Vulkan-external allocator",
-                             lfs::format_for_developer(interop_alloc_result.error()));
-                    if (interop_alloc_result.error().code() == lfs::ErrorCode::Cancelled) {
+                    auto make_interop_allocator = [this, vk_ctx] {
+                        return makeSplatExportableInteropAllocator(
+                            *vk_ctx, *splat_storage_, &splat_interop_parent_);
+                    };
+                    auto interop_alloc_result = viewer_ && !viewer_->isOnViewerThread()
+                                                    ? post_work_and_wait(
+                                                          [this](Visualizer::WorkItem work) {
+                                                              return viewer_->postWork(std::move(work));
+                                                          },
+                                                          make_interop_allocator,
+                                                          []() -> lfs::Result<lfs::core::SplatTensorAllocator> {
+                                                              return lfs::Result<lfs::core::SplatTensorAllocator>(
+                                                                  lfs::make_error(lfs::ErrorInit{
+                                                                      .code = lfs::ErrorCode::Cancelled,
+                                                                      .domain = lfs::ErrorDomain::Vulkan,
+                                                                      .user_message =
+                                                                          "Vulkan interop import cancelled during viewer shutdown",
+                                                                      .detection = LFS_SOURCE_SITE_CURRENT(),
+                                                                  }));
+                                                          })
+                                                    : make_interop_allocator();
+                    if (interop_alloc_result) {
+                        splat_interop_allocator_ = std::move(*interop_alloc_result);
+                        tensor_allocator = splat_interop_allocator_;
+                        LOG_INFO("Training tensors share one CUDA-exportable VMM block "
+                                 "imported into Vulkan (live≈{}, capacity={}, reserve={}, "
+                                 "sh_degree={}, committed={} MiB reserved={} MiB chunks={}) "
+                                 "— zero-copy viewer interop during live-N growth",
+                                 live_estimate,
+                                 exportable_capacity,
+                                 reserve_capacity,
+                                 sh_degree,
+                                 splat_storage_->block->committed_bytes >> 20,
+                                 splat_storage_->block->reserved_bytes >> 20,
+                                 splat_storage_->block->chunks.size());
+                    } else {
+                        LOG_WARN("Exportable-interop allocator failed ({}); dropping storage "
+                                 "and falling back to legacy Vulkan-external allocator",
+                                 lfs::format_for_developer(interop_alloc_result.error()));
+                        if (interop_alloc_result.error().code() == lfs::ErrorCode::Cancelled) {
+                            splat_interop_parent_.reset();
+                            splat_storage_.reset();
+                            return lfs::Result<lfs::core::SplatTensorAllocator>(
+                                std::move(interop_alloc_result.error()));
+                        }
                         splat_interop_parent_.reset();
                         splat_storage_.reset();
-                        return lfs::Result<lfs::core::SplatTensorAllocator>(
-                            std::move(interop_alloc_result.error()));
                     }
-                    splat_interop_parent_.reset();
-                    splat_storage_.reset();
                 }
             } else if (lfs::core::is_shareable_allocation_limit_message(storage_result.error())) {
                 LOG_WARN("SplatExportableStorage creation exceeded the shareable allocation "
@@ -436,7 +453,7 @@ namespace lfs::vis {
             }
         }
 
-        if (!tensor_allocator) {
+        if (!tensor_allocator && lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
             tensor_allocator = makeVulkanTrainingTensorAllocator(viewer_);
             if (tensor_allocator) {
                 LOG_INFO("Training model tensors will use Vulkan-external CUDA storage");
@@ -484,7 +501,7 @@ namespace lfs::vis {
         // remap). Generation-checked bind handles protect FastGS and Adam
         // readers from stale pointers during densification.
         try {
-            lfs::core::gpu_device_barrier(lfs::core::GpuBackend::CUDA);
+            lfs::core::gpu_device_barrier(lfs::core::default_gpu_backend());
         } catch (const std::exception& error) {
             LOG_ERROR("Device barrier before densify exportable barrier failed: {}", error.what());
             return false;
@@ -502,7 +519,7 @@ namespace lfs::vis {
             return true;
         }
         try {
-            lfs::core::gpu_device_barrier(lfs::core::GpuBackend::CUDA);
+            lfs::core::gpu_device_barrier(lfs::core::default_gpu_backend());
         } catch (const std::exception& error) {
             LOG_ERROR("Device barrier after densify exportable barrier failed: {}", error.what());
             return false;
@@ -530,7 +547,7 @@ namespace lfs::vis {
         const std::uint64_t old_generation = splat_storage_->generation();
 
         try {
-            lfs::core::gpu_device_barrier(lfs::core::GpuBackend::CUDA);
+            lfs::core::gpu_device_barrier(lfs::core::default_gpu_backend());
         } catch (const std::exception& error) {
             LOG_ERROR("Device barrier before exportable grow failed: {}", error.what());
             return false;
@@ -602,7 +619,11 @@ namespace lfs::vis {
                 new_state == TrainingState::Running ||
                 new_state == TrainingState::Paused ||
                 new_state == TrainingState::Stopping;
+#if LFS_HAS_CUDA
             lfs::core::SizeBucketedPool::instance().set_training_active(training_cache_active);
+#else
+            (void)training_cache_active;
+#endif
 
             if (new_state == TrainingState::Starting) {
                 auto& store = app_store();
@@ -873,8 +894,8 @@ namespace lfs::vis {
             return false;
         }
 
-        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
-            static_cast<void>(rejectStart("Training requires an available CUDA device", lfs::ErrorCode::FailedPrecondition));
+        if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend())) {
+            static_cast<void>(rejectStart("Training requires an available GPU", lfs::ErrorCode::FailedPrecondition));
             return false;
         }
 
@@ -997,7 +1018,7 @@ namespace lfs::vis {
                     graph_capture = lfs::training::captureTrainingModelGraph(*scene_);
                     for (const auto& camera : scene_->getAllCameras()) {
                         if (camera) {
-                            camera->to_backend(lfs::core::GpuBackend::CUDA);
+                            camera->to_backend(lfs::core::default_gpu_backend());
                         }
                     }
                 },
@@ -1847,7 +1868,7 @@ namespace lfs::vis {
     }
 
     void TrainerManager::trainingInitializationThreadFunc(std::stop_token stop_token) {
-        const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::CUDA);
+        const lfs::core::GpuBackendScope backend(lfs::core::default_gpu_backend());
         LOG_INFO("Training initialization thread started");
         lfs::Result<void> initialization_result;
         try {
@@ -1936,7 +1957,7 @@ namespace lfs::vis {
     }
 
     void TrainerManager::trainingThreadFunc(std::stop_token stop_token) {
-        const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::CUDA);
+        const lfs::core::GpuBackendScope backend(lfs::core::default_gpu_backend());
         {
             std::unique_lock lock(initialization_gate_mutex_);
             initialization_gate_cv_.wait(lock, [this] { return initialization_gate_open_; });

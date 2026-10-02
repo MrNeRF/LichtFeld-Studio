@@ -4,8 +4,8 @@
 
 #include "core/cuda_error.hpp"
 #include "core/tensor.hpp"
-#include "lfs/cuda_scratch.hpp"
 #include "mcmc_kernels.hpp"
+#include "training/kernels/cuda_scratch.hpp"
 #include <cassert>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>

@@ -17,11 +17,11 @@
 
 namespace lfs::core {
 
-    // Coalesced exportable storage for the per-primitive splat tensors. One
-    // CUDA VMM reservation backs every region; each tensor is a view at a
-    // VMM-granularity-aligned offset computed once at reserve_capacity. The
-    // Vulkan viewer imports this single sparse-bound buffer and reads the
-    // trainer's writes directly — no per-frame copy.
+    // Coalesced storage for the per-primitive splat tensors. A CUDA session
+    // reserves one exportable VMM block; any other session reserves one device
+    // allocation. Each tensor is a view at a granularity-aligned offset computed
+    // once at reserve_capacity. The Vulkan viewer imports the CUDA block and
+    // reads the trainer's writes directly — no per-frame copy.
     //
     // ShN is pad-dropped q16 (uint16 cells, [ceil(N/32), n_cells, 32]) with
     // per-256-splat float2 bounds in ShNBounds. The training viewport dequants

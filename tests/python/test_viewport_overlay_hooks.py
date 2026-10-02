@@ -119,6 +119,7 @@ def _install_stub_modules(monkeypatch):
         rml=SimpleNamespace(get_document=lambda _name: document),
         context=lambda: SimpleNamespace(),
         get_content_type=lambda: "splat_files",
+        get_active_view_id=lambda: 1,
         get_active_tool=lambda: "",
         get_transform_space=lambda: 1,
         get_pivot_mode=lambda: 0,

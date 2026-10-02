@@ -683,9 +683,6 @@ namespace lfs::vis {
 
         // Single source for the effective orthographic scale: the per-panel override when a
         // panel has one, otherwise the global setting.
-        [[nodiscard]] float effectiveOrthoScale(const Viewport& viewport, const RenderSettings& settings) {
-            return viewport.ortho_scale_override.value_or(settings.ortho_scale);
-        }
 
         [[nodiscard]] rendering::ViewportData viewportDataFromViewer(
             const Viewport& viewport,
@@ -697,7 +694,7 @@ namespace lfs::vis {
                 .size = glm::ivec2(info.render_width, info.render_height),
                 .focal_length_mm = settings.focal_length_mm,
                 .orthographic = settings.orthographic,
-                .ortho_scale = effectiveOrthoScale(viewport, settings),
+                .ortho_scale = settings.ortho_scale,
             };
         }
 
@@ -1823,10 +1820,6 @@ namespace lfs::vis {
         testing_hovered_gaussian_id_ = hovered_gaussian_id;
     }
 
-    void SelectionService::setTestingPanel(const SplitViewPanelId panel) {
-        testing_panel_ = panel;
-    }
-
     bool SelectionService::hasTestingScreenPositionsForCamera(const int camera_index) const {
         if (camera_index < 0) {
             return false;
@@ -1847,7 +1840,7 @@ namespace lfs::vis {
         if (!context.valid() || !rendering_manager_) {
             return std::nullopt;
         }
-        const auto settings = rendering_manager_->getSettings();
+        const auto settings = context.view == kNoView ? rendering_manager_->getSettings() : rendering_manager_->settingsForView(context.view);
         Viewport projection_viewport = *context.viewport;
         projection_viewport.windowSize = {context.info.render_width, context.info.render_height};
         SelectionProjectionContext projection_context;
@@ -1861,7 +1854,7 @@ namespace lfs::vis {
         // interactive viewport. Project committed selection against what is actually on
         // screen. Returns nullopt whenever GT is off or its camera is unavailable, in which
         // case everything below is exactly the interactive-viewer behaviour.
-        if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
+        if (const auto gt = rendering_manager_->gtComparisonSelectionContext(context.view)) {
             projection_context.viewport.rotation = gt->camera.rotation;
             projection_context.viewport.translation = gt->camera.translation;
             projection_context.viewport.size = gt->size;
@@ -2148,8 +2141,15 @@ namespace lfs::vis {
         if (!session.active || !session.viewport_context) {
             return std::nullopt;
         }
-        const auto panel = session.viewport_context->panel;
-        const auto context = resolveViewerViewportContext(screen_point, panel);
+        const auto& owner = *session.viewport_context;
+        if (owner.view != kNoView) {
+            const auto* gui = services().guiOrNull();
+            if (!gui || !gui->getViewer() || gui->getViewer()->screens().screenEpoch() != owner.screen_epoch ||
+                !gui->getViewer()->findView(owner.view).viewport)
+                return std::nullopt;
+        }
+        const auto panel = owner.panel;
+        const auto context = resolveViewerViewportContext(screen_point, panel, owner.view);
         if (!context || context->panel != panel) {
             return std::nullopt;
         }
@@ -2158,64 +2158,48 @@ namespace lfs::vis {
 
     std::optional<SelectionService::ViewerViewportContext> SelectionService::resolveViewerViewportContext(
         const std::optional<glm::vec2> screen_point,
-        const std::optional<SplitViewPanelId> panel_override) const {
+        const std::optional<SplitViewPanelId> panel_override, const ViewId view) const {
         ViewerViewportContext context;
         context.panel = panel_override.value_or(SplitViewPanelId::Left);
 
         if (testing_viewport_ && testing_viewport_->valid()) {
             static Viewport testing_viewport_source(1, 1);
-            context.panel = testing_panel_.value_or(SplitViewPanelId::Left);
+            context.panel = SplitViewPanelId::Left;
             context.info = *testing_viewport_;
             context.viewport = &testing_viewport_source;
             return context;
         }
 
-        // GT-C: the compare image is rendered at gt_size and composited across the whole
-        // letterboxed content rect, with the divider merely hiding its left portion — so the
-        // linear map from content-rect screen pixels to gt_size render pixels is the correct one
-        // for the full rect. This lives here, in the selection lane's own resolver, and NOT in
-        // RenderingManager::resolveViewerPanel: that function has nineteen non-selection callers
-        // (gizmos, alignment, sequencer, the guide-panel collector) which would otherwise combine
-        // GT layout and gt_size with the interactive pose.
-        if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
-            auto* const gui = services().guiOrNull();
-            if (gui && gui->getViewer()) {
-                const auto viewport_pos = gui->getViewportPos();
-                const auto viewport_size = gui->getViewportSize();
-                const auto bounds = rendering_manager_->getContentBounds(
-                    glm::ivec2(static_cast<int>(viewport_size.x), static_cast<int>(viewport_size.y)));
-                context.panel = SplitViewPanelId::Right;
-                context.info = ViewportInfo{
-                    .x = viewport_pos.x + bounds.x,
-                    .y = viewport_pos.y + bounds.y,
-                    .width = bounds.width,
-                    .height = bounds.height,
-                    .render_width = gt->size.x,
-                    .render_height = gt->size.y,
-                };
-                context.viewport = &gui->getViewer()->getViewport();
-                if (context.info.valid()) {
-                    return context;
-                }
-            }
-        }
-
         auto* const gm = services().guiOrNull();
-        if (!rendering_manager_ || !gm || !gm->getViewer()) {
+        if (!rendering_manager_ || !gm || !gm->getViewer())
             return std::nullopt;
-        }
-
-        const auto viewport_pos = gm->getViewportPos();
-        const auto viewport_size = gm->getViewportSize();
-        const auto panel = rendering_manager_->resolveViewerPanel(
-            gm->getViewer()->getViewport(),
-            {viewport_pos.x, viewport_pos.y},
-            {viewport_size.x, viewport_size.y},
-            screen_point,
-            panel_override);
-        if (!panel) {
+        auto* const viewer = gm->getViewer();
+        const auto target = viewer->findView(view == kNoView ? rendering_manager_->activeViewId() : view);
+        if (!target.viewport)
             return std::nullopt;
+        context.view = target.id;
+        context.screen_epoch = viewer->screens().screenEpoch();
+        const auto viewport_pos = target.pos;
+        const auto viewport_size = target.size;
+        if (const auto gt = rendering_manager_->gtComparisonSelectionContext(context.view)) {
+            const auto bounds = rendering_manager_->getContentBounds(context.view, glm::ivec2(viewport_size));
+            context.panel = SplitViewPanelId::Right;
+            context.info = ViewportInfo{
+                .x = viewport_pos.x + bounds.x,
+                .y = viewport_pos.y + bounds.y,
+                .width = bounds.width,
+                .height = bounds.height,
+                .render_width = gt->size.x,
+                .render_height = gt->size.y,
+            };
+            context.viewport = target.viewport;
+            return context.info.valid() ? std::optional<ViewerViewportContext>(context) : std::nullopt;
         }
+        const auto panel = rendering_manager_->resolveViewerPanel(context.view, *target.viewport,
+                                                                  viewport_pos, viewport_size,
+                                                                  screen_point, panel_override);
+        if (!panel)
+            return std::nullopt;
 
         context.panel = panel->panel;
         context.info = ViewportInfo{
@@ -2480,6 +2464,7 @@ namespace lfs::vis {
                                                 ? projectionContextFromViewerContext(*viewport_context)
                                                 : std::nullopt;
         if (!viewport_context || !projection_context_opt) {
+            cancelInteractiveSelection();
             return {false, 0, "Invalid projection context"};
         }
         const SelectionProjectionContext projection_context = *projection_context_opt;
@@ -2685,6 +2670,10 @@ namespace lfs::vis {
             return;
         }
 
+        if (!resolveInteractiveSessionViewportContext()) {
+            cancelInteractiveSelection();
+            return;
+        }
         const bool continuous_refresh = (session.shape == SelectionShape::Polygon) ||
                                         (session.shape == SelectionShape::Rings);
         if (!session.preview_dirty && !continuous_refresh) {
@@ -3845,18 +3834,20 @@ namespace lfs::vis {
             !viewport_context->info.valid()) {
             return std::nullopt;
         }
-        const glm::ivec2 rendered_size = rendering_manager_->getRenderedSize();
+        const glm::ivec2 rendered_size = rendering_manager_->viewState(
+                                                               viewport_context->view == kNoView ? rendering_manager_->activeViewId() : viewport_context->view)
+                                             .viewport_artifact_service_.renderedSize();
         if (rendered_size.x <= 0 || rendered_size.y <= 0) {
             return std::nullopt;
         }
 
-        const auto settings = rendering_manager_->getSettings();
+        const auto settings = viewport_context->view == kNoView ? rendering_manager_->getSettings() : rendering_manager_->settingsForView(viewport_context->view);
         const auto& info = viewport_context->info;
         Viewport projection_viewport = *viewport_context->viewport;
         projection_viewport.windowSize = {info.render_width, info.render_height};
         const auto render_point = screenToRender(screen_point, info);
 
-        if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
+        if (const auto gt = rendering_manager_->gtComparisonSelectionContext(viewport_context->view)) {
             // Equirect GT has empty intrinsics by construction (split_view_service.cpp:78-103).
             // Falling through would unproject through the interactive camera — the path the
             // STOP-3 comment below forbids. Inverse of core::filter_points.
@@ -3908,9 +3899,9 @@ namespace lfs::vis {
             }
         }
 
-        const float depth = rendering_manager_->getDepthAtPixel(
-            static_cast<int>(render_point.x), static_cast<int>(render_point.y), viewport_context->panel);
-        const float ortho_scale = effectiveOrthoScale(projection_viewport, settings);
+        const float depth = rendering_manager_->getDepthAtPixel(viewport_context->view == kNoView ? rendering_manager_->activeViewId() : viewport_context->view,
+                                                                static_cast<int>(render_point.x), static_cast<int>(render_point.y), viewport_context->panel);
+        const float ortho_scale = settings.ortho_scale;
 
         if (depth > 0.0f) {
             const glm::vec3 world = projection_viewport.unprojectPixel(
@@ -3953,10 +3944,10 @@ namespace lfs::vis {
         const auto& info = viewport_context->info;
         Viewport projection_viewport = *viewport_context->viewport;
         projection_viewport.windowSize = {info.render_width, info.render_height};
-        const auto settings = rendering_manager_->getSettings();
-        const float ortho_scale = effectiveOrthoScale(projection_viewport, settings);
+        const auto settings = viewport_context->view == kNoView ? rendering_manager_->getSettings() : rendering_manager_->settingsForView(viewport_context->view);
+        const float ortho_scale = settings.ortho_scale;
 
-        if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
+        if (const auto gt = rendering_manager_->gtComparisonSelectionContext(viewport_context->view)) {
             // Forward of core::filter_points's equirect branch. Must
             // not fall through to projectWorldPoint's interactive-camera pinhole.
             if (gt->camera.equirectangular) {
@@ -4278,25 +4269,13 @@ namespace lfs::vis {
                 (std::isfinite(viewport.ortho_scale) && viewport.ortho_scale > 1.0e-5f)
                     ? viewport.ortho_scale
                     : lfs::rendering::DEFAULT_ORTHO_SCALE;
-            const bool use_panel_depth_window =
-                settings.split_view_mode == SplitViewMode::IndependentDual &&
-                projection_context.panel.has_value();
             float depth_near = -settings.depth_filter_max.z;
             float depth_far = -settings.depth_filter_min.z;
             float scale_x = settings.depth_filter_scale_x;
             float scale_y = settings.depth_filter_scale_y;
             float offset_x = settings.depth_filter_offset_x;
             float offset_y = settings.depth_filter_offset_y;
-            if (use_panel_depth_window) {
-                const auto panel_window =
-                    rendering_manager_->getDepthWindowForPanel(*projection_context.panel);
-                depth_near = panel_window.near_plane;
-                depth_far = panel_window.far_plane;
-                scale_x = panel_window.scale_x;
-                scale_y = panel_window.scale_y;
-                offset_x = panel_window.offset_x;
-                offset_y = panel_window.offset_y;
-            }
+
             rendering::filter_selection_by_screen_window(
                 selection,
                 means,

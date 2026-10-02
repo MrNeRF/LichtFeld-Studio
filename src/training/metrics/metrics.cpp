@@ -3,22 +3,20 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "metrics.hpp"
-#include "../kernels/normal_loss.hpp"
-#include "../rasterization/gsplat_rasterizer.hpp"
-#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
-#include "core/cuda/undistort/undistort.hpp"
 #include "core/events.hpp"
 #include "core/gpu_device_runtime.hpp"
-#include "core/gpu_elapsed.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/shared_image_ops.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_upload.hpp"
 #include "eval_mask.hpp"
-#include "io/cuda/image_format_kernels.cuh"
-#include "lfs/training/ops/fast_cuda.hpp"
+#include "lfs/training/ops/fast_services.hpp"
+#include "lfs/training/ops/geometry_types.hpp"
+#include "lfs/training/ops/gsplat_services.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include <algorithm>
 #include <cassert>
@@ -27,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
@@ -36,8 +35,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <cuda_runtime.h>
 
 namespace lfs::training {
 
@@ -153,6 +150,12 @@ namespace lfs::training {
                 lfs::core::TensorShape({H, W, C}),
                 lfs::core::Device::CPU,
                 lfs::core::DataType::UInt8);
+            const auto* image_ops = training_ops(lfs::core::default_gpu_backend()).training_image;
+            if (image_ops && image_ops->upload_image_chw) {
+                auto chw = image_ops->upload_image_chw(hwc);
+                cam.set_image_dimensions(width, height);
+                return chw;
+            }
             auto chw = hwc.permute({2, 0, 1}).contiguous();
             image_data.reset();
 
@@ -753,10 +756,22 @@ namespace lfs::training {
             _lpips_load_attempted = true;
             const auto& weights_path = *_lpips_weights_path;
             try {
+                // Up to a quarter of the free device memory, never below the
+                // default: a device with room runs LPIPS untiled instead of
+                // recomputing tile halos.
+                const std::size_t free_bytes =
+                    lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend()).free_bytes;
+                const std::size_t budget =
+                    std::max(lfs::core::nn::models::default_lpips_activation_budget(), free_bytes / 4);
                 auto loaded = lfs::core::nn::models::Lpips::load(
                     weights_path, lfs::core::Device::GPU, lfs::core::DataType::Float16,
-                    lfs::core::nn::models::InputScaling::Identity);
+                    lfs::core::nn::models::InputScaling::Identity, budget);
                 if (loaded) {
+                    const auto backend = lfs::core::default_gpu_backend();
+                    const auto* lpips = training_ops(backend).lpips;
+                    if (!lpips)
+                        throw std::runtime_error(*unavailable_training_family(backend, Family::Lpips));
+                    loaded->set_dispatch(*lpips);
                     _lpips_metric.emplace(std::move(*loaded));
                 } else {
                     LOG_WARN("Eval: LPIPS unavailable at '{}' ({})",
@@ -767,7 +782,6 @@ namespace lfs::training {
                          lfs::core::path_to_utf8(weights_path), e.what());
             }
         }
-        lfs::core::GpuElapsed lpips_timer(lfs::core::GpuBackend::CUDA, 2);
         const bool use_masking = eval_uses_masks(_params.optimization.mask_mode);
 
         bool render_normal = false;
@@ -822,8 +836,17 @@ namespace lfs::training {
             auto& splatData_mutable = const_cast<lfs::core::SplatData&>(splatData);
             RenderOutput r_output;
             if (_params.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
-                r_output = gsplat_rasterize(*cam, splatData_mutable, background,
-                                            1.0f, false, GsplatRenderMode::RGB, true);
+                if (_gsplat_ops == nullptr) {
+                    _gsplat_ops = lfs::training::training_ops(lfs::core::default_gpu_backend()).gsplat;
+                }
+                if (_gsplat_ops == nullptr) {
+                    throw std::runtime_error(*lfs::training::unavailable_training_family(
+                        lfs::core::default_gpu_backend(), lfs::training::Family::Gsplat));
+                }
+                auto& saved = _gsplat_saved != nullptr ? *_gsplat_saved : _gsplat_owned;
+                if (!saved.backend)
+                    saved.backend = _gsplat_ops->create();
+                r_output = gsplat_infer(*_gsplat_ops, saved, *cam, splatData_mutable, background);
             } else {
                 if (_fast_ops == nullptr) {
                     _fast_ops = lfs::training::training_ops(lfs::core::default_gpu_backend()).fast;
@@ -877,6 +900,18 @@ namespace lfs::training {
 
             const auto gt_float = image_as_float01(gt_image).clamp(0.0f, 1.0f);
             std::optional<float> lpips;
+            std::function<void()> deferred_lpips;
+            std::future<void> pending_lpips;
+            const auto launch_lpips = [&] {
+                if (!deferred_lpips)
+                    return;
+                auto work = std::exchange(deferred_lpips, {});
+                try {
+                    pending_lpips = std::async(std::launch::async, work);
+                } catch (const std::system_error&) {
+                    pending_lpips = std::async(std::launch::deferred, std::move(work));
+                }
+            };
             if (_lpips_metric) {
                 try {
                     const auto pred_lpips = mask_image_for_lpips(r_output.image, mask);
@@ -889,7 +924,7 @@ namespace lfs::training {
                     lpips_preflight_size = image_size;
                     const auto required = _lpips_metric->estimated_peak_bytes(image_height, image_width);
                     const std::size_t free_bytes =
-                        lfs::core::gpu_backend_memory_info(lfs::core::GpuBackend::CUDA).free_bytes;
+                        lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend()).free_bytes;
                     const bool lpips_preflight_ok = free_bytes >= required && free_bytes != 0;
                     if (!lpips_preflight_ok && size_changed) {
                         const auto shortfall = required > free_bytes ? required - free_bytes : 0;
@@ -901,30 +936,43 @@ namespace lfs::training {
                                   _lpips_metric->tile_size_for(image_height, image_width), required, free_bytes);
                     }
                     if (lpips_preflight_ok) {
-                        const cudaStream_t lpips_stream = lfs::core::getCurrentCUDAStream();
-                        const bool timed_lpips = lpips_timer.mark(0, lpips_stream);
-                        auto value = _lpips_metric->forward(
-                            pred_lpips, target_lpips,
-                            lfs::core::nn::models::InputScaling::Identity);
-                        const bool lpips_event_complete =
-                            timed_lpips && lpips_timer.mark(1, lpips_stream) &&
-                            lpips_timer.wait_event(1);
-                        if (value && std::isfinite(*value)) {
-                            if (lpips_event_complete) {
-                                const auto elapsed_ms = lpips_timer.milliseconds(0, 1);
-                                if (elapsed_ms && std::isfinite(*elapsed_ms)) {
-                                    lpips_elapsed_ms += *elapsed_ms;
+                        auto evaluate_lpips = [&, pred_lpips, target_lpips] {
+                            const auto lpips_wall_start = std::chrono::steady_clock::now();
+                            auto value = _lpips_metric->forward(
+                                pred_lpips, target_lpips,
+                                lfs::core::nn::models::InputScaling::Identity);
+                            if (value && std::isfinite(*value)) {
+                                const auto elapsed_ms = std::chrono::duration<float, std::milli>(
+                                                            std::chrono::steady_clock::now() - lpips_wall_start)
+                                                            .count();
+                                if (std::isfinite(elapsed_ms)) {
+                                    lpips_elapsed_ms += elapsed_ms;
                                     lpips_timed_images++;
                                 }
+                                lpips = *value;
+                                lpips_values.push_back(*value);
+                            } else if (!value) {
+                                LOG_WARN("Eval: LPIPS failed for camera '{}' ({})", cam->image_name(),
+                                         value.error().detail());
+                            } else {
+                                LOG_WARN("Eval: LPIPS produced a non-finite value for camera '{}'",
+                                         cam->image_name());
                             }
-                            lpips = *value;
-                            lpips_values.push_back(*value);
-                        } else if (!value) {
-                            LOG_WARN("Eval: LPIPS failed for camera '{}' ({})", cam->image_name(),
-                                     value.error().detail());
+                        };
+                        if (_lpips_metric->prefers_independent_queue() &&
+                            render_normal && cam->has_normal()) {
+                            // Materialize on the producer queue before sharing with the worker.
+                            (void)pred_lpips.data_ptr();
+                            (void)target_lpips.data_ptr();
+                            deferred_lpips = [evaluate_lpips = std::move(evaluate_lpips),
+                                              backend = *lfs::core::gpu_backend_of(pred_lpips)] {
+                                const lfs::core::GpuBackendScope backend_scope(backend);
+                                lfs::core::TensorWorkQueue queue(backend);
+                                const lfs::core::TensorWorkQueue::Scope scope(queue);
+                                evaluate_lpips();
+                            };
                         } else {
-                            LOG_WARN("Eval: LPIPS produced a non-finite value for camera '{}'",
-                                     cam->image_name());
+                            evaluate_lpips();
                         }
                     }
                 } catch (const std::exception& e) {
@@ -969,13 +1017,22 @@ namespace lfs::training {
                             const int render_w = static_cast<int>(r_output.normal.shape()[2]);
                             if (static_cast<int>(prior.shape()[1]) != render_h ||
                                 static_cast<int>(prior.shape()[2]) != render_w) {
-                                prior = lfs::core::lanczos_resize_float_chw(
-                                    prior, render_h, render_w, 2, lfs::core::getCurrentCUDAStream());
+                                prior = lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->resize(prior, render_h, render_w, lfs::gpu_ops::Resample::LanczosFloatCHW, 2);
                             }
-                            if (const auto angle = mean_normal_angle_deg(
-                                    r_output.normal, prior, r_output.alpha)) {
+                            std::optional<float> angle;
+                            if (deferred_lpips) {
+                                // Finish the normal readbacks before LPIPS occupies the GPU.
+                                // The unchanged CPU reduction can then run alongside LPIPS.
+                                const auto rendered_cpu = r_output.normal.cpu().contiguous();
+                                const auto prior_cpu = prior.cpu().contiguous();
+                                const auto alpha_cpu = r_output.alpha.cpu().contiguous();
+                                launch_lpips();
+                                angle = mean_normal_angle_deg(rendered_cpu, prior_cpu, alpha_cpu);
+                            } else {
+                                angle = mean_normal_angle_deg(r_output.normal, prior, r_output.alpha);
+                            }
+                            if (angle)
                                 normal_values.push_back(*angle);
-                            }
                             if (_params.optimization.enable_save_eval_images &&
                                 std::getenv("LFS_EVAL_SAVE_NORMALS")) {
                                 const std::vector<lfs::core::Tensor> normal_maps = {
@@ -1035,6 +1092,16 @@ namespace lfs::training {
                 }
             } catch (const std::exception& e) {
                 LOG_DEBUG("Eval: depth_absrel skipped for '{}': {}", cam->image_name(), e.what());
+            }
+
+            launch_lpips();
+            if (pending_lpips.valid()) {
+                try {
+                    pending_lpips.get();
+                } catch (const std::exception& e) {
+                    LOG_WARN("Eval: LPIPS failed for camera '{}' ({})", cam->image_name(), e.what());
+                }
+                view.lpips = lpips;
             }
 
             if (_params.optimization.enable_save_eval_images) {

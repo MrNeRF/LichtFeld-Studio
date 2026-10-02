@@ -1,4 +1,5 @@
 #pragma once
+#include <deque>
 
 #include "gs_pipeline.h"
 
@@ -212,7 +213,13 @@ public:
         size_t raw_count = 0;
         bool count_overflow = false;
     };
+    struct LodSelectionReadbackIdentity {
+        std::uint32_t target = 0;
+        std::uint64_t model_generation = 0;
+        std::uint64_t tree_generation = 0;
+    };
     struct LodSelectionStats {
+        LodSelectionReadbackIdentity identity{};
         float threshold_scale = 1.0f;
         size_t candidate_count = 0;
         size_t rendered_capacity = 0;
@@ -243,7 +250,8 @@ public:
     void cleanup();
 
     void tagDeferredVisibleCountReadback(VkSemaphore semaphore, std::uint64_t value);
-    void tagDeferredLodSelectionReadback(VkSemaphore semaphore, std::uint64_t value);
+    void tagDeferredLodSelectionReadback(VkSemaphore semaphore, std::uint64_t value,
+                                         LodSelectionReadbackIdentity identity);
     void tagDeferredInstanceCountReadback(VkSemaphore semaphore, std::uint64_t value);
     [[nodiscard]] std::optional<PrimitiveVisibilityStats> pollDeferredPrimitiveVisibilityStats();
     [[nodiscard]] std::optional<LodSelectionStats> pollDeferredLodSelectionStats();
@@ -556,14 +564,20 @@ protected:
     uint32_t* instance_gate_readback_mapped_ = nullptr;
     bool instance_gate_readback_initialized_ = false;
 
-    _VulkanBuffer lod_selection_readback_buffer_{};
-    uint32_t* lod_selection_readback_mapped_ = nullptr;
-    bool lod_selection_readback_initialized_ = false;
-    bool lod_selection_readback_pending_ = false;
-    VkSemaphore lod_selection_readback_signal_ = VK_NULL_HANDLE;
-    std::uint64_t lod_selection_readback_value_ = 0;
-    size_t lod_selection_readback_capacity_ = 0;
-    size_t lod_selection_readback_chunk_capacity_ = 0;
+    struct LodSelectionReadbackSlot {
+        _VulkanBuffer buffer{};
+        uint32_t* mapped = nullptr;
+        bool initialized = false;
+        bool pending = false;
+        VkSemaphore signal = VK_NULL_HANDLE;
+        std::uint64_t value = 0;
+        size_t capacity = 0;
+        size_t chunk_capacity = 0;
+        std::uint64_t order = 0;
+        LodSelectionReadbackIdentity identity{};
+    };
+    std::deque<LodSelectionReadbackSlot> lod_selection_readbacks_{3};
+    std::uint64_t lod_selection_readback_order_ = 0;
 
     void ensureVisibleCountReadback();
     void destroyVisibleCountReadback();
@@ -573,7 +587,7 @@ protected:
     void recordInstanceCountReadback(VulkanGSPipelineBuffers& buffers, size_t armed);
     void ensureInstanceGateReadback();
     void destroyInstanceGateReadback();
-    void ensureLodSelectionReadback(size_t chunk_capacity);
+    void ensureLodSelectionReadback(LodSelectionReadbackSlot& slot, size_t chunk_capacity);
     void destroyLodSelectionReadback();
     void recordLodSelectionReadback(VulkanGSPipelineBuffers& buffers,
                                     size_t rendered_capacity);

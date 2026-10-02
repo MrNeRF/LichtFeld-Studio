@@ -35,6 +35,7 @@
 #include <format>
 #include <glm/glm.hpp>
 #include <string_view>
+#include <utility>
 
 namespace lfs::vis::gui {
 
@@ -422,8 +423,7 @@ namespace lfs::vis::gui {
         ctor.Bind("menu_labels", &menu_labels_);
         ctor.Bind("dropdown_items", &dropdown_items_);
         ctor.Bind("menu_camera_buttons", &camera_buttons_);
-        ctor.Bind("menu_render_buttons", &render_buttons_);
-        ctor.Bind("menu_projection_buttons", &projection_buttons_);
+        ctor.Bind("menu_snap_buttons", &snap_buttons_);
         ctor.Bind("portal_connection_label", &portal_connection_label_);
         ctor.Bind("portal_connection_tooltip", &portal_connection_tooltip_);
         ctor.Bind("portal_connection_icon", &portal_connection_icon_);
@@ -474,7 +474,6 @@ namespace lfs::vis::gui {
         project_title_el_ = document_->GetElementById("project-title-content");
         menu_toolbar_ = document_->GetElementById("menu-toolbar");
         menu_window_controls_ = document_->GetElementById("menu-window-controls");
-        menu_window_split_view_ = document_->GetElementById("menu-window-split-view");
         menu_window_toggle_ui_ = document_->GetElementById("menu-window-toggle-ui");
         menu_window_maximize_ = document_->GetElementById("menu-window-maximize");
         body_el_ = document_->GetElementById("body");
@@ -488,8 +487,7 @@ namespace lfs::vis::gui {
         menu_labels_.clear();
         dropdown_items_.clear();
         camera_buttons_.clear();
-        render_buttons_.clear();
-        projection_buttons_.clear();
+        snap_buttons_.clear();
         open_menu_idname_.clear();
         if (rml_manager_)
             rml_manager_->releaseCachedVulkanContext(direct_cache_);
@@ -506,14 +504,12 @@ namespace lfs::vis::gui {
         project_title_el_ = nullptr;
         menu_toolbar_ = nullptr;
         menu_window_controls_ = nullptr;
-        menu_window_split_view_ = nullptr;
         menu_window_toggle_ui_ = nullptr;
         menu_window_maximize_ = nullptr;
         body_el_ = nullptr;
         project_title_has_room_ = false;
         applied_project_title_left_ = -1.0f;
         applied_project_title_width_ = -1.0f;
-        last_window_split_view_ = false;
         last_ui_hidden_ = false;
         last_window_maximized_ = false;
         clearTitlebarDragRegion();
@@ -556,7 +552,6 @@ namespace lfs::vis::gui {
         project_title_el_ = nullptr;
         menu_toolbar_ = nullptr;
         menu_window_controls_ = nullptr;
-        menu_window_split_view_ = nullptr;
         menu_window_toggle_ui_ = nullptr;
         menu_window_maximize_ = nullptr;
         body_el_ = nullptr;
@@ -599,7 +594,6 @@ namespace lfs::vis::gui {
         project_title_el_ = document_->GetElementById("project-title-content");
         menu_toolbar_ = document_->GetElementById("menu-toolbar");
         menu_window_controls_ = document_->GetElementById("menu-window-controls");
-        menu_window_split_view_ = document_->GetElementById("menu-window-split-view");
         menu_window_toggle_ui_ = document_->GetElementById("menu-window-toggle-ui");
         menu_window_maximize_ = document_->GetElementById("menu-window-maximize");
         body_el_ = document_->GetElementById("body");
@@ -607,15 +601,13 @@ namespace lfs::vis::gui {
         applied_project_title_left_ = -1.0f;
         applied_project_title_width_ = -1.0f;
         toolbar_fits_ = true;
-        last_window_split_view_ = false;
         last_ui_hidden_ = false;
         last_window_maximized_ = false;
 
         rebuildLabels();
         menu_model_.DirtyVariable("dropdown_items");
         menu_model_.DirtyVariable("menu_camera_buttons");
-        menu_model_.DirtyVariable("menu_render_buttons");
-        menu_model_.DirtyVariable("menu_projection_buttons");
+        menu_model_.DirtyVariable("menu_snap_buttons");
         updateTheme();
     }
 
@@ -694,6 +686,16 @@ namespace lfs::vis::gui {
         if (!menu_items_ || !document_)
             return;
 
+        if (rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }, isOpen()))
+            return;
+        for (const auto& event : input.input_events) {
+            if (event.kind == FrameInputEventKind::KeyDown && event.scancode == SDL_SCANCODE_ESCAPE && isOpen()) {
+                closeDropdown();
+                if (event.dispatch)
+                    event.dispatch->consumed = true;
+                return;
+            }
+        }
         wants_input_ = false;
         if (rml_manager_)
             rml_manager_->trackContextFrame(rml_context_, 0, 0);
@@ -857,6 +859,7 @@ namespace lfs::vis::gui {
     void RmlMenuBar::openDropdown(int index) {
         assert(index >= 0 && index < static_cast<int>(current_idnames_.size()));
 
+        rml_manager_->activateInput(rml_context_, [this](const PanelInputState& event) { processInput(event); });
         open_menu_index_ = index;
         open_submenu_index_ = -1;
         open_child_submenu_index_ = -1;
@@ -891,6 +894,7 @@ namespace lfs::vis::gui {
 
     void RmlMenuBar::closeDropdown() {
         open_menu_index_ = -1;
+        rml_manager_->deactivateInput(rml_context_, true);
         open_submenu_index_ = -1;
         open_child_submenu_index_ = -1;
         open_menu_idname_.clear();
@@ -987,8 +991,7 @@ namespace lfs::vis::gui {
 
     void RmlMenuBar::rebuildToolbarButtons() {
         std::vector<MenuToolbarButtonView> camera_buttons;
-        std::vector<MenuToolbarButtonView> render_buttons;
-        std::vector<MenuToolbarButtonView> projection_buttons;
+        std::vector<MenuToolbarButtonView> snap_buttons;
 
         const auto make = [](std::string id, std::string action, std::string value,
                              std::string icon, std::string tooltip_key,
@@ -1040,58 +1043,22 @@ namespace lfs::vis::gui {
             }
         }
 
-        if (const auto* rm = lfs::vis::services().renderingOrNull()) {
-            const auto settings = rm->getSettings();
-
-            std::string active_mode = "splats";
-            if (settings.point_cloud_mode)
-                active_mode = "points";
-            else if (settings.show_rings)
-                active_mode = "rings";
-            else if (settings.show_center_markers)
-                active_mode = "centers";
-
-            render_buttons.push_back(make("menu-render-splats", "set_render_mode", "splats", "blob",
-                                          "toolbar.splat_rendering", "Splat Rendering",
-                                          active_mode == "splats"));
-            render_buttons.push_back(make("menu-render-points", "set_render_mode", "points",
-                                          "dots-diagonal", "toolbar.point_cloud", "Point Cloud",
-                                          active_mode == "points"));
-            render_buttons.push_back(make("menu-render-rings", "set_render_mode", "rings", "ring",
-                                          "toolbar.gaussian_rings", "Gaussian Rings",
-                                          active_mode == "rings"));
-            render_buttons.push_back(make("menu-render-centers", "set_render_mode", "centers",
-                                          "circle-dot", "toolbar.center_markers", "Center Markers",
-                                          active_mode == "centers"));
-
-            const bool ortho = settings.orthographic;
-            projection_buttons.push_back(make("menu-projection", "toggle_projection", "",
-                                              ortho ? "box" : "perspective",
-                                              ortho ? "toolbar.orthographic" : "toolbar.perspective",
-                                              ortho ? "Orthographic" : "Perspective", ortho));
-            projection_buttons.push_back(make("menu-depth-view", "toggle_depth_view", "", "depth-map",
-                                              "toolbar.depth_map", "Depth Map", settings.depth_view));
-
+        {
             bool view_snap = false;
             if (const auto* ic = lfs::vis::InputController::instance())
                 view_snap = ic->cameraViewSnapEnabled();
-            projection_buttons.push_back(make("menu-view-snap", "toggle_camera_view_snap", "", "check",
-                                              "", "Snap Axis Views", view_snap));
+            snap_buttons.push_back(make("menu-view-snap", "toggle_camera_view_snap", "", "check",
+                                        "", "Snap Axis Views", view_snap));
         }
 
-        if (render_buttons != render_buttons_) {
-            render_buttons_ = std::move(render_buttons);
-            menu_model_.DirtyVariable("menu_render_buttons");
-            render_needed_ = true;
-        }
         if (camera_buttons != camera_buttons_) {
             camera_buttons_ = std::move(camera_buttons);
             menu_model_.DirtyVariable("menu_camera_buttons");
             render_needed_ = true;
         }
-        if (projection_buttons != projection_buttons_) {
-            projection_buttons_ = std::move(projection_buttons);
-            menu_model_.DirtyVariable("menu_projection_buttons");
+        if (snap_buttons != snap_buttons_) {
+            snap_buttons_ = std::move(snap_buttons);
+            menu_model_.DirtyVariable("menu_snap_buttons");
             render_needed_ = true;
         }
     }
@@ -1183,21 +1150,8 @@ namespace lfs::vis::gui {
     }
 
     void RmlMenuBar::dispatchToolbarAction(const std::string& action, const std::string& value) {
-        auto* rm = lfs::vis::services().renderingOrNull();
 
-        if (action == "set_render_mode") {
-            if (!rm)
-                return;
-            auto settings = rm->getSettings();
-            const bool enable_point_cloud = value == "points";
-            const bool point_cloud_changed = settings.point_cloud_mode != enable_point_cloud;
-            settings.point_cloud_mode = enable_point_cloud;
-            settings.show_rings = value == "rings";
-            settings.show_center_markers = value == "centers";
-            rm->updateSettings(settings,
-                               point_cloud_changed && enable_point_cloud
-                                   ? lfs::vis::DirtyFlag::ALL
-                                   : lfs::vis::DirtyFlag::SELECTION);
+        if (false) {
         } else if (action == "set_camera_navigation_mode") {
             auto* ic = lfs::vis::InputController::instance();
             if (!ic)
@@ -1206,33 +1160,14 @@ namespace lfs::vis::gui {
                 ic->setCameraNavigationMode(*mode);
                 lfs::vis::saveCameraNavigationPreference(value);
             }
-        } else if (action == "toggle_projection") {
-            if (!rm)
-                return;
-            const bool ortho = rm->getSettings().orthographic;
-            float viewport_height = 0.0f;
-            float distance_to_pivot = 0.0f;
-            if (const auto view = lfs::vis::get_current_view_info(); view.has_value()) {
-                viewport_height = static_cast<float>(view->height);
-                const glm::vec3 eye(view->translation[0], view->translation[1], view->translation[2]);
-                const glm::vec3 pivot(view->pivot[0], view->pivot[1], view->pivot[2]);
-                distance_to_pivot = glm::length(pivot - eye);
-            }
-            rm->setOrthographic(!ortho, viewport_height, distance_to_pivot);
-        } else if (action == "toggle_depth_view") {
-            if (!rm)
-                return;
-            auto settings = rm->getSettings();
-            settings.depth_view = !settings.depth_view;
-            rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
         } else if (action == "toggle_camera_view_snap") {
             if (auto* ic = lfs::vis::InputController::instance())
                 ic->setCameraViewSnapEnabled(!ic->cameraViewSnapEnabled());
             if (const auto* ic = lfs::vis::InputController::instance())
                 lfs::vis::saveCameraViewSnapPreference(ic->cameraViewSnapEnabled());
-        } else if (action == "toggle_independent_split_view") {
+        } else if (action == "toggle_split_viewport") {
             if (auto* ic = lfs::vis::InputController::instance())
-                ic->toggleIndependentSplitView();
+                ic->toggleSplitViewport();
         } else if (action == "portal_connection") {
             python::invoke_operator("lfs_plugins.help_menu.PortalConnectionOperator");
         } else if (action == "gallery_transfers") {
@@ -1504,22 +1439,6 @@ namespace lfs::vis::gui {
         const bool theme_changed = updateTheme();
         rebuildToolbarButtons();
         rebuildPortalStatus();
-
-        if (menu_window_split_view_) {
-            const bool split_view = [&] {
-                if (auto* rm = lfs::vis::services().renderingOrNull())
-                    return rm->getSettings().split_view_mode == lfs::vis::SplitViewMode::IndependentDual;
-                return false;
-            }();
-            if (split_view != last_window_split_view_) {
-                menu_window_split_view_->SetClass("selected", split_view);
-                menu_window_split_view_->SetAttribute(
-                    "title", lfs::event::LocalizationManager::getInstance().get(
-                                 split_view ? "ui.exit_independent_split_view" : "ui.independent_split_view"));
-                last_window_split_view_ = split_view;
-                render_needed_ = true;
-            }
-        }
 
         if (menu_window_toggle_ui_ && ui_hidden_ != last_ui_hidden_) {
             menu_window_toggle_ui_->SetClass("selected", ui_hidden_);

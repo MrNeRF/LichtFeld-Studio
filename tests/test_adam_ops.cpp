@@ -422,14 +422,22 @@ TEST_F(AdamOpsBytes, EncodeZeroMatchesLauncher) {
     }
 }
 
-TEST(AdamOpsCapability, OnlyCudaCarriesAdam) {
+TEST(AdamOpsCapability, CompiledBackendsCarryAdam) {
     EXPECT_EQ(lfs::training::training_ops(lfs::core::GpuBackend::CUDA).adam,
               &lfs::training::cuda_adam_ops());
+#if defined(LFS_TEST_TENSOR_VULKAN)
+    EXPECT_NE(lfs::training::training_ops(lfs::core::GpuBackend::Vulkan).adam, nullptr);
+#else
     EXPECT_EQ(lfs::training::training_ops(lfs::core::GpuBackend::Vulkan).adam, nullptr);
+#endif
     EXPECT_EQ(lfs::training::training_ops(lfs::core::GpuBackend::Metal).adam, nullptr);
     EXPECT_FALSE(lfs::training::unavailable_training_family(
         lfs::core::GpuBackend::CUDA, lfs::training::Family::Adam));
+#if defined(LFS_TEST_TENSOR_VULKAN)
+    EXPECT_FALSE(lfs::training::unavailable_training_family(lfs::core::GpuBackend::Vulkan, lfs::training::Family::Adam));
+#else
     EXPECT_EQ(
         lfs::training::unavailable_training_family(lfs::core::GpuBackend::Vulkan, lfs::training::Family::Adam),
         "Vulkan training is unavailable for this configuration.\nMissing families: Adam.");
+#endif
 }

@@ -5,21 +5,18 @@
 #include "core/splat_exportable_storage.hpp"
 
 #include "core/checked_arithmetic.hpp"
-#include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
+#include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/splat_block.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor_cuda_interop.hpp"
 #include "diagnostics/vram_profiler.hpp"
-
-#include <cuda_runtime.h>
 
 #include <algorithm>
 #include <array>
-#include <cstring>
+#include <exception>
 #include <format>
 #include <limits>
-#include <vector>
 
 namespace lfs::core {
 
@@ -141,7 +138,7 @@ namespace lfs::core {
         if (capacity == 0) {
             return 0;
         }
-        const std::size_t gran = exportable_allocation_granularity(0);
+        const std::size_t gran = splat_block_ops(default_gpu_backend()).granularity(0);
         return compute_layout(capacity, sh_degree, gran).total;
     }
 
@@ -189,33 +186,36 @@ namespace lfs::core {
 
         const std::size_t reserve_gaussians =
             reserve_capacity > 0 ? std::max(reserve_capacity, capacity) : capacity;
-        const std::size_t gran = exportable_allocation_granularity(device);
+        auto& blocks = splat_block_ops(default_gpu_backend());
+        const std::size_t gran = blocks.granularity(device);
         const Layout reserved_layout = compute_layout(reserve_gaussians, sh_degree, gran);
         const auto live_bytes = region_raw_bytes(capacity, sh_degree);
 
-        auto block_result =
-            allocateExportableDeviceBlock(gran, device, /*track_splat_bytes=*/true, reserved_layout.total);
-        if (!block_result) {
+        std::shared_ptr<ExportableBlock> block;
+        try {
+            block = blocks.reserve(gran, device, reserved_layout.total);
+        } catch (const std::exception& error) {
             return std::unexpected(std::format(
                 "SplatExportableStorage::create: backing-block allocation failed: {}",
-                block_result.error()));
+                error.what()));
         }
 
         for (std::size_t i = 0; i < Count; ++i) {
             if (live_bytes[i] == 0) {
                 continue;
             }
-            auto committed = commitExportableDeviceRange(*block_result, reserved_layout.offsets[i], live_bytes[i]);
-            if (!committed) {
+            try {
+                blocks.commit_range(block, reserved_layout.offsets[i], live_bytes[i]);
+            } catch (const std::exception& error) {
                 return std::unexpected(std::format(
                     "SplatExportableStorage::create: region {} commit failed: {}",
                     i,
-                    committed.error()));
+                    error.what()));
             }
         }
 
         SplatExportableStorage out{};
-        out.block = std::move(*block_result);
+        out.block = std::move(block);
         out.region_offsets = reserved_layout.offsets;
         out.region_bytes = live_bytes;
         out.capacity_ = capacity;
@@ -271,65 +271,40 @@ namespace lfs::core {
         const std::size_t old_capacity = capacity_;
         const auto old_bytes = region_bytes;
         const auto new_bytes = region_raw_bytes(new_capacity, sh_degree_);
+        auto& blocks = splat_block_ops(default_gpu_backend());
 
-        if (const auto err = cudaDeviceSynchronize(); err != cudaSuccess) {
+        try {
+            blocks.prepare_growth();
+        } catch (const std::exception& error) {
             return std::unexpected(std::format(
                 "SplatExportableStorage::grow: pre-grow synchronize failed: {}",
-                cudaGetErrorString(err)));
+                error.what()));
         }
 
         for (std::size_t i = 0; i < Count; ++i) {
             if (new_bytes[i] <= old_bytes[i]) {
                 continue;
             }
-            auto committed = commitExportableDeviceRange(
-                block, region_offsets[i] + old_bytes[i], new_bytes[i] - old_bytes[i]);
-            if (!committed) {
+            try {
+                blocks.commit_range(block, region_offsets[i] + old_bytes[i],
+                                    new_bytes[i] - old_bytes[i]);
+            } catch (const std::exception& error) {
                 return std::unexpected(std::format(
                     "SplatExportableStorage::grow: region {} commit failed: {}",
                     i,
-                    committed.error()));
+                    error.what()));
             }
         }
 
         const std::size_t n_slack = new_capacity - old_capacity;
-        std::vector<float> opacity_host;
-        std::vector<float> rotation_host;
-        opacity_host.assign(n_slack, -std::numeric_limits<float>::infinity());
-        rotation_host.assign(n_slack * 4, 0.0f);
-        for (std::size_t i = 0; i < n_slack; ++i) {
-            rotation_host[i * 4] = 1.0f;
-        }
-
-        void* opacity_dst = static_cast<char*>(block->device_ptr) + region_offsets[Opacity] +
-                            old_capacity * kFloatBytes;
-        void* rotation_dst = static_cast<char*>(block->device_ptr) + region_offsets[Rotation] +
-                             old_capacity * 4 * kFloatBytes;
-        if (const auto err = cudaMemcpyAsync(opacity_dst,
-                                             opacity_host.data(),
-                                             opacity_host.size() * kFloatBytes,
-                                             cudaMemcpyHostToDevice,
-                                             getCurrentCUDAStream());
-            err != cudaSuccess) {
-            return std::unexpected(std::format(
-                "SplatExportableStorage::grow: slack opacity init failed: {}",
-                cudaGetErrorString(err)));
-        }
-        if (const auto err = cudaMemcpyAsync(rotation_dst,
-                                             rotation_host.data(),
-                                             rotation_host.size() * kFloatBytes,
-                                             cudaMemcpyHostToDevice,
-                                             getCurrentCUDAStream());
-            err != cudaSuccess) {
-            return std::unexpected(std::format(
-                "SplatExportableStorage::grow: slack rotation init failed: {}",
-                cudaGetErrorString(err)));
-        }
-
-        if (const auto err = cudaDeviceSynchronize(); err != cudaSuccess) {
-            return std::unexpected(std::format(
-                "SplatExportableStorage::grow: synchronize failed: {}",
-                cudaGetErrorString(err)));
+        try {
+            blocks.init_growth_slack(
+                block,
+                region_offsets[Opacity] + old_capacity * kFloatBytes,
+                region_offsets[Rotation] + old_capacity * 4 * kFloatBytes,
+                n_slack);
+        } catch (const std::exception& error) {
+            return std::unexpected(error.what());
         }
 
         region_bytes = new_bytes;
@@ -412,9 +387,7 @@ namespace lfs::core {
             std::size_t capacity,
             DataType dtype,
             std::string_view name,
-            std::string external_kind,
-            std::shared_ptr<void> owner,
-            cudaStream_t stream) {
+            std::string external_kind) {
             if (!ctrl || !ctrl->block || !ctrl->block->device_ptr) {
                 throw std::runtime_error(
                     "SplatExportableStorage allocator: control block missing "
@@ -493,17 +466,14 @@ namespace lfs::core {
                     region_bytes));
             }
 
-            if (!owner) {
-                owner = ctrl->block;
-            }
-            Tensor t = Tensor::from_external_owner(data,
-                                                   std::move(shape),
-                                                   Device::GPU,
-                                                   dtype,
-                                                   std::move(owner),
-                                                   clamped,
-                                                   stream,
-                                                   std::move(external_kind));
+            Tensor t = splat_block_ops(default_gpu_backend())
+                           .bind_region(ctrl->block,
+                                        data,
+                                        ctrl->region_offsets[region],
+                                        std::move(shape),
+                                        clamped,
+                                        dtype,
+                                        std::move(external_kind));
             stamp_exportable_provenance(t, ctrl, region);
             return t;
         }
@@ -531,9 +501,7 @@ namespace lfs::core {
                                         capacity,
                                         dtype,
                                         name,
-                                        "splat.exportable",
-                                        /*owner=*/{},
-                                        getCurrentCUDAStream());
+                                        "splat.exportable");
         };
     }
 

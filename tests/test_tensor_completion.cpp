@@ -337,9 +337,29 @@ namespace {
         consumer.wait();
     }
 
-    TEST(TensorQueue, UnsupportedVulkanOperationsAreExplicit) {
-        EXPECT_THROW(TensorWorkQueue{GpuBackend::Vulkan}, std::runtime_error);
-        EXPECT_THROW(TensorFence{GpuBackend::Vulkan}, std::runtime_error);
+    TEST(TensorQueue, VulkanModesRoundTripWithoutHostWait) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        const GpuBackendScope backend(GpuBackend::Vulkan);
+        TensorWorkQueue producer(GpuBackend::Vulkan, TensorWorkQueue::Mode::LegacyOrdered);
+        TensorWorkQueue consumer(GpuBackend::Vulkan);
+        TensorFence fence(GpuBackend::Vulkan);
+        EXPECT_TRUE(fence.ready());
+        Tensor value = Tensor::full({32}, 4.f, Device::CPU);
+        Tensor device = Tensor::empty({32}, Device::GPU);
+        TensorUpload upload;
+        upload.enqueue(device, value, TensorExecutionTarget(producer));
+        producer.record(fence);
+        consumer.wait_for(fence);
+        consumer.wait();
+        producer.wait();
+        EXPECT_TRUE(fence.ready());
+        EXPECT_TRUE(producer.ready());
+        EXPECT_EQ(device.to_vector(), std::vector<float>(32, 4.f));
+        producer.record(fence);
+        consumer.wait_for(fence);
+        consumer.wait();
+        EXPECT_TRUE(fence.ready());
     }
 
     TEST(TensorQueue, PackedReadbackPreservesSourceAndDestinationOffsets) {

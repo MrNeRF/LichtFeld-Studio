@@ -69,6 +69,11 @@ namespace lfs::core::tensor_ops {
 } // namespace lfs::core::tensor_ops
 
 namespace lfs::core {
+    void gpu_trim_cached_memory(const GpuBackend backend) {
+        if (gpu_backend_live(backend))
+            internal::backend_ops(backend).trim();
+    }
+
     void gpu_device_barrier(const GpuBackend backend) {
         internal::backend_ops(backend).device_barrier();
     }
@@ -99,6 +104,17 @@ namespace lfs::core {
     std::optional<size_t> reserved_allocation_bytes(const Tensor& tensor) {
         (void)tensor;
         return std::nullopt;
+    }
+
+    size_t gpu_allocation_bytes(const GpuBackend backend, const size_t bytes) {
+        if (backend == GpuBackend::CUDA)
+            return cuda_allocation_size(bytes);
+#ifdef LFS_TENSOR_METAL
+        if (backend == GpuBackend::Metal)
+            return internal::metal_allocation_bytes(bytes);
+#endif
+        throw std::invalid_argument(
+            std::format("Allocation sizes are unknown on the {} backend", gpu_backend_name(backend)));
     }
 
     PinnedAllocatorStats pinned_allocator_stats() {
@@ -491,6 +507,11 @@ namespace lfs::core {
             return std::nullopt;
         }
         return internal::gpu_backend_tag(tensor);
+    }
+
+    TensorExecutionTarget TensorExecutionTarget::current() {
+        const auto backend = scoped_backend ? *scoped_backend : default_gpu_backend();
+        return {backend, backend == GpuBackend::CUDA ? getCurrentCUDAStream() : nullptr};
     }
 
     GpuBackendScope::GpuBackendScope(const GpuBackend backend)

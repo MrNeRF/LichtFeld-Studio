@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/startup_overlay_geometry.hpp"
 
@@ -47,8 +47,8 @@ namespace lfs::vis::gui {
         static void openURL(const char* url);
 
     private:
+        friend class lfs::vis::WindowInputDispatchTest;
         struct InputForwardResult {
-            bool escape_consumed = false;
             bool event_forwarded = false;
         };
 
@@ -65,7 +65,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::optional<StartupOverlayRect> elementBorderRect(Rml::Element* element) const;
         [[nodiscard]] std::optional<StartupOverlayRect> languageDropdownRect() const;
         bool applyFitRatio(int context_width, int context_height, float maximum_ratio);
-        [[nodiscard]] bool hasInputActivity(const PanelInputState& input) const;
         InputForwardResult forwardInput(const PanelInputState& input, float overlay_x, float overlay_y,
                                         float overlay_w, float overlay_h);
 
@@ -75,6 +74,7 @@ namespace lfs::vis::gui {
             std::string stage;
         };
 
+        bool drag_hovering_ = false;
         bool visible_ = true;
         int shown_frames_ = 0;
 

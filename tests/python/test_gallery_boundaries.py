@@ -329,7 +329,7 @@ def test_native_registry_exposes_defaults_and_preferences_rows():
         assert f'.value("{name}", Action::{name})' in bindings
         assert f'Action::{name}, "' in source
         assert f'case Action::{name}: return "{name.lower()}"' in source
-    assert 'LAST_ACTION = Action::ASSET_REFRESH' in source
+    assert 'LAST_ACTION = Action::TOGGLE_MAXIMIZE_AREA' in source
 
 @pytest.mark.parametrize('kind', ['diverged', 'remote'])
 def test_gallery_target_does_not_accept_card_drops(convenience, kind):

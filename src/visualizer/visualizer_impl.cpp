@@ -251,7 +251,6 @@ namespace lfs::vis {
 
     VisualizerImpl::VisualizerImpl(const ViewerOptions& options)
         : options_(options),
-          viewport_(options.width, options.height),
           window_manager_(std::make_unique<WindowManager>(options.title, options.width, options.height,
                                                           options.monitor_x, options.monitor_y,
                                                           options.monitor_width, options.monitor_height,
@@ -271,7 +270,7 @@ namespace lfs::vis {
         gui_manager_ = std::make_unique<gui::GuiManager>(this);
 
         // Create rendering manager with initial antialiasing setting
-        rendering_manager_ = std::make_unique<RenderingManager>();
+        rendering_manager_ = std::make_unique<RenderingManager>(screen_service_);
         rendering_manager_->setWakeCallback([this] {
             wakeMainLoop();
         });
@@ -410,7 +409,7 @@ namespace lfs::vis {
         tool_context_ = std::make_unique<ToolContext>(
             rendering_manager_.get(),
             scene_manager_.get(),
-            &viewport_,
+            this,
             window_manager_->getWindow(),
             gui_manager_.get());
 
@@ -535,14 +534,11 @@ namespace lfs::vis {
         python::set_sequencer_callbacks(
             []() {
                 const auto* gm = python::get_gui_manager();
-                return gm ? gm->panelLayout().isShowSequencer() : false;
+                return gm ? gm->isSequencerVisible() : false;
             },
             [](bool visible) {
                 if (auto* gm = python::get_gui_manager()) {
-                    gm->panelLayout().setShowSequencer(visible);
-                    if (visible)
-                        gm->panelLayout().setBottomDockActiveTab(std::string(
-                            gui::native_panels::SEQUENCER_PANEL_ID));
+                    gm->setSequencerVisible(visible);
                 }
             });
         callback_cleanup_.add([] { python::set_sequencer_callbacks(nullptr, nullptr); });
@@ -904,6 +900,105 @@ namespace lfs::vis {
         callback_cleanup_.add([] { python::set_export_callback(nullptr); });
     }
 
+    ViewTarget VisualizerImpl::activeView() {
+        return findView(screen_service_.screen().activeView().value);
+    }
+
+    ViewTarget VisualizerImpl::viewAt(const float x, const float y) {
+        if (!gui_manager_)
+            return {};
+        const auto id = gui_manager_->viewAt(x, y);
+        return id.valid() ? findView(id.value) : ViewTarget{};
+    }
+
+    ViewId VisualizerImpl::viewId(const Viewport& viewport) const {
+        for (const auto id : screen_service_.screen().views())
+            if (&screen_service_.view3D(id.value)->camera == &viewport)
+                return id.value;
+        return kNoView;
+    }
+
+    ViewTarget VisualizerImpl::findView(const ViewId id) {
+        auto* space = screen_service_.view3D(id);
+        if (!space)
+            return {};
+        ViewTarget target{.id = id, .viewport = &space->camera};
+        if (gui_manager_) {
+            if (gui_manager_->isUiHidden() && id == screen_service_.screen().activeView().value) {
+                const auto layout = gui_manager_->viewportLayout();
+                target.pos = layout.pos;
+                target.size = layout.size;
+            } else if (const auto rect = gui_manager_->screenHost().viewContent(screen::AreaId{id})) {
+                target.pos = {rect->x, rect->y};
+                target.size = {rect->w, rect->h};
+            }
+        }
+        return target;
+    }
+
+    void VisualizerImpl::activateView(const ViewId id) {
+        if (screen_service_.screen().activeView().value == id)
+            return;
+        if (rendering_manager_)
+            rendering_manager_->clearSelectionPreviews();
+        const bool changed =
+            screen_service_.edit([id](screen::Screen& screen) { return screen.setActiveView(screen::AreaId{id}); });
+        if (changed && selection_tool_)
+            selection_tool_->syncViewSettings();
+        if (changed && rendering_manager_)
+            rendering_manager_->markViewDirty(id, DirtyFlag::OVERLAY);
+    }
+
+    screen::Rect VisualizerImpl::areaRect(const screen::AreaId id) {
+        if (gui_manager_)
+            return gui_manager_->screenHost().currentAreaRect(id);
+        const auto geometry = screens().screen().solve({0.0f, 0.0f, 1.0f, 1.0f}, {});
+        if (const auto* area = geometry.find(id))
+            return area->rect;
+        return {};
+    }
+
+    bool VisualizerImpl::runViewCommand(const ViewId id, const std::string_view command) {
+        auto* view = screen_service_.view3D(id);
+        if (!view)
+            return false;
+        float height = static_cast<float>(view->camera.windowSize.y);
+        if (gui_manager_) {
+            if (const auto rect = gui_manager_->screenHost().viewContent(screen::AreaId{id}))
+                height = rect->h;
+        }
+        const auto changed = [this, id] {
+            if (rendering_manager_)
+                rendering_manager_->markViewDirty(id, DirtyFlag::ALL);
+            return true;
+        };
+        if (screen::applyViewCommand(*view, command, height)) {
+            if (command.starts_with("axis:") || command == "projection")
+                rendering_manager_->markCameraCut(id);
+            return changed();
+        }
+        if (command == "home") {
+            view->camera.camera.resetToHome();
+            rendering_manager_->markCameraCut(id);
+            return changed();
+        }
+        if (command == "frame_all" || command == "frame_selected") {
+            activateView(id);
+            return input_controller_ && input_controller_->frameView(id, command == "frame_selected");
+        }
+        if (command == "area:quad") {
+            const bool toggled = screen_service_.edit(
+                [&](screen::Screen& screen) { return screen.toggleQuadView(screen::AreaId{id}, height * 0.5f); });
+            return toggled && changed();
+        }
+        if (command == "area:side") {
+            const bool toggled =
+                screen_service_.edit([&](screen::Screen& screen) { return screen.toggleSideView(screen::AreaId{id}); });
+            return toggled && changed();
+        }
+        return false;
+    }
+
     void VisualizerImpl::setupViewContextBridge() {
         if (view_context_bridge_initialized_)
             return;
@@ -914,60 +1009,9 @@ namespace lfs::vis {
             if (!rendering_manager_)
                 return std::nullopt;
 
-            const auto& settings = rendering_manager_->getSettings();
-            const auto R = viewport_.getRotationMatrix();
-            const auto T = viewport_.getTranslation();
-
-            vis::ViewInfo info;
-            for (int i = 0; i < 3; ++i)
-                for (int j = 0; j < 3; ++j)
-                    info.rotation[i * 3 + j] = R[j][i];
-            info.translation = {T.x, T.y, T.z};
-            const auto P = viewport_.camera.getPivot();
-            info.pivot = {P.x, P.y, P.z};
-            info.width = viewport_.windowSize.x;
-            info.height = viewport_.windowSize.y;
-            info.fov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
-            info.orthographic = settings.orthographic;
-            info.ortho_scale = viewport_.ortho_scale_override.value_or(settings.ortho_scale);
-            return info;
+            return makeViewInfo(getViewport(), rendering_manager_->getSettings(), getViewport().windowSize);
         });
         callback_cleanup_.add([] { vis::set_view_callback(nullptr); });
-
-        vis::set_view_for_panel_callback([this](const vis::SplitViewPanelId panel) -> std::optional<vis::ViewInfo> {
-            if (!rendering_manager_)
-                return std::nullopt;
-
-            const auto& settings = rendering_manager_->getSettings();
-            const Viewport& vp = rendering_manager_->resolvePanelViewport(viewport_, panel);
-            const auto R = vp.getRotationMatrix();
-            const auto T = vp.getTranslation();
-
-            vis::ViewInfo info;
-            for (int i = 0; i < 3; ++i)
-                for (int j = 0; j < 3; ++j)
-                    info.rotation[i * 3 + j] = R[j][i];
-            info.translation = {T.x, T.y, T.z};
-            const auto P = vp.camera.getPivot();
-            info.pivot = {P.x, P.y, P.z};
-
-            const int total_width = viewport_.windowSize.x;
-            int panel_width = total_width;
-            if (rendering_manager_->isSplitViewActive() && total_width > 0) {
-                const float split_pos = std::clamp(settings.split_position, 0.0f, 1.0f);
-                const int divider = static_cast<int>(static_cast<float>(total_width) * split_pos);
-                panel_width = (panel == vis::SplitViewPanelId::Left)
-                                  ? std::max(1, divider)
-                                  : std::max(1, total_width - divider);
-            }
-            info.width = panel_width;
-            info.height = viewport_.windowSize.y;
-            info.fov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
-            info.orthographic = settings.orthographic;
-            info.ortho_scale = vp.ortho_scale_override.value_or(settings.ortho_scale);
-            return info;
-        });
-        callback_cleanup_.add([] { vis::set_view_for_panel_callback(nullptr); });
 
         vis::set_set_view_callback([this](const vis::SetViewParams& params) {
             const glm::vec3 eye(params.eye[0], params.eye[1], params.eye[2]);
@@ -980,36 +1024,13 @@ namespace lfs::vis {
                 return;
             }
 
-            viewport_.setViewMatrix(*rotation, eye);
-            viewport_.camera.setPivot(target);
+            getViewport().setViewMatrix(*rotation, eye);
+            getViewport().camera.setPivot(target);
 
             if (rendering_manager_)
-                rendering_manager_->markCameraCut();
+                rendering_manager_->markCameraCut(rendering_manager_->activeViewId());
         });
         callback_cleanup_.add([] { vis::set_set_view_callback(nullptr); });
-
-        vis::set_set_view_for_panel_callback([this](const vis::SplitViewPanelId panel,
-                                                    const vis::SetViewParams& params) {
-            if (!rendering_manager_)
-                return;
-
-            const glm::vec3 eye(params.eye[0], params.eye[1], params.eye[2]);
-            const glm::vec3 target(params.target[0], params.target[1], params.target[2]);
-            const glm::vec3 up(params.up[0], params.up[1], params.up[2]);
-
-            const auto rotation = buildValidatedViewRotation(eye, target, up);
-            if (!rotation) {
-                LOG_WARN("Ignoring set_view request with degenerate or non-finite eye/target/up vectors");
-                return;
-            }
-
-            Viewport& vp = rendering_manager_->resolvePanelViewport(viewport_, panel);
-            vp.setViewMatrix(*rotation, eye);
-            vp.camera.setPivot(target);
-
-            rendering_manager_->markCameraCut();
-        });
-        callback_cleanup_.add([] { vis::set_set_view_for_panel_callback(nullptr); });
 
         vis::set_set_fov_callback([this](float fov_degrees) {
             if (rendering_manager_)
@@ -1018,9 +1039,10 @@ namespace lfs::vis {
         callback_cleanup_.add([] { vis::set_set_fov_callback(nullptr); });
 
         vis::set_set_ortho_scale_callback([this](std::optional<float> scale) {
-            viewport_.ortho_scale_override = scale;
+            if (rendering_manager_ && scale)
+                rendering_manager_->editViewSettings(rendering_manager_->activeViewId(), [&](ViewSettings& settings) { settings.ortho_scale = *scale; });
             if (rendering_manager_)
-                rendering_manager_->markCameraPoseChanged();
+                rendering_manager_->markCameraPoseChanged(rendering_manager_->activeViewId());
         });
         callback_cleanup_.add([] { vis::set_set_ortho_scale_callback(nullptr); });
 
@@ -1880,6 +1902,13 @@ namespace lfs::vis {
         // NOTE: ui::RenderSettingsChanged, ui::CameraMove, state::SceneChanged,
         // ui::PointCloudModeChanged are handled by RenderingManager::setupEventHandlers()
 
+        state::CombinedModelBuildReady::when([this](const auto& event) {
+            postWork({.run = [this, scene = event.scene] {
+                if (scene_manager_ && scene == &scene_manager_->getScene() && rendering_manager_)
+                    rendering_manager_->markDirty(DirtyFlag::ALL);
+            }});
+        });
+
         // Window redraw requests on scene/mode changes
         state::SceneChanged::when([this](const auto& event) {
             python::set_scene_mutation_flags(event.mutation_flags);
@@ -2066,18 +2095,18 @@ namespace lfs::vis {
             window_manager_->pollEvents();
             window_manager_->updateWindowSize();
 
-            viewport_.windowSize = window_manager_->getWindowSize();
-            viewport_.frameBufferSize = window_manager_->getFramebufferSize();
+            getViewport().windowSize = window_manager_->getWindowSize();
+            getViewport().frameBufferSize = window_manager_->getFramebufferSize();
 
-            if (viewport_.windowSize.x <= 0 || viewport_.windowSize.y <= 0) {
+            if (getViewport().windowSize.x <= 0 || getViewport().windowSize.y <= 0) {
                 LOG_WARN("Window manager returned invalid size, using options fallback: {}x{}",
                          options_.width, options_.height);
-                viewport_.windowSize = glm::ivec2(options_.width, options_.height);
-                viewport_.frameBufferSize = glm::ivec2(options_.width, options_.height);
+                getViewport().windowSize = glm::ivec2(options_.width, options_.height);
+                getViewport().frameBufferSize = glm::ivec2(options_.width, options_.height);
             }
 
             LOG_DEBUG("Window initialized with actual size: {}x{}",
-                      viewport_.windowSize.x, viewport_.windowSize.y);
+                      getViewport().windowSize.x, getViewport().windowSize.y);
         }
 
         // Initialize GUI systems.
@@ -2101,7 +2130,7 @@ namespace lfs::vis {
         // InputController requires the GUI focus state to be initialized.
         if (!input_controller_) {
             input_controller_ = std::make_unique<InputController>(
-                window_manager_->getWindow(), viewport_);
+                window_manager_->getWindow(), *this);
             input_controller_->setViewer(this);
             input_controller_->initialize();
             input_controller_->setTrackpadPreferences(loadTrackpadPreferences());
@@ -2149,6 +2178,10 @@ namespace lfs::vis {
         const bool preload_running_at_start = python::is_plugin_preload_running();
         update_work_processed_ = false;
         window_manager_->updateWindowSize();
+
+        // Completion and allocation validation must also run while minimized.
+        if (gui_manager_ && gui_manager_->asyncTasks().hasPendingMainThreadCompletions())
+            gui_manager_->asyncTasks().pollImportCompletion();
 
         motion_only_wake_skipped_ = isMotionOnlyWake();
         if (motion_only_wake_skipped_)
@@ -2214,11 +2247,11 @@ namespace lfs::vis {
 
         if (gui_manager_) {
             const auto& size = gui_manager_->getViewportSize();
-            viewport_.windowSize = {static_cast<int>(size.x), static_cast<int>(size.y)};
+            getViewport().windowSize = {static_cast<int>(size.x), static_cast<int>(size.y)};
         } else {
-            viewport_.windowSize = window_manager_->getWindowSize();
+            getViewport().windowSize = window_manager_->getWindowSize();
         }
-        viewport_.frameBufferSize = window_manager_->getFramebufferSize();
+        getViewport().frameBufferSize = window_manager_->getFramebufferSize();
 
         // Update editor context state from scene/trainer
         editor_context_.update(scene_manager_.get(), trainer_manager_.get());
@@ -2337,9 +2370,7 @@ namespace lfs::vis {
         if (!input.had_event || !input.mouse_moved || input.window_event ||
             input.mouse_wheel != 0.0f || input.mouse_down[0] || input.mouse_down[1] ||
             input.mouse_down[2] || !input.mouse_button_events.empty() ||
-            !input.keys_pressed.empty() || !input.keys_repeated.empty() ||
-            !input.keys_released.empty() || !input.text_codepoints.empty() ||
-            !input.text_inputs.empty() || input.has_text_editing)
+            !input.keys_pressed.empty() || !input.input_events.empty())
             return false;
 
         return !gui_manager_->passiveMouseMoveNeedsRender(input.mouse_x, input.mouse_y);
@@ -2359,11 +2390,7 @@ namespace lfs::vis {
                                         input.mouse_clicked[2] || input.mouse_released[0] ||
                                         input.mouse_released[1] || input.mouse_released[2];
         const bool keyboard_event = !input.keys_pressed.empty() ||
-                                    !input.keys_repeated.empty() ||
-                                    !input.keys_released.empty() ||
-                                    !input.text_codepoints.empty() ||
-                                    !input.text_inputs.empty() ||
-                                    input.has_text_editing;
+                                    !input.input_events.empty();
         if (mouse_button_event || keyboard_event || input.mouse_wheel != 0.0f)
             return true;
 
@@ -2595,35 +2622,14 @@ namespace lfs::vis {
         const bool interactive_transition_settling =
             gui_manager_ && gui_manager_->isInteractiveTransitionSettling();
 
-        // Get viewport region from GUI. This accounts for menu/tool/status panels and must be
-        // shared by every graphics backend so camera aspect and render resolution match the viewport.
-        ViewportRegion viewport_region;
-        bool has_viewport_region = false;
+        std::vector<ViewId> visible_views;
         if (gui_manager_) {
-            auto pos = gui_manager_->getSceneRenderViewportPos();
-            auto size = gui_manager_->getSceneRenderViewportSize();
-
-            // A staged UI-visibility transition renders against its target extent
-            // while input and presentation continue using the previous layout.
-            viewport_.windowSize = {
-                std::max(static_cast<int>(std::lround(size.x)), 1),
-                std::max(static_cast<int>(std::lround(size.y)), 1)};
-
-            viewport_region.x = pos.x;
-            viewport_region.y = pos.y;
-            viewport_region.width = size.x;
-            viewport_region.height = size.y;
-
-            has_viewport_region = true;
+            visible_views = gui_manager_->visibleViews();
+        } else {
+            for (const auto id : screen_service_.screen().views())
+                visible_views.push_back(id.value);
         }
-
-        RenderingManager::RenderContext context{
-            .viewport = viewport_,
-            .settings = rendering_manager_->getSettings(),
-            .logical_screen_size = window_manager_->getFramebufferSize(),
-            .viewport_region = has_viewport_region ? &viewport_region : nullptr,
-            .scene_manager = scene_manager_.get(),
-            .vulkan_context = window_manager_->getVulkanContext()};
+        rendering_manager_->retainVisibleViews(visible_views);
 
         if (gui_manager_) {
             rendering_manager_->setCropboxGizmoActive(gui_manager_->gizmo().isCropboxGizmoActive());
@@ -2647,24 +2653,24 @@ namespace lfs::vis {
         }
         const FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
         if (gui_frame_rendered_ && !frame_demand.shouldRenderFrame()) {
-            LOG_PERF("loop_idle skip_gui_render=true needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} wake_reason={} wake_timeout_source={}",
-                     frame_demand.scene_dirty,
-                     frame_demand.continuous_input,
-                     frame_demand.python_animation,
-                     frame_demand.python_overlay,
-                     frame_demand.python_redraw,
-                     frame_demand.gui_animation,
-                     frame_demand.input_event,
-                     frame_demand.posted_work,
-                     frame_demand.render_work,
-                     frame_demand.store_dirty,
-                     frame_demand.swapchain_resize_pending,
-                     frame_demand.swapchain_resize_ready,
-                     frame_demand.window_resize_paint_pending,
-                     frame_demand.viewport_resize_deferring,
-                     frame_demand.viewport_resize_settle_ready,
-                     last_wake_reason_,
-                     last_wake_timeout_source_);
+            LOG_PERF(
+                "loop_idle skip_gui_render=true needs_render={} continuous_input={} "
+                "py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} "
+                "posted_work={} render_work={} store_dirty={} "
+                "swapchain_resize_pending={} swapchain_resize_ready={} "
+                "window_resize_paint_pending={} viewport_resize_deferring={} "
+                "viewport_resize_settle_ready={} wake_reason={} wake_timeout_source={}",
+                frame_demand.scene_dirty, frame_demand.continuous_input,
+                frame_demand.python_animation, frame_demand.python_overlay,
+                frame_demand.python_redraw, frame_demand.gui_animation,
+                frame_demand.input_event, frame_demand.posted_work,
+                frame_demand.render_work, frame_demand.store_dirty,
+                frame_demand.swapchain_resize_pending,
+                frame_demand.swapchain_resize_ready,
+                frame_demand.window_resize_paint_pending,
+                frame_demand.viewport_resize_deferring,
+                frame_demand.viewport_resize_settle_ready, last_wake_reason_,
+                last_wake_timeout_source_);
             if (!python::is_plugin_preload_running()) {
                 python::flush_signals();
             }
@@ -2682,67 +2688,69 @@ namespace lfs::vis {
             if (!python::is_plugin_preload_running() && frame_demand.python_redraw && gui_manager_)
                 gui_manager_->syncVisiblePanelsBeforeSceneRender();
 
-            project_frame_started =
-                std::chrono::steady_clock::now();
-            const bool preview_refresh_only =
-                gui_frame_rendered_ && frame_demand.onlySceneDirty() &&
-                rendering_manager_->pendingDirtyMask() == DirtyFlag::SPLATS;
-            const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
-            // A preview refresh parked until training frees the shared scratch
-            // changed nothing on screen; present once it has rendered.
-            if (preview_refresh_only && rendering_manager_->hasParkedArenaRetry()) {
-                waitForNextEvent(is_training);
-                return;
-            }
-            if (gui_manager_) {
-                gui_manager_->commitUiVisibilityTransitionIfFrameReady(
-                    vulkan_frame.matches_viewport_extent);
-            }
-            {
-                auto& interop = rendering_manager_->viewportInterop();
-                if (vulkan_frame.external_image != VK_NULL_HANDLE) {
-                    interop.setExternalSceneImage(vulkan_frame.external_image,
-                                                  vulkan_frame.external_image_view,
-                                                  vulkan_frame.external_image_layout,
-                                                  vulkan_frame.size,
-                                                  vulkan_frame.flip_y,
-                                                  vulkan_frame.external_image_generation,
-                                                  vulkan_frame.completion_semaphore,
-                                                  vulkan_frame.completion_value,
-                                                  vulkan_frame.alloc_size);
-                } else {
-                    interop.setSceneImage(
-                        vulkan_frame.image,
-                        vulkan_frame.size,
-                        vulkan_frame.flip_y,
-                        vulkan_frame.split_left_image_generation != 0
-                            ? vulkan_frame.split_left_image_generation
-                            : vulkan_frame.image_generation,
-                        vulkan_frame.completion_semaphore,
-                        vulkan_frame.completion_value);
+            project_frame_started = std::chrono::steady_clock::now();
+            for (const auto id : visible_views) {
+                auto target = findView(id);
+                if (!target.valid())
+                    continue;
+                auto& camera = *target.viewport;
+                camera.windowSize = glm::max(glm::ivec2(glm::round(target.size)), glm::ivec2(1));
+                camera.frameBufferSize = window_manager_->getFramebufferSize();
+                ViewportRegion region{target.pos.x, target.pos.y, target.size.x, target.size.y};
+                const auto settings = rendering_manager_->settingsForView(id);
+                RenderingManager::RenderContext context{
+                    .view = id,
+                    .viewport = camera,
+                    .settings = settings,
+                    .logical_screen_size = camera.frameBufferSize,
+                    .viewport_region = &region,
+                    .scene_manager = scene_manager_.get(),
+                    .vulkan_context = window_manager_->getVulkanContext()};
+                const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
+                if (gui_manager_ && id == screen_service_.activeView()) {
+                    gui_manager_->commitUiVisibilityTransitionIfFrameReady(
+                        vulkan_frame.matches_viewport_extent);
                 }
-                if (vulkan_frame.split_right_image) {
-                    interop.setSplitRightImage(
-                        vulkan_frame.split_right_image,
-                        vulkan_frame.split_right_size,
-                        vulkan_frame.split_right_flip_y,
-                        vulkan_frame.split_right_image_generation);
-                } else {
-                    interop.clearSplitRightImage();
-                }
+                {
+                    auto& interop = rendering_manager_->viewState(id).viewport_interop_;
+                    if (vulkan_frame.external_image != VK_NULL_HANDLE) {
+                        interop.setExternalSceneImage(
+                            vulkan_frame.external_image, vulkan_frame.external_image_view,
+                            vulkan_frame.external_image_layout, vulkan_frame.size,
+                            vulkan_frame.flip_y, vulkan_frame.external_image_generation,
+                            vulkan_frame.completion_semaphore, vulkan_frame.completion_value,
+                            vulkan_frame.alloc_size);
+                    } else {
+                        interop.setSceneImage(
+                            vulkan_frame.image, vulkan_frame.size, vulkan_frame.flip_y,
+                            vulkan_frame.split_left_image_generation != 0
+                                ? vulkan_frame.split_left_image_generation
+                                : vulkan_frame.image_generation,
+                            vulkan_frame.completion_semaphore, vulkan_frame.completion_value);
+                    }
+                    if (vulkan_frame.split_right_image) {
+                        interop.setSplitRightImage(vulkan_frame.split_right_image,
+                                                   vulkan_frame.split_right_size,
+                                                   vulkan_frame.split_right_flip_y,
+                                                   vulkan_frame.split_right_image_generation);
+                    } else {
+                        interop.clearSplitRightImage();
+                    }
 
-                // Splat depth -> R32_SFLOAT interop slot for the depth-blit pass.
-                const auto mesh_frame = rendering_manager_->getVulkanMeshFrame();
-                if (mesh_frame.depth_blit.depth && mesh_frame.depth_blit.depth->is_valid() &&
-                    mesh_frame.depth_blit.depth->ndim() == 3 &&
-                    mesh_frame.depth_blit.depth->size(0) == 1) {
-                    const auto& d = *mesh_frame.depth_blit.depth;
-                    interop.setDepthBlitImage(
-                        mesh_frame.depth_blit.depth,
-                        glm::ivec2(static_cast<int>(d.size(2)), static_cast<int>(d.size(1))),
-                        vulkan_frame.image_generation);
-                } else {
-                    interop.clearDepthBlitImage();
+                    // Splat depth -> R32_SFLOAT interop slot for the depth-blit pass.
+                    const auto mesh_frame = rendering_manager_->viewState(id).vulkan_mesh_frame_;
+                    if (mesh_frame.depth_blit.depth &&
+                        mesh_frame.depth_blit.depth->is_valid() &&
+                        mesh_frame.depth_blit.depth->ndim() == 3 &&
+                        mesh_frame.depth_blit.depth->size(0) == 1) {
+                        const auto& d = *mesh_frame.depth_blit.depth;
+                        interop.setDepthBlitImage(mesh_frame.depth_blit.depth,
+                                                  glm::ivec2(static_cast<int>(d.size(2)),
+                                                             static_cast<int>(d.size(1))),
+                                                  vulkan_frame.image_generation);
+                    } else {
+                        interop.clearDepthBlitImage();
+                    }
                 }
             }
         } else if (interactive_transition_settling) {
@@ -3099,9 +3107,6 @@ namespace lfs::vis {
             scene_manager_->completePendingSelectionCounts();
         }
         op::undoHistory().undo();
-        if (rendering_manager_) {
-            rendering_manager_->markDirty(DirtyFlag::ALL);
-        }
     }
 
     void VisualizerImpl::redo() {
@@ -3109,9 +3114,6 @@ namespace lfs::vis {
             scene_manager_->completePendingSelectionCounts();
         }
         op::undoHistory().redo();
-        if (rendering_manager_) {
-            rendering_manager_->markDirty(DirtyFlag::ALL);
-        }
     }
 
     void VisualizerImpl::run() {
@@ -3209,6 +3211,11 @@ namespace lfs::vis {
             return std::unexpected("No data loader available");
         }
 
+        if (scene_manager_ && scene_manager_->canClearScene()) {
+            data_loader_->cancelPendingImports();
+            if (gui_manager_)
+                gui_manager_->asyncTasks().cancelImport(false);
+        }
         if (data_loader_->clearScene()) {
             return {};
         }
@@ -3366,9 +3373,10 @@ namespace lfs::vis {
             return false;
         }
         lfs::core::events::cmd::ShowLoadFileConfirmation{
-            .paths = {cmd.path},
+            .paths = cmd.paths.empty() ? std::vector<std::filesystem::path>{cmd.path} : cmd.paths,
             .is_dataset = cmd.is_dataset,
-            .replace = cmd.replace}
+            .replace = cmd.replace,
+            .user_batch = cmd.user_batch}
             .emit();
         return true;
     }
@@ -3429,6 +3437,8 @@ namespace lfs::vis {
             return;
         }
         if (gui_manager_) {
+            if (data_loader_)
+                data_loader_->cancelPendingImports();
             gui_manager_->asyncTasks().cancelImport(false);
         }
 
@@ -3559,6 +3569,8 @@ namespace lfs::vis {
             return preflight;
         }
         if (gui_manager_) {
+            if (data_loader_)
+                data_loader_->cancelPendingImports();
             gui_manager_->asyncTasks().cancelImport(false);
         }
         pending_view_paths_.clear();
@@ -3677,10 +3689,6 @@ namespace lfs::vis {
             });
             return;
         }
-        if (gui_manager_) {
-            gui_manager_->asyncTasks().cancelImport(false);
-        }
-
         if (shouldDeferProjectSwitchForTraining()) {
             pending_training_action_ =
                 PendingTrainingAction::OpenProject;
@@ -3804,20 +3812,9 @@ namespace lfs::vis {
         // its live width instead of replacing it with the target project's.
         const bool keep_asset_manager_open = std::exchange(
             keep_asset_manager_open_after_restore_, false);
-        const std::optional<float> asset_manager_width =
-            keep_asset_manager_open && gui_manager_
-                ? std::make_optional(
-                      gui_manager_->panelLayout()
-                          .getLeftDockPreferredWidth())
-                : std::nullopt;
         project::applyGuiSession(
             *this, *prepared, camera_bookmarks_);
         if (keep_asset_manager_open) {
-            if (asset_manager_width && gui_manager_) {
-                gui_manager_->panelLayout()
-                    .setLeftDockWidth(
-                        *asset_manager_width);
-            }
             auto& panels =
                 gui::PanelRegistry::instance();
             panels.set_panel_enabled(
@@ -3991,8 +3988,8 @@ namespace lfs::vis {
                 message, lfs::ErrorCode::FailedPrecondition));
             return std::unexpected(std::move(message));
         };
-        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
-            return reject("Training requires an available CUDA device");
+        if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend())) {
+            return reject("Training requires an available GPU");
         }
         if (project_lifecycle_) {
             if (project_lifecycle_->isHydrating()) {
@@ -4500,7 +4497,7 @@ namespace lfs::vis {
             return;
         }
 
-        const auto preserved_camera = viewport_.camera;
+        const auto preserved_camera = getViewport().camera;
         const auto preserved_transforms = collectResetTransforms(scene_manager_->getScene());
 
         const auto& init_path = data_loader_->getParameters().init_path;
@@ -4516,16 +4513,16 @@ namespace lfs::vis {
         }
 
         const auto restore_camera = [this, &preserved_camera]() {
-            viewport_.camera = preserved_camera;
+            getViewport().camera = preserved_camera;
             if (selection_tool_ && selection_tool_->isEnabled()) {
-                selection_tool_->syncDepthFilterToCamera(viewport_);
+                selection_tool_->syncDepthFilterToCamera(screen_service_.activeView(), getViewport());
             }
             if (rendering_manager_) {
-                rendering_manager_->markCameraPoseChanged();
+                rendering_manager_->markCameraPoseChanged(rendering_manager_->activeViewId());
             }
             ui::CameraMove{
-                .rotation = viewport_.getRotationMatrix(),
-                .translation = viewport_.getTranslation()}
+                .rotation = getViewport().getRotationMatrix(),
+                .translation = getViewport().getTranslation()}
                 .emit();
             wakeMainLoop();
         };

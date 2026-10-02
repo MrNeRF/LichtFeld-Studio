@@ -622,7 +622,7 @@ namespace lfs::python {
         group.id = "render_settings";
         group.name = "Render Settings";
 
-        auto add_color3 = [&](std::array<float, 3> Proxy::* member, const std::string& id, const std::string& name,
+        auto add_color3 = [&](std::array<float, 3> Proxy::*member, const std::string& id, const std::string& name,
                               const std::string& desc, std::array<double, 3> default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -642,7 +642,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_bool = [&](bool Proxy::* member, const std::string& id, const std::string& name, const std::string& desc,
+        auto add_bool = [&](bool Proxy::*member, const std::string& id, const std::string& name, const std::string& desc,
                             bool default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -659,7 +659,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_float = [&](float Proxy::* member, const std::string& id, const std::string& name,
+        auto add_float = [&](float Proxy::*member, const std::string& id, const std::string& name,
                              const std::string& desc, double default_val, double min_val, double max_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -678,7 +678,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_int = [&](int Proxy::* member, const std::string& id, const std::string& name,
+        auto add_int = [&](int Proxy::*member, const std::string& id, const std::string& name,
                            const std::string& desc, int default_val, int min_val, int max_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -697,7 +697,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_int_enum = [&](int Proxy::* member, const std::string& id, const std::string& name,
+        auto add_int_enum = [&](int Proxy::*member, const std::string& id, const std::string& name,
                                 const std::string& desc, std::vector<EnumItem> items, int default_idx) {
             PropertyMeta meta;
             meta.id = id;
@@ -732,7 +732,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_string = [&](std::string Proxy::* member, const std::string& id, const std::string& name,
+        auto add_string = [&](std::string Proxy::*member, const std::string& id, const std::string& name,
                               const std::string& desc, const std::string& default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -892,7 +892,7 @@ namespace lfs::python {
                      {{"Manual", "MANUAL", 0}, {"Auto", "AUTO", 1}}, 1);
 
         using PPISP = vis::PPISPOverrides;
-        const auto add_ppisp_float = [&](float PPISP::* member, const char* id, const char* name,
+        const auto add_ppisp_float = [&](float PPISP::*member, const char* id, const char* name,
                                          const char* desc, double def, double min_v, double max_v) {
             PropertyMeta meta;
             meta.id = id;
@@ -911,7 +911,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        const auto add_ppisp_bool = [&](bool PPISP::* member, const char* id, const char* name,
+        const auto add_ppisp_bool = [&](bool PPISP::*member, const char* id, const char* name,
                                         const char* desc, bool def) {
             PropertyMeta meta;
             meta.id = id;
@@ -1125,22 +1125,6 @@ namespace lfs::python {
     }
 
     namespace {
-        [[nodiscard]] std::optional<vis::SplitViewPanelId> parsePanelArg(const std::string& panel) {
-            if (panel.empty() || panel == "main")
-                return std::nullopt;
-            if (panel == "left")
-                return vis::SplitViewPanelId::Left;
-            if (panel == "right")
-                return vis::SplitViewPanelId::Right;
-            throw std::invalid_argument("panel must be 'main', 'left', or 'right'");
-        }
-
-        [[nodiscard]] std::optional<vis::ViewInfo> viewInfoForPanelArg(const std::string& panel) {
-            const auto panel_id = parsePanelArg(panel);
-            return panel_id ? vis::get_view_info_for_panel(*panel_id)
-                            : vis::get_current_view_info();
-        }
-
         [[nodiscard]] std::string normalizeExportImageFormat(std::string format,
                                                              const std::filesystem::path& path) {
             if (format.empty()) {
@@ -1310,7 +1294,7 @@ namespace lfs::python {
                     if (!rendering_manager || !scene_manager) {
                         return std::unexpected("no active viewer is available");
                     }
-                    const auto view_info = viewInfoForPanelArg("main");
+                    const auto view_info = vis::get_current_view_info();
                     const vis::ExportPostProcessView view{
                         .rotation = view_info ? viewInfoRotationMatrix(*view_info) : glm::mat3{1.0f},
                         .focal_length_mm =
@@ -1376,8 +1360,8 @@ namespace lfs::python {
         }
     } // namespace
 
-    std::optional<PyCameraState> get_camera(const std::string& panel) {
-        const auto info = viewInfoForPanelArg(panel);
+    std::optional<PyCameraState> get_camera() {
+        const auto info = vis::get_current_view_info();
         if (!info)
             return std::nullopt;
 
@@ -1397,17 +1381,13 @@ namespace lfs::python {
 
     void set_camera(const std::tuple<float, float, float>& eye,
                     const std::tuple<float, float, float>& target,
-                    const std::tuple<float, float, float>& up,
-                    const std::string& panel) {
+                    const std::tuple<float, float, float>& up) {
         const vis::SetViewParams params{
             .eye = {std::get<0>(eye), std::get<1>(eye), std::get<2>(eye)},
             .target = {std::get<0>(target), std::get<1>(target), std::get<2>(target)},
             .up = {std::get<0>(up), std::get<1>(up), std::get<2>(up)},
         };
-        if (const auto panel_id = parsePanelArg(panel))
-            vis::apply_set_view_for_panel(*panel_id, params);
-        else
-            vis::apply_set_view(params);
+        vis::apply_set_view(params);
     }
 
     void set_camera_fov(float fov_degrees) {
@@ -1611,8 +1591,8 @@ namespace lfs::python {
         return std::nullopt;
     }
 
-    std::optional<PyViewInfo> get_current_view(const std::string& panel) {
-        const auto view_info = viewInfoForPanelArg(panel);
+    std::optional<PyViewInfo> get_current_view() {
+        const auto view_info = vis::get_current_view_info();
         if (!view_info)
             return std::nullopt;
 
@@ -1656,7 +1636,7 @@ namespace lfs::python {
         }
         output_path = imageExportPathForFormat(std::move(output_path), normalized_format);
 
-        auto view_info = viewInfoForPanelArg("main");
+        auto view_info = vis::get_current_view_info();
         if (!view_info) {
             throw std::runtime_error("no active viewport is available");
         }
@@ -1940,14 +1920,10 @@ Returns:
     Tensor [N, 2] with (x, y) pixel coordinates for each Gaussian
 )doc");
 
-        m.def("get_current_view", &get_current_view, nb::arg("panel") = std::string{"main"},
+        m.def("get_current_view", &get_current_view,
               R"doc(
 Get current viewport camera pose (None if not available).
 
-Args:
-    panel: 'main' (default) returns the focused viewport, 'left'/'right' returns the
-        per-panel camera. In independent split-view mode, the right panel has its own
-        camera; otherwise both panels share the main camera.
 )doc");
 
         nb::class_<PyCameraState>(m, "CameraState")
@@ -1956,19 +1932,15 @@ Args:
             .def_ro("up", &PyCameraState::up)
             .def_ro("fov", &PyCameraState::fov);
 
-        m.def("get_camera", &get_camera, nb::arg("panel") = std::string{"main"},
+        m.def("get_camera", &get_camera,
               R"doc(
 Get current viewport camera state (eye, target, up, fov) or None if unavailable.
 
-Args:
-    panel: 'main' (default), 'left', or 'right'. 'left'/'right' return the per-panel
-        camera in independent split-view mode; otherwise both panels share the main camera.
 )doc");
 
         m.def("set_camera", &set_camera,
               nb::arg("eye"), nb::arg("target"),
               nb::arg("up") = std::make_tuple(0.0f, 1.0f, 0.0f),
-              nb::arg("panel") = std::string{"main"},
               R"doc(
 Move the viewport camera to look from eye toward target.
 
@@ -1976,8 +1948,6 @@ Args:
     eye: camera position (x, y, z).
     target: look-at target (x, y, z).
     up: world up vector (default (0, 1, 0)).
-    panel: 'main' (default), 'left', or 'right'. In independent split-view mode the right
-        panel can be moved independently; otherwise this falls back to the main camera.
 )doc");
 
         m.def("set_camera_fov", &set_camera_fov,

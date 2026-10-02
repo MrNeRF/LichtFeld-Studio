@@ -7,6 +7,7 @@
 #include "core/cuda_types.hpp"
 #include "core/detail/tensor_half.hpp"
 #include "core/gpu_backend_fwd.hpp"
+#include "core/tensor_execution.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -506,13 +507,8 @@ namespace lfs::core {
         std::shared_ptr<void> external_owner;
         mutable std::mutex vulkan_interop_mutex;
         mutable std::unordered_map<void*, std::shared_ptr<void>> vulkan_interop_owners;
-        // Exportable packed-SoA provenance. When set, bind sites
-        // re-resolve the device pointer through the live control block instead of
-        // trusting the baked data_ pointer across a capacity grow.
-        // exportable_control holds shared_ptr<SplatExportableStorage::Control>.
-        std::shared_ptr<void> exportable_control;
-        std::uint32_t exportable_region = 0;
-        std::uint64_t exportable_bound_generation = 0;
+        // Exportable provenance lives on TensorState. Region views share this
+        // descriptor (Vulkan buffer, timeline) and must not share that identity.
     };
 
     namespace internal {
@@ -632,6 +628,12 @@ namespace lfs::core {
             std::string name; // Optional name for identification in traces
 
             std::shared_ptr<LazyExprState> lazy;
+
+            // Per-tensor exportable provenance. Region views share one allocation
+            // descriptor and must not share this identity.
+            std::shared_ptr<void> exportable_control;
+            std::uint32_t exportable_region = 0;
+            std::uint64_t exportable_bound_generation = 0;
         };
 
         void* data_ = nullptr;
@@ -687,10 +689,7 @@ namespace lfs::core {
         ///   flat-buffer consumer safe. storage_ptr() stays non-materializing
         ///   (allocation base for lifetime / sharing checks only).
         ///
-        /// Do not assign `contiguous()` back to `*this`: expand views
-        /// set is_view_=true, so operator= takes the view deep-copy path (copy_from),
-        /// which re-enters data_ptr() → infinite recursion. Rebind fields like
-        /// materialize_deferred_slow instead (implemented in tensor.cpp).
+        /// Rebind materialized storage at the raw-pointer escape boundary.
         void materialize_zero_stride_for_raw_ptr_escape();
         void materialize_zero_stride_for_raw_ptr_escape() const {
             // has_zero_stride is cheap; avoid a virtual-ish hop when dense.
@@ -886,7 +885,8 @@ namespace lfs::core {
         Tensor(void* data, TensorShape shape, Device device, DataType dtype,
                cudaStream_t home_stream = nullptr);
 
-        // Copy constructor and assignment - SHALLOW COPY (LibTorch behavior)
+        // Copy construction and assignment share storage, including for view destinations.
+        // Use copy_from() to write data into existing storage.
         Tensor(const Tensor& other);
         Tensor& operator=(const Tensor& other);
 
@@ -1014,6 +1014,8 @@ namespace lfs::core {
                            "from_blob received null data for a non-empty tensor");
             return Tensor(data, shape, device, dtype, home_stream);
         }
+        static Tensor from_blob(void* data, TensorShape shape, Device device, DataType dtype,
+                                TensorExecutionTarget target);
         static Tensor from_external_owner(void* data,
                                           TensorShape shape,
                                           Device device,
@@ -1040,6 +1042,14 @@ namespace lfs::core {
                                           size_t capacity,
                                           cudaStream_t stream,
                                           std::string external_kind);
+        // View of one byte range of `backing`. Shares the allocation and its
+        // backend descriptor so Vulkan address math stays on the parent buffer.
+        static Tensor view_sharing_storage(const Tensor& backing,
+                                           size_t byte_offset,
+                                           TensorShape shape,
+                                           size_t capacity,
+                                           DataType dtype,
+                                           std::string external_kind);
 
         static Tensor from_vector(const std::vector<float>& data, TensorShape shape,
                                   Device device = Device::GPU);
@@ -1281,14 +1291,18 @@ namespace lfs::core {
         // Declarative re-homing: future writes happen on `stream`. The old home
         // becomes a recorded use so the eventual free stays ordered after it.
         void set_stream(cudaStream_t stream);
+        void set_stream(TensorExecutionTarget target);
+        [[nodiscard]] TensorExecutionTarget execution_target() const;
 
         // Marks a read of this tensor on `stream` (other than its home) so the
         // allocator defers recycling until that stream passes the read.
         void record_stream(cudaStream_t stream) const;
+        void record_stream(TensorExecutionTarget target) const;
 
         // Orders `execution_stream` after this tensor's pending work, then records
         // the use. The standard prologue for consuming a tensor on another stream.
         void sync_to_stream(cudaStream_t execution_stream) const;
+        void sync_to_stream(TensorExecutionTarget target) const;
 
         // Debug tracking - mark tensor to trace all operations it's involved in
         bool is_tracked() const { return state_ && state_->tracked; }
@@ -1348,25 +1362,26 @@ namespace lfs::core {
         void set_exportable_provenance(std::shared_ptr<void> control,
                                        std::uint32_t region,
                                        std::uint64_t bound_generation) {
-            ensure_storage_meta();
-            storage_meta_->exportable_control = std::move(control);
-            storage_meta_->exportable_region = region;
-            storage_meta_->exportable_bound_generation = bound_generation;
+            ensure_state();
+            state_->exportable_control = std::move(control);
+            state_->exportable_region = region;
+            state_->exportable_bound_generation = bound_generation;
         }
         [[nodiscard]] bool has_exportable_provenance() const noexcept {
-            return storage_meta_ && static_cast<bool>(storage_meta_->exportable_control);
+            return state_ && static_cast<bool>(state_->exportable_control);
         }
         [[nodiscard]] std::shared_ptr<void> exportable_control() const noexcept {
-            return storage_meta_ ? storage_meta_->exportable_control : nullptr;
+            return state_ ? state_->exportable_control : nullptr;
         }
         [[nodiscard]] std::uint32_t exportable_region() const noexcept {
-            return storage_meta_ ? storage_meta_->exportable_region : 0u;
+            return state_ ? state_->exportable_region : 0u;
         }
         [[nodiscard]] std::uint64_t exportable_bound_generation() const noexcept {
-            return storage_meta_ ? storage_meta_->exportable_bound_generation : 0u;
+            return state_ ? state_->exportable_bound_generation : 0u;
         }
         static std::string storage_memory_summary();
         static std::size_t cuda_direct_storage_live_bytes();
+        static std::size_t vulkan_external_storage_live_bytes();
         static void log_storage_memory();
         static void log_storage_memory(std::string_view label);
 
@@ -1378,6 +1393,7 @@ namespace lfs::core {
         Tensor clone() const;      // Deep copy
         Tensor contiguous() const; // Materialize to contiguous if strided
         Tensor to(Device device, cudaStream_t stream = nullptr) const;
+        Tensor to(Device device, TensorExecutionTarget target) const;
         // Synchronous export-oriented copy to ordinary pageable host memory.
         Tensor to_pageable_host(cudaStream_t stream = nullptr) const;
         Tensor to(DataType dtype) const;
@@ -2109,6 +2125,7 @@ namespace lfs::core {
         Tensor& zero_();
         Tensor& fill_(float value);
         Tensor& fill_(float value, cudaStream_t stream); // Stream-aware version (no sync)
+        Tensor& fill_(float value, TensorExecutionTarget target);
         Tensor& copy_from(const Tensor& other);
         Tensor& copy_(const Tensor& src) { return copy_from(src); }
         Tensor& uniform_(float low = 0.0f, float high = 1.0f);

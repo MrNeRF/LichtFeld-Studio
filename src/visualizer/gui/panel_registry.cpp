@@ -5,7 +5,8 @@
 #include "gui/panel_registry.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
+#include "gui/resize_geometry.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/ui_widgets.hpp"
 #include "python/python_runtime.hpp"
@@ -75,8 +76,8 @@ namespace lfs::vis::gui {
             case PanelSpace::ViewportOverlay: return "viewport_overlay";
             case PanelSpace::MainPanelTab: return "main_panel_tab";
             case PanelSpace::SceneHeader: return "scene_header";
-            case PanelSpace::BottomDock: return "bottom_dock";
-            case PanelSpace::LeftDock: return "left_dock";
+            case PanelSpace::BottomArea: return "bottom_dock";
+            case PanelSpace::LeftArea: return "left_dock";
             case PanelSpace::StatusBar: return "status_bar";
             }
             return "unknown";
@@ -1104,8 +1105,8 @@ apply_registered_chrome:
                                              },
                                              ctx);
                     break;
-                case PanelSpace::BottomDock:
-                case PanelSpace::LeftDock:
+                case PanelSpace::BottomArea:
+                case PanelSpace::LeftArea:
                     break;
                 case PanelSpace::StatusBar:
                     snap.panel->renderDirect({
@@ -1922,7 +1923,7 @@ apply_registered_chrome:
                 return false;
 
             if (!p.parent_id.empty()) {
-                return visibility.right_panel_visible &&
+                return visibility.properties_or_scene_visible &&
                        std::string_view(p.parent_id) == visibility.active_main_tab;
             }
 
@@ -1936,14 +1937,14 @@ apply_registered_chrome:
             case PanelSpace::ViewportOverlay:
                 return true;
             case PanelSpace::SceneHeader:
-                return visibility.right_panel_visible;
+                return visibility.properties_or_scene_visible;
             case PanelSpace::MainPanelTab:
-                return visibility.right_panel_visible &&
+                return visibility.properties_or_scene_visible &&
                        std::string_view(p.id) == visibility.active_main_tab;
-            case PanelSpace::BottomDock:
-                return visibility.ui_visible && visibility.bottom_dock_visible;
-            case PanelSpace::LeftDock:
-                return visibility.ui_visible && visibility.left_dock_visible;
+            case PanelSpace::BottomArea:
+                return visibility.ui_visible && visibility.bottom_editor_visible;
+            case PanelSpace::LeftArea:
+                return visibility.ui_visible && visibility.left_editor_visible;
             }
             return false;
         }
@@ -1977,11 +1978,11 @@ apply_registered_chrome:
             case PanelSpace::MainPanelTab:
                 demand.main_panel_tab = true;
                 return;
-            case PanelSpace::BottomDock:
-                demand.bottom_dock = true;
+            case PanelSpace::BottomArea:
+                demand.bottom_editor = true;
                 return;
-            case PanelSpace::LeftDock:
-                demand.left_dock = true;
+            case PanelSpace::LeftArea:
+                demand.left_editor = true;
                 return;
             }
         }

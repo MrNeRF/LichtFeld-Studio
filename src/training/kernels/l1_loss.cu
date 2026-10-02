@@ -4,8 +4,8 @@
 
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
-#include "lfs/core/warp_reduce.cuh"
-#include "lfs/kernels/l1_loss.cuh"
+#include "training/kernels/l1_loss.cuh"
+#include "training/kernels/warp_reduce.cuh"
 #include <type_traits>
 
 #include "kernel_stream.hpp"

@@ -11,7 +11,8 @@ New-backend checklist:
 * Run the tensor contract, parity and application suites with that backend selected.
 
 Private tensor includes and symbols are forbidden throughout consumers. Native
-CUDA API and backend branches are checked only in the viewer boundary below.
+CUDA API and backend branches are checked in the viewer and trainer. Trainer
+exceptions are path rules for native ops implementations, kernels and rasterizers.
 The header-only tensor implementation lives in src/core/include/core/detail and
 may be included only from core/tensor.hpp. Headers under src/core/tensor are
 private: they compile only where LFS_TENSOR_PRIVATE_ACCESS is set (lfs_core, the
@@ -25,12 +26,28 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".cuh", ".cu"}
-# Native API rules apply to the viewer and its tensor consumers.
+# Native API rules apply to the viewer, trainer and their tensor consumers.
 VIEWER_ROOTS = (
     "src/visualizer/", "src/app/", "src/python/", "src/mcp/",
     "src/io/formats/", "src/io/project/", "src/rendering/",
 )
-TRAINER_ROOTS = ("src/training/", "src/visualizer/training/")
+TRAINER_ROOTS = ("src/training/",)
+TRAINER_CUDA_ROOTS = (
+    "src/training/kernels/", "src/training/rasterization/fastgs/",
+    "src/training/rasterization/gsplat/",
+)
+# Backend implementation declarations follow the same boundary as their definitions.
+TRAINER_CUDA_FILE = re.compile(
+    r'src/training/(?:ops/[^/]+_cuda\.cpp|'
+    r'include/lfs/training/ops/[^/]+_cuda\.hpp|'
+    r'ops/[^/]+_vulkan\.cpp|'
+    r'include/lfs/training/ops/[^/]+_vulkan\.hpp|'
+    r'vulkan/.*|'
+    r'rasterization/[^/]+_cuda\.(?:cpp|hpp)|perf_bench_cuda\.cpp)$')
+# Neutral trainer sources dispatch through the ops table. Kernel and CUDA
+# headers stay on the implementation side of that boundary.
+TRAINER_KERNEL_INCLUDE = re.compile(
+    r'(?:^|/)kernels/|_cuda\.hpp$|^(?:cuda(?:_runtime(?:_api)?)?\.h)$')
 CUDA_RASTERIZERS = ("src/rendering/rasterizer/cuda/",)
 # File-specific native interoperability and backend selection seams.
 SEAMS = {
@@ -76,6 +93,12 @@ INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
 CUDA_HEADER = re.compile(r'^(?:cuda(?:_runtime(?:_api)?|_fp16|_bf16)?\.h|driver_types\.h|vector_types\.h|cublas.*\.h|curand.*\.h|cub/.*)$')
 NATIVE_CALL = re.compile(r'\b(cuda[A-Z]\w*|cu[A-Z]\w*)\s*\(')
 CUDA_STREAM = re.compile(r'\bcudaStream_t\b')
+TRAINER_NATIVE = re.compile(
+    r'\b(?:cuda[A-Z]\w*|cu[A-Z]\w*|nvtx\w*|getCurrentCUDAStream|setCurrentCUDAStream|'
+    r'waitForCUDAStream|bridgeStreams|prepare_inputs_for_stream|CUDAStreamGuard|TensorCudaStream|'
+    r'GlobalArenaManager|RasterizerMemoryArena|CudaMemoryPool|SizeBucketedPool|'
+    r'LFS_[A-Z_]*CUDA[A-Z_]*|native_handle|cuda_stream)\b')
+TRAINER_CUDA_HEADER = re.compile(r'^(?:core/(?:cuda/.*|cuda_[^/]+\.hpp|tensor_cuda_interop\.hpp)|io/cuda/.*|nvtx3/.*)$')
 BACKEND_BRANCH = re.compile(
     r'\bcase\s+(?:(?:lfs::)?core::)?GpuBackend::\w+|'
     r'(?:==|!=)\s*(?:(?:lfs::)?core::)?GpuBackend::\w+|'
@@ -99,11 +122,19 @@ def mask_tokens(source: str, *, strings: bool = True) -> str:
     return TOKEN.sub(replace, source)
 
 
+def neutral_trainer_file(relative: str) -> bool:
+    return (relative.startswith(TRAINER_ROOTS) and
+            not relative.startswith(TRAINER_CUDA_ROOTS) and
+            TRAINER_CUDA_FILE.fullmatch(relative) is None)
+
+
 def private_header(path: Path, header: str) -> bool:
     if re.search(r'(?:^|/)core/tensor/', header):
         return True
     resolved = (path.parent / header).resolve()
     tensor_root = PROJECT_ROOT / "src/core/tensor"
+    if resolved.is_file():
+        return resolved.is_relative_to(tensor_root)
     return (resolved.is_relative_to(tensor_root) or
             (tensor_root / header).is_file() or
             (tensor_root / "internal" / header).is_file())
@@ -111,7 +142,9 @@ def private_header(path: Path, header: str) -> bool:
 
 def scan(path: Path) -> list[tuple[int, str, str]]:
     relative = path.relative_to(PROJECT_ROOT).as_posix() if path.is_relative_to(PROJECT_ROOT) else str(path)
-    if relative.startswith(("src/core/tensor/", "src/core/include/core/detail/", *TRAINER_ROOTS)):
+    if (relative.startswith(("src/core/tensor/", "src/core/include/core/detail/",
+                             "src/visualizer/training/", *TRAINER_CUDA_ROOTS)) or
+            TRAINER_CUDA_FILE.fullmatch(relative)):
         return []
     # Tensor tests verify the backend contract and may inspect implementation state.
     if relative.startswith("tests/") and path.name.startswith(("test_tensor_", "tensor_", "bench_tensor_", "test_allocator_",
@@ -123,7 +156,7 @@ def scan(path: Path) -> list[tuple[int, str, str]]:
     comments_removed = mask_tokens(source, strings=False)
     code = mask_tokens(source)
     core_scope = CORE_SCOPE.search(code) is not None
-    native_checked = ((not path.is_relative_to(PROJECT_ROOT) or relative.startswith(VIEWER_ROOTS)) and
+    native_checked = ((not path.is_relative_to(PROJECT_ROOT) or relative.startswith((*VIEWER_ROOTS, *TRAINER_ROOTS))) and
                       not relative.startswith(CUDA_RASTERIZERS) and relative not in SEAMS)
     findings = []
 
@@ -138,9 +171,15 @@ def scan(path: Path) -> list[tuple[int, str, str]]:
                 add(match.start(), "private-header", header)
         elif private_header(path, header):
             add(match.start(), "private-header", header)
-        if native_checked and CUDA_HEADER.fullmatch(header):
+        if native_checked and (CUDA_HEADER.fullmatch(header) or
+                               (relative.startswith(TRAINER_ROOTS) and TRAINER_CUDA_HEADER.fullmatch(header))):
             add(match.start(), "cuda-header", header)
+        if neutral_trainer_file(relative) and TRAINER_KERNEL_INCLUDE.search(normalized):
+            add(match.start(), "trainer-cuda-include", header)
     if native_checked:
+        if relative.startswith(TRAINER_ROOTS):
+            for match in TRAINER_NATIVE.finditer(code):
+                add(match.start(), "trainer-native-api", match.group())
         for match in NATIVE_CALL.finditer(code):
             add(match.start(), "native-api", match[1])
         for match in CUDA_STREAM.finditer(code):

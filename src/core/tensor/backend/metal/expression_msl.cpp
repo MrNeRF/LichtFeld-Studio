@@ -189,7 +189,8 @@ static uint lfs_int_divide(uint a, uint b, bool modulo) {
                 case ExprOp::Tan: return bits("tan(" + x + ")");
                 case ExprOp::Asin:
                 case ExprOp::Acos: {
-                    const auto bounded = bits("clamp(" + x + ", -1.0f, 1.0f)");
+                    // Clamp rounding overshoot, but keep NaN.
+                    const auto bounded = bits("(isnan(" + x + ") ? " + x + " : clamp(" + x + ", -1.0f, 1.0f))");
                     const auto root = bits("sqrt(fmax(0.0f, 1.0f - " + f(bounded) + " * " + f(bounded) + "))");
                     return op == ExprOp::Asin ? bits("atan2(" + f(bounded) + ", " + f(root) + ")")
                                               : bits("atan2(" + f(root) + ", " + f(bounded) + ")");

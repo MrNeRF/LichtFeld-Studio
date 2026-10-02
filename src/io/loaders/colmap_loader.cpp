@@ -118,6 +118,19 @@ namespace lfs::io {
         std::string actual_images_folder = options.images_folder;
         std::filesystem::path image_dir = path / lfs::core::utf8_to_path(actual_images_folder);
 
+        // A relative images folder that is not inside the dataset may sit next to it,
+        // resolved from the working directory like the dataset path itself.
+        if (const auto requested = lfs::core::utf8_to_path(options.images_folder);
+            requested.is_relative() && !std::filesystem::exists(image_dir)) {
+            std::error_code ec;
+            if (std::filesystem::is_directory(requested, ec)) {
+                image_dir = std::filesystem::absolute(requested, ec).lexically_normal();
+                actual_images_folder = lfs::core::path_to_utf8(image_dir);
+                LOG_INFO("Images folder '{}' is outside the dataset; using {}",
+                         options.images_folder, actual_images_folder);
+            }
+        }
+
         auto is_dataset_root = [&](const std::filesystem::path& candidate) {
             if (candidate.empty()) {
                 return false;
@@ -164,7 +177,9 @@ namespace lfs::io {
                 }
             } else {
                 return make_error(ErrorCode::MISSING_REQUIRED_FILES,
-                                  std::format("Images directory '{}' not found", options.images_folder), path);
+                                  std::format("Images directory '{}' not found in the dataset or the working directory",
+                                              options.images_folder),
+                                  path);
             }
         }
 

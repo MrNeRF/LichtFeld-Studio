@@ -11,7 +11,7 @@
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
-#include "training/rasterization/fast_rasterizer.hpp"
+#include "training/rasterization/fast_rasterizer_cuda.hpp"
 
 #include <cstdint>
 #include <cstring>

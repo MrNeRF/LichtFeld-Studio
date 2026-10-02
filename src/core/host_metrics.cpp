@@ -21,6 +21,10 @@
 #else
 #include <unistd.h>
 #endif
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <sys/sysctl.h>
+#endif
 
 namespace lfs::core::host_metrics {
     namespace {
@@ -95,6 +99,37 @@ namespace lfs::core::host_metrics {
             return sys_ticks.total != 0;
         }
 
+#ifdef __APPLE__
+        // Available memory counts free, inactive, speculative and purgeable
+        // pages, which macOS reclaims without swapping.
+        void read_memory(Sample& result) {
+            mach_task_basic_info task{};
+            mach_msg_type_number_t task_count = MACH_TASK_BASIC_INFO_COUNT;
+            if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&task), &task_count) ==
+                KERN_SUCCESS)
+                result.process_rss_bytes = static_cast<std::size_t>(task.resident_size);
+
+            std::uint64_t total = 0;
+            size_t size = sizeof(total);
+            vm_statistics64_data_t vm{};
+            mach_msg_type_number_t vm_count = HOST_VM_INFO64_COUNT;
+            vm_size_t page = 0;
+            if (sysctlbyname("hw.memsize", &total, &size, nullptr, 0) != 0 ||
+                host_page_size(mach_host_self(), &page) != KERN_SUCCESS ||
+                host_statistics64(mach_host_self(), HOST_VM_INFO64, reinterpret_cast<host_info64_t>(&vm), &vm_count) !=
+                    KERN_SUCCESS)
+                return;
+            const std::uint64_t available =
+                (static_cast<std::uint64_t>(vm.free_count) + vm.inactive_count + vm.speculative_count +
+                 vm.purgeable_count) *
+                page;
+            if (total == 0 || available > total)
+                return;
+            result.system_total_bytes = static_cast<std::size_t>(total);
+            result.system_used_bytes = static_cast<std::size_t>(total - available);
+            result.ram_valid = true;
+        }
+#else
         void read_memory(Sample& result) {
             std::ifstream statm("/proc/self/statm");
             std::uint64_t pages = 0;
@@ -122,6 +157,7 @@ namespace lfs::core::host_metrics {
                 result.ram_valid = true;
             }
         }
+#endif
 #else
         void read_memory(Sample& result) {
             PROCESS_MEMORY_COUNTERS counters{};
@@ -139,6 +175,14 @@ namespace lfs::core::host_metrics {
 #endif
 
     } // namespace
+
+    std::optional<Memory> memory() {
+        Sample result;
+        read_memory(result);
+        if (!result.ram_valid)
+            return std::nullopt;
+        return Memory{result.system_total_bytes, result.system_total_bytes - result.system_used_bytes};
+    }
 
     Sample sample() {
         Sample result;

@@ -4,6 +4,7 @@
 #include "core/export.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include "core/tensor_completion.hpp"
+#include "core/tensor_execution.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -13,8 +14,8 @@ namespace lfs::core {
     class Tensor;
     // Reusable asynchronous H2D slot. Owns both tensors until the queued copy
     // completes. Destruction waits; poll never blocks. Does not alter copy_from.
-    // Metal copies through unified memory during enqueue, after earlier GPU
-    // use of the destination.
+    // Metal copies the bytes during enqueue: into the destination when the GPU
+    // no longer uses it, else into staging that a GPU copy drains after that use.
     class LFS_CORE_API TensorUpload {
     public:
         TensorUpload();
@@ -22,8 +23,11 @@ namespace lfs::core {
         TensorUpload(TensorUpload&&) noexcept;
         TensorUpload& operator=(TensorUpload&&) noexcept;
         void enqueue(Tensor destination, const Tensor& source);
-        // execution_target is a CUDA stream (nullptr selects the CUDA default
-        // stream). Vulkan and Metal use their own queues and require nullptr.
+        void enqueue(Tensor destination, const Tensor& source, TensorExecutionTarget target);
+        void enqueue(Tensor destination, std::span<const std::byte> source, TensorExecutionTarget target);
+        // execution_target is a CUDA stream, or the native handle of a Vulkan or
+        // Metal tensor queue. nullptr selects the backend's current queue. Other
+        // non-null targets are rejected.
         void enqueue(Tensor destination, const Tensor& source, void* execution_target);
         void enqueue(Tensor destination, std::span<const std::byte> source,
                      void* execution_target);
@@ -37,8 +41,10 @@ namespace lfs::core {
     };
     // Reusable ordering marker. Recording and GPU waits never block the host.
     // Does not retain tensor storage. The caller owns storage through completion.
-    // Re-record only after every consumer has submitted its wait. Vulkan is
-    // explicitly unsupported until reusable backend queue markers are available.
+    // Re-record only after every consumer has submitted its wait. A Vulkan fence
+    // is a context-timeline value; waiting copies that value into the consumer.
+    // A Metal fence is a batch serial; Metal runs batches in submission order,
+    // so a GPU wait on it is already satisfied.
     class LFS_CORE_API TensorFence {
     public:
         explicit TensorFence(GpuBackend backend);
@@ -48,10 +54,14 @@ namespace lfs::core {
         TensorFence(const TensorFence&) = delete;
         TensorFence& operator=(const TensorFence&) = delete;
         void record(void* execution_target);
+        void record(TensorExecutionTarget target);
+        void wait_on(TensorExecutionTarget target) const;
         void wait_on(void* execution_target) const;
         void wait() const;
         [[nodiscard]] bool ready() const;
         // Takes ownership of an event from an external backend producer.
+        // Vulkan `event` is a context-timeline value and Metal `event` a batch
+        // serial (not CUDA events); zero is already signaled and nothing is destroyed.
         static TensorFence adopt(GpuBackend backend, void* event);
 
     private:
@@ -81,6 +91,7 @@ namespace lfs::core {
         private:
             GpuBackendScope backend_scope_;
             void* previous_target_ = nullptr;
+            bool rebound_vulkan_ = false;
         };
         [[nodiscard]] void* native_handle() const;
         [[nodiscard]] GpuBackend backend() const;
@@ -89,7 +100,7 @@ namespace lfs::core {
         void record(TensorFence& fence) const;
         void wait_for(const TensorFence& fence) const;
         // Callback must not call GPU APIs or throw. Runs off the submitting
-        // thread after prior queue work. CUDA only; Vulkan throws unsupported.
+        // thread after prior queue work.
         void enqueue_host_callback(void (*callback)(void*), void* user);
         // Imports consumer semaphores without a host wait. Imports and keep_alive
         // tokens survive replacement until queue destruction.
@@ -102,6 +113,7 @@ namespace lfs::core {
         [[nodiscard]] void* timeline() const;
 
     private:
+        friend class TensorReadbackRing;
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };

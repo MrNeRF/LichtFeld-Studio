@@ -5,13 +5,16 @@
 #pragma once
 
 #include "core/export.hpp"
-#include "gui/terminal/terminal_widget.hpp"
 
 #include <RmlUi/Core/Element.h>
 
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace lfs::vis::terminal {
+    struct TerminalSnapshot;
+}
 
 namespace lfs::vis::gui {
 
@@ -22,6 +25,7 @@ namespace lfs::vis::gui {
         LFS_VIS_API void setSnapshot(const terminal::TerminalSnapshot& snapshot);
 
     protected:
+        void ProcessDefaultAction(Rml::Event& event) override;
         bool GetIntrinsicDimensions(Rml::Vector2f& dimensions, float& ratio) override;
 
     private:

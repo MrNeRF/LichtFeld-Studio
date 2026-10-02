@@ -429,14 +429,11 @@ namespace gsplat_lfs {
                             lfs::core::CudaFailureDisposition::LogOnlyNoLatch);
                     }
                 }
-                // Pinned n_isects slot + event stay for the TLS lifetime so a
+                // Pinned n_isects slot + event stay for the owner lifetime so a
                 // mid-process release does not break a later forward on this thread.
-                const bool cub_released = release_gsplat_cub_workspace();
-                const bool color_grad_released = release_gsplat_color_grad_workspace();
                 return !cum_tiles && !isect_ids_storage && !isect_values_storage &&
                        !sort_ids_storage && !sort_values_storage &&
-                       sort_reuse_event == nullptr && cub_released &&
-                       color_grad_released;
+                       sort_reuse_event == nullptr;
             }
 
             ~IntersectBufferCache() {
@@ -456,17 +453,24 @@ namespace gsplat_lfs {
             }
         };
 
-        IntersectBufferCache& get_cache() {
-            static thread_local IntersectBufferCache cache;
-            return cache;
-        }
     } // namespace
 
-    bool release_intersect_thread_local_cache() noexcept {
-        return get_cache().release();
+    struct Workspace::Intersections : IntersectBufferCache {};
+
+    Workspace::Workspace() = default;
+    Workspace::~Workspace() = default;
+
+    bool Workspace::release() noexcept {
+        const bool released = !intersections || intersections->release();
+        cub.reset();
+        color_grad.reset();
+        cub_capacity = 0;
+        color_grad_capacity = 0;
+        return released && !cub && !color_grad;
     }
 
     IntersectTileResult intersect_tile(
+        Workspace& saved,
         const float* means2d,
         const int32_t* radii,
         const float* depths,
@@ -521,7 +525,9 @@ namespace gsplat_lfs {
             return result;
         }
 
-        auto& cache = get_cache();
+        if (!saved.intersections)
+            saved.intersections = std::make_unique<Workspace::Intersections>();
+        auto& cache = *saved.intersections;
         cache.begin_call(n_elements, stream);
         if (cache.pair_budget == 0) {
             size_t free_bytes = 0, total_bytes = 0;
@@ -556,7 +562,7 @@ namespace gsplat_lfs {
 
         cache.ensure_cum_tiles(n_elements);
         int64_t* d_cum_tiles = cache.cum_tiles.as<int64_t>();
-        compute_cumsum_gpu(tiles_per_gauss_out, d_cum_tiles, n_elements, stream);
+        compute_cumsum_gpu(saved, tiles_per_gauss_out, d_cum_tiles, n_elements, stream);
 
         LFS_ASSERT_MSG(cache.h_n_isects_pinned != nullptr,
                        "gsplat intersection cache missing pinned n_isects slot");
@@ -613,6 +619,7 @@ namespace gsplat_lfs {
             if (sort && sort_n > 0) {
                 try {
                     radix_sort_double_buffer(
+                        saved,
                         static_cast<int64_t>(sort_n), tile_n_bits, cam_n_bits,
                         cache.isect_ids(), cache.flatten_ids(),
                         cache.sorted_isect_ids(), cache.sorted_flatten_ids(),

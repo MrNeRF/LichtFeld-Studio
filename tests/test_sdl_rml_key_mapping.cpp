@@ -91,7 +91,7 @@ namespace {
 
         EXPECT_TRUE(buffer.keys_pressed.empty());
         EXPECT_FALSE(buffer.mouse_clicked[0]);
-        EXPECT_TRUE(buffer.text_codepoints.empty());
+        EXPECT_TRUE(buffer.input_events.empty());
         EXPECT_FALSE(buffer.had_event);
         EXPECT_FALSE(buffer.mouse_moved);
     }
@@ -121,8 +121,10 @@ namespace {
         ASSERT_EQ(buffer.keys_pressed.size(), 1u);
         EXPECT_EQ(buffer.keys_pressed.front(), SDL_SCANCODE_A);
         EXPECT_TRUE(buffer.mouse_clicked[0]);
-        ASSERT_EQ(buffer.text_codepoints.size(), 1u);
-        EXPECT_EQ(buffer.text_codepoints.front(), 0xE9u);
+        ASSERT_EQ(buffer.input_events.size(), 3u);
+        EXPECT_EQ(buffer.input_events[1].kind, lfs::vis::FrameInputEventKind::MouseButton);
+        EXPECT_EQ(buffer.input_events.back().kind, lfs::vis::FrameInputEventKind::Text);
+        EXPECT_EQ(buffer.input_events.back().text, "\xc3\xa9");
         EXPECT_TRUE(buffer.had_event);
         EXPECT_FALSE(buffer.mouse_moved);
     }
@@ -172,6 +174,28 @@ namespace {
         EXPECT_FLOAT_EQ(buffer.mouse_wheel_x, 2.0f);
         EXPECT_TRUE(buffer.mouse_clicked[0]);
         EXPECT_TRUE(buffer.mouse_released[0]);
+    }
+
+    TEST(FrameInputBufferTest, CapturesCtrlModifierOnMousePressEvent) {
+        lfs::vis::FrameInputBuffer buffer;
+        buffer.beginFrame();
+        const auto previous = SDL_GetModState();
+        SDL_Event ctrl_down{};
+        ctrl_down.type = SDL_EVENT_KEY_DOWN;
+        ctrl_down.key.scancode = SDL_SCANCODE_LCTRL;
+        ctrl_down.key.mod = SDL_KMOD_CTRL;
+        buffer.processEvent(ctrl_down);
+        SDL_SetModState(previous);
+        buffer.beginFrame();
+        SDL_Event event{};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.x = 20.0f;
+        event.button.y = 30.0f;
+        buffer.processEvent(event);
+
+        ASSERT_EQ(buffer.mouse_button_events.size(), 1u);
+        EXPECT_TRUE(buffer.mouse_button_events.front().ctrl);
     }
 
     TEST(FrameInputBufferTest, TracksMouseWindowAndWakeEventsForRenderDemand) {

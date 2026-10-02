@@ -474,9 +474,10 @@ namespace lfs::vis::gui {
         }
     } // namespace
 
+    void beginScaleGizmoFrame() { g_hovered = false; }
+
     ScaleGizmoResult drawScaleGizmo(const ScaleGizmoConfig& config) {
         ScaleGizmoResult result;
-        g_hovered = false;
 
         if (!config.draw_list || config.viewport_size.x <= 1.0f || config.viewport_size.y <= 1.0f) {
             return result;
@@ -551,7 +552,7 @@ namespace lfs::vis::gui {
 
         result.hovered_handle = hovered_handle;
         result.hovered = hovered_handle != ScaleGizmoHandle::None;
-        g_hovered = result.hovered || result.active;
+        g_hovered |= result.hovered || result.active;
 
         const ScaleGizmoHandle emphasized = result.active ? g_active.handle : hovered_handle;
         for (const auto& plane : projected_planes) {

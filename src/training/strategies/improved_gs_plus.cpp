@@ -6,8 +6,7 @@
 
 #include "core/igs_failure_diagnostics.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/internal/tensor_serialization.hpp"
-#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/morton_reorder.hpp"
@@ -15,8 +14,6 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 
-#include "kernels/densification_kernels.hpp"
-#include "lfs/training/ops/registry.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
 #include <algorithm>
@@ -57,8 +54,7 @@ namespace lfs::training {
             if (tensor.device() == lfs::core::Device::GPU &&
                 tensor.dtype() == lfs::core::DataType::Float32 &&
                 tensor.is_valid() && tensor.numel() > 0) {
-                kernels::launch_normalize_by_positive_median(
-                    tensor.ptr<float>(), tensor.numel());
+                training_ops(lfs::core::default_gpu_backend()).refine->normalize_positive_median(tensor);
                 return;
             }
             tensor.masked_fill_(tensor.isnan(), 0.0f);
@@ -407,23 +403,7 @@ namespace lfs::training {
 
         // SH is unchanged by LAS. Keep resident shN swizzled, run the split kernel without
         // SH, then gather selected child SH rows below.
-        kernels::launch_long_axis_split_gaussians_inplace(
-            _splat_data->means().ptr<float>(),
-            _splat_data->rotation_raw().ptr<float>(),
-            _splat_data->scaling_raw().ptr<float>(),
-            _splat_data->sh0().ptr<float>(),
-            nullptr,
-            _splat_data->opacity_raw().ptr<float>(),
-            second_positions.ptr<float>(),
-            second_rotations.ptr<float>(),
-            second_scales.ptr<float>(),
-            second_sh0.ptr<float>(),
-            nullptr,
-            second_opacities.ptr<float>(),
-            sampled_idxs.ptr<int64_t>(),
-            static_cast<int>(budget_for_alloc),
-            0,
-            nullptr);
+        training_ops(lfs::core::default_gpu_backend()).refine->split({_splat_data->means(), _splat_data->rotation_raw(), _splat_data->scaling_raw(), _splat_data->sh0(), _splat_data->opacity_raw()}, {second_positions, second_rotations, second_scales, second_sh0, second_opacities}, sampled_idxs);
 
         if (use_shN) {
             lfs::training::sh_value::gather_shN_to_canonical(
@@ -448,7 +428,7 @@ namespace lfs::training {
                                 auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
                                                    ? sampled_idxs
                                                    : sampled_idxs.to(lfs::core::DataType::Int32);
-                                const auto stream = lfs::core::getCurrentCUDAStream();
+                                const auto stream = lfs::core::TensorExecutionTarget::current();
                                 idx_i32.sync_to_stream(stream);
                                 state->grad.set_stream(stream);
                                 training_sh_ops().zero_rows(state->grad, idx_i32, layout_rest_u32);
@@ -609,11 +589,9 @@ namespace lfs::training {
             return;
         }
 
-        const auto stream = lfs::core::getCurrentCUDAStream();
+        const auto stream = lfs::core::TensorExecutionTarget::current();
         _edge_view_scores.set_stream(stream);
-        kernels::launch_normalize_by_positive_median(
-            _edge_view_scores.ptr<float>(), _edge_view_scores.numel(),
-            stream);
+        training_ops(lfs::core::default_gpu_backend()).refine->normalize_positive_median(_edge_view_scores);
         zero_frozen_scores_inplace(*_splat_data, _edge_view_scores);
         _edge_score_sum.add_(_edge_view_scores);
         ++_edge_sample_count;
@@ -899,7 +877,7 @@ namespace lfs::training {
                         auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
                                            ? prune_indices
                                            : prune_indices.to(lfs::core::DataType::Int32);
-                        const auto stream = lfs::core::getCurrentCUDAStream();
+                        const auto stream = lfs::core::TensorExecutionTarget::current();
                         idx_i32.sync_to_stream(stream);
                         state->grad.set_stream(stream);
                         training_sh_ops().zero_rows(state->grad, idx_i32, layout_rest);
@@ -971,29 +949,13 @@ namespace lfs::training {
         const int64_t slots_to_fill = std::min(count, num_free);
         auto target_indices = free_indices.slice(0, 0, slots_to_fill);
 
-        const int opacity_dim = (_splat_data->opacity_raw().ndim() == 2) ? 1 : 0;
         auto pos_slice = positions.slice(0, 0, slots_to_fill);
         auto rot_slice = rotations.slice(0, 0, slots_to_fill);
         auto scale_slice = scales.slice(0, 0, slots_to_fill);
         auto sh0_slice = sh0.slice(0, 0, slots_to_fill);
         auto opac_slice = opacities.slice(0, 0, slots_to_fill);
 
-        kernels::launch_fill_free_slots_fused(
-            target_indices.ptr<int64_t>(),
-            static_cast<size_t>(slots_to_fill),
-            pos_slice.ptr<float>(),
-            rot_slice.ptr<float>(),
-            scale_slice.ptr<float>(),
-            sh0_slice.ptr<float>(),
-            opac_slice.ptr<float>(),
-            _splat_data->means().ptr<float>(),
-            _splat_data->rotation_raw().ptr<float>(),
-            _splat_data->scaling_raw().ptr<float>(),
-            _splat_data->sh0().ptr<float>(),
-            _splat_data->opacity_raw().ptr<float>(),
-            opacity_dim,
-            _free_mask.ptr<bool>(),
-            current_size);
+        training_ops(lfs::core::default_gpu_backend()).refine->fill_slots(target_indices, {pos_slice, rot_slice, scale_slice, sh0_slice, opac_slice}, {_splat_data->means(), _splat_data->rotation_raw(), _splat_data->scaling_raw(), _splat_data->sh0(), _splat_data->opacity_raw()}, _free_mask);
 
         const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
         if (layout_rest > 0 && shN.is_valid() && shN.numel() > 0 &&
@@ -1029,7 +991,7 @@ namespace lfs::training {
                                 auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
                                                    ? target_indices
                                                    : target_indices.to(lfs::core::DataType::Int32);
-                                const auto stream = lfs::core::getCurrentCUDAStream();
+                                const auto stream = lfs::core::TensorExecutionTarget::current();
                                 idx_i32.sync_to_stream(stream);
                                 state->grad.set_stream(stream);
                                 training_sh_ops().zero_rows(state->grad, idx_i32, layout_rest);

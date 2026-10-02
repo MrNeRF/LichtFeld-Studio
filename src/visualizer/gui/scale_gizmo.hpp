@@ -47,6 +47,8 @@ namespace lfs::vis::gui {
         glm::vec3 total_scale{1.0f};
     };
 
+    LFS_VIS_API void beginScaleGizmoFrame();
+
     LFS_VIS_API ScaleGizmoResult drawScaleGizmo(const ScaleGizmoConfig& config);
 
     [[nodiscard]] bool isScaleGizmoHovered();

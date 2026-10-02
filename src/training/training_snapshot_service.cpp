@@ -7,13 +7,14 @@
 
 #include "checkpoint.hpp"
 #include "core/gpu_elapsed.hpp"
+#include "core/host_metrics.hpp"
 #include "core/logger.hpp"
 #include "core/resource_messages.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/tensor_readback.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "core/tensor_upload.hpp"
@@ -168,6 +169,13 @@ namespace lfs::training {
                     .available_bytes = status.ullAvailPhys,
                 };
             }
+#elif defined(__APPLE__)
+            if (const auto memory = core::host_metrics::memory()) {
+                result = {
+                    .total_bytes = memory->total_bytes,
+                    .available_bytes = memory->available_bytes,
+                };
+            }
 #elif defined(__linux__)
             std::ifstream input("/proc/meminfo");
             std::string line;
@@ -274,7 +282,7 @@ namespace lfs::training {
                 lfs::core::DataType::Float32;
             lfs::core::Device source_device =
                 lfs::core::Device::CPU;
-            void* source_stream = nullptr;
+            std::optional<lfs::core::TensorExecutionTarget> source_stream;
             std::uint64_t source_bytes = 0;
             const void* auxiliary_source_pointer = nullptr;
             lfs::core::TensorShape auxiliary_source_shape;
@@ -282,7 +290,7 @@ namespace lfs::training {
                 lfs::core::DataType::Float32;
             lfs::core::Device auxiliary_source_device =
                 lfs::core::Device::CPU;
-            void* auxiliary_source_stream = nullptr;
+            std::optional<lfs::core::TensorExecutionTarget> auxiliary_source_stream;
             lfs::core::TensorSerializationDescriptor descriptor;
             std::uint64_t payload_offset = 0;
             std::uint64_t payload_bytes = 0;
@@ -395,7 +403,7 @@ namespace lfs::training {
                     .source_shape = source.shape(),
                     .source_dtype = source.dtype(),
                     .source_device = source.device(),
-                    .source_stream = source.stream(),
+                    .source_stream = source.execution_target(),
                     .source_bytes = source.bytes(),
                     .auxiliary_source_pointer =
                         auxiliary_source
@@ -416,8 +424,8 @@ namespace lfs::training {
                             : lfs::core::Device::CPU,
                     .auxiliary_source_stream =
                         auxiliary_source
-                            ? auxiliary_source->stream()
-                            : nullptr,
+                            ? std::make_optional(auxiliary_source->execution_target())
+                            : std::nullopt,
                     .descriptor = descriptor,
                     .payload_offset =
                         static_cast<std::uint64_t>(
@@ -763,15 +771,15 @@ namespace lfs::training {
 
         void initialize_resources(
             const std::vector<TensorLayoutWitness>& layout,
-            const std::span<void* const>
-                mutating_streams) {
+            const std::span<const lfs::core::TensorExecutionTarget>
+                mutating_queues) {
             if (!d2h_queue)
-                d2h_queue = std::make_unique<lfs::core::TensorWorkQueue>(lfs::core::GpuBackend::CUDA);
+                d2h_queue = std::make_unique<lfs::core::TensorWorkQueue>(lfs::core::default_gpu_backend());
             ensure_device_scratch();
-            calibrate_once(layout, mutating_streams);
+            calibrate_once(layout, mutating_queues);
             device_scratch = {};
             if (slots.empty()) {
-                ring = std::make_unique<lfs::core::TensorReadbackRing>(lfs::core::GpuBackend::CUDA,
+                ring = std::make_unique<lfs::core::TensorReadbackRing>(d2h_queue->backend(),
                                                                        config.ring_slots, config.band_bytes, *d2h_queue, &device_scratch);
                 slots.resize(config.ring_slots);
                 for (size_t i = 0; i < slots.size(); ++i)
@@ -793,35 +801,35 @@ namespace lfs::training {
 
         void calibrate_once(
             const std::vector<TensorLayoutWitness>& layout,
-            const std::span<void* const>
-                mutating_streams) {
+            const std::span<const lfs::core::TensorExecutionTarget>
+                mutating_queues) {
             std::scoped_lock lock(calibration_mutex);
             if (process_pinned_d2h_bytes_per_second > 0.0) {
                 measured_bandwidth =
                     process_pinned_d2h_bytes_per_second;
                 return;
             }
-            std::set<void*> streams;
-            for (const auto stream : mutating_streams) {
-                if (stream) {
+            std::set<lfs::core::TensorExecutionTarget> streams;
+            for (const auto stream : mutating_queues) {
+                if (!stream.is_default_queue()) {
                     streams.insert(stream);
                 }
             }
             for (const auto& witness : layout) {
                 if (witness.source_device ==
                         lfs::core::Device::GPU &&
-                    witness.source_stream) {
-                    streams.insert(witness.source_stream);
+                    witness.source_stream && !witness.source_stream->is_default_queue()) {
+                    streams.insert(*witness.source_stream);
                 }
                 if (witness.auxiliary_source_device ==
                         lfs::core::Device::GPU &&
-                    witness.auxiliary_source_stream) {
+                    witness.auxiliary_source_stream && !witness.auxiliary_source_stream->is_default_queue()) {
                     streams.insert(
-                        witness.auxiliary_source_stream);
+                        *witness.auxiliary_source_stream);
                 }
             }
             for (const auto stream : streams) {
-                lfs::core::TensorWorkQueue(lfs::core::GpuBackend::CUDA, stream).wait();
+                stream.wait();
             }
             const auto source = std::ranges::max_element(
                 layout, std::less{},
@@ -860,19 +868,19 @@ namespace lfs::training {
                     "Snapshot calibration requires device scratch");
             }
 
-            lfs::core::TensorReadbackRing calibration(lfs::core::GpuBackend::CUDA, 1, bytes, *d2h_queue, &device_scratch);
+            lfs::core::TensorReadbackRing calibration(d2h_queue->backend(), 1, bytes, *d2h_queue, &device_scratch);
             calibration.enqueue(source->source, 0, bytes, 0, 0, true);
             calibration.seal(0);
             calibration.wait(0);
             calibration.release(0);
-            lfs::core::GpuElapsed elapsed(lfs::core::GpuBackend::CUDA, 2);
-            if (!elapsed.mark(0, d2h_queue->native_handle()))
+            lfs::core::GpuElapsed elapsed(d2h_queue->backend(), 2);
+            if (!elapsed.mark(0, *d2h_queue))
                 throw std::runtime_error("Cannot start readback calibration timer");
             // Every iteration appends to the same slot; one seal covers the batch.
             for (int i = 0; i < config.calibration_iterations; ++i)
                 calibration.enqueue(source->source, 0, bytes, 0, 0, true);
             calibration.seal(0);
-            if (!elapsed.mark(1, d2h_queue->native_handle()) || !elapsed.wait_event(1))
+            if (!elapsed.mark(1, *d2h_queue) || !elapsed.wait_event(1))
                 throw std::runtime_error("Cannot finish readback calibration timer");
             const auto elapsed_ms = elapsed.milliseconds(0, 1);
             if (!elapsed_ms || !(*elapsed_ms > 0.0f))
@@ -953,8 +961,8 @@ namespace lfs::training {
             }
             const lfs::core::Tensor absent;
             {
-                const lfs::core::CUDAStreamGuard execution_scope(
-                    static_cast<cudaStream_t>(d2h_queue->native_handle()));
+                const lfs::core::TensorExecutionTarget::Scope execution_scope(
+                    *d2h_queue);
                 training_sh_ops().decode_range(
                     source,
                     auxiliary != nullptr ? *auxiliary : absent,
@@ -1769,7 +1777,7 @@ namespace lfs::training {
                 }
             }
             impl_->initialize_resources(
-                layout, request.mutating_streams);
+                layout, request.mutating_queues);
             impl_->initialization_ms =
                 Milliseconds(Clock::now() - begin)
                     .count();
@@ -1791,14 +1799,14 @@ namespace lfs::training {
             LOG_INFO(
                 "Training snapshot service initialized off the save path: "
                 "init={:.3f}ms pinned={} bytes raw_pinned_D2H={:.3f}GiB/s "
-                "mutating_streams={}",
+                "mutating_queues={}",
                 impl_->initialization_ms,
                 impl_->config.ring_slots *
                     impl_->config.band_bytes,
                 impl_->measured_bandwidth /
                     static_cast<double>(
                         1024ull * 1024 * 1024),
-                request.mutating_streams.size());
+                request.mutating_queues.size());
             return {};
         } catch (const std::exception& error) {
             // LFS-CENSUS-OK(empty-catch): normalize the exception into a typed snapshot error.
@@ -2048,11 +2056,11 @@ namespace lfs::training {
                 throw std::invalid_argument(
                     "Snapshot safe-point clock origin is in the future");
             }
-            std::set<void*> streams;
-            streams.insert(impl_->d2h_queue->native_handle());
+            std::set<lfs::core::TensorExecutionTarget> streams;
+            streams.insert(*impl_->d2h_queue);
             for (const auto stream :
-                 request.mutating_streams) {
-                if (stream) {
+                 request.mutating_queues) {
+                if (!stream.is_default_queue()) {
                     streams.insert(stream);
                 }
             }
@@ -2060,19 +2068,19 @@ namespace lfs::training {
                  prepared.impl_->layout) {
                 if (witness.source_device ==
                         lfs::core::Device::GPU &&
-                    witness.source_stream) {
+                    witness.source_stream && !witness.source_stream->is_default_queue()) {
                     streams.insert(
-                        witness.source_stream);
+                        *witness.source_stream);
                 }
                 if (witness.auxiliary_source_device ==
                         lfs::core::Device::GPU &&
-                    witness.auxiliary_source_stream) {
+                    witness.auxiliary_source_stream && !witness.auxiliary_source_stream->is_default_queue()) {
                     streams.insert(
-                        witness.auxiliary_source_stream);
+                        *witness.auxiliary_source_stream);
                 }
             }
             for (const auto stream : streams) {
-                lfs::core::TensorWorkQueue(lfs::core::GpuBackend::CUDA, stream).wait();
+                stream.wait();
             }
             const auto sync_end = Clock::now();
             impl_->ensure_device_scratch();

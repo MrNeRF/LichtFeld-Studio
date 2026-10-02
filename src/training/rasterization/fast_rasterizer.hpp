@@ -5,7 +5,6 @@
 #pragma once
 
 #include "optimizer/adam_optimizer.hpp"
-#include <rasterization_api.h>
 
 namespace lfs::training {
 
@@ -29,8 +28,5 @@ namespace lfs::training {
         const float* edge_weight_map = nullptr;
         float* edge_score_out = nullptr;
     };
-
-    [[nodiscard]] fast_lfs::rasterization::FusedAdamSettings fast_adam_settings(
-        const lfs::gpu_ops::BackwardAdam& adam);
 
 } // namespace lfs::training

@@ -70,7 +70,7 @@ namespace lfs::training {
         const lfs::core::Tensor& grad_normal) {
         const auto& ops = cuda_fast_ops();
         const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-        const auto prepared = optimizer.prepare_fastgs_fused_adam(iteration, stream);
+        const auto prepared = optimizer.prepare_fastgs_fused_adam(iteration, lfs::core::TensorExecutionTarget::current());
         lfs::core::Tensor scale_loss = device_f32(fused_extra_gradients.scale_reg_loss_out, {1});
         lfs::core::Tensor opacity_loss = device_f32(fused_extra_gradients.opacity_reg_loss_out, {1});
         const auto sparsity_n = static_cast<std::size_t>(std::max(fused_extra_gradients.sparsity_n, 0));

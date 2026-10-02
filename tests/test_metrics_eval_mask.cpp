@@ -489,3 +489,43 @@ TEST_F(MetricsEvalMask, RgbaPreprocessingUsesExecutionQueue) {
     EXPECT_EQ(loaded->mask.stream(), queue.native_handle());
     expect_keep(loaded->mask, {kExpectedKeep.begin(), kExpectedKeep.end()}, "scoped RGBA");
 }
+
+TEST(CameraTensorAssignment, ReplacingInMemoryMaskRebindsAnExistingView) {
+    Camera camera;
+    auto first_storage = Tensor::from_vector({1.0f, 2.0f, 3.0f, 4.0f}, {2, 2}, Device::CPU);
+    auto second_storage = Tensor::from_vector({5.0f, 6.0f, 7.0f, 8.0f}, {2, 2}, Device::CPU);
+
+    camera.set_mask_tensor(first_storage.slice(0, 0, 2));
+    camera.set_mask_tensor(second_storage.slice(0, 0, 2));
+
+    EXPECT_EQ(first_storage.to_vector(), (std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}));
+    EXPECT_EQ(second_storage.to_vector(), (std::vector<float>{5.0f, 6.0f, 7.0f, 8.0f}));
+}
+
+TEST(CameraTensorAssignment, TranslateRebindsAnExistingTranslationView) {
+    if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend()))
+        GTEST_SKIP() << "GPU backend not available";
+
+    auto translation_storage = Tensor::from_vector(
+        {0.0f, 0.0f, 1.0f, 9.0f, 9.0f, 9.0f}, {2, 3}, Device::CPU);
+    auto rotation = Tensor::eye(3, Device::CPU);
+    auto camera = Camera(rotation, translation_storage.slice(0, 0, 1).squeeze(0),
+                         2.0f, 2.0f, 1.0f, 1.0f, Tensor(), Tensor(),
+                         CameraModelType::PINHOLE, "", {}, {}, 2, 2, 0);
+    camera.translate(Tensor::from_vector({1.0f, 0.0f, 0.0f}, {3}, Device::CPU));
+
+    EXPECT_EQ(translation_storage.to_vector(),
+              (std::vector<float>{0.0f, 0.0f, 1.0f, 9.0f, 9.0f, 9.0f}));
+}
+
+TEST(CameraTensorAssignment, MoveAssignmentRebindsExistingTensorViews) {
+    Camera target;
+    Camera source;
+    auto target_storage = Tensor::zeros({2, 2}, Device::CPU);
+    target.set_mask_tensor(target_storage.slice(0, 0, 2));
+    source.set_mask_tensor(Tensor::full({2, 2}, 17.0f, Device::CPU));
+
+    target = std::move(source);
+
+    EXPECT_EQ(target_storage.to_vector(), std::vector<float>(4, 0.0f));
+}

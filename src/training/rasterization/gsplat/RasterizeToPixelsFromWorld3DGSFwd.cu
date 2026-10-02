@@ -107,10 +107,10 @@ namespace gsplat_lfs {
 #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
                 float bg_val = 0.0f;
-                if (bg_images != nullptr) {
+                if (bg_images != nullptr && k < 3u) {
                     // bg_images is [CDIM, H, W] for this camera
                     bg_val = bg_images[k * image_height * image_width + pix_id];
-                } else if (backgrounds != nullptr) {
+                } else if (backgrounds != nullptr && k < 3u) {
                     bg_val = backgrounds[k];
                 }
                 render_colors[chw_pix(k, pix_id, image_height, image_width)] = bg_val;
@@ -262,10 +262,10 @@ namespace gsplat_lfs {
 #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
                 float bg_val = 0.0f;
-                if (bg_images != nullptr) {
+                if (bg_images != nullptr && k < 3u) {
                     // bg_images is [CDIM, H, W] for this camera
                     bg_val = bg_images[k * image_height * image_width + pix_id];
-                } else if (backgrounds != nullptr) {
+                } else if (backgrounds != nullptr && k < 3u) {
                     bg_val = backgrounds[k];
                 }
                 render_colors[chw_pix(k, pix_id, image_height, image_width)] = pix_out[k] + T * bg_val;

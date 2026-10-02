@@ -355,7 +355,7 @@ def _scan_result(**overrides):
         setattr(value, key, item)
     return value
 
-def test_panel_contract_polls_preference_and_remains_left_dock(panel_module, monkeypatch):
+def test_panel_contract_polls_preference_and_keeps_area_placement(panel_module, monkeypatch):
     panel_type = panel_module.AssetManagerPanel
     assert panel_type.update_policy == "dirty"
     assert panel_type.space == panel_module.lf.ui.PanelSpace.LEFT_DOCK
@@ -814,12 +814,12 @@ def test_dom_right_click_uses_shared_app_context_menu(panel_module):
     assert menu["position"] == (120.0, 220.0)
     assert [item["action"] for item in menu["items"]] == [
         "load",
-        "inspector",
-        "gallery:publish",
         "project:rename",
+        "inspector",
         "show_in_folder",
         "remove",
         "trash",
+        "gallery:publish",
     ]
     assert event.stopped is True
 
@@ -846,14 +846,30 @@ def test_context_menu_opens_inspector_for_local_project(panel_module, status, ha
     actions = [entry["action"] for entry in menu["items"]]
     assert "project:contents" not in actions
     assert actions.count("inspector") == 1
-    expected_prefix = ["load", "inspector"] if status == "AVAILABLE" else ["inspector"]
+    expected_prefix = (
+        [
+            "load",
+            "project:rename",
+            *( ["project:update_thumbnail"] if has_details else [] ),
+            "inspector",
+        ]
+        if status == "AVAILABLE"
+        else ["inspector"]
+    )
     assert actions[:len(expected_prefix)] == expected_prefix
     assert ("project:rename" in actions) == (status == "AVAILABLE")
     assert not menu["items"][0].get("separator_before", False)
     assert not item.get("separator_before", False)
-    for entry in menu["items"]:
-        if entry["action"] in ("show_in_folder", "trash") or entry["action"].startswith("gallery:"):
-            assert entry["separator_before"] is True
+    assert next(item for item in menu["items"] if item["action"] == "show_in_folder")["separator_before"] is True
+    group_three = next(
+        (item for item in menu["items"] if item["action"] == "project:export_as"),
+        next(
+            (item for item in menu["items"] if item["action"].startswith("gallery:")),
+            None,
+        ),
+    )
+    if group_three is not None:
+        assert group_three["separator_before"] is True
     menu["on_action"](item["action"])
 
     assert panel._selected_asset_ids == {asset["id"]}
@@ -1450,11 +1466,11 @@ def test_recent_only_project_uses_native_inspection_without_joining_library(
     menu = panel_module.lf._test_state.context_menus[-1]
     assert [item["action"] for item in menu["items"]] == [
         "load",
-        "show_in_folder",
-        "inspector",
-        "project:export_as",
-        "project:update_thumbnail",
         "project:rename",
+        "project:update_thumbnail",
+        "inspector",
+        "show_in_folder",
+        "project:export_as",
     ]
     assert [item["label"] for item in menu["items"] if item["action"] == "inspector"] == [
         "projects.inspector.title"
@@ -2021,8 +2037,7 @@ def test_project_manager_state_is_device_chrome_not_catalog_selection(panel_modu
     assert "selected_folder_id" not in stored[-1]
 
 
-def test_project_manager_state_restores_outer_panel_width(panel_module, monkeypatch):
-    restored_widths = []
+def test_project_manager_state_restores_remembered_panel_width(panel_module, monkeypatch):
     monkeypatch.setattr(
         panel_module.lf.ui,
         "get_panel",
@@ -2039,48 +2054,12 @@ def test_project_manager_state_restores_outer_panel_width(panel_module, monkeypa
         "read_project_manager_state",
         lambda: {"view_mode": "list", "panel_width": 468.0},
     )
-    monkeypatch.setattr(
-        panel_module.lf.ui,
-        "set_left_dock_width",
-        lambda width: restored_widths.append(width),
-        raising=False,
-    )
-
-    panel_module.AssetManagerPanel()
-
-    assert restored_widths == [468.0]
-
-
-def test_project_manager_state_does_not_resize_left_dock_while_floating(panel_module, monkeypatch):
-    restored_widths = []
-    info = SimpleNamespace(space=panel_module.lf.ui.PanelSpace.FLOATING)
-    monkeypatch.setattr(panel_module.lf.ui, "get_panel", lambda _id: info, raising=False)
-    monkeypatch.setattr(
-        panel_module,
-        "read_project_manager_preferences",
-        lambda: {"defaultView": "remember", "rememberState": True},
-    )
-    monkeypatch.setattr(
-        panel_module,
-        "read_project_manager_state",
-        lambda: {"view_mode": "list", "panel_width": 468.0},
-    )
-    monkeypatch.setattr(
-        panel_module.lf.ui,
-        "set_left_dock_width",
-        lambda width: restored_widths.append(width),
-        raising=False,
-    )
 
     panel = panel_module.AssetManagerPanel()
-
-    assert restored_widths == []
-    info.space = panel_module.lf.ui.PanelSpace.LEFT_DOCK
-    panel._sync_panel_space_state()
-    assert restored_widths == [468.0]
+    assert panel._observed_outer_panel_width == 468.0
 
 
-def test_floating_project_manager_preserves_remembered_left_dock_width(panel_module, monkeypatch):
+def test_floating_project_manager_preserves_remembered_panel_width(panel_module, monkeypatch):
     stored = []
     info = SimpleNamespace(space=panel_module.lf.ui.PanelSpace.FLOATING)
     monkeypatch.setattr(panel_module.lf.ui, "get_panel", lambda _id: info, raising=False)
@@ -2095,7 +2074,6 @@ def test_floating_project_manager_preserves_remembered_left_dock_width(panel_mod
         lambda: {"view_mode": "list", "panel_width": 468.0},
     )
     monkeypatch.setattr(panel_module, "set_project_manager_state", lambda value: stored.append(value))
-    monkeypatch.setattr(panel_module.lf.ui, "get_left_dock_width", lambda: 712.0, raising=False)
 
     panel = panel_module.AssetManagerPanel()
     panel._sync_panel_space_state()
@@ -2113,13 +2091,11 @@ def test_project_manager_state_captures_outer_width_without_transient_visibility
     )
     monkeypatch.setattr(panel_module, "read_project_manager_state", lambda: {})
     monkeypatch.setattr(panel_module, "set_project_manager_state", lambda value: stored.append(value))
-    monkeypatch.setattr(panel_module.lf.ui, "get_left_dock_width", lambda: 512.0, raising=False)
 
     panel = panel_module.AssetManagerPanel()
     panel._persist_project_manager_state()
 
     assert "panel_open" not in stored[-1]
-    assert stored[-1]["panel_width"] == 512.0
 
 
 def test_project_manager_state_preserves_last_width_when_native_geometry_is_unavailable(
@@ -2136,7 +2112,6 @@ def test_project_manager_state_preserves_last_width_when_native_geometry_is_unav
         lambda: {"panel_width": 468.0, "panel_open": False, "future_key": "keep"},
     )
     monkeypatch.setattr(panel_module, "set_project_manager_state", lambda value: stored.append(value))
-    monkeypatch.setattr(panel_module.lf.ui, "get_left_dock_width", lambda: 0.0, raising=False)
 
     panel = panel_module.AssetManagerPanel()
     panel._persist_project_manager_state()
@@ -3172,14 +3147,29 @@ def test_use_found_location_relinks_selected_asset(panel_module):
 def test_context_menu_shows_use_found_location_only_with_candidate(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project()
-    assert [item["action"] for item in panel._asset_context_menu_items(asset)] == [
+    panel._inspection_by_asset[asset["id"]] = {"details": object()}
+    items = panel._asset_context_menu_items(asset)
+    assert [item["action"] for item in items] == [
         "load",
-        "inspector",
-        "gallery:publish",
         "project:rename",
+        "project:update_thumbnail",
+        "inspector",
         "show_in_folder",
         "remove",
         "trash",
+        "project:export_as",
+        "gallery:publish",
+    ]
+    assert [item.get("separator_before", False) for item in items] == [
+        False,
+        False,
+        False,
+        False,
+        True,
+        False,
+        False,
+        True,
+        False,
     ]
 
     asset["relocation_candidate"] = "/tmp/found.licht"
@@ -4064,7 +4054,7 @@ def test_gallery_attention_scope_and_state_specific_context_menu(panel_module):
     panel._select_folder_id('__gallery_attention__')
     assert [r['id'] for r in panel._filtered_assets()] == [local['id']]
     actions = [i['action'] for i in panel._asset_context_menu_items(local)]
-    assert actions[0:3] == ['load','inspector','gallery:resolve']
+    assert actions[0:3] == ['load', 'project:rename', 'inspector']
     assert 'gallery:update' not in actions and 'gallery:publish' not in actions
     remote_actions=[i['action'] for i in panel._asset_context_menu_items(panel._asset_dict('remote:remote-only'))]
     assert remote_actions == ['gallery:pull','gallery:pull_open','gallery:open','gallery:copy','gallery:remove']

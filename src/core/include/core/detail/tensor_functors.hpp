@@ -302,7 +302,7 @@ namespace lfs::core {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
 #ifdef __CUDA_ARCH__
-                return asinf(fminf(fmaxf(x, T(-1)), T(1)));
+                return x != x ? x : asinf(fminf(fmaxf(x, T(-1)), T(1))); // fmaxf drops NaN
 #else
                 return std::asin(clamp_value(x, T(-1), T(1)));
 #endif
@@ -313,7 +313,7 @@ namespace lfs::core {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
 #ifdef __CUDA_ARCH__
-                return acosf(fminf(fmaxf(x, T(-1)), T(1)));
+                return x != x ? x : acosf(fminf(fmaxf(x, T(-1)), T(1))); // fmaxf drops NaN
 #else
                 return std::acos(clamp_value(x, T(-1), T(1)));
 #endif
@@ -583,7 +583,10 @@ namespace lfs::core {
         struct div_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& a, const T& b) const {
-                return a / b;
+                if constexpr (std::is_integral_v<T>)
+                    return b == 0 ? T{0} : a / b; // matches the GPU kernels
+                else
+                    return a / b;
             }
         };
 
@@ -599,7 +602,37 @@ namespace lfs::core {
                         return a * a;
                     }
 #ifdef __CUDA_ARCH__
-                    return powf(a, b);
+                    // -use_fast_math lowers powf to exp2(b * log2(a)), which is NaN for
+                    // negative, zero, infinite and NaN operands. Keep it for finite
+                    // positive bases and follow C powf for the rest, like the Vulkan
+                    // and Metal kernels. No calls: fused expressions inline this body.
+                    const float x = static_cast<float>(a);
+                    const float y = static_cast<float>(b);
+                    if (x > 0.0f && isfinite(x) && isfinite(y))
+                        return static_cast<T>(powf(x, y));
+                    const float inf = __int_as_float(0x7f800000);
+                    if (y == 0.0f || x == 1.0f)
+                        return static_cast<T>(1.0f);
+                    if (isnan(x) || isnan(y))
+                        return static_cast<T>(x + y);
+                    const float magnitude = fabsf(x);
+                    if (isinf(y))
+                        return static_cast<T>(magnitude == 1.0f                  ? 1.0f
+                                              : (magnitude > 1.0f) == (y > 0.0f) ? inf
+                                                                                 : 0.0f);
+                    const bool integral = floorf(y) == y;
+                    if (x < 0.0f && !integral && !isinf(x))
+                        return static_cast<T>(__int_as_float(0x7fc00000));
+                    // Exact for |y| < 2^24, where halving an integer is exact.
+                    const bool odd = integral && fabsf(y) < 16777216.0f && floorf(y * 0.5f) != y * 0.5f;
+                    float result;
+                    if (magnitude == 0.0f)
+                        result = y < 0.0f ? inf : 0.0f;
+                    else if (isinf(magnitude))
+                        result = y < 0.0f ? 0.0f : inf;
+                    else
+                        result = powf(magnitude, y);
+                    return static_cast<T>(odd && signbit(x) ? -result : result);
 #else
                     return static_cast<T>(std::pow(a, b));
 #endif

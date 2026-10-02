@@ -330,6 +330,8 @@ namespace gsplat_lfs {
     __global__ void spherical_harmonics_swizzled_fwd_kernel(
         const uint32_t N,
         const uint32_t degrees_to_use,
+        const uint32_t layout_degree,
+        const uint32_t color_stride,
         const vec3* __restrict__ dirs,
         const scalar_t* __restrict__ sh0,
         const float4* __restrict__ sh_rest,
@@ -354,7 +356,7 @@ namespace gsplat_lfs {
             const float x = dir.x * inorm;
             const float y = dir.y * inorm;
             const float z = dir.z * inorm;
-            const uint32_t slots_per_primitive = shSlotsForDegree(effective_degree);
+            const uint32_t slots_per_primitive = shSlotsForDegree(layout_degree);
 
             const auto coeff = [&](const uint32_t rest_idx) -> float {
                 return swizzled_rest_coeff_channel(sh_rest, elem_id, rest_idx, c, slots_per_primitive);
@@ -398,11 +400,13 @@ namespace gsplat_lfs {
             }
         }
 
-        colors[idx] = result + SH_DC_OFFSET;
+        colors[elem_id * color_stride + c] = result + SH_DC_OFFSET;
     }
 
     void launch_spherical_harmonics_swizzled_fwd_kernel(
         uint32_t degrees_to_use,
+        uint32_t layout_degree,
+        uint32_t color_stride,
         const float* dirs,
         const float* sh0,
         const float* sh_rest_swizzled,
@@ -422,6 +426,8 @@ namespace gsplat_lfs {
             <<<grid, threads, 0, stream>>>(
                 N,
                 degrees_to_use,
+                layout_degree,
+                color_stride,
                 reinterpret_cast<const vec3*>(dirs),
                 sh0,
                 reinterpret_cast<const float4*>(sh_rest_swizzled),
@@ -435,6 +441,8 @@ namespace gsplat_lfs {
         const uint32_t N,
         const uint32_t K,
         const uint32_t degrees_to_use,
+        const uint32_t layout_degree,
+        const uint32_t color_stride,
         const vec3* __restrict__ dirs,
         const scalar_t* __restrict__ sh0,
         const float4* __restrict__ sh_rest,
@@ -457,7 +465,7 @@ namespace gsplat_lfs {
         const uint32_t stored_coeff_count = K < kShMaxCoeffs ? K : kShMaxCoeffs;
         const uint32_t active_coeff_count = shBasisCountForDegree(effective_degree);
         const uint32_t coeff_count = stored_coeff_count < active_coeff_count ? stored_coeff_count : active_coeff_count;
-        const uint32_t slots_per_primitive = shSlotsForDegree(effective_degree);
+        const uint32_t slots_per_primitive = shSlotsForDegree(layout_degree);
 
         scalar_t coeffs[kShMaxCoeffs * 3u];
         scalar_t v_coeffs_local[kShMaxCoeffs * 3u];
@@ -486,7 +494,7 @@ namespace gsplat_lfs {
             c,
             dir,
             coeffs,
-            v_colors + elem_id * 3,
+            v_colors + elem_id * color_stride,
             v_coeffs_local,
             compute_dir_grad ? &v_dir_x : nullptr,
             compute_dir_grad ? &v_dir_y : nullptr,
@@ -505,6 +513,7 @@ namespace gsplat_lfs {
     __global__ void spherical_harmonics_sh0_bwd_kernel(
         const uint32_t N,
         const uint32_t K,
+        const uint32_t color_stride,
         const bool* __restrict__ masks,
         const float* __restrict__ v_colors,
         float* __restrict__ v_coeffs) {
@@ -517,11 +526,13 @@ namespace gsplat_lfs {
         if (masks != nullptr && !masks[elem_id]) {
             return;
         }
-        v_coeffs[elem_id * K * 3u + c] = SH_C0 * v_colors[elem_id * 3u + c];
+        v_coeffs[elem_id * K * 3u + c] = SH_C0 * v_colors[elem_id * color_stride + c];
     }
 
     void launch_spherical_harmonics_swizzled_bwd_kernel(
         uint32_t degrees_to_use,
+        uint32_t layout_degree,
+        uint32_t color_stride,
         const float* dirs,
         const float* sh0,
         const float* sh_rest_swizzled,
@@ -543,7 +554,7 @@ namespace gsplat_lfs {
         dim3 grid((n_elements + threads.x - 1) / threads.x);
         if (degrees_to_use == 0) {
             spherical_harmonics_sh0_bwd_kernel<<<grid, threads, 0, stream>>>(
-                N, static_cast<uint32_t>(K), masks, v_colors, v_coeffs);
+                N, static_cast<uint32_t>(K), color_stride, masks, v_colors, v_coeffs);
             LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.sh0_bwd");
             return;
         }
@@ -552,6 +563,8 @@ namespace gsplat_lfs {
                 N,
                 static_cast<uint32_t>(K),
                 degrees_to_use,
+                layout_degree,
+                color_stride,
                 reinterpret_cast<const vec3*>(dirs),
                 sh0,
                 reinterpret_cast<const float4*>(sh_rest_swizzled),
@@ -560,6 +573,36 @@ namespace gsplat_lfs {
                 v_coeffs,
                 compute_v_dirs ? v_dirs : nullptr);
         LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.sh_swizzled_bwd");
+    }
+
+    __global__ void rasterization_pack_depth_colors_kernel(
+        const float* __restrict__ depths,
+        float* __restrict__ colors,
+        const uint32_t count,
+        const uint32_t channels) {
+        const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= count)
+            return;
+        if (channels == 1u) {
+            colors[idx] = depths[idx];
+        } else if (channels == 4u) {
+            colors[idx * channels + 3u] = depths[idx];
+        }
+    }
+
+    void launch_rasterization_pack_depth_colors(
+        const float* depths,
+        float* colors,
+        uint32_t count,
+        uint32_t channels,
+        cudaStream_t stream) {
+        if (count == 0)
+            return;
+        constexpr uint32_t threads = 256;
+        const uint32_t blocks = (count + threads - 1u) / threads;
+        rasterization_pack_depth_colors_kernel<<<blocks, threads, 0, stream>>>(
+            depths, colors, count, channels);
+        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.pack_depth_colors");
     }
 
     // Compute viewing directions: dir = mean - camera_position

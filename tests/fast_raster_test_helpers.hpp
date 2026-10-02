@@ -10,7 +10,7 @@
 #include "lfs/training/ops/fast_cuda.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/render_output.hpp"
-#include "training/rasterization/fast_rasterizer.hpp"
+#include "training/rasterization/fast_rasterizer_cuda.hpp"
 
 #include <cstddef>
 #include <cstdint>

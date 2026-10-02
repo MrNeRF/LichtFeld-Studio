@@ -47,12 +47,23 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         test_menu_bar_title.cpp
-        test_panel_layout_render_demand.cpp
+
         test_preferences_migration.cpp
         test_scene_upscaler_registry.cpp
+        test_screen_layout.cpp
+        test_screen.cpp
+        test_view_render_state.cpp
+        test_python_editor_input.cpp
         test_startup_overlay_geometry.cpp
         test_trackpad_navigation.cpp
+        test_vram_hud_geometry.cpp
     )
+    if(NOT LFS_HAS_CUDA)
+        # CUDA builds run these in lichtfeld_tests.
+        list(APPEND LICHTFELD_VISUALIZER_TEST_SOURCES
+            test_gpu_memory_query.cpp
+            test_viewer_gpu_memory.cpp)
+    endif()
     add_executable(lichtfeld_visualizer_tests EXCLUDE_FROM_ALL
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
     )
@@ -68,6 +79,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         lfs_core
         lfs_python_runtime
         GTest::gtest_main
+        Zep::Zep
     )
     if(APPLE)
         # On macOS the visualizer resolves CPython from the host process. The app
@@ -97,7 +109,7 @@ endif()
 
 if(BUILD_PANEL_LAYOUT_TESTS)
     add_executable(panel_layout_tests EXCLUDE_FROM_ALL
-        test_panel_layout_render_demand.cpp
+
         test_panel_registry_animation_demand.cpp
         test_panel_registry_default_closed.cpp
     )
@@ -459,12 +471,31 @@ if(NOT LFS_HAS_CUDA)
         test_tensor_vulkan_matrix_nn.cpp
         test_tensor_vulkan_random.cpp
         test_tensor_vulkan_buffer.cpp
+        test_tensor_backend_semantics.cpp
         test_tensor_metal.cpp
         test_camera_priors_portable.cpp
+        test_pipelined_loader_backends.cpp
         test_viewer_no_cuda.cpp
     )
+    if(LFS_BUILD_TRAINER)
+        list(APPEND TEST_SOURCES
+            test_vulkan_trainer_start.cpp
+            test_session_loader_storage.cpp
+            test_training_command_masks.cpp
+            test_training_ops_parity.cpp
+            test_training_ops_vulkan_gsplat.cpp
+            test_tensor_vulkan_training_fault.cpp
+            test_training_pair_sort.cpp
+            test_training_ops_metal_densify.cpp
+            test_training_ops_metal_appearance.cpp
+            test_training_ops_metal_gsplat.cpp
+            test_training_ops_metal_losses.cpp
+            test_training_ops_metal_adam_sh.cpp
+            test_training_ops_metal_fast.cpp
+            test_ppisp_regularizer_portable.cpp)
+    endif()
     if(APPLE)
-        list(APPEND TEST_SOURCES test_video_videotoolbox.cpp)
+        list(APPEND TEST_SOURCES test_video_videotoolbox.cpp test_mcp_render_capture_utils.cpp)
     endif()
     add_executable(lichtfeld_tests ${TEST_SOURCES})
     if(APPLE)
@@ -485,6 +516,7 @@ if(NOT LFS_HAS_CUDA)
         ${CMAKE_BINARY_DIR}/include
         ${CMAKE_SOURCE_DIR}/tests
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/training
         ${CMAKE_SOURCE_DIR}/src/app/include
     )
     lfs_tensor_private_access(${TEST_SOURCES})
@@ -494,6 +526,17 @@ if(NOT LFS_HAS_CUDA)
         GTest::gtest
         Vulkan::Vulkan
     )
+    if(LFS_BUILD_TRAINER)
+        target_link_libraries(lichtfeld_tests PRIVATE lfs_training)
+        if(APPLE)
+            # lfs_training resolves CPython from the host process, which the app
+            # embeds; the test binary must load it whole.
+            find_package(Python REQUIRED COMPONENTS Development.Embed)
+            target_link_options(lichtfeld_tests PRIVATE
+                "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+            target_link_libraries(lichtfeld_tests PRIVATE lfs_python_embed)
+        endif()
+    endif()
     add_test(NAME lichtfeld_tests COMMAND lichtfeld_tests --tensor-backend=vulkan)
     set_tests_properties(lichtfeld_tests PROPERTIES TIMEOUT 300)
 
@@ -520,6 +563,7 @@ set(TEST_FILES
     test_assert_hardening.cpp
     test_cuda_error.cpp
     test_exportable_storage.cpp
+    test_session_loader_storage.cpp
     test_shareable_allocation_limit.cpp
     test_ply_q16_streamed_encode.cpp
     test_vram_leak_regression.cpp
@@ -532,6 +576,8 @@ set(TEST_FILES
     test_tensor_point_ops.cpp
     test_tensor_expression.cpp
     test_tensor_expression_cuda.cu
+    test_tensor_warp_reduce.cpp
+    test_tensor_warp_reduce_cuda.cu
     test_splat_codec_edits.cpp
     test_tensor_splat_affine.cpp
     test_tensor_sh_codec.cpp
@@ -555,10 +601,19 @@ set(TEST_FILES
     test_fused_bg_blend.cpp
     test_photometric_hygiene.cpp
     test_photometric_ops.cpp
+    test_training_ops_parity.cpp
+    test_training_ops_vulkan_gsplat.cpp
+    test_tensor_vulkan_training_fault.cpp
+    test_training_pair_sort.cpp
+    test_gsplat_ops.cpp
     test_fast_ops.cpp
+    test_session_ops.cpp
     fast_raster_test_helpers.cpp
     test_training_image_ops.cpp
+    test_shared_image_ops.cpp
     test_adam_ops.cpp
+    test_lpips_ops.cpp
+    test_ppisp_ops.cpp
     test_geometry_ops.cpp
     test_bilateral_ops.cpp
     test_mcmc_ops.cpp
@@ -567,6 +622,7 @@ set(TEST_FILES
     test_mask_ops.cpp
     test_extra_loss_ops.cpp
     test_sh_ops.cpp
+    test_refine_ops.cpp
     test_persistent_masks.cpp
     test_fused_noise_injection.cpp
     test_densification_info_zero.cpp
@@ -689,10 +745,13 @@ set(TEST_FILES
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
     test_mcp_training_state.cpp
+    test_training_command_masks.cpp
     test_mcp_app_utils.cpp
     test_mcp_operator_schema.cpp
     test_mcp_shared_scene_tools.cpp
     test_mcp_sequencer_tools.cpp
+    test_mcp_screen_tools.cpp
+    test_mcp_render_capture_utils.cpp
     test_tcp_publisher.cpp
     test_view_info_json.cpp
     test_video_reconstruction.cpp
@@ -703,7 +762,7 @@ set(TEST_FILES
     test_visualizer_post_work.cpp
     test_panel_registry_animation_demand.cpp
     test_panel_registry_default_closed.cpp
-    test_panel_layout_render_demand.cpp
+
     test_number_format.cpp
     test_reactive_store.cpp
     test_video_color_convert.cpp
@@ -761,15 +820,16 @@ set(TEST_FILES
     test_temporal_frame_tracker.cpp
     test_selection_rasterization_ops.cpp
     test_selection_screen_window.cpp
-    test_depth_window_panels.cpp
-    test_depth_window_panels_interaction.cpp
     test_rendering_refactor_services.cpp
+    test_view_render_state.cpp
+    test_rml_pointer_routing.cpp
     test_point_cloud_raster_orientation.cpp
     test_theme_registry.cpp
     test_viewport.cpp
     test_input_controller_focus.cpp
+    test_ordered_input_dispatch.cpp
+    test_python_editor_input.cpp
     test_input_controller_dataset_load.cpp
-    test_input_controller_panel_camera.cpp
     test_selection_service_interactions.cpp
     test_selection_group_mask.cpp
     test_scene_graph_identity.cpp
@@ -848,12 +908,14 @@ set(TEST_FILES
     test_status_bar_fit.cpp
     test_training_progress_publisher.cpp
     test_startup_overlay_geometry.cpp
+    test_vram_hud_geometry.cpp
     test_menu_bar_title.cpp
     test_status_bar_mining.cpp
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp
     test_tensor_stream.cpp
     test_tensor_queue_readback.cpp
+    test_vulkan_trainer_start.cpp
     test_tensor_completion.cpp
     test_tensor_d4_from_blob_stream.cpp
     tensor_hardening_cuda_utils.cu
@@ -889,6 +951,7 @@ if(LFS_TENSOR_VULKAN)
         test_tensor_vulkan_buffer.cpp
         test_tensor_vulkan_cuda_bridge.cpp
         test_tensor_backend_parity.cpp
+        test_tensor_backend_semantics.cpp
         test_ply_vulkan_q16_bands.cpp
         test_viewer_vulkan_load.cpp
         test_headless_vulkan_device_selection.cpp
@@ -946,6 +1009,7 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_ui_modals.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/rml_im_mode_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/mcp_screen_tools.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_operator_schema.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_output_paths.cpp
@@ -1061,9 +1125,12 @@ endif()
 
 # Link libraries
 target_link_libraries(lichtfeld_tests PRIVATE
+    lfs_shared_image_cuda
     ${LFS_TEST_INTERNAL_LINK_LIBS}
 
     # External libraries
+    Zep::Zep
+    vterm
     GTest::gtest
     nanobind-static
     ${TORCH_LIBRARIES}
@@ -1506,6 +1573,9 @@ foreach(TEST_TARGET lichtfeld_tests)
         COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${PROJECT_SOURCE_DIR}/src/visualizer/gui/resources/viewer"
             "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/viewer"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${PROJECT_SOURCE_DIR}/src/visualizer/gui/rmlui/resources"
+            "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/assets/rmlui"
     )
 endforeach()
 
@@ -1706,6 +1776,9 @@ if(COMMAND lfs_enable_fast_cxx_compile)
 endif()
 
 lfs_tensor_private_access(${TEST_SOURCES})
+# The controller parity fixture calls the direct SGEMM launcher.
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/test_ppisp_ops.cpp" APPEND
+    PROPERTY COMPILE_DEFINITIONS LFS_TENSOR_PRIVATE_ACCESS)
 foreach(_lfs_tensor_test_target IN ITEMS
         tensor_hardening_tests tensor_interface_freeze tensor_backend_corpus
         bench_tensor_launch_overhead bench_tensor_gui)

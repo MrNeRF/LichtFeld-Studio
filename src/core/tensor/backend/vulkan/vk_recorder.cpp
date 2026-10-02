@@ -12,6 +12,7 @@
 #include <array>
 #include <deque>
 #include <limits>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -36,6 +37,7 @@ namespace lfs::core::internal {
         };
 
         thread_local ThreadRecorderToken tls_recorder;
+        thread_local std::vector<uint64_t> tls_queue_stack;
 
     } // namespace
 
@@ -58,6 +60,9 @@ namespace lfs::core::internal {
         uint64_t submitted_value = 0;
         uint32_t command_count = 0;
         bool owner_alive = true;
+        bool legacy = false;
+        bool queue_owned = false;
+        uint64_t gpu_wait = 0;
         std::vector<std::shared_ptr<void>> lifetimes;
     };
 
@@ -80,7 +85,7 @@ namespace lfs::core::internal {
         shutdown();
     }
 
-    VulkanRecorderRegistry::Recorder& VulkanRecorderRegistry::current_locked() {
+    VulkanRecorderRegistry::Recorder& VulkanRecorderRegistry::ensure_implicit_locked() {
         LFS_ASSERT_MSG(!shutting_down_ && context_.accepting_work(),
                        "Vulkan backend is shutting down; new recording is rejected");
         if (tls_recorder.context_id == context_.context_id() &&
@@ -101,6 +106,31 @@ namespace lfs::core::internal {
         tls_recorder.context_id = context_.context_id();
         tls_recorder.recorder_id = id;
         return *recorders_.at(id);
+    }
+
+    VulkanRecorderRegistry::Recorder& VulkanRecorderRegistry::current_locked() {
+        if (!tls_queue_stack.empty()) {
+            const uint64_t id = tls_queue_stack.back();
+            if (id != 0) {
+                const auto iterator = recorders_.find(id);
+                if (iterator != recorders_.end() && iterator->second->owner_alive) {
+                    return *iterator->second;
+                }
+            }
+        }
+        return ensure_implicit_locked();
+    }
+
+    VulkanRecorderRegistry::Recorder* VulkanRecorderRegistry::queue_locked(const uint64_t id) {
+        const uint64_t resolved = id != 0 ? id
+                                          : (tls_recorder.context_id == context_.context_id()
+                                                 ? tls_recorder.recorder_id
+                                                 : 0);
+        if (resolved == 0) {
+            return nullptr;
+        }
+        const auto iterator = recorders_.find(resolved);
+        return iterator == recorders_.end() ? nullptr : iterator->second.get();
     }
 
     void VulkanRecorderRegistry::begin_locked(Recorder& recorder) {
@@ -198,8 +228,25 @@ namespace lfs::core::internal {
         const uint64_t value = std::exchange(recorder.reserved_value, uint64_t{0});
         recorder.command_count = 0;
         vk_check(&context_, vkEndCommandBuffer(command), "vkEndCommandBuffer");
-        context_.submit(command, value);
+        uint64_t wait = recorder.gpu_wait;
+        recorder.gpu_wait = 0;
+        if (recorder.legacy) {
+            wait = std::max(wait, implicit_submitted_);
+        } else if (!recorder.queue_owned) {
+            wait = std::max(wait, legacy_submitted_);
+        }
+        if (wait != 0 && wait < value) {
+            context_.submit_after(command, wait, value);
+        } else {
+            context_.submit(command, value);
+        }
         recorder.submitted_value = value;
+        if (recorder.legacy) {
+            legacy_submitted_ = std::max(legacy_submitted_, value);
+        }
+        if (!recorder.queue_owned) {
+            implicit_submitted_ = std::max(implicit_submitted_, value);
+        }
         recorder.in_flight.push_back({command, value, std::move(recorder.lifetimes)});
     }
 
@@ -262,8 +309,24 @@ namespace lfs::core::internal {
         ensure_submitted_locked(storage);
     }
 
+    uint64_t VulkanRecorderRegistry::current_queue() {
+        std::lock_guard lock(mutex_);
+        return current_locked().id;
+    }
+
     uint64_t VulkanRecorderRegistry::flush_current() {
         std::lock_guard lock(mutex_);
+        // A bound tensor queue is the current recorder. Flushing only the
+        // implicit TLS recorder leaves that queue's timeline value unsignalled.
+        if (!tls_queue_stack.empty() && tls_queue_stack.back() != 0) {
+            Recorder* const recorder = queue_locked(tls_queue_stack.back());
+            if (recorder == nullptr) {
+                return 0;
+            }
+            return recorder->command == VK_NULL_HANDLE
+                       ? recorder->submitted_value
+                       : flush_through_locked(recorder->reserved_value);
+        }
         if (tls_recorder.context_id != context_.context_id() ||
             tls_recorder.recorder_id == 0) {
             return 0;
@@ -330,6 +393,218 @@ namespace lfs::core::internal {
         return std::ranges::count_if(recorders_, [](const auto& entry) {
             return !entry.second->owner_alive;
         });
+    }
+
+    uint64_t VulkanRecorderRegistry::create_queue(const bool legacy_ordered) {
+        std::lock_guard lock(mutex_);
+        LFS_ASSERT_MSG(!shutting_down_ && context_.accepting_work(),
+                       "Vulkan backend is shutting down; new recording is rejected");
+        auto recorder = std::make_unique<Recorder>();
+        recorder->id = next_recorder_id_++;
+        recorder->legacy = legacy_ordered;
+        recorder->queue_owned = true;
+        VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT |
+                          VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        pool_info.queueFamilyIndex = context_.queue_family();
+        vk_check(&context_, vkCreateCommandPool(context_.device(), &pool_info, nullptr, &recorder->pool),
+                 "vkCreateCommandPool");
+        const uint64_t id = recorder->id;
+        recorders_.emplace(id, std::move(recorder));
+        return id;
+    }
+
+    void VulkanRecorderRegistry::destroy_queue(const uint64_t id) {
+        uint64_t submitted = 0;
+        {
+            std::lock_guard lock(mutex_);
+            const auto iterator = recorders_.find(id);
+            if (iterator == recorders_.end()) {
+                return;
+            }
+            Recorder& recorder = *iterator->second;
+            const uint64_t deferred = recorder.gpu_wait;
+            if (deferred != 0) {
+                flush_through_locked(deferred);
+            }
+            if (recorder.command != VK_NULL_HANDLE) {
+                flush_through_locked(recorder.reserved_value);
+            }
+            submitted = std::max(recorder.submitted_value, deferred);
+            recorder.gpu_wait = 0;
+            recorder.owner_alive = false;
+            recorder.queue_owned = false;
+        }
+        if (submitted != 0) {
+            context_.wait(submitted);
+        }
+        std::lock_guard lock(mutex_);
+        collect_completed_locked(context_.completed_timeline());
+    }
+
+    void VulkanRecorderRegistry::bind_queue(const uint64_t id) {
+        tls_queue_stack.push_back(id);
+    }
+
+    void VulkanRecorderRegistry::unbind_queue() {
+        if (!tls_queue_stack.empty()) {
+            tls_queue_stack.pop_back();
+        }
+    }
+
+    bool VulkanRecorderRegistry::owns_queue(const uint64_t id) const {
+        std::lock_guard lock(mutex_);
+        const auto iterator = recorders_.find(id);
+        return iterator != recorders_.end() && iterator->second->queue_owned &&
+               iterator->second->owner_alive;
+    }
+
+    uint64_t VulkanRecorderRegistry::flush_queue(const uint64_t id) {
+        std::lock_guard lock(mutex_);
+        Recorder* const recorder = queue_locked(id);
+        if (recorder == nullptr) {
+            return 0;
+        }
+        if (recorder->command != VK_NULL_HANDLE) {
+            flush_through_locked(recorder->reserved_value);
+        }
+        return recorder->submitted_value;
+    }
+
+    bool VulkanRecorderRegistry::queue_ready(const uint64_t id) {
+        std::lock_guard lock(mutex_);
+        Recorder* const recorder = queue_locked(id);
+        if (recorder == nullptr) {
+            return true;
+        }
+        if (recorder->command != VK_NULL_HANDLE) {
+            return false;
+        }
+        const uint64_t completed = context_.completed_timeline();
+        if (recorder->gpu_wait != 0 && completed < recorder->gpu_wait) {
+            return false;
+        }
+        return recorder->submitted_value == 0 || completed >= recorder->submitted_value;
+    }
+
+    void VulkanRecorderRegistry::queue_wait(const uint64_t id) {
+        uint64_t submitted = 0;
+        {
+            std::lock_guard lock(mutex_);
+            Recorder* const recorder = queue_locked(id);
+            if (recorder == nullptr) {
+                return;
+            }
+            // An idle queue can still be waiting on a fence. Submit the producer
+            // before the host waits, then drop the deferral: the wait has been
+            // observed, matching a synchronized CUDA stream.
+            const uint64_t deferred = recorder->gpu_wait;
+            if (deferred != 0) {
+                flush_through_locked(deferred);
+            }
+            if (recorder->command != VK_NULL_HANDLE) {
+                flush_through_locked(recorder->reserved_value);
+            }
+            submitted = std::max(recorder->submitted_value, deferred);
+            recorder->gpu_wait = 0;
+        }
+        if (submitted != 0) {
+            context_.wait(submitted);
+        }
+        context_.check_fault_buffer();
+    }
+
+    void VulkanRecorderRegistry::queue_defer_wait(const uint64_t id, const uint64_t value) {
+        if (value == 0) {
+            return;
+        }
+        std::lock_guard lock(mutex_);
+        Recorder* recorder = id == 0 ? &ensure_implicit_locked() : queue_locked(id);
+        if (recorder == nullptr) {
+            throw std::invalid_argument("Tensor queue is not a Vulkan recorder");
+        }
+        if (recorder->command != VK_NULL_HANDLE) {
+            flush_through_locked(recorder->reserved_value);
+        }
+        recorder->gpu_wait = std::max(recorder->gpu_wait, value);
+    }
+
+    void VulkanRecorderRegistry::bridge_queues(const uint64_t consumer, const uint64_t producer) {
+        std::lock_guard lock(mutex_);
+        auto resolve = [&](const uint64_t id) -> Recorder* {
+            if (id == 0) {
+                return &current_locked();
+            }
+            return queue_locked(id);
+        };
+        Recorder* const produced = resolve(producer);
+        if (produced == nullptr) {
+            throw std::invalid_argument("Tensor queue is not a Vulkan recorder");
+        }
+        if (produced->command != VK_NULL_HANDLE) {
+            flush_through_locked(produced->reserved_value);
+        }
+        const uint64_t value = produced->submitted_value;
+        if (value == 0) {
+            return;
+        }
+        Recorder* const consumed = resolve(consumer);
+        if (consumed == nullptr) {
+            throw std::invalid_argument("Tensor queue is not a Vulkan recorder");
+        }
+        if (consumed == produced) {
+            consumed->gpu_wait = std::max(consumed->gpu_wait, value);
+            return;
+        }
+        if (consumed->command != VK_NULL_HANDLE) {
+            flush_through_locked(consumed->reserved_value);
+        }
+        consumed->gpu_wait = std::max(consumed->gpu_wait, value);
+    }
+
+    void VulkanRecorderRegistry::queue_wait_external(const uint64_t id, const VkSemaphore semaphore,
+                                                     const uint64_t value, std::shared_ptr<void> keep_alive) {
+        if (semaphore == VK_NULL_HANDLE || value == 0) {
+            return;
+        }
+        std::lock_guard lock(mutex_);
+        Recorder* const recorder = id == 0 ? &current_locked() : queue_locked(id);
+        if (recorder == nullptr) {
+            throw std::invalid_argument("Tensor queue is not a Vulkan recorder");
+        }
+        if (recorder->command != VK_NULL_HANDLE) {
+            flush_through_locked(recorder->reserved_value);
+        }
+        const uint64_t prior = std::max(recorder->submitted_value, recorder->gpu_wait);
+        recorder->gpu_wait = 0;
+        const uint64_t signal = context_.reserve_timeline_value();
+        context_.submit_external_after(semaphore, value, prior, signal);
+        recorder->submitted_value = signal;
+        recorder->gpu_wait = signal;
+        const auto completed = context_.completed_timeline();
+        std::erase_if(external_owners_, [completed](const auto& owner) { return owner.first <= completed; });
+        external_owners_.emplace_back(signal, std::move(keep_alive));
+    }
+
+    uint64_t VulkanRecorderRegistry::write_timestamp(const uint64_t id, const VkQueryPool pool,
+                                                     const uint32_t query) {
+        std::lock_guard lock(mutex_);
+        Recorder& recorder = id == 0 ? current_locked() : [&]() -> Recorder& {
+            Recorder* const found = queue_locked(id);
+            if (found == nullptr) {
+                throw std::invalid_argument("Tensor queue is not a Vulkan recorder");
+            }
+            return *found;
+        }();
+        begin_locked(recorder);
+        vkCmdResetQueryPool(recorder.command, pool, query, 1);
+        vkCmdWriteTimestamp2(recorder.command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, pool, query);
+        ++recorder.command_count;
+        const uint64_t value = recorder.reserved_value;
+        if (recorder.command_count >= kCommandLimit) {
+            flush_through_locked(value);
+        }
+        return value;
     }
 
     void VulkanRecorderRegistry::shutdown() {

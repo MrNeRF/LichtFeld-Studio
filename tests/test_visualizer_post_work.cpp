@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "test_view_targets.hpp"
 #include <SDL3/SDL.h>
 
 #include "core/checkpoint_format.hpp"
@@ -12,6 +13,7 @@
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
 #include "core/main_loop.hpp"
+#include "core/mesh_data.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/project_path.hpp"
@@ -21,6 +23,7 @@
 #include "core/training_state.hpp"
 #include "core/user_paths.hpp"
 #include "cuda_backend_test.hpp"
+#include "gui/import_error.hpp"
 #include "gui/scene_tree_session.hpp"
 #include "gui/string_keys.hpp"
 #include "input/input_controller.hpp"
@@ -37,6 +40,7 @@
 #include "operation/undo_history.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
@@ -53,6 +57,9 @@
 #include "visualizer/project/project_switch_error.hpp"
 #include "visualizer/project/session_state.hpp"
 #include "visualizer/visualizer_impl.hpp"
+#include "window/vulkan_context.hpp"
+#include "window/vulkan_result.hpp"
+#include <vk_mem_alloc.h>
 
 #include <algorithm>
 #include <array>
@@ -1697,7 +1704,7 @@ namespace lfs::vis {
         ASSERT_NE(viewer.getRenderingManager(), nullptr);
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getInputController(), nullptr);
 
         const auto kept_id =
@@ -2415,7 +2422,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto untitled = viewer.projectGetInfo();
             ASSERT_TRUE(untitled);
             ASSERT_EQ(untitled->hydration_state,
@@ -2494,7 +2501,7 @@ namespace lfs::vis {
                 viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
 
             auto untitled = viewer.projectGetInfo();
             ASSERT_TRUE(untitled);
@@ -2619,7 +2626,7 @@ namespace lfs::vis {
                 viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 reopened_path,
                 ProjectSwitchDisposition::DiscardChanges));
@@ -3377,7 +3384,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Untitled dirty"),
@@ -3420,7 +3427,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Untitled dirty"),
@@ -3658,7 +3665,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -3704,7 +3711,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Untitled dirty maintenance"),
@@ -3757,7 +3764,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Untitled quiet maintenance"),
@@ -3827,7 +3834,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Untitled before save as"),
@@ -4254,7 +4261,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Crash untitled"),
@@ -4423,7 +4430,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -4555,7 +4562,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             ASSERT_NE(viewer.getScene().addGroup(
                           "Settlement ordering"),
                       lfs::core::NULL_NODE);
@@ -5072,6 +5079,764 @@ namespace lfs::vis {
         EXPECT_EQ(manager->getScene().getNodes()[1]->name, "async-third");
     }
 
+    TEST_F(VisualizerImplResetTest, ProjectOpenCancelsActiveAndQueuedDropAtCommit) {
+        const auto project = temporary_.path / "replacement.licht";
+        write_empty_project(project);
+        VisualizerImpl viewer(projectOptions());
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        const auto first = makeSplatFixture("switch-first");
+        const auto second = makeSplatFixture("switch-second");
+        controller.handleFileDrop({core::path_to_utf8(first), core::path_to_utf8(second)});
+        controller.handleFileDrop({core::path_to_utf8(second), core::path_to_utf8(first)});
+        ASSERT_TRUE(viewer.projectOpen(project, ProjectSwitchDisposition::DiscardChanges));
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting();
+        }));
+        EXPECT_FALSE(tasks.hasPendingMainThreadCompletions());
+        EXPECT_TRUE(viewer.getScene().getNodes().empty());
+    }
+
+    TEST_F(VisualizerImplResetTest, FailedProjectOpenPreservesQueuedDrop) {
+        VisualizerImpl viewer(projectOptions());
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("kept-first"))});
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("kept-second")), core::path_to_utf8(makeSplatFixture("kept-third"))});
+        ASSERT_FALSE(viewer.projectOpen(temporary_.path / "missing.licht", ProjectSwitchDisposition::DiscardChanges));
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_EQ(viewer.getScene().getNodes().size(), 3u);
+    }
+
+    TEST_F(VisualizerImplResetTest, SceneClearCancelsStagedAndQueuedDropWithoutViewerHandler) {
+        for (const bool core_clear : {false, true}) {
+            VisualizerImpl viewer(projectOptions());
+            Viewport viewport(200, 200);
+            TestViewTargets controller_views{viewport};
+            InputController controller(nullptr, controller_views);
+            const auto first = makeSplatFixture("clear-staged-first");
+            const auto second = makeSplatFixture("clear-staged-second");
+            controller.handleFileDrop({core::path_to_utf8(first), core::path_to_utf8(second)});
+            controller.handleFileDrop({core::path_to_utf8(second), core::path_to_utf8(first)});
+            // Staging may finish, but nothing has been attached or acknowledged.
+            if (core_clear)
+                viewer.getScene().clear();
+            else
+                ASSERT_TRUE(viewer.getSceneManager()->clear());
+            auto& tasks = viewer.getGuiManager()->asyncTasks();
+            ASSERT_TRUE(waitUntil([&] { tasks.pollImportCompletion(); return !tasks.isImporting(); }));
+            EXPECT_FALSE(tasks.hasPendingMainThreadCompletions());
+            EXPECT_TRUE(viewer.getScene().getNodes().empty());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest, CompletedGalleryDoesNotCancelDatasetCommit) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto path = makeSplatFixture("gallery-complete");
+        const core::events::cmd::LoadGalleryScene gallery{
+            .paths = {path},
+            .names = {"gallery-model"},
+            .transforms = {glm::mat4{1.0f}},
+            .sh_degrees = {0},
+            .group_name = "gallery-group"};
+        ASSERT_TRUE(tasks.startSplatLoad({path}, false, {"gallery-model"}, {}, gallery));
+        ASSERT_TRUE(waitUntil([&] { tasks.pollImportCompletion(); return !tasks.isImporting(); }));
+        ASSERT_NE(viewer.getScene().getNode("gallery-group"), nullptr);
+        EXPECT_FALSE(tasks.canCancelGalleryImport());
+        EXPECT_FALSE(tasks.requestGalleryImportCancel());
+
+        const auto dataset = temporary_.path / "gallery-next-dataset";
+        write_minimal_transforms_dataset(dataset);
+        auto params = viewer.getDataLoader()->getParameters();
+        params.dataset.data_path = dataset;
+        viewer.getDataLoader()->setParameters(params);
+        core::events::cmd::LoadFile{.path = dataset, .is_dataset = true, .discard_changes = true}.emit();
+        const auto job = viewer.jobs().active(JobType::Import);
+        ASSERT_TRUE(job);
+        EXPECT_FALSE(tasks.requestGalleryImportCancel());
+        ASSERT_TRUE(waitUntil([&] { tasks.pollImportCompletion(); return !tasks.isImporting(); }));
+        const auto completed = viewer.jobs().update(job->handle);
+        ASSERT_TRUE(completed);
+        EXPECT_EQ(completed->status, JobStatus::Completed);
+        EXPECT_EQ(viewer.getScene().getAllCameras().size(), 1u);
+        EXPECT_EQ(viewer.getScene().getNode("gallery-group"), nullptr);
+    }
+
+    TEST(ImportComparisonTest, ProvisionalThirdUsesItsOwnSlotWithoutChangingDisplayedPair) {
+        const size_t displayed_offset = 0;
+        const auto validation_offset = plyComparisonImportOffset(3, displayed_offset, 2);
+        EXPECT_EQ(plyComparisonPairForOffset(3, validation_offset), (std::pair<size_t, size_t>{0, 2}));
+        EXPECT_EQ(plyComparisonPairForOffset(3, displayed_offset), (std::pair<size_t, size_t>{0, 1}));
+        EXPECT_EQ(plyComparisonImportOffset(3, displayed_offset, 1), displayed_offset);
+        EXPECT_EQ(plyComparisonImportOffset(1, displayed_offset, 0), displayed_offset);
+    }
+
+    TEST_F(VisualizerImplResetTest, ImportValidationReusesResidentMeshAllocations) {
+        if (!core::gpu_backend_available(core::GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA device unavailable";
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto* context = viewer.getWindowManager()->getVulkanContext();
+        core::MeshData mesh(
+            core::Tensor::zeros({1000000, 3}, core::Device::CPU),
+            core::Tensor::zeros({1000000, 3}, core::Device::CPU, core::DataType::Int32));
+        VulkanViewportPass resident;
+        VulkanViewportPassParams params;
+        params.mesh_items.push_back({.mesh = &mesh});
+        for (size_t slot = 0; slot < context->framesInFlight(); ++slot) {
+            params.frame_slot = slot;
+            resident.prepareImport(*context, params);
+        }
+        // Initialize the temporary presentation resources before measuring, so
+        // the delta accounts for mesh preparation alone (including textures).
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            VulkanViewportPass validation;
+            VulkanViewportPassParams empty;
+            for (size_t slot = 0; slot < context->framesInFlight(); ++slot) {
+                empty.frame_slot = slot;
+                validation.prepareImport(*context, empty, &resident);
+            }
+            VmaTotalStatistics before{}, after{};
+            vmaCalculateStatistics(context->allocator(), &before);
+            for (size_t slot = 0; slot < context->framesInFlight(); ++slot) {
+                params.frame_slot = slot;
+                ASSERT_NO_THROW(validation.prepareImport(*context, params, &resident));
+            }
+            vmaCalculateStatistics(context->allocator(), &after);
+            EXPECT_EQ(after.total.statistics.allocationBytes, before.total.statistics.allocationBytes);
+            EXPECT_EQ(after.total.statistics.allocationCount, before.total.statistics.allocationCount);
+            RecordProperty("validation_mesh_allocation_bytes",
+                           std::to_string(after.total.statistics.allocationBytes - before.total.statistics.allocationBytes));
+        }
+        // The former private-cache path must allocate another full copy. This
+        // control makes the accounting check sensitive to the original regression.
+        {
+            VulkanViewportPass private_cache;
+            private_cache.prepareImport(*context, {});
+            VmaTotalStatistics before{}, after{};
+            vmaCalculateStatistics(context->allocator(), &before);
+            private_cache.prepareImport(*context, params);
+            vmaCalculateStatistics(context->allocator(), &after);
+            const auto duplicate_bytes = after.total.statistics.allocationBytes - before.total.statistics.allocationBytes;
+            EXPECT_GE(duplicate_bytes, 1000000u * (64u + 3u * sizeof(uint32_t)));
+            RecordProperty("private_mesh_allocation_bytes", std::to_string(duplicate_bytes));
+        }
+        // Destroying validation must leave the resident cache usable without uploads.
+        VmaTotalStatistics before{}, after{};
+        vmaCalculateStatistics(context->allocator(), &before);
+        resident.prepareImport(*context, params);
+        vmaCalculateStatistics(context->allocator(), &after);
+        EXPECT_EQ(after.total.statistics.allocationBytes, before.total.statistics.allocationBytes);
+    }
+
+    TEST_F(VisualizerImplResetTest, ZeroExtentComparisonValidationRetiresProvisionalResources) {
+        if (!core::gpu_backend_available(core::GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA device unavailable";
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        viewer.getSceneManager()->loadSplatFile(makeSplatFixture("display-left"));
+        viewer.getSceneManager()->addSplatFile(makeSplatFixture("display-right"));
+        auto* rendering = viewer.getRenderingManager();
+        auto settings = rendering->getSettings();
+        settings.split_view_mode = SplitViewMode::PLYComparison;
+        rendering->updateSettings(settings);
+        Viewport viewport(640, 480);
+        viewport.frameBufferSize = {640, 480};
+        auto* context = viewer.getWindowManager()->getVulkanContext();
+        const RenderingManager::RenderContext displayed{
+            .view = rendering->activeViewId(),
+            .viewport = viewport,
+            .settings = settings,
+            .scene_manager = viewer.getSceneManager(),
+            .vulkan_context = context,
+            .preparing_import = false};
+        rendering->markDirty(DirtyFlag::ALL);
+        static_cast<void>(rendering->renderVulkanFrame(displayed));
+        const auto info = rendering->getSplitViewInfo();
+        ASSERT_TRUE(info.enabled);
+        const auto frame = rendering->viewState(rendering->activeViewId()).vulkan_mesh_frame_;
+        ASSERT_NE(frame.split_view.left.external_image_view, VK_NULL_HANDLE);
+        const auto image = rendering->captureViewportImage();
+        ASSERT_TRUE(image);
+        const auto frozen = image->cpu();
+        const auto large_path = temporary_.path / "provisional-large.ply";
+        ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(1000000), {.output_path = large_path, .binary = true, .async = false}));
+        viewer.getSceneManager()->addSplatFile(large_path);
+        const auto uuid = viewer.getScene().getNode("provisional-large")->uuid;
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        size_t free_before, total;
+        ASSERT_EQ(cudaMemGetInfo(&free_before, &total), cudaSuccess);
+        viewport.frameBufferSize = {0, 0};
+        viewport.windowSize = {0, 0};
+        const RenderingManager::RenderContext validation{
+            .view = rendering->activeViewId(),
+            .viewport = viewport,
+            .settings = settings,
+            .scene_manager = viewer.getSceneManager(),
+            .vulkan_context = context,
+            .provisional_import_node = uuid};
+        const auto result = rendering->pollImportRenderCheck(validation, [&] {
+            EXPECT_EQ(rendering->getSplitViewInfo().right_name, "provisional-large");
+        });
+        ASSERT_TRUE(result.has_value());
+        ASSERT_TRUE(result->empty()) << *result;
+        EXPECT_EQ(rendering->getSplitViewInfo(), info);
+        const auto restored = rendering->viewState(rendering->activeViewId()).vulkan_mesh_frame_;
+        EXPECT_EQ(restored.split_view.left.external_image_view, frame.split_view.left.external_image_view);
+        EXPECT_EQ(restored.split_view.right.external_image_view, frame.split_view.right.external_image_view);
+        const auto capture = rendering->captureViewportImage();
+        ASSERT_TRUE(capture);
+        const auto after = capture->cpu();
+        ASSERT_EQ(after.numel(), frozen.numel());
+        EXPECT_EQ(std::memcmp(after.data_ptr(), frozen.data_ptr(), after.numel() * sizeof(float)), 0);
+        size_t free_after;
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        ASSERT_EQ(cudaMemGetInfo(&free_after, &total), cudaSuccess);
+        // Driver pipeline bookkeeping may remain; model-sized render scratch must not.
+        EXPECT_LE(free_before > free_after ? free_before - free_after : 0, 16u * 1024 * 1024);
+        static_cast<void>(rendering->renderVulkanFrame(validation));
+        EXPECT_EQ(rendering->getSplitViewInfo(), info);
+    }
+
+    TEST_F(VisualizerImplResetTest, ComparisonDropDoesNotAllocateCombinedModel) {
+        VisualizerImpl viewer(projectOptions());
+        viewer.getSceneManager()->loadSplatFile(makeSplatFixture("comparison-existing"));
+        auto* rendering = viewer.getRenderingManager();
+        auto settings = rendering->getSettings();
+        settings.split_view_mode = SplitViewMode::PLYComparison;
+        rendering->updateSettings(settings);
+        std::atomic<int> allocations{0};
+        core::events::state::PLYAdded::when([&](const auto&) {
+            viewer.getScene().setCombinedModelAllocator(
+                [&](core::TensorShape, size_t, core::DataType, std::string_view) -> core::Tensor {
+                    ++allocations;
+                    throw std::runtime_error("Combined model must not be allocated in comparison mode");
+                });
+        });
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("comparison-first")),
+                                   core::path_to_utf8(makeSplatFixture("comparison-second"))});
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_EQ(allocations.load(), 0);
+        ASSERT_EQ(viewer.getScene().getNodes().size(), 3u);
+        for (const auto* node : viewer.getScene().getNodes())
+            EXPECT_NE(node->model, nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest, LegacyMultiFileLoadStillConsolidates) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getDataLoader()->loadSplatFiles({makeSplatFixture("legacy-first"), makeSplatFixture("legacy-second")}));
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        // Check the legacy final-consolidation policy with all files staged,
+        // independently of the worker/main-thread completion timing.
+        ASSERT_TRUE(waitUntil([&] {
+            const auto job = viewer.jobs().active(JobType::Import);
+            return job && job->status == JobStatus::CompletionPending;
+        }));
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        ASSERT_EQ(viewer.getScene().getNodes().size(), 2u);
+        for (const auto* node : viewer.getScene().getNodes())
+            EXPECT_EQ(node->model, nullptr);
+        ASSERT_NE(viewer.getScene().getCombinedModel(), nullptr);
+        EXPECT_EQ(viewer.getScene().getCombinedModel()->size(), 4u);
+    }
+
+    TEST_F(VisualizerImplResetTest, LegacyMultiFileErrorsRemainPerFile) {
+        VisualizerImpl viewer(projectOptions());
+        size_t individual = 0, batches = 0;
+        core::events::state::SplatFileLoadFailed::when([&](const auto&) { ++individual; });
+        core::events::state::SplatBatchLoadFailed::when([&](const auto&) { ++batches; });
+        ASSERT_TRUE(viewer.getDataLoader()->loadSplatFiles(
+            {temporary_.path / "missing-first.ply", temporary_.path / "missing-second.ply"}));
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_EQ(individual, 2u);
+        EXPECT_EQ(batches, 0u);
+    }
+
+    TEST(ImportErrorTest, CapturesVulkanErrorsWithoutInterruptingCleanup) {
+        std::string outer;
+        {
+            VulkanImportErrorScope validation(outer);
+            std::string inner;
+            {
+                VulkanImportErrorScope upload(inner);
+                EXPECT_FALSE(vk_try_bool(VK_ERROR_OUT_OF_DEVICE_MEMORY, "allocate", "test upload"));
+                EXPECT_TRUE(gui::isImportOutOfMemory(inner));
+            }
+            EXPECT_EQ(inner, outer);
+        }
+        EXPECT_TRUE(gui::isImportOutOfMemory(outer));
+        std::string direct;
+        VulkanImportErrorScope validation(direct);
+        const auto message = formatVkCheckFailure("allocate", VK_ERROR_OUT_OF_DEVICE_MEMORY, "direct log");
+        EXPECT_EQ(direct, message);
+    }
+
+    TEST(ImportErrorTest, UsesLocalePluralForms) {
+        EXPECT_EQ(gui::importFailureTitleKey("en", 1), "runtime.import_batch_failed.one");
+        EXPECT_EQ(gui::importFailureTitleKey("de", 2), "runtime.import_batch_failed.other");
+        for (const auto count : {2u, 3u, 4u, 22u, 104u})
+            EXPECT_EQ(gui::importFailureTitleKey("pl", count), "runtime.import_batch_failed.few");
+        for (const auto count : {0u, 5u, 12u, 13u, 14u, 111u, 112u})
+            EXPECT_EQ(gui::importFailureTitleKey("pl", count), "runtime.import_batch_failed.other");
+    }
+
+    TEST_F(VisualizerImplResetTest, QueuedBatchAttachmentGetsRollbackProtection) {
+        VisualizerImpl viewer(projectOptions());
+        core::events::state::PLYAdded::when([](const auto& event) {
+            if (event.name == "queued-failure")
+                throw std::runtime_error("GPU memory exhausted during attachment");
+        });
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("batch-one")),
+                                   core::path_to_utf8(makeSplatFixture("batch-two"))});
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("queued-failure")), core::path_to_utf8(makeSplatFixture("queued-skipped"))});
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_EQ(viewer.getScene().getNodes().size(), 2u);
+        EXPECT_EQ(viewer.getScene().getNode("queued-failure"), nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest, HistoryClearInvalidatesStagedAndQueuedDrop) {
+        VisualizerImpl viewer(projectOptions());
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("history-first")),
+                                   core::path_to_utf8(makeSplatFixture("history-second"))});
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("history-queued")), core::path_to_utf8(makeSplatFixture("history-queued-second"))});
+        core::events::state::SceneCleared{.from_history = true}.emit();
+        EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_TRUE(viewer.getScene().getNodes().empty());
+    }
+
+    TEST(ImportErrorTest, RecognizesAllocatorCudaAndRendererMemoryFailures) {
+        for (const auto* cause : {"out of memory for tensor", "cuMemCreate: CUDA_ERROR_OUT_OF_MEMORY",
+                                  "cudaErrorMemoryAllocation", "VK_ERROR_OUT_OF_HOST_MEMORY", "out of device memory", "GPU memory exhausted",
+                                  "Not loaded because the import exceeded available GPU memory"})
+            EXPECT_TRUE(gui::isImportOutOfMemory(cause)) << cause;
+        EXPECT_FALSE(gui::isImportOutOfMemory("Invalid PLY header"));
+    }
+
+    TEST_F(VisualizerImplResetTest, RollbackPreservesInterveningUserSelection) {
+        VisualizerImpl viewer(projectOptions());
+        const auto first = makeSplatFixture("selection-first");
+        const auto second = makeSplatFixture("selection-second");
+        core::NodeId user_choice = core::NULL_NODE;
+        core::events::state::PLYAdded::when([&](const auto& e) {
+            if (e.name == "selection-second") {
+                user_choice = viewer.getScene().addGroup("user-choice");
+                viewer.getScene().setCombinedModelAllocator(
+                    [](core::TensorShape, size_t, core::DataType, std::string_view) -> core::Tensor {
+                        throw std::runtime_error("GPU memory exhausted");
+                    });
+            }
+        });
+        core::events::ui::NodeSelected::when([&](const auto& e) {
+            if (e.path == "selection-second")
+                viewer.getSceneManager()->selectNode(user_choice);
+        });
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(first), core::path_to_utf8(second)});
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_EQ(viewer.getSceneManager()->getSelectedNodeName(), "user-choice");
+        EXPECT_EQ(viewer.getScene().getNode("selection-second"), nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest, MultiFileDropIntoEmptySceneLoadsEveryNode) {
+        const auto first = makeSplatFixture("drop-first");
+        const auto second = makeSplatFixture("drop-second");
+        VisualizerImpl viewer(projectOptions());
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(first), core::path_to_utf8(second)});
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        const auto nodes = viewer.getScene().getNodes();
+        ASSERT_EQ(nodes.size(), 2u);
+        EXPECT_EQ(nodes[0]->name, "drop-first");
+        EXPECT_EQ(nodes[1]->name, "drop-second");
+        EXPECT_EQ(viewer.getScene().getTotalGaussianCount(), 4u);
+        EXPECT_EQ(viewer.getSceneManager()->getSelectedNodeName(), "drop-second");
+        EXPECT_EQ(viewer.getSceneManager()->getContentType(), SceneManager::ContentType::SplatFiles);
+    }
+
+    TEST_F(VisualizerImplResetTest, MultiFileDropOntoSplatScenePreservesExistingNode) {
+        const auto existing = makeSplatFixture("drop-existing");
+        const auto first = makeSplatFixture("drop-first");
+        const auto second = makeSplatFixture("drop-second");
+        VisualizerImpl viewer(projectOptions());
+        viewer.getSceneManager()->loadSplatFile(existing);
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(first), core::path_to_utf8(second)});
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        const auto nodes = viewer.getScene().getNodes();
+        ASSERT_EQ(nodes.size(), 3u);
+        EXPECT_EQ(nodes[0]->name, "drop-existing");
+        EXPECT_EQ(nodes[1]->name, "drop-first");
+        EXPECT_EQ(nodes[2]->name, "drop-second");
+        EXPECT_EQ(viewer.getScene().getTotalGaussianCount(), 6u);
+    }
+
+    TEST_F(VisualizerImplResetTest, SeparateSingleRequestsKeepBusyImportRejection) {
+        VisualizerImpl viewer(projectOptions());
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        const auto first = makeSplatFixture("busy-first");
+        const auto second = makeSplatFixture("busy-second");
+        const auto rejected = makeSplatFixture("busy-rejected");
+        std::vector<std::string> failures;
+        core::events::state::SplatFileLoadFailed::when([&](const auto& e) { failures.push_back(e.error); });
+        controller.handleFileDrop({core::path_to_utf8(first), core::path_to_utf8(second)});
+        // File > Import, Python and MCP emit the same unmarked LoadFile command.
+        core::events::cmd::LoadFile{.path = rejected, .is_dataset = false}.emit();
+        controller.handleFileDrop({core::path_to_utf8(rejected)});
+        // Paths alone do not confer user-batch provenance.
+        core::events::cmd::LoadFile{.path = rejected, .is_dataset = false, .paths = {rejected, rejected}}.emit();
+        ASSERT_EQ(failures, (std::vector<std::string>(3, "Import already in progress")));
+        EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] { tasks.pollImportCompletion(); return !tasks.isImporting(); }));
+        EXPECT_EQ(viewer.getScene().getNodes().size(), 2u);
+        EXPECT_EQ(viewer.getScene().getNode("busy-rejected"), nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest, SecondDropQueuesUntilFirstImportAttaches) {
+        const auto first = makeSplatFixture("queued-first");
+        const auto second = makeSplatFixture("queued-second");
+        const auto third = makeSplatFixture("queued-third");
+        VisualizerImpl viewer(projectOptions());
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        std::vector<std::string> failures;
+        core::events::state::SplatFileLoadFailed::when([&](const auto& e) { failures.push_back(e.error); });
+        controller.handleFileDrop({core::path_to_utf8(first)});
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(tasks.isImporting());
+        // No completion polling: this covers even a worker that already finished IO.
+        controller.handleFileDrop({core::path_to_utf8(second), core::path_to_utf8(third)});
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        const auto nodes = viewer.getScene().getNodes();
+        ASSERT_EQ(nodes.size(), 3u);
+        EXPECT_EQ(nodes[0]->name, "queued-first");
+        EXPECT_EQ(nodes[1]->name, "queued-second");
+        EXPECT_EQ(nodes[2]->name, "queued-third");
+        for (const auto* node : nodes)
+            EXPECT_NE(node->model, nullptr);
+        ASSERT_NE(viewer.getScene().getCombinedModel(), nullptr);
+        EXPECT_EQ(viewer.getScene().getCombinedModel()->size(), 6u);
+        EXPECT_TRUE(failures.empty());
+    }
+
+    TEST_F(VisualizerImplResetTest, PartialDropFailureKeepsLoadedNodesAndReportsOneError) {
+        const auto first = makeSplatFixture("partial-first");
+        const auto last = makeSplatFixture("partial-last");
+        VisualizerImpl viewer(projectOptions());
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        std::vector<std::string> failures;
+        core::events::state::SplatBatchLoadFailed::when([&](const auto& e) {
+            std::string message;
+            for (const auto& [path, reason] : e.failures)
+                message += path.filename().string() + ": " + reason + "\n";
+            failures.push_back(message);
+        });
+        controller.handleFileDrop({core::path_to_utf8(first),
+                                   core::path_to_utf8(temporary_.path / "missing-one.ply"),
+                                   core::path_to_utf8(temporary_.path / "missing-two.ply"),
+                                   core::path_to_utf8(last)});
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_NE(viewer.getScene().getNode("partial-first"), nullptr);
+        EXPECT_NE(viewer.getScene().getNode("partial-last"), nullptr);
+        EXPECT_EQ(viewer.getScene().getTotalGaussianCount(), 4u);
+        ASSERT_EQ(failures.size(), 1u);
+        EXPECT_NE(failures[0].find("missing-one.ply"), std::string::npos);
+        EXPECT_NE(failures[0].find("missing-two.ply"), std::string::npos);
+    }
+
+    TEST_F(VisualizerImplResetTest, QueuedBatchFailureShowsOnlyBatchDialog) {
+        VisualizerImpl viewer(projectOptions());
+        auto* const gui = viewer.getGuiManager();
+        size_t reports = 0;
+        core::events::state::SplatBatchLoadFailed::when([&](const auto& e) {
+            ++reports;
+            ASSERT_EQ(e.failures.size(), 2u);
+            EXPECT_EQ(e.failures.front().first.filename(), "queued-failed.ply");
+            EXPECT_TRUE(gui::isImportOutOfMemory(e.failures.front().second));
+        });
+        core::events::state::PLYAdded::when([](const auto& e) {
+            if (e.name == "queued-failed")
+                throw std::runtime_error("cuMemCreate: CUDA_ERROR_OUT_OF_MEMORY");
+        });
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("queued-first")),
+                                   core::path_to_utf8(makeSplatFixture("queued-second"))});
+        auto& tasks = gui->asyncTasks();
+        ASSERT_TRUE(tasks.isImporting());
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("queued-failed")), core::path_to_utf8(makeSplatFixture("queued-skipped"))});
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_EQ(viewer.getScene().getTotalGaussianCount(), 4u);
+        EXPECT_EQ(viewer.getScene().getNode("queued-failed"), nullptr);
+        EXPECT_EQ(reports, 1u);
+        const auto overlay = app_store().import_overlay_state.get();
+        EXPECT_FALSE(overlay.active);
+        EXPECT_FALSE(overlay.show_completion);
+    }
+
+    TEST_F(VisualizerImplResetTest, IdleSingleFailureKeepsImportCompletionOverlay) {
+        VisualizerImpl viewer(projectOptions());
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(temporary_.path / "missing-single.ply")});
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        const auto overlay = app_store().import_overlay_state.get();
+        EXPECT_FALSE(overlay.active);
+        EXPECT_FALSE(overlay.success);
+        EXPECT_TRUE(overlay.show_completion);
+    }
+
+    TEST_F(VisualizerImplResetTest, RenderAllocationFailureKeepsEarlierImportsUsable) {
+        const auto first = makeSplatFixture("capacity-first");
+        const auto second = makeSplatFixture("capacity-second");
+        const auto third = makeSplatFixture("capacity-third");
+        VisualizerImpl viewer(projectOptions());
+        std::vector<std::string> failures;
+        core::events::state::SplatBatchLoadFailed::when([&](const auto& e) {
+            std::string message;
+            for (const auto& [path, reason] : e.failures)
+                message += path.filename().string() + ": " + reason + "\n";
+            failures.push_back(message);
+        });
+        core::events::state::PLYAdded::when([&](const auto& e) {
+            if (e.name == "capacity-second") {
+                viewer.getScene().renameNode("capacity-second", "renamed-provisional");
+                viewer.getScene().setCombinedModelAllocator(
+                    [](core::TensorShape, size_t, core::DataType, std::string_view) -> core::Tensor {
+                        throw std::runtime_error("GPU memory exhausted");
+                    });
+            }
+        });
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(first), core::path_to_utf8(second), core::path_to_utf8(third)});
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_NE(viewer.getScene().getNode("capacity-first"), nullptr);
+        EXPECT_EQ(viewer.getSceneManager()->getSelectedNodeName(), "capacity-first");
+        EXPECT_EQ(viewer.getScene().getNode("capacity-second"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNode("renamed-provisional"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNode("capacity-third"), nullptr);
+        ASSERT_NE(viewer.getScene().getCombinedModel(), nullptr);
+        EXPECT_EQ(viewer.getScene().getCombinedModel()->size(), 2u);
+        ASSERT_EQ(failures.size(), 1u);
+        EXPECT_NE(failures[0].find("capacity-second.ply"), std::string::npos);
+        EXPECT_NE(failures[0].find("capacity-third.ply"), std::string::npos);
+    }
+
+    TEST_F(VisualizerImplResetTest, FirstAttachmentFailureReportsBatchWithoutCancelingIt) {
+        VisualizerImpl viewer(projectOptions());
+        core::events::state::PLYAdded::when([](const auto& e) {
+            if (e.name == "first-fails")
+                throw std::runtime_error("GPU memory exhausted during attachment");
+        });
+        size_t reports = 0;
+        size_t failures = 0;
+        core::events::state::SplatBatchLoadFailed::when([&](const auto& e) {
+            ++reports;
+            failures = e.failures.size();
+            EXPECT_EQ(e.loaded_count, 0u);
+        });
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("first-fails")),
+                                   core::path_to_utf8(makeSplatFixture("remaining"))});
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_TRUE(viewer.getScene().getNodes().empty());
+        EXPECT_EQ(reports, 1u);
+        EXPECT_EQ(failures, 2u);
+        EXPECT_FALSE(app_store().import_overlay_state.get().show_completion);
+    }
+
+    TEST_F(VisualizerImplResetTest, AttachmentFailureDiscardsOnlyProvisionalUuid) {
+        VisualizerImpl viewer(projectOptions());
+        const auto first = makeSplatFixture("attached-first");
+        const auto second = makeSplatFixture("attached-second");
+        core::events::state::PLYAdded::when([&](const auto& e) {
+            if (e.name == "attached-second") {
+                viewer.getScene().renameNode(e.name, "renamed-before-failure");
+                throw std::runtime_error("GPU memory exhausted during attachment");
+            }
+        });
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(first), core::path_to_utf8(second)});
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        ASSERT_EQ(viewer.getScene().getNodes().size(), 1);
+        EXPECT_NE(viewer.getScene().getNode("attached-first"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNode("renamed-before-failure"), nullptr);
+        ASSERT_NE(viewer.getScene().getCombinedModel(), nullptr);
+        EXPECT_EQ(viewer.getScene().getCombinedModel()->size(), 2);
+    }
+
+    TEST_F(VisualizerImplResetTest, InsertionFailureDiscardsOnlyProvisionalUuid) {
+        VisualizerImpl viewer(projectOptions());
+        const auto first = makeSplatFixture("inserted-first");
+        const auto second = makeSplatFixture("inserted-second");
+        bool injected = false;
+        core::events::state::SceneChanged::when([&](const auto&) {
+            if (!injected && viewer.getScene().getNode("inserted-second")) {
+                injected = true;
+                viewer.getScene().renameNode("inserted-second", "renamed-before-failure");
+                throw std::runtime_error("GPU memory exhausted during insertion");
+            }
+        });
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(first), core::path_to_utf8(second)});
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_TRUE(injected);
+        ASSERT_EQ(viewer.getScene().getNodes().size(), 1);
+        EXPECT_NE(viewer.getScene().getNode("inserted-first"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNode("renamed-before-failure"), nullptr);
+        ASSERT_NE(viewer.getScene().getCombinedModel(), nullptr);
+        EXPECT_EQ(viewer.getScene().getCombinedModel()->size(), 2);
+    }
+
+    TEST_F(VisualizerImplResetTest, HiddenModelKeepsTransformWhenBatchIsAppended) {
+        VisualizerImpl viewer(projectOptions());
+        auto& scene = viewer.getScene();
+        viewer.getSceneManager()->loadSplatFile(makeSplatFixture("hidden-first"));
+        const auto id = scene.getNode("hidden-first")->id;
+        const auto transform = glm::translate(glm::mat4(1.0f), glm::vec3(2, 3, 4));
+        scene.setNodeTransform(id, transform);
+        scene.setNodeVisibility(id, false);
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("visible-second")),
+                                   core::path_to_utf8(makeSplatFixture("visible-third"))});
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        ASSERT_NE(scene.getCombinedModel(), nullptr);
+        EXPECT_EQ(scene.getCombinedModel()->size(), 4);
+        EXPECT_FALSE(scene.getNodeById(id)->visible);
+        EXPECT_EQ(scene.getNodeById(id)->transform(), transform);
+        EXPECT_EQ(scene.getNode("visible-second")->transform(), glm::mat4(1.0f));
+        EXPECT_EQ(scene.getNode("visible-third")->transform(), glm::mat4(1.0f));
+    }
+
+    TEST_F(VisualizerImplResetTest, ExplicitClearCancelsStagingAndQueuedDrop) {
+        VisualizerImpl viewer(projectOptions());
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        const auto first = makeSplatFixture("clear-first");
+        const auto second = makeSplatFixture("clear-second");
+        controller.handleFileDrop({core::path_to_utf8(first), core::path_to_utf8(second)});
+        controller.handleFileDrop({core::path_to_utf8(second), core::path_to_utf8(first)});
+        ASSERT_TRUE(viewer.clearScene());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_TRUE(viewer.getScene().getNodes().empty());
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting();
+        }));
+        EXPECT_FALSE(tasks.hasPendingMainThreadCompletions());
+        EXPECT_TRUE(viewer.getScene().getNodes().empty());
+    }
+
     TEST_F(VisualizerImplResetTest, CancelledAsyncSplatLoadLeavesSceneUnchanged) {
         lfs::vis::VisualizerImpl viewer(projectOptions());
         auto* const manager = viewer.getSceneManager();
@@ -5228,7 +5993,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Unsaved current project"),
@@ -5286,57 +6051,6 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
-           AssetManagerProjectRestorePreservesLeftDockWidth) {
-        auto options = projectOptions();
-        VisualizerImpl viewer(options);
-        auto* const gui = viewer.getGuiManager();
-        ASSERT_NE(gui, nullptr);
-
-        auto current_layout =
-            gui->panelLayout().captureProjectState();
-        current_layout.left_dock_width = 487.0f;
-        gui->panelLayout().applyProjectState(
-            current_layout);
-
-        auto session = lfs::test::licht::
-            make_populated_session_chapters();
-        auto prepared = project::prepareGuiSessionRestore(
-            std::move(session));
-        ASSERT_TRUE(prepared)
-            << lfs::format_for_developer(
-                   prepared.error());
-        auto restored_layout = lfs::test::licht::json_root(
-            prepared->chapters.gui_layout.dom());
-        std::optional<float> restored_left_dock_width;
-        lfs::io::project::
-            for_each_fixed_arrangement_payload(
-                restored_layout,
-                [&](const auto& payload) {
-                    restored_left_dock_width =
-                        payload.value(
-                            "left_dock_width", 0.0f);
-                });
-        ASSERT_TRUE(restored_left_dock_width);
-        ASSERT_FLOAT_EQ(
-            *restored_left_dock_width,
-            271.0f);
-
-        viewer.keep_asset_manager_open_after_restore_ =
-            true;
-        const auto ticket =
-            viewer.stagePreparedProjectSessionRestore(
-                std::move(*prepared));
-        ASSERT_NE(ticket, 0u);
-        viewer.noteGuiSessionRestoreOwnerReady(1);
-
-        EXPECT_FLOAT_EQ(
-            gui->panelLayout().getLeftDockWidth(),
-            487.0f);
-        EXPECT_FALSE(
-            viewer.keep_asset_manager_open_after_restore_);
-    }
-
-    TEST_F(VisualizerImplResetTest,
            NewProjectDirtyGateRunsBelowEveryCommandEntry) {
         auto options = projectOptions();
         {
@@ -5347,7 +6061,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Unsaved current project"),
@@ -5383,7 +6097,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(arm_running_trainer(viewer));
             ASSERT_NE(
                 viewer.getScene().addGroup(
@@ -5447,7 +6161,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
@@ -5514,7 +6228,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(arm_running_trainer(viewer));
             ASSERT_NE(
                 viewer.getScene().addGroup(
@@ -5581,7 +6295,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 current_path,
                 ProjectSwitchDisposition::
@@ -5645,7 +6359,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(arm_running_trainer(viewer));
             ASSERT_NE(
                 viewer.getScene().addGroup(
@@ -6126,7 +6840,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::DiscardChanges));
@@ -6228,7 +6942,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             const auto project_path =
                 temporary / "params-titled.licht";
             write_empty_project(project_path);
@@ -6315,7 +7029,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -6567,7 +7281,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(arm_running_trainer(viewer));
             auto* const trainer_manager =
                 viewer.getTrainerManager();
@@ -6799,7 +7513,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             const auto opened =
                 viewer.projectOpen(project_path);
             ASSERT_TRUE(opened)
@@ -6870,7 +7584,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             const auto opened =
                 viewer.projectOpen(project_path);
             ASSERT_TRUE(opened)
@@ -6963,7 +7677,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Unsaved before Save As exit"),
@@ -7018,7 +7732,7 @@ namespace lfs::vis {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
-                std::make_unique<InputController>(nullptr, viewer.getViewport());
+                std::make_unique<InputController>(nullptr, viewer);
             ASSERT_TRUE(viewer.projectOpen(source_path));
             ASSERT_NE(viewer.getScene().addGroup("Selectable"),
                       lfs::core::NULL_NODE);
@@ -7073,7 +7787,7 @@ namespace lfs::vis {
                 ->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_TRUE(viewer.projectOpen(
             source_path,
             ProjectSwitchDisposition::DiscardChanges));
@@ -7129,7 +7843,7 @@ namespace lfs::vis {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
-                std::make_unique<InputController>(nullptr, viewer.getViewport());
+                std::make_unique<InputController>(nullptr, viewer);
             ASSERT_TRUE(viewer.projectOpen(source_path));
             ASSERT_TRUE(viewer.projectSave(false));
             ASSERT_TRUE(pumpUntil(
@@ -7171,7 +7885,7 @@ namespace lfs::vis {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
-                std::make_unique<InputController>(nullptr, viewer.getViewport());
+                std::make_unique<InputController>(nullptr, viewer);
             ASSERT_NE(viewer.getScene().addGroup("Dialog save"),
                       lfs::core::NULL_NODE);
 
@@ -7202,7 +7916,7 @@ namespace lfs::vis {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
-                std::make_unique<InputController>(nullptr, viewer.getViewport());
+                std::make_unique<InputController>(nullptr, viewer);
             ASSERT_NE(viewer.getScene().addGroup("MCP save"),
                       lfs::core::NULL_NODE);
 
@@ -7231,7 +7945,7 @@ namespace lfs::vis {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
-                std::make_unique<InputController>(nullptr, viewer.getViewport());
+                std::make_unique<InputController>(nullptr, viewer);
             ASSERT_NE(viewer.getScene().addGroup("MCP implicit save"),
                       lfs::core::NULL_NODE);
 
@@ -7269,7 +7983,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             const auto opened =
                 viewer.projectOpen(project_path);
             ASSERT_TRUE(opened)
@@ -7372,7 +8086,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup("Saved"),
                 lfs::core::NULL_NODE);
@@ -7612,7 +8326,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             const auto opened =
                 viewer.projectOpen(
                     project_path,
@@ -7739,7 +8453,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             const auto opened =
                 viewer.projectOpen(
                     project_path,
@@ -8550,7 +9264,8 @@ namespace lfs::vis {
         write_minimal_transforms_dataset(dataset_path);
 
         VisualizerImpl viewer(options);
-        InputController controller(nullptr, viewer.getViewport());
+        lfs::vis::TestViewTargets controller_views{viewer.getViewport()};
+        InputController controller{nullptr, controller_views};
 
         viewer.getSceneManager()->changeContentType(SceneManager::ContentType::Dataset);
         viewer.getSceneManager()->setDatasetPath(dataset_path);
@@ -8655,7 +9370,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
@@ -8845,7 +9560,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -8928,7 +9643,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -8990,7 +9705,7 @@ namespace lfs::vis {
             params.use_depth_loss = true;
         });
         viewer.input_controller_ =
-            std::make_unique<InputController>(nullptr, viewer.getViewport());
+            std::make_unique<InputController>(nullptr, viewer);
         auto* const lifecycle = viewer.project_lifecycle_.get();
         ASSERT_NE(lifecycle, nullptr);
         ASSERT_FALSE(lifecycle->hasSourcePath());
@@ -9028,7 +9743,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -9092,7 +9807,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -9140,7 +9855,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -9218,7 +9933,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
@@ -9283,7 +9998,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
@@ -9363,7 +10078,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
@@ -9399,7 +10114,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
@@ -9467,7 +10182,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
@@ -9503,7 +10218,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
@@ -9575,7 +10290,7 @@ namespace lfs::vis {
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle = viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
             scene.addCamera(
@@ -9603,7 +10318,7 @@ namespace lfs::vis {
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle = viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
             scene.addCamera(
@@ -9763,7 +10478,7 @@ namespace lfs::vis {
                 viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const gui = viewer.getGuiManager();
             ASSERT_NE(gui, nullptr);
             installModalOverlay(
@@ -9833,7 +10548,7 @@ namespace lfs::vis {
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle = viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
             ASSERT_TRUE(lifecycle->openScratchRecovered(
@@ -9870,7 +10585,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -9966,7 +10681,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
@@ -10135,7 +10850,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -10223,7 +10938,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -10361,7 +11076,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -10465,7 +11180,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -10734,7 +11449,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -10826,7 +11541,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -10935,7 +11650,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -11035,7 +11750,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -11533,7 +12248,7 @@ namespace lfs::vis {
                 }));
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -11626,7 +12341,7 @@ namespace lfs::vis {
                 }));
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -11705,7 +12420,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
 
         auto created = viewer.projectCreateAt(path);
         ASSERT_TRUE(created)
@@ -11734,7 +12449,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getScene().addGroup("keep-me"),
                   lfs::core::NULL_NODE);
 
@@ -11761,7 +12476,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
 
         auto created = viewer.projectCreateAt(
             path, ProjectSwitchDisposition::DiscardChanges, true);
@@ -11789,7 +12504,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getScene().addGroup("keep-me"),
                   lfs::core::NULL_NODE);
 
@@ -11818,7 +12533,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getScene().addGroup("keep-me"),
                   lfs::core::NULL_NODE);
 
@@ -11838,7 +12553,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         const auto scratch = lfs::io::project::scratch_autosave_path(
             viewer.project_lifecycle_->temp_project_directory_,
             lfs::core::generate_uuid_v4());
@@ -11862,7 +12577,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getScene().addGroup("dirty"),
                   lfs::core::NULL_NODE);
         auto blocked = viewer.projectCreateAt(path);
@@ -11888,7 +12603,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto& scene = viewer.getScene();
         scene.addCamera(
             "camera.png", scene.addGroup("Train cameras"),
@@ -11915,7 +12630,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_TRUE(viewer.projectCreateAt(path));
         ASSERT_TRUE(viewer.resetUntitledSessionForReplaceLoad());
         const auto info = viewer.projectGetInfo();
@@ -11932,7 +12647,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getScene().addGroup("dirty"),
                   lfs::core::NULL_NODE);
         bool prompted = false;
@@ -11958,7 +12673,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getScene().addGroup("dirty"),
                   lfs::core::NULL_NODE);
         bool prompted = false;
@@ -11993,7 +12708,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_TRUE(arm_running_trainer(viewer));
         bool prompted = false;
         std::filesystem::path create_path;
@@ -12024,7 +12739,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_TRUE(arm_running_trainer(viewer));
         ASSERT_NE(viewer.getScene().addGroup("keep-me"),
                   lfs::core::NULL_NODE);
@@ -12055,7 +12770,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_TRUE(arm_running_trainer(viewer));
         ASSERT_NE(viewer.getScene().addGroup("keep-me"),
                   lfs::core::NULL_NODE);
@@ -12144,7 +12859,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -12247,7 +12962,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
@@ -12431,7 +13146,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
@@ -12756,7 +13471,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
@@ -12846,7 +13561,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
 
             auto& scene = viewer.getScene();
             const auto splat = scene.addSplat(
@@ -14157,7 +14872,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14285,7 +15000,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14330,7 +15045,7 @@ namespace lfs::vis {
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         ASSERT_TRUE(viewer.getWindowManager()->init());
-        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer);
         ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
         // The viewer queue has not committed hydration yet.
         const auto loading_start = viewer.startTraining();
@@ -14369,7 +15084,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14421,7 +15136,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14473,7 +15188,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14567,7 +15282,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14641,7 +15356,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14722,7 +15437,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14975,7 +15690,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -15052,7 +15767,7 @@ namespace lfs::vis {
         VisualizerImpl viewer(options);
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ = std::make_unique<InputController>(
-            nullptr, viewer.getViewport());
+            nullptr, viewer);
         auto* const lifecycle = viewer.project_lifecycle_.get();
         ASSERT_NE(lifecycle, nullptr);
 
@@ -15118,7 +15833,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto untitled = viewer.projectGetInfo();
             ASSERT_TRUE(untitled);
             ASSERT_FALSE(untitled->path.has_value());
@@ -15456,7 +16171,7 @@ namespace lfs::vis {
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
-            std::make_unique<InputController>(nullptr, viewer.getViewport());
+            std::make_unique<InputController>(nullptr, viewer);
         viewer.getParameterManager()->getDatasetConfig().images = "images_8";
         ASSERT_TRUE(viewer.projectCreateAt(project_path));
 
@@ -15503,7 +16218,7 @@ namespace lfs::vis {
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
-            std::make_unique<InputController>(nullptr, viewer.getViewport());
+            std::make_unique<InputController>(nullptr, viewer);
         viewer.getParameterManager()->getDatasetConfig().images = "images_8";
         ASSERT_TRUE(viewer.projectCreateAt(project_path));
 

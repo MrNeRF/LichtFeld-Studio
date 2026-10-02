@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "core/cuda_types.hpp"
+#include "core/export.hpp"
 #include "core/tensor/internal/private_access.hpp"
 
 #include "core/error.hpp"
@@ -11,6 +12,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -36,12 +38,16 @@ namespace lfs::core::internal {
         std::array<uint32_t, 3> max_workgroup_count{};
         uint32_t device_index = 0;
         uint32_t subgroup_size = 0;
+        uint32_t min_subgroup_size = 0;
+        uint32_t max_subgroup_size = 0;
         uint32_t max_workgroup_invocations = 0;
         uint32_t shared_memory_size = 0;
         float timestamp_period = 0.0f;
         bool shader_float64 = false;
+        bool shader_int64 = false;
         bool shader_float16 = false;
         bool shader_atomic_float = false;
+        bool subgroup_size_control = false;
         bool cooperative_matrix = false;
         bool vulkan_memory_model = false;
         bool vulkan_memory_model_device_scope = false;
@@ -127,25 +133,47 @@ namespace lfs::core::internal {
 
         [[nodiscard]] uint64_t reserve_timeline_value();
         void submit(VkCommandBuffer command, uint64_t signal_value);
+        // Waits for an earlier value on the context timeline, then signals signal_value.
+        // wait_value == 0 or wait_value >= signal_value submits without a wait.
+        void submit_after(VkCommandBuffer command, uint64_t wait_value, uint64_t signal_value);
         void submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value);
+        // Empty submit: wait for the context timeline (when earlier than signal_value)
+        // and for one external timeline semaphore, then signal signal_value.
+        void submit_external_after(VkSemaphore external, uint64_t external_value,
+                                   uint64_t timeline_wait, uint64_t signal_value);
         void wait(uint64_t value);
         [[nodiscard]] uint64_t completed_timeline() const;
         // The newest timeline value submitted to the queue.
         [[nodiscard]] uint64_t submitted_timeline() const noexcept {
             return submitted_timeline_.load(std::memory_order_acquire);
         }
+        // Runs `release` while no submission is in progress or unfinished and
+        // returns whether it ran. MoltenVK makes all device memory resident for
+        // every submitted command buffer without keeping it alive, so memory
+        // freed during a submit on another thread, or before it completes, faults.
+        template <class Release>
+        bool run_while_queue_idle(Release&& release) {
+            std::lock_guard lock(queue_mutex_);
+            if (completed_timeline() < submitted_timeline())
+                return false;
+            release();
+            return true;
+        }
         void check_fault_buffer();
         // Shaders record an out-of-range index as {code, index, extent, op}; the
         // adapter that owns the launch reads and clears the record after its wait.
         [[nodiscard]] uint64_t fault_address() const noexcept { return fault_address_; }
-        [[nodiscard]] std::array<uint32_t, 4> consume_fault_record() noexcept;
+        [[nodiscard]] LFS_CORE_API std::array<uint32_t, 4> consume_fault_record() noexcept;
         void mark_device_lost_once();
 
-        [[nodiscard]] VulkanMemory& memory();
-        [[nodiscard]] VulkanRecorderRegistry& recorders();
+        [[nodiscard]] LFS_CORE_API VulkanMemory& memory();
+        [[nodiscard]] LFS_CORE_API VulkanRecorderRegistry& recorders();
         [[nodiscard]] VulkanPipelines& pipelines();
 
         void shutdown();
+        // Runs `release` early in shutdown(), while the device is still alive, for
+        // objects held outside core past their last use (static pipeline caches).
+        LFS_CORE_API void on_shutdown(std::function<void()> release);
 
     private:
         void create_instance();
@@ -186,7 +214,10 @@ namespace lfs::core::internal {
         std::atomic<bool> dead_{false};
         std::atomic<bool> device_loss_reported_{false};
         std::mutex queue_mutex_;
+        void publish_submitted_locked(uint64_t signal_value);
         std::mutex shutdown_mutex_;
+        std::mutex shutdown_release_mutex_;
+        std::vector<std::function<void()>> shutdown_releases_;
 #if LFS_HAS_CUDA
         std::unique_ptr<VulkanCudaImportRegistry> cuda_imports_;
 #endif
@@ -207,9 +238,9 @@ namespace lfs::core::internal {
     // when a context already exists or the device lacks a required feature.
     [[nodiscard]] lfs::Status adopt_vulkan_context(const AdoptedDevice& adopted);
     [[nodiscard]] bool vulkan_context_adopted() noexcept;
-    [[nodiscard]] std::shared_ptr<VulkanContext> acquire_vulkan_context();
+    [[nodiscard]] LFS_CORE_API std::shared_ptr<VulkanContext> acquire_vulkan_context();
     [[nodiscard]] int vulkan_device_count();
-    [[nodiscard]] std::shared_ptr<VulkanContext> try_live_vulkan_context() noexcept;
+    [[nodiscard]] LFS_CORE_API std::shared_ptr<VulkanContext> try_live_vulkan_context() noexcept;
     void shutdown_vulkan_context();
 
     // Marks the live context lost as if a call had returned VK_ERROR_DEVICE_LOST,
@@ -223,6 +254,6 @@ namespace lfs::core::internal {
     [[nodiscard]] LFS_CORE_API uint64_t vulkan_completed_timeline_for_testing();
     [[nodiscard]] LFS_CORE_API size_t vulkan_dead_recorder_count_for_testing();
 
-    void vk_check(VulkanContext* context, VkResult result, const char* operation);
+    LFS_CORE_API void vk_check(VulkanContext* context, VkResult result, const char* operation);
 
 } // namespace lfs::core::internal

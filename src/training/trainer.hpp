@@ -18,7 +18,7 @@
 #include "core/tensor_upload.hpp"
 #include "dataset.hpp"
 #include "io/project_recovery.hpp"
-#include "kernels/depth_loss.hpp"
+#include "lfs/training/ops/geometry_types.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "losses/mask_loss.hpp"
@@ -250,13 +250,13 @@ namespace lfs::training {
 
         // GPU-side model-read handshake. Call both under a shared lock on
         // getRenderMutex(), bracketing every GPU read of the live model enqueued
-        // on reader_stream: beginModelRead orders the reads after the last
+        // on reader_queue: beginModelRead orders the reads after the last
         // consistent parameter state; endModelRead records the reads so the next
         // optimizer step waits for them (GPU-side, no CPU blocking).
-        void beginModelRead(void* reader_stream);
-        void endModelRead(void* reader_stream);
+        void beginModelRead(lfs::core::TensorExecutionTarget reader_queue);
+        void endModelRead(lfs::core::TensorExecutionTarget reader_queue);
 
-        void* trainingStream() const { return training_queue_ ? training_queue_->native_handle() : nullptr; }
+        lfs::core::TensorExecutionTarget trainingQueue() const { return training_queue_ ? lfs::core::TensorExecutionTarget(*training_queue_) : lfs::core::TensorExecutionTarget::default_queue(lfs::core::default_gpu_backend()); }
 
         // Reverse edge for the zero-copy viewport: the viewer's render-complete
         // timeline imported into CUDA, plus the latest timeline value covering
@@ -808,6 +808,8 @@ namespace lfs::training {
         // Resolved once at training start. Hot paths use this table.
         const lfs::training::TrainingOps* training_ops_ = nullptr;
         lfs::gpu_ops::PhotoSaved photo_saved_{};
+        lfs::gpu_ops::GsplatSaved gsplat_saved_{};
+        lfs::gpu_ops::GsplatSaved metrics_gsplat_saved_{};
         lfs::gpu_ops::FastSaved fast_saved_{};
         lfs::gpu_ops::FastSaved metrics_fast_saved_{};
         // photo_mask_ stays empty. Loss handles are moved to the caller.
@@ -816,6 +818,7 @@ namespace lfs::training {
         lfs::core::Tensor photo_grad_corrected_;
         lfs::core::Tensor photo_grad_raw_;
         void bind_training_ops();
+        void prepare_evaluation_workspaces();
 
         // Cached GPU scalar to avoid per-iteration allocation
         core::Tensor loss_accumulator_;
@@ -955,7 +958,7 @@ namespace lfs::training {
         // and after it has joined (drain) — no lock needed.
         std::vector<lfs::core::TensorFence> orphaned_sidecar_events_;
 
-        void createCudaResources();
+        void createGpuResources();
         void createSyncPrimitives();
         void destroySyncPrimitives();
         void recordParamsReady();
@@ -979,6 +982,11 @@ namespace lfs::training {
 
         void submitLossReadback(const lfs::core::Tensor& total_loss, int iter);
         std::expected<void, std::string> harvestLossReadbacks(bool drain, bool in_controller_phase);
+
+        // Rasterizers cull non-finite primitives, so a NaN model renders nothing and
+        // never reaches the loss check. Skipped iterations check the model instead.
+        int invisible_iteration_streak_ = 0;
+        [[nodiscard]] std::optional<lfs::Error> check_invisible_iteration(int iter);
 
         // Python control scripts (file paths) to execute before training starts
         std::vector<std::filesystem::path> python_scripts_;

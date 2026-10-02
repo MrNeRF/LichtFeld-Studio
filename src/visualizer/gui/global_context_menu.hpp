@@ -30,13 +30,14 @@ namespace lfs::vis::gui {
     class RmlUIManager;
 
     struct ContextMenuItem {
-        std::string label;
-        std::string action;
+        std::string label{};
+        std::string action{};
         bool separator_before = false;
         bool is_label = false;
         bool is_submenu_item = false;
         bool is_active = false;
         std::string icon = {};
+        std::string shortcut = {};
     };
 
     class LFS_VIS_API GlobalContextMenu {

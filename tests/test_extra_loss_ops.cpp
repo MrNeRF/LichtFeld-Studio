@@ -3,9 +3,9 @@
 
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
-#include "lfs/kernels/regularization.cuh"
 #include "lfs/training/ops/registry.hpp"
 #include "training/components/sparsity_optimizer_kernels.hpp"
+#include "training/kernels/regularization.cuh"
 
 #include <gtest/gtest.h>
 #include <vector>

@@ -196,12 +196,29 @@ namespace lfs::core::internal {
 
             VkPhysicalDeviceSubgroupProperties subgroup{
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
+            VkPhysicalDeviceSubgroupSizeControlProperties subgroup_control_props{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+            uint32_t extension_count = 0;
+            bool has_size_control = false;
+            if (vkEnumerateDeviceExtensionProperties(device, nullptr, &extension_count, nullptr) == VK_SUCCESS) {
+                std::vector<VkExtensionProperties> extension_properties(extension_count);
+                if (vkEnumerateDeviceExtensionProperties(device, nullptr, &extension_count,
+                                                         extension_properties.data()) == VK_SUCCESS) {
+                    has_size_control = std::ranges::any_of(
+                        extension_properties, [](const VkExtensionProperties& extension) {
+                            return std::string_view(extension.extensionName) ==
+                                   VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME;
+                        });
+                }
+            }
             VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
             VkPhysicalDeviceFloatControlsProperties float_controls{
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES};
             VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
             properties.pNext = &subgroup;
-            subgroup.pNext = &ids;
+            subgroup.pNext = has_size_control ? static_cast<void*>(&subgroup_control_props)
+                                              : static_cast<void*>(&ids);
+            subgroup_control_props.pNext = &ids;
             ids.pNext = &float_controls;
             vkGetPhysicalDeviceProperties2(device, &properties);
             const VkSubgroupFeatureFlags subgroup_required =
@@ -218,6 +235,8 @@ namespace lfs::core::internal {
                 std::copy_n(ids.deviceUUID, VK_UUID_SIZE, caps->device_uuid.begin());
                 std::copy_n(ids.driverUUID, VK_UUID_SIZE, caps->driver_uuid.begin());
                 caps->subgroup_size = subgroup.subgroupSize;
+                caps->min_subgroup_size = has_size_control ? subgroup_control_props.minSubgroupSize : 0;
+                caps->max_subgroup_size = has_size_control ? subgroup_control_props.maxSubgroupSize : 0;
                 caps->max_workgroup_invocations =
                     properties.properties.limits.maxComputeWorkGroupInvocations;
                 std::copy_n(properties.properties.limits.maxComputeWorkGroupSize, 3,
@@ -226,11 +245,20 @@ namespace lfs::core::internal {
                             caps->max_workgroup_count.begin());
                 caps->shared_memory_size =
                     properties.properties.limits.maxComputeSharedMemorySize;
+                caps->shader_int64 = features.features.shaderInt64;
                 caps->timestamp_period = properties.properties.limits.timestampPeriod;
                 caps->shader_float64 = features.features.shaderFloat64;
                 caps->shader_float16 = features12.shaderFloat16 &&
                                        float_controls.shaderSignedZeroInfNanPreserveFloat16;
                 caps->float_controls_fp16 = float_controls.shaderSignedZeroInfNanPreserveFloat16;
+                VkPhysicalDeviceSubgroupSizeControlFeatures size_control{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
+                VkPhysicalDeviceFeatures2 size_features{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+                size_features.pNext = &size_control;
+                if (has_size_control)
+                    vkGetPhysicalDeviceFeatures2(device, &size_features);
+                caps->subgroup_size_control = has_size_control && size_control.subgroupSizeControl;
             }
             return required;
         }
@@ -611,6 +639,8 @@ namespace lfs::core::internal {
         }
         caps_.memory_budget =
             extensions_available.contains(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+        caps_.subgroup_size_control =
+            extensions_available.contains(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
 
         VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_float{
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
@@ -627,6 +657,10 @@ namespace lfs::core::internal {
         query13.pNext = &atomic_float;
         vkGetPhysicalDeviceFeatures2(physical_device_, &query);
         caps_.shader_float64 = query.features.shaderFloat64;
+        caps_.shader_int64 = query.features.shaderInt64;
+        // Vulkan 1.3 is required, so subgroup size control is a Vulkan13Features member;
+        // chaining the promoted struct as well is invalid (VUID-VkDeviceCreateInfo-pNext-06532).
+        caps_.subgroup_size_control = caps_.subgroup_size_control && query13.subgroupSizeControl;
         caps_.shader_float16 = query12.shaderFloat16 && caps_.float_controls_fp16;
         caps_.vulkan_memory_model = query12.vulkanMemoryModel;
         caps_.vulkan_memory_model_device_scope = query12.vulkanMemoryModelDeviceScope;
@@ -670,16 +704,23 @@ namespace lfs::core::internal {
             else
                 features13.pNext = &coop_enable;
         }
+        features13.subgroupSizeControl = caps_.subgroup_size_control ? VK_TRUE : VK_FALSE;
 
         std::vector<const char*> enabled_extensions;
         if (caps_.memory_budget) {
             enabled_extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+        }
+        if (caps_.subgroup_size_control) {
+            enabled_extensions.push_back(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
         }
         if (caps_.shader_atomic_float) {
             enabled_extensions.push_back(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         }
         if (caps_.cooperative_matrix)
             enabled_extensions.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+        if (extensions_available.contains(VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME)) {
+            enabled_extensions.push_back(VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME);
+        }
 #if LFS_HAS_CUDA && defined(_WIN32)
         constexpr const char* kExternalMemoryExtension =
             VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME;
@@ -764,8 +805,19 @@ namespace lfs::core::internal {
             VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
         create_info.initialDataSize = initial_data.size();
         create_info.pInitialData = initial_data.data();
-        vk_check(this, vkCreatePipelineCache(device_, &create_info, nullptr, &pipeline_cache_),
-                 "vkCreatePipelineCache");
+        VkResult result = vkCreatePipelineCache(device_, &create_info, nullptr, &pipeline_cache_);
+        // MoltenVK compiles every cached shader library on load, so one entry
+        // that no longer compiles fails the whole cache; start empty instead.
+        if (result != VK_SUCCESS && !initial_data.empty()) {
+            LOG_WARN("Discarding the Vulkan pipeline cache '{}': it failed to load ({})",
+                     pipeline_cache_path_, static_cast<int>(result));
+            std::error_code error;
+            std::filesystem::remove(pipeline_cache_path_, error);
+            create_info.initialDataSize = 0;
+            create_info.pInitialData = nullptr;
+            result = vkCreatePipelineCache(device_, &create_info, nullptr, &pipeline_cache_);
+        }
+        vk_check(this, result, "vkCreatePipelineCache");
     }
 
     void VulkanContext::save_pipeline_cache() noexcept {
@@ -854,6 +906,13 @@ namespace lfs::core::internal {
         return next_timeline_.fetch_add(1, std::memory_order_relaxed) + 1;
     }
 
+    // Queue lock held. Batches are submitted out of reservation order across
+    // threads, so the published value only moves forward.
+    void VulkanContext::publish_submitted_locked(const uint64_t signal_value) {
+        if (signal_value > submitted_timeline_.load(std::memory_order_relaxed))
+            submitted_timeline_.store(signal_value, std::memory_order_release);
+    }
+
     void VulkanContext::submit(const VkCommandBuffer command,
                                const uint64_t signal_value) {
         if (dead()) {
@@ -875,7 +934,39 @@ namespace lfs::core::internal {
         std::lock_guard lock(queue_mutex_);
         vk_check(this, vkQueueSubmit2(queue_, 1, &submit_info, VK_NULL_HANDLE),
                  "vkQueueSubmit2");
-        submitted_timeline_.store(signal_value, std::memory_order_release);
+        publish_submitted_locked(signal_value);
+    }
+
+    void VulkanContext::submit_after(const VkCommandBuffer command, const uint64_t wait_value,
+                                     const uint64_t signal_value) {
+        if (wait_value == 0 || wait_value >= signal_value) {
+            submit(command, signal_value);
+            return;
+        }
+        if (dead()) {
+            vk_check(this, VK_ERROR_DEVICE_LOST, "vkQueueSubmit2");
+        }
+        VkCommandBufferSubmitInfo command_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+        command_info.commandBuffer = command;
+        VkSemaphoreSubmitInfo wait_info{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        wait_info.semaphore = timeline_;
+        wait_info.value = wait_value;
+        wait_info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        VkSemaphoreSubmitInfo signal_info{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        signal_info.semaphore = timeline_;
+        signal_info.value = signal_value;
+        signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        VkSubmitInfo2 submit_info{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+        submit_info.waitSemaphoreInfoCount = 1;
+        submit_info.pWaitSemaphoreInfos = &wait_info;
+        submit_info.commandBufferInfoCount = 1;
+        submit_info.pCommandBufferInfos = &command_info;
+        submit_info.signalSemaphoreInfoCount = 1;
+        submit_info.pSignalSemaphoreInfos = &signal_info;
+        std::lock_guard lock(queue_mutex_);
+        vk_check(this, vkQueueSubmit2(queue_, 1, &submit_info, VK_NULL_HANDLE),
+                 "vkQueueSubmit2");
+        publish_submitted_locked(signal_value);
     }
 
     void VulkanContext::submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value) {
@@ -894,7 +985,41 @@ namespace lfs::core::internal {
         submit.pSignalSemaphoreInfos = &signal;
         std::lock_guard lock(queue_mutex_);
         vk_check(this, vkQueueSubmit2(queue_, 1, &submit, VK_NULL_HANDLE), "vkQueueSubmit2(external tensor wait)");
-        submitted_timeline_.store(signal_value, std::memory_order_release);
+        publish_submitted_locked(signal_value);
+    }
+
+    void VulkanContext::submit_external_after(const VkSemaphore external, const uint64_t external_value,
+                                              const uint64_t timeline_wait, const uint64_t signal_value) {
+        if (dead()) {
+            vk_check(this, VK_ERROR_DEVICE_LOST, "vkQueueSubmit2");
+        }
+        std::array<VkSemaphoreSubmitInfo, 2> waits{};
+        uint32_t count = 0;
+        if (timeline_wait != 0 && timeline_wait < signal_value) {
+            waits[count] = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+            waits[count].semaphore = timeline_;
+            waits[count].value = timeline_wait;
+            waits[count].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            ++count;
+        }
+        waits[count] = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        waits[count].semaphore = external;
+        waits[count].value = external_value;
+        waits[count].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        ++count;
+        VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        signal.semaphore = timeline_;
+        signal.value = signal_value;
+        signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+        submit.waitSemaphoreInfoCount = count;
+        submit.pWaitSemaphoreInfos = waits.data();
+        submit.signalSemaphoreInfoCount = 1;
+        submit.pSignalSemaphoreInfos = &signal;
+        std::lock_guard lock(queue_mutex_);
+        vk_check(this, vkQueueSubmit2(queue_, 1, &submit, VK_NULL_HANDLE),
+                 "vkQueueSubmit2(external tensor wait)");
+        publish_submitted_locked(signal_value);
     }
 
     void VulkanContext::wait(const uint64_t value) {
@@ -967,10 +1092,13 @@ namespace lfs::core::internal {
         throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
             .code = ErrorCode::BoundsViolation,
             .domain = lfs::ErrorDomain::Vulkan,
-            .user_message = "A tensor index was out of range on the Vulkan backend",
-            .detail = std::format("device fault code {}: index {} is outside the extent {} "
-                                  "(operation {})",
-                                  record[0], value, bound, op_id),
+            .user_message = record[0] == 3 ? "The Vulkan rasterizer reported invalid tile data"
+                                           : "A tensor index was out of range on the Vulkan backend",
+            .detail = record[0] == 3
+                          ? std::format("raster validation observed {}, expected limit/count {} (operation {})",
+                                        value, bound, op_id)
+                          : std::format("device fault code {}: index {} is outside the extent {} (operation {})",
+                                        record[0], value, bound, op_id),
             .detection = LFS_SOURCE_SITE_CURRENT(),
             .fields = lfs::SmallFields{}
                           .add("op_id", static_cast<std::int64_t>(op_id))
@@ -1013,6 +1141,11 @@ namespace lfs::core::internal {
         return *pipelines_;
     }
 
+    void VulkanContext::on_shutdown(std::function<void()> release) {
+        std::lock_guard lock(shutdown_release_mutex_);
+        shutdown_releases_.push_back(std::move(release));
+    }
+
     void VulkanContext::shutdown() {
         std::lock_guard shutdown_lock(shutdown_mutex_);
         if (instance_ == VK_NULL_HANDLE) {
@@ -1026,6 +1159,14 @@ namespace lfs::core::internal {
                 // LFS-CENSUS-OK(empty-catch): mark_device_lost_once reports the loss.
                 mark_device_lost_once();
             }
+        }
+        std::vector<std::function<void()>> releases;
+        {
+            std::lock_guard release_lock(shutdown_release_mutex_);
+            releases.swap(shutdown_releases_);
+        }
+        for (auto& release : releases) {
+            release();
         }
         if (memory_) {
             memory_->shutdown();

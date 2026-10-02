@@ -13,14 +13,6 @@ body {
     height: 0;
 }
 
-#right-panel-region {
-    position: absolute;
-    right: 0;
-    top: 0;
-    width: 0;
-    height: 0;
-}
-
 #status-region {
     position: absolute;
     left: 0;

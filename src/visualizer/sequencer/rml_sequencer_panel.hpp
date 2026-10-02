@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "input/frame_input_buffer.hpp"
+
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/sequencer_ui_state.hpp"
@@ -51,14 +53,8 @@ namespace lfs::vis {
         bool want_capture_mouse = false;
         int screen_w = 0;
         int screen_h = 0;
+        std::vector<FrameInputEvent> input_events;
         std::vector<int> keys_pressed;
-        std::vector<int> keys_released;
-        std::vector<uint32_t> text_codepoints;
-        std::vector<std::string> text_inputs;
-        std::string text_editing;
-        int text_editing_start = -1;
-        int text_editing_length = -1;
-        bool has_text_editing = false;
     };
 
     namespace panel_config {

@@ -22,6 +22,11 @@ namespace lfs::core {
             throw_cuda_unavailable();
     }
 
+    void waitForCUDAStream(const cudaStream_t execution_stream, const cudaStream_t dependency_stream) {
+        if (execution_stream || dependency_stream)
+            throw_cuda_unavailable();
+    }
+
     cudaStream_t prepare_inputs_for_stream(
         const std::initializer_list<const Tensor*> inputs,
         const std::optional<cudaStream_t> execution_stream) {
@@ -47,5 +52,7 @@ namespace lfs::core {
 } // namespace lfs::core
 
 namespace lfs::core::cuda {
+    ExternalMemoryImportScope::ExternalMemoryImportScope() noexcept {}
+    ExternalMemoryImportScope::~ExternalMemoryImportScope() noexcept {}
     bool ExternalMemoryImportScope::active() noexcept { return false; }
 } // namespace lfs::core::cuda

@@ -389,6 +389,9 @@ def switch_to_edit_mode() -> None:
 def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None, stop_training: bool = False, discard_changes: bool = False, replace: bool = False) -> None:
     """Load a file (PLY, checkpoint) or dataset into the scene."""
 
+def load_files(paths: Sequence[str], stop_training: bool = False, discard_changes: bool = False, replace: bool = False, _user_batch: bool = False) -> None:
+    """Import splat and mesh files as one ordered batch."""
+
 def load_config_file(path: str) -> None:
     """Load a JSON configuration file."""
 
@@ -598,35 +601,11 @@ def load_icon(name: str) -> int:
 def free_icon(texture_id: int) -> None:
     """Free an icon texture"""
 
-def reset_camera(*, panel: str | None = None) -> None:
-    """
-    Reset the primary camera by default, even when another panel has focus.
-    Use panel="main" to reset the focused camera. Reset restores the camera's
-    default position and orientation.
+def reset_camera() -> None:
+    """Reset the active view's camera."""
 
-    Unlike focus_selection(), omitting panel (or passing None) does not follow focus.
-
-    panel (keyword-only):
-    - None (default): primary camera.
-    - 'main': focused camera.
-    - 'left' / 'right': named panel's camera.
-
-    Outside independent-dual split, all choices target the primary camera.
-    Addressing a panel never changes focus.
-    """
-
-def focus_selection(*, panel: str | None = None) -> bool:
-    """
-    Focus the active viewport on the selection, or the whole scene when nothing is selected.
-
-    panel (keyword-only) selects which split panel's camera is moved:
-    - None (default): the focused panel, exactly as before.
-    - 'main': the panel that currently has focus, requested explicitly.
-      Same panel as None here, reached through the panel-addressed path.
-    - 'left' / 'right': that panel's own camera. Outside independent-dual
-      split every token resolves to the primary camera, because there is
-      only one. Addressing a panel never changes which panel has focus.
-    """
+def focus_selection() -> bool:
+    """Frame the selection or the whole scene in the active view."""
 
 def get_camera_navigation_mode() -> str:
     """
@@ -675,8 +654,10 @@ def toggle_perf_hud_expanded() -> None:
 def is_perf_hud_visible() -> bool:
     """True when the performance HUD is currently shown"""
 
-def toggle_independent_split_view() -> None:
-    """Toggle independent split view"""
+def toggle_split_viewport() -> None:
+    """
+    Open a second 3D viewport beside the one under the pointer, or close it again
+    """
 
 def get_render_mode() -> RenderMode:
     """Get current render mode (Splats, Points, Rings, Centers)"""
@@ -1543,15 +1524,8 @@ def compute_screen_positions(rotation: Tensor, translation: Tensor, width: int, 
         Tensor [N, 2] with (x, y) pixel coordinates for each Gaussian
     """
 
-def get_current_view(panel: str = 'main') -> ViewInfo | None:
-    """
-    Get current viewport camera pose (None if not available).
-
-    Args:
-        panel: 'main' (default) returns the focused viewport, 'left'/'right' returns the
-            per-panel camera. In independent split-view mode, the right panel has its own
-            camera; otherwise both panels share the main camera.
-    """
+def get_current_view() -> ViewInfo | None:
+    """Get current viewport camera pose (None if not available)."""
 
 class CameraState:
     @property
@@ -1566,16 +1540,12 @@ class CameraState:
     @property
     def fov(self) -> float: ...
 
-def get_camera(panel: str = 'main') -> CameraState | None:
+def get_camera() -> CameraState | None:
     """
     Get current viewport camera state (eye, target, up, fov) or None if unavailable.
-
-    Args:
-        panel: 'main' (default), 'left', or 'right'. 'left'/'right' return the per-panel
-            camera in independent split-view mode; otherwise both panels share the main camera.
     """
 
-def set_camera(eye: tuple[float, float, float], target: tuple[float, float, float], up: tuple[float, float, float] = (0.0, 1.0, 0.0), panel: str = 'main') -> None:
+def set_camera(eye: tuple[float, float, float], target: tuple[float, float, float], up: tuple[float, float, float] = (0.0, 1.0, 0.0)) -> None:
     """
     Move the viewport camera to look from eye toward target.
 
@@ -1583,8 +1553,6 @@ def set_camera(eye: tuple[float, float, float], target: tuple[float, float, floa
         eye: camera position (x, y, z).
         target: look-at target (x, y, z).
         up: world up vector (default (0, 1, 0)).
-        panel: 'main' (default), 'left', or 'right'. In independent split-view mode the right
-            panel can be moved independently; otherwise this falls back to the main camera.
     """
 
 def set_camera_fov(fov: float) -> None:

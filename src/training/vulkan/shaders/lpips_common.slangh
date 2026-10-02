@@ -1,0 +1,36 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "half_bits.slangh"
+
+struct Parameters {
+    uint64_t a, b, c, d, e, f, g;
+    uint count, channels, height, width, out_channels, out_height, out_width;
+    uint stride, padding, dilation, flags;
+    float shift0, shift1, shift2, scale0, scale1, scale2, inverse_count;
+};
+float load_half(uint64_t address, uint index) {
+    return halfBitsToFloat(uint(((Ptr<uint16_t, Access.Read>)address)[index]));
+}
+float load_value(uint64_t address, uint index, bool is_half) {
+    return is_half ? load_half(address,index) : ((Ptr<float,Access.Read>)address)[index];
+}
+void store_half(uint64_t address, uint index, float value) {
+    ((Ptr<uint16_t, Access.ReadWrite>)address)[index] = uint16_t(floatToHalfBits(value));
+}
+void store_value(uint64_t address, uint index, float value, bool is_half) {
+    if(is_half) store_half(address,index,value);
+    else ((Ptr<float,Access.ReadWrite>)address)[index]=value;
+}
+uint pair_lo(uint value) { return value & 0xffffu; }
+uint pair_hi(uint value) { return value >> 16; }
+float activation(float x, uint mode) {
+    if (mode == 1u) return max(x, 0.0f);
+    if (mode == 4u) return x / (1.0f + exp(-x));
+    if (mode == 2u) return 0.5f * x * (1.0f + tanh(0.7978845608f * (x + 0.044715f*x*x*x)));
+    if (mode == 3u) {
+        float z=abs(x)*0.7071067812f, t=1.0f/(1.0f+0.3275911f*z);
+        float y=1.0f-(((((1.061405429f*t-1.453152027f)*t)+1.421413741f)*t-0.284496736f)*t+0.254829592f)*t*exp(-z*z);
+        return 0.5f*x*(1.0f+(x<0.0f?-y:y));
+    }
+    return x;
+}

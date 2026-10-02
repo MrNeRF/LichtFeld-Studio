@@ -1,0 +1,8 @@
+{
+  "file_format_version": "1.0.0",
+  "ICD": {
+    "library_path": "../../../lib/libMoltenVK.dylib",
+    "api_version": "@LFS_MOLTENVK_API_VERSION@",
+    "is_portability_driver": true
+  }
+}

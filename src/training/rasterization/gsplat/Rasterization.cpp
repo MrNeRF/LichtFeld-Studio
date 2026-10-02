@@ -206,6 +206,7 @@ namespace gsplat_lfs {
     //=========================================================================
 
     void rasterize_from_world_with_sh_fwd(
+        Workspace& workspace,
         const float* means,
         const float* quats,
         const float* scales,
@@ -213,6 +214,7 @@ namespace gsplat_lfs {
         const float* sh0,
         const float* shN,
         uint32_t sh_degree,
+        uint32_t sh_layout_degree,
         const float* backgrounds,
         const float* bg_images,
         const bool* masks,
@@ -275,7 +277,7 @@ namespace gsplat_lfs {
 
         // The first call retains the existing speculative warm-cache path.
         auto intersect = [&](TileRange tiles) {
-            return intersect_tile(result.means2d, result.radii, result.depths,
+            return intersect_tile(workspace, result.means2d, result.radii, result.depths,
                                   nullptr, nullptr, C, N, tile_size, tile_width, tile_height,
                                   true, result.tiles_per_gauss, stream, result.tile_offsets, tiles);
         };
@@ -287,10 +289,18 @@ namespace gsplat_lfs {
                 compute_view_dirs(means, viewmats0, C, N, result.dirs, stream);
             }
             spherical_harmonics_swizzled_fwd(
-                sh_degree, sh_degree > 0 ? result.dirs : nullptr, sh0, shN, nullptr,
-                static_cast<int64_t>(C) * N,
-                result.colors, stream);
+                sh_degree, sh_layout_degree, sh_degree > 0 ? result.dirs : nullptr,
+                sh0, shN, nullptr, static_cast<int64_t>(C) * N,
+                result.colors, channels, stream);
+            if (channels == 4u) {
+                rasterization_pack_depth_colors(result.depths, result.colors, C * N, channels, stream);
+            }
+        } else {
+            rasterization_pack_depth_colors(result.depths, result.colors, C * N, channels, stream);
         }
+
+        const float* render_backgrounds = (render_mode == 1 || render_mode == 2) ? nullptr : backgrounds;
+        const float* render_bg_images = (render_mode == 1 || render_mode == 2) ? nullptr : bg_images;
 
         auto render = [&](const IntersectTileResult& batch, TileRange tiles) {
             result.isect_ids = batch.isect_ids;
@@ -299,7 +309,7 @@ namespace gsplat_lfs {
             const uint32_t raster_n_isects = static_cast<uint32_t>(batch.n_sort);
             rasterize_to_pixels_from_world_3dgs_fwd(
                 means, quats, scaled_scales, result.colors, opacities,
-                backgrounds, bg_images, masks,
+                render_backgrounds, render_bg_images, masks,
                 C, N, raster_n_isects, channels,
                 image_width, image_height, tile_size,
                 viewmats0, viewmats1, Ks, camera_model,
@@ -343,6 +353,7 @@ namespace gsplat_lfs {
     //=========================================================================
 
     void rasterize_from_world_with_sh_bwd(
+        Workspace& workspace,
         const float* means,
         const float* quats,
         const float* scales,
@@ -350,6 +361,7 @@ namespace gsplat_lfs {
         const float* sh0,
         const float* shN,
         uint32_t sh_degree,
+        uint32_t sh_layout_degree,
         const float* backgrounds,
         const float* bg_images,
         const bool* masks,
@@ -407,15 +419,18 @@ namespace gsplat_lfs {
             channels = 4;
         }
 
+        const float* render_backgrounds = (render_mode == 1 || render_mode == 2) ? nullptr : backgrounds;
+        const float* render_bg_images = (render_mode == 1 || render_mode == 2) ? nullptr : bg_images;
+
         const size_t color_values = checked_multiply(
             checked_multiply(static_cast<size_t>(C), static_cast<size_t>(N),
                              "gsplat backward color elements"),
             static_cast<size_t>(channels), "gsplat backward color elements");
         const size_t color_bytes = checked_bytes(
             color_values, sizeof(float), "gsplat backward color gradients");
-        // Grow-only TLS high-water — replaces per-backward cudaMallocAsync/Free.
+        // Grow-only owner-held high-water — replaces per-backward cudaMallocAsync/Free.
         float* const v_colors =
-            static_cast<float*>(ensure_gsplat_color_grad_workspace(color_bytes, stream));
+            static_cast<float*>(ensure_gsplat_color_grad_workspace(workspace, color_bytes, stream));
         LFS_CUDA_CHECK_MSG(
             cudaMemsetAsync(v_colors, 0, color_bytes, stream),
             "gsplat backward color-gradient initialization");
@@ -423,7 +438,7 @@ namespace gsplat_lfs {
         auto render_backward = [&](TileRange tiles) {
             rasterize_to_pixels_from_world_3dgs_bwd(
                 means, quats, scales, colors, opacities,
-                backgrounds, bg_images, masks,
+                render_backgrounds, render_bg_images, masks,
                 C, N, n_isects, channels,
                 image_width, image_height, tile_size,
                 viewmats0, viewmats1, Ks, camera_model,
@@ -445,7 +460,7 @@ namespace gsplat_lfs {
             for (const auto& saved : batches) {
                 if (saved.count == 0)
                     continue;
-                const auto batch = intersect_tile(means2d, radii, depths, nullptr, nullptr,
+                const auto batch = intersect_tile(workspace, means2d, radii, depths, nullptr, nullptr,
                                                   C, N, tile_size, tile_width, tile_height, true,
                                                   tiles_per_gauss, stream, const_cast<int32_t*>(tile_offsets), saved.tiles);
                 LFS_ASSERT(batch.n_isects == saved.count && batch.n_sort > 0);
@@ -458,7 +473,7 @@ namespace gsplat_lfs {
         // Backward through SH
         if (render_mode == 0 || render_mode == 3 || render_mode == 4) {
             spherical_harmonics_swizzled_bwd(
-                K, sh_degree,
+                K, sh_degree, sh_layout_degree,
                 dirs,
                 sh0,
                 shN,
@@ -468,6 +483,7 @@ namespace gsplat_lfs {
                 false, // compute_v_dirs
                 v_sh_coeffs,
                 nullptr, // v_dirs
+                channels,
                 stream);
         }
 

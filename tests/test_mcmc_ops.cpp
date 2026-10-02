@@ -58,7 +58,9 @@ TEST(McmcOpsCapability, OnlyCudaProvidesTheFamily) {
     FamilySet required;
     required.set(static_cast<size_t>(Family::Mcmc));
     EXPECT_EQ(missing_training_families(TrainingOps{}, required), std::vector<std::string_view>{"Mcmc"});
-    for (auto backend : {lfs::core::GpuBackend::Vulkan, lfs::core::GpuBackend::Metal}) {
+    EXPECT_NE(training_ops(lfs::core::GpuBackend::Vulkan).mcmc, nullptr);
+    EXPECT_FALSE(unavailable_training_family(lfs::core::GpuBackend::Vulkan, Family::Mcmc));
+    for (auto backend : {lfs::core::GpuBackend::Metal}) {
         EXPECT_EQ(training_ops(backend).mcmc, nullptr);
         const auto reason = unavailable_training_family(backend, Family::Mcmc);
         ASSERT_TRUE(reason.has_value());

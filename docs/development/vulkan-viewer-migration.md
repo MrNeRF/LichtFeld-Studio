@@ -25,7 +25,7 @@ The legacy OpenGL/glad renderer target has been replaced by `lfs_rendering_tenso
 7. Remove `ENABLE_CUDA_GL_INTEROP` and the retired CUDA-GL framebuffer/texture path.
 8. Move the app, visualizer, Python module, and MCP server off `lfs_rendering`; verified Debug binaries do not link `libGL`, `libGLU`, `libOpenGL`, GLX/EGL, or glad.
 9. Route selection screen-position and hovered-Gaussian queries through the tensor raster engine, so editor selection remains available without initializing the legacy renderer.
-10. Restore Vulkan viewport parity paths for point-cloud mode, raw point-cloud scenes, independent split view, PLY comparison, and GT comparison through tensor rendering/composition instead of GL textures.
+10. Restore Vulkan viewport parity paths for point-cloud mode, raw point-cloud scenes, PLY comparison, and GT comparison through tensor rendering/composition instead of GL textures.
 11. Add tensor-backed frame handles for legacy GPU-frame call sites and a software mesh compositor for the Vulkan viewport/video-export path, so mesh overlays no longer require app-side OpenGL linkage.
 12. Restore HDRI environment backgrounds in tensor composition for viewport and video export.
 13. Restore grid, coordinate axes, pivot, viewport vignette, crop/depth/ellipsoid guides, and camera frustum/image guides in the Vulkan overlay path, with raster-only camera frustum picking.

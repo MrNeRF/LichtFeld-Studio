@@ -59,8 +59,10 @@ namespace lfs::io::project {
                 if (spaces == area.end() || !spaces->is_array())
                     continue;
                 for (auto& space : *spaces) {
-                    if (!space.is_object() ||
-                        space.value("type", std::string{}) != "fixed_arrangement")
+                    if (!space.is_object())
+                        continue;
+                    const auto type = space.value("type", std::string{});
+                    if (type != "fixed_arrangement" && type != "screen")
                         continue;
                     const auto payload = space.find("opaque_payload");
                     if (payload != space.end() && payload->is_object())

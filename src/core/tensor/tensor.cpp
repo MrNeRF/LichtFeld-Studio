@@ -348,6 +348,10 @@ namespace lfs::core {
         return storage_accounting_state().cuda_direct.live_bytes.load(std::memory_order_relaxed);
     }
 
+    std::size_t Tensor::vulkan_external_storage_live_bytes() {
+        return storage_accounting_state().vulkan_external.live_bytes.load(std::memory_order_relaxed);
+    }
+
     void Tensor::log_storage_memory() {
         log_storage_memory({});
     }
@@ -726,21 +730,11 @@ namespace lfs::core {
         }
     }
 
-    // ============= Copy Assignment - Context-aware (Shallow or Deep) =============
+    // ============= Copy Assignment - Shallow Handle Copy =============
     Tensor& Tensor::operator=(const Tensor& other) {
         if (this == &other) {
             return *this;
         }
-        // PyTorch semantics: slice/view assignment does deep copy, regular assignment does shallow copy
-        // Example: t1[0:5] = t2  -> deep copy into the slice
-        //          t1 = t2        -> shallow copy (both point to same data)
-
-        // If LHS is a view/slice and shapes match, do deep copy
-        if (is_view_ && is_valid() && other.is_valid() &&
-            shape_ == other.shape_ && dtype_ == other.dtype_) {
-            return copy_from(other);
-        }
-
         if (lazy_ir_registered_) {
             internal::lazy_ir_unregister_tensor(id_);
             lazy_ir_registered_ = false;
@@ -813,21 +807,6 @@ namespace lfs::core {
     // ============= Move Assignment =============
     Tensor& Tensor::operator=(Tensor&& other) {
         if (this != &other) {
-            // PyTorch semantics: slice/view assignment does deep copy even for rvalues
-            // This handles: t1.slice(0, 0, 5) = t2.slice(0, 5, 10)
-            // where the RHS is a temporary view
-
-            if (is_view_ && is_valid() && other.is_valid() &&
-                shape_ == other.shape_ && dtype_ == other.dtype_) {
-                if (device_ == Device::GPU && other.device_ == Device::CPU && stream() &&
-                    internal::gpu_backend_tag(*this) == GpuBackend::CUDA) {
-                    const GpuBackendScope scope(GpuBackend::CUDA);
-                    const CUDAStreamGuard execution_scope(stream());
-                    return copy_from(other.to(Device::GPU, stream()));
-                }
-                return copy_from(other);
-            }
-
             if (lazy_ir_registered_) {
                 internal::lazy_ir_unregister_tensor(id_);
             }
@@ -1060,9 +1039,7 @@ namespace lfs::core {
             return;
         }
 
-        // Produce a dense owned tensor, then rebind *this. Do not assign:
-        // expand views are is_view_=true, so operator= would copy_from into the
-        // view and re-enter data_ptr() (stack overflow).
+        // Materialize storage while preserving this handle's tracing identity.
         Tensor dense = contiguous();
         LFS_ASSERT_MSG(dense.is_valid() && dense.is_contiguous() && !dense.has_zero_stride(),
                        std::format(
@@ -1448,6 +1425,10 @@ namespace lfs::core {
 
         auto t = empty(shape_, device, dtype_);
         if (numel() == 0) {
+            // An empty readback still synchronizes, so device faults of the
+            // ops that produced it surface here as they do for other tensors.
+            if (device_ == Device::GPU && device == Device::CPU && !stream)
+                internal::backend_ops_for(*this).synchronize_stream(internal::ExecContext{this->stream()});
             return t;
         }
 
@@ -1652,6 +1633,10 @@ namespace lfs::core {
         for (size_t i = 0; i < numel(); ++i) {                               \
             if constexpr (std::is_same_v<TO_TYPE, uint8_t>) {                \
                 dst[i] = detail::torch_uint8_cast(src[i]);                   \
+            } else if constexpr (std::is_integral_v<TO_TYPE> &&              \
+                                 !std::is_integral_v<FROM_TYPE>) {           \
+                dst[i] = detail::saturating_float_cast<TO_TYPE>(             \
+                    static_cast<float>(src[i]));                             \
             } else {                                                         \
                 dst[i] = static_cast<TO_TYPE>(src[i]);                       \
             }                                                                \
@@ -1695,7 +1680,7 @@ namespace lfs::core {
 
             if (device_ == Device::GPU) {
                 // != 0 on the device, so NaN maps to true like the CPU loop.
-                return ne(internal::allocate_zeros_like(*this, TensorShape({1}), dtype_));
+                return ne(internal::allocate_zeros_like(*this, TensorShape(), dtype_)); // rank-0 keeps the input shape
             }
             const float* src = ptr<float>();
             unsigned char* dst = result.ptr<unsigned char>();
@@ -1720,7 +1705,7 @@ namespace lfs::core {
                 const float* src = ptr<float>();
                 int* dst = result.ptr<int>();
                 for (size_t i = 0; i < numel(); ++i) {
-                    dst[i] = static_cast<int>(src[i]);
+                    dst[i] = detail::saturating_float_cast<int>(src[i]);
                 }
             }
             return result;
@@ -1785,7 +1770,7 @@ namespace lfs::core {
         if (dtype_ == DataType::Int32 && dtype == DataType::Bool) {
             if (device_ == Device::GPU && numel() > 0) {
                 // != 0 on the device.
-                return ne(internal::allocate_zeros_like(*this, TensorShape({1}), dtype_));
+                return ne(internal::allocate_zeros_like(*this, TensorShape(), dtype_)); // rank-0 keeps the input shape
             }
             auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
@@ -1846,7 +1831,7 @@ namespace lfs::core {
         if (dtype_ == DataType::Int64 && dtype == DataType::Bool) {
             if (device_ == Device::GPU && numel() > 0) {
                 // != 0 on the device.
-                return ne(internal::allocate_zeros_like(*this, TensorShape({1}), dtype_));
+                return ne(internal::allocate_zeros_like(*this, TensorShape(), dtype_)); // rank-0 keeps the input shape
             }
             auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
@@ -1889,7 +1874,7 @@ namespace lfs::core {
         if (dtype_ == DataType::Float16 && dtype == DataType::Bool) {
             if (device_ == Device::GPU && numel() > 0) {
                 // != 0 on the device, so NaN maps to true like the CPU loop.
-                return ne(internal::allocate_zeros_like(*this, TensorShape({1}), dtype_));
+                return ne(internal::allocate_zeros_like(*this, TensorShape(), dtype_)); // rank-0 keeps the input shape
             }
             auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
@@ -2153,6 +2138,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(shape_ == other.shape_,
                        std::format("copy_from shape mismatch: {} vs {}", shape_.str(), other.shape_.str()));
         internal::require_same_gpu_backend(*this, other, "copy_from");
+        reject_inplace_on_zero_stride("copy_from");
 
         if (this == &other) {
             return *this;
@@ -2512,22 +2498,21 @@ namespace lfs::core {
                 internal::ExecContext{result.stream()});
             // No sync - returns tensor, not API boundary
         } else {
-            if (dtype_ == DataType::Float32) {
+            if (dtype_ == DataType::Float32 && numel() > 0) {
+                // A double running sum per line: a float one drifts on long lines.
                 float* data = result.ptr<float>();
-
-                auto strides = shape_.strides();
-                size_t dim_stride = strides[dim];
-                size_t dim_size = shape_[dim];
-                size_t total = numel();
-
-                for (size_t idx = 0; idx < total; ++idx) {
-                    size_t coord_along_dim = (idx / dim_stride) % dim_size;
-
-                    if (coord_along_dim == 0)
-                        continue;
-
-                    data[idx] += data[idx - dim_stride];
-                }
+                const size_t inner = shape_.strides()[dim];
+                const size_t size = shape_[dim];
+                const size_t outer = numel() / (inner * size);
+                for (size_t o = 0; o < outer; ++o)
+                    for (size_t i = 0; i < inner; ++i) {
+                        double running = 0.0;
+                        for (size_t k = 0; k < size; ++k) {
+                            float& value = data[(o * size + k) * inner + i];
+                            running += value;
+                            value = static_cast<float>(running);
+                        }
+                    }
             } else if (dtype_ == DataType::Int32) {
                 int* data = result.ptr<int>();
 

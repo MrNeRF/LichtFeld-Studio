@@ -13,6 +13,19 @@ namespace lfs::training {
     struct GumbelTopKScratch;
 } // namespace lfs::training
 
+namespace lfs::training::mrnf_strategy {
+    struct MRNFBounds {
+        float center[3] = {};
+        float extent[3] = {};
+        float median_size = 0.f;
+        float max_extent = 0.f;
+    };
+
+    inline constexpr float kStarvEps = 0.0026f;
+    inline constexpr float kStarvGamma = 1.72f;
+    inline constexpr float kExploreStarvDose = 2.38f;
+} // namespace lfs::training::mrnf_strategy
+
 namespace lfs::gpu_ops {
 
     struct Bounds {
@@ -97,6 +110,9 @@ namespace lfs::gpu_ops {
 
         float (*sorted_median)(In values);
         void (*starvation_weights)(Out weights, In visibility, float median);
+        size_t (*compact_bool_indices)(In mask, Out indices, size_t count);
+        void (*prune_bounds)(In means, In scale_max, Out mask, std::array<float, 3> center, float maximum, float log_maximum);
+        void (*replace_parent_weights)(In opacity, In visibility, In active, In trainable, In edge, Out weights);
     };
 
 } // namespace lfs::gpu_ops

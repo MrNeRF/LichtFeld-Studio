@@ -110,11 +110,18 @@ namespace {
         families.set(static_cast<size_t>(Family::Masks));
         families.set(static_cast<size_t>(Family::ExtraLoss));
         EXPECT_TRUE(missing_training_families(training_ops(GpuBackend::CUDA), families).empty());
-        for (const auto backend : {GpuBackend::Vulkan, GpuBackend::Metal}) {
-            EXPECT_EQ(training_ops(backend).masks, nullptr);
-            EXPECT_EQ(training_ops(backend).extra_loss, nullptr);
-            EXPECT_EQ(missing_training_families(training_ops(backend), families),
-                      (std::vector<std::string_view>{"Masks", "ExtraLoss"}));
-        }
+#if defined(LFS_TEST_TENSOR_VULKAN)
+        EXPECT_NE(training_ops(GpuBackend::Vulkan).masks, nullptr);
+        EXPECT_NE(training_ops(GpuBackend::Vulkan).extra_loss, nullptr);
+        EXPECT_TRUE(missing_training_families(training_ops(GpuBackend::Vulkan), families).empty());
+#else
+        EXPECT_EQ(training_ops(GpuBackend::Vulkan).masks, nullptr);
+        EXPECT_EQ(missing_training_families(training_ops(GpuBackend::Vulkan), families),
+                  (std::vector<std::string_view>{"Masks", "ExtraLoss"}));
+#endif
+        EXPECT_EQ(training_ops(GpuBackend::Metal).masks, nullptr);
+        EXPECT_EQ(training_ops(GpuBackend::Metal).extra_loss, nullptr);
+        EXPECT_EQ(missing_training_families(training_ops(GpuBackend::Metal), families),
+                  (std::vector<std::string_view>{"Masks", "ExtraLoss"}));
     }
 } // namespace

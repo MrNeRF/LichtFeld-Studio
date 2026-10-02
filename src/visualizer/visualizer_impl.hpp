@@ -15,12 +15,14 @@
 #include "core/training_progress_publisher.hpp"
 #include "gui/gui_manager.hpp"
 #include "input/input_controller.hpp"
+#include "input/view_targets.hpp"
 #include "internal/viewport.hpp"
 #include "project/project_lifecycle.hpp"
 #include "project/session_state.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "screen/screen_service.hpp"
 #include "tools/tool_base.hpp"
 #include "visualizer/visualizer.hpp"
 #include "window/window_manager.hpp"
@@ -61,7 +63,7 @@ namespace lfs::vis {
         class SelectionTool;
     } // namespace tools
 
-    class LFS_VIS_API VisualizerImpl : public Visualizer {
+    class LFS_VIS_API VisualizerImpl : public Visualizer, public ViewTargets {
         friend class gui::GuiManager;
         friend class gui::AsyncTaskManager;
 
@@ -196,8 +198,25 @@ namespace lfs::vis {
         [[nodiscard]] const JobRegistry& jobs() const noexcept {
             return job_registry_;
         }
-        const Viewport& getViewport() const { return viewport_; }
-        Viewport& getViewport() { return viewport_; }
+        // The active 3D view's camera.
+        const Viewport& getViewport() const { return screen_service_.activeView3D().camera; }
+        Viewport& getViewport() { return screen_service_.activeView3D().camera; }
+        [[nodiscard]] screen::ScreenService& screens() { return screen_service_; }
+        [[nodiscard]] const screen::ScreenService& screens() const { return screen_service_; }
+
+        // ViewTargets
+        [[nodiscard]] ViewTarget activeView() override;
+        [[nodiscard]] ViewTarget viewAt(float x, float y) override;
+        [[nodiscard]] ViewTarget findView(ViewId id) override;
+        [[nodiscard]] ViewId viewId(const Viewport& viewport) const override;
+        [[nodiscard]] std::uint64_t viewEpoch() const override { return screen_service_.screenEpoch(); }
+        void activateView(ViewId id) override;
+        // Runs a named command on one 3D view: frame_all, frame_selected,
+        // area:quad. Returns false for unknown commands or views.
+        [[nodiscard]] screen::Rect areaRect(screen::AreaId id);
+        bool runViewCommand(ViewId id, std::string_view command) override;
+        // Until every view renders on its own, the renderer's settings carry the
+        // active view's half; this keeps the two in step each frame.
         [[nodiscard]] lfs::Result<
             lfs::io::project::ProjectSessionChapters>
         captureProjectSession(
@@ -633,7 +652,7 @@ namespace lfs::vis {
         ViewerOptions options_;
 
         // Core components
-        Viewport viewport_;
+        screen::ScreenService screen_service_;
         std::unique_ptr<WindowManager> window_manager_;
         std::unique_ptr<InputController> input_controller_;
         std::unique_ptr<RenderingManager> rendering_manager_;

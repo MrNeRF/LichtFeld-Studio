@@ -7,6 +7,7 @@
 #include "app/converter_overwrite.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/error.hpp"
+#include "core/host_metrics.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
@@ -445,19 +446,8 @@ namespace lfs::app {
             // Full load + Bhattacharyya workset at 1.5x capacity, per splat.
             const std::uint64_t per_splat = 360 + static_cast<std::uint64_t>(rest_coeffs) * 40;
             const std::uint64_t estimated = info->vertex_count * per_splat;
-            std::uint64_t budget = 8ull << 30;
-#ifndef _WIN32
-            std::ifstream meminfo("/proc/meminfo");
-            std::string line;
-            while (std::getline(meminfo, line)) {
-                if (line.starts_with("MemAvailable:")) {
-                    std::uint64_t kb = 0;
-                    std::sscanf(line.c_str(), "MemAvailable: %lu kB", &kb);
-                    budget = kb * 1024;
-                    break;
-                }
-            }
-#endif
+            const auto memory = core::host_metrics::memory();
+            const std::uint64_t budget = memory ? memory->available_bytes : 8ull << 30;
             return estimated > budget * 7 / 10;
         }
 

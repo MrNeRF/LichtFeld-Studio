@@ -6,10 +6,6 @@
 
 #include <cmath>
 
-#ifdef __CUDACC__
-#include <cuda_runtime.h>
-#endif
-
 namespace lfs::training {
 
     // Dimensionless angular / screen-share of a 3D Gaussian. Saturates toward 1
@@ -103,6 +99,10 @@ namespace lfs::training {
         }
     }
 
+    // First-moment-only term: penalty * log2(share / limit) Adam-normalized steps.
+    // It scales with the old second moment, so feeding it into v as well grows v
+    // by (1 - beta2) * (penalty * log2(share / limit) * bc2)^2 per step and
+    // overflows it within tens of iterations for large penalties.
     __device__ __forceinline__ float screen_share_hinge_extra_grad(
         const float share,
         const float limit,
