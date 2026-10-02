@@ -24,6 +24,8 @@ namespace lfs::core {
         constexpr float NEWTON_EPSILON = 1e-6f;
         constexpr float MAX_FISHEYE_THETA = 1.56079632679f;
         constexpr int MAX_NEWTON_ITERATIONS = 20;
+        constexpr float INVERSE_RESIDUAL_PIXELS = 5.0e-4f;
+        constexpr float INVERSE_JACOBIAN_STEP = 1.0e-4f;
         constexpr float COLMAP_MIN_SCALE = 0.2f;
         constexpr float COLMAP_MAX_SCALE = 2.0f;
 
@@ -258,6 +260,120 @@ namespace lfs::core {
 
             dst[oy * params.dst_width + ox] =
                 bilinear_sample(src, params.src_width, params.src_height, params.src_width, sx, sy);
+        }
+
+        __device__ bool inverse_distortion(
+            const float xd, const float yd, const UndistortParams& params,
+            float& ux, float& uy) {
+            ux = xd;
+            uy = yd;
+
+            for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
+                float eval_x, eval_y;
+                apply_distortion(ux, uy, params.model_type, params.distortion,
+                                 params.num_distortion, eval_x, eval_y);
+                const float rx = eval_x - xd;
+                const float ry = eval_y - yd;
+                const float error_px = hypotf(rx * params.src_fx, ry * params.src_fy);
+                if (!isfinite(error_px))
+                    return false;
+                if (error_px <= INVERSE_RESIDUAL_PIXELS)
+                    break;
+
+                float xp_x, xp_y, xm_x, xm_y;
+                float yp_x, yp_y, ym_x, ym_y;
+                apply_distortion(ux + INVERSE_JACOBIAN_STEP, uy,
+                                 params.model_type, params.distortion,
+                                 params.num_distortion, xp_x, xp_y);
+                apply_distortion(ux - INVERSE_JACOBIAN_STEP, uy,
+                                 params.model_type, params.distortion,
+                                 params.num_distortion, xm_x, xm_y);
+                apply_distortion(ux, uy + INVERSE_JACOBIAN_STEP,
+                                 params.model_type, params.distortion,
+                                 params.num_distortion, yp_x, yp_y);
+                apply_distortion(ux, uy - INVERSE_JACOBIAN_STEP,
+                                 params.model_type, params.distortion,
+                                 params.num_distortion, ym_x, ym_y);
+
+                const float inverse_step = 0.5f / INVERSE_JACOBIAN_STEP;
+                const float j00 = (xp_x - xm_x) * inverse_step;
+                const float j10 = (xp_y - xm_y) * inverse_step;
+                const float j01 = (yp_x - ym_x) * inverse_step;
+                const float j11 = (yp_y - ym_y) * inverse_step;
+                const float det = j00 * j11 - j01 * j10;
+                if (!isfinite(det) || fabsf(det) < NEWTON_EPSILON)
+                    return false;
+
+                const float step_x = (j11 * rx - j01 * ry) / det;
+                const float step_y = (-j10 * rx + j00 * ry) / det;
+                if (!isfinite(step_x) || !isfinite(step_y) ||
+                    fabsf(step_x) > 2.0f || fabsf(step_y) > 2.0f)
+                    return false;
+                ux -= step_x;
+                uy -= step_y;
+                if (!isfinite(ux) || !isfinite(uy))
+                    return false;
+            }
+
+            float final_x, final_y;
+            apply_distortion(ux, uy, params.model_type, params.distortion,
+                             params.num_distortion, final_x, final_y);
+            const float final_error_px = hypotf(
+                (final_x - xd) * params.src_fx,
+                (final_y - yd) * params.src_fy);
+            if (!isfinite(final_error_px) || final_error_px > INVERSE_RESIDUAL_PIXELS)
+                return false;
+            if ((params.model_type == CameraModelType::FISHEYE ||
+                 params.model_type == CameraModelType::THIN_PRISM_FISHEYE) &&
+                atanf(hypotf(ux, uy)) >= MAX_FISHEYE_THETA)
+                return false;
+            return true;
+        }
+
+        __global__ void __launch_bounds__(BLOCK_DIM* BLOCK_DIM)
+            distort_image_to_source_kernel(
+                const float* __restrict__ src,
+                float* __restrict__ dst,
+                uint8_t* __restrict__ validity,
+                const int channels,
+                const UndistortParams params) {
+            const int ox = blockIdx.x * BLOCK_DIM + threadIdx.x;
+            const int oy = blockIdx.y * BLOCK_DIM + threadIdx.y;
+            if (ox >= params.src_width || oy >= params.src_height)
+                return;
+
+            const int output_index = oy * params.src_width + ox;
+            const int output_plane = params.src_width * params.src_height;
+            const int input_plane = params.dst_width * params.dst_height;
+            const float xd = (static_cast<float>(ox) + PIXEL_CENTER_OFFSET - params.src_cx) /
+                             params.src_fx;
+            const float yd = (static_cast<float>(oy) + PIXEL_CENTER_OFFSET - params.src_cy) /
+                             params.src_fy;
+            float ux, uy;
+            if (!inverse_distortion(xd, yd, params, ux, uy)) {
+                validity[output_index] = 0;
+                for (int channel = 0; channel < channels; ++channel)
+                    dst[channel * output_plane + output_index] = 0.0f;
+                return;
+            }
+
+            const float sx = ux * params.dst_fx + params.dst_cx - PIXEL_CENTER_OFFSET;
+            const float sy = uy * params.dst_fy + params.dst_cy - PIXEL_CENTER_OFFSET;
+            if (!isfinite(sx) || !isfinite(sy) || sx < 0.0f || sy < 0.0f ||
+                sx > static_cast<float>(params.dst_width - 1) ||
+                sy > static_cast<float>(params.dst_height - 1)) {
+                validity[output_index] = 0;
+                for (int channel = 0; channel < channels; ++channel)
+                    dst[channel * output_plane + output_index] = 0.0f;
+                return;
+            }
+
+            validity[output_index] = 1;
+            for (int channel = 0; channel < channels; ++channel) {
+                dst[channel * output_plane + output_index] = bilinear_sample(
+                    src + channel * input_plane, params.dst_width, params.dst_height,
+                    params.dst_width, sx, sy);
+            }
         }
 
         void apply_distortion_cpu(
@@ -930,6 +1046,35 @@ namespace lfs::core {
         assert(err == cudaSuccess && "undistort_image_kernel launch failed");
 
         nvtxRangePop();
+        return dst;
+    }
+
+    Tensor distort_image_to_source(const Tensor& src, const UndistortParams& params,
+                                   Tensor& validity_mask, cudaStream_t stream) {
+        assert(src.is_valid());
+        assert(src.ndim() == 3);
+        assert(src.device() == Device::CUDA);
+        assert(src.dtype() == DataType::Float32);
+        assert(static_cast<int>(src.shape()[1]) == params.dst_height);
+        assert(static_cast<int>(src.shape()[2]) == params.dst_width);
+
+        const int channels = static_cast<int>(src.shape()[0]);
+        auto dst = Tensor::zeros(
+            {static_cast<size_t>(channels), static_cast<size_t>(params.src_height),
+             static_cast<size_t>(params.src_width)},
+            Device::CUDA);
+        validity_mask = Tensor::zeros(
+            {static_cast<size_t>(params.src_height), static_cast<size_t>(params.src_width)},
+            Device::CUDA, DataType::UInt8);
+
+        const dim3 block(BLOCK_DIM, BLOCK_DIM);
+        const dim3 grid(
+            (params.src_width + BLOCK_DIM - 1) / BLOCK_DIM,
+            (params.src_height + BLOCK_DIM - 1) / BLOCK_DIM);
+        distort_image_to_source_kernel<<<grid, block, 0, stream>>>(
+            src.ptr<float>(), dst.ptr<float>(), validity_mask.ptr<uint8_t>(), channels, params);
+        const cudaError_t err = cudaGetLastError();
+        assert(err == cudaSuccess && "distort_image_to_source_kernel launch failed");
         return dst;
     }
 

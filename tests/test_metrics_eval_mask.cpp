@@ -30,6 +30,7 @@ using lfs::core::CameraModelType;
 using lfs::core::DataType;
 using lfs::core::Device;
 using lfs::core::Tensor;
+using lfs::core::UndistortParams;
 using lfs::core::param::MaskMode;
 using lfs::training::classify_keep_mask_for_metrics;
 using lfs::training::load_alpha_masked_metrics_inputs;
@@ -236,6 +237,56 @@ TEST(MetricsEvalMask, RgbaAlphaThroughEvalAndInteractiveLoaders) {
     ASSERT_TRUE(interactive.has_value()) << interactive.error();
     expect_keep(interactive->mask, {kExpectedKeep.begin(), kExpectedKeep.end()},
                 "load_alpha_masked_metrics_inputs");
+}
+
+TEST(MetricsEvalMask, KeepsSourceMaskAndTargetWhenUndistortionIsDisabled) {
+    if (!cuda_available())
+        GTEST_SKIP() << "CUDA not available";
+    UniqueTempDir tmp("lfs_eval_mask_source_space");
+    const auto image_path = tmp.path() / "rgba.png";
+    write_rgba_png(image_path, {kBandBytes.begin(), kBandBytes.end()}, kBandH, kBandW);
+    auto cam = make_camera(image_path, {}, kBandW, kBandH);
+    cam->set_has_alpha(true);
+
+    UndistortParams params{};
+    params.src_fx = params.src_fy = 20.0f;
+    params.src_cx = static_cast<float>(kBandW) * 0.5f;
+    params.src_cy = static_cast<float>(kBandH) * 0.5f;
+    params.dst_fx = params.src_fx;
+    params.dst_fy = params.src_fy;
+    params.dst_cx = params.src_cx + 1.0f;
+    params.dst_cy = params.src_cy;
+    params.src_width = params.dst_width = kBandW;
+    params.src_height = params.dst_height = kBandH;
+    params.model_type = CameraModelType::PINHOLE;
+    cam->adopt_undistortion(params);
+    cam->prepare_undistortion();
+
+    auto cfg = sai_config();
+    cfg.apply_undistortion = false;
+    cfg.replace_gt_image = false;
+    auto gt = Tensor::zeros({3, kBandH, kBandW}, Device::CUDA, DataType::UInt8);
+    const auto mask = load_eval_mask(cam.get(), gt, true, cfg);
+    expect_keep(mask, {kExpectedKeep.begin(), kExpectedKeep.end()}, "source-space alpha mask");
+    EXPECT_FLOAT_EQ(gt.to(DataType::Float32).sum().item<float>(), 0.0f);
+}
+
+TEST(MetricsEvalMask, ErosionRemovesIncompleteMetricWindows) {
+    if (!cuda_available())
+        GTEST_SKIP() << "CUDA not available";
+    std::vector<float> values(49, 1.0f);
+    values[3 * 7 + 3] = 0;
+    auto mask = Tensor::from_vector(values, lfs::core::TensorShape({7, 7}), Device::CUDA)
+                    .to(DataType::UInt8);
+    const auto eroded = lfs::training::erode_metrics_mask(mask, 1, nullptr);
+    const auto cpu = eroded.cpu().contiguous();
+    const uint8_t* const actual = cpu.ptr<uint8_t>();
+    EXPECT_EQ(actual[1 * 7 + 1], 1);
+    EXPECT_EQ(actual[1 * 7 + 5], 1);
+    EXPECT_EQ(actual[3 * 7 + 2], 0);
+    EXPECT_EQ(actual[3 * 7 + 3], 0);
+    EXPECT_EQ(actual[3 * 7 + 4], 0);
+    EXPECT_EQ(actual[0 * 7 + 3], 0);
 }
 
 TEST(MetricsEvalMask, DefaultThresholdDoesNotPromoteSegmentBand) {

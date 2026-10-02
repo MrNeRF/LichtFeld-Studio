@@ -110,7 +110,141 @@ namespace {
             y * scale + p1 * (r2 + 2.0f * y * y) + 2.0f * p2 * x * y};
     }
 
+    std::pair<float, float> distort_test_coordinate(
+        const float x, const float y, const UndistortParams& params) {
+        const float r2 = x * x + y * y;
+        if (params.model_type == CameraModelType::PINHOLE) {
+            const float radial = 1.0f + params.distortion[0] * r2 +
+                                 params.distortion[1] * r2 * r2 +
+                                 params.distortion[2] * r2 * r2 * r2;
+            const float p1 = params.distortion[3];
+            const float p2 = params.distortion[4];
+            return {x * radial + 2.0f * p1 * x * y + p2 * (r2 + 2.0f * x * x),
+                    y * radial + p1 * (r2 + 2.0f * y * y) + 2.0f * p2 * x * y};
+        }
+
+        const float r = std::sqrt(r2);
+        if (r < 1e-8f)
+            return {x, y};
+        const float theta = std::atan(r);
+        const float theta2 = theta * theta;
+        const float theta_d = theta * (1.0f + params.distortion[0] * theta2 +
+                                       params.distortion[1] * theta2 * theta2 +
+                                       params.distortion[2] * theta2 * theta2 * theta2 +
+                                       params.distortion[3] * theta2 * theta2 * theta2 * theta2);
+        float dx = x * theta_d / r;
+        float dy = y * theta_d / r;
+        if (params.model_type == CameraModelType::THIN_PRISM_FISHEYE) {
+            const float distorted_r2 = dx * dx + dy * dy;
+            const float p1 = params.distortion[4];
+            const float p2 = params.distortion[5];
+            dx += 2.0f * p1 * dx * dy + p2 * (distorted_r2 + 2.0f * dx * dx);
+            dy += p1 * (distorted_r2 + 2.0f * dy * dy) + 2.0f * p2 * dx * dy;
+            const float r4 = distorted_r2 * distorted_r2;
+            dx += params.distortion[6] * distorted_r2 + params.distortion[7] * r4;
+            dy += params.distortion[8] * distorted_r2 + params.distortion[9] * r4;
+        }
+        return {dx, dy};
+    }
+
+    void expect_inverse_round_trip(const CameraModelType model) {
+        auto radial = Tensor::from_vector(
+            model == CameraModelType::PINHOLE
+                ? std::vector<float>{-0.08f, 0.01f}
+                : std::vector<float>{0.01f, -0.001f, 0.0001f, 0.0f},
+            TensorShape({model == CameraModelType::PINHOLE ? 2u : 4u}), Device::CPU);
+        Tensor tangential;
+        if (model == CameraModelType::PINHOLE) {
+            tangential = Tensor::from_vector({0.001f, -0.0008f}, TensorShape({2}), Device::CPU);
+        } else if (model == CameraModelType::THIN_PRISM_FISHEYE) {
+            tangential = Tensor::from_vector(
+                {0.001f, -0.0008f, 0.0001f, -0.0001f, 0.00001f, -0.00001f},
+                TensorShape({6}), Device::CPU);
+        }
+        const auto params = compute_undistort_params(
+            450.0f, 455.0f, 160.0f, 120.0f, 320, 240,
+            radial, tangential, model);
+
+        const size_t plane = static_cast<size_t>(params.dst_width) * params.dst_height;
+        std::vector<float> coordinates(3 * plane, 0.0f);
+        for (int y = 0; y < params.dst_height; ++y) {
+            for (int x = 0; x < params.dst_width; ++x) {
+                const size_t i = static_cast<size_t>(y) * params.dst_width + x;
+                coordinates[i] = static_cast<float>(x);
+                coordinates[plane + i] = static_cast<float>(y);
+            }
+        }
+        auto input = Tensor::from_vector(
+            coordinates,
+            TensorShape({3, static_cast<size_t>(params.dst_height),
+                         static_cast<size_t>(params.dst_width)}),
+            Device::CUDA);
+        Tensor validity;
+        const auto output = distort_image_to_source(input, params, validity, nullptr);
+        ASSERT_EQ(output.shape(), (TensorShape({3, 240, 320})));
+        ASSERT_EQ(validity.shape(), (TensorShape({240, 320})));
+        ASSERT_EQ(validity.dtype(), DataType::UInt8);
+
+        const auto output_cpu = output.cpu().contiguous();
+        const auto validity_cpu = validity.cpu().contiguous();
+        const float* const mapped_x = output_cpu.ptr<float>();
+        const float* const mapped_y = output_cpu.ptr<float>() + 320 * 240;
+        const uint8_t* const valid = validity_cpu.ptr<uint8_t>();
+        int checked = 0;
+        for (int y = 4; y < 236; y += 11) {
+            for (int x = 4; x < 316; x += 11) {
+                const size_t i = static_cast<size_t>(y) * 320 + x;
+                if (valid[i] == 0)
+                    continue;
+                const float ux = (mapped_x[i] + 0.5f - params.dst_cx) / params.dst_fx;
+                const float uy = (mapped_y[i] + 0.5f - params.dst_cy) / params.dst_fy;
+                const auto [dx, dy] = distort_test_coordinate(ux, uy, params);
+                const float round_trip_x = dx * params.src_fx + params.src_cx;
+                const float round_trip_y = dy * params.src_fy + params.src_cy;
+                EXPECT_LE(std::hypot(round_trip_x - (x + 0.5f),
+                                     round_trip_y - (y + 0.5f)),
+                          1.0e-3f);
+                ++checked;
+            }
+        }
+        EXPECT_GT(checked, 100);
+    }
+
 } // namespace
+
+TEST(UndistortInverse, PinholeRoundTrip) {
+    expect_inverse_round_trip(CameraModelType::PINHOLE);
+}
+
+TEST(UndistortInverse, FisheyeRoundTrip) {
+    expect_inverse_round_trip(CameraModelType::FISHEYE);
+}
+
+TEST(UndistortInverse, ThinPrismFisheyeRoundTrip) {
+    expect_inverse_round_trip(CameraModelType::THIN_PRISM_FISHEYE);
+}
+
+TEST(UndistortInverse, ValidityMaskExcludesOutOfFrameSamples) {
+    UndistortParams params{};
+    params.src_fx = params.src_fy = 32.0f;
+    params.src_cx = params.src_cy = 32.0f;
+    params.dst_fx = params.dst_fy = 32.0f;
+    params.dst_cx = params.dst_cy = 16.0f;
+    params.src_width = params.src_height = 64;
+    params.dst_width = params.dst_height = 32;
+    params.model_type = CameraModelType::PINHOLE;
+
+    auto input = Tensor::ones({3, 32, 32}, Device::CUDA);
+    Tensor validity;
+    const auto output = distort_image_to_source(input, params, validity, nullptr);
+    ASSERT_EQ(output.shape(), (TensorShape({3, 64, 64})));
+    const auto mask_cpu = validity.cpu().contiguous();
+    const uint8_t* const mask = mask_cpu.ptr<uint8_t>();
+    EXPECT_EQ(mask[32 * 64 + 15], 0);
+    EXPECT_EQ(mask[32 * 64 + 16], 1);
+    EXPECT_EQ(mask[32 * 64 + 47], 1);
+    EXPECT_EQ(mask[32 * 64 + 48], 0);
+}
 
 // ====================== Coefficient packing tests ======================
 

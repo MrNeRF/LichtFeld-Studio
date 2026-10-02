@@ -105,6 +105,7 @@ set(TRAINING_NEW_SOURCES
     components/sparsity_optimizer.cpp
     control/command_api.cpp
     metrics/eval_mask.cpp
+    metrics/eval_mask_kernels.cu
     metrics/metrics.cpp
         checkpoint.cpp
         project_snapshot_chapters.cpp

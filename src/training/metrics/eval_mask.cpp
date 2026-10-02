@@ -69,7 +69,7 @@ namespace lfs::training {
                         mask.ptr<float>(), H, W, config.mask_threshold, nullptr);
                 }
 
-                if (camera.is_undistort_prepared()) {
+                if (camera.is_undistort_prepared() && config.apply_undistortion) {
                     const auto scaled = lfs::core::scale_undistort_params(
                         camera.undistort_params(),
                         static_cast<int>(W), static_cast<int>(H),
@@ -143,7 +143,15 @@ namespace lfs::training {
             return {};
         }
         if (cam->has_mask()) {
-            return load_sidecar_keep_mask(*cam, config);
+            auto mask = cam->load_and_get_mask(
+                config.resize_factor, config.max_width, config.invert_masks,
+                config.mask_threshold, !is_segment_and_ignore(config.mask_mode),
+                config.apply_undistortion);
+            if (!mask.is_valid())
+                return {};
+            return is_segment_and_ignore(config.mask_mode)
+                       ? classify_keep_mask_for_metrics(mask)
+                       : mask;
         }
         if (!alpha_as_mask) {
             return {};
@@ -152,7 +160,8 @@ namespace lfs::training {
         if (!loaded) {
             return {};
         }
-        gt_image = std::move(loaded->gt_image);
+        if (config.replace_gt_image)
+            gt_image = std::move(loaded->gt_image);
         return std::move(loaded->mask);
     }
 

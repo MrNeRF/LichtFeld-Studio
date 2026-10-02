@@ -58,6 +58,8 @@ namespace lfs::training {
         std::optional<float> ssim;
         std::optional<float> lpips;
         bool masked = false;
+        float evaluated_pixel_fraction = 0.0f;
+        bool validity_mask_applied = false;
         std::string skipped_reason;
     };
 
