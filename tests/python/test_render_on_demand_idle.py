@@ -76,22 +76,10 @@ def _tool(endpoint: str, name: str, arguments: dict | None = None) -> dict:
     result = _call(endpoint, "tools/call", {"name": name, "arguments": arguments or {}})
     if result.get("isError"):
         raise AssertionError(result)
-    structured = result.get("structuredContent")
-    if isinstance(structured, dict):
-        return structured
-    for item in result.get("content", []):
-        if item.get("type") == "text":
-            try:
-                decoded = json.loads(item["text"])
-                if isinstance(decoded, dict):
-                    return decoded
-            except (KeyError, json.JSONDecodeError):
-                pass
-    return result
-
+    return result["structuredContent"]
 
 def _ledger(endpoint: str, reset: bool = False) -> dict:
-    payload = _tool(endpoint, "runtime.frame_ledger", {"reset": reset})
+    payload = _tool(endpoint, "runtime_frame_ledger", {"reset": reset})
     return payload.get("frames", payload)
 
 
@@ -151,7 +139,7 @@ def test_every_render_mode_is_quiet_when_idle(tmp_path: Path) -> None:
 
         tools = _call(endpoint, "tools/list").get("tools", [])
         tool_names = {item.get("name") for item in tools}
-        required = {"runtime.frame_ledger"}
+        required = {"runtime_frame_ledger"}
         for mode in modes:
             for operation in mode.get("setup", []):
                 required.add(operation["tool"])
