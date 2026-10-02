@@ -182,6 +182,13 @@ namespace lfs::core {
                         LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
                     }
                 }
+                if (json.contains("eval_space")) {
+                    const auto eval_space = json.at("eval_space").get<std::string>();
+                    if (!eval_space_from_string(eval_space)) {
+                        throw std::invalid_argument(
+                            "eval_space must be 'distorted' or 'undistorted'");
+                    }
+                }
                 read_registered_optimization_properties(json, params, skip_missing);
                 if (const auto image_count_scaler = stored_image_count_scaler(json, params.steps_scaler))
                     params.image_count_scaler = *image_count_scaler;
@@ -525,6 +532,8 @@ namespace lfs::core {
                 normal_loss_space != NormalLossSpace::CameraOpenGL &&
                 normal_loss_space != NormalLossSpace::World)
                 return "normal_loss_space must be 'auto', 'camera-opencv', 'camera-opengl', or 'world'";
+            if (eval_space != EvalSpace::Distorted && eval_space != EvalSpace::Undistorted)
+                return "eval_space must be 'distorted' or 'undistorted'";
             if (normal_start_fraction > normal_end_fraction)
                 return std::format(
                     "normal_start_fraction must not exceed normal_end_fraction ({} > {})",

@@ -1975,6 +1975,11 @@ class MaskMode(enum.Enum):
 
     ALPHA_CONSISTENT = 4
 
+class EvalSpace(enum.Enum):
+    DISTORTED = 0
+
+    UNDISTORTED = 1
+
 class DensifyErrorMap(enum.Enum):
     SSIM = 0
 
@@ -2485,6 +2490,13 @@ class OptimizationParams:
 
     @undistort.setter
     def undistort(self, arg: bool, /) -> None: ...
+
+    @property
+    def eval_space(self) -> EvalSpace:
+        """Reference image space used for evaluation"""
+
+    @eval_space.setter
+    def eval_space(self, arg: EvalSpace, /) -> None: ...
 
     @property
     def save_steps(self) -> list[int]:

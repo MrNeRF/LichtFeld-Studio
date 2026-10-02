@@ -796,6 +796,10 @@ namespace lfs::python {
             .value("SEGMENT_AND_IGNORE", MaskMode::SegmentAndIgnore)
             .value("ALPHA_CONSISTENT", MaskMode::AlphaConsistent);
 
+        nb::enum_<EvalSpace>(m, "EvalSpace")
+            .value("DISTORTED", EvalSpace::Distorted)
+            .value("UNDISTORTED", EvalSpace::Undistorted);
+
         nb::enum_<DensifyErrorMap>(m, "DensifyErrorMap")
             .value("SSIM", DensifyErrorMap::Ssim)
             .value("SSIM_CS", DensifyErrorMap::SsimCs);
@@ -1192,6 +1196,11 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().undistort; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.undistort = v; }); },
                 "Undistort images on-the-fly before training")
+            .def_prop_rw(
+                "eval_space",
+                [](PyOptimizationParams& self) { return self.params().eval_space; },
+                [](PyOptimizationParams&, EvalSpace v) { modify_params([v](auto& p) { p.eval_space = v; }); },
+                "Reference image space used for evaluation")
             .def_prop_ro(
                 "save_steps",
                 [](PyOptimizationParams& self) -> std::vector<size_t> {

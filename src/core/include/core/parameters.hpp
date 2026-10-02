@@ -32,6 +32,31 @@ namespace lfs::core {
             AlphaConsistent   // Enforce exact alpha values from mask
         };
 
+        enum class EvalSpace {
+            Distorted,
+            Undistorted,
+        };
+
+        [[nodiscard]] inline constexpr std::string_view eval_space_name(
+            const EvalSpace space) noexcept {
+            switch (space) {
+            case EvalSpace::Distorted:
+                return "distorted";
+            case EvalSpace::Undistorted:
+                return "undistorted";
+            }
+            return "distorted";
+        }
+
+        [[nodiscard]] inline constexpr std::optional<EvalSpace> eval_space_from_string(
+            const std::string_view value) noexcept {
+            if (value == "distorted")
+                return EvalSpace::Distorted;
+            if (value == "undistorted")
+                return EvalSpace::Undistorted;
+            return std::nullopt;
+        }
+
         enum class DensifyErrorMap {
             Ssim,   // full SSIM (luminance × contrast × structure)
             SsimCs, // contrast × structure only (luminance excluded)
@@ -179,6 +204,7 @@ namespace lfs::core {
             bool bg_modulation = false;                        // Enable sinusoidal background modulation
             bool enable_eval = false;                          // Only evaluate when explicitly enabled
             bool eval_all = false;                             // Train on every image and evaluate all of them
+            EvalSpace eval_space = EvalSpace::Distorted;       // Reference image space used for evaluation
             bool enable_save_eval_images = true;               // Save during evaluation images
             bool headless = false;                             // Disable visualization during training
             bool auto_train = false;                           // Start training immediately on startup
