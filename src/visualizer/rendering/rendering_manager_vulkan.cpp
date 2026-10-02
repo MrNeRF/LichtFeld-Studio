@@ -38,6 +38,7 @@
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <optional>
 #include <shared_mutex>
 #include <stdexcept>
@@ -1639,23 +1640,48 @@ namespace lfs::vis {
     // parks instead, so the idle preview draws only once its render can proceed.
     void RenderingManager::queueSharedScratchRetry(const DirtyMask retry_dirty) {
         if ((retry_dirty & ~DirtyFlag::SPLATS) == 0) {
+            // A parked preview is an active waiter polled every 4 ms. Preserve
+            // its reservation; only camera retries drop the standing lease.
+            if (retry_dirty != 0 && vksplat_viewport_renderer_)
+                vksplat_viewport_renderer_->requestArenaHandoff();
             parked_arena_retry_ |= retry_dirty;
             return;
         }
         dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
     }
 
+    // The configured preview rate is an upper bound; the measured viewer turn
+    // stretches the interval so training keeps kIdlePreviewTrainingShare.
+    float RenderingManager::trainingRefreshIntervalSec() const {
+        const auto* const arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
+        const auto stats = arena ? arena->turn_stats() : lfs::core::RasterizerMemoryArena::TurnStats{};
+        const double viewer_turn_ms = stats.viewer_turn_ms + stats.viewer_record_ms;
+        // Recording holds the arena too; include it in the idle training budget.
+        // The budget helper gives training's rest time. The refresh period also
+        // includes the viewer turn itself.
+        return static_cast<float>(std::max<double>(
+            framerate_controller_.getSettings().training_frame_refresh_time_sec,
+            idlePreviewIntervalSec(0.0, viewer_turn_ms) + viewer_turn_ms * 1e-3));
+    }
+
     void RenderingManager::pollTrainingRefresh(const bool is_training) {
         if (const DirtyMask training_dirty = frame_lifecycle_service_.handleTrainingRefresh(
-                is_training, framerate_controller_.getSettings().training_frame_refresh_time_sec);
+                is_training, trainingRefreshIntervalSec());
             training_dirty) {
             markDirty(training_dirty);
         }
     }
 
     double RenderingManager::secondsUntilTrainingRefresh() const {
-        return frame_lifecycle_service_.secondsUntilTrainingRefresh(
-            framerate_controller_.getSettings().training_frame_refresh_time_sec);
+        return frame_lifecycle_service_.secondsUntilTrainingRefresh(trainingRefreshIntervalSec());
+    }
+
+    double RenderingManager::secondsUntilCameraSettle() const {
+        if (!camera_settle_pending_) {
+            return std::numeric_limits<double>::infinity();
+        }
+        const auto remaining = camera_settle_deadline_ - std::chrono::steady_clock::now();
+        return std::max(0.0, std::chrono::duration<double>(remaining).count());
     }
 
     void RenderingManager::pollParkedArenaRetry() {
@@ -1696,7 +1722,9 @@ namespace lfs::vis {
                               split_right_image_generation_, split_left_source_, split_left_source_size_, split_left_source_camera_uid_,
                               split_left_source_undistorted_, split_right_source_size_, gt_async_held_display_,
                               vksplat_stale_frame_guard_, parked_arena_retry_, last_logged_vksplat_render_error_,
-                              viewport_projection_generation_, vksplat_idle_frame_count_);
+                              viewport_projection_generation_, vksplat_idle_frame_count_,
+                              camera_settle_pending_, camera_settle_deadline_, navigation_pose_valid_,
+                              last_navigation_rotation_, last_navigation_translation_);
         auto saved = std::apply([](auto&... values) { return std::tuple{std::move(values)...}; }, state);
         auto frame = getVulkanMeshFrame();
         const auto info = split_view_service_.getInfo();
@@ -1898,9 +1926,10 @@ namespace lfs::vis {
         };
         const auto defer_shared_scratch = [this](const std::string& reason) {
             if (reason.find("arena is busy") != std::string::npos) {
-                if (vksplat_viewport_renderer_) {
-                    vksplat_viewport_renderer_->requestArenaHandoff();
-                }
+                // No standing reservation: the retry on the next frame waits
+                // for its window actively (waitForArenaHandoff) and a parked
+                // preview polls. Reserving here held training out for the
+                // whole GUI round trip after every failed attempt.
                 (void)vksplat_stale_frame_guard_.onDeferral(
                     StaleFrameGuard::DeferralKind::ArenaContention);
                 return;
@@ -2073,6 +2102,46 @@ namespace lfs::vis {
         // recreate waits ring watermarks only). pauseTrainingTemporary is not
         // used on this path — other interactive wait sites keep it.
 
+        const auto now = std::chrono::steady_clock::now();
+        const bool camera_changed = !navigation_pose_valid_ ||
+                                    last_navigation_rotation_ != context.viewport.camera.R ||
+                                    last_navigation_translation_ != context.viewport.camera.t;
+        last_navigation_rotation_ = context.viewport.camera.R;
+        last_navigation_translation_ = context.viewport.camera.t;
+        navigation_pose_valid_ = true;
+        auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
+        const double viewer_turn_ms = arena ? arena->turn_stats().viewer_turn_ms : 0.0;
+        const bool rest_only = is_training && navigationRendersOnlyAtRest(viewer_turn_ms);
+        if (rest_only && camera_changed) {
+            camera_settle_pending_ = true;
+            camera_settle_deadline_ = now + kCameraSettle;
+        }
+        if (rest_only && camera_settle_pending_ && now < camera_settle_deadline_ &&
+            (vulkan_external_viewport_image_ != VK_NULL_HANDLE || vulkan_viewport_image_)) {
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                LOG_WARN("Viewer frames take {:.0f} ms on the GPU (interactive budget {:.0f} ms): "
+                         "the viewport updates when the camera rests; GPU memory is probably oversubscribed",
+                         viewer_turn_ms, kInteractiveViewerBudgetMs);
+            }
+            if (arena)
+                arena->cancel_viewer_prediction();
+            // Retain CAMERA until the settle wakeup; never reserve scratch while
+            // deferring. New input, rather than this retry, extends the deadline.
+            dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
+            if (vksplat_viewport_renderer_)
+                vksplat_viewport_renderer_->cancelArenaHandoff();
+            return cached_frame_result();
+        }
+        camera_settle_pending_ = false;
+        if (arena) {
+            if (is_training && (dirty_mask_.load(std::memory_order_relaxed) & DirtyFlag::CAMERA) != 0)
+                arena->prepare_viewer_frame();
+            else
+                arena->cancel_viewer_prediction();
+        }
+
         // Training previews never wait for a step-boundary read, including
         // discrete layout resizes. On contention, retain the previous matching
         // frame and retry on the next cadence tick; the GUI commits a staged
@@ -2080,8 +2149,10 @@ namespace lfs::vis {
         // First frame / no cache still falls back to one blocking acquire below.
         const bool training_try_lock = is_training;
         if (is_training && vksplat_viewport_renderer_ &&
-            (dirty_mask_.load(std::memory_order_relaxed) & DirtyFlag::CAMERA) != 0) {
-            // No lock is held yet, so a refining trainer can still take the exclusive one.
+            (dirty_mask_.load(std::memory_order_relaxed) & ~DirtyFlag::SPLATS) != 0) {
+            // Explicit edits (camera, selection, visibility, settings) actively wait
+            // for a fresh frame. Only passive SPLATS refreshes park. No model
+            // lock is held, so a refining trainer can take the exclusive one.
             (void)vksplat_viewport_renderer_->waitForArenaHandoff(kNavigationArenaWait);
         }
         auto render_lock = acquireLiveModelRenderLock(scene_manager, training_try_lock);
@@ -4179,6 +4250,11 @@ namespace lfs::vis {
                         vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
                     }
                     const auto publish_vksplat_result = [&](const VksplatViewportRenderer::RenderResult& render_result) -> VulkanFrameResult {
+                        // Passive previews already advanced the refresh clock
+                        // when requested. Resetting it again after a parked
+                        // retry adds that delay to every subsequent interval.
+                        if (is_training && (frame_dirty & ~DirtyFlag::SPLATS) != 0)
+                            frame_lifecycle_service_.noteTrainingRender();
                         vksplat_stale_frame_guard_.onSuccess();
                         render_lock.reset();
                         note_lod_page_generation(render_result.lod_page_generation);
