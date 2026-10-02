@@ -96,6 +96,8 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--gut", "gut", Bool},
             OptimizationCliBinding{"--eval", "enable_eval", Bool},
             OptimizationCliBinding{"--eval-all", "eval_all", Bool},
+            OptimizationCliBinding{"--eval-space", "eval_space", Enum, false,
+                                   "; values: distorted, undistorted"},
             OptimizationCliBinding{"--far-scene-min-fraction", "far_scene_min_fraction", Float},
             OptimizationCliBinding{"--growth-ratio-pow", "growth_ratio_pow", Float},
             OptimizationCliBinding{"--fill-pacing-iter", "fill_pacing_iter", Integer},
@@ -747,6 +749,12 @@ namespace {
             ::args::Group output_group(parser, "OUTPUT OPTIONS:");
             ::args::Flag enable_eval(output_group, "eval", lfs::core::args::optimization_cli_help("--eval"), {"eval"});
             ::args::Flag eval_all(output_group, "eval_all", lfs::core::args::optimization_cli_help("--eval-all"), {"eval-all"});
+            ::args::MapFlag<std::string, lfs::core::param::EvalSpace> eval_space(
+                output_group, "eval_space", lfs::core::args::optimization_cli_help("--eval-space"),
+                {"eval-space"},
+                std::unordered_map<std::string, lfs::core::param::EvalSpace>{
+                    {"distorted", lfs::core::param::EvalSpace::Distorted},
+                    {"undistorted", lfs::core::param::EvalSpace::Undistorted}});
             ::args::Flag no_download(output_group, "no_download", "Do not download optional model weights", {"no-download"});
             ::args::ValueFlagList<std::string> eval_steps(output_group, "eval_steps", "Evaluation iterations as a comma list, e.g. 1000,7000,30000 (replaces the default 7000,30000; the final iteration is always evaluated)", {"eval-steps"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
@@ -1352,6 +1360,7 @@ namespace {
                                         ppisp_sidecar_path_val = cli_option_present({"--ppisp-sidecar"}) ? std::optional<std::string>(::args::get(ppisp_sidecar_path)) : std::optional<std::string>(),
                                         enable_eval_flag = bool(enable_eval),
                                         eval_all_flag = bool(eval_all),
+                                        eval_space_val = cli_option_present({"--eval-space"}) ? std::optional<lfs::core::param::EvalSpace>(::args::get(eval_space)) : std::optional<lfs::core::param::EvalSpace>(),
                                         no_download_flag = bool(no_download),
                                         headless_flag = bool(headless),
                                         auto_train_flag = bool(auto_train),
@@ -1521,6 +1530,7 @@ namespace {
                 setFlag(enable_eval_flag, opt.enable_eval);
                 setFlag(eval_all_flag, opt.eval_all);
                 setFlag(eval_all_flag, opt.enable_eval);
+                setVal(eval_space_val, opt.eval_space);
                 setFlag(no_download_flag, params.no_download);
                 setFlag(headless_flag, opt.headless);
                 setFlag(auto_train_flag, opt.auto_train);
@@ -1644,6 +1654,7 @@ namespace {
                 note_opt("ppisp_sidecar_path", ppisp_sidecar_path_val.has_value());
                 note_opt("enable_eval", enable_eval_flag || eval_all_flag);
                 note_opt("eval_all", eval_all_flag);
+                note_opt("eval_space", eval_space_val.has_value());
                 note_opt("headless", headless_flag);
                 note_opt("auto_train", auto_train_flag);
                 note_opt("no_splash", no_splash_flag);
@@ -1808,6 +1819,13 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
     };
     if (flag_given("--eval-steps") && !params->optimization.enable_eval)
         return std::unexpected("--eval-steps needs --eval or --eval-all; without them no evaluation runs");
+    const bool eval_space_requires_undistort =
+        flag_given("--eval-space") ||
+        params->overrides.has_optimization_key("eval_space");
+    if (eval_space_requires_undistort && !params->optimization.undistort) {
+        return std::unexpected(
+            "--eval-space needs --undistort; without it both spaces are identical");
+    }
     if (params->optimization.eval_all && flag_given("--test-every"))
         return std::unexpected("--test-every selects held-out images; --eval-all trains on every image and evaluates all of them");
     apply_ppisp_defaults(*params);

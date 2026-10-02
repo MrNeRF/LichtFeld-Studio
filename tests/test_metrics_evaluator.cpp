@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
@@ -40,6 +41,7 @@ using lfs::training::image_for_metrics_and_save;
 using lfs::training::mean_normal_angle_deg;
 using lfs::training::median_depth_absrel;
 using lfs::training::MetricsEvaluator;
+using lfs::training::prepare_evaluation_view;
 
 namespace {
 
@@ -429,6 +431,163 @@ TEST(MetricsEvaluatorUndistort, BiasCountsOnlyEvaluatedPixels) {
     std::filesystem::remove_all(tmp);
 }
 
+// Catches an undistorted reference path that still warps the render, keeps the validity mask,
+// or compares against the original source dimensions.
+TEST(MetricsEvaluatorUndistort, UndistortedSpaceUsesAllUndistortedPixels) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_undistorted_eval_space";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 64;
+    constexpr int kH = 48;
+    const auto image_path = tmp / "gt.png";
+    write_rgb_png(image_path, 130, 130, 130, kH, kW);
+
+    auto cam = make_distorted_eval_camera(image_path, {}, kW, kH);
+    const auto scaled = lfs::core::scale_undistort_params(
+        cam->undistort_params(), kW, kH, 0);
+    auto dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{cam}, DatasetConfig{}, CameraDataset::Split::ALL);
+    auto background = Tensor::full({3}, 128.0f / 255.0f, Device::CUDA);
+    auto params = make_eval_params(tmp / "out");
+    params.optimization.undistort = true;
+    params.optimization.eval_space = lfs::core::param::EvalSpace::Undistorted;
+    std::filesystem::create_directories(params.dataset.output_path);
+
+    MetricsEvaluator evaluator(params);
+    const auto metrics = evaluator.evaluate(1, make_hidden_splat(), dataset, background);
+    ASSERT_TRUE(metrics.valid);
+    ASSERT_EQ(metrics.views.size(), 1u);
+    const auto& view = metrics.views[0];
+    EXPECT_EQ(view.width, scaled.dst_width);
+    EXPECT_EQ(view.height, scaled.dst_height);
+    EXPECT_FALSE(view.validity_mask_applied);
+    EXPECT_FALSE(view.masked);
+    EXPECT_FLOAT_EQ(view.evaluated_pixel_fraction, 1.0f);
+    ASSERT_TRUE(view.ssim.has_value());
+    EXPECT_NEAR(metrics.bias_r, -2.0f / 255.0f, 1.0e-4f);
+    EXPECT_NEAR(metrics.bias_g, -2.0f / 255.0f, 1.0e-4f);
+    EXPECT_NEAR(metrics.bias_b, -2.0f / 255.0f, 1.0e-4f);
+    EXPECT_NEAR(metrics.bias_corr_r, -2.0f / 255.0f, 1.0e-4f);
+    EXPECT_FALSE(cam->image_size_loaded());
+    EXPECT_EQ(cam->image_width(), kW);
+    EXPECT_EQ(cam->image_height(), kH);
+
+    std::filesystem::remove_all(tmp);
+}
+
+// Catches batch and interactive callers preparing different GT tensors, render geometry,
+// masks, or SSIM behavior when the interactive caller reuses cached image inputs.
+TEST(MetricsEvaluatorUndistort, SharedPreparationMatchesCachedInteractiveInputsInBothSpaces) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_shared_eval_preparation";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 64;
+    constexpr int kH = 48;
+    const auto image_path = tmp / "gt.png";
+    write_rgb_png(image_path, 130, 130, 130, kH, kW);
+
+    for (const auto space : {lfs::core::param::EvalSpace::Distorted,
+                             lfs::core::param::EvalSpace::Undistorted}) {
+        auto cam = make_distorted_eval_camera(image_path, {}, kW, kH);
+        const auto scaled = lfs::core::scale_undistort_params(
+            cam->undistort_params(), kW, kH, 0);
+        auto params = make_eval_params(tmp / "out");
+        params.optimization.undistort = true;
+        params.optimization.eval_space = space;
+
+        int render_calls = 0;
+        const auto render = [&render_calls](Camera& render_camera)
+            -> std::expected<lfs::training::EvaluationRenderResult, std::string> {
+            ++render_calls;
+            const auto height = static_cast<size_t>(render_camera.image_height());
+            const auto width = static_cast<size_t>(render_camera.image_width());
+            assert(height > 0);
+            assert(width > 0);
+            auto image = Tensor::full({size_t{3}, height, width}, 128.0f / 255.0f,
+                                      Device::CUDA);
+            lfs::training::RenderOutput output;
+            output.image = image;
+            output.width = static_cast<int>(width);
+            output.height = static_cast<int>(height);
+            return lfs::training::EvaluationRenderResult{
+                .output = std::move(output),
+                .raw_image = image.clone()};
+        };
+
+        auto batch = prepare_evaluation_view(*cam, params, render);
+        ASSERT_TRUE(batch.has_value()) << batch.error();
+        auto interactive = prepare_evaluation_view(*cam, params, render, &batch->inputs);
+        ASSERT_TRUE(interactive.has_value()) << interactive.error();
+        EXPECT_EQ(render_calls, 2);
+
+        EXPECT_EQ(batch->inputs.gt_image.shape(), interactive->inputs.gt_image.shape());
+        EXPECT_EQ(batch->output.image.shape(), interactive->output.image.shape());
+        EXPECT_EQ(batch->render_geometry.width, interactive->render_geometry.width);
+        EXPECT_EQ(batch->render_geometry.height, interactive->render_geometry.height);
+        EXPECT_FLOAT_EQ(batch->render_geometry.fx, interactive->render_geometry.fx);
+        EXPECT_FLOAT_EQ(batch->render_geometry.fy, interactive->render_geometry.fy);
+        EXPECT_FLOAT_EQ(batch->render_geometry.cx, interactive->render_geometry.cx);
+        EXPECT_FLOAT_EQ(batch->render_geometry.cy, interactive->render_geometry.cy);
+        EXPECT_EQ(batch->render_geometry.undistorted,
+                  interactive->render_geometry.undistorted);
+        EXPECT_EQ(batch->validity_mask_applied, interactive->validity_mask_applied);
+        EXPECT_EQ(batch->erode_ssim_mask, interactive->erode_ssim_mask);
+        EXPECT_FLOAT_EQ(
+            (batch->inputs.gt_image.to(DataType::Float32) -
+             interactive->inputs.gt_image.to(DataType::Float32))
+                .abs()
+                .max()
+                .item<float>(),
+            0.0f);
+        EXPECT_FLOAT_EQ(
+            (batch->output.image - interactive->output.image).abs().max().item<float>(),
+            0.0f);
+
+        EXPECT_EQ(batch->render_geometry.width, scaled.dst_width);
+        EXPECT_EQ(batch->render_geometry.height, scaled.dst_height);
+        EXPECT_TRUE(batch->render_geometry.undistorted);
+        if (space == lfs::core::param::EvalSpace::Distorted) {
+            EXPECT_EQ(batch->inputs.gt_image.shape(),
+                      lfs::core::TensorShape({size_t{3}, size_t{kH}, size_t{kW}}));
+            EXPECT_TRUE(batch->metric_mask.is_valid());
+            EXPECT_TRUE(batch->validity_mask_applied);
+            EXPECT_TRUE(batch->erode_ssim_mask);
+            ASSERT_TRUE(interactive->metric_mask.is_valid());
+            EXPECT_FLOAT_EQ(
+                (batch->metric_mask.to(DataType::Float32) -
+                 interactive->metric_mask.to(DataType::Float32))
+                    .abs()
+                    .max()
+                    .item<float>(),
+                0.0f);
+        } else {
+            EXPECT_EQ(batch->inputs.gt_image.shape(),
+                      lfs::core::TensorShape(
+                          {size_t{3}, static_cast<size_t>(scaled.dst_height),
+                           static_cast<size_t>(scaled.dst_width)}));
+            EXPECT_FALSE(batch->metric_mask.is_valid());
+            EXPECT_FALSE(batch->validity_mask_applied);
+            EXPECT_FALSE(batch->erode_ssim_mask);
+        }
+
+        EXPECT_FALSE(cam->image_size_loaded());
+        EXPECT_EQ(cam->image_width(), kW);
+        EXPECT_EQ(cam->image_height(), kH);
+    }
+
+    std::filesystem::remove_all(tmp);
+}
+
 // A keep-mask narrower than the 11x11 SSIM window has no complete window after erosion;
 // the view must keep its PSNR instead of being dropped from every aggregate.
 TEST(MetricsEvaluatorUndistort, ThinMaskKeepsPsnrWithoutSsim) {
@@ -669,6 +828,7 @@ TEST(MetricsEvaluatorJson, WritesTheTrainingConfigAndPerImageMetricsNextToTheCsv
     const auto config = read(out_dir / "training_config.json");
     EXPECT_EQ(config.at("optimization").at("eval_steps"), nlohmann::json::array({3}));
     EXPECT_EQ(config.at("optimization").at("enable_eval"), true);
+    EXPECT_EQ(config.at("optimization").at("eval_space"), "distorted");
     EXPECT_TRUE(config.contains("dataset"));
 
     const auto first = evaluator.evaluate(3, splat, dataset, background);

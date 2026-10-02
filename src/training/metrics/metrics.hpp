@@ -9,7 +9,9 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "training/optimizer/render_output.hpp"
 #include <cmath>
+#include <expected>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -136,6 +138,47 @@ namespace lfs::training {
 
     [[nodiscard]] lfs::core::Tensor image_for_metrics_and_save(const lfs::core::Tensor& image);
 
+    struct EvaluationViewInputs {
+        lfs::core::Tensor gt_image;
+        lfs::core::Tensor user_mask;
+        int source_width = 0;
+        int source_height = 0;
+    };
+
+    struct EvaluationRenderResult {
+        RenderOutput output;
+        lfs::core::Tensor raw_image;
+    };
+
+    struct EvaluationRenderGeometry {
+        int width = 0;
+        int height = 0;
+        float fx = 0.0f;
+        float fy = 0.0f;
+        float cx = 0.0f;
+        float cy = 0.0f;
+        bool undistorted = false;
+    };
+
+    struct PreparedEvaluationView {
+        EvaluationViewInputs inputs;
+        RenderOutput output;
+        lfs::core::Tensor raw_image;
+        lfs::core::Tensor metric_mask;
+        EvaluationRenderGeometry render_geometry;
+        bool validity_mask_applied = false;
+        bool erode_ssim_mask = false;
+    };
+
+    using EvaluationRenderFn = std::function<
+        std::expected<EvaluationRenderResult, std::string>(lfs::core::Camera&)>;
+
+    [[nodiscard]] std::expected<PreparedEvaluationView, std::string> prepare_evaluation_view(
+        lfs::core::Camera& camera,
+        const lfs::core::param::TrainingParameters& params,
+        const EvaluationRenderFn& render,
+        const EvaluationViewInputs* cached_inputs = nullptr);
+
     [[nodiscard]] std::optional<float> mean_normal_angle_deg(
         const lfs::core::Tensor& rendered_normal,
         const lfs::core::Tensor& prior_normal,
@@ -250,9 +293,5 @@ namespace lfs::training {
         bool _lpips_load_attempted = false;
         std::unique_ptr<MetricsReporter> _reporter;
         AppearanceFn appearance_;
-
-        // Helper functions
-        lfs::core::Tensor load_eval_mask(lfs::core::Camera* cam, lfs::core::Tensor& gt_image,
-                                         bool alpha_as_mask) const;
     };
 } // namespace lfs::training

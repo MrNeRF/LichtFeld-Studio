@@ -34,7 +34,6 @@
 #include "depth_anchor_cache.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
-#include "io/cuda/image_format_kernels.cuh"
 #include "io/filesystem_utils.hpp"
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
@@ -542,97 +541,6 @@ namespace lfs::training {
             if (bytes > 0) {
                 entries.emplace_back(std::move(label), bytes);
             }
-        }
-
-        struct LoadedCameraMetricsInputs {
-            lfs::core::Tensor gt_image;
-            lfs::core::Tensor mask;
-        };
-
-        [[nodiscard]] lfs::io::LoadParams make_metrics_load_params(
-            const Trainer::GTLoadConfigSnapshot& gt_config,
-            const lfs::core::Camera& camera,
-            const bool apply_undistort,
-            const bool output_uint8 = false) {
-            lfs::io::LoadParams params;
-            params.resize_factor = gt_config.resize_factor;
-            params.max_width = gt_config.max_width;
-            params.output_uint8 = output_uint8;
-            if (apply_undistort && camera.is_undistort_prepared()) {
-                params.undistort = &camera.undistort_params();
-            }
-            return params;
-        }
-
-        [[nodiscard]] MetricsMaskLoadConfig make_metrics_mask_config(
-            const Trainer::GTLoadConfigSnapshot& gt_config,
-            const lfs::core::param::OptimizationParameters& opt_params) {
-            return {
-                .resize_factor = gt_config.resize_factor,
-                .max_width = gt_config.max_width,
-                .invert_masks = opt_params.invert_masks,
-                .mask_threshold = opt_params.mask_threshold,
-                .mask_mode = opt_params.mask_mode,
-            };
-        }
-
-        std::expected<LoadedCameraMetricsInputs, std::string> load_camera_metrics_inputs(
-            const lfs::core::Camera& camera,
-            const Trainer::GTLoadConfigSnapshot& gt_config,
-            const lfs::core::param::OptimizationParameters& opt_params,
-            const std::shared_ptr<lfs::io::PipelinedImageLoader>& image_loader) {
-            std::optional<lfs::io::PipelinedImageLoader> fallback_loader;
-            lfs::io::PipelinedImageLoader* loader = image_loader.get();
-            if (!loader) {
-                fallback_loader.emplace();
-                loader = &*fallback_loader;
-            }
-
-            const auto mask_mode = opt_params.mask_mode;
-            const bool use_masking =
-                mask_mode == lfs::core::param::MaskMode::Segment ||
-                mask_mode == lfs::core::param::MaskMode::Ignore ||
-                mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
-
-            const auto mask_config = make_metrics_mask_config(gt_config, opt_params);
-
-            // Sidecar mask file wins when present; alpha-as-mask is only used as fallback
-            // (some datasets ship RGBA images with a degenerate constant alpha alongside
-            // real per-pixel masks in masks/, and we must not let the alpha channel mask
-            // them out).
-            if (use_masking && !camera.has_mask() && opt_params.use_alpha_as_mask && camera.has_alpha()) {
-                auto loaded = load_alpha_masked_metrics_inputs(camera, mask_config);
-                if (!loaded) {
-                    return std::unexpected(loaded.error());
-                }
-                return LoadedCameraMetricsInputs{
-                    .gt_image = std::move(loaded->gt_image),
-                    .mask = std::move(loaded->mask)};
-            }
-
-            LoadedCameraMetricsInputs inputs;
-
-            try {
-                inputs.gt_image = loader->load_image_immediate(
-                    camera.image_path(),
-                    make_metrics_load_params(gt_config, camera, true, true));
-            } catch (const std::exception& e) {
-                return std::unexpected(e.what());
-            }
-
-            if (!inputs.gt_image.is_valid()) {
-                return std::unexpected("failed to load ground-truth image");
-            }
-
-            if (use_masking && camera.has_mask()) {
-                auto mask = load_external_mask_for_metrics(camera, mask_config);
-                if (!mask) {
-                    return std::unexpected(mask.error());
-                }
-                inputs.mask = std::move(*mask);
-            }
-
-            return inputs;
         }
 
         struct WorkspaceDisclosure {
@@ -3274,15 +3182,16 @@ namespace lfs::training {
     }
 
     std::expected<Trainer::CameraMetricsSnapshot, std::string> Trainer::computeCameraMetrics(
-        const lfs::core::Camera& camera,
+        lfs::core::Camera& camera,
         const bool include_ssim,
         CameraMetricsAppearanceConfig appearance) {
         if (!initialized_.load() || !strategy_) {
             return std::unexpected("trainer is not initialized");
         }
-        const auto params = getParams();
+        auto params = getParams();
         const auto gt_config = getGTLoadConfigSnapshot();
-        const auto image_loader = getActiveImageLoader();
+        params.dataset.resize_factor = gt_config.resize_factor;
+        params.dataset.max_width = gt_config.max_width;
         const auto& opt_params = params.optimization;
 
         const auto cache_matches = [&camera, &gt_config, &opt_params](
@@ -3298,11 +3207,11 @@ namespace lfs::training {
                    entry.invert_masks == opt_params.invert_masks &&
                    entry.mask_threshold == opt_params.mask_threshold &&
                    entry.undistort_prepared == camera.is_undistort_prepared() &&
-                   entry.gt_image.is_valid();
+                   entry.eval_space == static_cast<int>(opt_params.eval_space) &&
+                   entry.inputs.gt_image.is_valid();
         };
 
-        lfs::core::Tensor cached_gt_image;
-        lfs::core::Tensor cached_mask;
+        EvaluationViewInputs cached_inputs;
         {
             std::lock_guard lock(camera_metrics_input_cache_mutex_);
             const auto entry = std::find_if(
@@ -3311,19 +3220,78 @@ namespace lfs::training {
                 cache_matches);
             if (entry != camera_metrics_input_cache_.end()) {
                 entry->last_used = ++camera_metrics_input_cache_clock_;
-                cached_gt_image = entry->gt_image;
-                cached_mask = entry->mask;
+                cached_inputs = entry->inputs;
             }
         }
 
-        if (!cached_gt_image.is_valid()) {
-            auto inputs = load_camera_metrics_inputs(
-                camera, gt_config, opt_params, image_loader);
-            if (!inputs) {
-                return std::unexpected(inputs.error());
-            }
-            cached_gt_image = inputs->gt_image;
-            cached_mask = inputs->mask;
+        const cudaStream_t reader_stream = metrics_stream_ ? metrics_stream_
+                                                           : lfs::core::getCurrentCUDAStream();
+        std::optional<lfs::core::CUDAStreamGuard> metrics_guard;
+        if (metrics_stream_)
+            metrics_guard.emplace(metrics_stream_);
+
+        auto prepared = prepare_evaluation_view(
+            camera, params,
+            [&](lfs::core::Camera& render_camera)
+                -> std::expected<EvaluationRenderResult, std::string> {
+                const std::shared_lock lock(render_mutex_);
+                // Exclude the non-refining optimizer writes for the metric read window
+                // so the live model cannot be mutated mid-render.
+                const std::shared_lock model_read_lock(model_access_mutex_);
+                const lfs::core::RasterizerMemoryArena::ScopedBeginFrameTimeout arena_timeout(100);
+                try {
+                    beginModelRead(reader_stream);
+                } catch (const std::exception& e) {
+                    return std::unexpected(
+                        std::format("metric read window unavailable: {}", e.what()));
+                }
+
+                RenderOutput output;
+                lfs::core::Tensor raw_image;
+                try {
+                    auto& model = strategy_->get_model();
+                    auto& background = background_;
+                    if (params.optimization.gut) {
+                        output = gsplat_rasterize(
+                            render_camera, model, background,
+                            1.0f, false, GsplatRenderMode::RGB, true);
+                    } else {
+                        output = fast_rasterize(
+                            render_camera, model, background, params.optimization.mip_filter);
+                    }
+
+                    raw_image = output.image;
+                    if (appearance.enabled) {
+                        output.image = applyPPISPForViewport(
+                            output.image, render_camera.uid(), appearance.overrides,
+                            appearance.use_controller);
+                    }
+                } catch (const std::exception& e) {
+                    try {
+                        endModelRead(reader_stream);
+                    } catch (const std::exception& end_error) {
+                        LOG_ERROR(
+                            "computeCameraMetrics: reader-done record failed during degradation: {}",
+                            end_error.what());
+                    }
+                    return std::unexpected(
+                        std::format("metric render unavailable: {}", e.what()));
+                }
+                try {
+                    endModelRead(reader_stream);
+                } catch (const std::exception& e) {
+                    return std::unexpected(
+                        std::format("metric read-window close failed: {}", e.what()));
+                }
+                return EvaluationRenderResult{
+                    .output = std::move(output),
+                    .raw_image = std::move(raw_image)};
+            },
+            cached_inputs.gt_image.is_valid() ? &cached_inputs : nullptr);
+        if (!prepared)
+            return std::unexpected(prepared.error());
+
+        if (!cached_inputs.gt_image.is_valid()) {
             std::lock_guard lock(camera_metrics_input_cache_mutex_);
             camera_metrics_input_cache_.push_back(CameraMetricsInputCacheEntry{
                 .camera_uid = camera.uid(),
@@ -3335,8 +3303,8 @@ namespace lfs::training {
                 .invert_masks = opt_params.invert_masks,
                 .mask_threshold = opt_params.mask_threshold,
                 .undistort_prepared = camera.is_undistort_prepared(),
-                .gt_image = cached_gt_image,
-                .mask = cached_mask,
+                .eval_space = static_cast<int>(opt_params.eval_space),
+                .inputs = prepared->inputs,
                 .last_used = ++camera_metrics_input_cache_clock_});
             while (camera_metrics_input_cache_.size() > 4) {
                 const auto lru = std::min_element(
@@ -3349,79 +3317,9 @@ namespace lfs::training {
             }
         }
 
-        auto gt_image = std::move(cached_gt_image);
-        auto mask = std::move(cached_mask);
-
-        if (gt_image.device() != lfs::core::Device::CUDA) {
-            gt_image = gt_image.to(lfs::core::Device::CUDA);
-        }
-        if (mask.is_valid() && mask.device() != lfs::core::Device::CUDA) {
-            mask = mask.to(lfs::core::Device::CUDA);
-        }
-
-        lfs::core::Tensor rendered;
-        {
-            const std::shared_lock lock(render_mutex_);
-            // Exclude the non-refining optimizer writes for the metric read window
-            // so the live model can't be mutated mid-render (see getModelAccessMutex).
-            const std::shared_lock model_read_lock(model_access_mutex_);
-            // Run the metric render on the dedicated metrics stream (its kernels
-            // and tensor ops overlap training; item() readbacks drain it). Cap
-            // arena acquisition so a refining iteration holding the arena can't
-            // deadlock this reader (which holds render_mutex_ shared) — on
-            // timeout the rasterizer throws and the metric is skipped this call.
-            const cudaStream_t reader_stream = metrics_stream_ ? metrics_stream_
-                                                               : lfs::core::getCurrentCUDAStream();
-            std::optional<lfs::core::CUDAStreamGuard> metrics_guard;
-            if (metrics_stream_) {
-                metrics_guard.emplace(metrics_stream_);
-            }
-            const lfs::core::RasterizerMemoryArena::ScopedBeginFrameTimeout arena_timeout(100);
-            try {
-                beginModelRead(reader_stream);
-            } catch (const std::exception& e) {
-                return std::unexpected(std::format("metric read window unavailable: {}", e.what()));
-            }
-
-            auto& model = strategy_->get_model();
-            auto& background = background_;
-
-            try {
-                RenderOutput output;
-                if (params.optimization.gut) {
-                    output = gsplat_rasterize(
-                        camera, model, background,
-                        1.0f, false, GsplatRenderMode::RGB, true);
-                } else {
-                    output = fast_rasterize(
-                        camera, model, background, params.optimization.mip_filter);
-                }
-
-                rendered = output.image;
-                if (appearance.enabled) {
-                    rendered = applyPPISPForViewport(
-                        rendered, camera.uid(), appearance.overrides, appearance.use_controller);
-                }
-                rendered = rendered.clamp(0.0f, 1.0f);
-            } catch (const std::exception& e) {
-                // Arena busy (refining trainer holds the frame) or render error:
-                // skip this metric sample; the panel retries on its next update.
-                try {
-                    endModelRead(reader_stream);
-                } catch (const std::exception& end_error) {
-                    LOG_ERROR("computeCameraMetrics: reader-done record failed during degradation: {}",
-                              end_error.what());
-                }
-                return std::unexpected(std::format("metric render unavailable: {}", e.what()));
-            }
-            try {
-                endModelRead(reader_stream);
-            } catch (const std::exception& e) {
-                // Without the reader-done edge the trainer may not order writes
-                // against this reader's pending kernels — discard the sample.
-                return std::unexpected(std::format("metric read-window close failed: {}", e.what()));
-            }
-        }
+        auto gt_image = prepared->inputs.gt_image;
+        auto mask = prepared->metric_mask;
+        auto rendered = prepared->output.image;
 
         CameraMetricsSnapshot snapshot;
         snapshot.used_mask = mask.is_valid();
@@ -3432,7 +3330,14 @@ namespace lfs::training {
 
             if (include_ssim) {
                 SSIM ssim_metric(true);
-                snapshot.ssim = ssim_metric.compute(rendered, gt_image, mask);
+                const auto ssim_mask = prepared->erode_ssim_mask && mask.is_valid()
+                                           ? lfs::training::erode_metrics_mask(
+                                                 mask, 5, rendered.stream())
+                                           : mask;
+                if (!prepared->erode_ssim_mask || !mask.is_valid() ||
+                    ssim_mask.to(lfs::core::DataType::Float32).sum().item<float>() > 0.0f) {
+                    snapshot.ssim = ssim_metric.compute(rendered, gt_image, ssim_mask);
+                }
             }
         } catch (const std::exception& e) {
             return std::unexpected(e.what());

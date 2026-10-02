@@ -507,6 +507,7 @@ class TrainingPanel(Panel):
             "dep_sparsity": params.enable_sparsity,
             "dep_random": params.random,
             "dep_eval": params.enable_eval,
+            "dep_undistort": params.undistort,
         }
         return bool(conditions.get(str(condition_id), True))
 
@@ -693,6 +694,10 @@ class TrainingPanel(Panel):
         )
         model.bind_func(
             "dep_eval", lambda: p() is not None and p().has_params() and p().enable_eval
+        )
+        model.bind_func(
+            "dep_undistort",
+            lambda: p() is not None and p().has_params() and p().undistort,
         )
         model.bind_func(
             "dep_eval_holdout",

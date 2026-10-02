@@ -1677,6 +1677,166 @@ TEST(ArgumentParserTest, EvalStepsAcceptCommaListsAndRepeats) {
     EXPECT_EQ((*parsed)->optimization.eval_steps, (std::vector<size_t>{1000, 7000, 30000}));
 }
 
+// Catches a parser that accepts only one spelling or fails to store the selected enum value.
+TEST(ArgumentParserTest, EvalSpaceAcceptsBothRegisteredValues) {
+    const auto data_path = make_test_path("lfs_arg_parser_eval_space_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_space_output");
+    const std::vector<std::pair<const char*, lfs::core::param::EvalSpace>> cases = {
+        {"distorted", lfs::core::param::EvalSpace::Distorted},
+        {"undistorted", lfs::core::param::EvalSpace::Undistorted},
+    };
+
+    for (const auto& [value, expected] : cases) {
+        const char* argv[] = {
+            "LichtFeld-Studio",
+            "-d",
+            data_path.c_str(),
+            "-o",
+            output_path.c_str(),
+            "--undistort",
+            "--eval-space",
+            value,
+        };
+        auto parsed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(argv)), argv);
+        ASSERT_TRUE(parsed.has_value()) << value << ": " << parsed.error();
+        EXPECT_EQ((*parsed)->optimization.eval_space, expected) << value;
+        EXPECT_TRUE((*parsed)->overrides.has_optimization_key("eval_space")) << value;
+    }
+}
+
+// Catches an unvalidated CLI map or JSON enum that silently falls back to distorted evaluation.
+TEST(ArgumentParserTest, EvalSpaceRejectsInvalidCliAndConfigValues) {
+    const auto data_path = make_test_path("lfs_arg_parser_bad_eval_space_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bad_eval_space_output");
+
+    const char* cli_argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--undistort",
+        "--eval-space",
+        "source",
+    };
+    auto from_cli = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(cli_argv)), cli_argv);
+    ASSERT_FALSE(from_cli.has_value());
+    EXPECT_NE(from_cli.error().find("eval_space"), std::string::npos) << from_cli.error();
+
+    const auto config_path =
+        std::filesystem::path(make_test_path("lfs_arg_parser_bad_eval_space_config")) /
+        "config.json";
+    auto optimization = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+    optimization["undistort"] = true;
+    optimization["eval_space"] = "source";
+    std::ofstream(config_path) << nlohmann::json{{"optimization", optimization}}.dump();
+    const auto config_text = config_path.string();
+    const char* config_argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--config",
+        config_text.c_str(),
+    };
+    auto from_config = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(config_argv)), config_argv);
+    ASSERT_FALSE(from_config.has_value());
+    EXPECT_NE(from_config.error().find("eval_space"), std::string::npos)
+        << from_config.error();
+}
+
+// Catches an explicit CLI selection being accepted when there is no undistorted render space.
+TEST(ArgumentParserTest, EvalSpaceCliWithoutUndistortStopsTheRun) {
+    const auto data_path = make_test_path("lfs_arg_parser_eval_space_no_undistort_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_space_no_undistort_output");
+
+    for (const auto& args : std::vector<std::vector<const char*>>{
+             {"LichtFeld-Studio", "-d", data_path.c_str(), "-o", output_path.c_str(),
+              "--eval-space", "distorted"},
+             {"LichtFeld-Studio", "-d", data_path.c_str(), "-o", output_path.c_str(),
+              "--eval-space=undistorted"}}) {
+        auto parsed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(args.size()), args.data());
+        ASSERT_FALSE(parsed.has_value());
+        EXPECT_NE(parsed.error().find("--eval-space needs --undistort"), std::string::npos)
+            << parsed.error();
+    }
+}
+
+// Catches either explicit config value being accepted without the required undistortion mode.
+TEST(ArgumentParserTest, EvalSpaceConfigWithoutUndistortStopsTheRun) {
+    const auto directory = make_test_path("lfs_arg_parser_eval_space_config_rule");
+    const auto data_path = make_test_path("lfs_arg_parser_eval_space_config_rule_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_space_config_rule_output");
+    const auto config_path = std::filesystem::path(directory) / "config.json";
+    auto optimization = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+    optimization["undistort"] = false;
+    const auto config_text = config_path.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--config",
+        config_text.c_str(),
+    };
+
+    for (const char* value : {"distorted", "undistorted"}) {
+        optimization["eval_space"] = value;
+        std::ofstream(config_path) << nlohmann::json{{"optimization", optimization}}.dump();
+        auto invalid = lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(invalid.has_value()) << value;
+        EXPECT_NE(invalid.error().find("--eval-space needs --undistort"), std::string::npos)
+            << value << ": " << invalid.error();
+    }
+}
+
+// Catches missing serialization, config loading, or explicit override replay during resume.
+TEST(ArgumentParserTest, EvalSpaceConfigRoundTripAndResumeKeepTheValue) {
+    const auto directory = make_test_path("lfs_arg_parser_eval_space_round_trip");
+    const auto data_path = make_test_path("lfs_arg_parser_eval_space_round_trip_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_space_round_trip_output");
+    const auto config_path = std::filesystem::path(directory) / "training_config.json";
+    lfs::core::param::TrainingParameters written;
+    written.optimization.undistort = true;
+    written.optimization.eval_space = lfs::core::param::EvalSpace::Undistorted;
+    const auto saved = lfs::core::param::save_training_parameters_to_json(written, config_path);
+    ASSERT_TRUE(saved.has_value()) << saved.error();
+
+    const auto config_text = config_path.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--config",
+        config_text.c_str(),
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.undistort);
+    EXPECT_EQ((*parsed)->optimization.eval_space,
+              lfs::core::param::EvalSpace::Undistorted);
+    EXPECT_EQ((*parsed)->optimization.to_json().at("eval_space"), "undistorted");
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("eval_space"));
+
+    lfs::core::param::TrainingParameters restored;
+    restored.optimization.undistort = false;
+    restored.optimization.eval_space = lfs::core::param::EvalSpace::Distorted;
+    apply_explicit_training_overrides(restored, (*parsed)->overrides);
+    EXPECT_TRUE(restored.optimization.undistort);
+    EXPECT_EQ(restored.optimization.eval_space,
+              lfs::core::param::EvalSpace::Undistorted);
+}
+
 TEST(ArgumentParserTest, EvalStepsRejectNonPositiveOrMalformedValues) {
     const auto data_path = make_test_path("lfs_arg_parser_bad_eval_steps_data");
     const auto output_path = make_test_path("lfs_arg_parser_bad_eval_steps_output");

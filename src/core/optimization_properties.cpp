@@ -723,6 +723,14 @@ namespace lfs::core::param {
                        "Train on every image and evaluate all of them; no image is held out")
             .locale("training_params.eval_all")
             .tooltip("training.tooltip.eval_all")
+            .all_strategies()
+            .enum_prop(&OptimizationParameters::eval_space,
+                       "eval_space", "Eval Space", d.eval_space,
+                       {{"Distorted", EvalSpace::Distorted, "training.options.eval_space.distorted", "distorted"},
+                        {"Undistorted", EvalSpace::Undistorted, "training.options.eval_space.undistorted", "undistorted"}},
+                       "Reference image space used for evaluation")
+            .locale("training_params.eval_space")
+            .tooltip("training.tooltip.eval_space")
 
             // Random initialization
             .all_strategies()
