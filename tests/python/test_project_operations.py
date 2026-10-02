@@ -10,6 +10,11 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolate_project_operations_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("LFS_HOME", str(tmp_path / "home"))
+
+
 def _symlink_or_skip(link: Path, target: Path) -> None:
     try:
         link.symlink_to(target)
@@ -275,8 +280,6 @@ def native_io():
         from lichtfeld import io
     except ImportError as error:
         pytest.skip(f"native lichtfeld.io is unavailable: {error}")
-    if not hasattr(io, "inspect_project_card"):
-        pytest.skip("closed-file project APIs require the running application")
     return io
 
 
