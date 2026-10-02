@@ -138,8 +138,8 @@ namespace lfs::vis {
             return isCameraDragging() || needsCameraAnimationFrame();
         }
         [[nodiscard]] bool isCameraDragging() const {
-            return drag_mode_ == DragMode::Orbit || drag_mode_ == DragMode::Pan ||
-                   drag_mode_ == DragMode::Rotate;
+            return dragViewport() && (drag_mode_ == DragMode::Orbit || drag_mode_ == DragMode::Pan ||
+                                      drag_mode_ == DragMode::Rotate);
         }
         // A held pointer gesture only changes the camera when motion arrives.
         // Stored drag velocity is not an animation until the button is released.
