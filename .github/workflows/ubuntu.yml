@@ -132,6 +132,7 @@ jobs:
         run: |
           cmake -B build -S . -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DLFS_HIDDEN_SYMBOLS=${{ matrix.build_type == 'Debug' && 'ON' || 'OFF' }} \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
             -DBUILD_FORMAT_TESTS=ON \
             -DBUILD_PYTHON_STUBS=OFF \
