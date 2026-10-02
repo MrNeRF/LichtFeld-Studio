@@ -1401,14 +1401,18 @@ namespace lfs::vis {
                         // per-preview-size re-encode caches.
                         lfs::io::LoadParams params;
                         params.resize_factor = -1;
-                        params.max_width = request.preview_max_dimension;
+                        params.max_width = request.undistort_requested
+                                               ? 0
+                                               : request.preview_max_dimension;
                         params.cuda_stream = worker_stream;
                         params.output_uint8 = true;
                         gt_tensor = request.image_loader->load_image_immediate(request.image_path, params);
                     } else {
                         gt_tensor = lfs::core::load_image_cached({.path = request.image_path,
                                                                   .resize_factor = -1,
-                                                                  .max_width = request.preview_max_dimension,
+                                                                  .max_width = request.undistort_requested
+                                                                                   ? 0
+                                                                                   : request.preview_max_dimension,
                                                                   .stream = worker_stream,
                                                                   .output_uint8 = true,
                                                                   .skip_blob_cache = true});
@@ -1431,12 +1435,14 @@ namespace lfs::vis {
                                         gt_tensor.set_stream(worker_stream);
                                     }
                                 }
-                                const auto scaled = lfs::core::scale_undistort_params(
+                                const auto scaled = lfs::core::prepare_undistort_params(
                                     request.undistort_params,
                                     lfs::rendering::imageWidth(gt_tensor, gt_layout),
                                     lfs::rendering::imageHeight(gt_tensor, gt_layout),
+                                    1,
                                     request.preview_max_dimension);
-                                gt_tensor = lfs::core::undistort_image(gt_tensor, scaled, worker_stream);
+                                gt_tensor = lfs::core::undistort_image(
+                                    gt_tensor.clamp(0.0f, 1.0f).contiguous(), scaled, worker_stream);
                             }
                             gt_tensor = lfs::rendering::flipImageVertical(gt_tensor, gt_layout);
                             // Static GT display images must be decoupled from the CUDA pool
@@ -1452,12 +1458,13 @@ namespace lfs::vis {
                             -1, request.preview_max_dimension);
                         if (depth.is_valid() && depth.ndim() == 2) {
                             if (request.undistort_requested) {
-                                const auto scaled = lfs::core::scale_undistort_params(
+                                const auto scaled = lfs::core::prepare_undistort_params(
                                     request.undistort_params,
                                     static_cast<int>(depth.shape()[1]),
                                     static_cast<int>(depth.shape()[0]),
+                                    1,
                                     request.preview_max_dimension);
-                                depth = lfs::core::undistort_mask(depth, scaled, worker_stream);
+                                depth = lfs::core::undistort_depth_area(depth, scaled, worker_stream);
                             }
                             image = makeDepthDisplayTensor(
                                 depth, request.depth_visualization_mode, request.background_color);
@@ -1475,12 +1482,13 @@ namespace lfs::vis {
                             const auto normal_layout = lfs::rendering::detectImageLayout(normal);
                             if (request.undistort_requested &&
                                 normal_layout != lfs::rendering::ImageLayout::Unknown) {
-                                const auto scaled = lfs::core::scale_undistort_params(
+                                const auto scaled = lfs::core::prepare_undistort_params(
                                     request.undistort_params,
                                     lfs::rendering::imageWidth(normal, normal_layout),
                                     lfs::rendering::imageHeight(normal, normal_layout),
+                                    1,
                                     request.preview_max_dimension);
-                                normal = lfs::core::undistort_image(normal, scaled, worker_stream);
+                                normal = lfs::core::undistort_normal_area(normal, scaled, worker_stream);
                             }
                             image = makeNormalDisplayTensor(normal);
                             image = resizeChwDisplayTensor(image, request.image_size);

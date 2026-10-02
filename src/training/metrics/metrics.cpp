@@ -15,7 +15,7 @@
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "eval_mask.hpp"
-#include "io/cuda/image_format_kernels.cuh"
+#include "io/pipelined_image_loader.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include <algorithm>
 #include <cassert>
@@ -140,7 +140,8 @@ namespace lfs::training {
             bool changed = false;
 
             void set(const int new_width, const int new_height) {
-                if (camera.image_width() == new_width && camera.image_height() == new_height)
+                if (camera.image_width() == new_width && camera.image_height() == new_height &&
+                    camera.image_size_loaded())
                     return;
                 camera.set_image_dimensions(new_width, new_height);
                 changed = true;
@@ -176,17 +177,18 @@ namespace lfs::training {
             return chw.to(lfs::core::Device::CUDA);
         }
 
-        lfs::core::Tensor quantize_training_image(const lfs::core::Tensor& image) {
-            assert(image.is_valid());
-            assert(image.ndim() == 3);
-            assert(image.device() == lfs::core::Device::CUDA);
-            assert(image.dtype() == lfs::core::DataType::Float32);
-            auto quantized = lfs::core::Tensor::empty(
-                image.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-            lfs::io::cuda::launch_float32_chw_to_uint8_chw(
-                image.ptr<float>(), quantized.ptr<uint8_t>(),
-                image.shape()[1], image.shape()[2], image.shape()[0], image.stream());
-            return quantized;
+        std::unique_ptr<lfs::io::PipelinedImageLoader> make_eval_image_loader(
+            const lfs::core::param::TrainingParameters& params) {
+            lfs::io::PipelinedLoaderConfig config;
+            config.jpeg_batch_size = 1;
+            config.prefetch_count = 1;
+            config.output_queue_size = 1;
+            config.decode_frame_ring_capacity = 2;
+            config.decoder_pool_size = 1;
+            config.io_threads = 1;
+            config.cold_process_threads = 1;
+            config.use_16bit_color = params.dataset.loading_params.use_16bit_color;
+            return std::make_unique<lfs::io::PipelinedImageLoader>(config);
         }
     } // namespace
 
@@ -373,19 +375,44 @@ namespace lfs::training {
         lfs::core::Camera& camera,
         const lfs::core::param::TrainingParameters& params,
         const EvaluationRenderFn& render,
-        const EvaluationViewInputs* cached_inputs) {
+        const EvaluationViewInputs* cached_inputs,
+        lfs::io::PipelinedImageLoader* image_loader) {
         RestoreCameraImageDimensions restore_dimensions{
             camera, camera.image_width(), camera.image_height(), camera.image_size_loaded()};
 
         EvaluationViewInputs inputs;
         std::optional<lfs::core::UndistortParams> scaled_undistort;
+        std::unique_ptr<lfs::io::PipelinedImageLoader> fallback_image_loader;
         try {
+            const bool undistorted_reference =
+                params.optimization.undistort && camera.is_undistort_prepared() &&
+                params.optimization.eval_space == lfs::core::param::EvalSpace::Undistorted;
             if (cached_inputs) {
                 inputs = *cached_inputs;
                 if (!inputs.gt_image.is_valid() || inputs.source_width <= 0 ||
                     inputs.source_height <= 0) {
                     return std::unexpected("cached evaluation inputs are invalid");
                 }
+            } else if (undistorted_reference) {
+                if (!image_loader) {
+                    fallback_image_loader = make_eval_image_loader(params);
+                    image_loader = fallback_image_loader.get();
+                }
+                auto [source_width, source_height, source_channels] =
+                    lfs::core::get_image_info(camera.image_path());
+                if (source_width <= 0 || source_height <= 0 || source_channels <= 0)
+                    return std::unexpected("failed to read evaluation image dimensions");
+
+                lfs::io::LoadParams load_params;
+                load_params.resize_factor = params.dataset.resize_factor;
+                load_params.max_width = params.dataset.max_width;
+                load_params.output_uint8 = !params.dataset.loading_params.use_16bit_color;
+                load_params.cuda_stream = lfs::core::getCurrentCUDAStream();
+                load_params.undistort = &camera.undistort_params();
+                inputs.gt_image = image_loader->load_image_immediate(
+                    camera.image_path(), load_params);
+                inputs.source_width = source_width;
+                inputs.source_height = source_height;
             } else {
                 inputs.gt_image = load_eval_gt_image_cpu(
                     camera, params.dataset.resize_factor, params.dataset.max_width);
@@ -393,27 +420,28 @@ namespace lfs::training {
                 assert(inputs.gt_image.shape()[0] == 3);
                 inputs.source_height = static_cast<int>(inputs.gt_image.shape()[1]);
                 inputs.source_width = static_cast<int>(inputs.gt_image.shape()[2]);
+            }
 
-                if (params.optimization.undistort && camera.is_undistort_prepared()) {
-                    scaled_undistort = lfs::core::scale_undistort_params(
-                        camera.undistort_params(), inputs.source_width, inputs.source_height,
-                        params.dataset.max_width);
+            if (params.optimization.undistort && camera.is_undistort_prepared()) {
+                scaled_undistort = lfs::core::prepare_undistort_params(
+                    camera.undistort_params(), inputs.source_width, inputs.source_height,
+                    params.dataset.resize_factor, params.dataset.max_width);
+            }
+
+            if (undistorted_reference && scaled_undistort) {
+                if (inputs.gt_image.ndim() != 3 || inputs.gt_image.shape()[0] != 3 ||
+                    static_cast<int>(inputs.gt_image.shape()[1]) != scaled_undistort->dst_height ||
+                    static_cast<int>(inputs.gt_image.shape()[2]) != scaled_undistort->dst_width) {
+                    return std::unexpected(
+                        "undistorted evaluation image does not match the training grid");
                 }
+            }
 
-                const bool undistorted_reference =
-                    params.optimization.undistort &&
-                    params.optimization.eval_space == lfs::core::param::EvalSpace::Undistorted;
-                if (undistorted_reference && scaled_undistort) {
-                    auto gt_float = inputs.gt_image.to(lfs::core::DataType::Float32) / 255.0f;
-                    gt_float = lfs::core::undistort_image(
-                        gt_float, *scaled_undistort, gt_float.stream());
-                    inputs.gt_image = quantize_training_image(gt_float);
-                }
-
+            if (!cached_inputs) {
                 if (eval_uses_masks(params.optimization.mask_mode)) {
                     auto mask_config = metrics_mask_config_from(params);
                     mask_config.apply_undistortion = undistorted_reference;
-                    mask_config.replace_gt_image = undistorted_reference;
+                    mask_config.replace_gt_image = false;
                     const bool alpha_as_mask = params.optimization.use_alpha_as_mask &&
                                                camera.has_alpha();
                     inputs.user_mask = lfs::training::load_eval_mask(
@@ -421,32 +449,81 @@ namespace lfs::training {
                 }
             }
 
-            if (!scaled_undistort && params.optimization.undistort &&
-                camera.is_undistort_prepared()) {
-                scaled_undistort = lfs::core::scale_undistort_params(
-                    camera.undistort_params(), inputs.source_width, inputs.source_height,
-                    params.dataset.max_width);
-            }
-
             EvaluationRenderGeometry geometry;
-            std::optional<lfs::core::UndistortParams> render_undistort;
-            if (scaled_undistort) {
-                restore_dimensions.set(
-                    scaled_undistort->dst_width, scaled_undistort->dst_height);
-                const auto [fx, fy, cx, cy] = camera.get_intrinsics();
-                render_undistort = *scaled_undistort;
-                render_undistort->dst_fx = fx;
-                render_undistort->dst_fy = fy;
-                render_undistort->dst_cx = cx;
-                render_undistort->dst_cy = cy;
+            std::optional<lfs::core::UndistortParams> inverse_warp;
+            std::optional<lfs::core::Camera> scoped_camera;
+            lfs::core::Camera* render_camera = &camera;
+            int render_width = inputs.source_width;
+            int render_height = inputs.source_height;
+            float mip_filter_dilation = 0.1f;
+            const bool distorted_evaluation =
+                scaled_undistort &&
+                params.optimization.eval_space == lfs::core::param::EvalSpace::Distorted;
+            const bool native_gut_evaluation = distorted_evaluation && params.optimization.gut;
+            const bool warp_to_distorted = distorted_evaluation && !native_gut_evaluation;
+
+            if (native_gut_evaluation) {
+                const auto& native = camera.undistort_params();
+                const float source_scale_x = static_cast<float>(inputs.source_width) /
+                                             static_cast<float>(native.src_width);
+                const float source_scale_y = static_cast<float>(inputs.source_height) /
+                                             static_cast<float>(native.src_height);
+                scoped_camera.emplace(
+                    camera.R(), camera.T(),
+                    native.src_fx * source_scale_x, native.src_fy * source_scale_y,
+                    native.src_cx * source_scale_x, native.src_cy * source_scale_y,
+                    camera.radial_distortion(), camera.tangential_distortion(),
+                    camera.camera_model_type(), camera.image_name(), camera.image_path(),
+                    camera.mask_path(), inputs.source_width, inputs.source_height,
+                    camera.uid(), camera.camera_id(), camera.depth_path(), camera.normal_path());
+                render_camera = &*scoped_camera;
+                const auto [fx, fy, cx, cy] = render_camera->get_intrinsics();
                 geometry = {
-                    .width = scaled_undistort->dst_width,
-                    .height = scaled_undistort->dst_height,
+                    .width = inputs.source_width,
+                    .height = inputs.source_height,
                     .fx = fx,
                     .fy = fy,
                     .cx = cx,
                     .cy = cy,
-                    .undistorted = true};
+                    .undistorted = false};
+            } else if (scaled_undistort) {
+                constexpr int evaluation_supersample = 2;
+                const int factor = warp_to_distorted ? evaluation_supersample : 1;
+                scoped_camera.emplace(camera, camera.world_view_transform());
+                scoped_camera->set_image_dimensions(
+                    scaled_undistort->dst_width * factor,
+                    scaled_undistort->dst_height * factor);
+                render_camera = &*scoped_camera;
+                render_width = render_camera->image_width();
+                render_height = render_camera->image_height();
+                const auto [fx, fy, cx, cy] = render_camera->get_intrinsics();
+                if (warp_to_distorted) {
+                    inverse_warp = *scaled_undistort;
+                    inverse_warp->dst_width = render_width;
+                    inverse_warp->dst_height = render_height;
+                    inverse_warp->dst_fx = fx;
+                    inverse_warp->dst_fy = fy;
+                    inverse_warp->dst_cx = cx;
+                    inverse_warp->dst_cy = cy;
+                    mip_filter_dilation = 0.1f * factor * factor;
+                    geometry = {
+                        .width = inputs.source_width,
+                        .height = inputs.source_height,
+                        .fx = inverse_warp->src_fx,
+                        .fy = inverse_warp->src_fy,
+                        .cx = inverse_warp->src_cx,
+                        .cy = inverse_warp->src_cy,
+                        .undistorted = false};
+                } else {
+                    geometry = {
+                        .width = render_width,
+                        .height = render_height,
+                        .fx = fx,
+                        .fy = fy,
+                        .cx = cx,
+                        .cy = cy,
+                        .undistorted = true};
+                }
             } else {
                 restore_dimensions.set(inputs.source_width, inputs.source_height);
                 const auto [fx, fy, cx, cy] = camera.get_intrinsics();
@@ -460,7 +537,7 @@ namespace lfs::training {
                     .undistorted = false};
             }
 
-            auto rendered = render(camera);
+            auto rendered = render(*render_camera, mip_filter_dilation);
             if (!rendered)
                 return std::unexpected(rendered.error());
             if (!rendered->output.image.is_valid())
@@ -468,21 +545,18 @@ namespace lfs::training {
 
             assert(rendered->output.image.ndim() == 3);
             assert(rendered->output.image.shape()[0] == 3);
-            assert(rendered->output.image.shape()[1] == static_cast<size_t>(geometry.height));
-            assert(rendered->output.image.shape()[2] == static_cast<size_t>(geometry.width));
+            assert(rendered->output.image.shape()[1] == static_cast<size_t>(render_height));
+            assert(rendered->output.image.shape()[2] == static_cast<size_t>(render_width));
             if (rendered->raw_image.is_valid()) {
                 assert(rendered->raw_image.ndim() == 3);
                 assert(rendered->raw_image.shape() == rendered->output.image.shape());
             }
 
-            const bool warp_to_distorted =
-                render_undistort &&
-                params.optimization.eval_space == lfs::core::param::EvalSpace::Distorted;
             auto metric_mask = inputs.user_mask;
             if (warp_to_distorted) {
                 lfs::core::Tensor validity_mask;
                 rendered->output.image = lfs::core::distort_image_to_source(
-                    rendered->output.image, *render_undistort, validity_mask,
+                    rendered->output.image, *inverse_warp, validity_mask,
                     rendered->output.image.stream());
                 assert(validity_mask.ndim() == 2);
                 assert(validity_mask.shape()[0] == static_cast<size_t>(inputs.source_height));
@@ -490,9 +564,42 @@ namespace lfs::training {
                 if (rendered->raw_image.is_valid()) {
                     lfs::core::Tensor raw_validity;
                     rendered->raw_image = lfs::core::distort_image_to_source(
-                        rendered->raw_image, *render_undistort, raw_validity,
+                        rendered->raw_image, *inverse_warp, raw_validity,
                         rendered->raw_image.stream());
                 }
+                if (rendered->output.alpha.is_valid()) {
+                    rendered->output.alpha = lfs::core::distort_mask_to_source_area(
+                        rendered->output.alpha, *inverse_warp,
+                        rendered->output.alpha.stream());
+                }
+                if (rendered->output.depth.is_valid()) {
+                    rendered->output.depth = lfs::core::distort_depth_to_source_area(
+                        rendered->output.depth, *inverse_warp,
+                        rendered->output.depth.stream());
+                }
+                if (rendered->output.normal.is_valid()) {
+                    rendered->output.normal = lfs::core::distort_normal_to_source_area(
+                        rendered->output.normal, *inverse_warp,
+                        rendered->output.normal.stream());
+                }
+                const auto validity_float = validity_mask.to(lfs::core::DataType::Float32);
+                const auto apply_validity = [&validity_float](lfs::core::Tensor& value) {
+                    if (!value.is_valid())
+                        return;
+                    if (value.ndim() == 2) {
+                        value = value * validity_float;
+                    } else if (value.ndim() == 3) {
+                        value = value * validity_float.unsqueeze(0).expand(
+                                            {static_cast<int>(value.shape()[0]),
+                                             static_cast<int>(validity_float.shape()[0]),
+                                             static_cast<int>(validity_float.shape()[1])});
+                    }
+                };
+                apply_validity(rendered->output.alpha);
+                apply_validity(rendered->output.depth);
+                apply_validity(rendered->output.normal);
+                rendered->output.width = inputs.source_width;
+                rendered->output.height = inputs.source_height;
                 if (metric_mask.is_valid()) {
                     assert(metric_mask.ndim() == 2);
                     assert(metric_mask.shape() == validity_mask.shape());
@@ -893,9 +1000,17 @@ namespace lfs::training {
     EvalMetrics MetricsEvaluator::evaluate(const int iteration,
                                            const lfs::core::SplatData& splatData,
                                            std::shared_ptr<CameraDataset> val_dataset,
-                                           lfs::core::Tensor& background) {
+                                           lfs::core::Tensor& background,
+                                           lfs::io::PipelinedImageLoader* image_loader) {
         if (!_params.optimization.enable_eval) {
             throw std::runtime_error("Evaluation is not enabled");
+        }
+
+        std::unique_ptr<lfs::io::PipelinedImageLoader> fallback_image_loader;
+        if (!image_loader && _params.optimization.undistort &&
+            _params.optimization.eval_space == lfs::core::param::EvalSpace::Undistorted) {
+            fallback_image_loader = make_eval_image_loader(_params);
+            image_loader = fallback_image_loader.get();
         }
 
         EvalMetrics result;
@@ -974,7 +1089,7 @@ namespace lfs::training {
             auto& splatData_mutable = const_cast<lfs::core::SplatData&>(splatData);
             auto prepared = prepare_evaluation_view(
                 *cam, _params,
-                [&](lfs::core::Camera& render_camera)
+                [&](lfs::core::Camera& render_camera, const float mip_filter_dilation)
                     -> std::expected<EvaluationRenderResult, std::string> {
                     try {
                         RenderOutput output;
@@ -985,7 +1100,8 @@ namespace lfs::training {
                         } else {
                             output = fast_rasterize(
                                 render_camera, splatData_mutable, background,
-                                _params.optimization.mip_filter, {}, render_normal);
+                                _params.optimization.mip_filter, {}, render_normal,
+                                mip_filter_dilation);
                         }
                         auto raw_image = output.image;
                         if (appearance_ && output.image.is_valid())
@@ -996,7 +1112,9 @@ namespace lfs::training {
                     } catch (const std::exception& e) {
                         return std::unexpected(e.what());
                     }
-                });
+                },
+                nullptr,
+                image_loader);
             if (!prepared) {
                 LOG_WARN("Eval: skipping camera '{}' (view preparation failed: {})",
                          cam->image_name(), prepared.error());
@@ -1011,6 +1129,9 @@ namespace lfs::training {
             auto render_raw = std::move(prepared->raw_image);
             const auto render_geometry = prepared->render_geometry;
             const bool erode_ssim_mask = prepared->erode_ssim_mask;
+            const bool distorted_coordinates =
+                _params.optimization.undistort && cam->is_undistort_prepared() &&
+                _params.optimization.eval_space == lfs::core::param::EvalSpace::Distorted;
             view.height = static_cast<int>(gt_image.shape()[1]);
             view.width = static_cast<int>(gt_image.shape()[2]);
             view.validity_mask_applied = prepared->validity_mask_applied;
@@ -1145,10 +1266,17 @@ namespace lfs::training {
                         LOG_DEBUG("Eval: normal_angle_deg skipped for '{}': rendered normal is empty",
                                   cam->image_name());
                     } else {
+                        RestoreCameraImageDimensions restore_normal_dimensions{
+                            *cam, cam->image_width(), cam->image_height(),
+                            cam->image_size_loaded()};
+                        cam->release_normal_cache();
+                        if (distorted_coordinates)
+                            restore_normal_dimensions.set(view.width, view.height);
                         lfs::core::Tensor prior = cam->load_and_get_normal(
                             _params.dataset.resize_factor,
                             _params.dataset.max_width,
-                            _normal_prior_decode);
+                            _normal_prior_decode,
+                            !distorted_coordinates);
                         cam->release_normal_cache();
                         if (!prior.is_valid() || prior.ndim() != 3 || prior.shape()[0] != 3) {
                             LOG_DEBUG("Eval: normal_angle_deg skipped for '{}': prior normal is missing",
@@ -1198,10 +1326,16 @@ namespace lfs::training {
                         const int depth_w = static_cast<int>(depth.shape()[1]);
                         assert(depth_h == render_geometry.height);
                         assert(depth_w == render_geometry.width);
+                        const int observation_width = distorted_coordinates
+                                                          ? cam->undistort_params().src_width
+                                                          : cam->camera_width();
+                        const int observation_height = distorted_coordinates
+                                                           ? cam->undistort_params().src_height
+                                                           : cam->camera_height();
                         const float u_scale = static_cast<float>(depth_w) /
-                                              static_cast<float>(cam->camera_width());
+                                              static_cast<float>(observation_width);
                         const float v_scale = static_cast<float>(depth_h) /
-                                              static_cast<float>(cam->camera_height());
+                                              static_cast<float>(observation_height);
                         auto R_cpu = cam->R().cpu().contiguous();
                         auto T_cpu = cam->T().cpu().contiguous();
                         const float* const R = R_cpu.ptr<float>();

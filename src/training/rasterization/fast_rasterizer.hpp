@@ -172,7 +172,8 @@ namespace lfs::training {
         bool mip_filter = false,
         const lfs::core::Tensor& bg_image = {},
         bool render_normal = false,
-        bool render_depth = true);
+        bool render_depth = true,
+        float mip_filter_dilation = 0.1f);
 
     // Backward pass with optional extra alpha gradient for masked training
     void fast_rasterize_backward(
@@ -201,9 +202,11 @@ namespace lfs::training {
         lfs::core::Tensor& bg_color,
         bool mip_filter = false,
         const lfs::core::Tensor& bg_image = {},
-        bool render_normal = false) {
+        bool render_normal = false,
+        float mip_filter_dilation = 0.1f) {
         auto result = fast_rasterize_forward(
-            viewpoint_camera, gaussian_model, bg_color, 0, 0, 0, 0, mip_filter, bg_image, render_normal);
+            viewpoint_camera, gaussian_model, bg_color, 0, 0, 0, 0, mip_filter,
+            bg_image, render_normal, true, mip_filter_dilation);
         if (!result) {
             throw lfs::Exception(std::move(result.error()));
         }
@@ -230,14 +233,16 @@ namespace lfs::training {
         lfs::core::Tensor& bg_color,
         bool mip_filter = false,
         const lfs::core::Tensor& bg_image = {},
-        bool render_normal = false) {
+        bool render_normal = false,
+        float mip_filter_dilation = 0.1f) {
         return fast_rasterize(
             const_cast<lfs::core::Camera&>(viewpoint_camera),
             gaussian_model,
             bg_color,
             mip_filter,
             bg_image,
-            render_normal);
+            render_normal,
+            mip_filter_dilation);
     }
 
     inline RenderOutput fast_rasterize(

@@ -84,7 +84,8 @@ namespace lfs::core {
         // Load normal map from disk, decode unit normals as [3,H,W]
         // float32 in [-1,1] (file encoding v = n*0.5+0.5), and return it (cached).
         Tensor load_and_get_normal(int resize_factor, int max_width,
-                                   const NormalPriorDecode& decode);
+                                   const NormalPriorDecode& decode,
+                                   bool apply_undistortion = true);
 
         // Quantization step of the depth prior's file encoding in target units
         // (1/255 for 8-bit, 1/65535 for 16-bit, 0 for float). Header probe on

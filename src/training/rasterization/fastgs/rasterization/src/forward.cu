@@ -193,7 +193,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     const float far_,
     bool mip_filter,
     cudaStream_t stream,
-    float* max_screen_share) {
+    float* max_screen_share,
+    float mip_filter_dilation) {
 
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
@@ -281,6 +282,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             far_,
             depth_bits,
             mip_filter,
+            mip_filter_dilation,
             screen_share);
         LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.preprocess");
     };

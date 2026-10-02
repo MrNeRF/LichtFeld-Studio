@@ -19,6 +19,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -448,8 +449,8 @@ TEST(MetricsEvaluatorUndistort, UndistortedSpaceUsesAllUndistortedPixels) {
     write_rgb_png(image_path, 130, 130, 130, kH, kW);
 
     auto cam = make_distorted_eval_camera(image_path, {}, kW, kH);
-    const auto scaled = lfs::core::scale_undistort_params(
-        cam->undistort_params(), kW, kH, 0);
+    const auto scaled = lfs::core::prepare_undistort_params(
+        cam->undistort_params(), kW, kH, 1, 0);
     auto dataset = std::make_shared<CameraDataset>(
         std::vector<std::shared_ptr<Camera>>{cam}, DatasetConfig{}, CameraDataset::Split::ALL);
     auto background = Tensor::full({3}, 128.0f / 255.0f, Device::CUDA);
@@ -480,6 +481,72 @@ TEST(MetricsEvaluatorUndistort, UndistortedSpaceUsesAllUndistortedPixels) {
     std::filesystem::remove_all(tmp);
 }
 
+TEST(MetricsEvaluatorUndistort, UndistortedGroundTruthEqualsTrainingLoaderImage) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_undistorted_eval_training_gt";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 64;
+    constexpr int kH = 48;
+    std::vector<uint8_t> pixels(static_cast<size_t>(kW) * kH * 3);
+    for (int y = 0; y < kH; ++y) {
+        for (int x = 0; x < kW; ++x) {
+            const size_t index = (static_cast<size_t>(y) * kW + x) * 3;
+            pixels[index] = static_cast<uint8_t>((3 * x + y) & 255);
+            pixels[index + 1] = static_cast<uint8_t>((x + 5 * y) & 255);
+            pixels[index + 2] = static_cast<uint8_t>((7 * x + 11 * y) & 255);
+        }
+    }
+    const auto image_path = tmp / "gt.png";
+    write_u8_hwc_png(image_path, pixels, kH, kW);
+
+    auto camera = make_distorted_eval_camera(image_path, {}, kW, kH);
+    auto params = make_eval_params(tmp / "out");
+    params.optimization.undistort = true;
+    params.optimization.eval_space = lfs::core::param::EvalSpace::Undistorted;
+    params.dataset.max_width = 40;
+
+    lfs::io::PipelinedLoaderConfig loader_config;
+    loader_config.jpeg_batch_size = 1;
+    loader_config.prefetch_count = 1;
+    loader_config.output_queue_size = 1;
+    loader_config.decode_frame_ring_capacity = 2;
+    loader_config.decoder_pool_size = 1;
+    loader_config.io_threads = 1;
+    loader_config.cold_process_threads = 1;
+    lfs::io::PipelinedImageLoader loader(loader_config);
+    lfs::io::LoadParams load_params;
+    load_params.resize_factor = params.dataset.resize_factor;
+    load_params.max_width = params.dataset.max_width;
+    load_params.output_uint8 = true;
+    load_params.undistort = &camera->undistort_params();
+    const auto training_image = loader.load_image_immediate(image_path, load_params);
+
+    const auto render = [](Camera& render_camera, float)
+        -> std::expected<lfs::training::EvaluationRenderResult, std::string> {
+        const auto height = static_cast<size_t>(render_camera.image_height());
+        const auto width = static_cast<size_t>(render_camera.image_width());
+        lfs::training::RenderOutput output;
+        output.image = Tensor::zeros({size_t{3}, height, width}, Device::CUDA);
+        return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+    };
+    const auto prepared = prepare_evaluation_view(
+        *camera, params, render, nullptr, &loader);
+    ASSERT_TRUE(prepared.has_value()) << prepared.error();
+    ASSERT_EQ(prepared->inputs.gt_image.shape(), training_image.shape());
+    ASSERT_EQ(prepared->inputs.gt_image.dtype(), training_image.dtype());
+    const auto actual_cpu = prepared->inputs.gt_image.cpu().contiguous();
+    const auto expected_cpu = training_image.cpu().contiguous();
+    ASSERT_EQ(actual_cpu.bytes(), expected_cpu.bytes());
+    EXPECT_EQ(std::memcmp(actual_cpu.data_ptr(), expected_cpu.data_ptr(), actual_cpu.bytes()), 0);
+
+    std::filesystem::remove_all(tmp);
+}
+
 // Catches batch and interactive callers preparing different GT tensors, render geometry,
 // masks, or SSIM behavior when the interactive caller reuses cached image inputs.
 TEST(MetricsEvaluatorUndistort, SharedPreparationMatchesCachedInteractiveInputsInBothSpaces) {
@@ -499,18 +566,23 @@ TEST(MetricsEvaluatorUndistort, SharedPreparationMatchesCachedInteractiveInputsI
     for (const auto space : {lfs::core::param::EvalSpace::Distorted,
                              lfs::core::param::EvalSpace::Undistorted}) {
         auto cam = make_distorted_eval_camera(image_path, {}, kW, kH);
-        const auto scaled = lfs::core::scale_undistort_params(
-            cam->undistort_params(), kW, kH, 0);
+        const auto scaled = lfs::core::prepare_undistort_params(
+            cam->undistort_params(), kW, kH, -1, 0);
         auto params = make_eval_params(tmp / "out");
         params.optimization.undistort = true;
         params.optimization.eval_space = space;
 
         int render_calls = 0;
-        const auto render = [&render_calls](Camera& render_camera)
+        std::vector<std::pair<int, int>> render_sizes;
+        std::vector<float> render_dilations;
+        const auto render = [&render_calls, &render_sizes, &render_dilations](
+                                Camera& render_camera, const float mip_filter_dilation)
             -> std::expected<lfs::training::EvaluationRenderResult, std::string> {
             ++render_calls;
             const auto height = static_cast<size_t>(render_camera.image_height());
             const auto width = static_cast<size_t>(render_camera.image_width());
+            render_sizes.emplace_back(static_cast<int>(width), static_cast<int>(height));
+            render_dilations.push_back(mip_filter_dilation);
             assert(height > 0);
             assert(width > 0);
             auto image = Tensor::full({size_t{3}, height, width}, 128.0f / 255.0f,
@@ -553,10 +625,14 @@ TEST(MetricsEvaluatorUndistort, SharedPreparationMatchesCachedInteractiveInputsI
             (batch->output.image - interactive->output.image).abs().max().item<float>(),
             0.0f);
 
-        EXPECT_EQ(batch->render_geometry.width, scaled.dst_width);
-        EXPECT_EQ(batch->render_geometry.height, scaled.dst_height);
-        EXPECT_TRUE(batch->render_geometry.undistorted);
         if (space == lfs::core::param::EvalSpace::Distorted) {
+            EXPECT_EQ(render_sizes, (std::vector<std::pair<int, int>>{
+                                        {scaled.dst_width * 2, scaled.dst_height * 2},
+                                        {scaled.dst_width * 2, scaled.dst_height * 2}}));
+            EXPECT_EQ(render_dilations, (std::vector<float>{0.4f, 0.4f}));
+            EXPECT_EQ(batch->render_geometry.width, kW);
+            EXPECT_EQ(batch->render_geometry.height, kH);
+            EXPECT_FALSE(batch->render_geometry.undistorted);
             EXPECT_EQ(batch->inputs.gt_image.shape(),
                       lfs::core::TensorShape({size_t{3}, size_t{kH}, size_t{kW}}));
             EXPECT_TRUE(batch->metric_mask.is_valid());
@@ -571,6 +647,13 @@ TEST(MetricsEvaluatorUndistort, SharedPreparationMatchesCachedInteractiveInputsI
                     .item<float>(),
                 0.0f);
         } else {
+            EXPECT_EQ(render_sizes, (std::vector<std::pair<int, int>>{
+                                        {scaled.dst_width, scaled.dst_height},
+                                        {scaled.dst_width, scaled.dst_height}}));
+            EXPECT_EQ(render_dilations, (std::vector<float>{0.1f, 0.1f}));
+            EXPECT_EQ(batch->render_geometry.width, scaled.dst_width);
+            EXPECT_EQ(batch->render_geometry.height, scaled.dst_height);
+            EXPECT_TRUE(batch->render_geometry.undistorted);
             EXPECT_EQ(batch->inputs.gt_image.shape(),
                       lfs::core::TensorShape(
                           {size_t{3}, static_cast<size_t>(scaled.dst_height),

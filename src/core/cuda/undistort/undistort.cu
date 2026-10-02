@@ -33,6 +33,11 @@ namespace lfs::core {
         constexpr float INVERSE_MAX_STEP = 2.0f;
         constexpr float COLMAP_MIN_SCALE = 0.2f;
         constexpr float COLMAP_MAX_SCALE = 2.0f;
+        constexpr int AREA_QUADRATURE = 8;
+        constexpr int LANCZOS_RADIUS = 3;
+        constexpr int OUTPUT_TILE_ROWS = 256;
+        constexpr float MIN_SIGNED_WEIGHT_RATIO = 1.0e-4f;
+        constexpr float EVALUATION_MIN_COVERAGE = 0.999f;
 
         // COLMAP sensor/models.h (BSD-3 licensed formulas)
         __host__ __device__ void apply_distortion_pinhole(
@@ -164,35 +169,101 @@ namespace lfs::core {
             }
         }
 
-        __device__ float bilinear_sample(
+        __device__ float bilinear_sample_renormalized(
             const float* __restrict__ src,
             const int width, const int height, const int stride,
-            const float sx, const float sy) {
-
-            const auto get_pixel_constant_border = [&](const int y, const int x) {
-                if (x >= 0 && y >= 0 && x < width && y < height) {
-                    return src[y * stride + x];
+            const float sx, const float sy,
+            const bool positive_only = false) {
+            const int x0 = static_cast<int>(floorf(sx));
+            const int y0 = static_cast<int>(floorf(sy));
+            const float fx = sx - static_cast<float>(x0);
+            const float fy = sy - static_cast<float>(y0);
+            float value = 0.0f;
+            float weight_sum = 0.0f;
+            for (int dy = 0; dy < 2; ++dy) {
+                const int y = y0 + dy;
+                const float wy = dy == 0 ? 1.0f - fy : fy;
+                for (int dx = 0; dx < 2; ++dx) {
+                    const int x = x0 + dx;
+                    if (x < 0 || x >= width || y < 0 || y >= height)
+                        continue;
+                    const float sample = src[y * stride + x];
+                    if (!isfinite(sample) || (positive_only && sample <= 0.0f))
+                        continue;
+                    const float wx = dx == 0 ? 1.0f - fx : fx;
+                    const float weight = wx * wy;
+                    value += sample * weight;
+                    weight_sum += weight;
                 }
+            }
+            if (weight_sum > 1.0e-8f)
+                return value / weight_sum;
+            if (positive_only)
                 return 0.0f;
-            };
+            const int nearest_x = min(max(static_cast<int>(floorf(sx + 0.5f)), 0), width - 1);
+            const int nearest_y = min(max(static_cast<int>(floorf(sy + 0.5f)), 0), height - 1);
+            return src[nearest_y * stride + nearest_x];
+        }
 
-            const float x0f = floorf(sx);
-            const float y0f = floorf(sy);
-            const int x0 = static_cast<int>(x0f);
-            const int y0 = static_cast<int>(y0f);
-            const int x1 = x0 + 1;
-            const int y1 = y0 + 1;
+        __device__ float lanczos3_weight(const float value) {
+            const float absolute_value = fabsf(value);
+            if (absolute_value >= static_cast<float>(LANCZOS_RADIUS))
+                return 0.0f;
+            if (absolute_value < 1.0e-6f)
+                return 1.0f;
+            constexpr float PI = 3.14159265358979323846f;
+            const float pi_value = PI * value;
+            return sinf(pi_value) / pi_value *
+                   (sinf(pi_value / static_cast<float>(LANCZOS_RADIUS)) /
+                    (pi_value / static_cast<float>(LANCZOS_RADIUS)));
+        }
 
-            const float fx = sx - x0f;
-            const float fy = sy - y0f;
+        __device__ bool lanczos3_sample(
+            const float* __restrict__ src,
+            const int width, const int height, const int channels,
+            const float sx, const float sy,
+            float* values, float& absolute_inside, float& absolute_full) {
+            const int base_x = static_cast<int>(floorf(sx));
+            const int base_y = static_cast<int>(floorf(sy));
+            float weights_x[6];
+            float weights_y[6];
+            for (int i = 0; i < 6; ++i) {
+                weights_x[i] = lanczos3_weight(sx - static_cast<float>(base_x + i - 2));
+                weights_y[i] = lanczos3_weight(sy - static_cast<float>(base_y + i - 2));
+            }
 
-            const float v00 = get_pixel_constant_border(y0, x0);
-            const float v01 = get_pixel_constant_border(y0, x1);
-            const float v10 = get_pixel_constant_border(y1, x0);
-            const float v11 = get_pixel_constant_border(y1, x1);
+            float weighted[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            float signed_inside = 0.0f;
+            absolute_inside = 0.0f;
+            absolute_full = 0.0f;
+            const int plane = width * height;
+            for (int j = 0; j < 6; ++j) {
+                const int y = base_y + j - 2;
+                for (int i = 0; i < 6; ++i) {
+                    const int x = base_x + i - 2;
+                    const float weight = weights_x[i] * weights_y[j];
+                    absolute_full += fabsf(weight);
+                    if (x < 0 || x >= width || y < 0 || y >= height)
+                        continue;
+                    signed_inside += weight;
+                    absolute_inside += fabsf(weight);
+                    const int index = y * width + x;
+                    for (int channel = 0; channel < channels; ++channel)
+                        weighted[channel] += src[channel * plane + index] * weight;
+                }
+            }
 
-            return (1.0f - fy) * ((1.0f - fx) * v00 + fx * v01) +
-                   fy * ((1.0f - fx) * v10 + fx * v11);
+            if (fabsf(signed_inside) > MIN_SIGNED_WEIGHT_RATIO * absolute_inside) {
+                for (int channel = 0; channel < channels; ++channel)
+                    values[channel] = weighted[channel] / signed_inside;
+                return true;
+            }
+
+            for (int channel = 0; channel < channels; ++channel) {
+                values[channel] = bilinear_sample_renormalized(
+                    src + channel * plane, width, height, width, sx, sy);
+            }
+            return false;
         }
 
         __global__ void __launch_bounds__(BLOCK_DIM* BLOCK_DIM)
@@ -200,71 +271,43 @@ namespace lfs::core {
                 const float* __restrict__ src,
                 float* __restrict__ dst,
                 const int channels,
+                const int output_y_offset,
                 const UndistortParams params) {
-
             const int ox = blockIdx.x * BLOCK_DIM + threadIdx.x;
-            const int oy = blockIdx.y * BLOCK_DIM + threadIdx.y;
-
+            const int oy = output_y_offset + blockIdx.y * BLOCK_DIM + threadIdx.y;
             if (ox >= params.dst_width || oy >= params.dst_height)
                 return;
 
-            const float pixel_x = static_cast<float>(ox) + PIXEL_CENTER_OFFSET;
-            const float pixel_y = static_cast<float>(oy) + PIXEL_CENTER_OFFSET;
-            const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
-            const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
-
-            float dnx, dny;
-            apply_distortion(nx, ny, params.model_type, params.distortion, params.num_distortion, dnx, dny);
-
-            const int dst_plane = params.dst_height * params.dst_width;
-            if (!isfinite(dnx) || !isfinite(dny)) {
-                for (int c = 0; c < channels; ++c) {
-                    dst[c * dst_plane + oy * params.dst_width + ox] = 0.0f;
+            float result[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            for (int qy = 0; qy < AREA_QUADRATURE; ++qy) {
+                for (int qx = 0; qx < AREA_QUADRATURE; ++qx) {
+                    const float pixel_x = static_cast<float>(ox) +
+                                          (static_cast<float>(qx) + 0.5f) / AREA_QUADRATURE;
+                    const float pixel_y = static_cast<float>(oy) +
+                                          (static_cast<float>(qy) + 0.5f) / AREA_QUADRATURE;
+                    const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
+                    const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
+                    float dnx, dny;
+                    apply_distortion(nx, ny, params.model_type, params.distortion,
+                                     params.num_distortion, dnx, dny);
+                    const float sx = dnx * params.src_fx + params.src_cx - PIXEL_CENTER_OFFSET;
+                    const float sy = dny * params.src_fy + params.src_cy - PIXEL_CENTER_OFFSET;
+                    float sample[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                    float absolute_inside = 0.0f;
+                    float absolute_full = 0.0f;
+                    (void)lanczos3_sample(
+                        src, params.src_width, params.src_height, channels,
+                        sx, sy, sample, absolute_inside, absolute_full);
+                    for (int channel = 0; channel < channels; ++channel)
+                        result[channel] += sample[channel];
                 }
-                return;
             }
 
-            const float sx = dnx * params.src_fx + params.src_cx - PIXEL_CENTER_OFFSET;
-            const float sy = dny * params.src_fy + params.src_cy - PIXEL_CENTER_OFFSET;
-
-            const int src_plane = params.src_height * params.src_width;
-
-            for (int c = 0; c < channels; ++c) {
-                dst[c * dst_plane + oy * params.dst_width + ox] =
-                    bilinear_sample(src + c * src_plane, params.src_width, params.src_height, params.src_width, sx, sy);
-            }
-        }
-
-        __global__ void __launch_bounds__(BLOCK_DIM* BLOCK_DIM)
-            undistort_mask_kernel(
-                const float* __restrict__ src,
-                float* __restrict__ dst,
-                const UndistortParams params) {
-
-            const int ox = blockIdx.x * BLOCK_DIM + threadIdx.x;
-            const int oy = blockIdx.y * BLOCK_DIM + threadIdx.y;
-
-            if (ox >= params.dst_width || oy >= params.dst_height)
-                return;
-
-            const float pixel_x = static_cast<float>(ox) + PIXEL_CENTER_OFFSET;
-            const float pixel_y = static_cast<float>(oy) + PIXEL_CENTER_OFFSET;
-            const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
-            const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
-
-            float dnx, dny;
-            apply_distortion(nx, ny, params.model_type, params.distortion, params.num_distortion, dnx, dny);
-
-            if (!isfinite(dnx) || !isfinite(dny)) {
-                dst[oy * params.dst_width + ox] = 0.0f;
-                return;
-            }
-
-            const float sx = dnx * params.src_fx + params.src_cx - PIXEL_CENTER_OFFSET;
-            const float sy = dny * params.src_fy + params.src_cy - PIXEL_CENTER_OFFSET;
-
-            dst[oy * params.dst_width + ox] =
-                bilinear_sample(src, params.src_width, params.src_height, params.src_width, sx, sy);
+            const int output_index = oy * params.dst_width + ox;
+            const int output_plane = params.dst_width * params.dst_height;
+            constexpr float inverse_samples = 1.0f / (AREA_QUADRATURE * AREA_QUADRATURE);
+            for (int channel = 0; channel < channels; ++channel)
+                dst[channel * output_plane + output_index] = result[channel] * inverse_samples;
         }
 
         // The fisheye radial model is one-dimensional in the incidence angle: solving it in theta
@@ -392,32 +435,58 @@ namespace lfs::core {
                 float* __restrict__ dst,
                 uint8_t* __restrict__ validity,
                 const int channels,
+                const int output_y_offset,
                 const UndistortParams params) {
             const int ox = blockIdx.x * BLOCK_DIM + threadIdx.x;
-            const int oy = blockIdx.y * BLOCK_DIM + threadIdx.y;
+            const int oy = output_y_offset + blockIdx.y * BLOCK_DIM + threadIdx.y;
             if (ox >= params.src_width || oy >= params.src_height)
                 return;
 
-            const int output_index = oy * params.src_width + ox;
-            const int output_plane = params.src_width * params.src_height;
-            const int input_plane = params.dst_width * params.dst_height;
-            const float xd = (static_cast<float>(ox) + PIXEL_CENTER_OFFSET - params.src_cx) /
-                             params.src_fx;
-            const float yd = (static_cast<float>(oy) + PIXEL_CENTER_OFFSET - params.src_cy) /
-                             params.src_fy;
-            float ux, uy;
-            if (!inverse_distortion(xd, yd, params, ux, uy)) {
-                validity[output_index] = 0;
-                for (int channel = 0; channel < channels; ++channel)
-                    dst[channel * output_plane + output_index] = 0.0f;
-                return;
+            float result[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            float absolute_inside_sum = 0.0f;
+            float absolute_full_sum = 0.0f;
+            bool converged = true;
+            for (int qy = 0; qy < AREA_QUADRATURE && converged; ++qy) {
+                for (int qx = 0; qx < AREA_QUADRATURE; ++qx) {
+                    const float pixel_x = static_cast<float>(ox) +
+                                          (static_cast<float>(qx) + 0.5f) / AREA_QUADRATURE;
+                    const float pixel_y = static_cast<float>(oy) +
+                                          (static_cast<float>(qy) + 0.5f) / AREA_QUADRATURE;
+                    const float xd = (pixel_x - params.src_cx) / params.src_fx;
+                    const float yd = (pixel_y - params.src_cy) / params.src_fy;
+                    float ux, uy;
+                    if (!inverse_distortion(xd, yd, params, ux, uy)) {
+                        converged = false;
+                        break;
+                    }
+                    const float sx = ux * params.dst_fx + params.dst_cx - PIXEL_CENTER_OFFSET;
+                    const float sy = uy * params.dst_fy + params.dst_cy - PIXEL_CENTER_OFFSET;
+                    if (!isfinite(sx) || !isfinite(sy)) {
+                        converged = false;
+                        break;
+                    }
+                    float sample[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                    float absolute_inside = 0.0f;
+                    float absolute_full = 0.0f;
+                    if (!lanczos3_sample(
+                            src, params.dst_width, params.dst_height, channels,
+                            sx, sy, sample, absolute_inside, absolute_full)) {
+                        converged = false;
+                        break;
+                    }
+                    absolute_inside_sum += absolute_inside;
+                    absolute_full_sum += absolute_full;
+                    for (int channel = 0; channel < channels; ++channel)
+                        result[channel] += sample[channel];
+                }
             }
 
-            const float sx = ux * params.dst_fx + params.dst_cx - PIXEL_CENTER_OFFSET;
-            const float sy = uy * params.dst_fy + params.dst_cy - PIXEL_CENTER_OFFSET;
-            if (!isfinite(sx) || !isfinite(sy) || sx < 0.0f || sy < 0.0f ||
-                sx > static_cast<float>(params.dst_width - 1) ||
-                sy > static_cast<float>(params.dst_height - 1)) {
+            const int output_index = oy * params.src_width + ox;
+            const int output_plane = params.src_width * params.src_height;
+            const float coverage = absolute_full_sum > 0.0f
+                                       ? absolute_inside_sum / absolute_full_sum
+                                       : 0.0f;
+            if (!converged || coverage < EVALUATION_MIN_COVERAGE) {
                 validity[output_index] = 0;
                 for (int channel = 0; channel < channels; ++channel)
                     dst[channel * output_plane + output_index] = 0.0f;
@@ -425,11 +494,164 @@ namespace lfs::core {
             }
 
             validity[output_index] = 1;
-            for (int channel = 0; channel < channels; ++channel) {
-                dst[channel * output_plane + output_index] = bilinear_sample(
-                    src + channel * input_plane, params.dst_width, params.dst_height,
-                    params.dst_width, sx, sy);
+            constexpr float inverse_samples = 1.0f / (AREA_QUADRATURE * AREA_QUADRATURE);
+            for (int channel = 0; channel < channels; ++channel)
+                dst[channel * output_plane + output_index] = result[channel] * inverse_samples;
+        }
+
+        enum class AreaFilterMode : int {
+            NONNEGATIVE,
+            DEPTH,
+            NORMAL
+        };
+
+        __global__ void __launch_bounds__(BLOCK_DIM* BLOCK_DIM)
+            undistort_area_kernel(
+                const float* __restrict__ src,
+                float* __restrict__ dst,
+                const int channels,
+                const AreaFilterMode mode,
+                const int output_y_offset,
+                const UndistortParams params) {
+            const int ox = blockIdx.x * BLOCK_DIM + threadIdx.x;
+            const int oy = output_y_offset + blockIdx.y * BLOCK_DIM + threadIdx.y;
+            if (ox >= params.dst_width || oy >= params.dst_height)
+                return;
+
+            float result[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            float valid_samples = 0.0f;
+            const int input_plane = params.src_width * params.src_height;
+            for (int qy = 0; qy < AREA_QUADRATURE; ++qy) {
+                for (int qx = 0; qx < AREA_QUADRATURE; ++qx) {
+                    const float pixel_x = static_cast<float>(ox) +
+                                          (static_cast<float>(qx) + 0.5f) / AREA_QUADRATURE;
+                    const float pixel_y = static_cast<float>(oy) +
+                                          (static_cast<float>(qy) + 0.5f) / AREA_QUADRATURE;
+                    const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
+                    const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
+                    float dnx, dny;
+                    apply_distortion(nx, ny, params.model_type, params.distortion,
+                                     params.num_distortion, dnx, dny);
+                    const float sx = dnx * params.src_fx + params.src_cx - PIXEL_CENTER_OFFSET;
+                    const float sy = dny * params.src_fy + params.src_cy - PIXEL_CENTER_OFFSET;
+                    if (mode == AreaFilterMode::DEPTH) {
+                        const float sample = bilinear_sample_renormalized(
+                            src, params.src_width, params.src_height, params.src_width,
+                            sx, sy, true);
+                        if (sample > 0.0f && isfinite(sample)) {
+                            result[0] += sample;
+                            valid_samples += 1.0f;
+                        }
+                    } else {
+                        for (int channel = 0; channel < channels; ++channel) {
+                            result[channel] += bilinear_sample_renormalized(
+                                src + channel * input_plane,
+                                params.src_width, params.src_height, params.src_width,
+                                sx, sy);
+                        }
+                        valid_samples += 1.0f;
+                    }
+                }
             }
+
+            const int output_index = oy * params.dst_width + ox;
+            const int output_plane = params.dst_width * params.dst_height;
+            if (valid_samples <= 0.0f) {
+                for (int channel = 0; channel < channels; ++channel)
+                    dst[channel * output_plane + output_index] = 0.0f;
+                return;
+            }
+            for (int channel = 0; channel < channels; ++channel)
+                result[channel] /= valid_samples;
+            if (mode == AreaFilterMode::NORMAL) {
+                const float norm = sqrtf(result[0] * result[0] + result[1] * result[1] +
+                                         result[2] * result[2]);
+                if (norm > 1.0e-8f && isfinite(norm)) {
+                    result[0] /= norm;
+                    result[1] /= norm;
+                    result[2] /= norm;
+                } else {
+                    result[0] = result[1] = result[2] = 0.0f;
+                }
+            }
+            for (int channel = 0; channel < channels; ++channel)
+                dst[channel * output_plane + output_index] = result[channel];
+        }
+
+        __global__ void __launch_bounds__(BLOCK_DIM* BLOCK_DIM)
+            distort_area_to_source_kernel(
+                const float* __restrict__ src,
+                float* __restrict__ dst,
+                const int channels,
+                const AreaFilterMode mode,
+                const int output_y_offset,
+                const UndistortParams params) {
+            const int ox = blockIdx.x * BLOCK_DIM + threadIdx.x;
+            const int oy = output_y_offset + blockIdx.y * BLOCK_DIM + threadIdx.y;
+            if (ox >= params.src_width || oy >= params.src_height)
+                return;
+
+            float result[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            float valid_samples = 0.0f;
+            const int input_plane = params.dst_width * params.dst_height;
+            bool converged = true;
+            for (int qy = 0; qy < AREA_QUADRATURE && converged; ++qy) {
+                for (int qx = 0; qx < AREA_QUADRATURE; ++qx) {
+                    const float pixel_x = static_cast<float>(ox) +
+                                          (static_cast<float>(qx) + 0.5f) / AREA_QUADRATURE;
+                    const float pixel_y = static_cast<float>(oy) +
+                                          (static_cast<float>(qy) + 0.5f) / AREA_QUADRATURE;
+                    const float xd = (pixel_x - params.src_cx) / params.src_fx;
+                    const float yd = (pixel_y - params.src_cy) / params.src_fy;
+                    float ux, uy;
+                    if (!inverse_distortion(xd, yd, params, ux, uy)) {
+                        converged = false;
+                        break;
+                    }
+                    const float sx = ux * params.dst_fx + params.dst_cx - PIXEL_CENTER_OFFSET;
+                    const float sy = uy * params.dst_fy + params.dst_cy - PIXEL_CENTER_OFFSET;
+                    if (mode == AreaFilterMode::DEPTH) {
+                        const float sample = bilinear_sample_renormalized(
+                            src, params.dst_width, params.dst_height, params.dst_width,
+                            sx, sy, true);
+                        if (sample > 0.0f && isfinite(sample)) {
+                            result[0] += sample;
+                            valid_samples += 1.0f;
+                        }
+                    } else {
+                        for (int channel = 0; channel < channels; ++channel) {
+                            result[channel] += bilinear_sample_renormalized(
+                                src + channel * input_plane,
+                                params.dst_width, params.dst_height, params.dst_width,
+                                sx, sy);
+                        }
+                        valid_samples += 1.0f;
+                    }
+                }
+            }
+
+            const int output_index = oy * params.src_width + ox;
+            const int output_plane = params.src_width * params.src_height;
+            if (!converged || valid_samples <= 0.0f) {
+                for (int channel = 0; channel < channels; ++channel)
+                    dst[channel * output_plane + output_index] = 0.0f;
+                return;
+            }
+            for (int channel = 0; channel < channels; ++channel)
+                result[channel] /= valid_samples;
+            if (mode == AreaFilterMode::NORMAL) {
+                const float norm = sqrtf(result[0] * result[0] + result[1] * result[1] +
+                                         result[2] * result[2]);
+                if (norm > 1.0e-8f && isfinite(norm)) {
+                    result[0] /= norm;
+                    result[1] /= norm;
+                    result[2] /= norm;
+                } else {
+                    result[0] = result[1] = result[2] = 0.0f;
+                }
+            }
+            for (int channel = 0; channel < channels; ++channel)
+                dst[channel * output_plane + output_index] = result[channel];
         }
 
         void apply_distortion_cpu(
@@ -718,6 +940,20 @@ namespace lfs::core {
                 uy = (img_y - cy) / fy;
                 return true;
             }
+        }
+
+        bool is_identity_resample(const UndistortParams& params) {
+            if (params.src_width != params.dst_width ||
+                params.src_height != params.dst_height ||
+                params.src_fx != params.dst_fx || params.src_fy != params.dst_fy ||
+                params.src_cx != params.dst_cx || params.src_cy != params.dst_cy) {
+                return false;
+            }
+            for (int i = 0; i < params.num_distortion; ++i) {
+                if (params.distortion[i] != 0.0f)
+                    return false;
+            }
+            return true;
         }
 
     } // anonymous namespace
@@ -1019,155 +1255,238 @@ namespace lfs::core {
         return params;
     }
 
-    UndistortParams scale_undistort_params(
-        const UndistortParams& params, const int actual_src_width, const int actual_src_height,
+    UndistortGrid compute_undistort_grid(
+        const UndistortParams& params, const int resize_factor, const int max_width) {
+        assert(params.dst_width > 0 && params.dst_height > 0);
+        const float resize_scale = 1.0f / static_cast<float>(std::max(1, resize_factor));
+        const int largest_crop_dimension = std::max(params.dst_width, params.dst_height);
+        const float width_scale = max_width > 0
+                                      ? static_cast<float>(max_width) /
+                                            static_cast<float>(largest_crop_dimension)
+                                      : 1.0f;
+        const float scale = std::min({1.0f, resize_scale, width_scale});
+        const int width = std::max(
+            1, static_cast<int>(std::lround(static_cast<double>(params.dst_width) * scale)));
+        const int height = std::max(
+            1, static_cast<int>(std::lround(static_cast<double>(params.dst_height) * scale)));
+        return {
+            .width = width,
+            .height = height,
+            .scale_x = static_cast<float>(width) / static_cast<float>(params.dst_width),
+            .scale_y = static_cast<float>(height) / static_cast<float>(params.dst_height)};
+    }
+
+    UndistortParams prepare_undistort_params(
+        const UndistortParams& params,
+        const int actual_src_width,
+        const int actual_src_height,
+        const int resize_factor,
         const int max_width) {
+        const auto grid = compute_undistort_grid(params, resize_factor, max_width);
+        assert(actual_src_width > 0 && actual_src_height > 0);
+        assert(grid.width > 0 && grid.height > 0);
         UndistortParams scaled = params;
-
-        if (actual_src_width != params.src_width || actual_src_height != params.src_height) {
-            assert(actual_src_width > 0 && actual_src_height > 0);
-
-            const float sx = static_cast<float>(actual_src_width) / static_cast<float>(params.src_width);
-            const float sy = static_cast<float>(actual_src_height) / static_cast<float>(params.src_height);
-
-            scaled.src_fx = params.src_fx * sx;
-            scaled.src_fy = params.src_fy * sy;
-            scaled.src_cx = params.src_cx * sx;
-            scaled.src_cy = params.src_cy * sy;
-            scaled.src_width = actual_src_width;
-            scaled.src_height = actual_src_height;
-
-            scaled.dst_fx = params.dst_fx * sx;
-            scaled.dst_fy = params.dst_fy * sy;
-            scaled.dst_width = std::max(1, static_cast<int>(std::lroundf(params.dst_width * sx)));
-            scaled.dst_height = std::max(1, static_cast<int>(std::lroundf(params.dst_height * sy)));
-            scaled.dst_cx = params.dst_cx * sx;
-            scaled.dst_cy = params.dst_cy * sy;
-        }
-
-        if (max_width > 0 && (scaled.dst_width > max_width || scaled.dst_height > max_width)) {
-            const int old_width = scaled.dst_width;
-            const int old_height = scaled.dst_height;
-            int new_width;
-            int new_height;
-            if (old_width > old_height) {
-                new_width = max_width;
-                new_height = std::max(
-                    1, static_cast<int>(static_cast<std::int64_t>(old_height) * max_width / old_width));
-            } else {
-                new_height = max_width;
-                new_width = std::max(
-                    1, static_cast<int>(static_cast<std::int64_t>(old_width) * max_width / old_height));
-            }
-
-            const float dst_sx = static_cast<float>(new_width) / static_cast<float>(old_width);
-            const float dst_sy = static_cast<float>(new_height) / static_cast<float>(old_height);
-            scaled.dst_fx *= dst_sx;
-            scaled.dst_fy *= dst_sy;
-            scaled.dst_cx *= dst_sx;
-            scaled.dst_cy *= dst_sy;
-            scaled.dst_width = new_width;
-            scaled.dst_height = new_height;
-        }
-
+        const float src_scale_x = static_cast<float>(actual_src_width) /
+                                  static_cast<float>(params.src_width);
+        const float src_scale_y = static_cast<float>(actual_src_height) /
+                                  static_cast<float>(params.src_height);
+        scaled.src_fx = params.src_fx * src_scale_x;
+        scaled.src_fy = params.src_fy * src_scale_y;
+        scaled.src_cx = params.src_cx * src_scale_x;
+        scaled.src_cy = params.src_cy * src_scale_y;
+        scaled.src_width = actual_src_width;
+        scaled.src_height = actual_src_height;
+        scaled.dst_fx = params.dst_fx * grid.scale_x;
+        scaled.dst_fy = params.dst_fy * grid.scale_y;
+        scaled.dst_cx = params.dst_cx * grid.scale_x;
+        scaled.dst_cy = params.dst_cy * grid.scale_y;
+        scaled.dst_width = grid.width;
+        scaled.dst_height = grid.height;
         return scaled;
     }
 
-    Tensor undistort_image(const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
-        assert(src.is_valid());
-        assert(src.ndim() == 3);
-        assert(src.device() == Device::CUDA);
-
-        const int channels = static_cast<int>(src.shape()[0]);
-        assert(static_cast<int>(src.shape()[1]) == params.src_height);
-        assert(static_cast<int>(src.shape()[2]) == params.src_width);
-
-        nvtxRangePush("undistort_image");
-
-        auto dst = Tensor::zeros(
-            {static_cast<size_t>(channels),
-             static_cast<size_t>(params.dst_height),
-             static_cast<size_t>(params.dst_width)},
-            Device::CUDA);
-
-        const dim3 block(BLOCK_DIM, BLOCK_DIM);
-        const dim3 grid(
-            (params.dst_width + BLOCK_DIM - 1) / BLOCK_DIM,
-            (params.dst_height + BLOCK_DIM - 1) / BLOCK_DIM);
-
-        undistort_image_kernel<<<grid, block, 0, stream>>>(
-            src.ptr<float>(), dst.ptr<float>(), channels, params);
-
-        const cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "undistort_image_kernel launch failed");
-
-        nvtxRangePop();
-        return dst;
-    }
-
-    Tensor distort_image_to_source(const Tensor& src, const UndistortParams& params,
-                                   Tensor& validity_mask, cudaStream_t stream) {
+    Tensor undistort_image(
+        const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
         assert(src.is_valid());
         assert(src.ndim() == 3);
         assert(src.device() == Device::CUDA);
         assert(src.dtype() == DataType::Float32);
-        assert(static_cast<int>(src.shape()[1]) == params.dst_height);
-        assert(static_cast<int>(src.shape()[2]) == params.dst_width);
-
-        nvtxRangePush("distort_image_to_source");
-
         const CUDAStreamGuard stream_guard(stream);
         const auto input = src.contiguous();
         input.sync_to_stream(stream);
         const int channels = static_cast<int>(input.shape()[0]);
+        assert(channels > 0 && channels <= 4);
+        assert(static_cast<int>(src.shape()[1]) == params.src_height);
+        assert(static_cast<int>(src.shape()[2]) == params.src_width);
+        if (is_identity_resample(params))
+            return input.clone();
+
+        nvtxRangePush("undistort_image");
         auto dst = Tensor::empty(
-            {static_cast<size_t>(channels), static_cast<size_t>(params.src_height),
-             static_cast<size_t>(params.src_width)},
-            Device::CUDA);
-        validity_mask = Tensor::empty(
-            {static_cast<size_t>(params.src_height), static_cast<size_t>(params.src_width)},
-            Device::CUDA, DataType::UInt8);
-
+            {static_cast<size_t>(channels), static_cast<size_t>(params.dst_height),
+             static_cast<size_t>(params.dst_width)},
+            Device::CUDA, DataType::Float32);
         const dim3 block(BLOCK_DIM, BLOCK_DIM);
-        const dim3 grid(
-            (params.src_width + BLOCK_DIM - 1) / BLOCK_DIM,
-            (params.src_height + BLOCK_DIM - 1) / BLOCK_DIM);
-        distort_image_to_source_kernel<<<grid, block, 0, stream>>>(
-            input.ptr<float>(), dst.ptr<float>(), validity_mask.ptr<uint8_t>(), channels, params);
-        const cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "distort_image_to_source_kernel launch failed");
-
+        for (int output_y = 0; output_y < params.dst_height; output_y += OUTPUT_TILE_ROWS) {
+            const int tile_rows = std::min(OUTPUT_TILE_ROWS, params.dst_height - output_y);
+            const dim3 grid(
+                (params.dst_width + BLOCK_DIM - 1) / BLOCK_DIM,
+                (tile_rows + BLOCK_DIM - 1) / BLOCK_DIM);
+            undistort_image_kernel<<<grid, block, 0, stream>>>(
+                input.ptr<float>(), dst.ptr<float>(), channels, output_y, params);
+        }
+        const cudaError_t error = cudaGetLastError();
+        assert(error == cudaSuccess && "undistort_image_kernel launch failed");
         nvtxRangePop();
         return dst;
     }
 
-    Tensor undistort_mask(const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+    Tensor distort_image_to_source(
+        const Tensor& src, const UndistortParams& params,
+        Tensor& validity_mask, cudaStream_t stream) {
         assert(src.is_valid());
-        assert(src.ndim() == 2);
+        assert(src.ndim() == 3);
         assert(src.device() == Device::CUDA);
-        assert(static_cast<int>(src.shape()[0]) == params.src_height);
-        assert(static_cast<int>(src.shape()[1]) == params.src_width);
-
-        nvtxRangePush("undistort_mask");
+        assert(src.dtype() == DataType::Float32);
+        const CUDAStreamGuard stream_guard(stream);
+        const auto input = src.contiguous();
+        input.sync_to_stream(stream);
+        const int channels = static_cast<int>(input.shape()[0]);
+        assert(channels > 0 && channels <= 4);
+        assert(static_cast<int>(src.shape()[1]) == params.dst_height);
+        assert(static_cast<int>(src.shape()[2]) == params.dst_width);
 
         auto dst = Tensor::zeros(
-            {static_cast<size_t>(params.dst_height),
-             static_cast<size_t>(params.dst_width)},
-            Device::CUDA);
-
+            {static_cast<size_t>(channels), static_cast<size_t>(params.src_height),
+             static_cast<size_t>(params.src_width)},
+            Device::CUDA, DataType::Float32);
+        validity_mask = Tensor::zeros(
+            {static_cast<size_t>(params.src_height), static_cast<size_t>(params.src_width)},
+            Device::CUDA, DataType::UInt8);
         const dim3 block(BLOCK_DIM, BLOCK_DIM);
-        const dim3 grid(
-            (params.dst_width + BLOCK_DIM - 1) / BLOCK_DIM,
-            (params.dst_height + BLOCK_DIM - 1) / BLOCK_DIM);
-
-        undistort_mask_kernel<<<grid, block, 0, stream>>>(
-            src.ptr<float>(), dst.ptr<float>(), params);
-
-        const cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "undistort_mask_kernel launch failed");
-
-        nvtxRangePop();
+        for (int output_y = 0; output_y < params.src_height; output_y += OUTPUT_TILE_ROWS) {
+            const int tile_rows = std::min(OUTPUT_TILE_ROWS, params.src_height - output_y);
+            const dim3 grid(
+                (params.src_width + BLOCK_DIM - 1) / BLOCK_DIM,
+                (tile_rows + BLOCK_DIM - 1) / BLOCK_DIM);
+            distort_image_to_source_kernel<<<grid, block, 0, stream>>>(
+                input.ptr<float>(), dst.ptr<float>(), validity_mask.ptr<uint8_t>(),
+                channels, output_y, params);
+        }
+        const cudaError_t error = cudaGetLastError();
+        assert(error == cudaSuccess && "distort_image_to_source_kernel launch failed");
         return dst;
+    }
+
+    namespace {
+        Tensor launch_undistort_area(
+            const Tensor& src, const UndistortParams& params,
+            const AreaFilterMode mode, cudaStream_t stream) {
+            assert(src.is_valid());
+            assert(src.device() == Device::CUDA);
+            assert(src.dtype() == DataType::Float32);
+            const CUDAStreamGuard stream_guard(stream);
+            const auto input = src.contiguous();
+            input.sync_to_stream(stream);
+            const bool scalar = input.ndim() == 2;
+            const int channels = scalar ? 1 : static_cast<int>(input.shape()[0]);
+            assert((scalar || src.ndim() == 3) && channels > 0 && channels <= 4);
+            assert(static_cast<int>(src.shape()[src.ndim() - 2]) == params.src_height);
+            assert(static_cast<int>(src.shape()[src.ndim() - 1]) == params.src_width);
+            if (mode == AreaFilterMode::NORMAL)
+                assert(!scalar && channels == 3);
+
+            TensorShape output_shape = scalar
+                                           ? TensorShape({static_cast<size_t>(params.dst_height),
+                                                          static_cast<size_t>(params.dst_width)})
+                                           : TensorShape({static_cast<size_t>(channels),
+                                                          static_cast<size_t>(params.dst_height),
+                                                          static_cast<size_t>(params.dst_width)});
+            auto dst = Tensor::zeros(output_shape, Device::CUDA, DataType::Float32);
+            const dim3 block(BLOCK_DIM, BLOCK_DIM);
+            for (int output_y = 0; output_y < params.dst_height; output_y += OUTPUT_TILE_ROWS) {
+                const int tile_rows = std::min(OUTPUT_TILE_ROWS, params.dst_height - output_y);
+                const dim3 grid(
+                    (params.dst_width + BLOCK_DIM - 1) / BLOCK_DIM,
+                    (tile_rows + BLOCK_DIM - 1) / BLOCK_DIM);
+                undistort_area_kernel<<<grid, block, 0, stream>>>(
+                    input.ptr<float>(), dst.ptr<float>(), channels, mode, output_y, params);
+            }
+            const cudaError_t error = cudaGetLastError();
+            assert(error == cudaSuccess && "undistort_area_kernel launch failed");
+            return dst;
+        }
+    } // namespace
+
+    Tensor undistort_mask_area(
+        const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        return launch_undistort_area(src, params, AreaFilterMode::NONNEGATIVE, stream);
+    }
+
+    Tensor undistort_depth_area(
+        const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        return launch_undistort_area(src, params, AreaFilterMode::DEPTH, stream);
+    }
+
+    Tensor undistort_normal_area(
+        const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        return launch_undistort_area(src, params, AreaFilterMode::NORMAL, stream);
+    }
+
+    namespace {
+        Tensor launch_distort_area_to_source(
+            const Tensor& src, const UndistortParams& params,
+            const AreaFilterMode mode, cudaStream_t stream) {
+            assert(src.is_valid());
+            assert(src.device() == Device::CUDA);
+            assert(src.dtype() == DataType::Float32);
+            const CUDAStreamGuard stream_guard(stream);
+            const auto input = src.contiguous();
+            input.sync_to_stream(stream);
+            const bool scalar = input.ndim() == 2;
+            const int channels = scalar ? 1 : static_cast<int>(input.shape()[0]);
+            assert((scalar || src.ndim() == 3) && channels > 0 && channels <= 4);
+            assert(static_cast<int>(src.shape()[src.ndim() - 2]) == params.dst_height);
+            assert(static_cast<int>(src.shape()[src.ndim() - 1]) == params.dst_width);
+            if (mode == AreaFilterMode::NORMAL)
+                assert(!scalar && channels == 3);
+
+            TensorShape output_shape = scalar
+                                           ? TensorShape({static_cast<size_t>(params.src_height),
+                                                          static_cast<size_t>(params.src_width)})
+                                           : TensorShape({static_cast<size_t>(channels),
+                                                          static_cast<size_t>(params.src_height),
+                                                          static_cast<size_t>(params.src_width)});
+            auto dst = Tensor::zeros(output_shape, Device::CUDA, DataType::Float32);
+            const dim3 block(BLOCK_DIM, BLOCK_DIM);
+            for (int output_y = 0; output_y < params.src_height; output_y += OUTPUT_TILE_ROWS) {
+                const int tile_rows = std::min(OUTPUT_TILE_ROWS, params.src_height - output_y);
+                const dim3 grid(
+                    (params.src_width + BLOCK_DIM - 1) / BLOCK_DIM,
+                    (tile_rows + BLOCK_DIM - 1) / BLOCK_DIM);
+                distort_area_to_source_kernel<<<grid, block, 0, stream>>>(
+                    input.ptr<float>(), dst.ptr<float>(), channels, mode, output_y, params);
+            }
+            const cudaError_t error = cudaGetLastError();
+            assert(error == cudaSuccess && "distort_area_to_source_kernel launch failed");
+            return dst;
+        }
+    } // namespace
+
+    Tensor distort_mask_to_source_area(
+        const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        return launch_distort_area_to_source(
+            src, params, AreaFilterMode::NONNEGATIVE, stream);
+    }
+
+    Tensor distort_depth_to_source_area(
+        const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        return launch_distort_area_to_source(src, params, AreaFilterMode::DEPTH, stream);
+    }
+
+    Tensor distort_normal_to_source_area(
+        const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        return launch_distort_area_to_source(src, params, AreaFilterMode::NORMAL, stream);
     }
 
 } // namespace lfs::core
