@@ -230,9 +230,13 @@ namespace lfs::rendering::metal {
         impl_->device = device;
         auto options = [MTLCompileOptions new];
         options.languageVersion = MTLLanguageVersion2_4;
-        if (@available(macOS 15.0, iOS 18.0, *))
+        if (@available(macOS 15.0, iOS 18.0, *)) {
             options.mathMode = MTLMathModeSafe;
-        else {
+            // Safe prevents reassociation but leaves exp/pow in Fast mode by
+            // default. Median thresholds and Spark tails need precise FP32
+            // intrinsics across Apple GPU generations, as fastMathEnabled=NO did.
+            options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsPrecise;
+        } else {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
             options.fastMathEnabled = NO;

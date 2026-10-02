@@ -179,6 +179,7 @@ def _install_lf_stub(monkeypatch):
             "error_port": 0,
             "safe_mode": False,
         },
+        viewer_backend="auto",
         render_settings=SimpleNamespace(
             scene_upscaler="native",
             scene_upscaler_preset="native",
@@ -281,6 +282,8 @@ def _install_lf_stub(monkeypatch):
         set_panel_enabled=lambda _panel_id, _enabled: None,
         tr=tr,
         get_current_language=lambda: state.language[0],
+        get_viewer_backend_preference=lambda: state.viewer_backend,
+        set_viewer_backend_preference=lambda value="auto": setattr(state, "viewer_backend", value),
         request_redraw=lambda: None,
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
         get_project_location=lambda: "/home/tester/.lichtfeld/projects",

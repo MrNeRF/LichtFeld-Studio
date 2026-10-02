@@ -90,7 +90,12 @@ namespace lfs::rendering::metal {
             id<MTLFunction> function = [library newFunctionWithName:@"project_splats" constantValues:constants error:&error];
             if (!function)
                 throw failure("Compile Metal splat specialization", error);
-            id<MTLComputePipelineState> state = [device newComputePipelineStateWithFunction:function error:&error];
+            auto descriptor = [MTLComputePipelineDescriptor new];
+            descriptor.computeFunction = function;
+            // Every projection dispatch uses 256 lanes. Bound compiler and
+            // validator resource planning to that actual threadgroup size.
+            descriptor.maxTotalThreadsPerThreadgroup = 256;
+            id<MTLComputePipelineState> state = [device newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&error];
             if (!state)
                 throw failure("Create Metal splat pipeline", error);
             pipelines.emplace(key, state);

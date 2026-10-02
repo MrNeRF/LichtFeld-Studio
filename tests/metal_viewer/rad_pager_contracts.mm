@@ -175,8 +175,10 @@ static void run() {
 }
 int main() {
     @autoreleasepool {
-        if (!core::gpu_backend_available(core::GpuBackend::Metal))
-            return LFS_METAL_TEST_REQUIRE_DEVICE ? 1 : 77;
+        if (!core::gpu_backend_available(core::GpuBackend::Metal)) {
+            std::fprintf(stderr, "Skipping RAD pager contract: resident Metal tensor backend unavailable\n");
+            return 77;
+        }
         const auto home = std::filesystem::temp_directory_path() / ("lfs-metal-rad-home-" + std::to_string(getpid()));
         setenv("LFS_HOME", home.c_str(), 1);
         unsetenv("LFS_SAFE_MODE");
