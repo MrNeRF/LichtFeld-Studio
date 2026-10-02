@@ -52,8 +52,8 @@ TEST_F(GutUndistortParity, PreparedCameraMatchesPinholeWithoutCoefficients) {
     const auto R = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f},
                                        {3, 3}, Device::CUDA);
     const auto T = Tensor::zeros({3}, Device::CUDA);
-    // GUT reads six pinhole radial coefficients; explicitly zero the unused terms.
     const auto radial = Tensor::from_vector({-0.25f, 0.08f, 0.f, 0.f, 0.f, 0.f}, {6}, Device::CPU);
+    const auto compact_radial = Tensor::from_vector({-0.25f, 0.08f, 0.f}, {3}, Device::CPU);
     Camera A(R, T, 200.f, 200.f, 128.f, 96.f, radial, Tensor(),
              lfs::core::CameraModelType::PINHOLE, "prepared", "", "", 256, 192, 0);
     A.prepare_undistortion();
@@ -66,6 +66,8 @@ TEST_F(GutUndistortParity, PreparedCameraMatchesPinholeWithoutCoefficients) {
              A.image_width(), A.image_height(), 1);
     Camera C(R, T, 200.f, 200.f, 128.f, 96.f, radial, Tensor(),
              lfs::core::CameraModelType::PINHOLE, "distorted", "", "", 256, 192, 2);
+    Camera D(R, T, 200.f, 200.f, 128.f, 96.f, compact_radial, Tensor(),
+             lfs::core::CameraModelType::PINHOLE, "compact_distorted", "", "", 256, 192, 3);
     ASSERT_FALSE(C.is_undistort_prepared());
     ASSERT_TRUE(C.has_distortion());
 
@@ -79,20 +81,26 @@ TEST_F(GutUndistortParity, PreparedCameraMatchesPinholeWithoutCoefficients) {
     const auto image_a = render_cpu(A);
     const auto image_b = render_cpu(B);
     const auto image_c = render_cpu(C);
+    const auto image_d = render_cpu(D);
     ASSERT_EQ(image_a.shape(), image_b.shape());
     ASSERT_EQ(image_c.shape(), image_b.shape());
+    ASSERT_EQ(image_d.shape(), image_c.shape());
     ASSERT_GT(image_b.numel(), 0u);
     const float* a = image_a.ptr<float>();
     const float* b = image_b.ptr<float>();
     const float* c = image_c.ptr<float>();
-    float max_ab = 0.0f, max_cb = 0.0f, max_pixel = 0.0f;
+    const float* d = image_d.ptr<float>();
+    float max_ab = 0.0f, max_cb = 0.0f, max_cd = 0.0f, max_pixel = 0.0f;
     for (size_t i = 0; i < image_b.numel(); ++i) {
-        ASSERT_TRUE(std::isfinite(a[i]) && std::isfinite(b[i]) && std::isfinite(c[i]));
+        ASSERT_TRUE(std::isfinite(a[i]) && std::isfinite(b[i]) &&
+                    std::isfinite(c[i]) && std::isfinite(d[i]));
         max_ab = std::max(max_ab, std::abs(a[i] - b[i]));
         max_cb = std::max(max_cb, std::abs(c[i] - b[i]));
+        max_cd = std::max(max_cd, std::abs(c[i] - d[i]));
         max_pixel = std::max(max_pixel, b[i]);
     }
     EXPECT_EQ(max_ab, 0.0f);
     EXPECT_GT(max_pixel, 0.0f);
     EXPECT_GT(max_cb, 0.0f);
+    EXPECT_EQ(max_cd, 0.0f);
 }

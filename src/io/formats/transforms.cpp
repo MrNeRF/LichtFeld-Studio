@@ -253,9 +253,13 @@ namespace lfs::io {
             float k1 = 0.0f;
             float k2 = 0.0f;
             float k3 = 0.0f;
+            float k4 = 0.0f;
+            float k5 = 0.0f;
+            float k6 = 0.0f;
             float p1 = 0.0f;
             float p2 = 0.0f;
             bool is_distorted = false;
+            bool full_opencv = false;
             lfs::core::CameraModelType camera_model = lfs::core::CameraModelType::PINHOLE;
         };
 
@@ -342,8 +346,10 @@ namespace lfs::io {
                     intrinsics.camera_model = lfs::core::CameraModelType::EQUIRECTANGULAR;
                 } else if (model_str == "FISHEYE" || model_str == "OPENCV_FISHEYE") {
                     intrinsics.camera_model = lfs::core::CameraModelType::FISHEYE;
+                } else if (model_str == "FULL_OPENCV") {
+                    intrinsics.full_opencv = true;
                 } else if (model_str != "PINHOLE" && model_str != "SIMPLE_PINHOLE" &&
-                           model_str != "OPENCV" && model_str != "FULL_OPENCV") {
+                           model_str != "OPENCV") {
                     if (warnings.unknown_camera_models.insert(model_str).second)
                         LOG_WARN("Unknown camera_model '{}', defaulting to PINHOLE", model_str);
                 }
@@ -424,20 +430,47 @@ namespace lfs::io {
                 intrinsics.k2 = finite_json_float_value(*value, "k2");
             if (const auto* value = find("k3"))
                 intrinsics.k3 = finite_json_float_value(*value, "k3");
+            if (const auto* value = find("k4"))
+                intrinsics.k4 = finite_json_float_value(*value, "k4");
+            if (const auto* value = find("k5"))
+                intrinsics.k5 = finite_json_float_value(*value, "k5");
+            if (const auto* value = find("k6"))
+                intrinsics.k6 = finite_json_float_value(*value, "k6");
             if (const auto* value = find("p1"))
                 intrinsics.p1 = finite_json_float_value(*value, "p1");
             if (const auto* value = find("p2"))
                 intrinsics.p2 = finite_json_float_value(*value, "p2");
-            for (const float coefficient : {intrinsics.k1, intrinsics.k2, intrinsics.k3, intrinsics.p1, intrinsics.p2}) {
+            for (const float coefficient : {intrinsics.k1, intrinsics.k2, intrinsics.k3,
+                                            intrinsics.k4, intrinsics.k5, intrinsics.k6,
+                                            intrinsics.p1, intrinsics.p2}) {
                 if (std::abs(coefficient) > MAX_DISTORTION_MAGNITUDE)
                     throw std::runtime_error("Transforms distortion coefficient exceeds the supported range");
             }
+            const auto drop_unsupported = [&](const char* key, float& coefficient) {
+                if (coefficient != 0.0f) {
+                    warnings.unsupported_distortion_keys.insert(key);
+                    coefficient = 0.0f;
+                }
+            };
+            const bool fisheye = intrinsics.camera_model == lfs::core::CameraModelType::FISHEYE;
+            if (!intrinsics.full_opencv && !fisheye) {
+                drop_unsupported("k4", intrinsics.k4);
+                drop_unsupported("k5", intrinsics.k5);
+                drop_unsupported("k6", intrinsics.k6);
+            }
+            if (fisheye) {
+                drop_unsupported("k5", intrinsics.k5);
+                drop_unsupported("k6", intrinsics.k6);
+                drop_unsupported("p1", intrinsics.p1);
+                drop_unsupported("p2", intrinsics.p2);
+            }
             intrinsics.is_distorted = (intrinsics.k1 != 0.0f) || (intrinsics.k2 != 0.0f) ||
-                                      (intrinsics.k3 != 0.0f) || (intrinsics.p1 != 0.0f) || (intrinsics.p2 != 0.0f);
+                                      (intrinsics.k3 != 0.0f) || (intrinsics.k4 != 0.0f) ||
+                                      (intrinsics.k5 != 0.0f) || (intrinsics.k6 != 0.0f) ||
+                                      (intrinsics.p1 != 0.0f) || (intrinsics.p2 != 0.0f);
 
-            // Metashape/nerfstudio may emit higher-order distortion terms we do not model.
-            static constexpr std::array<const char*, 5> unsupported_distortion_keys = {
-                "k4", "k5", "k6", "b1", "b2"};
+            static constexpr std::array<const char*, 2> unsupported_distortion_keys = {
+                "b1", "b2"};
             for (const char* key : unsupported_distortion_keys) {
                 const auto* value = find(key);
                 if (!value || !value->is_number())
@@ -612,10 +645,26 @@ namespace lfs::io {
                 camdata._R = R.contiguous();
 
                 if (intrinsics.is_distorted) {
-                    camdata._radial_distortion =
-                        Tensor::from_vector({intrinsics.k1, intrinsics.k2, intrinsics.k3}, {3}, Device::CPU);
-                    camdata._tangential_distortion =
-                        Tensor::from_vector({intrinsics.p1, intrinsics.p2}, {2}, Device::CPU);
+                    if (intrinsics.full_opencv) {
+                        camdata._radial_distortion = Tensor::from_vector(
+                            {intrinsics.k1, intrinsics.k2, intrinsics.k3,
+                             intrinsics.k4, intrinsics.k5, intrinsics.k6},
+                            {6}, Device::CPU);
+                    } else if (intrinsics.camera_model == lfs::core::CameraModelType::FISHEYE) {
+                        camdata._radial_distortion = Tensor::from_vector(
+                            {intrinsics.k1, intrinsics.k2, intrinsics.k3, intrinsics.k4},
+                            {4}, Device::CPU);
+                    } else {
+                        camdata._radial_distortion = Tensor::from_vector(
+                            {intrinsics.k1, intrinsics.k2, intrinsics.k3},
+                            {3}, Device::CPU);
+                    }
+                    if (intrinsics.camera_model == lfs::core::CameraModelType::FISHEYE) {
+                        camdata._tangential_distortion = Tensor::empty({0}, Device::CPU);
+                    } else {
+                        camdata._tangential_distortion =
+                            Tensor::from_vector({intrinsics.p1, intrinsics.p2}, {2}, Device::CPU);
+                    }
                 } else {
                     camdata._radial_distortion = Tensor::empty({0}, Device::CPU);
                     camdata._tangential_distortion = Tensor::empty({0}, Device::CPU);

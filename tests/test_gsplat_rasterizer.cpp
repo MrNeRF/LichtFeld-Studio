@@ -1288,7 +1288,9 @@ namespace {
         auto T = Tensor::from_vector({0.f, 0.f, 3.f}, {3}, Device::CUDA);
         Tensor radial, tangential;
         if (model == lfs::core::CameraModelType::PINHOLE) {
-            radial = Tensor::from_vector({0.03f, -0.01f, 0.002f, 0.f, 0.f, 0.f}, {6}, Device::CPU);
+            radial = Tensor::from_vector(
+                {0.03f, -0.01f, 0.002f, 0.004f, -0.001f, 0.0002f},
+                {6}, Device::CPU);
             tangential = Tensor::from_vector({0.001f, -0.002f}, {2}, Device::CPU);
         } else if (model == lfs::core::CameraModelType::THIN_PRISM_FISHEYE) {
             radial = Tensor::from_vector({0.035f, 0.007f, 0.0006f, -0.0003f}, {4}, Device::CPU);

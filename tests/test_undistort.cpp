@@ -5,9 +5,13 @@
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "io/formats/colmap.hpp"
+#include <array>
+#include <bit>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <random>
+#include <utility>
 
 using namespace lfs::core;
 
@@ -86,6 +90,26 @@ namespace {
         }
     }
 
+    std::pair<float, float> direct_full_opencv_distortion(
+        const float x,
+        const float y,
+        const std::array<float, 6>& radial,
+        const std::array<float, 2>& tangential) {
+        const float r2 = x * x + y * y;
+        const float r4 = r2 * r2;
+        const float r6 = r4 * r2;
+        const float numerator =
+            1.0f + radial[0] * r2 + radial[1] * r4 + radial[2] * r6;
+        const float denominator =
+            1.0f + radial[3] * r2 + radial[4] * r4 + radial[5] * r6;
+        const float scale = numerator / denominator;
+        const float p1 = tangential[0];
+        const float p2 = tangential[1];
+        return {
+            x * scale + 2.0f * p1 * x * y + p2 * (r2 + 2.0f * x * x),
+            y * scale + p1 * (r2 + 2.0f * y * y) + 2.0f * p2 * x * y};
+    }
+
 } // namespace
 
 // ====================== Coefficient packing tests ======================
@@ -121,19 +145,144 @@ TEST(UndistortPacking, PinholeRadialAndTangential) {
 }
 
 TEST(UndistortPacking, PinholeFullRadialAndTangential) {
-    // COLMAP FULL_OPENCV: 6 radial + 2 tangential (only 3 radial used by our kernel)
-    auto radial = Tensor::from_vector({-0.1f, 0.02f, -0.003f}, TensorShape({3}), Device::CPU);
+    // COLMAP FULL_OPENCV: numerator k1-k3, denominator k4-k6, then p1-p2.
+    auto radial = Tensor::from_vector(
+        {-0.1f, 0.02f, -0.003f, 0.001f, -0.0005f, 0.0002f},
+        TensorShape({6}), Device::CPU);
     auto tangential = Tensor::from_vector({0.001f, -0.002f}, TensorShape({2}), Device::CPU);
     auto params = compute_undistort_params(
         TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H,
         radial, tangential, CameraModelType::PINHOLE);
 
-    EXPECT_FLOAT_EQ(params.distortion[0], -0.1f);   // k1
-    EXPECT_FLOAT_EQ(params.distortion[1], 0.02f);   // k2
-    EXPECT_FLOAT_EQ(params.distortion[2], -0.003f); // k3
-    EXPECT_FLOAT_EQ(params.distortion[3], 0.001f);  // p1
-    EXPECT_FLOAT_EQ(params.distortion[4], -0.002f); // p2
-    EXPECT_EQ(params.num_distortion, 5);
+    EXPECT_FLOAT_EQ(params.distortion[0], -0.1f);    // k1
+    EXPECT_FLOAT_EQ(params.distortion[1], 0.02f);    // k2
+    EXPECT_FLOAT_EQ(params.distortion[2], -0.003f);  // k3
+    EXPECT_FLOAT_EQ(params.distortion[3], 0.001f);   // k4
+    EXPECT_FLOAT_EQ(params.distortion[4], -0.0005f); // k5
+    EXPECT_FLOAT_EQ(params.distortion[5], 0.0002f);  // k6
+    EXPECT_FLOAT_EQ(params.distortion[6], 0.001f);   // p1
+    EXPECT_FLOAT_EQ(params.distortion[7], -0.002f);  // p2
+    EXPECT_EQ(params.num_distortion, 8);
+}
+
+TEST(UndistortFullOpenCV, ForwardMatchesDirectColmapFormula) {
+    std::mt19937 generator(0x46554c4cU);
+    std::uniform_real_distribution<float> numerator_distribution(-0.04f, 0.04f);
+    std::uniform_real_distribution<float> denominator_distribution(-0.01f, 0.01f);
+    std::uniform_real_distribution<float> tangential_distribution(-0.002f, 0.002f);
+    std::uniform_real_distribution<float> point_distribution(-0.7f, 0.7f);
+
+    for (int coefficient_set = 0; coefficient_set < 24; ++coefficient_set) {
+        std::array<float, 6> radial{};
+        for (int i = 0; i < 3; ++i)
+            radial[i] = numerator_distribution(generator);
+        for (int i = 3; i < 6; ++i)
+            radial[i] = denominator_distribution(generator);
+        const std::array<float, 2> tangential = {
+            tangential_distribution(generator), tangential_distribution(generator)};
+        const auto params = compute_undistort_params(
+            TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H,
+            Tensor::from_vector(
+                std::vector<float>(radial.begin(), radial.end()), {6}, Device::CPU),
+            Tensor::from_vector(
+                std::vector<float>(tangential.begin(), tangential.end()), {2}, Device::CPU),
+            CameraModelType::PINHOLE);
+
+        for (int point = 0; point < 32; ++point) {
+            const float x = point_distribution(generator);
+            const float y = point_distribution(generator);
+            const auto [expected_x, expected_y] =
+                direct_full_opencv_distortion(x, y, radial, tangential);
+            float actual_x = 0.0f;
+            float actual_y = 0.0f;
+            distort_normalized_point(params, x, y, actual_x, actual_y);
+            EXPECT_NEAR(actual_x, expected_x, 1.0e-7f);
+            EXPECT_NEAR(actual_y, expected_y, 1.0e-7f);
+        }
+    }
+}
+
+TEST(UndistortFullOpenCV, InverseRoundTripsWithinOneThousandthPixel) {
+    const std::array<float, 6> radial = {
+        -0.12f, 0.035f, -0.004f, 0.018f, -0.003f, 0.0004f};
+    const std::array<float, 2> tangential = {0.0015f, -0.001f};
+    const auto params = compute_undistort_params(
+        TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H,
+        Tensor::from_vector(
+            std::vector<float>(radial.begin(), radial.end()), {6}, Device::CPU),
+        Tensor::from_vector(
+            std::vector<float>(tangential.begin(), tangential.end()), {2}, Device::CPU),
+        CameraModelType::PINHOLE);
+
+    for (int yi = -7; yi <= 7; ++yi) {
+        for (int xi = -9; xi <= 9; ++xi) {
+            const float x = static_cast<float>(xi) * 0.065f;
+            const float y = static_cast<float>(yi) * 0.065f;
+            float distorted_x = 0.0f;
+            float distorted_y = 0.0f;
+            distort_normalized_point(
+                params, x, y, distorted_x, distorted_y);
+
+            float recovered_x = 0.0f;
+            float recovered_y = 0.0f;
+            ASSERT_TRUE(undistort_image_point(
+                params,
+                distorted_x * TEST_FX + TEST_CX,
+                distorted_y * TEST_FY + TEST_CY,
+                recovered_x, recovered_y));
+            EXPECT_NEAR(recovered_x * TEST_FX + TEST_CX,
+                        x * TEST_FX + TEST_CX, 1.0e-3f);
+            EXPECT_NEAR(recovered_y * TEST_FY + TEST_CY,
+                        y * TEST_FY + TEST_CY, 1.0e-3f);
+        }
+    }
+}
+
+TEST(UndistortFullOpenCV, ThreeCoefficientCaseIsBitIdentical) {
+    const std::vector<float> numerator = {-0.12f, 0.035f, -0.004f};
+    const auto polynomial = compute_undistort_params(
+        TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H,
+        Tensor::from_vector(numerator, {3}, Device::CPU), Tensor(),
+        CameraModelType::PINHOLE);
+    const auto rational = compute_undistort_params(
+        TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H,
+        Tensor::from_vector(
+            {numerator[0], numerator[1], numerator[2], 0.0f, 0.0f, 0.0f},
+            {6}, Device::CPU),
+        Tensor(), CameraModelType::PINHOLE);
+
+    EXPECT_EQ(polynomial.dst_width, rational.dst_width);
+    EXPECT_EQ(polynomial.dst_height, rational.dst_height);
+    EXPECT_EQ(std::bit_cast<std::uint32_t>(polynomial.dst_cx),
+              std::bit_cast<std::uint32_t>(rational.dst_cx));
+    EXPECT_EQ(std::bit_cast<std::uint32_t>(polynomial.dst_cy),
+              std::bit_cast<std::uint32_t>(rational.dst_cy));
+
+    for (int yi = -7; yi <= 7; ++yi) {
+        for (int xi = -9; xi <= 9; ++xi) {
+            const float x = static_cast<float>(xi) * 0.065f;
+            const float y = static_cast<float>(yi) * 0.065f;
+            float polynomial_x = 0.0f;
+            float polynomial_y = 0.0f;
+            float rational_x = 0.0f;
+            float rational_y = 0.0f;
+            distort_normalized_point(
+                polynomial, x, y, polynomial_x, polynomial_y);
+            distort_normalized_point(
+                rational, x, y, rational_x, rational_y);
+            EXPECT_EQ(std::bit_cast<std::uint32_t>(polynomial_x),
+                      std::bit_cast<std::uint32_t>(rational_x));
+            EXPECT_EQ(std::bit_cast<std::uint32_t>(polynomial_y),
+                      std::bit_cast<std::uint32_t>(rational_y));
+        }
+    }
+
+    auto source = Tensor::randn(
+        {3, static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)},
+        Device::CUDA);
+    const auto polynomial_image = undistort_image(source, polynomial, nullptr).cpu();
+    const auto rational_image = undistort_image(source, rational, nullptr).cpu();
+    EXPECT_EQ(polynomial_image.to_vector(), rational_image.to_vector());
 }
 
 TEST(UndistortPacking, Fisheye4Coeffs) {
@@ -246,8 +395,10 @@ TEST(UndistortPinhole, OpenCV) {
 }
 
 TEST(UndistortPinhole, FullOpenCV) {
-    // COLMAP model 6: FULL_OPENCV — k1,k2,k3 (we cap at 3 radial) + p1,p2
-    auto radial = Tensor::from_vector({-0.15f, 0.03f, -0.005f}, TensorShape({3}), Device::CPU);
+    // COLMAP model 6: FULL_OPENCV rational radial model + p1,p2.
+    auto radial = Tensor::from_vector(
+        {-0.15f, 0.03f, -0.005f, 0.02f, -0.004f, 0.0005f},
+        TensorShape({6}), Device::CPU);
     auto tangential = Tensor::from_vector({0.001f, -0.002f}, TensorShape({2}), Device::CPU);
     auto params = compute_undistort_params(
         TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H,
