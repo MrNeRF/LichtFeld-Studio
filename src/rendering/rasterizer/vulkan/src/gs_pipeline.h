@@ -88,6 +88,10 @@ public:
     _VulkanBuffer& resizeAndCopyDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool clear);
     void beginCommandBatch();
     void setGrowCommandBatchRing(bool enabled) { grow_command_batch_ring_ = enabled; }
+    // Growth-retired buffers are freed inside the gate, never immediately. The gate
+    // runs its argument once no queue of the device has work in flight.
+    using MemoryReleaseGate = std::function<void(const std::function<void()>&)>;
+    void setMemoryReleaseGate(MemoryReleaseGate gate) { memory_release_gate_ = std::move(gate); }
     void endCommandBatch(bool use_fence = true,
                          VkSemaphore signal_semaphore = VK_NULL_HANDLE,
                          std::uint64_t signal_value = 0);
@@ -216,6 +220,7 @@ protected:
         std::uint32_t key_count = 0;
     };
     std::vector<RetiredBufferShell> retired_buffer_shells_;
+    MemoryReleaseGate memory_release_gate_;
     // Scripted-test forge counter for createBuffer when allocator is null.
     std::uintptr_t test_buffer_handle_counter_ = 0xB1000;
 

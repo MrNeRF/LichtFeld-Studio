@@ -1969,6 +1969,8 @@ namespace lfs::vis {
             .cooperative_matrix = device.cooperative_matrix,
             .external_memory = vulkan_context_->externalMemoryInteropEnabled(),
             .external_semaphore = vulkan_context_->externalSemaphoreInteropEnabled(),
+            .consumer_queue = vulkan_context_->graphicsQueue(),
+            .consumer_queue_mutex = &vulkan_context_->graphicsQueueMutex(),
         };
         if (const auto status = lfs::core::adopt_vulkan_device(handles); !status) {
             LOG_WARN("Tensor Vulkan backend keeps its own device: {}", lfs::format_for_developer(status.error()));

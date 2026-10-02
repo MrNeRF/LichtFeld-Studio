@@ -1,5 +1,6 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "gs_renderer.h"
+#include <algorithm>
 #include <cassert>
 #include <limits>
 #include <map>
@@ -405,7 +406,7 @@ void VulkanGSPipeline::retireDeviceBufferForGrowth(_VulkanBuffer& deviceBuffer) 
         }
     }
 
-    if (entry.key_count == 0) {
+    if (entry.key_count == 0 && !memory_release_gate_) {
         // Immediate free: label policy depends on whether a live replacement with the
         // same profiler label already exists (see call-site comments at resize*).
         destroyBufferRetired(entry.shell);
@@ -422,23 +423,25 @@ void VulkanGSPipeline::drainRetiredBufferShells(const bool force) {
     if (retired_buffer_shells_.empty()) {
         return;
     }
-    for (auto it = retired_buffer_shells_.begin(); it != retired_buffer_shells_.end();) {
-        bool complete = force;
-        if (!complete) {
-            complete = true;
-            for (std::uint32_t i = 0; i < it->key_count; ++i) {
-                if (!timelineValueComplete(it->keys[i].semaphore, it->keys[i].value)) {
-                    complete = false;
-                    break;
-                }
-            }
+    const auto complete = [&](const RetiredBufferShell& retired) {
+        for (std::uint32_t i = 0; i < retired.key_count; ++i) {
+            if (!timelineValueComplete(retired.keys[i].semaphore, retired.keys[i].value))
+                return false;
         }
-        if (complete) {
-            destroyBufferRetired(it->shell);
-            it = retired_buffer_shells_.erase(it);
-        } else {
-            ++it;
-        }
+        return true;
+    };
+    const auto release = [&] {
+        std::erase_if(retired_buffer_shells_, [&](RetiredBufferShell& retired) {
+            if (!force && !complete(retired))
+                return false;
+            destroyBufferRetired(retired.shell);
+            return true;
+        });
+    };
+    if (force || !memory_release_gate_) {
+        release();
+    } else if (std::ranges::any_of(retired_buffer_shells_, complete)) {
+        memory_release_gate_(release);
     }
 }
 

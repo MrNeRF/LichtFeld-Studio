@@ -78,6 +78,8 @@ namespace lfs::core::internal {
         bool cooperative_matrix = false;
         bool external_memory = false;
         bool external_semaphore = false;
+        VkQueue consumer_queue = VK_NULL_HANDLE;
+        std::mutex* consumer_queue_mutex = nullptr;
     };
 
     class VulkanContext final {
@@ -149,15 +151,25 @@ namespace lfs::core::internal {
         }
         // Runs `release` while no submission is in progress or unfinished and
         // returns whether it ran. MoltenVK makes all device memory resident for
-        // every submitted command buffer without keeping it alive, so memory
-        // freed during a submit on another thread, or before it completes, faults.
+        // every submitted command buffer of every queue without keeping it alive,
+        // so memory freed during a submit on another thread, or before it
+        // completes, faults. The adopting application's queue is drained as well.
         template <class Release>
         bool run_while_queue_idle(Release&& release) {
             std::lock_guard lock(queue_mutex_);
             if (completed_timeline() < submitted_timeline())
                 return false;
+            wait_consumer_queue_idle_locked();
             release();
             return true;
+        }
+        // Blocking form: holds off new submissions until the queue drains.
+        template <class Release>
+        void run_after_queue_idle(Release&& release) {
+            std::lock_guard lock(queue_mutex_);
+            wait(submitted_timeline());
+            wait_consumer_queue_idle_locked();
+            release();
         }
         void check_fault_buffer();
         // Shaders record an out-of-range index as {code, index, extent, op}; the
@@ -214,7 +226,10 @@ namespace lfs::core::internal {
         std::atomic<bool> dead_{false};
         std::atomic<bool> device_loss_reported_{false};
         std::mutex queue_mutex_;
+        VkQueue consumer_queue_ = VK_NULL_HANDLE;
+        std::mutex* consumer_queue_mutex_ = nullptr;
         void publish_submitted_locked(uint64_t signal_value);
+        void wait_consumer_queue_idle_locked();
         std::mutex shutdown_mutex_;
         std::mutex shutdown_release_mutex_;
         std::vector<std::function<void()>> shutdown_releases_;
