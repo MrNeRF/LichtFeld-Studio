@@ -161,20 +161,21 @@ class ProjectCleanup:
                 if Path(self.destination).exists():
                     raise RuntimeError(lf.ui.tr("project_cleanup.new_destination"))
             self.before_bytes = self.plan.physical_size
+            expected_commit_uuid = str(self.plan.input_commit_uuid)
             if self.closed_file:
                 self.write_state = {"running": True, "error": ""}
 
                 def operation(progress, cancel):
                     return lf.io.clean_project_file(self.path, self.destination,
-                        str(self.plan.input_commit_uuid), progress,
+                        expected_commit_uuid, progress,
                         lambda: self.cancel_requested.is_set() or cancel())
 
                 def complete(error):
                     self.write_state = {"running": False, "error": str(error) if error else ""}
 
-                self.run_closed(operation, complete)
+                self.run_closed(operation, complete, expected_commit_uuid=expected_commit_uuid)
             else:
-                lf.project_clean(self.destination, str(self.plan.input_commit_uuid))
+                lf.project_clean(self.destination, expected_commit_uuid)
             self.cleaning = True
             # The modal also prevents edits while the durable snapshot is cleaned.
             lf.ui.form_dialog(self.key, lf.ui.tr("project_cleanup.title"), self.body(lf.ui.tr("project_cleanup.working")),

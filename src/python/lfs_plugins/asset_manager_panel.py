@@ -2937,12 +2937,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             if action == "clean":
                 from .project_cleanup import open_project_cleanup
 
-                def run_closed(operation, complete):
+                def run_closed(operation, complete, *, expected_commit_uuid):
                     current = self._asset_dict(asset_id)
                     if not current or str(current.get("path") or "") != str(asset["path"]):
                         raise RuntimeError(tr("project_cleanup.changed"))
                     if not self._start_project_operation(asset_id, tr("project_cleanup.title"), operation,
-                            operation_kind="clean", on_finished=complete):
+                            operation_kind="clean", on_finished=complete,
+                            expected_commit_uuid=expected_commit_uuid):
                         raise RuntimeError(tr("project_cleanup.changed"))
 
                 def refresh():
@@ -3248,6 +3249,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         reverify_asset: bool = False,
         closed_file: bool = True,
         on_finished: Optional[Callable[[Optional[Exception]], None]] = None,
+        expected_commit_uuid: Optional[str] = None,
     ) -> bool:
         if self._contents_busy(asset_id):
             return False
@@ -3270,6 +3272,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             asset["commit_uuid"] = str(card.commit_uuid)
         elif card is not None and native_project_id == asset_id:
             asset["commit_uuid"] = str(card.commit_uuid)
+        if expected_commit_uuid is not None:
+            # Previewed operations must guard the snapshot the user confirmed,
+            # rather than an older catalog scan or a newer unconfirmed save.
+            asset["commit_uuid"] = str(expected_commit_uuid)
         operation_id = "project-" + str(uuid.uuid4())
         cancel = threading.Event()
         metadata = dict(project_name=project_name, operation_kind=operation_kind,

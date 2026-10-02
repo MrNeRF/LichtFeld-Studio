@@ -144,7 +144,7 @@ def closed_cleanup(cleanup):
     completed = []
     cleanup.menu.lf.io.clean_project_file = lambda *args: cleanup.calls.append(args)
     c = cleanup.module.ProjectCleanup(str(cleanup.path),
-        lambda operation, finish: operations.append((operation, finish)),
+        lambda operation, finish, **kwargs: operations.append((operation, finish, kwargs)),
         lambda: completed.append(True))
     cleanup.state["path"] = str(cleanup.path.parent / "unrelated.licht")
     return c, operations, completed
@@ -159,7 +159,8 @@ def test_closed_cleanup_uses_selected_file_without_saving_active_project(cleanup
     assert c.plan is cleanup.plan
     assert not cleanup.menu.lf.confirm_dialogs
     c.choose("project_cleanup.copy" if copy else "project_cleanup.clean_here")
-    operation, finish = operations[0]
+    operation, finish, guards = operations[0]
+    assert guards == {"expected_commit_uuid": "commit-3"}
     operation(None, lambda: False)
     args = cleanup.calls[0]
     assert args[:3] == (str(cleanup.path), str(cleanup.path.parent / "copy.licht") if copy else "", "commit-3")
@@ -185,7 +186,7 @@ def test_closed_cleanup_cancellation_and_failure_do_not_use_active_writer(cleanu
     c.start()
     c.choose("project_cleanup.clean_here")
     c.cancel()
-    operation, finish = operations[0]
+    operation, finish, _guards = operations[0]
     operation(None, lambda: False)
     assert cleanup.calls[0][-1]() is True
     assert "cancel" not in cleanup.calls
@@ -207,7 +208,7 @@ def test_selected_active_project_keeps_existing_save_and_cleanup_flow(cleanup):
 def test_closed_cleanup_reports_operation_that_cannot_start(cleanup):
     c, _operations, _completed = closed_cleanup(cleanup)
     c.start()
-    def reject(*_args):
+    def reject(*_args, **_kwargs):
         raise RuntimeError("The selected file changed")
     c.run_closed = reject
     c.choose("project_cleanup.clean_here")
