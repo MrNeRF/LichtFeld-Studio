@@ -38,7 +38,9 @@ kernel void refine_split(constant RefineSplitParams& p [[buffer(0)]], uint i [[t
     const float4 q = float4(p.rotations[src * 4], p.rotations[src * 4 + 1], p.rotations[src * 4 + 2],
                             p.rotations[src * 4 + 3]);
     const float3 scale = float3(p.scales[src * 3], p.scales[src * 3 + 1], p.scales[src * 3 + 2]);
-    const float w = q.x, x = q.y, y = q.z, z = q.w;
+    // Trained quaternions drift from unit norm; projection normalizes them.
+    const float inverse_norm = fmin(rsqrt(dot(q, q)), 1e12f);
+    const float w = q.x * inverse_norm, x = q.y * inverse_norm, y = q.z * inverse_norm, z = q.w * inverse_norm;
     // Columns of the row-major rotation matrix of quat_to_rotmat.
     const float3 column[3] = {
         float3(1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y + w * z), 2.0f * (x * z - w * y)),

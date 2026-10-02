@@ -578,7 +578,7 @@ namespace lfs::training {
         };
 
         struct BackwardShParams {
-            uint64_t means, camera, shN, sh_bounds, n_touched, grads;
+            uint64_t means, camera, shN, sh_bounds, n_touched, color_depth, grads;
             AdamGroupParams sh0, shN_adam;
             float beta1, beta2, eps;
             uint32_t n;
@@ -724,13 +724,14 @@ namespace lfs::training {
             }
 
             const uint32_t blocks = div_up(f.n, 256);
-            std::vector<const Tensor*> uses{&f.means, &f.camera, &f.shN, &f.sh_bounds, &s.n_touched, &s.grads};
+            std::vector<const Tensor*> uses{&f.means, &f.camera, &f.shN, &f.sh_bounds, &s.n_touched, &s.color_depth, &s.grads};
             const BackwardShParams sh{
                 .means = mk::address(f.means),
                 .camera = mk::address(f.camera),
                 .shN = f.sh_bases > 1 ? address_if(f.shN) : 0,
                 .sh_bounds = address_if(f.sh_bounds),
                 .n_touched = mk::address(s.n_touched),
+                .color_depth = mk::address(s.color_depth),
                 .grads = mk::address(s.grads),
                 .sh0 = adam_group(group(AdamSlot::Sh0), uses),
                 .shN_adam = adam_group(group(AdamSlot::ShN), uses),

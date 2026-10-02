@@ -653,6 +653,7 @@ struct FastBackwardShParams {
     device const uchar* shN;
     device const float2* sh_bounds;
     device const uint* n_touched;
+    device const float4* color_depth;
     device float* grads;
     FastAdamGroup sh0;
     FastAdamGroup shN_adam;
@@ -679,6 +680,13 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
     if (visible) {
         device const float* g = p.grads + idx * kFastGradStride;
         grad_color = float3(g[6], g[7], g[8]);
+        // The blend clamps colour at zero. Below it, keep only the image
+        // gradients that brighten the splat; the forward never saw the rest.
+        const float3 colour = p.color_depth[idx].xyz;
+        for (uint c = 0; c < 3u; ++c) {
+            if (colour[c] < 0.0f && grad_color[c] >= 0.0f)
+                grad_color[c] = 0.0f;
+        }
         const float3 mean = float3(p.means[idx]);
         const float3 camera = float3(p.camera[0], p.camera[1], p.camera[2]);
         direction = fast_safe_normalize(mean - camera);
