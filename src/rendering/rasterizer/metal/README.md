@@ -67,8 +67,8 @@ Callers can precompile cached specializations with `prepare` before interaction.
 - SH0 specialization does not bind/read SH rest or bounds; points specialization
   does not bind/read Gaussian scales or rotations.
 - Affine object transforms, positive-view-Z perspective projection, normalized
-  source quaternion, covariance projection, contribution bounds, near/far and
-  deleted-mask rejection. Screen positions/depth use the requested render extent.
+  source quaternion, covariance projection, contribution bounds, the shared
+  raster near threshold and deleted-mask rejection. Screen positions/depth use the requested render extent.
 - Caller-owned projection output and input lifetimes. Metal retains resources
   of normal command buffers; producers must be synchronized before encoding.
   Input mutation or scratch reuse before completion is not allowed. No borrowed
@@ -181,8 +181,9 @@ pinhole Jacobian, 0.075-pixel GS dilation, normalized Gaussian tails and portal
 billboard limits. The GUT path retains its 0.3 dilation, no mip compensation,
 raw ray geometry and explicit clamped billboard fragment bound. Tone operators
 are applied per Gaussian before blending, with no second tone pass. Portal GS
-uses the reference's macro-relative FP16 footprint; native accumulation remains
-FP32. An independent analytic alpha contract and eighteen macOS-only comparisons
+uses the reference's macro-relative FP16 footprint and half color partials
+with FP32 composition. Exact depth uses independent FP32 transmittance.
+An independent analytic alpha contract and macOS comparisons
 cover SH0/Q16, mip, orthographic, depth, export, close range, GUT/panoramas, ACES,
 affine transforms, selection, crop and markers. Existing parity limits are retained.
 
@@ -291,12 +292,15 @@ Independent GPU contracts cover coarse/fine/non-monotone cuts, transition
 complements, missing/partial pages, fade, budget retries, lifetimes and dynamic
 GPU count-to-projection reuse. Twelve real Metal/Vulkan comparisons cover SH0/Q16,
 budget, mip, orthographic, depth, export, portal/tone, Spark, selection and transforms.
-GPU tests and comparison binaries are restricted to macOS; CPU policy tests
-remain available to Windows/Linux CI without a GPU.
+Native Metal GPU tests and comparison binaries are restricted to macOS;
+CPU policy tests remain available to Windows/Linux CI without a GPU. The
+independent Vulkan depth test can also be enabled on a Vulkan GPU runner.
 
 The desktop UI, grid, gizmos and final composition still use Vulkan. This
 backend is not yet a fully independent Metal desktop presentation/editor stack.
-Auto prefers compatible Metal frames and falls back to Vulkan; no global Vulkan shader is modified.
+Auto prefers compatible Metal frames and falls back to Vulkan. The separate
+HiGS median-depth correction affects the shared Vulkan compose shader; it is
+covered by the independent Vulkan GPU contracts described below.
 
 Dense GUT reservations can switch from 8x8/two-SIMD blend groups to
 8x4/SIMD32 groups using their already completed instance counts. The threshold
@@ -367,22 +371,12 @@ depth, crop/ellipsoid/window, committed/preview selection, center markers, flash
 and affine transforms. Color gates are max 4/255 and RMS 1/255. Depth separately
 reports full-image error, same-coverage error and coverage disagreement; its
 gate allows at most 0.1% disagreement, max 4/255 and RMS 1/255 on shared coverage.
-FP32 native and FP16 reference blending can cross the 50% median boundary on
-different pixels. A passing depth gate does not mean pixel-identical depth.
-
-A local macOS real-scene check imported a 1,179,648-splat SH0 PLY, rendered it
-with confirmed native routing, exercised exact 3DGS mask queries and positive
-GS/GUT ring picking, and applied whole-node translation/rotation/scale with undo.
-SPZ export/reimport and spatial/temporal reconstruction succeeded, including
-convergence to zero remaining temporal samples. Native repeated captures were
-identical. The three GUT color comparisons differed by at most 1/255 after the
-saturation correction below. The first 3DGS Vulkan frame uses its legacy warmup
-chain and differs at 28 pixels by more than 4/255; later frames use its macro
-chain, with isolated reference variation of up to 6/255 and RMS 0.000529. Later
-repeats reproduced that variation between Vulkan captures of the same scene;
-the corresponding native captures remained identical. These are measured scene-specific results,
-not pixel identity or a guarantee for every scene, camera or editor workflow.
-Synthetic maximum-error gates remain unchanged.
+Exact median depth uses FP32 transmittance in both renderers, independently
+of half color partials. Rounded projected footprints can still move individual
+pixels across the 50% threshold. The two reduced perspective-view regressions
+exercise production Metal projection and sorting without a downloaded model;
+they retain the focal-division/FMA ordering needed at those boundaries.
+A passing depth gate does not mean pixel-identical depth.
 
 The desktop GUT adapter explicitly matches the legacy Vulkan saturating-color
 rule: if the next transmittance is below 1e-4, that splat's color and alpha update
@@ -391,13 +385,14 @@ the reference. GS macro composition and native analytic/Spark rendering retain
 their include-last-contributor equations. Independent GPU assertions test both
 color modes and unchanged expected depth. Two macOS comparison fixtures use
 nearly opaque overlapping Gaussians: the GUT fixture fails before this correction
-with a 10/255 maximum color error and passes afterward. No Vulkan shader changes.
+with a 10/255 maximum color error and passes afterward. This GUT color rule
+does not change the Vulkan shader.
 
 The native desktop boundary returns structured `lfs::Result`/`lfs::Status`
 errors, preserving existing typed causes and classifying invalid arguments,
 missing tickets, empty output and memory admission failures. Explicit adapters
 retain the existing Vulkan-facing string contracts. Backend routing logs are
-emitted on successful frames and route changes, including Automatic and fallback;
+emitted on successful frames and route changes, including Auto and fallback;
 tensor selection is logged after startup preflight. Preferences reject unavailable
 CUDA/Metal choices with a localized dialog and preserve the previous settings.
 
@@ -409,6 +404,39 @@ Metal presentation and its own device/simulator verification.
 The existing tensor Metal backend's OS/feature requirements do not automatically
 become this viewer's requirements. This module currently compiles MSL 2.4 and
 does not depend on the tensor backend's Metal 4 submission machinery.
+
+## Vulkan median-depth regression
+
+HiGS color partials use FP16. A batch whose true transmittance is just above
+0.5 can round to exactly 0.5; using that rounded value to locate the median
+can leave a hole or select the wrong depth. The compose shader therefore carries
+independent FP32 depth transmittance across batches and raster waves. Color
+composition and approximate focus-pick depth retain their existing behavior.
+
+The independent [Vulkan depth contracts](../../../../tests/vulkan_viewer/README.md)
+dispatch the production shader with explicit expected depths and cover batch
+rounding, both profiles, edge lanes, continued state and empty-frame reuse.
+They run in macOS CI without the Metal tensor backend and can be enabled on
+other Vulkan GPU runners. Windows/Linux CPU CI leaves them disabled.
+
+This correctness fix has an exact-depth replay cost. Performance comparisons
+must identify the Vulkan revision; the cost is not a native Metal optimization.
+The optional shader-directory argument on `vulkan_depth_contracts` supports a
+negative control using pre-fix SPIR-V, without replacing production binaries.
+
+## Known limitations
+
+- Metal is not faster for every scene or camera. Benchmark native-resolution
+  frames with identical settings, actual backend identity and retained samples.
+- The public Flowers SH3 PLY still exposes a strict transparent straight-RGB
+  difference at very low alpha. Its black/white composites are much closer,
+  but the existing straight-RGB gate remains unchanged and the case is open.
+- The shared loader does not accept the compressed PlayCanvas PLY variant;
+  unsupported input is not a renderer parity result.
+- Desktop composition, UI, grid and gizmos remain Vulkan. A complete iOS app
+  requires separate presentation/input integration and device verification.
+- Native Windows/Linux execution and online CI results must be reported
+  separately from local Mac validation.
 
 ## Reproduce the native GPU contracts
 
@@ -441,7 +469,7 @@ The optional `LFS_TEST_METAL_VULKAN_INTEROP=ON` test links an existing Vulkan SD
 provide `Vulkan_INCLUDE_DIR`, `Vulkan_LIBRARY` and an existing macOS ICD through
 `VK_DRIVER_FILES`. It tests native texture import and Metal-to-Vulkan GPU timeline
 ordering with an exact readback comparison. It does not test a descriptor-based
-desktop draw or authorize rebuilding/installing MoltenVK. The texture is imported
+desktop draw or install/rebuild MoltenVK. The texture is imported
 already backed by Metal memory, as specified by `VK_EXT_metal_objects`.
 
 ## macOS Vulkan/Metal benchmark
@@ -463,7 +491,8 @@ warmup excludes shader compilation and initial reservations. Each measured frame
 waits for its actual GPU completion. Native overflow/error output is rejected.
 CPU image readback and complete desktop UI/composition are excluded. These are
 serial completed-frame wall latencies, not GPU kernel timestamps or pipelined
-viewer FPS. Safe mode isolates the process from saved user preferences.
+viewer FPS. An isolated temporary preferences home preserves user settings;
+safe mode is disabled so the reference can explicitly select Vulkan.
 
 `--input /path/to/scene.ply` (or another shared-loader splat format) measures a
 real resident model. Loading, optional Q16 codec preparation and camera fitting
@@ -501,15 +530,6 @@ in [0,1]; arbitrary RGB at zero alpha is not treated as visible color. These
 additional diagnostics do not change either renderer or its alpha threshold.
 Eight Mac-only imported PLY RGBA comparisons exercise fitted nonidentity cameras,
 both tensor backends, Studio/portal GUT and perspective/orthographic views.
-The 1.18M PLY GUT transparency check found one coverage-boundary disagreement
-among 400800 pixels: raw straight-RGB max 135/255, common-coverage max 1/255,
-alpha max 1/255, and black/white composited max about 1.14/255. This numerical
-tail remains explicitly reported; the renderers are not pixel-identical.
-All metrics remain visible even without `--verify-parity`. On the same 1.18M SH0 PLY/camera at 600x668, the latest paired
-opaque and transparent GS runs each stayed within 2/255 maximum RGB error;
-transparent alpha stayed within 1/255. This is a measured scene/camera result,
-not pixel identity or a universal image-error bound.
-
 The JSON contains raw samples, median/p95, Vulkan/Metal median ratio, image
 MAE/RMSE/PSNR/max error, device/OS/compiler, validation environment, and combined
 process peak RSS. A ratio above one means Metal was faster for that case only.
@@ -570,22 +590,6 @@ matched 3DGS selection indices exactly. Seven GUT brush IDs differed from the
 legacy Vulkan arithmetic within 0.002 pixels of the boundary; independent double
 projection confirmed the native decisions in every case. This is semantic and
 numerical parity, not a promise of bit-identical floating-point boundary decisions.
-
-Local paired tests on an Apple M4 Pro illustrate the effect of the blend changes,
-without establishing a universal speed advantage. On the 1.18M SH0 PLY at 600x668,
-native 3DGS fell from 31.5 ms to roughly 11 ms, and GUT from 62.2 ms to 31.5 ms.
-Vulkan varied around 8.7-12.9 ms for GS and 26.6-27.2 ms for GUT. The native GS
-image remained byte-identical through the optimizations; repeated reference GS
-runs varied at isolated pixels (up to 6/255) without Vulkan source changes. Those
-full errors remain reported: a real-input strict parity run can reject them, and
-its 4/255 gate is not weakened. GUT stayed within 1/255. The synthetic 100k
-SH0/Q16 tests measured about 2.3x for GS and 1.4x for GUT in these runs. All figures
-are serial completed-frame latency, exclude desktop composition and must be
-retested on other scenes/devices. The later conservative GUT support-sphere
-culling reduced the same real-scene native median to 15.3 ms versus Vulkan's
-26.7 ms (1.75x in that paired run), while retaining max error 1/255. These are
-scene-specific measurements, not a universal or CI speed gate.
-
 
 Desktop Gaussian admission uses the reference full-camera center bounds with a
 20% margin before covariance expansion. Oversized off-frustum Gaussians therefore
