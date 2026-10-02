@@ -275,7 +275,8 @@ namespace lfs::core {
             size_t reset_every = 3'000;
             bool gut = false;
             bool undistort = false;
-            float steps_scaler = 1.f; // Scales training step counts; values <= 0 disable scaling
+            float steps_scaler = 1.f;       // Scales training step counts; values <= 0 disable scaling
+            float image_count_scaler = 1.f; // Share of steps_scaler applied by the GUI image-count auto-scale
 
             // MRNF strategy specific parameters
             float growth_grad_threshold = 0.003f;
@@ -511,6 +512,9 @@ namespace lfs::core {
             // True when -i/--iter was provided. Resume adapters use this to
             // distinguish an explicit continuation target from the default.
             bool cli_iterations_set = false;
+            // True when the command line set any absolute step value; the GUI
+            // image-count auto-scale then leaves that strategy untouched.
+            bool cli_step_values_set = false;
 
             ExplicitTrainingOverrides overrides;
 

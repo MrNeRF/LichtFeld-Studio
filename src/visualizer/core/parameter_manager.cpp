@@ -31,11 +31,11 @@ namespace lfs::vis {
         }
 
         void apply_scaler_to_params(lfs::core::param::OptimizationParameters& p, const float new_scaler) {
-            const float prev = p.steps_scaler;
-            p.steps_scaler = new_scaler;
-            if (new_scaler <= 0.0f)
-                return;
-            const float ratio = (prev > 0.0f) ? (new_scaler / prev) : new_scaler;
+            const bool enabled = p.steps_scaler > 0.0f;
+            const float user_scaler = enabled ? p.steps_scaler / p.image_count_scaler : 1.0f;
+            const float ratio = enabled ? new_scaler / p.image_count_scaler : new_scaler;
+            p.image_count_scaler = new_scaler;
+            p.steps_scaler = user_scaler * new_scaler;
             if (std::abs(ratio - 1.0f) < 0.001f)
                 return;
             p.scale_steps(ratio);
@@ -67,6 +67,7 @@ namespace lfs::vis {
                 "ParameterManager is not loaded");
         }
         return lfs::io::project::ParameterManagerSnapshot{
+            .cli_step_locked_strategy = cli_step_locked_strategy_,
             .active_strategy = active_strategy_,
             .mcmc_session = mcmc_session_,
             .mrnf_session = mrnf_session_,
@@ -142,6 +143,7 @@ namespace lfs::vis {
     void ParameterManager::installValidatedPendingProjectState(
         const lfs::io::project::ParameterManagerSnapshot& snapshot) {
         std::lock_guard lock(params_mutex_);
+        cli_step_locked_strategy_ = snapshot.cli_step_locked_strategy;
         active_strategy_ = std::string(
             lfs::core::param::canonical_strategy_name(snapshot.active_strategy));
         mcmc_session_ = snapshot.mcmc_session;
@@ -238,6 +240,7 @@ namespace lfs::vis {
         }
 
         std::lock_guard lock(params_mutex_);
+        cli_step_locked_strategy_.reset();
         active_strategy_ = std::string(lfs::core::param::kStrategyMRNF);
         mcmc_session_ = lfs::core::param::OptimizationParameters::mcmc_defaults();
         mcmc_current_ = mcmc_session_;
@@ -267,6 +270,10 @@ namespace lfs::vis {
         const auto& opt = params.optimization;
         if (!opt.strategy.empty())
             setActiveStrategy(opt.strategy);
+
+        cli_step_locked_strategy_ = (params.cli_iterations_set || params.cli_step_values_set)
+                                        ? std::optional(active_strategy_)
+                                        : std::nullopt;
 
         auto* session = &mrnf_session_;
         auto* current = &mrnf_current_;
@@ -320,6 +327,7 @@ namespace lfs::vis {
 
     void ParameterManager::importParams(const lfs::core::param::OptimizationParameters& params) {
         std::lock_guard lock(params_mutex_);
+        cli_step_locked_strategy_.reset();
         if (!params.strategy.empty()) {
             setActiveStrategy(params.strategy);
         }
@@ -349,6 +357,7 @@ namespace lfs::vis {
         }
 
         std::lock_guard lock(params_mutex_);
+        cli_step_locked_strategy_.reset();
         if (!params.optimization.strategy.empty()) {
             setActiveStrategy(params.optimization.strategy);
         }
@@ -403,9 +412,14 @@ namespace lfs::vis {
                                      : static_cast<float>(image_count) / static_cast<float>(BASE_IMAGE_COUNT);
 
         std::lock_guard lock(params_mutex_);
-        apply_scaler_to_params(mcmc_current_, new_scaler);
-        apply_scaler_to_params(mrnf_current_, new_scaler);
-        apply_scaler_to_params(igs_current_, new_scaler);
+        for (auto* params : {&mcmc_current_, &mrnf_current_, &igs_current_}) {
+            if (cli_step_locked_strategy_ &&
+                lfs::core::param::canonical_strategy_name(params->strategy) == *cli_step_locked_strategy_) {
+                LOG_INFO("Auto-scale skipped for {}: step values set on the command line", *cli_step_locked_strategy_);
+                continue;
+            }
+            apply_scaler_to_params(*params, new_scaler);
+        }
         markDirty();
         LOG_INFO("Auto-scaled steps for {} images: scaler={:.2f}", image_count, new_scaler);
     }

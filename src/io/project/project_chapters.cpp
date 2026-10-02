@@ -3293,6 +3293,7 @@ namespace lfs::io::project {
                 "PRMS", "presets");
         }
         cached_snapshot_ = ParameterManagerSnapshot{
+            .cli_step_locked_strategy = std::nullopt,
             .active_strategy = *active,
             .mcmc_session = std::move(mcmc_session->parameters),
             .mrnf_session = std::move(mrnf_session->parameters),
