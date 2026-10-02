@@ -27,6 +27,7 @@
 #include "core/tensor_image.hpp"
 #include "cuda_backend_test.hpp"
 #include "io/dataset_scene_import.hpp"
+#include "io/formats/ply.hpp"
 #include "lfs/training/idle_arena_scratch.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/ops/fast_services.hpp"
@@ -2494,6 +2495,73 @@ namespace {
         for (const auto& field : result.snapshot.fields)
             for (const float value : field.values)
                 ASSERT_TRUE(std::isfinite(value)) << field.name;
+    }
+
+    // Master #2641: below black, a colour takes only the image gradients that
+    // brighten it, on every backend. Trained splats whose blue is below zero.
+    TEST(TrainingOpsFast, ColourBelowBlackTakesOnlyBrighteningGradients) {
+        const auto path = std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/clamped_colour_regression.ply.fixture";
+        ASSERT_TRUE(std::filesystem::is_regular_file(path));
+        int ran = 0;
+        for (const GpuBackend backend : {GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal}) {
+            const auto* table = lfs::training::training_ops(backend).fast;
+            if (table == nullptr || !lfs::core::gpu_backend_available(backend))
+                continue;
+            const lfs::test::DefaultGpuBackendForTesting scope(backend);
+            ASSERT_TRUE(scope.switched());
+            ++ran;
+            auto loaded = lfs::io::load_ply(path);
+            ASSERT_TRUE(loaded.has_value()) << lfs::format_for_developer(loaded.error());
+            auto model = std::move(loaded->value);
+            model.set_active_sh_degree(0);
+            ASSERT_EQ(model.size(), 32);
+            std::vector<float> rotation = {0.980588226f, 0.079929263f, -0.179047602f,
+                                           -0.0259451419f, 0.958005654f, 0.285573136f,
+                                           0.194354266f, -0.275384239f, 0.941482841f};
+            std::vector<float> translation = {-0.339415499f, -1.93373719f, 3.83564182f};
+            lfs::core::Camera camera(Tensor::from_vector(rotation, {3, 3}, Device::GPU),
+                                     Tensor::from_vector(translation, {3}, Device::GPU), 64.f, 64.f, 32.f, 32.f,
+                                     Tensor(), Tensor(), lfs::core::CameraModelType::PINHOLE, "regression", "",
+                                     std::filesystem::path{}, 64, 64, 0);
+            const auto original = model.sh0().cpu();
+            auto background = Tensor::zeros({3}, Device::GPU);
+
+            const auto blue_change = [&](const float image_gradient) {
+                model.sh0() = original.to(Device::GPU);
+                lfs::training::AdamOptimizer optimizer(model, {.lr = 0.01f, .beta1 = 0.9, .beta2 = 0.999, .eps = 0.1f});
+                optimizer.allocate_gradients();
+                optimizer.zero_grad(1);
+                ops::FastSaved saved{.backend = table->create()};
+                lfs::training::RenderOutput output;
+                const auto result = lfs::training::fast_render(*table, saved, camera, model, background,
+                                                               0, 0, 0, 0, false, {}, true, false, output);
+                EXPECT_EQ(result.code, ops::RasterResult::Code::Success) << result.message;
+                const auto shape = output.image.shape();
+                const size_t plane = shape[1] * shape[2];
+                std::vector<float> grad(3 * plane, 0.f);
+                std::fill(grad.begin() + 2 * plane, grad.end(), image_gradient);
+                auto adam = optimizer.prepare_fastgs_fused_adam(1, lfs::core::TensorExecutionTarget::current());
+                Tensor densification, error, edges, scores;
+                table->backward(saved,
+                                {Tensor::from_vector(grad, shape, Device::GPU), Tensor(), Tensor(), Tensor()},
+                                densification, error, edges, scores, adam, DensificationType::None);
+                table->release(saved);
+                const auto after = model.sh0().cpu();
+                float largest = 0.f;
+                for (size_t i = 0; i < 32; ++i) {
+                    const float change = after.ptr<float>()[i * 3 + 2] - original.ptr<float>()[i * 3 + 2];
+                    if (std::fabs(change) > std::fabs(largest))
+                        largest = change;
+                }
+                return largest;
+            };
+            const float darker = blue_change(1.f);
+            const float brighter = blue_change(-1.f);
+            EXPECT_NEAR(darker, 0.f, 1e-6f) << lfs::core::gpu_backend_name(backend);
+            EXPECT_GT(brighter, 1e-4f) << lfs::core::gpu_backend_name(backend);
+        }
+        if (ran == 0)
+            GTEST_SKIP() << "no Fast training backend available";
     }
 
     TEST(TrainingVulkanOps, EvaluationImageUploadPreservesBytes) {

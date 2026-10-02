@@ -5282,6 +5282,9 @@ namespace lfs::training {
             if (progress_) {
                 progress_->pause();
             }
+            if (on_paused_) {
+                on_paused_(iter);
+            }
             // B3: the previous step is complete; release the production loss arena.
             if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
                 training_ops_->photometric->reset(photo_saved_);

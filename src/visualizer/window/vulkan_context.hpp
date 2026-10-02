@@ -204,6 +204,7 @@ namespace lfs::vis {
         [[nodiscard]] VkPhysicalDevice physicalDevice() const { return physical_device_; }
         [[nodiscard]] VkDevice device() const { return device_; }
         [[nodiscard]] VkQueue graphicsQueue() const { return graphics_queue_; }
+        [[nodiscard]] std::mutex& graphicsQueueMutex() { return graphics_queue_mutex_; }
         [[nodiscard]] uint32_t graphicsQueueFamily() const { return graphics_queue_family_; }
         [[nodiscard]] VmaAllocator allocator() const { return allocator_; }
         [[nodiscard]] std::size_t queryVmaUsedBytes(

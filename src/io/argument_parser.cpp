@@ -43,7 +43,7 @@ namespace lfs::io::args {
 
         // Registry ranges are UI-clamp semantics; CLI acceptance is intentionally wider.
         constexpr std::array OPTIMIZATION_CLI_BINDINGS{
-            OptimizationCliBinding{"--iter", "iterations", Integer},
+            OptimizationCliBinding{"--iter", "iterations", Integer, false, "; cannot be combined with --steps-scaler"},
             OptimizationCliBinding{"--strategy", "strategy", String, false, "; legacy aliases: mnrf, lfs"},
             OptimizationCliBinding{"--sh-degree", "sh_degree", Integer},
             OptimizationCliBinding{"--sh-degree-interval", "sh_degree_interval", Integer},
@@ -52,7 +52,7 @@ namespace lfs::io::args {
             OptimizationCliBinding{"--min-opacity", "min_opacity", Float},
             OptimizationCliBinding{"--cropbox-lr-scale", "cropbox_lr_scale", Float},
             OptimizationCliBinding{"--cropbox-loss-weight", "cropbox_loss_weight", Float},
-            OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float},
+            OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float, false, "; cannot be combined with --iter"},
             OptimizationCliBinding{"--no-error-map", "use_error_map", Bool, true},
             OptimizationCliBinding{"--densify-error-map", "densify_error_map", Enum, false,
                                    "; values: ssim, ssim_cs"},
@@ -838,6 +838,34 @@ namespace {
                 return std::unexpected(std::format("Parse error: {}\n{}", e.what(), parser.Help()));
             }
 
+            const auto cli_option_present = [&args](const std::initializer_list<std::string_view> names) {
+                for (size_t i = 1; i < args.size(); ++i) {
+                    const std::string_view arg = args[i];
+                    for (const std::string_view name : names) {
+                        if (arg == name) {
+                            return true;
+                        }
+                        if (name.starts_with("--") &&
+                            arg.size() > name.size() &&
+                            arg.starts_with(name) &&
+                            arg[name.size()] == '=') {
+                            return true;
+                        }
+                        const bool short_option_with_joined_value =
+                            name.size() == 2 && name[1] != '-' &&
+                            arg.size() > name.size() && arg.starts_with(name);
+                        if (short_option_with_joined_value) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
+
+            if (cli_option_present({"-i", "--iter"}) && cli_option_present({"--steps-scaler"})) {
+                return std::unexpected("--iter and --steps-scaler are mutually exclusive: --iter sets the iteration count exactly, --steps-scaler rescales the default schedule");
+            }
+
             // Initialize logger (CLI args override environment variable)
             {
                 auto level = lfs::core::LogLevel::Info;
@@ -1280,24 +1308,6 @@ namespace {
                 return std::unexpected("ERROR: --bg-image-path is required when --bg-mode image");
             }
 
-            const auto cli_option_present = [&args](const std::initializer_list<std::string_view> names) {
-                for (size_t i = 1; i < args.size(); ++i) {
-                    const std::string_view arg = args[i];
-                    for (const std::string_view name : names) {
-                        if (arg == name) {
-                            return true;
-                        }
-                        if (name.starts_with("--") &&
-                            arg.size() > name.size() &&
-                            arg.starts_with(name) &&
-                            arg[name.size()] == '=') {
-                            return true;
-                        }
-                    }
-                }
-                return false;
-            };
-
             std::optional<std::vector<size_t>> eval_steps_val;
             if (cli_option_present({"--eval-steps"})) {
                 auto steps = parse_eval_steps(::args::get(eval_steps));
@@ -1455,10 +1465,21 @@ namespace {
                         target = true;
                 };
 
+                if (steps_scaler_val) {
+                    opt.steps_scaler = *steps_scaler_val;
+                    opt.image_count_scaler = 1.f;
+                }
+                opt.apply_step_scaling();
+
                 // Apply all overrides
                 setVal(iterations_val, opt.iterations);
                 params.cli_iterations_set =
                     iterations_val.has_value();
+                params.cli_step_values_set = iterations_val.has_value() ||
+                                             sh_degree_interval_val.has_value() ||
+                                             morton_reorder_interval_val.has_value() ||
+                                             fill_pacing_iter_val.has_value() ||
+                                             (eval_steps_val && !eval_steps_val->empty());
                 note_opt("iterations", iterations_val.has_value());
                 setVal(resize_factor_val, ds.resize_factor);
                 note_ds("resize_factor", resize_factor_explicit);
@@ -1475,7 +1496,6 @@ namespace {
                 setFlag(tcp_connection_flag, svs.tcp_connection);
                 setVal(images_folder_val, ds.images);
                 setVal(test_every_val, ds.test_every);
-                setVal(steps_scaler_val, opt.steps_scaler);
                 setVal(sh_degree_interval_val, opt.sh_degree_interval);
                 if (morton_reorder_interval_val) {
                     opt.morton_reorder_interval = static_cast<size_t>(*morton_reorder_interval_val);
@@ -1629,6 +1649,7 @@ namespace {
                 note_opt("max_cap", max_cap_val.has_value());
                 note_opt("steps_scaler", steps_scaler_val.has_value());
                 note_opt("sh_degree_interval", sh_degree_interval_val.has_value());
+                note_opt("morton_reorder_interval", morton_reorder_interval_val.has_value());
                 note_opt("sh_degree", sh_degree_val.has_value());
                 note_opt("min_opacity", min_opacity_val.has_value());
                 note_opt("cropbox_lr_scale", cropbox_lr_scale_val.has_value());
@@ -1736,11 +1757,6 @@ namespace {
         }
     }
 
-    void apply_step_scaling(lfs::core::param::TrainingParameters& params) {
-        auto& opt = params.optimization;
-        opt.apply_step_scaling();
-    }
-
     void apply_ppisp_defaults(lfs::core::param::TrainingParameters& params) {
         auto& opt = params.optimization;
         if (!opt.ppisp_use_controller)
@@ -1825,7 +1841,6 @@ lfs::io::args::parse_args_and_params(int argc, const char* const argv[]) {
         return std::unexpected("--eval-steps needs --eval or --eval-all; without them no evaluation runs");
     if (params->optimization.eval_all && flag_given("--test-every"))
         return std::unexpected("--test-every selects held-out images; --eval-all trains on every image and evaluates all of them");
-    apply_step_scaling(*params);
     apply_ppisp_defaults(*params);
 
     if (auto error = params->validate(); !error.empty())

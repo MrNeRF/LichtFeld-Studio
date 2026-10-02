@@ -2007,7 +2007,8 @@ namespace lfs::vis {
             python::update_training_state(true, "running");
         });
 
-        state::TrainingPaused::when([](const auto&) {
+        state::TrainingPaused::when([this](const auto& event) {
+            training_progress_publisher_.publishFinal(event.iteration);
             auto& store = app_store();
             lfs::core::reactive::BatchUpdate batch(store.store());
             store.training_running.set(false);
@@ -2023,7 +2024,8 @@ namespace lfs::vis {
             python::update_training_state(true, "running");
         });
 
-        state::TrainingCompleted::when([](const auto& event) {
+        state::TrainingCompleted::when([this](const auto& event) {
+            training_progress_publisher_.publishFinal(event.iteration);
             const char* state = !event.success       ? "error"
                                 : event.user_stopped ? "stopped"
                                                      : "completed";
@@ -2494,6 +2496,11 @@ namespace lfs::vis {
         }
         if (rendering_manager_ && rendering_manager_->hasParkedArenaRetry())
             consider_timeout(kArenaRetryPollSeconds, "arena_retry");
+        if (rendering_manager_ && trainer_manager_ && trainer_manager_->isRunning()) {
+            const double settle_wait = rendering_manager_->secondsUntilCameraSettle();
+            if (std::isfinite(settle_wait))
+                consider_timeout(std::max(kScheduledRedrawMinWaitSeconds, settle_wait), "camera_settle");
+        }
         if (rendering_manager_ && trainer_manager_ && trainer_manager_->isRunning())
             consider_timeout(std::max(kScheduledRedrawMinWaitSeconds,
                                       rendering_manager_->secondsUntilTrainingRefresh()),

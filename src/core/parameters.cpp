@@ -21,6 +21,7 @@
 #include <iomanip>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <sstream>
@@ -159,6 +160,16 @@ namespace lfs::core {
                 return parse_overlay_object(text).contains(key);
             }
 
+            // Older builds keep both keys as unknown data while rewriting steps_scaler,
+            // so the image share is trusted only next to the total it was written with.
+            std::optional<float> stored_image_count_scaler(const nlohmann::json& json, const float steps_scaler) {
+                if (!json.contains("image_count_scaler") || !json.contains("image_count_scaler_total"))
+                    return std::nullopt;
+                if (json.at("image_count_scaler_total").get<float>() != steps_scaler)
+                    return std::nullopt;
+                return json.at("image_count_scaler").get<float>();
+            }
+
             void apply_optimization_json_overlay(
                 OptimizationParameters& params,
                 const nlohmann::json& json,
@@ -190,6 +201,8 @@ namespace lfs::core {
                     }
                 }
                 read_registered_optimization_properties(json, params, skip_missing);
+                if (const auto image_count_scaler = stored_image_count_scaler(json, params.steps_scaler))
+                    params.image_count_scaler = *image_count_scaler;
 
                 if (backend)
                     params.set_raster_backend(*backend);
@@ -366,6 +379,8 @@ namespace lfs::core {
             opt_json["strategy"] = canonical_strategy.empty() ? strategy : std::string(canonical_strategy);
 
             // Residue not represented by scalar registry properties.
+            opt_json["image_count_scaler"] = image_count_scaler;
+            opt_json["image_count_scaler_total"] = steps_scaler;
             opt_json["eval_steps"] = eval_steps;
             opt_json["save_steps"] = save_steps;
             opt_json["enable_save_eval_images"] = enable_save_eval_images;
@@ -475,6 +490,8 @@ namespace lfs::core {
                 return std::format("init_opacity must be finite and within (0, 1) (got {})", init_opacity);
             if (!std::isfinite(mask_opacity_penalty_power) || mask_opacity_penalty_power <= 0.0f)
                 return std::format("mask_opacity_penalty_power must be finite and positive (got {})", mask_opacity_penalty_power);
+            if (!std::isfinite(image_count_scaler) || image_count_scaler <= 0.f)
+                return std::format("image_count_scaler must be finite and positive (got {})", image_count_scaler);
             if (!std::isfinite(steps_scaler))
                 return std::format("steps_scaler must be finite (got {})", steps_scaler);
             if (!std::isfinite(max_screen_share))
@@ -794,6 +811,9 @@ namespace lfs::core {
                 }
             }
             apply_optimization_json_overlay(params, json, false);
+            // Legacy GUI saves recorded the image factor in steps_scaler.
+            if (!stored_image_count_scaler(json, params.steps_scaler))
+                params.image_count_scaler = params.steps_scaler > 0.f ? params.steps_scaler : 1.f;
             return params;
         }
 

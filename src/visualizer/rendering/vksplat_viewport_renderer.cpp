@@ -14,6 +14,7 @@
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda_vulkan_interop.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #endif
 #include "core/executable_path.hpp"
 #include "core/exportable_storage.hpp"
@@ -254,17 +255,16 @@ namespace lfs::vis {
                 try {
                     // The UI thread barely waits for training: while the trainer
                     // holds the frame, or its last frame still runs on the GPU,
-                    // this declines and the reservation below keeps the next
-                    // training frame out until the next viewport frame retries.
+                    // this declines. Active waiters in the rendering manager
+                    // reserve the next available window before retrying.
                     // An unbounded wait would deadlock on refining iterations,
                     // where the trainer holds the frame while blocked on the
                     // exclusive render lock our caller's shared lock excludes.
                     const auto token = handoff_token ? *handoff_token : 0;
                     auto frame_id = arena_->try_begin_render_frame_for(1, token);
                     if (!frame_id) {
-                        if (handoff_token) {
-                            *handoff_token = arena_->request_render_handoff(token);
-                        }
+                        // Explicit edits reserve while actively waiting; parked
+                        // passive previews reserve in queueSharedScratchRetry.
                         throw std::runtime_error("rasterizer arena is busy");
                     }
                     if (handoff_token && token != 0) {
@@ -298,20 +298,24 @@ namespace lfs::vis {
                     return;
                 }
                 if (frame_active_) {
-                    releaseViewerArenaFrame(
-                        *arena_, frame_id_, handoff_token_,
-                        camera_navigating_ ? std::optional(kTrainingFramesPerNavigationRender) : std::nullopt);
+                    std::optional<std::uint32_t> owed;
+                    if (camera_navigating_) {
+                        const auto stats = arena_->turn_stats();
+                        owed = trainingTurnsPerViewerFrame(stats.viewer_turn_ms + stats.viewer_record_ms, stats.training_step_ms,
+                                                           kTrainingFramesPerNavigationRender);
+                    }
+                    releaseViewerArenaFrame(*arena_, frame_id_, handoff_token_, owed);
                 }
             }
 
-            // Must be called after the frame's Vulkan submit: the arena's next
-            // tenant waits this timeline value GPU-side before reusing scratch
-            // — neither the chain event nor a device sync can see in-flight
-            // Vulkan work, which lets training kernels overwrite scratch a
-            // running batch still reads (Xid 109 device-lost class).
+            // Called after Vulkan submission, inside the tensor execution scope
+            // whose current stream queued the input uploads. Queue the completion
+            // wait after them; the arena admits its next tenant only after that
+            // wait's event completes. A device sync alone cannot observe Vulkan
+            // work still reading the shared scratch.
             void noteVulkanRelease(cudaExternalSemaphore_t semaphore, std::uint64_t value) const {
                 if (arena_ && frame_active_ && semaphore != nullptr) {
-                    arena_->note_external_release(semaphore, value);
+                    arena_->note_external_release(semaphore, value, lfs::core::getCurrentCUDAStream());
                 }
             }
 
@@ -680,11 +684,11 @@ namespace lfs::vis {
 
             search_paths.push_back(lfs::core::getResourceBaseDir() / "shaders" / "vulkan_rasterizer");
 
-#ifdef LFS_VULKAN_RASTERIZER_DEV_SPV_DIR
+#if defined(LFS_VULKAN_RASTERIZER_DEV_SPV_DIR) && !defined(LFS_MACOS_PORTABLE_APP)
             search_paths.push_back(lfs::core::utf8_to_path(LFS_VULKAN_RASTERIZER_DEV_SPV_DIR));
 #endif
 
-#ifdef PROJECT_ROOT_PATH
+#if defined(PROJECT_ROOT_PATH) && !defined(LFS_MACOS_PORTABLE_APP)
             search_paths.push_back(lfs::core::utf8_to_path(PROJECT_ROOT_PATH) /
                                    "src/rendering/rasterizer/vulkan/shader");
 #endif
@@ -3993,6 +3997,11 @@ namespace lfs::vis {
 
     void VksplatViewportRenderer::releaseSharedScratchArena() {
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
+        // CUDA may still have an imported-timeline wait enqueued even after B3
+        // detached the backing. Retire it before reset destroys the semaphore.
+        if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
+            arena->drain_external_release();
+        }
         if (shared_scratch_.installed_in_training_arena && shared_scratch_.block) {
             lfs::core::GlobalArenaManager::instance().clear_external_backing(shared_scratch_.block->device_ptr);
         }
@@ -4625,6 +4634,19 @@ namespace lfs::vis {
                                          context.vkCmdEndConditionalRendering());
             context.flushPipelineCache();
             renderer_.assignBufferLabels(buffers_);
+#ifdef __APPLE__
+            // MoltenVK keeps all device memory resident for every queue without
+            // keeping it alive, so growth buffers are freed only with nothing in flight.
+            renderer_.setMemoryReleaseGate([this](const std::function<void()>& release) {
+                for (const VkQueue queue : {context_->graphicsQueue(), context_->computeQueue()}) {
+                    if (const VkResult result = lfs::rendering::vk_queue_wait_idle_synced(queue); result != VK_SUCCESS)
+                        lfs::rendering::throw_vk_result(result, "vkQueueWaitIdle",
+                                                        "VkSplat could not idle the queue before freeing growth buffers",
+                                                        LFS_SOURCE_SITE_CURRENT());
+                }
+                context_->tensorInterop().run_while_idle(active_tensor_backend_, release);
+            });
+#endif
             renderer_.setCpuTimerCallback([](const std::string_view name, const double ms) {
                 LOG_PERF("{} took {:.2f}ms", name, ms);
             });
@@ -8328,8 +8350,15 @@ namespace lfs::vis {
         active_tensor_backend_ = lfs::core::gpu_backend_of(splat_data.means_raw()).value_or(lfs::core::default_gpu_backend());
         const auto tensor_scope = context.tensorInterop().execution_scope(active_tensor_backend_);
 
-        std::erase_if(retired_inputs_, [this](const RetiredInputs& retired) {
-            if (!renderTimelineValueRetired(retired.completion))
+        // Frames submitted after a target was released can still read its
+        // per-frame inputs, so a released target's cells are only cleared once
+        // every submitted frame has finished. Releases are rare (closed views).
+        const bool retired_ready = std::ranges::any_of(retired_inputs_, [this](const RetiredInputs& retired) {
+            return renderTimelineValueRetired(retired.completion);
+        });
+        const bool frames_done = !retired_ready || context.waitForSubmittedFrames();
+        std::erase_if(retired_inputs_, [this, frames_done](const RetiredInputs& retired) {
+            if (!frames_done || !renderTimelineValueRetired(retired.completion))
                 return false;
             for (std::size_t cell = retired.base; cell < retired.base + kFrameRingSize; ++cell) {
                 overlays_[cell] = {};

@@ -372,13 +372,14 @@ TEST_F(ArenaMetricsContentionTest, RenderFrameReadyOnlyWhenRenderCanBeginWithout
 // renewal so the viewer never gets its turn.
 TEST_F(ArenaMetricsContentionTest, ReservationLetsExactlyItsTrainingFramesBeginFirst) {
     RasterizerMemoryArena arena;
-    const auto token = arena.request_render_handoff(0, 1);
+    arena.owe_training_frames(1);
+    const auto token = arena.request_render_handoff();
     ASSERT_NE(token, 0u);
     const auto step = arena.try_begin_frame(nullptr, false);
     ASSERT_TRUE(step.has_value()) << "the reservation kept out the training step it granted";
     arena.end_frame(*step, nullptr, false);
     EXPECT_FALSE(arena.try_begin_frame(nullptr, false)) << "training got a second step before the viewer's turn";
-    EXPECT_EQ(arena.request_render_handoff(token, 1), token);
+    EXPECT_EQ(arena.request_render_handoff(token), token);
     EXPECT_FALSE(arena.try_begin_frame(nullptr, false)) << "renewing the reservation granted training another step";
 
     const auto render = arena.try_begin_render_frame_for(1, token);
@@ -1400,4 +1401,361 @@ TEST_F(ArenaMetricsContentionTest, RetainedFallbackPublishesLogicalRequiredAndCl
     EXPECT_EQ(retained.required_bytes, 10 * MiB);
     EXPECT_EQ(retained.arena_capacity, 64 * MiB);
     EXPECT_EQ(retained.arena_capacity - retained.required_bytes, 54 * MiB);
+}
+
+// The viewer's batch is registered as a release event; a training frame must
+// wait for it on the host, outside the arena frame, and the arena must report
+// the turn cost. Stands in for the imported Vulkan timeline with a CUDA event
+// recorded behind a host-function hold.
+TEST_F(ArenaMetricsContentionTest, TrainingBeginWaitsForTheViewerBatchOutsideTheFrame) {
+    using namespace std::chrono_literals;
+    RasterizerMemoryArena arena;
+    cudaStream_t viewer_stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&viewer_stream, cudaStreamNonBlocking), cudaSuccess);
+    cudaEvent_t release = nullptr;
+    ASSERT_EQ(cudaEventCreateWithFlags(&release, cudaEventDisableTiming), cudaSuccess);
+    std::atomic<bool> batch_done{false};
+
+    // Viewer frame: claim, "submit", register the release, release the CPU frame.
+    const auto viewer_frame = arena.try_begin_render_frame_for(1);
+    ASSERT_TRUE(viewer_frame.has_value());
+    ASSERT_EQ(cudaLaunchHostFunc(viewer_stream, hold_stream_until_released, &batch_done), cudaSuccess);
+    ASSERT_EQ(cudaEventRecord(release, viewer_stream), cudaSuccess);
+    arena.note_release_event_for_testing(release);
+    arena.end_frame(*viewer_frame, nullptr, true);
+
+    EXPECT_FALSE(arena.render_frame_ready()) << "a second viewer frame was admitted behind a running batch";
+    EXPECT_FALSE(arena.try_begin_frame(nullptr, false)) << "a try-begin claimed the arena behind a running viewer batch";
+
+    std::atomic<bool> training_began{false};
+    std::thread trainer([&] {
+        EXPECT_EQ(cudaSetDevice(0), cudaSuccess);
+        const auto frame = arena.begin_frame(nullptr, false);
+        training_began.store(true, std::memory_order_release);
+        arena.end_frame(frame, nullptr, false);
+    });
+    std::this_thread::sleep_for(60ms);
+    EXPECT_FALSE(training_began.load(std::memory_order_acquire)) << "training began while the viewer batch was still running";
+    EXPECT_EQ(arena.get_statistics().frame_count, 1u) << "the waiting trainer must not hold an arena frame";
+    batch_done.store(true, std::memory_order_release);
+    trainer.join();
+    EXPECT_TRUE(training_began.load(std::memory_order_acquire));
+
+    const auto stats = arena.turn_stats();
+    EXPECT_GE(stats.last_viewer_turn_ms, 50.0) << "the viewer turn was not measured";
+    EXPECT_TRUE(arena.render_frame_ready()) << "the release stayed pending after it completed";
+
+    arena.note_release_event_for_testing(nullptr);
+    ASSERT_EQ(cudaStreamSynchronize(viewer_stream), cudaSuccess);
+    ASSERT_EQ(cudaStreamDestroy(viewer_stream), cudaSuccess);
+}
+
+TEST_F(ArenaMetricsContentionTest, OwedTurnsSurviveWithoutAReservation) {
+    using namespace std::chrono_literals;
+    RasterizerMemoryArena arena;
+    arena.owe_training_frames(2);
+    const auto expired = arena.request_render_handoff();
+    std::this_thread::sleep_for(std::chrono::milliseconds(RasterizerMemoryArena::kRenderHandoffLeaseMs + 5));
+    EXPECT_FALSE(arena.has_render_handoff(expired));
+    // A viewer arrives and waits: it has priority only once the owed steps ran.
+    auto token = arena.request_render_handoff();
+    ASSERT_NE(token, 0u);
+    EXPECT_TRUE(arena.render_handoff_owes_training(token));
+    for (int i = 0; i < 2; ++i) {
+        const auto step = arena.try_begin_frame(nullptr, false);
+        ASSERT_TRUE(step.has_value()) << "owed training step " << i << " was refused";
+        arena.end_frame(*step, nullptr, false);
+    }
+    EXPECT_FALSE(arena.render_handoff_owes_training(token));
+    EXPECT_FALSE(arena.try_begin_frame(nullptr, false)) << "training ran past its owed turns while a viewer waited";
+    const auto render = arena.try_begin_render_frame_for(1, token);
+    ASSERT_TRUE(render.has_value());
+    arena.end_frame(*render, nullptr, true);
+}
+
+TEST(ViewerTurnBudget, ReproducesTheShippedScheduleAndBoundsSlowFrames) {
+    using namespace lfs::vis;
+    EXPECT_EQ(trainingTurnsPerViewerFrame(24.0, 30.0, 1), 1u);     // RTX 4080, 2560x1440
+    EXPECT_EQ(trainingTurnsPerViewerFrame(38.0, 30.0, 1), 1u);     // 3840x2160
+    EXPECT_EQ(trainingTurnsPerViewerFrame(0.0, 0.0, 1), 1u);       // nothing measured yet
+    EXPECT_EQ(trainingTurnsPerViewerFrame(2500.0, 100.0, 1), 11u); // paging GPU: training keeps 30%
+    EXPECT_EQ(trainingTurnsPerViewerFrame(1e6, 1.0, 1), 64u);
+    EXPECT_DOUBLE_EQ(idlePreviewIntervalSec(0.25, 0.0), 0.25);
+    EXPECT_NEAR(idlePreviewIntervalSec(0.0, 23.0), 0.186, 1e-3);
+    EXPECT_NEAR(idlePreviewIntervalSec(0.25, 2500.0), 20.23, 1e-2);
+    EXPECT_FALSE(navigationRendersOnlyAtRest(499.0));
+    EXPECT_TRUE(navigationRendersOnlyAtRest(501.0));
+}
+
+TEST(ViewerTurnBudget, ExtraStepMustFinishBeforeTheNextViewerRequest) {
+    using namespace std::chrono_literals;
+    lfs::core::ViewerAdmission admission;
+    const auto start = lfs::core::ViewerAdmission::Time{} + 1s;
+    admission.prepare(start);
+    admission.acquired(start);
+    admission.prepare(start + 165ms);
+    // Waiting for an already running step does not inflate the 165 ms period.
+    admission.acquired(start + 183ms);
+    EXPECT_TRUE(admission.predicted(start + 240ms));
+    EXPECT_TRUE(admission.admits(start + 290ms, 33.0, 0));
+    EXPECT_FALSE(admission.admits(start + 320ms, 33.0, 0));
+    EXPECT_FALSE(admission.admits(start + 350ms, 33.0, 0));
+    EXPECT_TRUE(admission.admits(start + 373ms, 33.0, 0)) << "an abandoned prediction must expire";
+}
+
+TEST(ViewerTurnBudget, OwedTurnsAndActivePreparationTakePrecedence) {
+    using namespace std::chrono_literals;
+    lfs::core::ViewerAdmission admission;
+    const auto start = lfs::core::ViewerAdmission::Time{} + 1s;
+    EXPECT_TRUE(admission.admits(start, 33.0, 0));
+    admission.prepare(start);
+    EXPECT_FALSE(admission.admits(start, 33.0, 0));
+    EXPECT_TRUE(admission.admits(start, 33.0, 1));
+    EXPECT_TRUE(admission.admits(start + 25ms, 33.0, 0));
+    admission.acquired(start + 30ms);
+    admission.prepare(start + 195ms);
+    admission.acquired(start + 195ms);
+    EXPECT_FALSE(admission.admits(start + 345ms, 33.0, 0));
+    EXPECT_TRUE(admission.admits(start + 345ms, 33.0, 1));
+    admission.prepare(start + 240ms);
+    EXPECT_FALSE(admission.admits(start + 240ms, 1.0, 0)) << "early preparation overrides the forecast";
+}
+
+TEST(ViewerTurnBudget, FasterViewportImmediatelyShortensTheAdmissionWindow) {
+    using namespace std::chrono_literals;
+    lfs::core::ViewerAdmission admission;
+    const auto start = lfs::core::ViewerAdmission::Time{} + 1s;
+    admission.prepare(start);
+    admission.acquired(start);
+    admission.prepare(start + 165ms);
+    admission.acquired(start + 165ms);
+    admission.prepare(start + 217ms);
+    admission.acquired(start + 217ms);
+    EXPECT_FALSE(admission.admits(start + 250ms, 33.0, 0)) << "a second step must not race the 720p frame";
+    EXPECT_TRUE(admission.admits(start + 250ms, 33.0, 1));
+    admission.prepare(start + 1s);
+    admission.acquired(start + 1s);
+    EXPECT_FALSE(admission.predicted(start + 1s)) << "idle and rest-only gaps must not become navigation periods";
+}
+
+TEST_F(ArenaMetricsContentionTest, CancelledViewerPredictionWakesTheTrainer) {
+    using namespace std::chrono_literals;
+    RasterizerMemoryArena arena;
+    arena.prepare_viewer_frame();
+    EXPECT_FALSE(arena.try_begin_frame(false));
+    arena.owe_training_frames(1);
+    const auto owed = arena.try_begin_frame(false);
+    ASSERT_TRUE(owed);
+    arena.end_frame(*owed, false);
+    EXPECT_FALSE(arena.try_begin_frame(false));
+    arena.cancel_viewer_prediction();
+    const auto step = arena.try_begin_frame(false);
+    ASSERT_TRUE(step);
+    arena.end_frame(*step, false);
+}
+
+TEST_F(ArenaMetricsContentionTest, AbandonedViewerPredictionExpiresAndWakesTheTrainer) {
+    using namespace std::chrono_literals;
+    RasterizerMemoryArena arena;
+    arena.prepare_viewer_frame();
+    const auto start = std::chrono::steady_clock::now();
+    const auto step = arena.begin_frame(false);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    EXPECT_GE(elapsed, 15ms);
+    EXPECT_LT(elapsed, 75ms);
+    arena.end_frame(step, false);
+}
+
+TEST_F(ArenaMetricsContentionTest, PredictedViewerRequestReplacesThePostReleaseLease) {
+    using namespace std::chrono_literals;
+    RasterizerMemoryArena arena;
+    arena.prepare_viewer_frame();
+    auto frame = arena.try_begin_render_frame_for(1);
+    ASSERT_TRUE(frame);
+    arena.end_frame(*frame, true);
+    std::this_thread::sleep_for(40ms);
+    arena.prepare_viewer_frame();
+    auto token = arena.request_render_handoff();
+    frame = arena.try_begin_render_frame_for(1, token);
+    ASSERT_TRUE(frame);
+    lfs::vis::releaseViewerArenaFrame(arena, *frame, &token, std::optional<std::uint32_t>(1));
+    EXPECT_EQ(token, 0u);
+    const auto owed = arena.try_begin_frame(false);
+    ASSERT_TRUE(owed);
+    arena.end_frame(*owed, false);
+    // With no step cost yet, admission conservatively keeps the next window.
+    arena.cancel_viewer_prediction();
+    const auto next = arena.try_begin_frame(false);
+    ASSERT_TRUE(next) << "a redundant release lease still excluded training";
+    arena.end_frame(*next, false);
+}
+
+TEST_F(ArenaMetricsContentionTest, NavigationAdmissionIncludesTheTrainingGpuTail) {
+    using namespace std::chrono_literals;
+    RasterizerMemoryArena arena;
+    cudaStream_t stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    arena.prepare_viewer_frame();
+    arena.owe_training_frames(2);
+    const auto first = arena.begin_frame(stream, false);
+    std::atomic<bool> done{false};
+    ASSERT_EQ(cudaLaunchHostFunc(stream, hold_stream_until_released, &done), cudaSuccess);
+    arena.end_frame(first, stream, false);
+    const auto queued = arena.try_begin_frame(stream, false);
+    EXPECT_FALSE(queued) << "the forecast admitted another step behind an unfinished GPU turn";
+    if (queued)
+        arena.end_frame(*queued, stream, false);
+    std::this_thread::sleep_for(10ms);
+    done.store(true, std::memory_order_release);
+    ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+    const auto second = arena.begin_frame(stream, false);
+    EXPECT_GE(arena.turn_stats().training_step_ms, 8.0) << "only CPU enqueue time was measured";
+    arena.end_frame(second, stream, false);
+    ASSERT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+}
+
+TEST_F(ArenaMetricsContentionTest, OneViewerFrameInFlight) {
+    using namespace std::chrono_literals;
+    RasterizerMemoryArena arena;
+    cudaStream_t stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    cudaEvent_t release = nullptr;
+    ASSERT_EQ(cudaEventCreateWithFlags(&release, cudaEventDisableTiming), cudaSuccess);
+    const auto first = arena.try_begin_render_frame_for(1);
+    ASSERT_TRUE(first);
+    std::atomic<bool> done{false};
+    ASSERT_EQ(cudaLaunchHostFunc(stream, hold_stream_until_released, &done), cudaSuccess);
+    ASSERT_EQ(cudaEventRecord(release, stream), cudaSuccess);
+    arena.note_release_event_for_testing(release);
+    arena.end_frame(*first, true);
+    EXPECT_FALSE(arena.try_begin_render_frame_for(1));
+    EXPECT_FALSE(arena.render_frame_ready());
+    done.store(true, std::memory_order_release);
+    ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+    const auto second = arena.try_begin_render_frame_for(25);
+    EXPECT_TRUE(second);
+    if (second)
+        arena.end_frame(*second, true);
+    EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+}
+
+TEST_F(ArenaMetricsContentionTest, ConsumedViewerReleaseDoesNotDrainUnrelatedCudaWork) {
+    using namespace std::chrono_literals;
+    for (const bool streamless : {false, true}) {
+        RasterizerMemoryArena arena;
+        cudaStream_t viewer = nullptr, unrelated = nullptr, training = nullptr;
+        ASSERT_EQ(cudaStreamCreateWithFlags(&viewer, cudaStreamNonBlocking), cudaSuccess);
+        ASSERT_EQ(cudaStreamCreateWithFlags(&unrelated, cudaStreamNonBlocking), cudaSuccess);
+        ASSERT_EQ(cudaStreamCreateWithFlags(&training, cudaStreamNonBlocking), cudaSuccess);
+        cudaEvent_t release = nullptr;
+        ASSERT_EQ(cudaEventCreateWithFlags(&release, cudaEventDisableTiming), cudaSuccess);
+        const auto frame = arena.begin_frame(true);
+        ASSERT_EQ(cudaEventRecord(release, viewer), cudaSuccess);
+        arena.note_release_event_for_testing(release);
+        arena.end_frame(frame, true);
+        // Another caller, such as renderer reset, may consume the same release.
+        arena.drain_external_release();
+        std::atomic<bool> done{false};
+        ASSERT_EQ(cudaLaunchHostFunc(unrelated, hold_stream_until_released, &done), cudaSuccess);
+        std::promise<void> began;
+        auto ready = began.get_future();
+        std::thread trainer([&] {
+            EXPECT_EQ(cudaSetDevice(0), cudaSuccess);
+            const auto step = arena.begin_frame(streamless ? nullptr : training, false);
+            began.set_value();
+            arena.end_frame(step, streamless ? nullptr : training, false);
+        });
+        const auto status = ready.wait_for(100ms);
+        done.store(true, std::memory_order_release);
+        trainer.join();
+        EXPECT_EQ(status, std::future_status::ready)
+            << "viewer completion fell back to a device-wide sync, streamless=" << streamless;
+        EXPECT_EQ(cudaStreamSynchronize(unrelated), cudaSuccess);
+        EXPECT_EQ(cudaStreamDestroy(unrelated), cudaSuccess);
+        EXPECT_EQ(cudaStreamDestroy(training), cudaSuccess);
+        EXPECT_EQ(cudaStreamDestroy(viewer), cudaSuccess);
+    }
+}
+
+TEST_F(ArenaMetricsContentionTest, NavigationGraceDoesNotWithdrawAnExecutingTrainingBudget) {
+    RasterizerMemoryArena arena;
+    arena.owe_training_frames(3);
+    auto token = arena.request_render_handoff();
+    const auto step = arena.begin_frame(false);
+    arena.withdraw_render_handoff_training_frames(token);
+    EXPECT_TRUE(arena.render_handoff_owes_training(token));
+    arena.end_frame(step, false);
+    for (int i = 0; i < 2; ++i) {
+        const auto owed = arena.try_begin_frame(false);
+        ASSERT_TRUE(owed);
+        arena.end_frame(*owed, false);
+    }
+    EXPECT_FALSE(arena.try_begin_frame(false));
+    arena.cancel_render_handoff(token);
+}
+
+TEST_F(ArenaMetricsContentionTest, AbandonedReleaseReservationCostsAtMostTheShortLease) {
+    using namespace std::chrono_literals;
+    RasterizerMemoryArena arena;
+    auto token = arena.request_render_handoff();
+    const auto start = std::chrono::steady_clock::now();
+    const auto step = arena.begin_frame(false);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    EXPECT_GE(elapsed, 15ms);
+    EXPECT_LT(elapsed, 75ms) << "an abandoned viewer held training for the old 100 ms lease";
+    EXPECT_FALSE(arena.has_render_handoff(token));
+    arena.end_frame(step, false);
+}
+
+TEST_F(ArenaMetricsContentionTest, OwedStepDoesNotSpendTheViewersClaimLease) {
+    using namespace std::chrono_literals;
+    RasterizerMemoryArena arena;
+    arena.owe_training_frames(1);
+    const auto token = arena.request_render_handoff();
+    const auto step = arena.begin_frame(false);
+    std::this_thread::sleep_for(30ms);
+    arena.end_frame(step, false);
+    EXPECT_TRUE(arena.has_render_handoff(token));
+    EXPECT_FALSE(arena.try_begin_frame(false)) << "a second step raced the viewer after its owed step";
+    const auto frame = arena.try_begin_render_frame_for(1, token);
+    ASSERT_TRUE(frame);
+    arena.end_frame(*frame, true);
+}
+
+TEST_F(ArenaMetricsContentionTest, FullResetDropsThePreviousSessionsTurnBudget) {
+    RasterizerMemoryArena arena;
+    cudaEvent_t release = nullptr;
+    ASSERT_EQ(cudaEventCreateWithFlags(&release, cudaEventDisableTiming), cudaSuccess);
+    ASSERT_EQ(cudaEventRecord(release), cudaSuccess);
+    arena.note_release_event_for_testing(release);
+    arena.drain_external_release();
+    ASSERT_GT(arena.turn_stats().viewer_turn_ms, 0.0);
+    arena.owe_training_frames(5);
+    const auto token = arena.request_render_handoff();
+    arena.full_reset();
+    EXPECT_DOUBLE_EQ(arena.turn_stats().viewer_turn_ms, 0.0);
+    EXPECT_DOUBLE_EQ(arena.turn_stats().viewer_record_ms, 0.0);
+    EXPECT_FALSE(arena.has_render_handoff(token));
+    const auto frame = arena.try_begin_frame(false);
+    ASSERT_TRUE(frame);
+    arena.end_frame(*frame, false);
+}
+
+TEST_F(ArenaMetricsContentionTest, ViewerRetainsOwnershipOfItsReleaseStream) {
+    cudaStream_t stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    {
+        RasterizerMemoryArena arena;
+        cudaEvent_t release = nullptr;
+        ASSERT_EQ(cudaEventCreateWithFlags(&release, cudaEventDisableTiming), cudaSuccess);
+        ASSERT_EQ(cudaEventRecord(release, stream), cudaSuccess);
+        arena.note_release_event_for_testing(release, stream);
+    }
+    // Destroying the arena drains the borrow, but must leave the owner's stream usable.
+    cudaEvent_t probe = nullptr;
+    ASSERT_EQ(cudaEventCreateWithFlags(&probe, cudaEventDisableTiming), cudaSuccess);
+    EXPECT_EQ(cudaEventRecord(probe, stream), cudaSuccess);
+    EXPECT_EQ(cudaEventSynchronize(probe), cudaSuccess);
+    EXPECT_EQ(cudaEventDestroy(probe), cudaSuccess);
+    EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
 }

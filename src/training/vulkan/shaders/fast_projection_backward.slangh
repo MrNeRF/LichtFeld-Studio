@@ -115,6 +115,12 @@ void projectionBackward(BackPush back, uint primitive_idx) {
         [unroll] for (uint j = 0; j < 3; ++j)
             w2c[j] = ((Ptr<float4, Access.Read>)p.view)[j];
         float3 gc = screen3(back, work_idx, 6);
+        // The blend clamps colour at zero. Below it, keep only the image
+        // gradients that brighten the splat; the forward never saw the rest.
+        const Projected shaded = projectedAt(p, work_idx);
+        if (shaded.red < 0 && gc.x >= 0) gc.x = 0;
+        if (shaded.green < 0 && gc.y >= 0) gc.y = 0;
+        if (shaded.blue < 0 && gc.z >= 0) gc.z = 0;
         float3 dL_dmean3d_from_color = shPositionGradient(p, primitive_idx, gc);
         store3(back.dcGradient, primitive_idx, 0.28209479177387814f * gc);
         float basis[16];

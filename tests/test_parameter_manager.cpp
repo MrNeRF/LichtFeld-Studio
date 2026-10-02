@@ -3,14 +3,25 @@
 
 #include <gtest/gtest.h>
 
+#include "core/argument_parser.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
 #include "io/project_chapters.hpp"
 
+#include <filesystem>
+#include <format>
+#include <fstream>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <random>
 
 namespace {
+
+    std::filesystem::path unique_temp_config_path() {
+        const auto* test = ::testing::UnitTest::GetInstance()->current_test_info();
+        return std::filesystem::temp_directory_path() /
+               std::format("lfs_{}_{}.json", test->name(), std::random_device{}());
+    }
 
     TEST(ParameterManagerTest, DefaultStrategyIsMrnf) {
         lfs::vis::ParameterManager manager;
@@ -342,6 +353,220 @@ namespace {
             .width = 1919,
             .height = 1080};
         EXPECT_NE(params.validate().find("render dimensions"), std::string::npos);
+    }
+
+    // Catches auto-scale replacing the user's factor instead of multiplying it.
+    TEST(ParameterManagerTest, ImageScalingComposesWithUserScaling) {
+        lfs::vis::ParameterManager manager;
+        lfs::core::param::TrainingParameters params;
+        params.optimization = lfs::core::param::OptimizationParameters::mrnf_defaults();
+        params.optimization.steps_scaler = 0.5f;
+        params.optimization.apply_step_scaling();
+        manager.setSessionDefaults(params);
+        manager.autoScaleSteps(600);
+        EXPECT_EQ(manager.getActiveParams().iterations, 30000u);
+        EXPECT_FLOAT_EQ(manager.getActiveParams().steps_scaler, 1.f);
+        EXPECT_FLOAT_EQ(manager.getActiveParams().image_count_scaler, 2.f);
+        const auto scaled = manager.getActiveParams().to_json();
+        manager.autoScaleSteps(600);
+        EXPECT_EQ(manager.getActiveParams().to_json(), scaled);
+        manager.autoScaleSteps(300);
+        EXPECT_EQ(manager.getActiveParams().iterations, 15000u);
+        EXPECT_FLOAT_EQ(manager.getActiveParams().steps_scaler, 0.5f);
+        EXPECT_FLOAT_EQ(manager.getActiveParams().image_count_scaler, 1.f);
+    }
+
+    // Catches the command-line lock being lost on reset or replace-load, or never released.
+    TEST(ParameterManagerTest, CliIterationLockSurvivesResetAndReplaceLoad) {
+        lfs::vis::ParameterManager manager;
+        lfs::core::param::TrainingParameters params;
+        params.optimization = lfs::core::param::OptimizationParameters::mrnf_defaults();
+        params.optimization.strategy = "mnrf";
+        params.optimization.iterations = 2500;
+        params.cli_iterations_set = true;
+        manager.setSessionDefaults(params);
+        const auto seeded = manager.getActiveParams().to_json();
+        manager.autoScaleSteps(600);
+        EXPECT_EQ(manager.getActiveParams().to_json(), seeded);
+        EXPECT_EQ(manager.getCurrentParams("mcmc").iterations,
+                  2 * lfs::core::param::OptimizationParameters::mcmc_defaults().iterations);
+        manager.modifyActiveParams([](auto& opt) { opt.iterations = 999; });
+        manager.resetToDefaults();
+        manager.autoScaleSteps(600);
+        EXPECT_EQ(manager.getActiveParams().to_json(), seeded);
+        const auto captured = manager.capturePendingProjectState();
+        ASSERT_TRUE(captured);
+        manager.clearSession();
+        manager.installValidatedPendingProjectState(*captured);
+        manager.autoScaleSteps(600);
+        EXPECT_EQ(manager.getActiveParams().to_json(), seeded);
+        manager.clearSession();
+        manager.autoScaleSteps(600);
+        EXPECT_EQ(manager.getActiveParams().iterations,
+                  2 * lfs::core::param::OptimizationParameters::mrnf_defaults().iterations);
+    }
+
+    // Catches a lock that outlives imports or is read back from a project file.
+    TEST(ParameterManagerTest, ImportsAndParsedProjectClearCliStepLock) {
+        lfs::vis::ParameterManager manager;
+        lfs::core::param::TrainingParameters params;
+        params.optimization = lfs::core::param::OptimizationParameters::mrnf_defaults();
+        params.optimization.iterations = 2500;
+        params.cli_iterations_set = true;
+        manager.setSessionDefaults(params);
+        manager.importParams(params.optimization);
+        manager.autoScaleSteps(600);
+        EXPECT_EQ(manager.getActiveParams().iterations, 5000u);
+        manager.setSessionDefaults(params);
+        manager.importTrainingParams(params);
+        manager.autoScaleSteps(600);
+        EXPECT_EQ(manager.getActiveParams().iterations, 5000u);
+        manager.setSessionDefaults(params);
+        const auto captured = manager.capturePendingProjectState();
+        ASSERT_TRUE(captured);
+        ASSERT_TRUE(captured->cli_step_locked_strategy);
+        lfs::io::project::ParametersChapter chapter;
+        ASSERT_TRUE(chapter.set_snapshot(*captured));
+        const auto parsed = lfs::io::project::ParametersChapter::from_bytes(chapter.to_bytes());
+        ASSERT_TRUE(parsed);
+        const auto snapshot = parsed->snapshot();
+        ASSERT_TRUE(snapshot);
+        EXPECT_FALSE(snapshot->cli_step_locked_strategy);
+        manager.installValidatedPendingProjectState(*snapshot);
+        manager.autoScaleSteps(600);
+        EXPECT_EQ(manager.getActiveParams().iterations, 5000u);
+    }
+
+    // Catches a disabled factor (<= 0) diverging from the previous auto-scale outcome.
+    TEST(ParameterManagerTest, DisabledScalingUsesImageFactorRegardlessOfPreviousImageScaling) {
+        for (const float disabled : {0.f, -1.f}) {
+            lfs::vis::ParameterManager manager;
+            lfs::core::param::TrainingParameters params;
+            params.optimization = lfs::core::param::OptimizationParameters::mrnf_defaults();
+            params.optimization.steps_scaler = disabled;
+            params.optimization.image_count_scaler = 2.f;
+            manager.setSessionDefaults(params);
+            manager.autoScaleSteps(600);
+            EXPECT_EQ(manager.getActiveParams().iterations, 60000u);
+            EXPECT_FLOAT_EQ(manager.getActiveParams().steps_scaler, 2.f);
+            EXPECT_FLOAT_EQ(manager.getActiveParams().image_count_scaler, 2.f);
+        }
+    }
+
+    // Catches old projects being auto-scaled a second time on reopen.
+    TEST(ParameterManagerTest, LegacyProjectImageFactorIsNotAppliedTwice) {
+        lfs::vis::ParameterManager manager;
+        ASSERT_TRUE(manager.ensureLoaded());
+        auto captured = manager.capturePendingProjectState();
+        ASSERT_TRUE(captured);
+        captured->mrnf_current.scale_steps(2.f);
+        captured->mrnf_current.steps_scaler = 2.f;
+        lfs::io::project::ParametersChapter chapter;
+        ASSERT_TRUE(chapter.set_snapshot(*captured));
+        auto bytes = nlohmann::json::parse(chapter.dom().dump());
+        for (auto& strategy : bytes["presets"].items()) {
+            for (auto& role : strategy.value().items()) {
+                role.value().erase("image_count_scaler");
+                role.value().erase("image_count_scaler_total");
+            }
+        }
+        const auto parsed = lfs::io::project::ParametersChapter::parse(bytes.dump());
+        ASSERT_TRUE(parsed);
+        const auto snapshot = parsed->snapshot();
+        ASSERT_TRUE(snapshot);
+        manager.installValidatedPendingProjectState(*snapshot);
+        EXPECT_FLOAT_EQ(manager.getActiveParams().image_count_scaler, 2.f);
+        const auto before = manager.getActiveParams().to_json();
+        manager.autoScaleSteps(600);
+        EXPECT_EQ(manager.getActiveParams().to_json(), before);
+    }
+
+    // Catches an absolute CLI step flag that auto-scale still rescales.
+    TEST(ParameterManagerTest, EveryAbsoluteCliStepFlagLocksSeededStrategy) {
+        const std::vector<std::vector<std::string>> cases{
+            {"--sh-degree-interval", "1000"},
+            {"--morton-reorder-interval", "3000"},
+            {"--fill-pacing-iter", "1234"},
+            {"--eval", "--eval-steps", "1000"},
+        };
+        for (const auto& flags : cases) {
+            SCOPED_TRACE(nlohmann::json(flags).dump());
+            for (const char* strategy : {"mrnf", "mcmc", "igs+"}) {
+                SCOPED_TRACE(strategy);
+                std::vector<const char*> argv{"LichtFeld-Studio", "--strategy", strategy, "--steps-scaler", "0.5"};
+                for (const auto& flag : flags)
+                    argv.push_back(flag.c_str());
+                const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+                ASSERT_TRUE(parsed) << parsed.error();
+                ASSERT_TRUE((*parsed)->cli_step_values_set);
+                lfs::vis::ParameterManager manager;
+                manager.setSessionDefaults(**parsed);
+                const auto before = manager.getActiveParams().to_json();
+                manager.autoScaleSteps(600);
+                EXPECT_EQ(manager.getActiveParams().to_json(), before);
+                manager.setActiveStrategy(strategy == std::string_view("mrnf") ? "mcmc" : "mrnf");
+                EXPECT_FLOAT_EQ(manager.getActiveParams().steps_scaler, 2.f);
+            }
+        }
+    }
+
+    // Catches config keys being mistaken for typed CLI values.
+    TEST(ParameterManagerTest, ConfigStepKeysDoNotCountAsAbsoluteCliOverrides) {
+        const auto path = unique_temp_config_path();
+        auto json = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+        json["steps_scaler"] = 0.5f;
+        json["image_count_scaler_total"] = 0.5f;
+        const auto path_text = path.string();
+        for (const bool legacy : {false, true}) {
+            SCOPED_TRACE(legacy);
+            if (legacy) {
+                json.erase("image_count_scaler");
+                json.erase("image_count_scaler_total");
+            }
+            std::ofstream(path) << json.dump();
+            const char* argv[]{"LichtFeld-Studio", "--config", path_text.c_str()};
+            const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+            ASSERT_TRUE(parsed) << parsed.error();
+            EXPECT_FALSE((*parsed)->cli_step_values_set);
+            EXPECT_TRUE((*parsed)->overrides.has_optimization_key("iterations"));
+            lfs::vis::ParameterManager manager;
+            manager.setSessionDefaults(**parsed);
+            manager.autoScaleSteps(600);
+            EXPECT_EQ(manager.getActiveParams().iterations, legacy ? 60000u : 30000u);
+            EXPECT_FLOAT_EQ(manager.getActiveParams().steps_scaler, legacy ? 2.f : 1.f);
+        }
+        const char* argv[]{"LichtFeld-Studio", "--config", path_text.c_str(), "--sh-degree-interval", "1000"};
+        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_TRUE(parsed) << parsed.error();
+        lfs::vis::ParameterManager manager;
+        manager.setSessionDefaults(**parsed);
+        const auto before = manager.getActiveParams().to_json();
+        manager.autoScaleSteps(600);
+        EXPECT_EQ(manager.getActiveParams().to_json(), before);
+        std::filesystem::remove(path);
+    }
+
+    // Catches --steps-scaler keeping a config's image share that its timetable no longer contains.
+    TEST(ParameterManagerTest, CliStepsScalerDropsConfigImageFactor) {
+        const auto path = unique_temp_config_path();
+        auto json = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+        json["steps_scaler"] = 2.f;
+        json["image_count_scaler"] = 2.f;
+        json["image_count_scaler_total"] = 2.f;
+        std::ofstream(path) << json.dump();
+        const auto path_text = path.string();
+        const char* argv[]{"LichtFeld-Studio", "--config", path_text.c_str(), "--steps-scaler", "0.5"};
+        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        std::filesystem::remove(path);
+        ASSERT_TRUE(parsed) << parsed.error();
+        EXPECT_EQ((*parsed)->optimization.iterations, 15000u);
+        EXPECT_FLOAT_EQ((*parsed)->optimization.image_count_scaler, 1.f);
+
+        lfs::vis::ParameterManager manager;
+        manager.setSessionDefaults(**parsed);
+        manager.autoScaleSteps(600);
+        EXPECT_EQ(manager.getActiveParams().iterations, 30000u);
+        EXPECT_FLOAT_EQ(manager.getActiveParams().steps_scaler, 1.f);
     }
 
 } // namespace

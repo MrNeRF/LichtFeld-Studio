@@ -9,6 +9,9 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
+#ifdef LFS_MACOS_PORTABLE_APP
+#include "core/user_paths.hpp"
+#endif
 #include "gui/editor/zep_rml_display.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
@@ -730,7 +733,15 @@ namespace lfs::vis::editor {
         Impl()
             : editor(std::make_unique<Zep::ZepEditor>(
                   new ZepDisplay_Rml(),
+#ifdef LFS_MACOS_PORTABLE_APP
+                  [] {
+                      const auto paths = lfs::core::UserPaths::resolve();
+                      return paths ? paths->configDir() / "python-editor"
+                                   : std::filesystem::temp_directory_path() / "lichtfeld-python-editor";
+                  }(),
+#else
                   std::filesystem::path(PROJECT_ROOT_PATH) / "external" / "zep",
+#endif
                   Zep::ZepEditorFlags::DisableThreads)),
               host(*this) {
             editor->RegisterCallback(&host);

@@ -21,6 +21,14 @@ if(BUILD_LOCALIZATION_TESTS)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         TIMEOUT 30
     )
+    add_test(NAME MacosPortableInventory
+        COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/python/test_macos_portable_inventory.py)
+    set_tests_properties(MacosPortableInventory PROPERTIES TIMEOUT 30)
+    if(APPLE)
+        add_test(NAME MacosPortableResourcePaths
+            COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/python/test_macos_portable_resource_paths.py)
+        set_tests_properties(MacosPortableResourcePaths PROPERTIES TIMEOUT 30)
+    endif()
     add_custom_target(test_localization_contracts
         COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R LocalizationContracts
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/CTestTestfile.cmake
@@ -522,6 +530,7 @@ if(NOT LFS_HAS_CUDA)
         list(APPEND TEST_SOURCES test_video_videotoolbox.cpp test_mcp_render_capture_utils.cpp)
     endif()
     add_executable(lichtfeld_tests ${TEST_SOURCES})
+    target_compile_definitions(lichtfeld_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
     if(APPLE)
         find_package(PkgConfig REQUIRED)
         pkg_check_modules(VIDEO_TEST_FFMPEG REQUIRED IMPORTED_TARGET
@@ -703,6 +712,7 @@ set(TEST_FILES
     test_mcmc.cpp
     test_expression_templates.cpp
     test_lfs_scheduler.cpp
+    test_uncapped_compaction.cpp
     test_mrnf_strategy.cpp
     test_compact_splats_peak.cpp
     test_adam_capacity_invariant.cpp

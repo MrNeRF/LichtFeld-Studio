@@ -600,7 +600,10 @@ namespace {
             expected_child_opacity;
         for (const int64_t id : ids) {
             const size_t s = static_cast<size_t>(id);
-            const float w = rotations[s * 4], x = rotations[s * 4 + 1], y = rotations[s * 4 + 2], z = rotations[s * 4 + 3];
+            const float* q = &rotations[s * 4];
+            // Placement normalizes the quaternion like projection (master #2655).
+            const float inverse_norm = std::min(1.0f / std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]), 1e12f);
+            const float w = q[0] * inverse_norm, x = q[1] * inverse_norm, y = q[2] * inverse_norm, z = q[3] * inverse_norm;
             const float r[9] = {1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y - w * z), 2.0f * (x * z + w * y),
                                 2.0f * (x * y + w * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z - w * x),
                                 2.0f * (x * z - w * y), 2.0f * (y * z + w * x), 1.0f - 2.0f * (x * x + y * y)};

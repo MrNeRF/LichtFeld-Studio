@@ -7,6 +7,7 @@
 #include "stdio_process.hpp"
 
 #include <core/environment.hpp>
+#include <core/executable_path.hpp>
 #include <core/logger.hpp>
 #include <core/path_utils.hpp>
 #include <core/user_paths.hpp>
@@ -264,6 +265,7 @@ namespace lfs::vis::editor {
                 return commands;
             }
 
+#ifndef LFS_MACOS_PORTABLE_APP
             const fs::path project_root(PROJECT_ROOT_PATH);
 #ifdef _WIN32
             constexpr std::array<std::string_view, 4> DIRECT_EXECUTABLES = {
@@ -294,6 +296,8 @@ namespace lfs::vis::editor {
                                   .args = {"--stdio"},
                                   .label = is_basedpyright ? "basedpyright" : "pyright"});
             }
+
+#endif // LFS_MACOS_PORTABLE_APP
 
             if (const auto resolved = resolve_program_path("basedpyright-langserver")) {
                 append_candidate(commands, seen,
@@ -383,11 +387,17 @@ namespace lfs::vis::editor {
             }
 
             const fs::path config_path = workspace_root / "pyrightconfig.json";
+#ifdef LFS_MACOS_PORTABLE_APP
+            const fs::path source_stubs = project_root;
+            const fs::path active_stub_path = lfs::core::getTypingsDir();
+            const fs::path active_python_path = lfs::core::getPythonModuleDir();
+#else
             const fs::path build_python = project_root / "build" / "src" / "python";
             const fs::path build_typings = build_python / "typings";
             const fs::path source_stubs = project_root / "src" / "python" / "stubs";
             const fs::path active_stub_path = fs::exists(build_typings) ? build_typings : source_stubs;
             const fs::path active_python_path = fs::exists(build_python) ? build_python : source_stubs;
+#endif
             const auto relative_to_workspace = [&](const fs::path& path) {
                 std::error_code relative_ec;
                 fs::path relative = fs::relative(path, workspace_root, relative_ec);
@@ -405,7 +415,11 @@ namespace lfs::vis::editor {
                  })},
                 {"stubPath", relative_to_workspace(active_stub_path)},
                 {"pythonVersion", "3.12"},
+#ifdef LFS_MACOS_PORTABLE_APP
+                {"pythonPlatform", "Darwin"},
+#else
                 {"pythonPlatform", "Linux"},
+#endif
                 {"typeCheckingMode", "basic"},
                 {"reportMissingImports", "warning"},
                 {"reportMissingTypeStubs", "none"},
@@ -518,7 +532,11 @@ namespace lfs::vis::editor {
 
         Impl()
             : commands(discover_server_commands()),
+#ifdef LFS_MACOS_PORTABLE_APP
+              project_root(lfs::core::getLibDir() / "python"),
+#else
               project_root(PROJECT_ROOT_PATH),
+#endif
               workspace_root(get_lichtfeld_dir() / "python-lsp"),
               document_path(workspace_root / "script_editor.py"),
               root_uri(file_uri_from_path(workspace_root)),

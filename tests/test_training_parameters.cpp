@@ -16,6 +16,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <set>
@@ -249,6 +250,8 @@ namespace {
             {"bg_image_path", "background image path uses its dedicated Python binding"},
             {"enable_save_eval_images", "evaluation image output is not a registry property"},
             {"eval_steps", "vector-valued evaluation schedule is managed separately"},
+            {"image_count_scaler", "image-count scaling bookkeeping is not a registry property"},
+            {"image_count_scaler_total", "steps_scaler the image-count share was written with"},
             {"ppisp_sidecar_path", "PPISP sidecar path uses its dedicated Python binding"},
             {"raster_backend", "explicit backend name is an adapter over the legacy gut property"},
             {"save_steps", "vector-valued save schedule is managed separately"},
@@ -921,6 +924,56 @@ namespace {
         EXPECT_EQ(restored.optimization.iterations, 40000u);
         EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>({30100}));
         EXPECT_EQ(restored.dataset.test_every, 64);
+    }
+
+    // Catches lost round trips, missing legacy seeding, and trusting an image share whose total an older build rewrote.
+    TEST_F(TrainingParametersTest, ImageCountScalerRoundTripsAndSeedsLegacyFullDecodes) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        params.steps_scaler = 0.5f;
+        params.image_count_scaler = 2.f;
+        EXPECT_EQ(OptimizationParameters::from_json(params.to_json()).to_json(), params.to_json());
+        auto legacy = params.to_json();
+        legacy.erase("image_count_scaler");
+        legacy["steps_scaler"] = 2.f;
+        EXPECT_FLOAT_EQ(OptimizationParameters::from_json(legacy).image_count_scaler, 2.f);
+        legacy["steps_scaler"] = 0.f;
+        EXPECT_FLOAT_EQ(OptimizationParameters::from_json(legacy).image_count_scaler, 1.f);
+
+        auto resaved_by_older_build = params.to_json();
+        resaved_by_older_build["steps_scaler"] = 1.5f;
+        EXPECT_FLOAT_EQ(OptimizationParameters::from_json(resaved_by_older_build).image_count_scaler, 1.5f);
+    }
+
+    // Catches sparse overlays seeding or dropping the image share.
+    TEST_F(TrainingParametersTest, SparseImageScalerOverlaysNeverSeedMissingKeys) {
+        lfs::core::param::TrainingParameters target;
+        target.optimization.image_count_scaler = 2.f;
+        lfs::core::param::ExplicitTrainingOverrides overrides;
+        overrides.optimization_json = R"({"steps_scaler":0.5})";
+        apply_explicit_training_overrides(target, overrides);
+        EXPECT_FLOAT_EQ(target.optimization.image_count_scaler, 2.f);
+        overrides.optimization_json = R"({"steps_scaler":1.5,"image_count_scaler":3,"image_count_scaler_total":1.5})";
+        apply_explicit_training_overrides(target, overrides);
+        EXPECT_FLOAT_EQ(target.optimization.steps_scaler, 1.5f);
+        EXPECT_FLOAT_EQ(target.optimization.image_count_scaler, 3.f);
+    }
+
+    // Catches a decoder that rejects keys it does not know, which would break opening newer files.
+    TEST_F(TrainingParametersTest, FullOptimizationDecoderIgnoresUnknownKeys) {
+        const auto params = OptimizationParameters::mrnf_defaults();
+        auto json = params.to_json();
+        json["future_bookkeeping"] = {{"arbitrary", true}};
+        EXPECT_EQ(OptimizationParameters::from_json(json).to_json(), params.to_json());
+    }
+
+    // Catches validation accepting a zero, negative or non-finite image share.
+    TEST_F(TrainingParametersTest, ImageCountScalerMustBeFiniteAndPositive) {
+        for (const float invalid : {0.f, -1.f, std::numeric_limits<float>::infinity(),
+                                    std::numeric_limits<float>::quiet_NaN()}) {
+            auto params = OptimizationParameters::mrnf_defaults();
+            params.image_count_scaler = invalid;
+            EXPECT_NE(params.validate().find("image_count_scaler must be finite and positive"), std::string::npos);
+        }
     }
 
 } // namespace

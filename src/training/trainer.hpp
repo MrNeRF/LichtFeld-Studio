@@ -302,6 +302,7 @@ namespace lfs::training {
         [[nodiscard]] bool endExportableDensifyBarrier();
 
         void setOnIterationStart(std::function<void()> cb) { on_iteration_start_ = std::move(cb); }
+        void setOnPaused(std::function<void(int)> cb) { on_paused_ = std::move(cb); }
 
         lfs::core::Scene* getScene() const { return scene_; }
         std::shared_ptr<lfs::io::PipelinedImageLoader> getActiveImageLoader() const;
@@ -992,6 +993,7 @@ namespace lfs::training {
         std::vector<std::filesystem::path> python_scripts_;
 
         std::function<void()> on_iteration_start_;
+        std::function<void(int)> on_paused_;
         std::function<bool()> exportable_densify_barrier_begin_;
         std::function<bool()> exportable_densify_barrier_end_;
         int exportable_densify_barrier_depth_ = 0;

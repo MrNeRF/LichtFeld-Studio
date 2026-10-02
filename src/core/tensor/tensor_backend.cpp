@@ -197,6 +197,10 @@ namespace lfs::core {
         impl_->backend(backend).drain();
     }
 
+    void TensorVulkanInterop::run_while_idle(GpuBackend backend, const std::function<void()>& release) {
+        impl_->backend(backend).run_while_idle(release);
+    }
+
     std::shared_ptr<void> TensorVulkanInterop::execution_scope(GpuBackend backend) {
         return impl_->backend(backend).execution_scope();
     }
@@ -989,6 +993,8 @@ namespace lfs::core {
 #ifdef __APPLE__
             .metal_objects = handles.metal_objects,
 #endif
+            .consumer_queue = static_cast<VkQueue>(handles.consumer_queue),
+            .consumer_queue_mutex = handles.consumer_queue_mutex,
         });
 #else
         (void)handles;

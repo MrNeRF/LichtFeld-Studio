@@ -78,6 +78,12 @@ namespace lfs::vis {
         std::string last_logged_vksplat_render_error_;
         StaleFrameGuard vksplat_stale_frame_guard_;
         DirtyMask parked_arena_retry_ = 0;
+        // Over-budget navigation: render when the camera has rested.
+        bool camera_settle_pending_ = false;
+        glm::mat3 last_navigation_rotation_{1.0f};
+        glm::vec3 last_navigation_translation_{0.0f};
+        bool navigation_pose_valid_ = false;
+        std::chrono::steady_clock::time_point camera_settle_deadline_{};
         std::atomic<DirtyMask> training_refresh_dirty_{0};
         std::uint64_t viewport_projection_generation_ = 1;
         std::uint64_t temporal_scene_revision_ = 1;

@@ -312,6 +312,10 @@ namespace lfs::core::internal {
                 context->recorders().wait_all();
             }
 
+            void run_while_idle(const std::function<void()>& release) override {
+                acquire_vulkan_context()->run_after_queue_idle(release);
+            }
+
             std::shared_ptr<void> execution_scope() override {
                 return std::make_shared<GpuBackendScope>(GpuBackend::Vulkan);
             }

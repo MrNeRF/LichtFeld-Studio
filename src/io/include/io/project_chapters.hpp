@@ -470,6 +470,8 @@ namespace lfs::io::project {
                                    const ReferenceBindings&) = default;
         };
 
+        // Preserve CLI step locks across in-process replace-load, never in PRMS.
+        std::optional<std::string> cli_step_locked_strategy;
         std::string active_strategy = std::string(lfs::core::param::kStrategyMRNF);
         lfs::core::param::OptimizationParameters mcmc_session;
         lfs::core::param::OptimizationParameters mrnf_session;

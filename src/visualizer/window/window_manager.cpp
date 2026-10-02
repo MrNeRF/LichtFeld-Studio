@@ -1984,6 +1984,8 @@ namespace lfs::vis {
 #ifdef __APPLE__
             .metal_objects = vulkan_context_->metalObjectsInteropEnabled(),
 #endif
+            .consumer_queue = vulkan_context_->graphicsQueue(),
+            .consumer_queue_mutex = &vulkan_context_->graphicsQueueMutex(),
         };
         if (const auto status = lfs::core::adopt_vulkan_device(handles); !status) {
             LOG_WARN("Tensor Vulkan backend keeps its own device: {}", lfs::format_for_developer(status.error()));

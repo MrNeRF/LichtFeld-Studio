@@ -449,6 +449,10 @@ namespace lfs::core::internal {
         device_ = adopted.device;
         queue_ = adopted.queue;
         queue_family_ = adopted.queue_family;
+        if (adopted.consumer_queue_mutex) {
+            consumer_queue_ = adopted.consumer_queue;
+            consumer_queue_mutex_ = adopted.consumer_queue_mutex;
+        }
         if (adopted.sharing_queue_family_count > adopted.sharing_queue_families.size())
             throw std::invalid_argument("Too many Vulkan tensor sharing queue families");
         sharing_queue_families_ = {queue_family_};
@@ -986,6 +990,13 @@ namespace lfs::core::internal {
         vk_check(this, vkQueueSubmit2(queue_, 1, &submit_info, VK_NULL_HANDLE),
                  "vkQueueSubmit2");
         publish_submitted_locked(signal_value);
+    }
+
+    void VulkanContext::wait_consumer_queue_idle_locked() {
+        if (consumer_queue_ == VK_NULL_HANDLE)
+            return;
+        std::lock_guard lock(*consumer_queue_mutex_);
+        vk_check(this, vkQueueWaitIdle(consumer_queue_), "vkQueueWaitIdle(consumer queue)");
     }
 
     void VulkanContext::submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value) {

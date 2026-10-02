@@ -29,6 +29,7 @@ tests/data/nn/*
 !tests/data/nn/moge2_ref_fixture.json
 !tests/data/nn/romav1_ref_fixture.json
 !tests/data/nn/lpips_ref_fixture.json
+!tests/data/clamped_colour_regression.ply.fixture
 *.pt
 *.py
 !scripts/lichtfeld_mcp_bridge.py

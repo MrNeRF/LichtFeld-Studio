@@ -45,6 +45,21 @@ namespace {
         EXPECT_FALSE(publisher.secondsUntilDue(t0 + TrainingProgressPublisher::kInterval).has_value());
     }
 
+    TEST(TrainingProgressPublisherTest, TerminalIterationBypassesThrottleAndClearsPendingProgress) {
+        TrainingProgressPublisher publisher;
+        const auto t0 = Clock::now();
+        publisher.offer({.iteration = 1000, .loss = 0.5f, .num_gaussians = 10}, t0);
+        publisher.offer({.iteration = 1010, .loss = 0.4f, .num_gaussians = 11},
+                        t0 + milliseconds(30));
+
+        publisher.publishFinal(1017);
+
+        EXPECT_EQ(publishedIteration(), 1017);
+        EXPECT_FALSE(publisher.secondsUntilDue(t0 + milliseconds(30)).has_value());
+        publisher.flushDue(t0 + TrainingProgressPublisher::kInterval);
+        EXPECT_EQ(publishedIteration(), 1017);
+    }
+
     // Races training threads offering progress against the UI thread flushing
     // and draining the store. Catches a publisher that lets more than one
     // update per interval through, or loses the last value.

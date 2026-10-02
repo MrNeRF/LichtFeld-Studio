@@ -6,8 +6,9 @@
 include(${CMAKE_SOURCE_DIR}/cmake/FetchLibvterm.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/CompileShaders.cmake)
 
-# SHARED on Windows and macOS to avoid singleton duplication across module boundaries
-if(WIN32 OR APPLE)
+# SHARED on Windows and macOS to avoid singleton duplication across module
+# boundaries, or when checking the Windows DLL export boundary on Linux.
+if(WIN32 OR APPLE OR LFS_HIDDEN_SYMBOLS)
     set(LFS_VIS_LIB_TYPE SHARED)
 else()
     set(LFS_VIS_LIB_TYPE STATIC)
