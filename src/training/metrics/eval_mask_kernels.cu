@@ -58,8 +58,8 @@ namespace lfs::training {
 
         nvtxRangePush("erode_metrics_mask");
         const lfs::core::CUDAStreamGuard stream_guard(stream);
-        mask.sync_to_stream(stream);
         const auto input = mask.contiguous();
+        input.sync_to_stream(stream);
         const int height = static_cast<int>(input.shape()[0]);
         const int width = static_cast<int>(input.shape()[1]);
         auto result = lfs::core::Tensor::empty(
