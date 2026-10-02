@@ -132,6 +132,16 @@ namespace lfs::training {
             }
         };
 
+        struct RestoreCameraImageDimensions {
+            lfs::core::Camera& camera;
+            int width;
+            int height;
+
+            ~RestoreCameraImageDimensions() {
+                camera.set_image_dimensions(width, height);
+            }
+        };
+
         lfs::core::Tensor load_eval_gt_image_cpu(lfs::core::Camera& cam,
                                                  const int resize_factor,
                                                  const int max_width) {
@@ -508,6 +518,8 @@ namespace lfs::training {
             {"ssim", json_metric(view.ssim)},
             {"lpips", json_metric(view.lpips)},
             {"masked", view.masked},
+            {"evaluated_pixel_fraction", view.evaluated_pixel_fraction},
+            {"validity_mask_applied", view.validity_mask_applied},
         };
         if (!view.skipped_reason.empty())
             entry["skipped_reason"] = view.skipped_reason;
@@ -692,8 +704,13 @@ namespace lfs::training {
     lfs::core::Tensor MetricsEvaluator::load_eval_mask(lfs::core::Camera* cam,
                                                        lfs::core::Tensor& gt_image,
                                                        const bool alpha_as_mask) const {
+        auto config = metrics_mask_config_from(_params);
+        if (_params.optimization.undistort) {
+            config.apply_undistortion = false;
+            config.replace_gt_image = false;
+        }
         return lfs::training::load_eval_mask(
-            cam, gt_image, alpha_as_mask, metrics_mask_config_from(_params));
+            cam, gt_image, alpha_as_mask, config);
     }
 
     EvalMetrics MetricsEvaluator::evaluate(const int iteration,
@@ -776,6 +793,8 @@ namespace lfs::training {
         result.views.reserve(val_dataset_size);
         for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
             lfs::core::Camera* cam = val_dataset->get_camera(image_idx);
+            const RestoreCameraImageDimensions restore_dimensions{
+                *cam, cam->image_width(), cam->image_height()};
             auto& view = result.views.emplace_back();
             view.index = static_cast<int>(image_idx);
             view.image_name = cam->image_name();
@@ -793,6 +812,15 @@ namespace lfs::training {
             }
             view.height = static_cast<int>(gt_image.shape()[1]);
             view.width = static_cast<int>(gt_image.shape()[2]);
+
+            std::optional<lfs::core::UndistortParams> eval_undistort;
+            if (_params.optimization.undistort && cam->is_undistort_prepared()) {
+                eval_undistort = lfs::core::scale_undistort_params(
+                    cam->undistort_params(), view.width, view.height,
+                    _params.dataset.max_width);
+                cam->set_image_dimensions(eval_undistort->dst_width, eval_undistort->dst_height);
+                view.validity_mask_applied = true;
+            }
 
             lfs::core::Tensor mask;
             if (use_masking) {
@@ -812,6 +840,7 @@ namespace lfs::training {
                 }
             }
 
+            lfs::core::Tensor validity_mask;
             auto& splatData_mutable = const_cast<lfs::core::SplatData&>(splatData);
             RenderOutput r_output;
             if (_params.optimization.gut) {
@@ -821,19 +850,49 @@ namespace lfs::training {
                 r_output = fast_rasterize(*cam, splatData_mutable, background,
                                           _params.optimization.mip_filter, {}, render_normal);
             }
-            const auto render_raw = r_output.image.is_valid()
-                                        ? r_output.image.clamp(0.0f, 1.0f)
-                                        : lfs::core::Tensor{};
+            auto render_raw = r_output.image.is_valid()
+                                  ? r_output.image.clamp(0.0f, 1.0f)
+                                  : lfs::core::Tensor{};
             if (appearance_ && r_output.image.is_valid()) {
                 r_output.image = appearance_(r_output.image, *cam);
             }
+            if (eval_undistort) {
+                assert(r_output.image.shape()[1] == static_cast<size_t>(eval_undistort->dst_height));
+                assert(r_output.image.shape()[2] == static_cast<size_t>(eval_undistort->dst_width));
+                r_output.image = lfs::core::distort_image_to_source(
+                    r_output.image, *eval_undistort, validity_mask, r_output.image.stream());
+                if (render_raw.is_valid()) {
+                    lfs::core::Tensor raw_validity;
+                    render_raw = lfs::core::distort_image_to_source(
+                        render_raw, *eval_undistort, raw_validity, render_raw.stream());
+                }
+                if (mask.is_valid()) {
+                    assert(mask.shape()[0] == validity_mask.shape()[0]);
+                    assert(mask.shape()[1] == validity_mask.shape()[1]);
+                    mask = (mask.to(lfs::core::DataType::Float32) *
+                            validity_mask.to(lfs::core::DataType::Float32))
+                               .gt(0.5f)
+                               .to(lfs::core::DataType::UInt8)
+                               .contiguous();
+                } else {
+                    mask = validity_mask;
+                }
+            }
             r_output.image = image_for_metrics_and_save(r_output.image);
+            assert(r_output.image.shape() == gt_image.shape());
+            view.evaluated_pixel_fraction = mask.is_valid()
+                                                ? mask.to(lfs::core::DataType::Float32).mean().item<float>()
+                                                : 1.0f;
 
             float psnr = 0.0f;
             float ssim = 0.0f;
             try {
                 psnr = _psnr_metric->compute(r_output.image, gt_image, mask);
-                ssim = _ssim_metric->compute(r_output.image, gt_image, mask);
+                const auto ssim_mask = eval_undistort && mask.is_valid()
+                                           ? lfs::training::erode_metrics_mask(
+                                                 mask, 5, r_output.image.stream())
+                                           : mask;
+                ssim = _ssim_metric->compute(r_output.image, gt_image, ssim_mask);
             } catch (const std::exception& e) {
                 LOG_WARN("Eval: skipping camera '{}' (metric computation failed: {})", cam->image_name(), e.what());
                 view.skipped_reason = std::string("metric computation failed: ") + e.what();
@@ -1049,6 +1108,13 @@ namespace lfs::training {
                     true, // horizontal
                     4,    // separator width
                     lfs::core::provenance_to_json(stamp));
+                if (view.validity_mask_applied) {
+                    lfs::core::image_io::save_image_async(
+                        eval_dir / (std::to_string(image_idx) + "_metric_mask.png"),
+                        mask.to(lfs::core::DataType::Float32)
+                            .unsqueeze(0)
+                            .expand({3, view.height, view.width}));
+                }
                 saved_images++;
             }
         }

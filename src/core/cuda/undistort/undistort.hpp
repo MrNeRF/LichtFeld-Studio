@@ -42,6 +42,9 @@ namespace lfs::core {
 
     Tensor undistort_image(const Tensor& src, const UndistortParams& params, cudaStream_t stream);
 
+    Tensor distort_image_to_source(const Tensor& src, const UndistortParams& params,
+                                   Tensor& validity_mask, cudaStream_t stream);
+
     Tensor undistort_mask(const Tensor& src, const UndistortParams& params, cudaStream_t stream);
 
 } // namespace lfs::core

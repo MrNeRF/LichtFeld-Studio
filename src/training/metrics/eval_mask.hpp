@@ -7,7 +7,9 @@
 #include "core/camera.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
+#include "eval_mask_kernels.cuh"
 
+#include <cuda_runtime.h>
 #include <expected>
 #include <string>
 
@@ -19,6 +21,8 @@ namespace lfs::training {
         bool invert_masks = false;
         float mask_threshold = 0.5f;
         lfs::core::param::MaskMode mask_mode = lfs::core::param::MaskMode::None;
+        bool apply_undistortion = true;
+        bool replace_gt_image = true;
     };
 
     struct LoadedMetricsMask {

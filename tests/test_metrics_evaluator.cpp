@@ -351,6 +351,9 @@ TEST(MetricsEvaluatorGeom, MatchingRenderedAndPriorNormalIsNearZero) {
     MetricsEvaluator evaluator(params);
     const auto metrics = evaluator.evaluate(1, splat, dataset, background);
     ASSERT_TRUE(metrics.valid);
+    ASSERT_EQ(metrics.views.size(), 1u);
+    EXPECT_FALSE(metrics.views[0].validity_mask_applied);
+    EXPECT_FLOAT_EQ(metrics.views[0].evaluated_pixel_fraction, 1.0f);
     ASSERT_TRUE(metrics.normal_angle_deg.has_value());
     EXPECT_NEAR(*metrics.normal_angle_deg, 0.0f, 2.0f);
     EXPECT_EQ(EvalMetrics::to_csv_header(),
@@ -439,7 +442,9 @@ TEST(ViewEvaluationJson, AddsStepsInOrderAndReplacesARepeatedStep) {
         .height = 4,
         .psnr = 24.0f,
         .ssim = 0.8f,
-        .lpips = 0.2f};
+        .lpips = 0.2f,
+        .evaluated_pixel_fraction = 0.75f,
+        .validity_mask_applied = true};
     const lfs::training::ViewMetrics remeasured{
         .index = 0,
         .image_name = "a.png",
@@ -596,7 +601,9 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
         .height = 4,
         .psnr = 24.0f,
         .ssim = 0.8f,
-        .lpips = 0.2f};
+        .lpips = 0.2f,
+        .evaluated_pixel_fraction = 0.75f,
+        .validity_mask_applied = true};
     const lfs::training::ViewMetrics skipped{
         .index = 3,
         .image_name = "cam/frame.png",
@@ -615,12 +622,16 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
     EXPECT_EQ(keys(record), (std::vector<std::string>{"evaluations", "height", "width"}));
     ASSERT_EQ(record.at("evaluations").size(), 2u);
     EXPECT_EQ(keys(record.at("evaluations")[0]),
-              (std::vector<std::string>{"lpips", "masked", "psnr", "split", "ssim", "step"}));
+              (std::vector<std::string>{"evaluated_pixel_fraction", "lpips", "masked", "psnr", "split", "ssim", "step", "validity_mask_applied"}));
     EXPECT_EQ(keys(record.at("evaluations")[1]),
-              (std::vector<std::string>{"lpips", "masked", "psnr", "skipped_reason", "split", "ssim", "step"}));
+              (std::vector<std::string>{"evaluated_pixel_fraction", "lpips", "masked", "psnr", "skipped_reason", "split", "ssim", "step", "validity_mask_applied"}));
     EXPECT_TRUE(record.at("evaluations")[0].at("step").is_number_integer());
     EXPECT_TRUE(record.at("evaluations")[0].at("psnr").is_number_float());
     EXPECT_TRUE(record.at("evaluations")[0].at("masked").is_boolean());
+    EXPECT_FLOAT_EQ(record.at("evaluations")[0].at("evaluated_pixel_fraction"), 0.75f);
+    EXPECT_TRUE(record.at("evaluations")[0].at("validity_mask_applied"));
     EXPECT_EQ(record.at("evaluations")[0].at("split"), "test");
     EXPECT_TRUE(record.at("evaluations")[1].at("psnr").is_null());
+    EXPECT_FLOAT_EQ(record.at("evaluations")[1].at("evaluated_pixel_fraction"), 0.0f);
+    EXPECT_FALSE(record.at("evaluations")[1].at("validity_mask_applied"));
 }
