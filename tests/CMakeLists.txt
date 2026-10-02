@@ -309,6 +309,30 @@ set_tests_properties(lichtfeld_format_tests PROPERTIES
     TIMEOUT 300
 )
 
+add_executable(lichtfeld_frame_tests test_frame_demand_ledger.cpp)
+target_include_directories(lichtfeld_frame_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/visualizer/rendering
+    ${CMAKE_SOURCE_DIR}/src/visualizer
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/tests
+)
+target_link_libraries(lichtfeld_frame_tests PRIVATE GTest::gtest_main Threads::Threads)
+set_target_properties(lichtfeld_frame_tests PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(lichtfeld_frame_tests)
+endif()
+add_test(NAME lichtfeld_frame_tests
+    COMMAND $<TARGET_FILE:lichtfeld_frame_tests> --gtest_color=no
+)
+set_tests_properties(lichtfeld_frame_tests PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "fast;frame"
+    TIMEOUT 30
+)
+
 if(NOT BUILD_TESTS)
     message(STATUS "Building CPU-only format tests (no CUDA); full suite disabled")
     return()  # lichtfeld_format_tests is defined above; the rest needs CUDA/Torch

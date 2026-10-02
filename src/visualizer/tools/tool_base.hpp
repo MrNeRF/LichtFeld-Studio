@@ -76,7 +76,7 @@ namespace lfs::vis {
         // Helper methods
         void requestRender() const {
             if (rendering_manager) {
-                rendering_manager->markDirty(DirtyFlag::ALL);
+                rendering_manager->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
             }
         }
 

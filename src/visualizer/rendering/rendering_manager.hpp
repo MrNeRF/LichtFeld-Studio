@@ -10,6 +10,7 @@
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "dirty_flags.hpp"
+#include "frame_demand.hpp"
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
 #include "io/loader.hpp"
@@ -127,6 +128,8 @@ namespace lfs::vis {
         RenderingManager();
         ~RenderingManager();
         void setWakeCallback(std::function<void()> callback);
+        [[nodiscard]] FrameDemandLedger& frameDemandLedger() { return frame_demand_ledger_; }
+        [[nodiscard]] const FrameDemandLedger& frameDemandLedger() const { return frame_demand_ledger_; }
 
         // Initialize rendering resources
         void initialize();
@@ -253,15 +256,14 @@ namespace lfs::vis {
 
         [[nodiscard]] lfs::io::SplatTensorAllocator makeSplatTensorAllocator() const;
 
-        void markDirty();
-        void markDirty(DirtyMask flags);
+        void markDirty(DirtyMask flags, FrameReason reason, std::string detail = {});
         void markCameraPoseChanged();
 
         [[nodiscard]] bool pollDirtyState();
         [[nodiscard]] DirtyMask pendingDirtyMask() const { return dirty_mask_.load(std::memory_order_relaxed); }
         // The training preview refreshes on its own cadence, not only when an
         // unrelated redraw happens to notice it is due.
-        void pollTrainingRefresh(bool is_training);
+        void pollTrainingRefresh(bool is_training, int current_iteration);
         [[nodiscard]] double secondsUntilTrainingRefresh() const;
         // Seconds until an over-budget navigation render may run (camera at
         // rest); +inf when no settle is pending.
@@ -269,13 +271,15 @@ namespace lfs::vis {
         // Re-arms a parked passive training refresh once its render can claim the arena.
         void pollParkedArenaRetry();
         [[nodiscard]] bool hasParkedArenaRetry() const { return parked_arena_retry_ != 0; }
+        void noteVksplatViewFrame();
+        [[nodiscard]] double secondsUntilVksplatScratchRelease(bool training_active) const;
 
         void setPivotAnimationEndTime(const std::chrono::steady_clock::time_point end_time) {
             animation_state_.setPivotAnimationEndTime(end_time);
         }
 
         void triggerSelectionFlash() {
-            markDirty(animation_state_.triggerSelectionFlash());
+            markDirty(animation_state_.triggerSelectionFlash(), lfs::vis::FrameReason::Selection);
         }
 
         void setOverlayAnimationActive(const bool active) { animation_state_.setOverlayAnimationActive(active); }
@@ -399,7 +403,7 @@ namespace lfs::vis {
             if (changed) {
                 invalidateCameraMetricsRequests(true);
             }
-            markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP);
+            markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP, lfs::vis::FrameReason::SettingsChange);
         }
         int getCurrentCameraId() const { return camera_interaction_service_.currentCameraId(); }
         int getHoveredCameraId() const { return camera_interaction_service_.hoveredCameraId(); }
@@ -420,7 +424,10 @@ namespace lfs::vis {
             return presented_framerate_controller_.getAverageFPS();
         }
         // Measurement only — does not affect scene render pacing/limiting.
-        void notePresentedFrame() { presented_framerate_controller_.beginFrame(); }
+        void notePresentedFrame(const FramePlan& plan) {
+            presented_framerate_controller_.beginFrame();
+            frame_demand_ledger_.notePresented(plan);
+        }
 
         // Access to the auxiliary rendering engine used by point-cloud, mesh, and readback paths.
         lfs::rendering::RenderingEngine* getRenderingEngine();
@@ -573,11 +580,11 @@ namespace lfs::vis {
         // Preview selection
         void setPreviewSelection(lfs::core::Tensor* preview, bool add_mode = true) {
             viewport_overlay_service_.setPreviewSelection(preview, add_mode);
-            markDirty(DirtyFlag::SELECTION);
+            markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         }
         void clearPreviewSelection() {
             viewport_overlay_service_.clearPreviewSelection();
-            markDirty(DirtyFlag::SELECTION);
+            markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         }
         void clearSelectionPreviews();
 
@@ -855,6 +862,7 @@ namespace lfs::vis {
         VulkanContext* last_vulkan_context_ = nullptr;
         std::atomic<bool> vksplat_terminal_release_pending_{false};
         std::uint32_t vksplat_idle_frame_count_ = 0;
+        std::chrono::steady_clock::time_point vksplat_idle_since_{};
         VkImage vulkan_external_viewport_image_ = VK_NULL_HANDLE;
         VkImageView vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
         VkImageLayout vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -885,6 +893,7 @@ namespace lfs::vis {
         glm::ivec2 gt_comparison_failed_placeholder_size_{0, 0};
         std::mutex wake_callback_mutex_;
         std::function<void()> wake_callback_;
+        FrameDemandLedger frame_demand_ledger_;
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
         glm::ivec2 vulkan_viewport_image_alloc_size_{0, 0};
         glm::ivec2 vulkan_viewport_coordinate_size_{0, 0};
@@ -937,6 +946,8 @@ namespace lfs::vis {
 
         // Granular dirty tracking
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
+        int last_training_preview_iteration_ = -1;
+        bool has_training_preview_iteration_ = false;
 
         RenderAnimationState animation_state_;
         FramebufferViewportRect framebuffer_viewport_rect_;

@@ -2688,7 +2688,7 @@ namespace lfs::vis {
                     sm->selectNode(node->id);
                 }
                 if (auto* rendering_manager = services().renderingOrNull()) {
-                    rendering_manager->markDirty(DirtyFlag::SELECTION | DirtyFlag::OVERLAY);
+                    rendering_manager->markDirty(DirtyFlag::SELECTION | DirtyFlag::OVERLAY, lfs::vis::FrameReason::Selection);
                 }
                 return;
             }
