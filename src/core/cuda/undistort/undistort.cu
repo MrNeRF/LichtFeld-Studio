@@ -4,6 +4,7 @@
 
 #include "core/logger.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "distortion_model.cuh"
 #include "undistort.hpp"
 
 #include <algorithm>
@@ -41,144 +42,10 @@ namespace lfs::core {
         constexpr float MIN_SIGNED_WEIGHT_RATIO = 1.0e-4f;
         constexpr float EVALUATION_MIN_COVERAGE = 0.999f;
 
-        // COLMAP sensor/models.h (BSD-3 licensed formulas)
-        __host__ __device__ void apply_distortion_pinhole(
-            const float x, const float y,
-            const float* __restrict__ dist, const int num_dist,
-            float& dx, float& dy) {
-
-            const float r2 = x * x + y * y;
-            const float r4 = r2 * r2;
-            const float r6 = r4 * r2;
-
-            const float k1 = num_dist > 0 ? dist[0] : 0.0f;
-            const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-            const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-            const float numerator = 1.0f + k1 * r2 + k2 * r4 + k3 * r6;
-            float radial = numerator;
-            if (num_dist >= 6) {
-                const float denominator =
-                    1.0f + dist[3] * r2 + dist[4] * r4 + dist[5] * r6;
-                radial = numerator / denominator;
-            }
-
-            const int tangential_offset = num_dist >= 6 ? 6 : 3;
-            const float p1 = num_dist > tangential_offset ? dist[tangential_offset] : 0.0f;
-            const float p2 = num_dist > tangential_offset + 1 ? dist[tangential_offset + 1] : 0.0f;
-
-            dx = x * radial + 2.0f * p1 * x * y + p2 * (r2 + 2.0f * x * x);
-            dy = y * radial + p1 * (r2 + 2.0f * y * y) + 2.0f * p2 * x * y;
-        }
-
-        __device__ void apply_distortion_fisheye(
-            const float x, const float y,
-            const float* __restrict__ dist, const int num_dist,
-            float& dx, float& dy) {
-
-            const float r = sqrtf(x * x + y * y);
-            if (r < 1e-8f) {
-                dx = x;
-                dy = y;
-                return;
-            }
-
-            const float theta = atanf(r);
-            const float theta2 = theta * theta;
-            const float theta4 = theta2 * theta2;
-            const float theta6 = theta4 * theta2;
-            const float theta8 = theta4 * theta4;
-
-            const float k1 = num_dist > 0 ? dist[0] : 0.0f;
-            const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-            const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-            const float k4 = num_dist > 3 ? dist[3] : 0.0f;
-
-            const float theta_d = theta * (1.0f + k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8);
-            const float scale = theta_d / r;
-
-            dx = x * scale;
-            dy = y * scale;
-        }
-
-        // COLMAP ThinPrismFisheyeCameraModel evaluates the tangential and prism terms on the
-        // theta-scaled point (uu, vv), |(uu, vv)| = theta, independently of the radial polynomial.
-        __host__ __device__ void thin_prism_increment(
-            const float uu, const float vv,
-            const float* __restrict__ dist, const int num_dist,
-            float& tx, float& ty) {
-            const float p1 = num_dist > 4 ? dist[4] : 0.0f;
-            const float p2 = num_dist > 5 ? dist[5] : 0.0f;
-            const float sx1 = num_dist > 6 ? dist[6] : 0.0f;
-            const float sx2 = num_dist > 7 ? dist[7] : 0.0f;
-            const float sy1 = num_dist > 8 ? dist[8] : 0.0f;
-            const float sy2 = num_dist > 9 ? dist[9] : 0.0f;
-            const float u2 = uu * uu;
-            const float uv = uu * vv;
-            const float v2 = vv * vv;
-            const float r2 = u2 + v2;
-            const float r4 = r2 * r2;
-            tx = 2.0f * p1 * uv + p2 * (r2 + 2.0f * u2) + sx1 * r2 + sx2 * r4;
-            ty = 2.0f * p2 * uv + p1 * (r2 + 2.0f * v2) + sy1 * r2 + sy2 * r4;
-        }
-
-        __host__ __device__ void thin_prism_fisheye_from_theta_point(
-            const float uu, const float vv,
-            const float* __restrict__ dist, const int num_dist,
-            float& dx, float& dy) {
-            const float k1 = num_dist > 0 ? dist[0] : 0.0f;
-            const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-            const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-            const float k4 = num_dist > 3 ? dist[3] : 0.0f;
-            const float r2 = uu * uu + vv * vv;
-            const float r4 = r2 * r2;
-            const float r6 = r4 * r2;
-            const float r8 = r6 * r2;
-            const float radial = k1 * r2 + k2 * r4 + k3 * r6 + k4 * r8;
-            float tx, ty;
-            thin_prism_increment(uu, vv, dist, num_dist, tx, ty);
-            dx = uu + uu * radial + tx;
-            dy = vv + vv * radial + ty;
-        }
-
-        __device__ void apply_distortion_thin_prism_fisheye(
-            const float x, const float y,
-            const float* __restrict__ dist, const int num_dist,
-            float& dx, float& dy) {
-
-            const float r = sqrtf(x * x + y * y);
-            if (r < 1e-8f) {
-                dx = x;
-                dy = y;
-                return;
-            }
-
-            const float theta_over_r = atanf(r) / r;
-            thin_prism_fisheye_from_theta_point(
-                x * theta_over_r, y * theta_over_r, dist, num_dist, dx, dy);
-        }
-
-        __device__ void apply_distortion(
-            const float x, const float y,
-            const CameraModelType model,
-            const float* __restrict__ dist, const int num_dist,
-            float& dx, float& dy) {
-
-            switch (model) {
-            case CameraModelType::PINHOLE:
-                apply_distortion_pinhole(x, y, dist, num_dist, dx, dy);
-                break;
-            case CameraModelType::FISHEYE:
-                apply_distortion_fisheye(x, y, dist, num_dist, dx, dy);
-                break;
-            case CameraModelType::THIN_PRISM_FISHEYE:
-                apply_distortion_thin_prism_fisheye(x, y, dist, num_dist, dx, dy);
-                break;
-            default:
-                dx = x;
-                dy = y;
-                break;
-            }
-        }
+        using detail::apply_distortion;
+        using detail::apply_distortion_pinhole;
+        using detail::thin_prism_fisheye_from_theta_point;
+        using detail::thin_prism_increment;
 
         __device__ float bilinear_sample_renormalized(
             const float* __restrict__ src,
@@ -1002,6 +869,26 @@ namespace lfs::core {
             return true;
         }
 
+        __global__ void __launch_bounds__(BLOCK_DIM* BLOCK_DIM)
+            inverse_distortion_sample_map_kernel(
+                float2* __restrict__ samples,
+                const UndistortParams params) {
+            const int ox = blockIdx.x * BLOCK_DIM + threadIdx.x;
+            const int oy = blockIdx.y * BLOCK_DIM + threadIdx.y;
+            if (ox >= params.src_width || oy >= params.src_height)
+                return;
+            const float xd = (static_cast<float>(ox) + PIXEL_CENTER_OFFSET - params.src_cx) /
+                             params.src_fx;
+            const float yd = (static_cast<float>(oy) + PIXEL_CENTER_OFFSET - params.src_cy) /
+                             params.src_fy;
+            float ux, uy;
+            if (!inverse_distortion(xd, yd, params, ux, uy)) {
+                ux = nanf("");
+                uy = nanf("");
+            }
+            samples[oy * params.src_width + ox] = make_float2(ux, uy);
+        }
+
     } // anonymous namespace
 
     void distort_normalized_point(
@@ -1538,6 +1425,25 @@ namespace lfs::core {
     Tensor distort_normal_to_source_area(
         const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
         return launch_distort_area_to_source(src, params, AreaFilterMode::NORMAL, stream);
+    }
+
+    Tensor inverse_distortion_sample_map(const UndistortParams& params, cudaStream_t stream) {
+        assert(params.src_width > 0 && params.src_height > 0);
+        nvtxRangePush("inverse_distortion_sample_map");
+        const CUDAStreamGuard stream_guard(stream);
+        auto samples = Tensor::empty(
+            {static_cast<size_t>(params.src_height), static_cast<size_t>(params.src_width), 2},
+            Device::CUDA, DataType::Float32);
+        const dim3 block(BLOCK_DIM, BLOCK_DIM);
+        const dim3 grid(
+            (params.src_width + BLOCK_DIM - 1) / BLOCK_DIM,
+            (params.src_height + BLOCK_DIM - 1) / BLOCK_DIM);
+        inverse_distortion_sample_map_kernel<<<grid, block, 0, stream>>>(
+            reinterpret_cast<float2*>(samples.ptr<float>()), params);
+        const cudaError_t error = cudaGetLastError();
+        assert(error == cudaSuccess && "inverse_distortion_sample_map_kernel launch failed");
+        nvtxRangePop();
+        return samples;
     }
 
 } // namespace lfs::core

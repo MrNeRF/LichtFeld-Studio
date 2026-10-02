@@ -733,6 +733,20 @@ namespace lfs::core::param {
                        "undistorted training images")
             .locale("training_params.eval_space")
             .tooltip("training.tooltip.eval_space")
+            .all_strategies()
+            .string_prop(&OptimizationParameters::eval_mask,
+                         "eval_mask", "Evaluation Mesh", d.eval_mask,
+                         "Absolute mesh path used to select evaluated pixels")
+            .locale("training_params.eval_mask")
+            .tooltip("training.tooltip.eval_mask")
+            .flags(PROP_NEEDS_RESTART)
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::eval_mask_invert,
+                       "eval_mask_invert", "Invert Evaluation Mask", d.eval_mask_invert,
+                       "Evaluate pixels outside the mesh coverage")
+            .locale("training_params.eval_mask_invert")
+            .tooltip("training.tooltip.eval_mask_invert")
+            .flags(PROP_NEEDS_RESTART)
 
             // Random initialization
             .all_strategies()

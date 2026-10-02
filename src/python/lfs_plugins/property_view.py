@@ -90,6 +90,7 @@ BOOL_PROPS = (
     "random",
     "enable_eval",
     "eval_all",
+    "eval_mask_invert",
     "background_improvements",
 )
 
@@ -109,6 +110,7 @@ BESPOKE_OR_HIDDEN = {
     "headless": "runtime-only read-only flag",
     "prune_ratio": "scrub slider",
     "steps_scaler": "driven by apply_step_scaling via the iterations lock; raw edits desync step counts",
+    "eval_mask": "mesh file browser and path display",
 }
 
 AUTO_ADVANCED_RUN_ID = "advanced_registry"
@@ -218,6 +220,11 @@ DATASET_RUNS = (
     _run("dataset_eval", "enable_eval", visibility_condition_id="has_dataset"),
     _run("dataset_eval_train", "eval_all", visibility_condition_id="dep_eval"),
     _run("dataset_eval_space", "eval_space", visibility_condition_id="dep_undistort"),
+    _run(
+        "dataset_eval_mask_invert",
+        "eval_mask_invert",
+        visibility_condition_id="dep_eval_mask",
+    ),
 )
 
 OPTIMIZATION_RUNS = (

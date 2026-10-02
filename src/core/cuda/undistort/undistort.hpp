@@ -71,4 +71,6 @@ namespace lfs::core {
     Tensor distort_normal_to_source_area(const Tensor& src, const UndistortParams& params,
                                          cudaStream_t stream);
 
+    Tensor inverse_distortion_sample_map(const UndistortParams& params, cudaStream_t stream);
+
 } // namespace lfs::core

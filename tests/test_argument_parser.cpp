@@ -1967,6 +1967,72 @@ TEST(ArgumentParserTest, EvalStepsAcceptEvaluationEnabledByTheConfigFile) {
     EXPECT_EQ((*parsed)->optimization.eval_steps, (std::vector<size_t>{500}));
 }
 
+// Catches working-directory-dependent persistence or lost explicit resume overrides.
+TEST(ArgumentParserTest, EvalMeshMaskStoresAbsolutePathAndSurvivesResume) {
+    const auto directory = std::filesystem::path(
+        make_test_path("lfs_arg_parser_eval_mesh"));
+    const auto mesh = directory / "mask.obj";
+    std::ofstream(mesh) << "v 0 0 1\nv 1 0 1\nv 0 1 1\nf 1 2 3\n";
+    const auto spec = "mesh:" + mesh.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--eval",
+        "--eval-mask",
+        spec.c_str(),
+        "--eval-mask-invert",
+    };
+    const auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    const auto expected = lfs::core::path_to_utf8(
+        std::filesystem::weakly_canonical(mesh));
+    EXPECT_EQ((*parsed)->optimization.eval_mask, expected);
+    EXPECT_TRUE((*parsed)->optimization.eval_mask_invert);
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("eval_mask"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("eval_mask_invert"));
+
+    const auto round_trip = lfs::core::param::OptimizationParameters::from_json(
+        (*parsed)->optimization.to_json());
+    EXPECT_EQ(round_trip.eval_mask, expected);
+    EXPECT_TRUE(round_trip.eval_mask_invert);
+
+    lfs::core::param::TrainingParameters restored;
+    restored.optimization.eval_mask.clear();
+    restored.optimization.eval_mask_invert = false;
+    apply_explicit_training_overrides(restored, (*parsed)->overrides);
+    EXPECT_EQ(restored.optimization.eval_mask, expected);
+    EXPECT_TRUE(restored.optimization.eval_mask_invert);
+}
+
+// Catches accepting an unknown source, missing file, or ineffective evaluation flags.
+TEST(ArgumentParserTest, EvalMeshMaskRejectsInvalidSourceFileAndFlagCombinations) {
+    const auto directory = std::filesystem::path(
+        make_test_path("lfs_arg_parser_bad_eval_mesh"));
+    const auto mesh = directory / "mask.obj";
+    std::ofstream(mesh).put('\n');
+    const auto mesh_spec = "mesh:" + mesh.string();
+    const auto missing_spec = "mesh:" + (directory / "missing.obj").string();
+    const auto unknown_spec = "image:" + mesh.string();
+
+    const std::vector<std::pair<std::vector<const char*>, std::string_view>> cases{
+        {{"LichtFeld-Studio", "--eval", "--eval-mask", unknown_spec.c_str()},
+         "Invalid --eval-mask source"},
+        {{"LichtFeld-Studio", "--eval", "--eval-mask", missing_spec.c_str()},
+         "does not exist"},
+        {{"LichtFeld-Studio", "--eval-mask", mesh_spec.c_str()},
+         "need --eval"},
+        {{"LichtFeld-Studio", "--eval", "--eval-mask-invert"},
+         "needs --eval-mask"},
+    };
+    for (const auto& [arguments, expected] : cases) {
+        const auto parsed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(arguments.size()), arguments.data());
+        ASSERT_FALSE(parsed) << expected;
+        EXPECT_NE(parsed.error().find(expected), std::string::npos)
+            << parsed.error();
+    }
+}
+
 TEST(ArgumentParserTest, EvalAllTrainsOnEveryImageAndEnablesEvaluation) {
     const auto data_path = make_test_path("lfs_arg_parser_eval_all_data");
     const auto output_path = make_test_path("lfs_arg_parser_eval_all_output");

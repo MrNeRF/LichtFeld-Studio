@@ -11,6 +11,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "training/optimizer/render_output.hpp"
+#include <array>
 #include <cmath>
 #include <expected>
 #include <filesystem>
@@ -171,6 +172,16 @@ namespace lfs::training {
         bool erode_ssim_mask = false;
     };
 
+    struct EvaluationMesh {
+        lfs::core::Tensor vertices; // [V,3] CUDA Float32 in the training world frame
+        lfs::core::Tensor indices;  // [F,3] CUDA Int32
+        float z_near = 0.0f;
+        bool invert = false;
+    };
+
+    [[nodiscard]] lfs::Result<EvaluationMesh> load_evaluation_mesh(
+        const std::filesystem::path& path, const std::array<float, 3>& training_origin, bool invert);
+
     using EvaluationRenderFn =
         std::function<lfs::Result<EvaluationRenderResult>(lfs::core::Camera&, float)>;
 
@@ -186,7 +197,8 @@ namespace lfs::training {
         const lfs::core::param::TrainingParameters& params,
         const EvaluationRenderFn& render,
         const EvaluationViewInputs* cached_inputs = nullptr,
-        lfs::io::PipelinedImageLoader* image_loader = nullptr);
+        lfs::io::PipelinedImageLoader* image_loader = nullptr,
+        const EvaluationMesh* mesh = nullptr);
 
     [[nodiscard]] std::optional<float> mean_normal_angle_deg(
         const lfs::core::Tensor& rendered_normal,
@@ -254,6 +266,9 @@ namespace lfs::training {
             _lpips_load_attempted = false;
         }
 
+        void set_eval_mesh(EvaluationMesh mesh) { _eval_mesh = std::move(mesh); }
+        [[nodiscard]] const EvaluationMesh* eval_mesh() const { return _eval_mesh ? &*_eval_mesh : nullptr; }
+
         void set_normal_prior_decode(const lfs::core::Camera::NormalPriorDecode& decode) {
             _normal_prior_decode = decode;
         }
@@ -303,5 +318,6 @@ namespace lfs::training {
         bool _lpips_load_attempted = false;
         std::unique_ptr<MetricsReporter> _reporter;
         AppearanceFn appearance_;
+        std::optional<EvaluationMesh> _eval_mesh;
     };
 } // namespace lfs::training

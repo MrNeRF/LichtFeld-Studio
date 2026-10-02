@@ -11,12 +11,15 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "eval_mask.hpp"
+#include "io/loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "mesh_mask_kernels.cuh"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -396,12 +399,50 @@ namespace lfs::training {
         });
     }
 
+    lfs::Result<EvaluationMesh> load_evaluation_mesh(
+        const std::filesystem::path& path, const std::array<float, 3>& training_origin, const bool invert) {
+        lfs::io::LoadOptions options;
+        options.mesh_geometry_only = true;
+        auto loaded = lfs::io::Loader::create()->load(path, options);
+        if (!loaded)
+            return evaluation_error(loaded.error().format(), LFS_SOURCE_SITE_CURRENT());
+        const auto* mesh = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&loaded->data);
+        if (!mesh || !*mesh)
+            return evaluation_error("the file does not contain a triangle mesh", LFS_SOURCE_SITE_CURRENT());
+        const auto& data = **mesh;
+        if (!data.indices.is_valid() || data.indices.numel() == 0)
+            return evaluation_error("the mesh has no triangles", LFS_SOURCE_SITE_CURRENT());
+        assert(data.vertices.ndim() == 2 && data.vertices.shape()[1] == 3);
+        assert(data.indices.ndim() == 2 && data.indices.shape()[1] == 3);
+
+        const auto positions = data.vertices.cpu().contiguous().to_vector();
+        std::array<float, 3> lower{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                                   std::numeric_limits<float>::max()};
+        std::array<float, 3> upper{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                                   std::numeric_limits<float>::lowest()};
+        for (size_t i = 0; i < positions.size(); ++i) {
+            lower[i % 3] = std::min(lower[i % 3], positions[i]);
+            upper[i % 3] = std::max(upper[i % 3], positions[i]);
+        }
+        const float diagonal = std::hypot(upper[0] - lower[0], upper[1] - lower[1], upper[2] - lower[2]);
+
+        const auto origin = lfs::core::Tensor::from_vector(
+            {training_origin[0], training_origin[1], training_origin[2]},
+            lfs::core::TensorShape({1, 3}), lfs::core::Device::CUDA);
+        return EvaluationMesh{
+            .vertices = (data.vertices.to(lfs::core::Device::CUDA) - origin).contiguous(),
+            .indices = data.indices.to(lfs::core::Device::CUDA).contiguous(),
+            .z_near = std::max(1.0e-6f, 1.0e-4f * diagonal),
+            .invert = invert};
+    }
+
     lfs::Result<PreparedEvaluationView> prepare_evaluation_view(
         lfs::core::Camera& camera,
         const lfs::core::param::TrainingParameters& params,
         const EvaluationRenderFn& render,
         const EvaluationViewInputs* cached_inputs,
-        lfs::io::PipelinedImageLoader* image_loader) {
+        lfs::io::PipelinedImageLoader* image_loader,
+        const EvaluationMesh* mesh) {
         RestoreCameraImageDimensions restore_dimensions{
             camera, camera.image_width(), camera.image_height(), camera.image_size_loaded()};
 
@@ -463,7 +504,7 @@ namespace lfs::training {
             }
 
             if (!cached_inputs) {
-                if (eval_uses_masks(params.optimization.mask_mode)) {
+                if (!mesh && eval_uses_masks(params.optimization.mask_mode)) {
                     auto mask_config = metrics_mask_config_from(params);
                     mask_config.apply_undistortion = undistorted_reference;
                     mask_config.replace_gt_image = false;
@@ -578,8 +619,8 @@ namespace lfs::training {
             }
 
             auto metric_mask = inputs.user_mask;
+            lfs::core::Tensor validity_mask;
             if (warp_to_distorted) {
-                lfs::core::Tensor validity_mask;
                 rendered->output.image = lfs::core::distort_image_to_source(
                     rendered->output.image, *inverse_warp, validity_mask,
                     rendered->output.image.stream());
@@ -638,6 +679,49 @@ namespace lfs::training {
                 }
             }
 
+            if (mesh) {
+                const auto stream = rendered->output.image.stream();
+                const auto R = camera.R().cpu().contiguous().to_vector();
+                const auto T = camera.T().cpu().contiguous().to_vector();
+                MeshMaskCamera mesh_camera;
+                mesh_camera.world_to_camera = {R[0], R[1], R[2], T[0],
+                                               R[3], R[4], R[5], T[1],
+                                               R[6], R[7], R[8], T[2]};
+                lfs::core::Tensor coverage;
+                if (distorted_evaluation) {
+                    mesh_camera.fx = scaled_undistort->src_fx;
+                    mesh_camera.fy = scaled_undistort->src_fy;
+                    mesh_camera.cx = scaled_undistort->src_cx;
+                    mesh_camera.cy = scaled_undistort->src_cy;
+                    mesh_camera.width = inputs.source_width;
+                    mesh_camera.height = inputs.source_height;
+                    const auto samples = lfs::core::inverse_distortion_sample_map(*scaled_undistort, stream);
+                    coverage = rasterize_mesh_coverage(
+                        mesh->vertices, mesh->indices, mesh_camera, samples, *scaled_undistort,
+                        mesh->z_near, stream);
+                } else {
+                    mesh_camera.fx = geometry.fx;
+                    mesh_camera.fy = geometry.fy;
+                    mesh_camera.cx = geometry.cx;
+                    mesh_camera.cy = geometry.cy;
+                    mesh_camera.width = geometry.width;
+                    mesh_camera.height = geometry.height;
+                    coverage = rasterize_mesh_coverage(
+                        mesh->vertices, mesh->indices, mesh_camera, mesh->z_near, stream);
+                }
+                if (mesh->invert)
+                    coverage = coverage.eq(0).to(lfs::core::DataType::UInt8);
+                metric_mask = validity_mask.is_valid()
+                                  ? (coverage.to(lfs::core::DataType::Float32) *
+                                     validity_mask.to(lfs::core::DataType::Float32))
+                                        .gt(0.5f)
+                                        .to(lfs::core::DataType::UInt8)
+                                        .contiguous()
+                                  : coverage;
+                if (metric_mask.to(lfs::core::DataType::Float32).sum().item<float>() <= 0.0f)
+                    return evaluation_error("mesh mask covers no evaluated pixel", LFS_SOURCE_SITE_CURRENT());
+            }
+
             if (rendered->raw_image.is_valid())
                 rendered->raw_image = rendered->raw_image.clamp(0.0f, 1.0f);
             rendered->output.image = image_for_metrics_and_save(rendered->output.image);
@@ -662,7 +746,7 @@ namespace lfs::training {
                 .metric_mask = std::move(metric_mask),
                 .render_geometry = geometry,
                 .validity_mask_applied = warp_to_distorted,
-                .erode_ssim_mask = warp_to_distorted};
+                .erode_ssim_mask = warp_to_distorted || mesh != nullptr};
         } catch (const std::exception& e) {
             // LFS-CENSUS-OK(empty-catch): converted into a typed evaluation error
             return evaluation_error(e.what(), LFS_SOURCE_SITE_CURRENT());
@@ -1141,7 +1225,8 @@ namespace lfs::training {
                     }
                 },
                 nullptr,
-                image_loader);
+                image_loader,
+                eval_mesh());
             if (!prepared) {
                 LOG_WARN("Eval: skipping camera '{}' (view preparation failed: {})",
                          cam->image_name(), prepared.error().detail());

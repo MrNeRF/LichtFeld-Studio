@@ -764,6 +764,54 @@ TEST(MetricsEvaluatorUndistort, SupersampledRenderKeepsTheSplatFootprint) {
     EXPECT_NEAR(alpha_area(*supersampled, 4.0f) / 4.0f, base_area, 0.03f * base_area);
 }
 
+// Catches a mesh mask that is not projected through the evaluation camera, ignores the invert
+// flag, or lets a view without any covered pixel through.
+TEST(MetricsEvaluatorMeshMask, CoverageSelectsTheEvaluatedPixels) {
+    ensure_image_loader();
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_mesh_mask";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 32;
+    constexpr int kH = 24;
+    const auto image_path = tmp / "gt.png";
+    write_rgb_png(image_path, 128, 128, 128, kH, kW);
+    const auto camera = make_eval_camera(image_path, {}, kW, kH);
+    const auto params = make_eval_params(tmp / "out");
+    const auto render = [](Camera& render_camera, float) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        lfs::training::RenderOutput output;
+        output.image = Tensor::zeros({size_t{3}, static_cast<size_t>(render_camera.image_height()),
+                                      static_cast<size_t>(render_camera.image_width())},
+                                     Device::CUDA);
+        return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+    };
+    // The camera sits at z = -4 looking down +z; the quad covers the left half of the view.
+    lfs::training::EvaluationMesh mesh{
+        .vertices = Tensor::from_vector({-2.0f, -2.4f, 0.0f, 0.0f, -2.4f, 0.0f, 0.0f, 2.4f, 0.0f, -2.0f, 2.4f, 0.0f},
+                                        lfs::core::TensorShape({4, 3}), Device::CUDA),
+        .indices = Tensor::from_vector(std::vector<int32_t>{0, 1, 2, 0, 2, 3},
+                                       lfs::core::TensorShape({2, 3}), Device::CUDA),
+        .z_near = 1.0e-3f};
+
+    for (const bool invert : {false, true}) {
+        mesh.invert = invert;
+        const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, &mesh);
+        ASSERT_TRUE(prepared.has_value());
+        EXPECT_TRUE(prepared->erode_ssim_mask);
+        const auto mask = prepared->metric_mask.cpu().contiguous();
+        ASSERT_EQ(mask.shape(), (lfs::core::TensorShape({kH, kW})));
+        for (int y = 0; y < kH; ++y) {
+            for (int x = 0; x < kW; ++x)
+                EXPECT_EQ(mask.ptr<uint8_t>()[y * kW + x], (x < kW / 2) != invert) << x << ',' << y;
+        }
+    }
+
+    mesh.invert = false;
+    mesh.vertices = mesh.vertices - Tensor::from_vector({0.0f, 0.0f, 10.0f}, lfs::core::TensorShape({1, 3}),
+                                                        Device::CUDA);
+    EXPECT_FALSE(prepare_evaluation_view(*camera, params, render, nullptr, nullptr, &mesh).has_value());
+    std::filesystem::remove_all(tmp);
+}
+
 TEST(MetricsEvaluatorGeom, RotatedPriorReportsKnownAngle) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";

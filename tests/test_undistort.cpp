@@ -664,6 +664,32 @@ TEST(UndistortInverse, CpuThinPrismWideRaysRoundTrip) {
     }
 }
 
+// The mesh evaluation mask samples coverage at these points; each must map back onto its
+// exact pixel centre through the forward model.
+TEST(UndistortInverse, SampleMapInvertsPixelCentres) {
+    auto radial = Tensor::from_vector({-0.08f, 0.01f}, TensorShape({2}), Device::CPU);
+    auto tangential = Tensor::from_vector({0.001f, -0.0008f}, TensorShape({2}), Device::CPU);
+    const auto params = compute_undistort_params(
+        450.0f, 455.0f, 160.0f, 120.0f, 320, 240, radial, tangential, CameraModelType::PINHOLE);
+    const auto samples = inverse_distortion_sample_map(params, nullptr).cpu().contiguous();
+    ASSERT_EQ(samples.shape(), (TensorShape({240, 320, 2})));
+    const float* const map = samples.ptr<float>();
+    int checked = 0;
+    for (int y = 0; y < 240; y += 7) {
+        for (int x = 0; x < 320; x += 7) {
+            const size_t i = static_cast<size_t>(y) * 320 + x;
+            if (!std::isfinite(map[2 * i]))
+                continue;
+            const auto [dx, dy] = distort_test_coordinate(map[2 * i], map[2 * i + 1], params);
+            EXPECT_LE(std::hypot(dx * params.src_fx + params.src_cx - (x + 0.5f),
+                                 dy * params.src_fy + params.src_cy - (y + 0.5f)),
+                      1.0e-2f);
+            ++checked;
+        }
+    }
+    EXPECT_GT(checked, 1000);
+}
+
 TEST(UndistortInverse, ValidityMaskExcludesOutOfFrameSamples) {
     UndistortParams params{};
     params.src_fx = params.src_fy = 32.0f;
