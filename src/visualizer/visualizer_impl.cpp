@@ -4525,9 +4525,7 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::handleLoadConfigFile(const std::filesystem::path& path) {
-        const bool dataset_editable = !trainer_manager_ || !trainer_manager_->hasTrainer() ||
-                                      (trainer_manager_->getState() == TrainingState::Ready &&
-                                       trainer_manager_->getCurrentIteration() == 0);
+        const bool dataset_editable = !trainer_manager_ || trainer_manager_->isDatasetEditable();
         auto result = parameter_manager_->importConfigFile(path, dataset_editable);
         if (!result) {
             state::ConfigLoadFailed{.path = path, .error = result.error()}.emit();

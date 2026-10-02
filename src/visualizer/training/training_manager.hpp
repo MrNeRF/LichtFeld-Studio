@@ -67,6 +67,7 @@ namespace lfs::vis {
         void setTrainerFromCheckpoint(std::unique_ptr<lfs::training::Trainer> trainer, int checkpoint_iteration);
         [[nodiscard]] bool clearTrainer();
         bool hasTrainer() const;
+        [[nodiscard]] bool isDatasetEditable() const;
 
         // Link to viewer for notifications
         void setViewer(VisualizerImpl* viewer) { viewer_ = viewer; }

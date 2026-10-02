@@ -835,7 +835,7 @@ target_link_libraries(lichtfeld_tests PRIVATE
 target_link_libraries(lichtfeld_tests PRIVATE lfs_vulkan_rasterizer Vulkan::Vulkan)
 
 # Run parameter/configuration contracts without compiling the CUDA test suite.
-add_executable(lichtfeld_parameter_tests EXCLUDE_FROM_ALL test_parameter_manager.cpp)
+add_executable(lichtfeld_parameter_tests test_parameter_manager.cpp)
 target_compile_features(lichtfeld_parameter_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_parameter_tests PRIVATE
     $<TARGET_PROPERTY:lichtfeld_tests,INCLUDE_DIRECTORIES>

@@ -551,7 +551,7 @@ namespace lfs::python {
         const auto* tm = get_trainer_manager();
         if (!tm)
             return false;
-        return tm->getState() == lfs::vis::TrainingState::Ready && tm->getCurrentIteration() == 0;
+        return tm->hasTrainer() && tm->isDatasetEditable();
     }
 
     core::param::DatasetConfig& PyDatasetConfig::params() {

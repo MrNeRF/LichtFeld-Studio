@@ -2548,14 +2548,17 @@ namespace lfs::vis {
         return pending_dataset_params_;
     }
 
+    bool TrainerManager::isDatasetEditable() const {
+        return !hasTrainer() || (getState() == TrainingState::Ready && getCurrentIteration() == 0);
+    }
+
     lfs::core::param::TrainingParameters TrainerManager::getEditableTrainingParams(
         const ParameterManager& parameter_manager) const {
         const auto& configured_dataset = parameter_manager.getDatasetConfig();
         auto params = parameter_manager.createForDataset(
             configured_dataset.data_path,
             configured_dataset.output_path);
-        if (hasTrainer() && trainer_->isInitialized() &&
-            (getState() != TrainingState::Ready || getCurrentIteration() != 0)) {
+        if (hasTrainer() && trainer_->isInitialized() && !isDatasetEditable()) {
             params.dataset = trainer_->getParams().dataset;
         } else if (services().paramsOrNull() || hasTrainer() || !pending_dataset_params_.data_path.empty()) {
             params.dataset = getEditableDatasetParams();
