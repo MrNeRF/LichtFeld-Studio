@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "undistort.hpp"
 
 #include <algorithm>
@@ -25,7 +26,11 @@ namespace lfs::core {
         constexpr float MAX_FISHEYE_THETA = 1.56079632679f;
         constexpr int MAX_NEWTON_ITERATIONS = 20;
         constexpr float INVERSE_RESIDUAL_PIXELS = 5.0e-4f;
+        // Float32 Newton stalls near 6e-4 px at 8k image scales; accepting up to 1e-2 px keeps
+        // those pixels valid while the geometric error stays far below sampling resolution.
+        constexpr float INVERSE_ACCEPT_PIXELS = 1.0e-2f;
         constexpr float INVERSE_JACOBIAN_STEP = 1.0e-4f;
+        constexpr float INVERSE_MAX_STEP = 2.0f;
         constexpr float COLMAP_MIN_SCALE = 0.2f;
         constexpr float COLMAP_MAX_SCALE = 2.0f;
 
@@ -268,6 +273,7 @@ namespace lfs::core {
             ux = xd;
             uy = yd;
 
+            float previous_error_px = INFINITY;
             for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
                 float eval_x, eval_y;
                 apply_distortion(ux, uy, params.model_type, params.distortion,
@@ -277,8 +283,10 @@ namespace lfs::core {
                 const float error_px = hypotf(rx * params.src_fx, ry * params.src_fy);
                 if (!isfinite(error_px))
                     return false;
-                if (error_px <= INVERSE_RESIDUAL_PIXELS)
+                const bool stalled = error_px <= INVERSE_ACCEPT_PIXELS && error_px >= previous_error_px;
+                if (error_px <= INVERSE_RESIDUAL_PIXELS || stalled)
                     break;
+                previous_error_px = error_px;
 
                 float xp_x, xp_y, xm_x, xm_y;
                 float yp_x, yp_y, ym_x, ym_y;
@@ -304,11 +312,15 @@ namespace lfs::core {
                 if (!isfinite(det) || fabsf(det) < NEWTON_EPSILON)
                     return false;
 
-                const float step_x = (j11 * rx - j01 * ry) / det;
-                const float step_y = (-j10 * rx + j00 * ry) / det;
-                if (!isfinite(step_x) || !isfinite(step_y) ||
-                    fabsf(step_x) > 2.0f || fabsf(step_y) > 2.0f)
+                float step_x = (j11 * rx - j01 * ry) / det;
+                float step_y = (-j10 * rx + j00 * ry) / det;
+                if (!isfinite(step_x) || !isfinite(step_y))
                     return false;
+                const float step_length = fmaxf(fabsf(step_x), fabsf(step_y));
+                if (step_length > INVERSE_MAX_STEP) {
+                    step_x *= INVERSE_MAX_STEP / step_length;
+                    step_y *= INVERSE_MAX_STEP / step_length;
+                }
                 ux -= step_x;
                 uy -= step_y;
                 if (!isfinite(ux) || !isfinite(uy))
@@ -321,7 +333,7 @@ namespace lfs::core {
             const float final_error_px = hypotf(
                 (final_x - xd) * params.src_fx,
                 (final_y - yd) * params.src_fy);
-            if (!isfinite(final_error_px) || final_error_px > INVERSE_RESIDUAL_PIXELS)
+            if (!isfinite(final_error_px) || final_error_px > INVERSE_ACCEPT_PIXELS)
                 return false;
             if ((params.model_type == CameraModelType::FISHEYE ||
                  params.model_type == CameraModelType::THIN_PRISM_FISHEYE) &&
@@ -1058,12 +1070,17 @@ namespace lfs::core {
         assert(static_cast<int>(src.shape()[1]) == params.dst_height);
         assert(static_cast<int>(src.shape()[2]) == params.dst_width);
 
-        const int channels = static_cast<int>(src.shape()[0]);
-        auto dst = Tensor::zeros(
+        nvtxRangePush("distort_image_to_source");
+
+        const CUDAStreamGuard stream_guard(stream);
+        src.sync_to_stream(stream);
+        const auto input = src.contiguous();
+        const int channels = static_cast<int>(input.shape()[0]);
+        auto dst = Tensor::empty(
             {static_cast<size_t>(channels), static_cast<size_t>(params.src_height),
              static_cast<size_t>(params.src_width)},
             Device::CUDA);
-        validity_mask = Tensor::zeros(
+        validity_mask = Tensor::empty(
             {static_cast<size_t>(params.src_height), static_cast<size_t>(params.src_width)},
             Device::CUDA, DataType::UInt8);
 
@@ -1072,9 +1089,11 @@ namespace lfs::core {
             (params.src_width + BLOCK_DIM - 1) / BLOCK_DIM,
             (params.src_height + BLOCK_DIM - 1) / BLOCK_DIM);
         distort_image_to_source_kernel<<<grid, block, 0, stream>>>(
-            src.ptr<float>(), dst.ptr<float>(), validity_mask.ptr<uint8_t>(), channels, params);
+            input.ptr<float>(), dst.ptr<float>(), validity_mask.ptr<uint8_t>(), channels, params);
         const cudaError_t err = cudaGetLastError();
         assert(err == cudaSuccess && "distort_image_to_source_kernel launch failed");
+
+        nvtxRangePop();
         return dst;
     }
 

@@ -15,6 +15,7 @@
 #include "training/rasterization/fast_rasterizer.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -161,6 +162,31 @@ namespace {
                  .output_uint8 = p.output_uint8});
         });
         initialized = true;
+    }
+
+    std::shared_ptr<Camera> make_distorted_eval_camera(const std::filesystem::path& image_path,
+                                                       const std::filesystem::path& mask_path,
+                                                       const int width,
+                                                       const int height) {
+        auto R = Tensor::eye(3, Device::CUDA);
+        std::vector<float> t_data{0.0f, 0.0f, 4.0f};
+        auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        auto radial = Tensor::from_vector({-0.3f}, lfs::core::TensorShape({1}), Device::CPU);
+        auto cam = std::make_shared<Camera>(
+            R, T, static_cast<float>(width), static_cast<float>(width),
+            0.5f * static_cast<float>(width), 0.5f * static_cast<float>(height),
+            radial, Tensor(), CameraModelType::PINHOLE,
+            image_path.filename().string(), image_path, mask_path,
+            width, height, 0);
+        cam->prepare_undistortion();
+        assert(cam->is_undistort_prepared());
+        return cam;
+    }
+
+    SplatData make_hidden_splat() {
+        auto splat = make_front_facing_splat();
+        splat.means() = Tensor::from_vector({0.0f, 0.0f, -10.0f}, lfs::core::TensorShape({1, 3}), Device::CUDA);
+        return splat;
     }
 
     lfs::core::param::TrainingParameters make_eval_params(const std::filesystem::path& output_dir) {
@@ -358,6 +384,95 @@ TEST(MetricsEvaluatorGeom, MatchingRenderedAndPriorNormalIsNearZero) {
     EXPECT_NEAR(*metrics.normal_angle_deg, 0.0f, 2.0f);
     EXPECT_EQ(EvalMetrics::to_csv_header(),
               "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b");
+
+    std::filesystem::remove_all(tmp);
+}
+
+// The warped render is zero outside the undistorted frame; a bias averaged over the whole
+// image would be pulled toward -GT by those pixels instead of reporting the 2/255 offset.
+TEST(MetricsEvaluatorUndistort, BiasCountsOnlyEvaluatedPixels) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_undistort_eval_bias";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 64;
+    constexpr int kH = 48;
+    const auto image_path = tmp / "gt.png";
+    write_rgb_png(image_path, 130, 130, 130, kH, kW);
+
+    auto cam = make_distorted_eval_camera(image_path, {}, kW, kH);
+    ASSERT_FALSE(cam->image_size_loaded());
+    auto dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{cam}, DatasetConfig{}, CameraDataset::Split::ALL);
+    auto background = Tensor::full({3}, 128.0f / 255.0f, Device::CUDA);
+    auto params = make_eval_params(tmp / "out");
+    params.optimization.undistort = true;
+    std::filesystem::create_directories(params.dataset.output_path);
+
+    MetricsEvaluator evaluator(params);
+    const auto metrics = evaluator.evaluate(1, make_hidden_splat(), dataset, background);
+    ASSERT_TRUE(metrics.valid);
+    ASSERT_EQ(metrics.views.size(), 1u);
+    EXPECT_TRUE(metrics.views[0].validity_mask_applied);
+    EXPECT_GT(metrics.views[0].evaluated_pixel_fraction, 0.5f);
+    EXPECT_LT(metrics.views[0].evaluated_pixel_fraction, 0.99f);
+    EXPECT_NEAR(metrics.bias_r, -2.0f / 255.0f, 1.0e-4f);
+    EXPECT_NEAR(metrics.bias_corr_r, -2.0f / 255.0f, 1.0e-4f);
+    EXPECT_FALSE(cam->image_size_loaded());
+    EXPECT_EQ(cam->image_width(), kW);
+    EXPECT_EQ(cam->image_height(), kH);
+
+    std::filesystem::remove_all(tmp);
+}
+
+// A keep-mask narrower than the 11x11 SSIM window has no complete window after erosion;
+// the view must keep its PSNR instead of being dropped from every aggregate.
+TEST(MetricsEvaluatorUndistort, ThinMaskKeepsPsnrWithoutSsim) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_undistort_eval_thin_mask";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 64;
+    constexpr int kH = 48;
+    const auto image_path = tmp / "gt.png";
+    const auto mask_path = tmp / "mask.png";
+    write_rgb_png(image_path, 130, 130, 130, kH, kW);
+    std::vector<uint8_t> strip(static_cast<size_t>(kH) * kW * 3, 0);
+    for (int y = 0; y < kH; ++y) {
+        for (int x = 28; x < 37; ++x) {
+            const size_t i = (static_cast<size_t>(y) * kW + x) * 3;
+            strip[i] = strip[i + 1] = strip[i + 2] = 255;
+        }
+    }
+    write_u8_hwc_png(mask_path, strip, kH, kW);
+
+    auto cam = make_distorted_eval_camera(image_path, mask_path, kW, kH);
+    auto dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{cam}, DatasetConfig{}, CameraDataset::Split::ALL);
+    auto background = Tensor::full({3}, 128.0f / 255.0f, Device::CUDA);
+    auto params = make_eval_params(tmp / "out");
+    params.optimization.undistort = true;
+    params.optimization.mask_mode = lfs::core::param::MaskMode::Ignore;
+    std::filesystem::create_directories(params.dataset.output_path);
+
+    MetricsEvaluator evaluator(params);
+    const auto metrics = evaluator.evaluate(1, make_hidden_splat(), dataset, background);
+    ASSERT_TRUE(metrics.valid);
+    ASSERT_EQ(metrics.views.size(), 1u);
+    const auto& view = metrics.views[0];
+    EXPECT_TRUE(view.skipped_reason.empty()) << view.skipped_reason;
+    EXPECT_TRUE(view.masked);
+    ASSERT_TRUE(view.psnr.has_value());
+    EXPECT_NEAR(*view.psnr, 20.0f * std::log10(255.0f / 2.0f), 0.01f);
+    EXPECT_FALSE(view.ssim.has_value());
 
     std::filesystem::remove_all(tmp);
 }

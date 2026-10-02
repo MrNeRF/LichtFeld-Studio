@@ -109,7 +109,8 @@ namespace lfs::training {
                 config.max_width,
                 config.invert_masks,
                 config.mask_threshold,
-                !sai);
+                !sai,
+                config.apply_undistortion);
             if (!mask.is_valid()) {
                 return {};
             }
@@ -143,15 +144,7 @@ namespace lfs::training {
             return {};
         }
         if (cam->has_mask()) {
-            auto mask = cam->load_and_get_mask(
-                config.resize_factor, config.max_width, config.invert_masks,
-                config.mask_threshold, !is_segment_and_ignore(config.mask_mode),
-                config.apply_undistortion);
-            if (!mask.is_valid())
-                return {};
-            return is_segment_and_ignore(config.mask_mode)
-                       ? classify_keep_mask_for_metrics(mask)
-                       : mask;
+            return load_sidecar_keep_mask(*cam, config);
         }
         if (!alpha_as_mask) {
             return {};

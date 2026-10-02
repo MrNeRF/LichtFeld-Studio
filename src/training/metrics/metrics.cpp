@@ -110,8 +110,8 @@ namespace lfs::training {
                        : mask;
         }
 
-        lfs::core::Tensor mask_image_for_lpips(const lfs::core::Tensor& image,
-                                               const lfs::core::Tensor& mask) {
+        lfs::core::Tensor mask_image(const lfs::core::Tensor& image,
+                                     const lfs::core::Tensor& mask) {
             if (!mask.is_valid())
                 return image;
             const auto mask_f = mask_as_float01(mask);
@@ -136,9 +136,10 @@ namespace lfs::training {
             lfs::core::Camera& camera;
             int width;
             int height;
+            bool size_loaded;
 
             ~RestoreCameraImageDimensions() {
-                camera.set_image_dimensions(width, height);
+                camera.restore_image_dimensions(width, height, size_loaded);
             }
         };
 
@@ -794,7 +795,7 @@ namespace lfs::training {
         for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
             lfs::core::Camera* cam = val_dataset->get_camera(image_idx);
             const RestoreCameraImageDimensions restore_dimensions{
-                *cam, cam->image_width(), cam->image_height()};
+                *cam, cam->image_width(), cam->image_height(), cam->image_size_loaded()};
             auto& view = result.views.emplace_back();
             view.index = static_cast<int>(image_idx);
             view.image_name = cam->image_name();
@@ -819,6 +820,11 @@ namespace lfs::training {
                     cam->undistort_params(), view.width, view.height,
                     _params.dataset.max_width);
                 cam->set_image_dimensions(eval_undistort->dst_width, eval_undistort->dst_height);
+                const auto [render_fx, render_fy, render_cx, render_cy] = cam->get_intrinsics();
+                eval_undistort->dst_fx = render_fx;
+                eval_undistort->dst_fy = render_fy;
+                eval_undistort->dst_cx = render_cx;
+                eval_undistort->dst_cy = render_cy;
                 view.validity_mask_applied = true;
             }
 
@@ -850,9 +856,7 @@ namespace lfs::training {
                 r_output = fast_rasterize(*cam, splatData_mutable, background,
                                           _params.optimization.mip_filter, {}, render_normal);
             }
-            auto render_raw = r_output.image.is_valid()
-                                  ? r_output.image.clamp(0.0f, 1.0f)
-                                  : lfs::core::Tensor{};
+            auto render_raw = r_output.image;
             if (appearance_ && r_output.image.is_valid()) {
                 r_output.image = appearance_(r_output.image, *cam);
             }
@@ -878,6 +882,8 @@ namespace lfs::training {
                     mask = validity_mask;
                 }
             }
+            if (render_raw.is_valid())
+                render_raw = render_raw.clamp(0.0f, 1.0f);
             r_output.image = image_for_metrics_and_save(r_output.image);
             assert(r_output.image.shape() == gt_image.shape());
             view.evaluated_pixel_fraction = mask.is_valid()
@@ -885,14 +891,21 @@ namespace lfs::training {
                                                 : 1.0f;
 
             float psnr = 0.0f;
-            float ssim = 0.0f;
+            std::optional<float> ssim;
             try {
                 psnr = _psnr_metric->compute(r_output.image, gt_image, mask);
-                const auto ssim_mask = eval_undistort && mask.is_valid()
+                const bool require_complete_windows = eval_undistort && mask.is_valid();
+                const auto ssim_mask = require_complete_windows
                                            ? lfs::training::erode_metrics_mask(
                                                  mask, 5, r_output.image.stream())
                                            : mask;
-                ssim = _ssim_metric->compute(r_output.image, gt_image, ssim_mask);
+                if (!require_complete_windows ||
+                    ssim_mask.to(lfs::core::DataType::Float32).sum().item<float>() > 0.0f) {
+                    ssim = _ssim_metric->compute(r_output.image, gt_image, ssim_mask);
+                } else {
+                    LOG_WARN("Eval: SSIM unavailable for camera '{}' (no complete SSIM window inside the evaluated pixels)",
+                             cam->image_name());
+                }
             } catch (const std::exception& e) {
                 LOG_WARN("Eval: skipping camera '{}' (metric computation failed: {})", cam->image_name(), e.what());
                 view.skipped_reason = std::string("metric computation failed: ") + e.what();
@@ -900,16 +913,17 @@ namespace lfs::training {
                 continue;
             }
 
-            if (!std::isfinite(psnr) || !std::isfinite(ssim)) {
+            if (!std::isfinite(psnr) || (ssim && !std::isfinite(*ssim))) {
                 LOG_WARN("Eval: skipping camera '{}' (non-finite metric values: PSNR={}, SSIM={})",
-                         cam->image_name(), psnr, ssim);
+                         cam->image_name(), psnr, ssim.value_or(0.0f));
                 view.skipped_reason = "non-finite metric values";
                 skipped_images++;
                 continue;
             }
 
             psnr_values.push_back(psnr);
-            ssim_values.push_back(ssim);
+            if (ssim)
+                ssim_values.push_back(*ssim);
             view.psnr = psnr;
             view.ssim = ssim;
             view.masked = mask.is_valid();
@@ -919,8 +933,8 @@ namespace lfs::training {
             std::optional<float> lpips;
             if (_lpips_metric) {
                 try {
-                    const auto pred_lpips = mask_image_for_lpips(r_output.image, mask);
-                    const auto target_lpips = mask_image_for_lpips(
+                    const auto pred_lpips = mask_image(r_output.image, mask);
+                    const auto target_lpips = mask_image(
                         gt_float.to(lfs::core::Device::CUDA), mask);
                     const int image_height = static_cast<int>(gt_image.shape()[1]);
                     const int image_width = static_cast<int>(gt_image.shape()[2]);
@@ -984,7 +998,11 @@ namespace lfs::training {
                     image.ndim() != 3 || image.shape()[0] != 3) {
                     return;
                 }
-                const auto channel_mean = (image - gt_float).mean({1, 2});
+                const auto difference = image - gt_float;
+                const auto channel_mean =
+                    mask.is_valid()
+                        ? mask_image(difference, mask).sum({1, 2}) / mask_as_float01(mask).sum().item<float>()
+                        : difference.mean({1, 2});
                 const auto channel_cpu = channel_mean.cpu().contiguous();
                 const float* const bias = channel_cpu.ptr<float>();
                 br.push_back(bias[0]);
@@ -1059,12 +1077,26 @@ namespace lfs::training {
                         auto T_cpu = cam->T().cpu().contiguous();
                         const float* const R = R_cpu.ptr<float>();
                         const float* const T = T_cpu.ptr<float>();
+                        // Observed pixels live in the distorted source image; the undistorted
+                        // render is sampled at the point's projection through its own camera.
+                        const auto [render_fx, render_fy, render_cx, render_cy] = cam->get_intrinsics();
                         std::vector<DepthAbsRelSample> samples;
                         samples.reserve(observations.size());
                         for (const auto& observation : observations) {
                             const float z = R[6] * observation.x + R[7] * observation.y +
                                             R[8] * observation.z + T[2];
                             if (!std::isfinite(z) || z <= 1.0e-6f) {
+                                continue;
+                            }
+                            if (eval_undistort) {
+                                const float x = R[0] * observation.x + R[1] * observation.y +
+                                                R[2] * observation.z + T[0];
+                                const float y = R[3] * observation.x + R[4] * observation.y +
+                                                R[5] * observation.z + T[1];
+                                samples.push_back(DepthAbsRelSample{
+                                    .u = render_fx * x / z + render_cx,
+                                    .v = render_fy * y / z + render_cy,
+                                    .true_depth = z});
                                 continue;
                             }
                             samples.push_back(DepthAbsRelSample{
@@ -1144,6 +1176,8 @@ namespace lfs::training {
         // Compute averages
         if (!psnr_values.empty()) {
             result.psnr = std::accumulate(psnr_values.begin(), psnr_values.end(), 0.0f) / psnr_values.size();
+        }
+        if (!ssim_values.empty()) {
             result.ssim = std::accumulate(ssim_values.begin(), ssim_values.end(), 0.0f) / ssim_values.size();
         }
         result.lpips = mean_of_finite(lpips_values);
