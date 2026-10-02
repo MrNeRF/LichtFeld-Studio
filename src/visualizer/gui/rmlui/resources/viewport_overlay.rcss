@@ -499,9 +499,12 @@ body {
     padding: 0 0 0 8dp;
     position: relative;
     top: 0;
+    /* Viewport selects align from the top instead of using shared centering. */
+    transform: none;
 }
 
-#depth-view-block .viewport-depth-mode-select selectvalue {
+#depth-view-block .viewport-depth-mode-select selectvalue,
+#gt-compare-mode-block .viewport-depth-mode-select selectvalue {
     height: 20dp;
     line-height: 20dp;
 }
@@ -512,9 +515,11 @@ body {
     line-height: 22dp;
     position: relative;
     top: 0;
+    transform: none;
 }
 
-#depth-view-block .viewport-depth-mode-select selectarrow {
+#depth-view-block .viewport-depth-mode-select selectarrow,
+#gt-compare-mode-block .viewport-depth-mode-select selectarrow {
     height: 20dp;
     line-height: 20dp;
 }
