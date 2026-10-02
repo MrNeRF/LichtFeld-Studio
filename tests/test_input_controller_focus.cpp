@@ -10,6 +10,7 @@
 #include "core/user_paths.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "input/camera_animation_cadence.hpp"
 #include "input/input_controller.hpp"
 #include "input/input_router.hpp"
 #include "input/key_codes.hpp"
@@ -33,6 +34,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -118,6 +120,110 @@ namespace lfs::vis {
             }
         };
     } // namespace
+
+    TEST_F(InputControllerFocusTest, HeldOrbitRequestsFramesOnlyWhenTheCameraChanges) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_PRESS, 100.0, 100.0);
+        ASSERT_TRUE(controller.isCameraDragging());
+        EXPECT_TRUE(controller.isContinuousInputActive());
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+
+        const auto before = viewport.camera.R;
+        controller.handleMouseMove(120.0, 110.0);
+        EXPECT_NE(viewport.camera.R, before);
+        ASSERT_TRUE(viewport.camera.hasOrbitMomentum());
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_RELEASE, 120.0, 110.0);
+        EXPECT_FALSE(controller.isCameraDragging());
+        EXPECT_TRUE(controller.needsCameraAnimationFrame());
+        for (int i = 0; i < 300; ++i)
+            controller.update(1.0f / 60.0f);
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+    }
+
+    TEST_F(InputControllerFocusTest, HeldPanVelocityIsNotAnAnimationUntilRelease) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::RIGHT),
+                                     input::ACTION_PRESS, 100.0, 100.0);
+        ASSERT_TRUE(controller.isCameraDragging());
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+        controller.handleMouseMove(125.0, 105.0);
+        ASSERT_TRUE(viewport.camera.hasPanMomentum());
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::RIGHT),
+                                     input::ACTION_RELEASE, 125.0, 105.0);
+        EXPECT_TRUE(controller.needsCameraAnimationFrame());
+    }
+
+    TEST_F(InputControllerFocusTest, HeldLookIsEventDrivenButKeyboardMovementAnimates) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.initialize();
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        router.focusViewportKeyboard();
+        controller.setCameraNavigationMode(InputController::CameraNavigationMode::FPV);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_PRESS, 100.0, 100.0);
+        ASSERT_TRUE(controller.isCameraDragging());
+        controller.handleMouseMove(120.0, 110.0);
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+        controller.handleKey(input::KEY_W, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_TRUE(controller.needsCameraAnimationFrame());
+    }
+
+    TEST_F(InputControllerFocusTest, PausedOrbitDecaysWithoutFrameTicks) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_PRESS, 100.0, 100.0);
+        controller.handleMouseMove(120.0, 110.0);
+        ASSERT_TRUE(viewport.camera.hasOrbitMomentum());
+        const auto paused_rotation = viewport.camera.R;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_RELEASE, 120.0, 110.0);
+        EXPECT_FALSE(controller.needsCameraAnimationFrame());
+        EXPECT_EQ(viewport.camera.R, paused_rotation);
+    }
+
+    TEST(CameraAnimationCadenceTest, ContinuousTicksUseDisplayOpportunitiesWithoutACatchUpBurst) {
+        CameraAnimationCadence cadence;
+        const CameraAnimationCadence::Clock::time_point start{};
+        int frames = 0;
+        int last_visible_input = -1;
+        for (int input = 0; input < 1000; ++input) {
+            const auto now = start + std::chrono::milliseconds(input);
+            if (cadence.secondsUntilReady(now, 0.01) == 0.0) {
+                cadence.noteFrame(now);
+                last_visible_input = input;
+                ++frames;
+            }
+        }
+        EXPECT_EQ(frames, 100);
+        EXPECT_EQ(last_visible_input, 990);
+        // No accumulated render debt after a slow frame or an idle period.
+        const auto later = start + std::chrono::seconds(2);
+        EXPECT_EQ(cadence.secondsUntilReady(later, 0.01), 0.0);
+        cadence.noteFrame(later);
+        EXPECT_GT(cadence.secondsUntilReady(later, 0.01), 0.0);
+    }
+
+    TEST(CameraAnimationCadenceTest, FirstUpdateIsImmediateAndDisplayChangesAreRespected) {
+        CameraAnimationCadence cadence;
+        const CameraAnimationCadence::Clock::time_point start{};
+        EXPECT_EQ(cadence.secondsUntilReady(start, 1.0 / 60.0), 0.0);
+        cadence.noteFrame(start);
+        const auto next = start + std::chrono::milliseconds(5);
+        EXPECT_GT(cadence.secondsUntilReady(next, 1.0 / 60.0), 0.0);
+        EXPECT_EQ(cadence.secondsUntilReady(next, 1.0 / 240.0), 0.0);
+    }
 
     TEST_F(InputControllerFocusTest, CameraViewHotkeysDoNotBypassGuiKeyboardCapture) {
         Viewport viewport(200, 200);

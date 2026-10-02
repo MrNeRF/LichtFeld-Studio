@@ -2389,7 +2389,7 @@ namespace lfs::vis {
         FrameDemand demand;
         demand.viewport_export_locked = viewport_export_locked;
         demand.scene_dirty = rendering_manager_ && rendering_manager_->pollDirtyState();
-        demand.continuous_input = input_controller_ && input_controller_->isContinuousInputActive();
+        demand.continuous_input = input_controller_ && input_controller_->needsCameraAnimationFrame();
         const bool plugin_preload_running = python::is_plugin_preload_running();
         demand.python_animation = !plugin_preload_running &&
                                   (python::has_frame_callback() ||
@@ -2420,7 +2420,7 @@ namespace lfs::vis {
         return demand;
     }
 
-    double VisualizerImpl::guiAnimationFrameInterval() const {
+    double VisualizerImpl::displayFrameInterval() const {
         const auto now = std::chrono::steady_clock::now();
         if (display_refresh_queried_at_ != std::chrono::steady_clock::time_point{} &&
             now - display_refresh_queried_at_ < std::chrono::seconds(1))
@@ -2431,7 +2431,7 @@ namespace lfs::vis {
         if (window_manager_ && window_manager_->getWindow()) {
             const SDL_DisplayID display_id = SDL_GetDisplayForWindow(window_manager_->getWindow());
             if (const SDL_DisplayMode* const mode = SDL_GetCurrentDisplayMode(display_id);
-                mode && mode->refresh_rate > 0.0f)
+                mode && std::isfinite(mode->refresh_rate) && mode->refresh_rate > 0.0f)
                 refresh_rate = mode->refresh_rate;
         }
         refresh_rate = std::clamp(refresh_rate, 30.0f, 240.0f);
@@ -2672,6 +2672,37 @@ namespace lfs::vis {
             return;
         }
 
+        const auto camera_frame_started = std::chrono::steady_clock::now();
+        const DirtyMask pending_dirty = rendering_manager_->pendingDirtyMask();
+        const bool camera_frame = input_controller_ && input_controller_->isCameraNavigating() &&
+                                  (frame_demand.continuous_input || (pending_dirty & DirtyFlag::CAMERA));
+        const auto& input = window_manager_->frameInput();
+        const bool discrete_input = input.window_event || !input.mouse_button_events.empty() ||
+                                    !input.input_events.empty() || !input.keys_pressed.empty() ||
+                                    input.mouse_wheel != 0.0f || input.mouse_wheel_x != 0.0f;
+        const bool camera_animation_only = frame_demand.continuous_input && !input.mouse_moved && !discrete_input &&
+                                           !(pending_dirty & ~(DirtyFlag::CAMERA | DirtyFlag::OVERLAY)) &&
+                                           !frame_demand.viewport_export_locked && !frame_demand.python_animation &&
+                                           !frame_demand.python_overlay && !frame_demand.python_redraw &&
+                                           !frame_demand.posted_work && !frame_demand.render_work && !frame_demand.store_dirty &&
+                                           !frame_demand.swapchain_resize_pending && !frame_demand.window_resize_paint_pending &&
+                                           !frame_demand.viewport_resize_deferring && !frame_demand.viewport_resize_settle_ready &&
+                                           !interactive_transition_settling;
+        if (gui_frame_rendered_ && camera_animation_only) {
+            const double wait = camera_animation_cadence_.secondsUntilReady(camera_frame_started, displayFrameInterval());
+            if (wait > 0.0) {
+                // MAILBOX does not pace autonomous camera motion. Keep its
+                // invalidation until the next display interval. Fresh pointer
+                // and keyboard input bypass this wait and render immediately.
+                window_manager_->waitEvents(std::max(0.001, wait));
+                last_wake_reason_ = window_manager_->frameInput().had_event ? "event" : "timeout";
+                last_wake_timeout_source_ = "camera_animation";
+                return;
+            }
+        }
+        if (camera_frame)
+            camera_animation_cadence_.noteFrame(camera_frame_started);
+
         std::optional<std::chrono::steady_clock::time_point>
             project_frame_started;
         if (!viewport_export_locked && !interactive_transition_settling &&
@@ -2792,7 +2823,7 @@ namespace lfs::vis {
         }
         update_work_processed_ = false;
 
-        // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
+        // Render-on-demand: demand owns cadence; MAILBOX only retires GPU work.
         // The demand walk is the expensive part of the frame loop (notably the
         // visible Python panel traversal). Reuse the demand collected before the
         // render and refresh only the cheap flags that can be created by the
@@ -2855,7 +2886,7 @@ namespace lfs::vis {
             if (gui_only_animation) {
                 // GUI-only animation must not free-run against a MAILBOX swapchain.
                 // Cap at the display interval; waitEvents still wakes instantly on input.
-                const double gui_animation_frame_interval = guiAnimationFrameInterval();
+                const double gui_animation_frame_interval = displayFrameInterval();
                 if (presented_gui_frame) {
                     if (auto* const vulkan_context = window_manager_->getVulkanContext())
                         static_cast<void>(vulkan_context->waitForNextFrameSlot());

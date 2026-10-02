@@ -12,6 +12,7 @@
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
 #include "gui/gui_manager.hpp"
+#include "input/camera_animation_cadence.hpp"
 #include "input/input_controller.hpp"
 #include "internal/viewport.hpp"
 #include "project/project_lifecycle.hpp"
@@ -601,7 +602,7 @@ namespace lfs::vis {
                                                      bool drained_store_dirty = false,
                                                      bool consume_python_redraw = true);
         [[nodiscard]] bool isMotionOnlyWake() const;
-        [[nodiscard]] double guiAnimationFrameInterval() const;
+        [[nodiscard]] double displayFrameInterval() const;
         void waitForNextEvent(bool is_training);
 
         class CallbackCleanup {
@@ -666,6 +667,7 @@ namespace lfs::vis {
         bool window_initialized_ = false;
         mutable std::chrono::steady_clock::time_point display_refresh_queried_at_{};
         mutable double gui_animation_frame_interval_ = 1.0 / 60.0;
+        CameraAnimationCadence camera_animation_cadence_;
         bool gui_initialized_ = false;
         bool tools_initialized_ = false;
         bool view_context_bridge_initialized_ = false;
