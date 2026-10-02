@@ -1971,7 +1971,8 @@ namespace lfs::vis {
             python::update_training_state(true, "running");
         });
 
-        state::TrainingPaused::when([](const auto&) {
+        state::TrainingPaused::when([this](const auto& event) {
+            training_progress_publisher_.publishFinal(event.iteration);
             auto& store = app_store();
             lfs::core::reactive::BatchUpdate batch(store.store());
             store.training_running.set(false);
@@ -1987,7 +1988,8 @@ namespace lfs::vis {
             python::update_training_state(true, "running");
         });
 
-        state::TrainingCompleted::when([](const auto& event) {
+        state::TrainingCompleted::when([this](const auto& event) {
+            training_progress_publisher_.publishFinal(event.iteration);
             const char* state = !event.success       ? "error"
                                 : event.user_stopped ? "stopped"
                                                      : "completed";

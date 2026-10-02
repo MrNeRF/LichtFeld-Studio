@@ -5561,6 +5561,9 @@ namespace lfs::training {
             if (progress_) {
                 progress_->pause();
             }
+            if (on_paused_) {
+                on_paused_(iter);
+            }
             // B3: the previous step is complete; release the production loss arena.
             photometric_loss_.arena().reset();
             resize_rasterizer_arena_at_boundary("B3 pause", true);

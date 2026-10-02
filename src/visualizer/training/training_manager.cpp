@@ -1390,7 +1390,6 @@ namespace lfs::vis {
                         if (!state_machine_.transitionTo(TrainingState::Paused)) {
                             LOG_WARN("Failed to transition to Paused after initialization pause request");
                         }
-                        state::TrainingPaused{.iteration = getCurrentIteration()}.emit();
                     }
                 }
             } catch (const std::exception& error) {
@@ -1447,8 +1446,7 @@ namespace lfs::vis {
                 LOG_WARN("Failed to transition to Paused");
             }
 
-            state::TrainingPaused{.iteration = getCurrentIteration()}.emit();
-            LOG_INFO("Training paused at iteration {}", getCurrentIteration());
+            LOG_INFO("Training pause requested at iteration {}", getCurrentIteration());
         }
     }
 
@@ -1769,6 +1767,23 @@ namespace lfs::vis {
             return;
         }
         emit_completion();
+    }
+
+    void TrainerManager::dispatchTrainingPaused(const int iteration) {
+        auto emit_paused = [iteration] {
+            state::TrainingPaused{.iteration = iteration}.emit();
+        };
+
+        if (viewer_) {
+            if (!viewer_->postWork({
+                    .run = std::move(emit_paused),
+                    .cancel = [] {},
+                })) {
+                LOG_WARN("Training pause event dropped during viewer shutdown");
+            }
+            return;
+        }
+        emit_paused();
     }
 
     int TrainerManager::getCurrentIteration() const {
@@ -2367,6 +2382,9 @@ namespace lfs::vis {
             if (auto* pm = services().paramsOrNull(); pm && pm->consumeDirty()) {
                 applyPendingParams();
             }
+        });
+        trainer_->setOnPaused([this](const int iteration) {
+            dispatchTrainingPaused(iteration);
         });
 
         lfs::core::run_guarded<void>(

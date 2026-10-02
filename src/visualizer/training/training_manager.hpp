@@ -240,6 +240,7 @@ namespace lfs::vis {
         void launchTrainingThread();
         void completionReaperLoop(std::stop_token stop_token);
         void finishTrainingThreadJoin();
+        void dispatchTrainingPaused(int iteration);
         void dispatchTrainingCompleted(TrainingCompletionData completion);
 
         // State management
