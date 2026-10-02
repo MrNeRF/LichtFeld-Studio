@@ -1819,10 +1819,7 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
     };
     if (flag_given("--eval-steps") && !params->optimization.enable_eval)
         return std::unexpected("--eval-steps needs --eval or --eval-all; without them no evaluation runs");
-    const bool eval_space_requires_undistort =
-        flag_given("--eval-space") ||
-        params->overrides.has_optimization_key("eval_space");
-    if (eval_space_requires_undistort && !params->optimization.undistort) {
+    if (flag_given("--eval-space") && !params->optimization.undistort) {
         return std::unexpected(
             "--eval-space needs --undistort; without it both spaces are identical");
     }

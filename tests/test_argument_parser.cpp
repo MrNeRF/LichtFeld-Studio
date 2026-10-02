@@ -1767,8 +1767,9 @@ TEST(ArgumentParserTest, EvalSpaceCliWithoutUndistortStopsTheRun) {
     }
 }
 
-// Catches either explicit config value being accepted without the required undistortion mode.
-TEST(ArgumentParserTest, EvalSpaceConfigWithoutUndistortStopsTheRun) {
+// Every saved training config carries eval_space; reusing one without --undistort must still
+// load, the value simply has no effect there.
+TEST(ArgumentParserTest, EvalSpaceConfigWithoutUndistortIsAccepted) {
     const auto directory = make_test_path("lfs_arg_parser_eval_space_config_rule");
     const auto data_path = make_test_path("lfs_arg_parser_eval_space_config_rule_data");
     const auto output_path = make_test_path("lfs_arg_parser_eval_space_config_rule_output");
@@ -1789,11 +1790,9 @@ TEST(ArgumentParserTest, EvalSpaceConfigWithoutUndistortStopsTheRun) {
     for (const char* value : {"distorted", "undistorted"}) {
         optimization["eval_space"] = value;
         std::ofstream(config_path) << nlohmann::json{{"optimization", optimization}}.dump();
-        auto invalid = lfs::core::args::parse_args_and_params(
+        auto parsed = lfs::core::args::parse_args_and_params(
             static_cast<int>(std::size(argv)), argv);
-        ASSERT_FALSE(invalid.has_value()) << value;
-        EXPECT_NE(invalid.error().find("--eval-space needs --undistort"), std::string::npos)
-            << value << ": " << invalid.error();
+        EXPECT_TRUE(parsed.has_value()) << value << ": " << parsed.error();
     }
 }
 
