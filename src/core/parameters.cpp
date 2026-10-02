@@ -265,6 +265,19 @@ namespace lfs::core {
                 }
             }
 
+            [[nodiscard]] lfs::Error config_import_error(std::string detail, const std::filesystem::path& path) {
+                lfs::SmallFields fields;
+                fields.add("path", path_to_utf8(path));
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::IO,
+                    .user_message = "The config file could not be imported.",
+                    .detail = std::move(detail),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                    .fields = std::move(fields),
+                });
+            }
+
             std::expected<nlohmann::json, std::string> read_json_file(const std::filesystem::path& path) {
                 if (!std::filesystem::exists(path)) {
                     return std::unexpected(std::format("Config file not found: {}", path_to_utf8(path)));
@@ -552,9 +565,10 @@ namespace lfs::core {
                 return std::format("freeze_lr_scale must be within [0, 1] (got {})", freeze_lr_scale);
             }
             if (!add_splat_paths.empty()) {
-                if (resume_checkpoint.has_value() ||
-                    resume_project.has_value() ||
-                    project_path.has_value()) {
+                if (!add_splats_applied &&
+                    (resume_checkpoint.has_value() ||
+                     resume_project.has_value() ||
+                     project_path.has_value())) {
                     return "--add-splat cannot be used together with --resume";
                 }
                 if (!add_splat_freeze.empty() && add_splat_freeze.size() != add_splat_paths.size()) {
@@ -564,7 +578,7 @@ namespace lfs::core {
                     if (path.empty()) {
                         return "--add-splat path cannot be empty";
                     }
-                    if (!std::filesystem::exists(path)) {
+                    if (!add_splats_applied && !std::filesystem::exists(path)) {
                         return std::format("Added splat does not exist: '{}'",
                                            lfs::core::path_to_utf8(path));
                     }
@@ -813,18 +827,18 @@ namespace lfs::core {
             return read_optim_params_from_json(path, unused);
         }
 
-        std::expected<TrainingParameters, std::string> read_training_parameters_from_json(
+        std::expected<TrainingParameters, lfs::Error> read_training_parameters_from_json(
             const std::filesystem::path& path,
             const TrainingParameters& defaults) {
             auto json_result = read_json_file(path);
             if (!json_result) {
-                return std::unexpected(json_result.error());
+                return std::unexpected(config_import_error(std::move(json_result.error()), path));
             }
 
             const auto& json = *json_result;
             const auto& opt_json = json.contains("optimization") ? json["optimization"] : json;
             if (!opt_json.is_object()) {
-                return std::unexpected("Optimization parameters must be a JSON object");
+                return std::unexpected(config_import_error("Optimization parameters must be a JSON object", path));
             }
 
             try {
@@ -841,13 +855,13 @@ namespace lfs::core {
 
                 if (json.contains("dataset")) {
                     if (!json["dataset"].is_object()) {
-                        return std::unexpected("Dataset parameters must be a JSON object");
+                        return std::unexpected(config_import_error("Dataset parameters must be a JSON object", path));
                     }
                     apply_dataset_json_overlay(params.dataset, json["dataset"]);
                 }
                 if (json.contains("server")) {
                     if (!json["server"].is_object()) {
-                        return std::unexpected("Server parameters must be a JSON object");
+                        return std::unexpected(config_import_error("Server parameters must be a JSON object", path));
                     }
                     const auto& server_json = json["server"];
                     if (server_json.contains("tcp_server_connection_port")) {
@@ -864,14 +878,14 @@ namespace lfs::core {
                 }
 
                 if (const auto error = params.optimization.validate(); !error.empty()) {
-                    return std::unexpected("Invalid optimization parameters: " + error);
+                    return std::unexpected(config_import_error("Invalid optimization parameters: " + error, path));
                 }
                 if (const auto error = params.dataset.validate(); !error.empty()) {
-                    return std::unexpected("Invalid dataset parameters: " + error);
+                    return std::unexpected(config_import_error("Invalid dataset parameters: " + error, path));
                 }
                 return params;
             } catch (const std::exception& e) {
-                return std::unexpected(std::format("Error parsing training parameters: {}", e.what()));
+                return std::unexpected(config_import_error(std::format("Error parsing training parameters: {}", e.what()), path));
             }
         }
 

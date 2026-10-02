@@ -2563,7 +2563,6 @@ namespace lfs::vis {
         } else if (services().paramsOrNull() || hasTrainer() || !pending_dataset_params_.data_path.empty()) {
             params.dataset = getEditableDatasetParams();
         }
-        params.optimization = parameter_manager.copyActiveParams();
         return params;
     }
 

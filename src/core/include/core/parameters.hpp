@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/mesh2splat.hpp"
 
@@ -431,6 +432,7 @@ namespace lfs::core {
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;
             std::vector<bool> add_splat_freeze;
+            bool add_splats_applied = false;
             float freeze_lr_scale = 0.0f;
             bool exclude_frozen_add_splats_from_export = false;
             bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
@@ -581,7 +583,7 @@ namespace lfs::core {
         LFS_CORE_API std::expected<OptimizationParameters, std::string> read_optim_params_from_json(
             const std::filesystem::path& path,
             ExplicitTrainingOverrides& captured_overrides);
-        LFS_CORE_API std::expected<TrainingParameters, std::string> read_training_parameters_from_json(
+        LFS_CORE_API std::expected<TrainingParameters, lfs::Error> read_training_parameters_from_json(
             const std::filesystem::path& path,
             const TrainingParameters& defaults = {});
 

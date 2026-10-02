@@ -13,6 +13,7 @@
 #include <device_launch_parameters.h>
 #include <limits>
 #include <nvtx3/nvToolsExt.h>
+#include <stdexcept>
 
 namespace lfs::core {
 
@@ -27,7 +28,7 @@ namespace lfs::core {
         constexpr float COLMAP_MAX_SCALE = 2.0f;
 
         // COLMAP sensor/models.h (BSD-3 licensed formulas)
-        __device__ void apply_distortion_pinhole(
+        __host__ __device__ void apply_distortion_pinhole(
             const float x, const float y,
             const float* __restrict__ dist, const int num_dist,
             float& dx, float& dy) {
@@ -39,10 +40,17 @@ namespace lfs::core {
             const float k1 = num_dist > 0 ? dist[0] : 0.0f;
             const float k2 = num_dist > 1 ? dist[1] : 0.0f;
             const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-            const float radial = 1.0f + k1 * r2 + k2 * r4 + k3 * r6;
+            const float numerator = 1.0f + k1 * r2 + k2 * r4 + k3 * r6;
+            float radial = numerator;
+            if (num_dist >= 6) {
+                const float denominator =
+                    1.0f + dist[3] * r2 + dist[4] * r4 + dist[5] * r6;
+                radial = numerator / denominator;
+            }
 
-            const float p1 = num_dist > 3 ? dist[3] : 0.0f;
-            const float p2 = num_dist > 4 ? dist[4] : 0.0f;
+            const int tangential_offset = num_dist >= 6 ? 6 : 3;
+            const float p1 = num_dist > tangential_offset ? dist[tangential_offset] : 0.0f;
+            const float p2 = num_dist > tangential_offset + 1 ? dist[tangential_offset + 1] : 0.0f;
 
             dx = x * radial + 2.0f * p1 * x * y + p2 * (r2 + 2.0f * x * x);
             dy = y * radial + p1 * (r2 + 2.0f * y * y) + 2.0f * p2 * x * y;
@@ -201,11 +209,18 @@ namespace lfs::core {
             float dnx, dny;
             apply_distortion(nx, ny, params.model_type, params.distortion, params.num_distortion, dnx, dny);
 
+            const int dst_plane = params.dst_height * params.dst_width;
+            if (!isfinite(dnx) || !isfinite(dny)) {
+                for (int c = 0; c < channels; ++c) {
+                    dst[c * dst_plane + oy * params.dst_width + ox] = 0.0f;
+                }
+                return;
+            }
+
             const float sx = dnx * params.src_fx + params.src_cx - PIXEL_CENTER_OFFSET;
             const float sy = dny * params.src_fy + params.src_cy - PIXEL_CENTER_OFFSET;
 
             const int src_plane = params.src_height * params.src_width;
-            const int dst_plane = params.dst_height * params.dst_width;
 
             for (int c = 0; c < channels; ++c) {
                 dst[c * dst_plane + oy * params.dst_width + ox] =
@@ -233,6 +248,11 @@ namespace lfs::core {
             float dnx, dny;
             apply_distortion(nx, ny, params.model_type, params.distortion, params.num_distortion, dnx, dny);
 
+            if (!isfinite(dnx) || !isfinite(dny)) {
+                dst[oy * params.dst_width + ox] = 0.0f;
+                return;
+            }
+
             const float sx = dnx * params.src_fx + params.src_cx - PIXEL_CENTER_OFFSET;
             const float sy = dny * params.src_fy + params.src_cy - PIXEL_CENTER_OFFSET;
 
@@ -248,17 +268,7 @@ namespace lfs::core {
 
             switch (model) {
             case CameraModelType::PINHOLE: {
-                const float r2 = x * x + y * y;
-                const float r4 = r2 * r2;
-                const float r6 = r4 * r2;
-                const float k1 = num_dist > 0 ? dist[0] : 0.0f;
-                const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-                const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-                const float radial = 1.0f + k1 * r2 + k2 * r4 + k3 * r6;
-                const float p1 = num_dist > 3 ? dist[3] : 0.0f;
-                const float p2 = num_dist > 4 ? dist[4] : 0.0f;
-                dx = x * radial + 2.0f * p1 * x * y + p2 * (r2 + 2.0f * x * x);
-                dy = y * radial + p1 * (r2 + 2.0f * y * y) + 2.0f * p2 * x * y;
+                apply_distortion_pinhole(x, y, dist, num_dist, dx, dy);
                 break;
             }
             case CameraModelType::FISHEYE: {
@@ -348,11 +358,35 @@ namespace lfs::core {
                 const float k1 = dist[0];
                 const float k2 = num_dist > 1 ? dist[1] : 0.0f;
                 const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-                const float p1 = num_dist > 3 ? dist[3] : 0.0f;
-                const float p2 = num_dist > 4 ? dist[4] : 0.0f;
+                const bool rational = num_dist >= 6;
+                const float k4 = rational ? dist[3] : 0.0f;
+                const float k5 = rational ? dist[4] : 0.0f;
+                const float k6 = rational ? dist[5] : 0.0f;
+                const int tangential_offset = rational ? 6 : 3;
+                const float p1 = num_dist > tangential_offset ? dist[tangential_offset] : 0.0f;
+                const float p2 = num_dist > tangential_offset + 1 ? dist[tangential_offset + 1] : 0.0f;
 
-                const float radial = 1.0f + k1 * r2 + k2 * r4 + k3 * r6;
-                const float d_radial_dr2 = k1 + 2.0f * k2 * r2 + 3.0f * k3 * r4;
+                const float numerator = 1.0f + k1 * r2 + k2 * r4 + k3 * r6;
+                const float d_numerator_dr2 = k1 + 2.0f * k2 * r2 + 3.0f * k3 * r4;
+                float radial = numerator;
+                float d_radial_dr2 = d_numerator_dr2;
+                if (rational) {
+                    const float denominator = 1.0f + k4 * r2 + k5 * r4 + k6 * r6;
+                    if (!std::isfinite(denominator) ||
+                        std::fabs(denominator) < NEWTON_EPSILON) {
+                        return false;
+                    }
+                    const float d_denominator_dr2 =
+                        k4 + 2.0f * k5 * r2 + 3.0f * k6 * r4;
+                    radial = numerator / denominator;
+                    d_radial_dr2 =
+                        (d_numerator_dr2 * denominator -
+                         numerator * d_denominator_dr2) /
+                        (denominator * denominator);
+                }
+                if (!std::isfinite(radial) || !std::isfinite(d_radial_dr2)) {
+                    return false;
+                }
                 const float d_radial_dx = 2.0f * ux * d_radial_dr2;
                 const float d_radial_dy = 2.0f * uy * d_radial_dr2;
 
@@ -516,6 +550,30 @@ namespace lfs::core {
 
     } // anonymous namespace
 
+    void distort_normalized_point(
+        const UndistortParams& params,
+        const float x,
+        const float y,
+        float& distorted_x,
+        float& distorted_y) {
+        apply_distortion_cpu(
+            x, y, params.model_type, params.distortion, params.num_distortion,
+            distorted_x, distorted_y);
+    }
+
+    bool undistort_image_point(
+        const UndistortParams& params,
+        const float image_x,
+        const float image_y,
+        float& normalized_x,
+        float& normalized_y) {
+        return cam_from_img_cpu(
+            image_x, image_y,
+            params.src_fx, params.src_fy, params.src_cx, params.src_cy,
+            params.model_type, params.distortion, params.num_distortion,
+            normalized_x, normalized_y);
+    }
+
     UndistortParams compute_undistort_params(
         float fx, float fy, float cx, float cy,
         int width, int height,
@@ -532,7 +590,8 @@ namespace lfs::core {
         params.model_type = model;
 
         // Coefficient layout per model:
-        // PINHOLE:            [k1, k2, k3, p1, p2]               indices 0-4
+        // PINHOLE polynomial: [k1, k2, k3, p1, p2]               indices 0-4
+        // PINHOLE rational:   [k1, k2, k3, k4, k5, k6, p1, p2]  indices 0-7
         // FISHEYE:            [k1, k2, k3, k4]                   indices 0-3
         // THIN_PRISM_FISHEYE: [k1, k2, k3, k4, p1, p2, s1..s4]  indices 0-9
         std::memset(params.distortion, 0, sizeof(params.distortion));
@@ -540,12 +599,14 @@ namespace lfs::core {
 
         std::vector<float> rad_vec, tan_vec;
         if (radial.is_valid() && radial.numel() > 0) {
+            assert(radial.ndim() == 1);
             auto rad_cpu = radial.cpu();
             auto rad_acc = rad_cpu.accessor<float, 1>();
             for (size_t i = 0; i < rad_cpu.numel(); ++i)
                 rad_vec.push_back(rad_acc(i));
         }
         if (tangential.is_valid() && tangential.numel() > 0) {
+            assert(tangential.ndim() == 1);
             auto tan_cpu = tangential.cpu();
             auto tan_acc = tan_cpu.accessor<float, 1>();
             for (size_t i = 0; i < tan_cpu.numel(); ++i)
@@ -559,26 +620,58 @@ namespace lfs::core {
         };
 
         switch (model) {
-        case CameraModelType::PINHOLE:
-            for (size_t i = 0; i < rad_vec.size() && i < 3; ++i)
+        case CameraModelType::PINHOLE: {
+            if (rad_vec.size() > 3 && rad_vec.size() != 6) {
+                throw std::invalid_argument(
+                    "Pinhole distortion requires at most three polynomial radial coefficients or six rational radial coefficients");
+            }
+            if (!tan_vec.empty() && tan_vec.size() != 2) {
+                throw std::invalid_argument(
+                    "Pinhole distortion supports exactly two tangential coefficients");
+            }
+            const bool rational =
+                rad_vec.size() == 6 &&
+                (rad_vec[3] != 0.0f || rad_vec[4] != 0.0f || rad_vec[5] != 0.0f);
+            const size_t radial_count = rational ? rad_vec.size() : std::min<size_t>(rad_vec.size(), 3);
+            for (size_t i = 0; i < radial_count; ++i)
                 place(static_cast<int>(i), rad_vec[i]);
-            for (size_t i = 0; i < tan_vec.size() && i < 2; ++i)
-                place(3 + static_cast<int>(i), tan_vec[i]);
+            const int tangential_offset = rational ? 6 : 3;
+            for (size_t i = 0; i < tan_vec.size(); ++i)
+                place(tangential_offset + static_cast<int>(i), tan_vec[i]);
             break;
+        }
 
         case CameraModelType::FISHEYE:
-            for (size_t i = 0; i < rad_vec.size() && i < 4; ++i)
+            if (rad_vec.size() > 4) {
+                throw std::invalid_argument(
+                    "Fisheye distortion supports at most four radial coefficients");
+            }
+            if (std::any_of(tan_vec.begin(), tan_vec.end(), [](const float value) {
+                    return value != 0.0f;
+                })) {
+                throw std::invalid_argument(
+                    "Fisheye distortion does not support tangential coefficients");
+            }
+            for (size_t i = 0; i < rad_vec.size(); ++i)
                 place(static_cast<int>(i), rad_vec[i]);
             break;
 
         case CameraModelType::THIN_PRISM_FISHEYE:
-            for (size_t i = 0; i < rad_vec.size() && i < 4; ++i)
+            if (rad_vec.size() > 4 || tan_vec.size() > 6) {
+                throw std::invalid_argument(
+                    "Thin prism fisheye distortion supports four radial and six tangential or prism coefficients");
+            }
+            for (size_t i = 0; i < rad_vec.size(); ++i)
                 place(static_cast<int>(i), rad_vec[i]);
-            for (size_t i = 0; i < tan_vec.size() && i < 6; ++i)
+            for (size_t i = 0; i < tan_vec.size(); ++i)
                 place(4 + static_cast<int>(i), tan_vec[i]);
             break;
 
         default:
+            if (!rad_vec.empty() || !tan_vec.empty()) {
+                throw std::invalid_argument(
+                    "Distortion coefficients are unsupported by this camera model");
+            }
             break;
         }
 
@@ -612,8 +705,7 @@ namespace lfs::core {
         const auto trace_pixel = [&](const float px, const float py, float& min_axis, float& max_axis,
                                      const bool trace_x_axis, bool& edge_has_valid_sample) {
             float ux, uy;
-            if (!cam_from_img_cpu(
-                    px, py, fx, fy, cx, cy, model, params.distortion, params.num_distortion, ux, uy)) {
+            if (!undistort_image_point(params, px, py, ux, uy)) {
                 return;
             }
 

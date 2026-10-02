@@ -41,6 +41,8 @@ namespace {
         EXPECT_EQ(std::as_const(trainer_manager).getEditableDatasetParams().max_width, 1600);
         EXPECT_EQ(&trainer_manager.getEditableDatasetParams(), &manager.getDatasetConfig());
         EXPECT_EQ(trainer_manager.getEditableTrainingParams(manager).dataset.max_width, 1600);
+        manager.modifyActiveParams([](auto& params) { params.iterations = 1234; });
+        EXPECT_EQ(trainer_manager.getEditableTrainingParams(manager).optimization.iterations, 1234u);
 
         lfs::vis::services().set(static_cast<lfs::vis::ParameterManager*>(nullptr));
         trainer_manager.getEditableDatasetParams().max_width = 1024;
@@ -104,7 +106,10 @@ namespace {
                 {"dataset", {{"max_width", nlohmann::json::parse(value)}}}};
             std::ofstream(path) << config.dump();
             const auto result = manager.importConfigFile(path);
-            EXPECT_FALSE(result);
+            ASSERT_FALSE(result);
+            EXPECT_EQ(result.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_EQ(result.error().domain(), lfs::ErrorDomain::IO);
+            EXPECT_FALSE(result.error().detail().empty());
             EXPECT_EQ(manager.getDatasetConfig().max_width, 800);
             EXPECT_EQ(manager.getActiveStrategy(), "mrnf");
         }
@@ -282,7 +287,7 @@ namespace {
         const auto imported = lfs::core::param::read_training_parameters_from_json(config_path);
         std::error_code ec;
         std::filesystem::remove(config_path, ec);
-        ASSERT_TRUE(imported) << imported.error();
+        ASSERT_TRUE(imported) << imported.error().detail();
 
         EXPECT_EQ(imported->dataset.data_path, source.dataset.data_path);
         EXPECT_EQ(imported->dataset.output_path, source.dataset.output_path);
@@ -320,7 +325,7 @@ namespace {
         defaults.server.tcp_server_connection_port = 23456;
         const auto partial = lfs::core::param::read_training_parameters_from_json(partial_path, defaults);
         std::filesystem::remove(partial_path, ec);
-        ASSERT_TRUE(partial) << partial.error();
+        ASSERT_TRUE(partial) << partial.error().detail();
         EXPECT_EQ(partial->dataset.max_width, 640);
         EXPECT_EQ(partial->server.tcp_server_connection_port, 23456);
         EXPECT_EQ(partial->optimization.iterations, 4321u);

@@ -4,6 +4,7 @@
 
 #include "preferences.hpp"
 #include <algorithm>
+#include <cmath>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -3431,24 +3432,36 @@ NB_MODULE(lichtfeld, m) {
         },
         "Print the scene graph tree");
 
-    // Frame callback for animations
-    m.def(
-        "on_frame", [](nb::callable cb) {
-            const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
-            lfs::python::set_frame_callback([callback](float dt) {
-                try {
-                    (*callback)(dt);
-                } catch (nb::python_error& e) {
-                    (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
-                    lfs::python::clear_frame_callback();
-                } catch (const std::exception& e) {
-                    (void)lfs::python::contain_cxx_callback(e.what(), lfs::python::PyCallbackPolicy::DisableAndReport);
-                    lfs::python::clear_frame_callback();
-                }
-            });
-            LOG_INFO("Frame callback registered");
+    // Frame callback for animations. Legacy registrations without an explicit
+    // duration expire after ten seconds and emit a single process-wide warning.
+    const auto register_frame_callback = [](nb::callable cb, nb::object duration_s) {
+        std::optional<double> duration;
+        if (!duration_s.is_none()) {
+            duration = nb::cast<double>(duration_s);
+            if (!std::isfinite(*duration) || *duration <= 0.0)
+                throw nb::value_error("duration_s must be a positive finite number");
+        }
+        const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
+        lfs::python::set_frame_callback([callback](float dt) {
+            try {
+                (*callback)(dt);
+            } catch (nb::python_error& e) {
+                (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
+                lfs::python::clear_frame_callback();
+            } catch (const std::exception& e) {
+                (void)lfs::python::contain_cxx_callback(e.what(), lfs::python::PyCallbackPolicy::DisableAndReport);
+                lfs::python::clear_frame_callback();
+            }
         },
-        nb::arg("callback"), "Register a callback to be called each frame with delta time (seconds)");
+                                        duration);
+        LOG_INFO("Frame callback registered");
+    };
+    m.def("on_frame", register_frame_callback,
+          nb::arg("callback"), nb::arg("duration_s") = nb::none(),
+          "Register a frame callback with an optional positive lifetime in seconds (defaults to 10 seconds).");
+    m.def("set_frame_callback", register_frame_callback,
+          nb::arg("callback"), nb::arg("duration_s") = nb::none(),
+          "Register a frame callback with an optional positive lifetime in seconds (defaults to 10 seconds).");
 
     m.def(
         "stop_animation", []() {

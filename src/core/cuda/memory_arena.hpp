@@ -211,7 +211,6 @@ namespace lfs::core {
         double viewer_record_ms_ = 0.0;
         double viewer_turn_ring_[5] = {};
         uint32_t viewer_turn_count_ = 0;
-        double last_viewer_turn_ms_ = 0.0;
 
         // Completion event of the most recent stream-aware frame. Invalid when
         // the last frame was legacy (no stream) — the next begin then falls back
@@ -224,7 +223,7 @@ namespace lfs::core {
         bool last_frame_gpu_complete_ = false;
 
         // Pending Vulkan release of the previous frame's arena work (see
-        // note_external_release). Guarded by last_frame_event_mutex_.
+        // await_external_release). Guarded by last_frame_event_mutex_.
         cudaExternalSemaphore_t external_release_semaphore_ = nullptr;
         uint64_t external_release_value_ = 0;
         // GPU completion of that release: a wait on the imported timeline is
@@ -262,7 +261,7 @@ namespace lfs::core {
         // the chain.
         //
         // A tenant whose arena work runs on a VULKAN queue (the viewport) must
-        // call note_external_release before ending its frame: neither the chain
+        // call await_external_release before ending its frame: neither the chain
         // event nor cudaDeviceSynchronize can see in-flight Vulkan work, so the
         // next frame waits the imported timeline value instead.
         uint64_t begin_frame(bool from_rendering = false) { return begin_frame(nullptr, from_rendering); }
@@ -314,7 +313,6 @@ namespace lfs::core {
         struct TurnStats {
             // Median of the last five viewer turns (submit → GPU completion).
             double viewer_turn_ms = 0.0;
-            double last_viewer_turn_ms = 0.0;
             // CPU recording also excludes training from the shared arena.
             double viewer_record_ms = 0.0;
             // Period between consecutive training frames with no viewer turn between.
@@ -324,7 +322,7 @@ namespace lfs::core {
         // Test seam: registers an already-recorded event as the pending viewer
         // release, standing in for the imported Vulkan timeline. Owns the event;
         // the optional viewer stream remains owned by the caller.
-        void note_release_event_for_testing(cudaEvent_t event, cudaStream_t viewer_stream = nullptr);
+        void set_release_event_for_testing(cudaEvent_t event, cudaStream_t viewer_stream = nullptr);
         // Host-waits for GPU work only within timeout_ms: while the previous
         // CUDA frame is still running on the GPU it polls that frame, then
         // declines like a busy arena, and the caller's reservation keeps the
@@ -344,7 +342,7 @@ namespace lfs::core {
         // admission (falling back to the tenant stream if setup fails).
         // The non-blocking viewer stream has already queued the input uploads.
         // Its owner must call drain_external_release before destroying it.
-        void note_external_release(cudaExternalSemaphore_t semaphore, uint64_t value, cudaStream_t viewer_stream);
+        void await_external_release(cudaExternalSemaphore_t semaphore, uint64_t value, cudaStream_t viewer_stream);
         // Drain before destroying the imported semaphore, including after the
         // backing has been detached. No arena/model lock may be held.
         void drain_external_release();
@@ -428,7 +426,7 @@ namespace lfs::core {
         // viewer's pending release, is still pending on the GPU. Caller holds
         // sync_mutex_.
         [[nodiscard]] bool previous_frame_still_running() const;
-        // True while a viewer batch registered through note_external_release is
+        // True while a viewer batch registered through await_external_release is
         // still running on the GPU. Caller holds last_frame_event_mutex_.
         [[nodiscard]] bool release_event_pending_locked() const;
         // Host-waits the pending viewer release event, records the turn cost and
@@ -436,7 +434,7 @@ namespace lfs::core {
         // Must not be called with sync_mutex_ held.
         bool wait_release_event();
         // Update the completed-turn history without holding a CUDA event lock.
-        void record_viewer_turn(double turn_ms);
+        void update_viewer_turn_cost(double turn_ms);
         bool install_external_backing_impl(ExternalBacking backing, bool wait, uint32_t timeout_ms = 0);
         char* allocate_internal(Arena& arena, size_t size, uint64_t frame_id,
                                 const char* label);

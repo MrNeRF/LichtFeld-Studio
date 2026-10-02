@@ -352,7 +352,7 @@ namespace lfs::vis {
         LOG_INFO("Imported params: strategy={}, iter={}, sh={}", params.strategy, params.iterations, params.sh_degree);
     }
 
-    std::expected<void, std::string> ParameterManager::importConfigFile(const std::filesystem::path& path, const bool import_dataset) {
+    std::expected<void, lfs::Error> ParameterManager::importConfigFile(const std::filesystem::path& path, const bool import_dataset) {
         const auto defaults = createForDataset(dataset_config_.data_path, dataset_config_.output_path);
         auto candidate = lfs::core::param::read_training_parameters_from_json(path, defaults);
         if (!candidate)

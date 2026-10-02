@@ -120,23 +120,31 @@ namespace lfs::vis {
 
         // Check if continuous input is active (WASD keys or camera drag)
         [[nodiscard]] bool isContinuousInputActive() const {
+            return isCameraDragging() || needsCameraAnimationFrame();
+        }
+        [[nodiscard]] bool isCameraDragging() const {
+            return drag_mode_ == DragMode::Orbit || drag_mode_ == DragMode::Pan ||
+                   drag_mode_ == DragMode::Rotate;
+        }
+        // A held pointer gesture only changes the camera when motion arrives.
+        // Stored drag velocity is not an animation until the button is released.
+        [[nodiscard]] bool needsCameraAnimationFrame() const {
             const bool movement_active = keys_movement_[0] || keys_movement_[1] || keys_movement_[2] ||
                                          keys_movement_[3] || keys_movement_[4] || keys_movement_[5];
-            const bool camera_drag = drag_mode_ == DragMode::Orbit ||
-                                     drag_mode_ == DragMode::Pan ||
-                                     drag_mode_ == DragMode::Rotate;
             auto& keyboard_camera = activeKeyboardViewport().camera;
             const bool orbit_coasting =
-                orbit_coast_viewport_ && orbit_coast_viewport_->camera.hasOrbitMomentum();
+                drag_mode_ != DragMode::Orbit && orbit_coast_viewport_ &&
+                orbit_coast_viewport_->camera.hasOrbitMomentum();
             const bool pan_coasting =
-                pan_coast_viewport_ && pan_coast_viewport_->camera.hasPanMomentum();
+                drag_mode_ != DragMode::Pan && pan_coast_viewport_ &&
+                pan_coast_viewport_->camera.hasPanMomentum();
             const bool wasd_coasting =
                 (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasWasdMomentum()) ||
                 keyboard_camera.hasWasdMomentum();
             const bool drone_settling =
                 (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
                 keyboard_camera.hasDroneMotion();
-            return movement_active || camera_drag || orbit_coasting || pan_coasting ||
+            return movement_active || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
         [[nodiscard]] bool isCameraNavigating() const {
@@ -260,6 +268,8 @@ namespace lfs::vis {
         double splitter_start_x_ = 0.0;
         Viewport* drag_viewport_ = nullptr;
         Viewport* orbit_coast_viewport_ = nullptr;
+        std::chrono::steady_clock::time_point drag_momentum_updated_at_ = std::chrono::steady_clock::now();
+        void decayHeldDragMomentum();
         Viewport* pan_coast_viewport_ = nullptr;
         Viewport* wasd_momentum_viewport_ = nullptr;
 

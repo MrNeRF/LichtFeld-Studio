@@ -1419,7 +1419,7 @@ TEST_F(ArenaMetricsContentionTest, TrainingBeginWaitsForTheViewerBatchOutsideThe
     ASSERT_TRUE(viewer_frame.has_value());
     ASSERT_EQ(cudaLaunchHostFunc(viewer_stream, hold_stream_until_released, &batch_done), cudaSuccess);
     ASSERT_EQ(cudaEventRecord(release, viewer_stream), cudaSuccess);
-    arena.note_release_event_for_testing(release);
+    arena.set_release_event_for_testing(release);
     arena.end_frame(*viewer_frame, nullptr, true);
 
     EXPECT_FALSE(arena.render_frame_ready()) << "a second viewer frame was admitted behind a running batch";
@@ -1440,10 +1440,10 @@ TEST_F(ArenaMetricsContentionTest, TrainingBeginWaitsForTheViewerBatchOutsideThe
     EXPECT_TRUE(training_began.load(std::memory_order_acquire));
 
     const auto stats = arena.turn_stats();
-    EXPECT_GE(stats.last_viewer_turn_ms, 50.0) << "the viewer turn was not measured";
+    EXPECT_GE(stats.viewer_turn_ms, 50.0) << "the viewer turn was not measured";
     EXPECT_TRUE(arena.render_frame_ready()) << "the release stayed pending after it completed";
 
-    arena.note_release_event_for_testing(nullptr);
+    arena.set_release_event_for_testing(nullptr);
     ASSERT_EQ(cudaStreamSynchronize(viewer_stream), cudaSuccess);
     ASSERT_EQ(cudaStreamDestroy(viewer_stream), cudaSuccess);
 }
@@ -1473,14 +1473,14 @@ TEST_F(ArenaMetricsContentionTest, OwedTurnsSurviveWithoutAReservation) {
 
 TEST(ViewerTurnBudget, ReproducesTheShippedScheduleAndBoundsSlowFrames) {
     using namespace lfs::vis;
-    EXPECT_EQ(trainingTurnsPerViewerFrame(24.0, 30.0, 1), 1u);     // RTX 4080, 2560x1440
-    EXPECT_EQ(trainingTurnsPerViewerFrame(38.0, 30.0, 1), 1u);     // 3840x2160
-    EXPECT_EQ(trainingTurnsPerViewerFrame(0.0, 0.0, 1), 1u);       // nothing measured yet
-    EXPECT_EQ(trainingTurnsPerViewerFrame(2500.0, 100.0, 1), 11u); // paging GPU: training keeps 30%
-    EXPECT_EQ(trainingTurnsPerViewerFrame(1e6, 1.0, 1), 64u);
-    EXPECT_DOUBLE_EQ(idlePreviewIntervalSec(0.25, 0.0), 0.25);
-    EXPECT_NEAR(idlePreviewIntervalSec(0.0, 23.0), 0.186, 1e-3);
-    EXPECT_NEAR(idlePreviewIntervalSec(0.25, 2500.0), 20.23, 1e-2);
+    EXPECT_EQ(trainingTurnsPerViewerFrame(24.0, 30.0), 1u);     // RTX 4080, 2560x1440
+    EXPECT_EQ(trainingTurnsPerViewerFrame(38.0, 30.0), 1u);     // 3840x2160
+    EXPECT_EQ(trainingTurnsPerViewerFrame(0.0, 0.0), 1u);       // nothing measured yet
+    EXPECT_EQ(trainingTurnsPerViewerFrame(2500.0, 100.0), 11u); // paging GPU: training keeps 30%
+    EXPECT_EQ(trainingTurnsPerViewerFrame(1e6, 1.0), 64u);
+    EXPECT_DOUBLE_EQ(idlePreviewIntervalSec(0.0), 0.0);
+    EXPECT_NEAR(idlePreviewIntervalSec(23.0), 0.186, 1e-3);
+    EXPECT_NEAR(idlePreviewIntervalSec(2500.0), 20.23, 1e-2);
     EXPECT_FALSE(navigationRendersOnlyAtRest(499.0));
     EXPECT_TRUE(navigationRendersOnlyAtRest(501.0));
 }
@@ -1624,7 +1624,7 @@ TEST_F(ArenaMetricsContentionTest, OneViewerFrameInFlight) {
     std::atomic<bool> done{false};
     ASSERT_EQ(cudaLaunchHostFunc(stream, hold_stream_until_released, &done), cudaSuccess);
     ASSERT_EQ(cudaEventRecord(release, stream), cudaSuccess);
-    arena.note_release_event_for_testing(release);
+    arena.set_release_event_for_testing(release);
     arena.end_frame(*first, true);
     EXPECT_FALSE(arena.try_begin_render_frame_for(1));
     EXPECT_FALSE(arena.render_frame_ready());
@@ -1649,7 +1649,7 @@ TEST_F(ArenaMetricsContentionTest, ConsumedViewerReleaseDoesNotDrainUnrelatedCud
         ASSERT_EQ(cudaEventCreateWithFlags(&release, cudaEventDisableTiming), cudaSuccess);
         const auto frame = arena.begin_frame(true);
         ASSERT_EQ(cudaEventRecord(release, viewer), cudaSuccess);
-        arena.note_release_event_for_testing(release);
+        arena.set_release_event_for_testing(release);
         arena.end_frame(frame, true);
         // Another caller, such as renderer reset, may consume the same release.
         arena.drain_external_release();
@@ -1725,7 +1725,7 @@ TEST_F(ArenaMetricsContentionTest, FullResetDropsThePreviousSessionsTurnBudget) 
     cudaEvent_t release = nullptr;
     ASSERT_EQ(cudaEventCreateWithFlags(&release, cudaEventDisableTiming), cudaSuccess);
     ASSERT_EQ(cudaEventRecord(release), cudaSuccess);
-    arena.note_release_event_for_testing(release);
+    arena.set_release_event_for_testing(release);
     arena.drain_external_release();
     ASSERT_GT(arena.turn_stats().viewer_turn_ms, 0.0);
     arena.owe_training_frames(5);
@@ -1747,7 +1747,7 @@ TEST_F(ArenaMetricsContentionTest, ViewerRetainsOwnershipOfItsReleaseStream) {
         cudaEvent_t release = nullptr;
         ASSERT_EQ(cudaEventCreateWithFlags(&release, cudaEventDisableTiming), cudaSuccess);
         ASSERT_EQ(cudaEventRecord(release, stream), cudaSuccess);
-        arena.note_release_event_for_testing(release, stream);
+        arena.set_release_event_for_testing(release, stream);
     }
     // Destroying the arena drains the borrow, but must leave the owner's stream usable.
     cudaEvent_t probe = nullptr;

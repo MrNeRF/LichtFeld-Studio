@@ -703,6 +703,7 @@ namespace lfs::io {
         request.loader_generation = loader_generation_.load(std::memory_order_relaxed);
         request.path = path;
         request.params = params;
+        request.undistort = params.undistort;
         {
             std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
             if (!running_.load(std::memory_order_acquire)) {
@@ -1012,7 +1013,7 @@ namespace lfs::io {
 
             try {
                 auto nvcodec = acquire_nvcodec_loader(config_.decoder_pool_size);
-                auto tensor = decode_cached_rgb_tensor(nvcodec, jpeg_data, params, needs_requested_processing);
+                auto tensor = decode_cached_rgb_tensor(nvcodec, jpeg_data, params, false);
                 if (tensor.is_valid() && tensor.numel() > 0)
                     return tensor;
             } catch (...) {}
