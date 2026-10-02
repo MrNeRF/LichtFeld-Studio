@@ -1225,9 +1225,13 @@ namespace lfs::training {
                         const cudaStream_t lpips_stream = pred_lpips.stream();
                         const bool timed_lpips = lpips_start_event != nullptr &&
                                                  cudaEventRecord(lpips_start_event, lpips_stream) == cudaSuccess;
-                        auto value = _lpips_metric->forward(
-                            pred_lpips, target_lpips,
-                            lfs::core::nn::models::InputScaling::Identity);
+                        auto value = mask.is_valid()
+                                         ? _lpips_metric->forward(
+                                               pred_lpips, target_lpips, mask_as_float01(mask),
+                                               lfs::core::nn::models::InputScaling::Identity)
+                                         : _lpips_metric->forward(
+                                               pred_lpips, target_lpips,
+                                               lfs::core::nn::models::InputScaling::Identity);
                         const bool lpips_event_complete =
                             timed_lpips && cudaEventRecord(lpips_stop_event, lpips_stream) == cudaSuccess &&
                             cudaEventSynchronize(lpips_stop_event) == cudaSuccess;

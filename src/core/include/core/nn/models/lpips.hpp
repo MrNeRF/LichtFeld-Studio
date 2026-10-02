@@ -40,6 +40,11 @@ namespace lfs::core::nn::models {
         lfs::Result<float> forward(const Tensor& pred, const Tensor& target,
                                    std::optional<InputScaling> scaling = std::nullopt);
 
+        // Mean over the masked area only: every layer's distance map is weighted by the mask
+        // area-pooled to that layer's resolution. mask is CUDA [H,W] with values in [0,1].
+        lfs::Result<float> forward(const Tensor& pred, const Tensor& target, const Tensor& mask,
+                                   std::optional<InputScaling> scaling = std::nullopt);
+
         lfs::Result<LpipsTaps> forward_with_taps(const Tensor& pred, const Tensor& target,
                                                  std::optional<InputScaling> scaling = std::nullopt);
 
@@ -55,16 +60,22 @@ namespace lfs::core::nn::models {
         void release_activations();
 
     private:
+        struct MaskWeights {
+            std::array<Tensor, 5> maps;
+            std::array<double, 5> sums{};
+        };
+
         lfs::Result<float> run(const Tensor& pred, const Tensor& target, InputScaling scaling,
-                               LpipsTaps* taps);
+                               LpipsTaps* taps, const MaskWeights* mask = nullptr);
         lfs::Result<float> run_untiled(const Tensor& pred, const Tensor& target,
-                                       InputScaling scaling, LpipsTaps* taps);
+                                       InputScaling scaling, LpipsTaps* taps,
+                                       const MaskWeights* mask);
         lfs::Result<float> run_tiled(const Tensor& pred, const Tensor& target,
-                                     InputScaling scaling);
+                                     InputScaling scaling, const MaskWeights* mask);
         // Fast mode without taps: fused kernels writing ping-pong feature buffers,
         // no activation arena, no intermediate copies.
         lfs::Result<float> run_fast(const Tensor& pred, const Tensor& target,
-                                    InputScaling scaling);
+                                    InputScaling scaling, const MaskWeights* mask);
         std::optional<lfs::Error> validate_pair(const Tensor& pred, const Tensor& target) const;
         void bind_weights_to_stream(cudaStream_t stream);
         const Tensor& w(std::string_view name) const;
