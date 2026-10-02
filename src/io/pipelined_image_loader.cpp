@@ -703,6 +703,7 @@ namespace lfs::io {
         request.loader_generation = loader_generation_.load(std::memory_order_relaxed);
         request.path = path;
         request.params = params;
+        request.undistort = params.undistort;
         {
             std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
             if (!running_.load(std::memory_order_acquire)) {

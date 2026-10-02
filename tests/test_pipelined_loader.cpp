@@ -347,6 +347,58 @@ TEST_F(PipelinedImageLoaderTest, ImmediateCacheHitDoesNotRepeatUndistortion) {
               hot.tensor.to(DataType::Float32).cpu().to_vector());
 }
 
+// The single-path prefetch overload must carry the undistortion like a full request; otherwise the
+// cold path caches distorted pixels under the undistorted key and every later hit returns them.
+TEST_F(PipelinedImageLoaderTest, PathPrefetchUndistortsLikeFullRequest) {
+    const lfs::test::licht::TemporaryDirectory temp("lfs-path-prefetch-undistort");
+    constexpr int width = 128;
+    constexpr int height = 96;
+    std::vector<uint8_t> pixels(width * height * 3);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const size_t offset = static_cast<size_t>(y * width + x) * 3;
+            pixels[offset] = static_cast<uint8_t>((x * 255) / (width - 1));
+            pixels[offset + 1] = static_cast<uint8_t>((y * 255) / (height - 1));
+            pixels[offset + 2] = static_cast<uint8_t>((x + y) & 0xff);
+        }
+    }
+    const auto image_path = temp.path / "distorted.png";
+    ASSERT_TRUE(save_png(image_path, pixels.data(), width, height, 3, 8, 1));
+
+    UndistortParams undistort{};
+    undistort.src_width = undistort.dst_width = width;
+    undistort.src_height = undistort.dst_height = height;
+    undistort.src_fx = undistort.dst_fx = 100.0f;
+    undistort.src_fy = undistort.dst_fy = 100.0f;
+    undistort.src_cx = undistort.dst_cx = width / 2.0f;
+    undistort.src_cy = undistort.dst_cy = height / 2.0f;
+    undistort.model_type = CameraModelType::PINHOLE;
+    undistort.distortion[0] = 0.08f;
+    undistort.num_distortion = 1;
+
+    LoadParams params;
+    params.resize_factor = 1;
+    params.output_uint8 = true;
+    params.undistort = &undistort;
+
+    PipelinedImageLoader path_loader(config());
+    path_loader.prefetch(0, image_path, params);
+    const auto from_path = path_loader.get();
+    ASSERT_TRUE(from_path.error.empty()) << from_path.error;
+
+    PipelinedImageLoader request_loader(config());
+    ImageRequest request{};
+    request.path = image_path;
+    request.params = params;
+    request.undistort = &undistort;
+    request_loader.prefetch({request});
+    const auto from_request = request_loader.get();
+    ASSERT_TRUE(from_request.error.empty()) << from_request.error;
+
+    EXPECT_EQ(from_path.tensor.to(DataType::Float32).cpu().to_vector(),
+              from_request.tensor.to(DataType::Float32).cpu().to_vector());
+}
+
 TEST_F(PipelinedImageLoaderTest, ResizeAndMaxWidthKeepImageAndMaskAligned) {
     PipelinedImageLoader loader(config());
     loader.prefetch({request(1, 256)});
