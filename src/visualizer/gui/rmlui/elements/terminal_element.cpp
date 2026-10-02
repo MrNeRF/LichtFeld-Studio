@@ -189,6 +189,13 @@ namespace lfs::vis::gui {
             case '>':
                 out += "&gt;";
                 break;
+            // RmlUi treats "{{"/"}}" in text as data-binding delimiters.
+            case '{':
+                out += "&#123;";
+                break;
+            case '}':
+                out += "&#125;";
+                break;
             default:
                 out += c;
                 break;

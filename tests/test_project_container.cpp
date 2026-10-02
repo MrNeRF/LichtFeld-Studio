@@ -2015,6 +2015,30 @@ namespace {
             << "the lifecycle's 50% compaction suggestion must fire";
     }
 
+    TEST(ProjectContainerWriter, CompactionIntoAnotherFileIgnoresTheSourceSidecar) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "save-as-source.licht";
+        const fs::path copy = temporary.path / "save-as-copy.licht";
+        const fs::path sidecar = autosave_sidecar_path(master);
+        const ChunkKey key = fixed_key("PROJ", 3880);
+        create_single_chunk_fixture(
+            master, 3881, 3882, 3883, key, R"({"generation":1})");
+        publish_complete_sidecar(master, sidecar, 1, 3884, 3885, 3886);
+
+        require_status(ProjectWriter::compact_to(
+            master, copy,
+            CompactionOptions{
+                .new_file_uuid = fixed_uuid(3887),
+                .commit_uuid = fixed_uuid(3888),
+                .snapshot_uuid = fixed_uuid(3889),
+                .creation_time_unix_ns = FIXED_CREATION_TIME_NS + 41,
+                .wallclock_unix_ns = FIXED_COMMIT_TIME_NS + 41,
+                .disk_reserve_bytes = 0,
+            }));
+        EXPECT_TRUE(fs::exists(copy));
+        EXPECT_TRUE(fs::exists(sidecar));
+    }
+
     TEST(ProjectContainerWriter,
          CompactionRefusesCurrentBoundSidecarUntilExplicitHeadAdvances) {
         TemporaryDirectory temporary;

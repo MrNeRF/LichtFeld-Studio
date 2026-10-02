@@ -7,6 +7,7 @@
 #include "zep/regress.h"
 #include "zep/syntax.h"
 #include "zep/tab_window.h"
+#include <algorithm>
 
 namespace Zep {
     CommandContext::CommandContext(const std::string& commandIn, ZepMode& md, EditorMode editorMode)

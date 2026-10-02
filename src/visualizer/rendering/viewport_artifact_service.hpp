@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include "render_pass.hpp"
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>

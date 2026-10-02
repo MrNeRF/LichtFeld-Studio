@@ -5,13 +5,14 @@
 #pragma once
 
 #include "core/camera.hpp"
+#include "core/error.hpp"
 #include "core/events.hpp"
 #include "core/mesh_data.hpp"
 #include "core/scene.hpp"
 #include "py_prop.hpp"
 #include "py_splat_data.hpp"
 #include "py_tensor.hpp"
-#include <expected>
+#include <cstdint>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -24,8 +25,7 @@ namespace nb = nanobind;
 namespace lfs::python {
 
     // Shared viewer-thread dispatch for the two Python scene-clear entry points.
-    // Throws std::runtime_error with the user-facing reason on failure.
-    void clear_application_scene();
+    lfs::Result<void> clear_application_scene();
 
     struct PySelectionGroup {
         uint8_t id;

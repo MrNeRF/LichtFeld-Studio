@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mode.h"
+#include <cstdint>
 
 namespace Zep {
 

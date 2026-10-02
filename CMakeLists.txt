@@ -113,6 +113,8 @@ else()
 endif()
 
 if(WIN32)
+    # Public headers can include windows.h in consumers such as the test targets.
+    add_compile_definitions(NOMINMAX)
     enable_language(RC)
 endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/WindowsVersionResource.cmake")

@@ -15,6 +15,7 @@
 #include "scene/scene_render_state.hpp"
 #include "scene/selection_state.hpp"
 #include "selection/selection_service.hpp"
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <functional>

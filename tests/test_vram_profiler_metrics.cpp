@@ -300,3 +300,17 @@ namespace {
     }
 
 } // namespace
+
+TEST_F(VramProfilerMetricsTest, UnavailableProcessSampleDoesNotBecomeDeviceUsage) {
+    auto& p = VramProfiler::instance();
+    p.updateProcessMemory(0, 500, 1000, "test GPU");
+    auto snapshot = p.snapshot();
+    EXPECT_FALSE(snapshot.process.process_memory_valid);
+    EXPECT_EQ(snapshot.process.process_used, 0u);
+    EXPECT_EQ(snapshot.process.total_used, 500u);
+    p.updateProcessMemory(200, 1700, 1000, "test GPU");
+    snapshot = p.snapshot();
+    EXPECT_TRUE(snapshot.process.process_memory_valid);
+    EXPECT_EQ(snapshot.process.process_used, 200u);
+    EXPECT_EQ(snapshot.process.total_used, 1000u);
+}

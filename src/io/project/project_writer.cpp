@@ -3285,9 +3285,13 @@ namespace lfs::io::project {
                 "the caller requested cancellation before copying payloads",
                 "compaction.cancel"));
         }
-        auto bound_autosaves =
-            detail::valid_bound_autosaves_locked(
-                path, *source_result);
+        // Only an in-place compaction replaces the head a current autosave
+        // binds to. Compacting into another file (Save As) leaves the source
+        // and its autosave untouched.
+        lfs::Result<std::vector<detail::ValidBoundAutosave>> bound_autosaves =
+            std::vector<detail::ValidBoundAutosave>{};
+        if (source_path == destination_path)
+            bound_autosaves = detail::valid_bound_autosaves_locked(path, *source_result);
         if (!bound_autosaves) {
             return status_failure(
                 std::move(bound_autosaves).error());
