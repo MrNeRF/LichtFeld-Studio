@@ -773,6 +773,8 @@ namespace lfs::vis {
             const auto& params = trainer->getParams();
             pending_opt_params_ = params.optimization;
             pending_dataset_params_ = params.dataset;
+            if (auto* const param_mgr = services().paramsOrNull())
+                param_mgr->getDatasetConfig() = params.dataset;
             // A new training run has no resumable elapsed-time authority.
             clearRestoredProjectMetrics();
             accumulated_training_time_ =
@@ -2534,6 +2536,18 @@ namespace lfs::vis {
         return trainer_->computeCameraMetrics(*cam, include_ssim, appearance);
     }
 
+    lfs::core::param::DatasetConfig& TrainerManager::getEditableDatasetParams() {
+        if (auto* const param_mgr = services().paramsOrNull())
+            return param_mgr->getDatasetConfig();
+        return pending_dataset_params_;
+    }
+
+    const lfs::core::param::DatasetConfig& TrainerManager::getEditableDatasetParams() const {
+        if (const auto* const param_mgr = services().paramsOrNull())
+            return param_mgr->getDatasetConfig();
+        return pending_dataset_params_;
+    }
+
     void TrainerManager::applyPendingParams() {
         if (!trainer_)
             return;
@@ -2551,7 +2565,7 @@ namespace lfs::vis {
 
         const auto previous_params = trainer_->getParams();
         auto params = previous_params;
-        params.dataset = pending_dataset_params_;
+        params.dataset = getEditableDatasetParams();
 
         // Use ParameterManager in GUI mode, fallback to pending_opt_params_ for headless
         if (auto* const param_mgr = services().paramsOrNull()) {

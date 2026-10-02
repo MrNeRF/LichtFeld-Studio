@@ -207,8 +207,8 @@ namespace lfs::vis {
         // Pending parameters (editable in Ready state, applied on start)
         lfs::core::param::OptimizationParameters& getEditableOptParams() { return pending_opt_params_; }
         const lfs::core::param::OptimizationParameters& getEditableOptParams() const { return pending_opt_params_; }
-        lfs::core::param::DatasetConfig& getEditableDatasetParams() { return pending_dataset_params_; }
-        const lfs::core::param::DatasetConfig& getEditableDatasetParams() const { return pending_dataset_params_; }
+        lfs::core::param::DatasetConfig& getEditableDatasetParams();
+        const lfs::core::param::DatasetConfig& getEditableDatasetParams() const;
         void applyPendingParams();
 
     private:

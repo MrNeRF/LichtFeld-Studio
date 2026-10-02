@@ -4525,14 +4525,14 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::handleLoadConfigFile(const std::filesystem::path& path) {
-        auto result = lfs::core::param::read_optim_params_from_json(path);
+        const bool dataset_editable = !trainer_manager_->hasTrainer() ||
+                                      (trainer_manager_->getState() == TrainingState::Ready &&
+                                       trainer_manager_->getCurrentIteration() == 0);
+        auto result = parameter_manager_->importConfigFile(path, dataset_editable);
         if (!result) {
             state::ConfigLoadFailed{.path = path, .error = result.error()}.emit();
             return;
         }
-        result->apply_step_scaling();
-        parameter_manager_->importParams(*result);
-        parameter_manager_->markDirty();
 
         // Bump scene generation so all panels (e.g. training panel) pick up
         // the new parameter values.  Without this, importing a config after a
