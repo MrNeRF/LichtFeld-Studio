@@ -61,7 +61,8 @@ def test_copy_link_fetches_current_url_and_rejects_unsafe_or_stale_results(galle
 @pytest.mark.parametrize('field', ['verification_uri', 'verification_uri_complete'])
 @pytest.mark.parametrize('url', BAD_URLS[:4])
 def test_device_flow_refuses_bad_origin_before_display(tmp_path, monkeypatch, field, url):
-    account = portal_account.PortalAccountService(base_url='https://portal.example', credentials_path=tmp_path/'credentials.json')
+    account = portal_account.PortalAccountService(base_url='https://portal.example', credentials_path=tmp_path/'credentials.json',
+                                                storage_backend=credential_storage.FileBackend(tmp_path/'credentials.json'))
     payload = dict(device_code='secret', user_code='ABCD', verification_uri='https://portal.example/device',
                    verification_uri_complete='https://portal.example/device?code=ABCD', expires_in=60, interval=1)
     payload[field] = url
@@ -464,7 +465,8 @@ def test_keep_waiting_real_http_only_polls_existing_upload(tmp_path):
         origin = 'http://127.0.0.1:' + str(server.server_port)
         path = tmp_path/'credentials.json'
         write_credentials(path, origin=origin)
-        account = portal_account.PortalAccountService(base_url=origin, credentials_path=path)
+        account = portal_account.PortalAccountService(base_url=origin, credentials_path=path,
+                                                    storage_backend=credential_storage.FileBackend(path))
         service = gallery_sync.GallerySync(account, tmp_path/'gallery')
         def finish():
             service._thread.join(timeout=10)

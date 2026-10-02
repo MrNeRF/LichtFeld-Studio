@@ -129,7 +129,7 @@ def test_redact_secret_fields(value):
 def test_redact_actual_tokens_and_user_code_in_unstructured_exception(tmp_path, monkeypatch, caplog):
     path = tmp_path / 'credentials.json'
     write_credentials(path, access='private-access', refresh='private-refresh')
-    account = portal_account.PortalAccountService(credentials_path=path)
+    account = portal_account.PortalAccountService(credentials_path=path, storage_backend=credential_storage.FileBackend(path))
     account._set_linking(user_code='ABCD-1234', verification_uri='https://portal.lichtfeld.io/link/',
                          verification_uri_complete='', expires_at=time.time()+60, interval=1)
     text = portal_security.redact('failure private-access private-refresh ABCD-1234')
@@ -139,7 +139,7 @@ def test_redact_actual_tokens_and_user_code_in_unstructured_exception(tmp_path, 
 @pytest.mark.parametrize('method,key,retried', [('GET', False, True), ('PATCH', False, False),
     ('DELETE', False, False), ('POST', False, False), ('POST', True, True)])
 def test_account_retry_is_idempotency_gated(tmp_path, monkeypatch, method, key, retried):
-    account = portal_account.PortalAccountService(credentials_path=tmp_path/'credentials.json', client_version='9.8.7')
+    account = portal_account.PortalAccountService(credentials_path=tmp_path/'credentials.json', storage_backend=credential_storage.FileBackend(tmp_path/'credentials.json'), client_version='9.8.7')
     network = StubUrlopen((503, {}), {'ok': True})
     monkeypatch.setattr(portal_account, 'urlopen', network)
     body = {'idempotencyKey': 'stable'} if key else None
@@ -564,7 +564,7 @@ def test_valid_native_download_checks_embedded_crc_before_atomic_rename(tmp_path
 def test_account_switch_during_backoff_stops_old_bearer(tmp_path, monkeypatch):
     path = tmp_path/'credentials.json'
     write_credentials(path)
-    account = portal_account.PortalAccountService(credentials_path=path)
+    account = portal_account.PortalAccountService(credentials_path=path, storage_backend=credential_storage.FileBackend(path))
     network = StubUrlopen((503, {}))
     monkeypatch.setattr(portal_account, 'urlopen', network)
     monkeypatch.setattr(portal_retry.time, 'sleep', lambda _: account._clear_current_credentials())
@@ -663,12 +663,12 @@ def test_dpapi_ctypes_uses_user_scope_and_releases_native_buffer(monkeypatch):
 
 def test_credential_initialization_handles_unwritable_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(portal_account, '_locked_sidecar', lambda *_: (_ for _ in ()).throw(OSError('read-only')))
-    account = portal_account.PortalAccountService(credentials_path=tmp_path/'account'/'credentials.json')
+    account = portal_account.PortalAccountService(credentials_path=tmp_path/'account'/'credentials.json', storage_backend=credential_storage.FileBackend(tmp_path/'account'/'credentials.json'))
     assert not account.snapshot().signed_in
     assert not (tmp_path/'account').exists()
 
 def test_account_code_is_included_in_bug_report_redaction_material(tmp_path):
-    account = portal_account.PortalAccountService(credentials_path=tmp_path/'credentials.json')
+    account = portal_account.PortalAccountService(credentials_path=tmp_path/'credentials.json', storage_backend=credential_storage.FileBackend(tmp_path/'credentials.json'))
     account._set_linking(user_code='LINK-ONLY', verification_uri='', verification_uri_complete='',
                          expires_at=time.time()+60, interval=1)
     assert 'LINK-ONLY' in account._redaction_tokens()
