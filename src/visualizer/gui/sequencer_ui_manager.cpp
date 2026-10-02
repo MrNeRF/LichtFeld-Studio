@@ -1028,7 +1028,7 @@ namespace lfs::vis::gui {
         if (current_frame_loaded)
             last_ply_sequence_frame_ = std::nullopt;
         if (auto* const rm = viewer_->getRenderingManager())
-            rm->markDirty(DirtyFlag::SPLATS);
+            rm->markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
         if (current_frame.has_value())
             evictPlySequenceFrames(*current_frame);
     }
@@ -1979,7 +1979,7 @@ namespace lfs::vis::gui {
                     new_pos,
                     new_rot,
                     kf->focal_length_mm)) {
-                rendering_manager->markDirty(DirtyFlag::OVERLAY);
+                rendering_manager->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
             }
         }
 
@@ -2181,7 +2181,7 @@ namespace lfs::vis::gui {
         }
         last_ply_sequence_frame_ = display_frame;
         if (auto* const rm = viewer_->getRenderingManager())
-            rm->markDirty(DirtyFlag::SPLATS);
+            rm->markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
     }
 
     void SequencerUIManager::handleOverlayActions() {
@@ -2232,7 +2232,7 @@ namespace lfs::vis::gui {
                                           ? SequencerViewportEditMode::None
                                           : SequencerViewportEditMode::Translate;
                 if (auto* const rm = viewer_->getRenderingManager())
-                    rm->markDirty(DirtyFlag::OVERLAY);
+                    rm->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                 break;
             case Action::SET_ROTATE:
                 keyframe_gizmo_active_ = false;
@@ -2242,7 +2242,7 @@ namespace lfs::vis::gui {
                                           ? SequencerViewportEditMode::None
                                           : SequencerViewportEditMode::Rotate;
                 if (auto* const rm = viewer_->getRenderingManager())
-                    rm->markDirty(DirtyFlag::OVERLAY);
+                    rm->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                 break;
             case Action::SET_EASING: {
                 const auto easing = static_cast<sequencer::EasingType>(action->easing_value);

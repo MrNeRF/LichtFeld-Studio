@@ -2854,6 +2854,51 @@ namespace lfs::python {
                 return lfs::python::consume_redraw_request();
             },
             "Consume and return pending redraw request flag");
+        m.def(
+            "frame_ledger", []() {
+                nb::dict result;
+                auto* const viewer = lfs::python::get_visualizer();
+                auto* const rendering = viewer ? viewer->getRenderingManager() : nullptr;
+                if (!rendering)
+                    return result;
+                const auto snapshot = rendering->frameDemandLedger().snapshot();
+                result["frames_presented"] = snapshot.frames_presented;
+                result["views_rendered"] = snapshot.views_rendered[0];
+                result["frames_without_reason"] = snapshot.frames_without_reason;
+                result["wakes_without_frame"] = snapshot.wakes_without_frame;
+                result["holders_expired"] = snapshot.holders_expired;
+                result["preview_skipped_no_step"] = snapshot.preview_skipped_no_step;
+                result["stale_detections"] = snapshot.stale_detections;
+                nb::dict presents_by_reason;
+                nb::dict view_renders_by_reason;
+                for (std::size_t i = 0; i < static_cast<std::size_t>(lfs::vis::FrameReason::Count); ++i) {
+                    const auto reason = static_cast<lfs::vis::FrameReason>(i);
+                    const std::string name(lfs::vis::frameReasonName(reason));
+                    presents_by_reason[name.c_str()] = snapshot.presents_by_reason[i];
+                    view_renders_by_reason[name.c_str()] = snapshot.view_renders_by_reason[i];
+                }
+                result["presents_by_reason"] = std::move(presents_by_reason);
+                result["view_renders_by_reason"] = std::move(view_renders_by_reason);
+                nb::list last_reasons;
+                for (std::size_t i = 0; i < snapshot.last_frame_reasons.size(); ++i) {
+                    if (snapshot.last_frame_reasons.test(i))
+                        last_reasons.append(lfs::vis::frameReasonName(static_cast<lfs::vis::FrameReason>(i)));
+                }
+                result["last_frame_reasons"] = std::move(last_reasons);
+                result["last_frame_details"] = snapshot.last_frame_details;
+                nb::list holders;
+                for (const auto& holder : snapshot.live_holders) {
+                    nb::dict item;
+                    item["reason"] = lfs::vis::frameReasonName(holder.reason);
+                    item["scope"] = holder.scope == lfs::vis::FrameScope::Gui ? "gui" : "view";
+                    item["detail"] = holder.detail;
+                    item["age_seconds"] = std::chrono::duration<double>(holder.age).count();
+                    holders.append(std::move(item));
+                }
+                result["live_holders"] = std::move(holders);
+                return result;
+            },
+            "Return frame-demand counters and active holders.");
         const auto schedule_on_ui_thread = [](nb::callable callback) {
             if (!callback.is_valid())
                 throw nb::type_error("schedule_on_ui_thread requires a callable");
@@ -4463,7 +4508,7 @@ namespace lfs::python {
                     lfs::vis::op::operators().dispatchModalEvent(event);
                 }
                 if (auto* const rm = lfs::vis::services().renderingOrNull()) {
-                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                 }
             },
             nb::arg("enabled"),
@@ -4484,7 +4529,7 @@ namespace lfs::python {
                     lfs::vis::op::operators().dispatchModalEvent(event);
                 }
                 if (auto* const rm = lfs::vis::services().renderingOrNull()) {
-                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                 }
             },
             nb::arg("enabled"),

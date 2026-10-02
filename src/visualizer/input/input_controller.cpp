@@ -728,6 +728,7 @@ namespace lfs::vis {
 
     // Core handlers
     void InputController::handleMouseButton(int button, int action, double x, double y) {
+        decayHeldDragMomentum();
         LOG_PERF("InputController::handleMouseButton button={} action={} pos=({},{}) drag_mode={}",
                  button, action, x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
@@ -1365,6 +1366,7 @@ namespace lfs::vis {
         if (drag_view_ != kNoView && !dragViewport())
             clearViewportDragState();
         hover_pos_ = {x, y};
+        decayHeldDragMomentum();
         LOG_PERF("InputController::handleMouseMove pos=({},{}) drag_mode={}",
                  x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
@@ -2361,9 +2363,22 @@ namespace lfs::vis {
         }
     }
 
+    void InputController::decayHeldDragMomentum() {
+        const auto now = std::chrono::steady_clock::now();
+        const float elapsed = std::chrono::duration<float>(now - drag_momentum_updated_at_).count();
+        drag_momentum_updated_at_ = now;
+        // Pausing a drag must still dissipate its velocity when the frame loop
+        // sleeps. Use elapsed time, not the animation timestep (which is clamped).
+        if (drag_mode_ == DragMode::Orbit && orbitCoastViewport())
+            orbitCoastViewport()->camera.decayOrbitMomentum(elapsed);
+        if (drag_mode_ == DragMode::Pan && panCoastViewport())
+            panCoastViewport()->camera.decayPanMomentum(elapsed);
+    }
+
     void InputController::update(float delta_time) {
         if (drag_view_ != kNoView && !dragViewport())
             clearViewportDragState();
+        decayHeldDragMomentum();
         maybeInitializeDepthViewRange();
 
         if (input_router_) {
@@ -2476,11 +2491,9 @@ namespace lfs::vis {
 
         // Orbit ease-out: while dragging, let a held-still pause fade the stored
         // motion; once released, coast the remembered rotation to a smooth stop.
-        if (orbitCoastViewport()) {
+        if (orbitCoastViewport() && drag_mode_ != DragMode::Orbit) {
             auto& orbit_camera = orbitCoastViewport()->camera;
-            if (drag_mode_ == DragMode::Orbit) {
-                orbit_camera.decayOrbitMomentum(delta_time);
-            } else if (orbit_camera.hasOrbitMomentum()) {
+            if (orbit_camera.hasOrbitMomentum()) {
                 orbit_camera.updateOrbitCoast(delta_time);
                 onCameraMovementStart();
                 publishCameraMove(orbitCoastViewport());
@@ -2499,11 +2512,9 @@ namespace lfs::vis {
         // Pan ease-out: mirror the orbit coast for click-drag panning. While the
         // button is held a paused drag fades the stored motion; once released the
         // remembered translation coasts to a smooth stop.
-        if (panCoastViewport()) {
+        if (panCoastViewport() && drag_mode_ != DragMode::Pan) {
             auto& pan_camera = panCoastViewport()->camera;
-            if (drag_mode_ == DragMode::Pan) {
-                pan_camera.decayPanMomentum(delta_time);
-            } else if (pan_camera.hasPanMomentum()) {
+            if (pan_camera.hasPanMomentum()) {
                 pan_camera.updatePanCoast(delta_time);
                 onCameraMovementStart();
                 publishCameraMove(panCoastViewport());
@@ -2928,7 +2939,7 @@ namespace lfs::vis {
                     sm->selectNode(node->id);
                 }
                 if (auto* rendering_manager = services().renderingOrNull()) {
-                    rendering_manager->markDirty(DirtyFlag::SELECTION | DirtyFlag::OVERLAY);
+                    rendering_manager->markDirty(DirtyFlag::SELECTION | DirtyFlag::OVERLAY, lfs::vis::FrameReason::Selection);
                 }
                 return;
             }

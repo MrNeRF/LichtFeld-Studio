@@ -85,6 +85,10 @@ namespace lfs::vis {
         bool navigation_pose_valid_ = false;
         std::chrono::steady_clock::time_point camera_settle_deadline_{};
         std::atomic<DirtyMask> training_refresh_dirty_{0};
+        int last_training_preview_iteration_ = -1;
+        bool has_training_preview_iteration_ = false;
+        std::uint64_t last_rendered_input_fingerprint_ = 0;
+        bool has_rendered_input_fingerprint_ = false;
         std::uint64_t viewport_projection_generation_ = 1;
         std::uint64_t temporal_scene_revision_ = 1;
         TemporalConvergenceController temporal_convergence_;

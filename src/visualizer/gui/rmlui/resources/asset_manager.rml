@@ -140,7 +140,7 @@
             <div class="gallery-empty" data-if="empty_folder">{{empty_folder_label}}</div>
             <div class="gallery-empty" data-if="gallery_empty">@tr:projects.gallery.empty.published</div>
           </div>
-          <div class="asset-catalog-loading" data-if="catalog_loading" role="status">
+          <div class="asset-catalog-loading is-indeterminate" data-if="catalog_loading" role="status">
             <span class="asset-loading-label">@tr:status.loading</span>
             <div class="asset-loading-track"><span class="asset-loading-fill"></span></div>
           </div>

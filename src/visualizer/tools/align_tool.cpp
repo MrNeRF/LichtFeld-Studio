@@ -57,7 +57,7 @@ namespace lfs::vis::tools {
         if (!settings.show_grid) {
             settings.show_grid = true;
             rm->updateSettings(settings);
-            rm->markDirty(DirtyFlag::OVERLAY);
+            rm->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
         }
         grid_override_active_ = true;
     }
@@ -78,7 +78,7 @@ namespace lfs::vis::tools {
         if (settings.show_grid != saved_show_grid_) {
             settings.show_grid = saved_show_grid_;
             rm->updateSettings(settings);
-            rm->markDirty(DirtyFlag::OVERLAY);
+            rm->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
         }
     }
 
@@ -86,7 +86,7 @@ namespace lfs::vis::tools {
         auto* const rm = ctx.getRenderingManager();
         const bool has_status = services().getAlignStatusMessage() != nullptr;
         if (had_align_status_ && !has_status && rm) {
-            rm->markDirty(DirtyFlag::OVERLAY);
+            rm->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
         }
         had_align_status_ = has_status;
 

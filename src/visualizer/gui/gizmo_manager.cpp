@@ -483,7 +483,7 @@ namespace lfs::vis::gui {
             sm->setNodeTransform(node->name, local_transform);
             scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
             if (rm)
-                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
             auto entry = std::make_unique<op::CropBoxUndoEntry>(
                 *sm, rm, node->name, before_data, before_transform, show_before, use_before);
@@ -508,7 +508,7 @@ namespace lfs::vis::gui {
         sm->setNodeTransform(node->name, local_transform);
         scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         if (rm)
-            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
         auto entry = std::make_unique<op::EllipsoidUndoEntry>(
             *sm, rm, node->name, before_data, before_transform, show_before, use_before);
@@ -766,7 +766,7 @@ namespace lfs::vis::gui {
         if (!effectively_visible) {
             rm->setCropboxGizmoActive(false);
             rm->setEllipsoidGizmoActive(false);
-            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
             return;
         }
         if (crop_tool_shape_ == CropToolShape::Box) {
@@ -778,7 +778,7 @@ namespace lfs::vis::gui {
                 true, crop_tool_ellipsoid_radii_, crop_tool_visualizer_transform_, affects_render, parent_node_index);
             rm->setCropboxGizmoActive(false);
         }
-        rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+        rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
     }
 
     void GizmoManager::setCropToolShape(const std::string& shape) {
@@ -2423,7 +2423,7 @@ namespace lfs::vis::gui {
                 gizmo_ops::applyTranslation(gizmo_context_, scene, new_pivot_world);
             }
 
-            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         }
 
         if (!is_using && cropbox_gizmo_active_) {
@@ -2954,7 +2954,7 @@ namespace lfs::vis::gui {
                 gizmo_ops::applyTranslation(gizmo_context_, scene, new_pivot_world);
             }
 
-            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         }
 
         if (!is_using && ellipsoid_gizmo_active_) {
@@ -3195,7 +3195,7 @@ namespace lfs::vis::gui {
             node->cropbox->flash_intensity = 1.0f - static_cast<float>(elapsed_ms) / DURATION_MS;
         }
         sm->getScene().invalidateCache();
-        rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+        rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
     }
 
     void GizmoManager::deactivateAllTools() {

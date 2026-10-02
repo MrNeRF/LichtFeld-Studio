@@ -134,8 +134,8 @@ import lichtfeld as lf
 | `template` | `str \| os.PathLike[str]` | `""` | Retained RML template. Use an absolute path for plugin-local files |
 | `style` | `str` | `""` | Inline RCSS appended to the retained document |
 | `height_mode` | `lf.ui.PanelHeightMode` | `lf.ui.PanelHeightMode.FILL` | `FILL` or `CONTENT` for retained panels |
-| `update_policy` | `str` | `"interval"` | Set to `"dirty"` or `"reactive"` for retained panels that update from explicit model/store invalidation |
-| `update_interval_ms` | `int` | `100` | Fallback cadence for retained/hybrid `on_update()` work. Prefer `update_policy = "dirty"` for data-driven panels |
+| `update_policy` | `str` | `"dirty"` | Use `"interval"` only for panels that need periodic updates; normal data panels update from explicit invalidation |
+| `update_interval_ms` | `int \| None` | `None` | Required when `update_policy = "interval"`; sets its refresh interval in milliseconds |
 
 | Method | Returns | Description |
 |---|---|---|
@@ -1823,7 +1823,8 @@ The tables below list the most-used tensor APIs. For the full bound surface, see
 | `lf.request_exit()`  | Exit with confirmation   |
 | `lf.force_exit()`    | Immediate exit           |
 | `lf.run(path)`       | Execute Python script    |
-| `lf.on_frame(cb)`    | Per-frame callback       |
+| `lf.on_frame(cb, duration_s=None)` | Per-frame callback; expires after 10 seconds with a one-time warning when no duration is supplied |
+| `lf.set_frame_callback(cb, duration_s=None)` | Alias for the bounded per-frame callback API |
 | `lf.stop_animation()`| Clear frame callback     |
 | `lf.mat4(rows)`      | Create 4x4 matrix        |
 | `lf.help()`          | Show help                |

@@ -131,7 +131,7 @@ namespace lfs::vis::op {
         };
 
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
+            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
         }
 
         return OperatorResult::RUNNING_MODAL;
@@ -277,7 +277,7 @@ namespace lfs::vis::op {
                         selected_point_ = press_point_index_;
                         services().setAlignSelectedPoint(selected_point_);
                         if (services().renderingOrNull()) {
-                            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
+                            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                         }
                     }
                 }
@@ -329,7 +329,7 @@ namespace lfs::vis::op {
                     selected_point_ = press_point_index_;
                     services().setAlignSelectedPoint(selected_point_);
                     if (services().renderingOrNull()) {
-                        services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
+                        services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                     }
                     press_point_index_.reset();
                     return OperatorResult::RUNNING_MODAL;
@@ -340,7 +340,7 @@ namespace lfs::vis::op {
                     selected_point_ = hit;
                     services().setAlignSelectedPoint(selected_point_);
                     if (services().renderingOrNull()) {
-                        services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
+                        services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                     }
                     return OperatorResult::RUNNING_MODAL;
                 }
@@ -401,14 +401,14 @@ namespace lfs::vis::op {
         press_active_ = false;
         drag_active_ = false;
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
+            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
         }
     }
 
     void AlignPickPointOperator::setStatus(const char* locale_key, const double duration_seconds) const {
         services().setAlignStatusMessage(LOC(locale_key), duration_seconds);
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
+            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
         }
     }
 
@@ -416,7 +416,7 @@ namespace lfs::vis::op {
         services().setAlignPickedPoints(picked_points_);
         services().setAlignSelectedPoint(selected_point_);
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
+            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
         }
     }
 
@@ -429,7 +429,7 @@ namespace lfs::vis::op {
         drag_active_ = false;
         services().clearAlignPickedPoints();
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
+            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
         }
     }
 
@@ -655,7 +655,7 @@ namespace lfs::vis::op {
         services().setAlignPreviewEnabled(false);
         syncPickedPointsToServices();
         if (auto* rm = services().renderingOrNull()) {
-            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         }
     }
 
@@ -711,7 +711,7 @@ namespace lfs::vis::op {
         press_point_index_.reset();
         drag_active_ = false;
         if (auto* rm = services().renderingOrNull()) {
-            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         }
         return true;
     }

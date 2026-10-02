@@ -83,7 +83,7 @@ namespace lfs::app {
 
         void notify_screen_changed(vis::VisualizerImpl* impl) {
             if (auto* rendering = impl->getRenderingManager())
-                rendering->markDirty(vis::DirtyFlag::ALL);
+                rendering->markDirty(vis::DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
 
         vis::ViewInfo view_info_from_space(const vis::screen::View3DSpace& space) {

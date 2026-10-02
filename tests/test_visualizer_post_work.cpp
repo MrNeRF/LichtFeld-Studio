@@ -5260,7 +5260,7 @@ namespace lfs::vis {
             .scene_manager = viewer.getSceneManager(),
             .vulkan_context = context,
             .preparing_import = false};
-        rendering->markDirty(DirtyFlag::ALL);
+        rendering->markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
         static_cast<void>(rendering->renderVulkanFrame(displayed));
         const auto info = rendering->getSplitViewInfo();
         ASSERT_TRUE(info.enabled);
