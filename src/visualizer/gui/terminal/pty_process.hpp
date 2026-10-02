@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <cstddef>
 #include <string>
 
@@ -37,7 +39,7 @@ namespace lfs::vis::terminal {
 
         bool attach(int fd);
         void close();
-        [[nodiscard]] bool is_running() const;
+        [[nodiscard]] LFS_VIS_API bool is_running() const;
 
         [[nodiscard]] ssize_t read(char* buf, size_t len);
         [[nodiscard]] ssize_t write(const char* buf, size_t len);
