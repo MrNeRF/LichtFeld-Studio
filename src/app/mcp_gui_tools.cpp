@@ -1018,8 +1018,9 @@ namespace lfs::app {
             };
         }
 
-        json scene_reconstruction_status_json(vis::RenderingManager& rendering_manager) {
-            const auto selection = rendering_manager.sceneUpscalerRuntimeSelection();
+        json scene_reconstruction_status_json(vis::RenderingManager& rendering_manager,
+                                              const vis::ViewId view = vis::kNoView) {
+            const auto selection = rendering_manager.sceneUpscalerRuntimeSelection(view);
             const auto settings = vis::get_render_settings();
             return json{
                 {"success", true},
@@ -3185,13 +3186,25 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "render.reconstruction.status",
-                .description = "Read requested/effective viewport reconstruction, fallback, convergence, and live frame-rate state",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
+                .description = "Read requested/effective viewport reconstruction, fallback, convergence, and live frame-rate state. Optional `view` selects a 3D view; defaults to the active view.",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{{"view", json{{"type", "integer"}, {"description", "3D view area id; defaults to the active view"}}}},
+                    .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
                     auto* const rendering_manager = viewer_impl->getRenderingManager();
                     if (!rendering_manager)
                         return json{{"error", "Rendering manager is not available"}};
+                    if (args.contains("view") && !args["view"].is_null()) {
+                        const auto view = args["view"].get<std::uint32_t>();
+                        if (!viewer_impl->screens().view3D(vis::screen::AreaId{view}) ||
+                            !rendering_manager->hasViewState(view))
+                            return json{{"error", "Not a 3D view"}};
+                        auto result = scene_reconstruction_status_json(*rendering_manager, view);
+                        result["view"] = view;
+                        return result;
+                    }
                     return scene_reconstruction_status_json(*rendering_manager);
                 });
             });
