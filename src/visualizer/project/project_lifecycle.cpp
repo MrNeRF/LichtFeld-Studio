@@ -5,6 +5,7 @@
 
 #include "project_lifecycle.hpp"
 #include "io/project_operations.hpp"
+#include "io/sfm_observation_chapter.hpp"
 
 #include "core/assert.hpp"
 #include "core/checkpoint_format.hpp"
@@ -6192,6 +6193,11 @@ namespace lfs::vis::project {
             document_->edit_scene_graph() =
                 std::move(*captured_scene);
         }
+        if (auto synced = lfs::io::project::sync_sfm_observations(
+                *document_, lfs::io::project::capture_sfm_observation_cameras(scene));
+            !synced) {
+            return synced;
+        }
         // Entering Edit Mode clears the SCNG training binding. Existing CKPT
         // chapters remain live historical data (not resumable without a
         // binding) and survive saves and compaction.
@@ -7659,11 +7665,6 @@ namespace lfs::vis::project {
         const auto shell_staged_at =
             std::chrono::steady_clock::now();
 
-        // Invalidate gallery imports before swapping scenes; their workers drain asynchronously.
-        if (auto* const gui = viewer_.getGuiManager()) {
-            gui->asyncTasks().cancelImport(false);
-        }
-
         stopHydrationThreads(false);
         if (auto* trainer_manager = viewer_.getTrainerManager();
             trainer_manager && trainer_manager->hasTrainer() &&
@@ -7674,6 +7675,11 @@ namespace lfs::vis::project {
                 "Project switching requires the trainer to reach its terminal state",
                 "project.training");
         }
+        // Every project-open entry point reaches this committed switch boundary.
+        if (auto* loader = viewer_.getDataLoader())
+            loader->cancelPendingImports();
+        if (auto* gui = viewer_.getGuiManager())
+            gui->asyncTasks().cancelImport(false);
         viewer_.deactivateProjectTools();
         viewer_.resetProjectState();
         manager->setDatasetPath({});

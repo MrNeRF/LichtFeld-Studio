@@ -550,12 +550,16 @@ def _show_stop_training_confirmation(
     )
 
 
-def _show_load_file_confirmation(paths, is_dataset: bool, replace: bool) -> None:
+def _show_load_file_confirmation(paths, is_dataset: bool, replace: bool, user_batch: bool = False) -> None:
     title = lf.ui.tr(
         "load_dataset_popup.save_title" if is_dataset else "unsaved_work.title"
     )
 
     def _proceed(stop_training: bool) -> None:
+        if not is_dataset:
+            lf.load_files(paths, discard_changes=True, replace=replace,
+                          stop_training=stop_training, _user_batch=user_batch)
+            return
         for i, path in enumerate(paths):
             lf.load_file(
                 path,
@@ -981,7 +985,7 @@ def register():
     lf.ui.on_project_switch_confirmation(
         _show_project_switch_confirmation
     )
-    lf.ui.on_show_load_file_confirmation(
+    lf.ui.on_show_load_file_confirmation_with_batch(
         _show_load_file_confirmation
     )
     lf.ui.on_stop_training_confirmation(

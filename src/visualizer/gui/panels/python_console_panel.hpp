@@ -16,6 +16,10 @@
 #include <thread>
 #include <vector>
 
+namespace lfs::vis {
+    struct FrameInputEvent;
+}
+
 namespace lfs::vis::editor {
     class PythonEditor;
 } // namespace lfs::vis::editor
@@ -38,6 +42,7 @@ namespace lfs::vis::gui::panels {
         void addError(const std::string& text);
         void addInfo(const std::string& text);
         void clear();
+        bool handleShortcut(const FrameInputEvent& event);
 
         void addToHistory(const std::string& cmd);
 

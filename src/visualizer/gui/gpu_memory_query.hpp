@@ -18,7 +18,9 @@ namespace lfs::vis::gui {
         size_t total = 0;
         float gpu_utilization_percent = -1.f;
         bool gpu_utilization_valid = false;
-        bool process_estimated = false;
+        bool process_valid = false;
+        size_t process_budget = 0;
+        bool process_over_budget = false;
         bool device_estimated = false;
         std::string device_name;
     };
@@ -33,7 +35,8 @@ namespace lfs::vis::gui {
     LFS_VIS_API GpuMemoryInfo selectGpuMemory(size_t compute_bytes, size_t graphics_bytes,
                                               size_t dxgi_bytes, size_t cuda_used,
                                               size_t cuda_total, size_t nvml_used,
-                                              size_t nvml_total);
+                                              size_t nvml_total, size_t dxgi_budget = 0,
+                                              bool dxgi_valid = false);
     LFS_VIS_API std::string formatGpuGiB(size_t bytes);
     LFS_VIS_API size_t parseGpuProcessBytes(unsigned int pid,
                                             std::span<const GpuProcessUsage> processes);

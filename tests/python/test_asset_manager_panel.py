@@ -1469,6 +1469,8 @@ def test_recent_only_project_uses_native_inspection_without_joining_library(
         "project:rename",
         "project:update_thumbnail",
         "inspector",
+        "project:clean",
+        "project:compact_content",
         "show_in_folder",
         "project:export_as",
     ]
@@ -3195,6 +3197,8 @@ def test_context_menu_shows_use_found_location_only_with_candidate(panel_module)
         "project:rename",
         "project:update_thumbnail",
         "inspector",
+        "project:clean",
+        "project:compact_content",
         "show_in_folder",
         "remove",
         "trash",
@@ -3202,6 +3206,8 @@ def test_context_menu_shows_use_found_location_only_with_candidate(panel_module)
         "gallery:publish",
     ]
     assert [item.get("separator_before", False) for item in items] == [
+        False,
+        False,
         False,
         False,
         False,
@@ -5385,3 +5391,117 @@ def test_thumbnail_training_rejection_shows_short_user_message(panel_module):
     panel_module.lf.project_set_preview = rejected
     with pytest.raises(RuntimeError, match=r"^Stop training before updating the project thumbnail\.$"):
         panel_module.AssetManagerPanel._apply_active_project_preview("/tmp/test.licht", "target", _MIN_PNG)
+
+
+@pytest.mark.parametrize("status", ["MISSING", "IDENTITY_MISMATCH", "UNREADABLE", "UNSUPPORTED_NEWER", "REPAIR_ONLY"])
+def test_project_maintenance_is_unavailable_for_unwritable_projects(panel_module, status):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project(status=status)
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._inspection_by_asset[asset["id"]] = {"details": object()}
+    actions = {item["action"] for item in panel._asset_context_menu_items(asset)}
+    assert not actions.intersection({"project:clean", "project:compact_content"})
+    panel._set_asset_selection({asset["id"]}, cursor=asset["id"], anchor=asset["id"])
+    panel.open_project_operation(None, None, ["compact_content"])
+    assert not panel._dialog_kind
+
+
+def test_context_cleanup_targets_selected_file_and_uses_guarded_operation(panel_module, monkeypatch):
+    from lfs_plugins import project_cleanup
+
+    panel = panel_module.AssetManagerPanel()
+    asset = _project(path="/projects/closed.licht")
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._inspection_by_asset[asset["id"]] = {"details": object()}
+    opened = []
+    operations = []
+    monkeypatch.setattr(project_cleanup, "open_project_cleanup", lambda *args: opened.append(args))
+    panel._start_project_operation = lambda *args, **kwargs: operations.append((args, kwargs)) or True
+    panel._handle_asset_context_action("project:clean", asset["id"])
+    assert len(opened) == 1
+    path, run_closed, refresh = opened[0]
+    assert path == asset["path"]
+    operation, complete = lambda *_: None, lambda _: None
+    run_closed(operation, complete, expected_commit_uuid="preview-commit")
+    args, kwargs = operations[0]
+    assert args == (asset["id"], "project_cleanup.title", operation)
+    assert kwargs["on_finished"] is complete
+    assert kwargs["operation_kind"] == "clean"
+    assert kwargs["expected_commit_uuid"] == "preview-commit"
+    assert panel_module.lf._test_state.opened == []
+    asset["path"] = "/projects/relinked.licht"
+    with pytest.raises(RuntimeError, match="project_cleanup.changed"):
+        run_closed(operation, complete, expected_commit_uuid="preview-commit")
+    assert len(operations) == 1
+
+
+def test_context_compact_requires_confirmation_and_uses_selected_file(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project(path="/projects/closed.licht")
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._inspection_by_asset[asset["id"]] = {"details": object()}
+    operations = []
+    calls = []
+    monkeypatch.setattr(panel_module.lf.ui, "form_dialog", lambda *_args, **_kwargs: True, raising=False)
+    panel._start_project_operation = lambda *args, **kwargs: operations.append(args) or True
+    panel_module.lf.io = SimpleNamespace(compact_project_file=lambda *args: calls.append(args))
+    panel._handle_asset_context_action("project:compact_content", asset["id"])
+    assert panel._dialog_kind == "compact_content"
+    assert operations == []
+    panel.confirm_project_dialog()
+    operations[0][2](None, lambda: False)
+    assert calls[0][0] == asset["path"]
+    assert panel_module.lf._test_state.opened == []
+
+
+@pytest.mark.parametrize("recent_only", [False, True])
+@pytest.mark.parametrize("change", ["none", "save_after_preview", "replaced_project"])
+def test_preview_operation_guards_confirmed_commit_and_identity(
+    panel_module, monkeypatch, tmp_path, recent_only, change
+):
+    from lfs_plugins import project_operations
+
+    path = tmp_path / "selected.licht"
+    path.write_bytes(b"unchanged project")
+    project_id = str(uuid.uuid4())
+    cached = SimpleNamespace(project_uuid=project_id, commit_uuid="old-catalog-commit")
+    current = SimpleNamespace(project_uuid=project_id, commit_uuid="preview-commit")
+    if change == "save_after_preview":
+        current.commit_uuid = "newer-unconfirmed-commit"
+    elif change == "replaced_project":
+        current.project_uuid = str(uuid.uuid4())
+    calls, completed = [], []
+
+    def guard(_path, identity, commit, operation):
+        calls.append((identity, commit))
+        if identity != current.project_uuid or commit != current.commit_uuid:
+            raise RuntimeError("The project changed")
+        return operation()
+
+    io = SimpleNamespace(inspect_project_card=lambda _path: current,
+        run_project_operation=guard,
+        backup_project_file=lambda _path: calls.append("backup") or str(tmp_path / "backup.licht"))
+    store = project_operations.ProjectOperations(io, tmp_path / "records")
+    monkeypatch.setattr(project_operations, "ProjectOperations", lambda _io: store)
+    monkeypatch.setattr(panel_module.lf, "io", io, raising=False)
+    monkeypatch.setattr(panel_module.threading, "Thread",
+        lambda target, **kwargs: SimpleNamespace(start=target))
+    panel = panel_module.AssetManagerPanel()
+    asset_id = "recent:preview" if recent_only else project_id
+    asset = dict(id=asset_id, project_uuid=project_id, commit_uuid=cached.commit_uuid,
+        path=str(path), name="Selected", status="AVAILABLE", recent_only=recent_only)
+    panel._asset_dict = lambda identifier: asset if identifier == asset_id else None
+    panel._inspection_by_asset[asset_id] = dict(card=cached, details=SimpleNamespace(card=cached))
+    panel._inspect_contents = lambda _path: {}
+    assert panel._start_project_operation(asset_id, "Clean", lambda *_: calls.append("clean"),
+        expected_commit_uuid="preview-commit", on_finished=completed.append)
+    assert calls[0] == (project_id, "preview-commit")
+    assert asset["commit_uuid"] == "old-catalog-commit"
+    assert cached.commit_uuid == "old-catalog-commit"
+    if change == "none":
+        assert calls[1:] == ["backup", "clean"]
+        assert completed == [None]
+    else:
+        assert len(calls) == 1
+        assert len(completed) == 1 and isinstance(completed[0], Exception)
+        assert path.read_bytes() == b"unchanged project"

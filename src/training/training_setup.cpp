@@ -401,7 +401,7 @@ namespace lfs::training {
             const lfs::core::param::TrainingParameters& params,
             lfs::core::SplatData& model,
             const glm::vec3& dataset_origin) {
-            if (params.add_splat_paths.empty()) {
+            if (params.add_splat_paths.empty() || params.add_splats_applied) {
                 return {};
             }
 

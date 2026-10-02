@@ -92,6 +92,17 @@ namespace lfs::vis {
         return std::nullopt;
     }
 
+    // Select a validation pair containing the provisional node without changing
+    // the stored comparison offset. Keep the displayed left model when possible.
+    [[nodiscard]] inline size_t plyComparisonImportOffset(size_t count, size_t offset, size_t provisional) {
+        const auto displayed = plyComparisonPairForOffset(count, offset);
+        if (!displayed || provisional >= count || displayed->first == provisional || displayed->second == provisional)
+            return offset;
+        const size_t left = std::min(displayed->first, provisional);
+        const size_t right = std::max(displayed->first, provisional);
+        return left * (2 * count - left - 1) / 2 + right - left - 1;
+    }
+
     [[nodiscard]] inline bool splitViewUsesGTComparison(const SplitViewMode mode) {
         return mode == SplitViewMode::GTComparison;
     }

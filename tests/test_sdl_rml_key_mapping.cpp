@@ -91,7 +91,7 @@ namespace {
 
         EXPECT_TRUE(buffer.keys_pressed.empty());
         EXPECT_FALSE(buffer.mouse_clicked[0]);
-        EXPECT_TRUE(buffer.text_codepoints.empty());
+        EXPECT_TRUE(buffer.input_events.empty());
         EXPECT_FALSE(buffer.had_event);
         EXPECT_FALSE(buffer.mouse_moved);
     }
@@ -121,8 +121,10 @@ namespace {
         ASSERT_EQ(buffer.keys_pressed.size(), 1u);
         EXPECT_EQ(buffer.keys_pressed.front(), SDL_SCANCODE_A);
         EXPECT_TRUE(buffer.mouse_clicked[0]);
-        ASSERT_EQ(buffer.text_codepoints.size(), 1u);
-        EXPECT_EQ(buffer.text_codepoints.front(), 0xE9u);
+        ASSERT_EQ(buffer.input_events.size(), 3u);
+        EXPECT_EQ(buffer.input_events[1].kind, lfs::vis::FrameInputEventKind::MouseButton);
+        EXPECT_EQ(buffer.input_events.back().kind, lfs::vis::FrameInputEventKind::Text);
+        EXPECT_EQ(buffer.input_events.back().text, "\xc3\xa9");
         EXPECT_TRUE(buffer.had_event);
         EXPECT_FALSE(buffer.mouse_moved);
     }

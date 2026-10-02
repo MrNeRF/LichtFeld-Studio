@@ -18,7 +18,7 @@ namespace {
         EXPECT_EQ(memory.process_used, 381 * MiB);
         EXPECT_EQ(memory.total_used, 684 * MiB);
         EXPECT_EQ(memory.total, 24564 * MiB);
-        EXPECT_FALSE(memory.process_estimated);
+        EXPECT_TRUE(memory.process_valid);
         EXPECT_FALSE(memory.device_estimated);
         EXPECT_EQ(lfs::vis::gui::formatGpuGiB(memory.total), "23.99");
     }
@@ -38,15 +38,36 @@ namespace {
         const auto windows = lfs::vis::gui::selectGpuMemory(
             0, 0, 512 * MiB, 768 * MiB, 24074 * MiB, 0, 0);
         EXPECT_EQ(windows.process_used, 512 * MiB);
-        EXPECT_FALSE(windows.process_estimated);
+        EXPECT_TRUE(windows.process_valid);
         EXPECT_TRUE(windows.device_estimated);
 
         const auto cuda_only = lfs::vis::gui::selectGpuMemory(
             0, 0, 0, 768 * MiB, 24074 * MiB, 0, 0);
-        EXPECT_EQ(cuda_only.process_used, 768 * MiB);
-        EXPECT_TRUE(cuda_only.process_estimated);
+        EXPECT_EQ(cuda_only.process_used, 0u);
+        EXPECT_FALSE(cuda_only.process_valid);
         EXPECT_TRUE(cuda_only.device_estimated);
         EXPECT_EQ(lfs::vis::gui::formatGpuGiB(768 * MiB), "0.75");
+    }
+
+    TEST(GpuMemoryQuery, OversubscriptionIsExplicitAndDeviceUsageIsPhysical) {
+        const auto memory = lfs::vis::gui::selectGpuMemory(
+            0, 0, 17 * 1024 * MiB, 17 * 1024 * MiB, 10 * 1024 * MiB,
+            17 * 1024 * MiB, 10 * 1024 * MiB, 9 * 1024 * MiB, true);
+        EXPECT_TRUE(memory.process_valid);
+        EXPECT_TRUE(memory.process_over_budget);
+        EXPECT_EQ(memory.process_used, 17 * 1024 * MiB);
+        EXPECT_EQ(memory.process_budget, 9 * 1024 * MiB);
+        EXPECT_EQ(memory.total_used, memory.total);
+        EXPECT_EQ(memory.total, 10 * 1024 * MiB);
+    }
+
+    TEST(GpuMemoryQuery, ZeroUsageAndZeroBudgetRemainValidDxgiSamples) {
+        const auto idle = lfs::vis::gui::selectGpuMemory(0, 0, 0, 500, 1000, 500, 1000, 800, true);
+        EXPECT_TRUE(idle.process_valid);
+        EXPECT_EQ(idle.process_used, 0u);
+        EXPECT_FALSE(idle.process_over_budget);
+        const auto no_budget = lfs::vis::gui::selectGpuMemory(0, 0, 100, 500, 1000, 500, 1000, 0, true);
+        EXPECT_TRUE(no_budget.process_over_budget);
     }
 
     TEST(GpuMemoryQuery, DisplayCategoriesCloseWithoutNegativeRemainder) {

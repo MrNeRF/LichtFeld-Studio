@@ -191,6 +191,20 @@ namespace fast_lfs::rasterization::kernels::backward {
                 (colour.z >= 0.0f || image_grad.z < 0.0f ? 4u : 0u);
         }
 
+        // Gate the accumulated image derivative before SH conversion. Below
+        // black, retain only derivatives that increase colour under descent.
+        if (visible) {
+            const float3 colour = make_float3(primitive_color[work_idx]);
+            float3 image_grad = grad_color_helper[work_idx];
+            if (colour.x < 0.0f && image_grad.x >= 0.0f)
+                image_grad.x = 0.0f;
+            if (colour.y < 0.0f && image_grad.y >= 0.0f)
+                image_grad.y = 0.0f;
+            if (colour.z < 0.0f && image_grad.z >= 0.0f)
+                image_grad.z = 0.0f;
+            grad_color_helper[work_idx] = image_grad;
+        }
+
         // Compute SH backward gradients before entering the geometry path.
         if (invisible) {
             // Reg-only scale/opacity; SH/means/rot get pure momentum decay (zeros).

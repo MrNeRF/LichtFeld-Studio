@@ -216,7 +216,7 @@ def test_getting_started_panel_escapes_thumbnail_paths(panel_modules, tmp_path):
 def test_getting_started_panel_uses_dirty_update_policy(panel_modules):
     _, getting_started = panel_modules
     assert getting_started.GettingStartedPanel.update_policy == "dirty"
-    assert getting_started.GettingStartedPanel.update_interval_ms == 100
+    assert getting_started.GettingStartedPanel.update_interval_ms is None
 
 
 def test_image_preview_uses_dirty_update_policy(panel_modules):

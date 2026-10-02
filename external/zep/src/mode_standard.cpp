@@ -42,8 +42,8 @@ namespace Zep {
 
         // Insert Mode
         keymap_add({&m_insertMap}, {"<Backspace>"}, id_Backspace);
-        keymap_add({&m_insertMap}, {"<Return>"}, id_InsertCarriageReturn);
-        keymap_add({&m_insertMap}, {"<Tab>"}, id_InsertTab);
+        keymap_add({&m_insertMap, &m_visualMap}, {"<Return>"}, id_InsertCarriageReturn);
+        keymap_add({&m_insertMap, &m_visualMap}, {"<Tab>"}, id_InsertTab);
         keymap_add({&m_insertMap, &m_visualMap}, {"<Del>"}, id_Delete);
         keymap_add({&m_insertMap, &m_visualMap}, {"<C-S-z>", "<C-y>"}, id_Redo);
         keymap_add({&m_insertMap, &m_visualMap}, {"<C-z>", "<C-u>"}, id_Undo);
@@ -52,8 +52,6 @@ namespace Zep {
         keymap_add({&m_insertMap, &m_visualMap}, {"<Right>"}, id_MotionStandardRight);
         keymap_add({&m_insertMap, &m_visualMap}, {"<Up>"}, id_MotionStandardUp);
         keymap_add({&m_insertMap, &m_visualMap}, {"<Down>"}, id_MotionStandardDown);
-        keymap_add({&m_insertMap, &m_visualMap}, {"<End>"}, id_MotionLineBeyondEnd);
-        keymap_add({&m_insertMap, &m_visualMap}, {"<Home>"}, id_MotionLineHomeToggle);
         keymap_add({&m_insertMap, &m_visualMap}, {"<C-Left>"}, id_MotionStandardLeftWord);
         keymap_add({&m_insertMap, &m_visualMap}, {"<C-Right>"}, id_MotionStandardRightWord);
         keymap_add({&m_insertMap, &m_visualMap}, {"<PageDown>"}, id_MotionPageForward);
@@ -81,6 +79,35 @@ namespace Zep {
         keymap_add({&m_visualMap, &m_insertMap}, {"<C-->"}, id_FontSmaller);
 
         keymap_add({&m_visualMap, &m_insertMap}, {"<C-s>"}, id_Save);
+    }
+
+    void ZepMode_Standard::AddKeyPress(uint32_t key, uint32_t modifierKeys) {
+        auto* window = GetCurrentWindow();
+        if (window && (key == ExtKeys::HOME || key == ExtKeys::END) &&
+            !(modifierKeys & ModifierKey::Alt)) {
+            auto& buffer = window->GetBuffer();
+            const auto cursor = window->GetBufferCursor();
+            const bool home = key == ExtKeys::HOME;
+            auto target = cursor;
+            if (modifierKeys & ModifierKey::Ctrl) {
+                target = home ? buffer.Begin() : buffer.End();
+            } else if (home) {
+                target = buffer.GetLinePos(cursor, LineLocation::LineFirstGraphChar);
+                if (target == cursor || (modifierKeys & ModifierKey::Shift))
+                    target = buffer.GetLinePos(cursor, LineLocation::LineBegin);
+            } else {
+                target = buffer.GetLinePos(cursor, LineLocation::LineCRBegin);
+            }
+            if (modifierKeys & ModifierKey::Shift) {
+                SetSelection(GetEditorMode() == EditorMode::Visual ? m_visualBegin : cursor, target);
+            } else {
+                SwitchMode(EditorMode::Insert);
+                window->SetBufferCursor(target);
+            }
+            GetEditor().RequestRefresh();
+            return;
+        }
+        ZepMode::AddKeyPress(key, modifierKeys);
     }
 
     void ZepMode_Standard::Begin(ZepWindow* pWindow) {

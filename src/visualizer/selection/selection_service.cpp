@@ -1494,7 +1494,7 @@ namespace lfs::vis {
 
         if (rendering_manager_) {
             rendering_manager_->clearSelectionPreviews();
-            rendering_manager_->markDirty(DirtyFlag::SELECTION);
+            rendering_manager_->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         }
 
         return result;
@@ -1510,7 +1510,7 @@ namespace lfs::vis {
 
         if (rendering_manager_) {
             rendering_manager_->clearSelectionPreviews();
-            rendering_manager_->markDirty(DirtyFlag::SELECTION);
+            rendering_manager_->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         }
     }
 
@@ -2130,7 +2130,7 @@ namespace lfs::vis {
         } else {
             rendering_manager_->clearPreviewSelection();
         }
-        rendering_manager_->markDirty(DirtyFlag::SELECTION);
+        rendering_manager_->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
 
     void SelectionService::updatePassiveBrushHoverPreview(const glm::vec2 cursor_pos,
@@ -2272,7 +2272,7 @@ namespace lfs::vis {
             }
         }
 
-        rendering_manager_->markDirty(DirtyFlag::SELECTION);
+        rendering_manager_->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         session.preview_dirty = false;
     }
 
@@ -2461,7 +2461,7 @@ namespace lfs::vis {
             selected_count = scene.selectedCount();
         }
 
-        rendering_manager_->markDirty(DirtyFlag::SELECTION);
+        rendering_manager_->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         return {true, selected_count, {}};
     }
 
@@ -3248,7 +3248,7 @@ namespace lfs::vis {
                 true, geometry.ellipsoid_radii, geometry.visualizer_transform, false, -1);
             rendering_manager_->setCropboxGizmoActive(false);
         }
-        rendering_manager_->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+        rendering_manager_->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
     }
 
     std::vector<glm::vec2> SelectionService::getPolygonPreviewPoints() const {
@@ -3664,7 +3664,7 @@ namespace lfs::vis {
     void SelectionService::clearInteractivePreviewState() {
         if (rendering_manager_) {
             rendering_manager_->clearSelectionPreviews();
-            rendering_manager_->markDirty(DirtyFlag::SELECTION);
+            rendering_manager_->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         }
     }
 

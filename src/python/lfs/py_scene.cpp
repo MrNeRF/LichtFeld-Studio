@@ -9,6 +9,7 @@
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "io/loader.hpp"
+#include "py_error.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operation/undo_entry.hpp"
@@ -649,6 +650,11 @@ namespace lfs::python {
     }
 
     void PyScene::clear() {
+        if (get_visualizer()) {
+            nb::gil_scoped_release release;
+            unwrap(clear_application_scene());
+            return;
+        }
         if (auto* const scene_manager = get_scene_manager()) {
             if (scene_manager->clear()) {
                 return;

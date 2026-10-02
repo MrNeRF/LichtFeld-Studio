@@ -672,6 +672,7 @@ namespace lfs::vis {
 
     // Core handlers
     void InputController::handleMouseButton(int button, int action, double x, double y) {
+        decayHeldDragMomentum();
         LOG_PERF("InputController::handleMouseButton button={} action={} pos=({},{}) drag_mode={}",
                  button, action, x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
@@ -1289,6 +1290,7 @@ namespace lfs::vis {
     }
 
     void InputController::handleMouseMove(double x, double y) {
+        decayHeldDragMomentum();
         LOG_PERF("InputController::handleMouseMove pos=({},{}) drag_mode={}",
                  x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
@@ -1623,7 +1625,7 @@ namespace lfs::vis {
     }
 
     void InputController::handleKey(const int physical_key, const int logical_key,
-                                    const int scancode, int action, [[maybe_unused]] int mods) {
+                                    const int scancode, int action, int mods, const bool owned_release, const bool gui_consumed) {
         // Track modifier keys (always, even if GUI has focus)
         if (physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL) {
             key_ctrl_pressed_ = (action != input::ACTION_RELEASE);
@@ -1631,12 +1633,18 @@ namespace lfs::vis {
         if (physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT) {
             key_alt_pressed_ = (action != input::ACTION_RELEASE);
         }
+        const bool wants_text_input = input_router_
+                                          ? input_router_->isTextInputActive()
+                                          : gui::guiFocusState().want_text_input;
         const bool is_modifier_key =
             physical_key == input::KEY_LEFT_SHIFT || physical_key == input::KEY_RIGHT_SHIFT ||
             physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL ||
             physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT ||
             physical_key == input::KEY_LEFT_SUPER || physical_key == input::KEY_RIGHT_SUPER;
-        if (!is_modifier_key && logical_key != input::KEY_UNKNOWN) {
+        if (wants_text_input && !bindings_.isCapturing()) {
+            // Text keys must not become viewport mouse/scroll chords either.
+            held_keys_.clear();
+        } else if (!is_modifier_key && logical_key != input::KEY_UNKNOWN) {
             if (action == input::ACTION_RELEASE) {
                 std::erase(held_keys_, logical_key);
             } else if (!std::ranges::contains(held_keys_, logical_key)) {
@@ -1669,9 +1677,19 @@ namespace lfs::vis {
         const bool is_mcp_runtime_action =
             bound_action == input::Action::TOGGLE_MCP_SERVER ||
             bound_action == input::Action::TOGGLE_MCP_BINDING;
-        if (lfs::python::has_keyboard_capture_request() && !is_mcp_runtime_action) {
+        if (lfs::python::has_keyboard_capture_request() && !is_mcp_runtime_action && !owned_release) {
             return;
         }
+
+        const bool project_save = logical_key == input::KEY_S && mods == input::KEYMOD_CTRL;
+        if (wants_text_input && !is_mcp_runtime_action && !owned_release) {
+            if (project_save && action == input::ACTION_PRESS)
+                cmd::ProjectSave{}.emit();
+            return;
+        }
+
+        if (gui_consumed && !is_mcp_runtime_action && !owned_release)
+            return;
 
         // Dispatch to modal operators first - if consumed, don't continue
         float mx_f, my_f;
@@ -1701,9 +1719,6 @@ namespace lfs::vis {
             }
         }
 
-        const bool wants_text_input = input_router_
-                                          ? input_router_->isTextInputActive()
-                                          : gui::guiFocusState().want_text_input;
         const bool viewport_keyboard_focus = input_router_
                                                  ? input_router_->isViewportKeyboardFocused()
                                                  : false;
@@ -1823,15 +1838,20 @@ namespace lfs::vis {
 
             case input::Action::CAMERA_NEXT_VIEW:
             case input::Action::CAMERA_PREV_VIEW: {
-                const auto* trainer = services().trainerOrNull();
-                if (trainer) {
-                    const int num_cams = static_cast<int>(trainer->getAllCamList().size());
-                    if (num_cams > 0) {
+                if (const auto* scene_manager = services().sceneOrNull()) {
+                    const auto& cameras = scene_manager->getScene().getAllCamerasCached();
+                    if (!cameras.empty()) {
+                        const auto* rendering = services().renderingOrNull();
+                        const int current_uid = rendering ? rendering->getCurrentCameraId() : last_camview_;
+                        const auto current = std::ranges::find_if(cameras, [current_uid](const auto& camera) {
+                            return camera->uid() == current_uid;
+                        });
+                        const int count = static_cast<int>(cameras.size());
                         const int delta = (bound_action == input::Action::CAMERA_NEXT_VIEW) ? 1 : -1;
-                        last_camview_ = (last_camview_ < 0)
-                                            ? (delta > 0 ? 0 : num_cams - 1)
-                                            : (last_camview_ + delta + num_cams) % num_cams;
-                        cmd::GoToCamView{.cam_id = last_camview_}.emit();
+                        const int index = current == cameras.end()
+                                              ? (delta > 0 ? 0 : count - 1)
+                                              : (static_cast<int>(std::distance(cameras.begin(), current)) + delta + count) % count;
+                        cmd::GoToCamView{.cam_id = cameras[index]->uid()}.emit();
                     }
                 }
                 return;
@@ -2092,7 +2112,20 @@ namespace lfs::vis {
         }
     }
 
+    void InputController::decayHeldDragMomentum() {
+        const auto now = std::chrono::steady_clock::now();
+        const float elapsed = std::chrono::duration<float>(now - drag_momentum_updated_at_).count();
+        drag_momentum_updated_at_ = now;
+        // Pausing a drag must still dissipate its velocity when the frame loop
+        // sleeps. Use elapsed time, not the animation timestep (which is clamped).
+        if (drag_mode_ == DragMode::Orbit && orbit_coast_viewport_)
+            orbit_coast_viewport_->camera.decayOrbitMomentum(elapsed);
+        if (drag_mode_ == DragMode::Pan && pan_coast_viewport_)
+            pan_coast_viewport_->camera.decayPanMomentum(elapsed);
+    }
+
     void InputController::update(float delta_time) {
+        decayHeldDragMomentum();
         // Refresh once per input frame; mouse-move events can then query the
         // divider without taking RenderingManager's settings mutex repeatedly.
         refreshSplitDividerCache();
@@ -2209,11 +2242,9 @@ namespace lfs::vis {
 
         // Orbit ease-out: while dragging, let a held-still pause fade the stored
         // motion; once released, coast the remembered rotation to a smooth stop.
-        if (orbit_coast_viewport_) {
+        if (orbit_coast_viewport_ && drag_mode_ != DragMode::Orbit) {
             auto& orbit_camera = orbit_coast_viewport_->camera;
-            if (drag_mode_ == DragMode::Orbit) {
-                orbit_camera.decayOrbitMomentum(delta_time);
-            } else if (orbit_camera.hasOrbitMomentum()) {
+            if (orbit_camera.hasOrbitMomentum()) {
                 orbit_camera.updateOrbitCoast(delta_time);
                 onCameraMovementStart();
                 publishCameraMove(orbit_coast_viewport_);
@@ -2232,11 +2263,9 @@ namespace lfs::vis {
         // Pan ease-out: mirror the orbit coast for click-drag panning. While the
         // button is held a paused drag fades the stored motion; once released the
         // remembered translation coasts to a smooth stop.
-        if (pan_coast_viewport_) {
+        if (pan_coast_viewport_ && drag_mode_ != DragMode::Pan) {
             auto& pan_camera = pan_coast_viewport_->camera;
-            if (drag_mode_ == DragMode::Pan) {
-                pan_camera.decayPanMomentum(delta_time);
-            } else if (pan_camera.hasPanMomentum()) {
+            if (pan_camera.hasPanMomentum()) {
                 pan_camera.updatePanCoast(delta_time);
                 onCameraMovementStart();
                 publishCameraMove(pan_coast_viewport_);
@@ -2492,19 +2521,19 @@ namespace lfs::vis {
             cmd::ShowLoadFileConfirmation{
                 .paths = splat_files,
                 .is_dataset = false,
-                .replace = false}
+                .replace = false,
+                .user_batch = splat_files.size() > 1}
                 .emit();
             LOG_INFO(
                 "Requesting confirmation before loading {} dropped splat/mesh file(s)",
                 splat_files.size());
         } else {
-            for (const auto& splat : splat_files) {
-                auto event = cmd::LoadFile{};
-                event.path = splat;
-                event.is_dataset = false;
-                event.emit();
-                LOG_INFO("Loading {} via drag-and-drop: {}",
-                         lfs::core::path_to_utf8(splat.extension()), lfs::core::path_to_utf8(splat.filename()));
+            if (!splat_files.empty()) {
+                cmd::LoadFile{.path = splat_files.front(),
+                              .is_dataset = false,
+                              .paths = splat_files,
+                              .user_batch = splat_files.size() > 1}
+                    .emit();
             }
         }
 
@@ -2659,7 +2688,7 @@ namespace lfs::vis {
                     sm->selectNode(node->id);
                 }
                 if (auto* rendering_manager = services().renderingOrNull()) {
-                    rendering_manager->markDirty(DirtyFlag::SELECTION | DirtyFlag::OVERLAY);
+                    rendering_manager->markDirty(DirtyFlag::SELECTION | DirtyFlag::OVERLAY, lfs::vis::FrameReason::Selection);
                 }
                 return;
             }

@@ -803,6 +803,10 @@ namespace lfs::python {
             .value("SEGMENT_AND_IGNORE", MaskMode::SegmentAndIgnore)
             .value("ALPHA_CONSISTENT", MaskMode::AlphaConsistent);
 
+        nb::enum_<EvalSpace>(m, "EvalSpace")
+            .value("DISTORTED", EvalSpace::Distorted)
+            .value("UNDISTORTED", EvalSpace::Undistorted);
+
         nb::enum_<DensifyErrorMap>(m, "DensifyErrorMap")
             .value("SSIM", DensifyErrorMap::Ssim)
             .value("SSIM_CS", DensifyErrorMap::SsimCs);
@@ -1198,7 +1202,17 @@ namespace lfs::python {
                 "undistort",
                 [](PyOptimizationParams& self) { return self.params().undistort; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.undistort = v; }); },
-                "Undistort images on-the-fly before training")
+                "Remove lens distortion before training: each image and its mask, depth and "
+                "normal map are resampled once from full resolution into a distortion-free "
+                "pinhole camera, which training then uses. Alternative to --gut for distorted "
+                "or non-pinhole cameras")
+            .def_prop_rw(
+                "eval_space",
+                [](PyOptimizationParams& self) { return self.params().eval_space; },
+                [](PyOptimizationParams&, EvalSpace v) { modify_params([v](auto& p) { p.eval_space = v; }); },
+                "Reference images for evaluation with --undistort: distorted = the original "
+                "images, with the render warped into the original lens; undistorted = the "
+                "undistorted training images")
             .def_prop_ro(
                 "save_steps",
                 [](PyOptimizationParams& self) -> std::vector<size_t> {

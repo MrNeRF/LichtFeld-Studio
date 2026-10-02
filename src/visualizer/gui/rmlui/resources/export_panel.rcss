@@ -125,7 +125,7 @@
     margin: 6dp 0;
 }
 
-.ep-progress fill {
+.ep-progress-wrap.is-exporting .ep-progress fill {
     animation: ep-pulse 1.2s quadratic-in-out infinite alternate;
 }
 

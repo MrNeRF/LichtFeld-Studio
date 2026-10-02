@@ -641,7 +641,7 @@ def test_menu_pointer_input_is_not_replayed_into_underlay_panels():
     )[1].split("PanelInputState maskInputForBlockedUi", 1)[0]
     assert "input.key_ctrl" not in pointer_mask
     assert "input.keys_pressed" not in pointer_mask
-    assert "input.text_inputs" not in pointer_mask
+    assert "input.input_events" not in pointer_mask
 
 
 def test_viewport_overlay_toolbar_origin_tracks_viewport_content_offset():

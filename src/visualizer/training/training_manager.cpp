@@ -1390,7 +1390,6 @@ namespace lfs::vis {
                         if (!state_machine_.transitionTo(TrainingState::Paused)) {
                             LOG_WARN("Failed to transition to Paused after initialization pause request");
                         }
-                        state::TrainingPaused{.iteration = getCurrentIteration()}.emit();
                     }
                 }
             } catch (const std::exception& error) {
@@ -1447,8 +1446,7 @@ namespace lfs::vis {
                 LOG_WARN("Failed to transition to Paused");
             }
 
-            state::TrainingPaused{.iteration = getCurrentIteration()}.emit();
-            LOG_INFO("Training paused at iteration {}", getCurrentIteration());
+            LOG_INFO("Training pause requested at iteration {}", getCurrentIteration());
         }
     }
 
@@ -1769,6 +1767,23 @@ namespace lfs::vis {
             return;
         }
         emit_completion();
+    }
+
+    void TrainerManager::dispatchTrainingPaused(const int iteration) {
+        auto emit_paused = [iteration] {
+            state::TrainingPaused{.iteration = iteration}.emit();
+        };
+
+        if (viewer_) {
+            if (!viewer_->postWork({
+                    .run = std::move(emit_paused),
+                    .cancel = [] {},
+                })) {
+                LOG_WARN("Training pause event dropped during viewer shutdown");
+            }
+            return;
+        }
+        emit_paused();
     }
 
     int TrainerManager::getCurrentIteration() const {
@@ -2368,6 +2383,9 @@ namespace lfs::vis {
                 applyPendingParams();
             }
         });
+        trainer_->setOnPaused([this](const int iteration) {
+            dispatchTrainingPaused(iteration);
+        });
 
         lfs::core::run_guarded<void>(
             lfs::core::TaskContext{
@@ -2516,6 +2534,25 @@ namespace lfs::vis {
         return trainer_->computeCameraMetrics(*cam, include_ssim, appearance);
     }
 
+    lfs::core::param::TrainingParameters TrainerManager::getEditableTrainingParams(
+        const ParameterManager& parameter_manager) const {
+        auto params = parameter_manager.createForDataset(
+            pending_dataset_params_.data_path,
+            pending_dataset_params_.output_path);
+        params.dataset = (hasTrainer() || !pending_dataset_params_.data_path.empty())
+                             ? pending_dataset_params_
+                             : parameter_manager.getDatasetConfig();
+        return params;
+    }
+
+    void TrainerManager::importTrainingParams(
+        const lfs::core::param::TrainingParameters& params,
+        ParameterManager& parameter_manager) {
+        parameter_manager.importTrainingParams(params);
+        pending_opt_params_ = params.optimization;
+        pending_dataset_params_ = params.dataset;
+    }
+
     void TrainerManager::applyPendingParams() {
         if (!trainer_)
             return;
@@ -2533,14 +2570,19 @@ namespace lfs::vis {
 
         const auto previous_params = trainer_->getParams();
         auto params = previous_params;
-        params.dataset = pending_dataset_params_;
 
-        // Use ParameterManager in GUI mode, fallback to pending_opt_params_ for headless
+        // Use the same composed values for export and training. The dataset
+        // panel edits pending_dataset_params_; optimization edits the shared
+        // ParameterManager state.
         if (auto* const param_mgr = services().paramsOrNull()) {
-            params.optimization = param_mgr->copyActiveParams();
+            const auto editable_params = getEditableTrainingParams(*param_mgr);
+            params.dataset = editable_params.dataset;
+            params.optimization = editable_params.optimization;
+            params.server = editable_params.server;
             LOG_DEBUG("Applied params: strategy={}, iter={}, max_cap={}",
                       params.optimization.strategy, params.optimization.iterations, params.optimization.max_cap);
         } else {
+            params.dataset = pending_dataset_params_;
             params.optimization = pending_opt_params_;
         }
 

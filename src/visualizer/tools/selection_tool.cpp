@@ -244,7 +244,7 @@ namespace lfs::vis::tools {
         settings.depth_filter_min = glm::vec3(-frustum_half_width_, -half_height, -depth_far_);
         settings.depth_filter_max = glm::vec3(frustum_half_width_, half_height, -depth_near_);
         rm->updateSettings(settings);
-        rm->markDirty(DirtyFlag::SELECTION);
+        rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
 
     void SelectionTool::setCropFilterEnabled(const bool enabled) {
@@ -277,7 +277,7 @@ namespace lfs::vis::tools {
             settings.depth_filter_max = glm::vec3(frustum_half_width_, half_height, -depth_near_);
         }
         rm->updateSettings(settings);
-        rm->markDirty(DirtyFlag::SELECTION);
+        rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
 
     void SelectionTool::clearSelectionRenderState(const ToolContext& ctx) const {
@@ -291,7 +291,7 @@ namespace lfs::vis::tools {
         settings.depth_filter_enabled = false;
         rm->updateSettings(settings);
         rm->clearSelectionPreviews();
-        rm->markDirty(DirtyFlag::SELECTION);
+        rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
 
     void SelectionTool::onSelectionModeChanged() {

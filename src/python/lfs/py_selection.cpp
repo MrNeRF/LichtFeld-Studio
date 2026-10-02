@@ -537,7 +537,7 @@ namespace lfs::python {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
                     });
                 if (auto* rm = get_rm())
-                    rm->markDirty(vis::DirtyFlag::SELECTION);
+                    rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
             nb::arg("radius"), nb::arg("iterations") = 1, "Grow selection by radius (scene units). Uses spatial hashing, O(N).");
 
@@ -562,7 +562,7 @@ namespace lfs::python {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
                     });
                 if (auto* rm = get_rm())
-                    rm->markDirty(vis::DirtyFlag::SELECTION);
+                    rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
             nb::arg("radius"), nb::arg("iterations") = 1, "Shrink selection by radius (scene units). Uses spatial hashing, O(N).");
 
@@ -583,7 +583,7 @@ namespace lfs::python {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
                     });
                 if (auto* rm = get_rm())
-                    rm->markDirty(vis::DirtyFlag::SELECTION);
+                    rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
             nb::arg("min_opacity") = 0.0f, nb::arg("max_opacity") = 1.0f, "Select gaussians by activated opacity range [min, max].");
 
@@ -604,7 +604,7 @@ namespace lfs::python {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
                     });
                 if (auto* rm = get_rm())
-                    rm->markDirty(vis::DirtyFlag::SELECTION);
+                    rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
             nb::arg("max_scale"), "Select gaussians with max activated scale <= threshold.");
 
@@ -646,7 +646,7 @@ namespace lfs::python {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
                     });
                 if (auto* rm = get_rm())
-                    rm->markDirty(vis::DirtyFlag::SELECTION);
+                    rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
             nb::arg("gaussian_index"), nb::arg("threshold") = 0.2f, "Select gaussians by color similarity to a reference gaussian.\n"
                                                                     "Picks the SH DC color of the gaussian at the given index and selects all\n"

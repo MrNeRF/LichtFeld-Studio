@@ -37,6 +37,7 @@ namespace lfs::vis {
 
     // Forward declarations
     class VisualizerImpl;
+    class ParameterManager;
     class VulkanExternalTensorStorage;
     class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
     class VisualizerImplResetTest_NewProjectWhileCompletionPendingStillErrors_Test;
@@ -209,6 +210,11 @@ namespace lfs::vis {
         const lfs::core::param::OptimizationParameters& getEditableOptParams() const { return pending_opt_params_; }
         lfs::core::param::DatasetConfig& getEditableDatasetParams() { return pending_dataset_params_; }
         const lfs::core::param::DatasetConfig& getEditableDatasetParams() const { return pending_dataset_params_; }
+        [[nodiscard]] lfs::core::param::TrainingParameters getEditableTrainingParams(
+            const ParameterManager& parameter_manager) const;
+        void importTrainingParams(
+            const lfs::core::param::TrainingParameters& params,
+            ParameterManager& parameter_manager);
         void applyPendingParams();
 
     private:
@@ -240,6 +246,7 @@ namespace lfs::vis {
         void launchTrainingThread();
         void completionReaperLoop(std::stop_token stop_token);
         void finishTrainingThreadJoin();
+        void dispatchTrainingPaused(int iteration);
         void dispatchTrainingCompleted(TrainingCompletionData completion);
 
         // State management

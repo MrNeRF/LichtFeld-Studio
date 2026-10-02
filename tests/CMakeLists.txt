@@ -50,6 +50,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_menu_bar_title.cpp
         test_panel_layout_render_demand.cpp
         test_preferences_migration.cpp
+        test_python_editor_input.cpp
         test_startup_overlay_geometry.cpp
         test_vram_hud_geometry.cpp
     )
@@ -68,6 +69,7 @@ if(BUILD_VISUALIZER_TESTS)
         lfs_core
         lfs_python_runtime
         GTest::gtest_main
+        Zep::Zep
     )
     add_test(
         NAME lichtfeld_visualizer_tests
@@ -305,6 +307,30 @@ set_tests_properties(lichtfeld_format_tests PROPERTIES
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     LABELS "fast;format"
     TIMEOUT 300
+)
+
+add_executable(lichtfeld_frame_tests test_frame_demand_ledger.cpp)
+target_include_directories(lichtfeld_frame_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/visualizer/rendering
+    ${CMAKE_SOURCE_DIR}/src/visualizer
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/tests
+)
+target_link_libraries(lichtfeld_frame_tests PRIVATE GTest::gtest_main Threads::Threads)
+set_target_properties(lichtfeld_frame_tests PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(lichtfeld_frame_tests)
+endif()
+add_test(NAME lichtfeld_frame_tests
+    COMMAND $<TARGET_FILE:lichtfeld_frame_tests> --gtest_color=no
+)
+set_tests_properties(lichtfeld_frame_tests PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "fast;frame"
+    TIMEOUT 30
 )
 
 if(NOT BUILD_TESTS)
@@ -553,6 +579,8 @@ set(TEST_FILES
     test_theme_registry.cpp
     test_viewport.cpp
     test_input_controller_focus.cpp
+    test_ordered_input_dispatch.cpp
+    test_python_editor_input.cpp
     test_input_controller_dataset_load.cpp
     test_selection_service_interactions.cpp
     test_scene_graph_identity.cpp
@@ -625,6 +653,7 @@ set(TEST_FILES
     test_status_bar_fit.cpp
     test_training_progress_publisher.cpp
     test_startup_overlay_geometry.cpp
+    test_vram_hud_geometry.cpp
     test_menu_bar_title.cpp
     test_status_bar_mining.cpp
     test_rotated_sh_correctness.cpp
@@ -812,6 +841,8 @@ target_link_libraries(lichtfeld_tests PRIVATE
     ${LFS_TEST_INTERNAL_LINK_LIBS}
 
     # External libraries
+    Zep::Zep
+    vterm
     GTest::gtest
     nanobind-static
     ${TORCH_LIBRARIES}
@@ -1227,6 +1258,9 @@ foreach(TEST_TARGET lichtfeld_tests)
         COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${PROJECT_SOURCE_DIR}/src/visualizer/gui/resources/viewer"
             "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/viewer"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${PROJECT_SOURCE_DIR}/src/visualizer/gui/rmlui/resources"
+            "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/assets/rmlui"
     )
 endforeach()
 

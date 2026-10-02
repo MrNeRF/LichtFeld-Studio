@@ -65,7 +65,7 @@ namespace lfs::core {
             EVENT(ResumeTraining, );
             EVENT(StopTraining, );
             EVENT(ResetTraining, );
-            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false; bool stop_training = false; bool discard_changes = false; bool replace = false;);
+            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false; bool stop_training = false; bool discard_changes = false; bool replace = false; std::vector<std::filesystem::path> paths = {}; bool user_batch = false;);
             EVENT(PrepareGalleryProject, std::filesystem::path source_path; std::filesystem::path destination; ExportFormat payload_format = ExportFormat::GALLERY_SOG; std::string expected_commit_uuid;);
             EVENT(LoadGalleryScene, std::vector<std::filesystem::path> paths; std::vector<std::string> names; std::vector<glm::mat4> transforms; std::vector<int> sh_degrees; std::string group_name; bool hidden = false;);
             EVENT(LoadCheckpointForTraining, std::filesystem::path checkpoint_path; std::filesystem::path dataset_path; std::filesystem::path output_path;);
@@ -86,7 +86,7 @@ namespace lfs::core {
                   std::function<void(const std::string&)> on_started;);
             EVENT(ProjectEmbedDataset, );
             EVENT(ShowProjectSwitchConfirmation, bool new_project = false; std::filesystem::path path; bool keep_asset_manager_open = false; std::filesystem::path create_path = {}; bool allow_existing_destination_replacement = false;);
-            EVENT(ShowLoadFileConfirmation, std::vector<std::filesystem::path> paths; bool is_dataset = false; bool replace = false;);
+            EVENT(ShowLoadFileConfirmation, std::vector<std::filesystem::path> paths; bool is_dataset = false; bool replace = false; bool user_batch = false;);
             EVENT(ShowStopTrainingConfirmation, bool new_project = false; std::filesystem::path path; bool discard_changes = false; bool keep_asset_manager_open = false; std::filesystem::path create_path = {}; bool allow_existing_destination_replacement = false;);
             EVENT(SetReopenLastProject, bool enabled;);
             EVENT(SetAutoSaveOnClose, bool enabled;);
@@ -211,6 +211,8 @@ namespace lfs::core {
                   size_t num_gaussians;
                   int checkpoint_iteration = 0;);
             EVENT(SceneCleared, bool from_history = false;);
+            EVENT(SceneReplacing, const Scene* scene;);
+            EVENT(CombinedModelBuildReady, const Scene* scene;);
             EVENT(ModelUpdated, int iteration; size_t num_gaussians;);
             EVENT(SceneChanged, uint32_t mutation_flags = 0;);
             EVENT(SelectionChanged, bool has_selection; int count;);
@@ -230,6 +232,8 @@ namespace lfs::core {
                   size_t num_points;);
             EVENT(ConfigLoadFailed, std::filesystem::path path; std::string error;);
             EVENT(FileDropFailed, std::vector<std::string> files; std::string error;);
+            EVENT(SplatBatchLoadFailed, std::vector<std::pair<std::filesystem::path, std::string>> failures; size_t loaded_count;);
+            EVENT(CombinedModelBuildFailed, std::string error; uint64_t generation;);
             EVENT(SplatFileLoadFailed, std::filesystem::path path; std::string error;);
 
             // Evaluation

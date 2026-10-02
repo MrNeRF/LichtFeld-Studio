@@ -203,7 +203,7 @@ namespace lfs::core {
           _cached_mask_invert(other._cached_mask_invert),
           _cached_mask_threshold(other._cached_mask_threshold),
           _cached_mask_binarize(other._cached_mask_binarize),
-          _cached_mask_undistort_prepared(other._cached_mask_undistort_prepared),
+          _cached_mask_was_undistorted(other._cached_mask_was_undistorted),
           _in_memory_mask_raw(std::move(other._in_memory_mask_raw)),
           _cached_depth(std::move(other._cached_depth)),
           _depth_loaded(other._depth_loaded),
@@ -214,7 +214,10 @@ namespace lfs::core {
           _undistort_prepared(other._undistort_prepared),
           _undistort_params(other._undistort_params),
           _stream(other._stream),
-          _sfm_observations(std::move(other._sfm_observations)) {
+          _sfm_observations(std::move(other._sfm_observations)),
+          _sfm_observation_source(std::move(other._sfm_observation_source)),
+          _sfm_observation_node(other._sfm_observation_node),
+          _sfm_observation_count(other._sfm_observation_count) {
         // Take ownership of the stream
         other._stream = nullptr;
         other._mask_loaded = false;
@@ -266,7 +269,7 @@ namespace lfs::core {
             _cached_mask_invert = other._cached_mask_invert;
             _cached_mask_threshold = other._cached_mask_threshold;
             _cached_mask_binarize = other._cached_mask_binarize;
-            _cached_mask_undistort_prepared = other._cached_mask_undistort_prepared;
+            _cached_mask_was_undistorted = other._cached_mask_was_undistorted;
             _in_memory_mask_raw = std::move(other._in_memory_mask_raw);
             _cached_depth = std::move(other._cached_depth);
             _depth_loaded = other._depth_loaded;
@@ -277,6 +280,9 @@ namespace lfs::core {
             _undistort_prepared = other._undistort_prepared;
             _undistort_params = other._undistort_params;
             _sfm_observations = std::move(other._sfm_observations);
+            _sfm_observation_source = std::move(other._sfm_observation_source);
+            _sfm_observation_node = other._sfm_observation_node;
+            _sfm_observation_count = other._sfm_observation_count;
 
             // Take ownership of the stream
             _stream = other._stream;
@@ -319,6 +325,12 @@ namespace lfs::core {
           _FoVy(other._FoVy) {
         _world_view_transform = transform;
         _sfm_observations = other._sfm_observations;
+        _sfm_observation_source = other._sfm_observation_source;
+        _sfm_observation_node = other._sfm_observation_node;
+        _sfm_observation_count = other._sfm_observation_count;
+        _undistort_precomputed = other._undistort_precomputed;
+        _undistort_prepared = other._undistort_prepared;
+        _undistort_params = other._undistort_params;
 
         // Non-blocking so image loading doesn't serialize with the legacy stream.
         // On failure fall back to the default stream rather than a bad handle.
@@ -402,8 +414,16 @@ namespace lfs::core {
     }
 
     void Camera::load_image_size(int resize_factor, int max_width) {
+        if (_undistort_prepared) {
+            const auto grid = compute_undistort_grid(_undistort_params, resize_factor, max_width);
+            _image_width = grid.width;
+            _image_height = grid.height;
+            _image_size_loaded = true;
+            return;
+        }
+
         int w, h;
-        if (_undistort_prepared || !_has_image) {
+        if (!_has_image) {
             w = _camera_width;
             h = _camera_height;
         } else {
@@ -458,6 +478,11 @@ namespace lfs::core {
         int w = std::get<0>(result);
         int h = std::get<1>(result);
         int c = std::get<2>(result);
+
+        if (_undistort_prepared) {
+            const auto grid = compute_undistort_grid(_undistort_params, resize_factor, max_width);
+            return static_cast<size_t>(grid.width) * grid.height * c * sizeof(uint8_t);
+        }
 
         if (resize_factor > 0) {
             w = w / resize_factor;
@@ -538,14 +563,14 @@ namespace lfs::core {
 
     Tensor Camera::load_and_get_mask(const int resize_factor, const int max_width,
                                      const bool invert_mask, const float mask_threshold,
-                                     const bool binarize) {
+                                     const bool binarize, const bool apply_undistortion) {
         if (_mask_loaded && _cached_mask.is_valid() &&
             _cached_mask_resize_factor == resize_factor &&
             _cached_mask_max_width == max_width &&
             _cached_mask_invert == invert_mask &&
             _cached_mask_threshold == mask_threshold &&
             _cached_mask_binarize == binarize &&
-            _cached_mask_undistort_prepared == _undistort_prepared) {
+            _cached_mask_was_undistorted == (_undistort_prepared && apply_undistortion)) {
             return _cached_mask;
         }
 
@@ -573,10 +598,11 @@ namespace lfs::core {
                 mask = mask.squeeze(2);
             }
         } else if (!_mask_path.empty() && std::filesystem::exists(_mask_path)) {
+            const bool warp_full_resolution = _undistort_prepared && apply_undistortion;
             const ImageLoadParams params{
                 .path = _mask_path,
-                .resize_factor = resize_factor,
-                .max_width = max_width,
+                .resize_factor = warp_full_resolution ? 1 : resize_factor,
+                .max_width = warp_full_resolution ? 0 : max_width,
                 .stream = _stream};
 
             mask = load_image_cached(params);
@@ -605,22 +631,27 @@ namespace lfs::core {
             mask = Tensor::full(mask.shape(), 1.0f, mask.device()) - mask;
         }
 
-        // Threshold before undistort; final binarization happens after geometric resampling.
-        if (binarize && mask_threshold > 0.0f && mask_threshold < 1.0f) {
+        if (binarize && !(_undistort_prepared && apply_undistortion) &&
+            mask_threshold > 0.0f && mask_threshold < 1.0f) {
             mask = mask.ge(mask_threshold).to(DataType::Float32);
         }
 
-        if (_undistort_prepared) {
-            const auto scaled = scale_undistort_params(
+        if (_undistort_prepared && apply_undistortion) {
+            const auto scaled = prepare_undistort_params(
                 _undistort_params,
                 static_cast<int>(mask.shape()[1]),
                 static_cast<int>(mask.shape()[0]),
+                resize_factor,
                 max_width);
-            mask = undistort_mask(mask, scaled, _stream);
+            mask = undistort_mask_area(mask, scaled, _stream);
         }
 
         if (binarize) {
-            mask = mask.ge(0.5f).to(DataType::UInt8).contiguous();
+            const float final_threshold = _undistort_prepared && apply_undistortion &&
+                                                  mask_threshold > 0.0f && mask_threshold < 1.0f
+                                              ? mask_threshold
+                                              : 0.5f;
+            mask = mask.ge(final_threshold).to(DataType::UInt8).contiguous();
         } else {
             // Keep Float32 [0,1] so undistorted samples match the pipelined
             // loader / fused-kernel domain (kMaskKeepMin). Rounding through
@@ -634,7 +665,7 @@ namespace lfs::core {
         _cached_mask_invert = invert_mask;
         _cached_mask_threshold = mask_threshold;
         _cached_mask_binarize = binarize;
-        _cached_mask_undistort_prepared = _undistort_prepared;
+        _cached_mask_was_undistorted = _undistort_prepared && apply_undistortion;
 
         LOG_DEBUG("Loaded mask for {}: [{},{}]", _image_name, mask.shape()[0], mask.shape()[1]);
 
@@ -694,17 +725,18 @@ namespace lfs::core {
             depth = depth.squeeze(2);
         }
 
-        if (!_image_size_loaded)
-            load_image_size(resize_factor, max_width);
-        depth = resize_depth_prior(depth.contiguous(), _image_height, _image_width, _stream);
-
         if (_undistort_prepared) {
-            const auto scaled = scale_undistort_params(
+            const auto scaled = prepare_undistort_params(
                 _undistort_params,
                 static_cast<int>(depth.shape()[1]),
                 static_cast<int>(depth.shape()[0]),
+                resize_factor,
                 max_width);
-            depth = undistort_mask(depth, scaled, _stream);
+            depth = undistort_depth_area(depth.contiguous(), scaled, _stream);
+        } else {
+            if (!_image_size_loaded)
+                load_image_size(resize_factor, max_width);
+            depth = resize_depth_prior(depth.contiguous(), _image_height, _image_width, _stream);
         }
 
         _cached_depth = depth.contiguous();
@@ -716,7 +748,8 @@ namespace lfs::core {
     }
 
     Tensor Camera::load_and_get_normal(const int resize_factor, const int max_width,
-                                       const NormalPriorDecode& decode) {
+                                       const NormalPriorDecode& decode,
+                                       const bool apply_undistortion) {
         if (_normal_loaded && _cached_normal.is_valid()) {
             return _cached_normal;
         }
@@ -810,18 +843,18 @@ namespace lfs::core {
             }
         }
 
-        if (!_image_size_loaded)
-            load_image_size(resize_factor, max_width);
-        normal = resize_normal_prior(normal.contiguous(), _image_height, _image_width, _stream);
-
-        if (_undistort_prepared) {
-            const auto scaled = scale_undistort_params(
+        if (_undistort_prepared && apply_undistortion) {
+            const auto scaled = prepare_undistort_params(
                 _undistort_params,
                 static_cast<int>(normal.shape()[2]),
                 static_cast<int>(normal.shape()[1]),
+                resize_factor,
                 max_width);
-            normal = undistort_image(normal, scaled, _stream);
-            normal = resize_normal_prior(normal.contiguous(), normal.shape()[1], normal.shape()[2], _stream);
+            normal = undistort_normal_area(normal.contiguous(), scaled, _stream);
+        } else {
+            if (!_image_size_loaded)
+                load_image_size(resize_factor, max_width);
+            normal = resize_normal_prior(normal.contiguous(), _image_height, _image_width, _stream);
         }
 
         _cached_normal = normal.contiguous();
@@ -902,6 +935,8 @@ namespace lfs::core {
         _T = Tensor::from_vector(T_new, {3}, Device::CPU);
         _world_view_transform = world_to_view(_R, _T);
         _cam_position = _cam_position + trans.to(Device::CUDA).contiguous();
+        if (_sfm_observation_source)
+            set_sfm_observations(sfm_observations());
         for (auto& observation : _sfm_observations) {
             observation.x += t_acc(0);
             observation.y += t_acc(1);

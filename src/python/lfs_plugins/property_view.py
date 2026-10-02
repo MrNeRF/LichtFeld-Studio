@@ -93,7 +93,7 @@ BOOL_PROPS = (
     "background_improvements",
 )
 
-SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space")
+SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space", "eval_space")
 MIGRATED_PROP_IDS = NUMBER_PROPS + BOOL_PROPS + SELECT_PROPS
 
 # These registered properties are intentionally represented by bespoke widgets or
@@ -217,6 +217,7 @@ BASIC_RUNS = (
 DATASET_RUNS = (
     _run("dataset_eval", "enable_eval", visibility_condition_id="has_dataset"),
     _run("dataset_eval_train", "eval_all", visibility_condition_id="dep_eval"),
+    _run("dataset_eval_space", "eval_space", visibility_condition_id="dep_undistort"),
 )
 
 OPTIMIZATION_RUNS = (

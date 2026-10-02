@@ -157,8 +157,8 @@ namespace lfs::training {
             bool invert_masks = false;
             float mask_threshold = 0.0f;
             bool undistort_prepared = false;
-            lfs::core::Tensor gt_image;
-            lfs::core::Tensor mask;
+            int eval_space = 0;
+            EvaluationViewInputs inputs;
             std::uint64_t last_used = 0;
         };
 
@@ -345,12 +345,13 @@ namespace lfs::training {
         [[nodiscard]] bool endExportableDensifyBarrier();
 
         void setOnIterationStart(std::function<void()> cb) { on_iteration_start_ = std::move(cb); }
+        void setOnPaused(std::function<void(int)> cb) { on_paused_ = std::move(cb); }
 
         lfs::core::Scene* getScene() const { return scene_; }
         std::shared_ptr<lfs::io::PipelinedImageLoader> getActiveImageLoader() const;
         GTLoadConfigSnapshot getGTLoadConfigSnapshot() const;
         std::expected<CameraMetricsSnapshot, std::string> computeCameraMetrics(
-            const lfs::core::Camera& camera,
+            lfs::core::Camera& camera,
             bool include_ssim,
             CameraMetricsAppearanceConfig appearance);
 
@@ -1058,6 +1059,7 @@ namespace lfs::training {
         std::vector<std::filesystem::path> python_scripts_;
 
         std::function<void()> on_iteration_start_;
+        std::function<void(int)> on_paused_;
         std::function<bool()> exportable_densify_barrier_begin_;
         std::function<bool()> exportable_densify_barrier_end_;
         int exportable_densify_barrier_depth_ = 0;

@@ -54,8 +54,10 @@
 struct SDL_Cursor;
 
 namespace lfs::vis {
+    class WindowInputDispatchTest;
     class VisualizerImpl;
     class WindowManager;
+    class VulkanImportErrorScope;
     class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
     class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
     class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -97,6 +99,10 @@ namespace lfs::vis {
 
         class LFS_VIS_API GuiManager {
         public:
+            void beginImportRenderCheck();
+            void endImportRenderCheck();
+            std::optional<std::string> pollImportRenderCheck(const core::Uuid& provisional_node);
+            void discardImportMesh(uint64_t mesh_id);
             GuiManager(VisualizerImpl* viewer);
             ~GuiManager();
 
@@ -118,6 +124,10 @@ namespace lfs::vis {
             // is requested immediately while decoded thumbnails remain ready.
             void notifyCameraThumbnailBatchReady();
             void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
+            void prepareInput();
+            RmlUIManager::InputDispatchResult dispatchInputEvent(const SDL_Event& event) {
+                return rmlui_manager_.dispatchInputEvent(event);
+            }
             void ensureCjkFontsLoaded() { rmlui_manager_.ensureCjkFontsLoaded(); }
 
             // Sub-manager access
@@ -239,6 +249,9 @@ namespace lfs::vis {
             void renderViewportDecorations();
 
         private:
+            std::string import_render_error_;
+            std::unique_ptr<VulkanImportErrorScope> import_error_capture_;
+            friend class lfs::vis::WindowInputDispatchTest;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
             friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;

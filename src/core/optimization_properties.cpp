@@ -807,6 +807,16 @@ namespace lfs::core::param {
                        "Train on every image and evaluate all of them; no image is held out")
             .locale("training_params.eval_all")
             .tooltip("training.tooltip.eval_all")
+            .all_strategies()
+            .enum_prop(&OptimizationParameters::eval_space,
+                       "eval_space", "Eval Space", d.eval_space,
+                       {{"Distorted", EvalSpace::Distorted, "training.options.eval_space.distorted", "distorted"},
+                        {"Undistorted", EvalSpace::Undistorted, "training.options.eval_space.undistorted", "undistorted"}},
+                       "Reference images for evaluation with --undistort: distorted = the original "
+                       "images, with the render warped into the original lens; undistorted = the "
+                       "undistorted training images")
+            .locale("training_params.eval_space")
+            .tooltip("training.tooltip.eval_space")
 
             // Random initialization
             .all_strategies()
@@ -878,7 +888,10 @@ namespace lfs::core::param {
             .all_strategies()
             .bool_prop(&OptimizationParameters::undistort,
                        "undistort", "Undistort", d.undistort,
-                       "Undistort images on-the-fly before training")
+                       "Remove lens distortion before training: each image and its mask, depth and "
+                       "normal map are resampled once from full resolution into a distortion-free "
+                       "pinhole camera, which training then uses. Alternative to --gut for distorted "
+                       "or non-pinhole cameras")
             .locale("training_params.undistort")
             .tooltip("training.tooltip.undistort")
             .flags(PROP_NEEDS_RESTART)

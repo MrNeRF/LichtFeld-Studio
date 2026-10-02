@@ -1670,6 +1670,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             if row.get("bound"):
                 message += "\n" + tr("projects.contents.keep_model")
             self._set_dialog("remove_content", {"row": row, "message": message})
+        elif action == "clean":
+            self.open_project_operation(None, None, ["clean"])
         elif action == "compact":
             self._set_dialog("compact_content", {"message": tr("projects.contents.confirm_compact")})
         elif action == "restore":
@@ -2927,6 +2929,34 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if action == "export_as":
             self._export_asset(asset)
             return
+        if action in {"clean", "compact_content"}:
+            asset = dict(asset)
+            if (self._contents_busy(asset_id) or
+                    action not in {item["action"] for item in operation_actions(self._asset_with_inspection(asset))}):
+                return
+            if action == "clean":
+                from .project_cleanup import open_project_cleanup
+
+                def run_closed(operation, complete, *, expected_commit_uuid):
+                    current = self._asset_dict(asset_id)
+                    if not current or str(current.get("path") or "") != str(asset["path"]):
+                        raise RuntimeError(tr("project_cleanup.changed"))
+                    if not self._start_project_operation(asset_id, tr("project_cleanup.title"), operation,
+                            operation_kind="clean", on_finished=complete,
+                            expected_commit_uuid=expected_commit_uuid):
+                        raise RuntimeError(tr("project_cleanup.changed"))
+
+                def refresh():
+                    self._inspection_by_asset.pop(asset_id, None)
+                    if self._inspection_pipeline is not None:
+                        self._inspection_pipeline.invalidate(asset_id)
+                    self.refresh_catalog(scan_folders=False)
+
+                open_project_cleanup(str(asset["path"]), run_closed, refresh)
+                return
+            self._dialog_asset_id = asset_id
+            self._set_dialog("compact_content", {"message": tr("projects.contents.confirm_compact")})
+            return
         self._dialog_asset_id = asset_id
         details = self._inspection_by_asset.get(asset_id, {}).get("details")
         if action == "update_thumbnail":
@@ -3218,13 +3248,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         operation_kind: str = "",
         reverify_asset: bool = False,
         closed_file: bool = True,
-    ) -> None:
+        on_finished: Optional[Callable[[Optional[Exception]], None]] = None,
+        expected_commit_uuid: Optional[str] = None,
+    ) -> bool:
         if self._contents_busy(asset_id):
-            return
+            return False
         asset = dict(self._asset_dict(asset_id) or {})
         if not asset.get("path"):
             self._set_catalog_notice(tr("projects.status.locate_id_mismatch"))
-            return
+            return False
         project_name = self._get_asset_display_name(asset)
         asset["operation_path"] = str(Path(asset["path"]).resolve())
         inspected = self._inspection_by_asset.get(asset_id, {})
@@ -3235,11 +3267,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._set_catalog_notice(
                     self._inspection_errors.get(asset_id) or tr("projects.status.unreadable")
                 )
-                return
+                return False
             asset["id"] = native_project_id
             asset["commit_uuid"] = str(card.commit_uuid)
         elif card is not None and native_project_id == asset_id:
             asset["commit_uuid"] = str(card.commit_uuid)
+        if expected_commit_uuid is not None:
+            # Previewed operations must guard the snapshot the user confirmed,
+            # rather than an older catalog scan or a newer unconfirmed save.
+            asset["commit_uuid"] = str(expected_commit_uuid)
         operation_id = "project-" + str(uuid.uuid4())
         cancel = threading.Event()
         metadata = dict(project_name=project_name, operation_kind=operation_kind,
@@ -3287,9 +3323,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._contents_feedback[asset_id] = dict(row_id=(content_row or {}).get("id", ""), status="failed", reason=str(exc))
                 if content_row is None:
                     self._set_catalog_notice(str(exc))
+                error = exc
             finally:
                 self._request_model_update()
                 self._dirty_selection()
+                if on_finished is not None:
+                    on_finished(error)
 
         def worker() -> None:
             facts = None
@@ -3325,6 +3364,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             threading.Thread(target=worker, daemon=True, name="ProjectsOperation").start()
         except Exception as exc:
             complete(error=exc)
+        return True
 
     def native_file_drop(self, path: str) -> bool:
         """Register a native .licht drop when Projects owns the drop target."""
@@ -3421,10 +3461,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     "rename": "projects.action.rename",
                     "update_thumbnail": "projects.action.update_thumbnail",
                     "inspector": "projects.inspector.title",
+                    "clean": "project_cleanup.title",
+                    "compact_content": "projects.contents.compact",
                 }
                 operations = operation_actions(asset)
                 available = {str(operation.get("action") or "") for operation in operations}
-                for action in ("rename", "update_thumbnail", "inspector"):
+                for action in ("rename", "update_thumbnail", "inspector", "clean", "compact_content"):
                     if action in available:
                         items.append({
                             "label": tr(labels[action]),
@@ -3471,6 +3513,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 "action": "project:update_thumbnail",
             })
         items.append({"label": tr("projects.inspector.title"), "action": "inspector"})
+        if has_project_operations:
+            for action, label in (("clean", "project_cleanup.title"), ("compact_content", "projects.contents.compact")):
+                if action in operation_ids:
+                    items.append({"label": tr(label), "action": "project:" + action})
 
         items.extend(
             [

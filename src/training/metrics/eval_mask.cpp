@@ -19,16 +19,20 @@ namespace lfs::training {
             return mode == lfs::core::param::MaskMode::SegmentAndIgnore;
         }
 
-        [[nodiscard]] lfs::core::Tensor finalize_binary_metrics_mask(lfs::core::Tensor mask) {
-            return mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
+        [[nodiscard]] lfs::core::Tensor finalize_binary_metrics_mask(
+            lfs::core::Tensor mask, const float threshold = 0.5f) {
+            return mask.ge(threshold).to(lfs::core::DataType::UInt8).contiguous();
         }
 
         [[nodiscard]] std::expected<LoadedMetricsMask, std::string> load_rgba_metrics_inputs(
             const lfs::core::Camera& camera,
             const MetricsMaskLoadConfig& config) {
             try {
+                const bool undistort = camera.is_undistort_prepared() && config.apply_undistortion;
                 auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
-                    camera.image_path(), config.resize_factor, config.max_width);
+                    camera.image_path(),
+                    undistort ? 1 : config.resize_factor,
+                    undistort ? 0 : config.max_width);
 
                 if (!img_data || channels != 4) {
                     if (img_data) {
@@ -62,20 +66,20 @@ namespace lfs::training {
                 if (config.invert_masks) {
                     lfs::io::cuda::launch_mask_invert(mask.ptr<float>(), H, W, nullptr);
                 }
-                // SegmentAndIgnore must keep authored bands through undistort.
-                // Binary modes still snap before the warp, then re-binarize after.
-                if (!sai && config.mask_threshold > 0.0f) {
+                if (!sai && !undistort && config.mask_threshold > 0.0f) {
                     lfs::io::cuda::launch_mask_threshold(
                         mask.ptr<float>(), H, W, config.mask_threshold, nullptr);
                 }
 
-                if (camera.is_undistort_prepared()) {
-                    const auto scaled = lfs::core::scale_undistort_params(
+                if (undistort) {
+                    const auto scaled = lfs::core::prepare_undistort_params(
                         camera.undistort_params(),
                         static_cast<int>(W), static_cast<int>(H),
+                        config.resize_factor,
                         config.max_width);
                     auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
-                    rgb_float = lfs::core::undistort_image(rgb_float, scaled, nullptr);
+                    rgb_float = lfs::core::undistort_image(
+                        rgb_float, scaled, nullptr);
                     auto rgb_uint8 = lfs::core::Tensor::empty(
                         rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
                     lfs::io::cuda::launch_float32_chw_to_uint8_chw(
@@ -86,13 +90,16 @@ namespace lfs::training {
                         rgb_float.shape()[0],
                         nullptr);
                     rgb = std::move(rgb_uint8);
-                    mask = lfs::core::undistort_mask(mask, scaled, nullptr);
+                    mask = lfs::core::undistort_mask_area(mask, scaled, nullptr);
                 }
 
                 if (sai) {
                     mask = classify_keep_mask_for_metrics(mask);
                 } else {
-                    mask = finalize_binary_metrics_mask(std::move(mask));
+                    const float threshold = undistort && config.mask_threshold > 0.0f
+                                                ? config.mask_threshold
+                                                : 0.5f;
+                    mask = finalize_binary_metrics_mask(std::move(mask), threshold);
                 }
                 return LoadedMetricsMask{.gt_image = std::move(rgb), .mask = std::move(mask)};
             } catch (const std::exception& e) {
@@ -109,7 +116,8 @@ namespace lfs::training {
                 config.max_width,
                 config.invert_masks,
                 config.mask_threshold,
-                !sai);
+                !sai,
+                config.apply_undistortion);
             if (!mask.is_valid()) {
                 return {};
             }
@@ -152,7 +160,8 @@ namespace lfs::training {
         if (!loaded) {
             return {};
         }
-        gt_image = std::move(loaded->gt_image);
+        if (config.replace_gt_image)
+            gt_image = std::move(loaded->gt_image);
         return std::move(loaded->mask);
     }
 

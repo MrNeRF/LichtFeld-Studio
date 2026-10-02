@@ -24,6 +24,7 @@
   "enable_sparsity": false,
   "erank_reg": 0.0,
   "eval_all": false,
+  "eval_space": "distorted",
   "eval_steps": [
     7000,
     30000
@@ -41,6 +42,8 @@
   "gut": false,
   "hard_clip_stop_iter": 0,
   "headless": false,
+  "image_count_scaler": 1.0,
+  "image_count_scaler_total": 1.0,
   "init_extent": 3.0,
   "init_num_pts": 100000,
   "init_opacity": 0.10000000149011612,

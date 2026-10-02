@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <chrono>
 #include <deque>
 
@@ -36,8 +38,8 @@ namespace lfs::vis {
         }
 
     private:
-        void updateFPSStats();
-        void cleanupOldFrames(); // Remove old frames based on time and size limits
+        LFS_VIS_API void updateFPSStats();
+        LFS_VIS_API void cleanupOldFrames(); // Remove old frames based on time and size limits
 
         FramerateSettings settings_;
 

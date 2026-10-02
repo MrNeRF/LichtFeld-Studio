@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_mesh_pass.hpp"
+#include <algorithm>
 
 #include "core/logger.hpp"
 #include "core/material.hpp"
@@ -2674,6 +2675,18 @@ namespace lfs::vis {
         if (!impl_)
             return;
         impl_->prepare(params);
+    }
+
+    void VulkanMeshPass::discardImport(uint64_t mesh_id) {
+        if (!impl_)
+            return;
+        const auto it = impl_->mesh_cache.find(mesh_id);
+        if (it == impl_->mesh_cache.end())
+            return;
+        if (!impl_->context->waitForSubmittedFrames())
+            throw std::runtime_error("Could not retire failed mesh import");
+        impl_->destroyMesh(it->second);
+        impl_->mesh_cache.erase(it);
     }
 
     void VulkanMeshPass::record(VkCommandBuffer command_buffer, VkRect2D viewport_rect,

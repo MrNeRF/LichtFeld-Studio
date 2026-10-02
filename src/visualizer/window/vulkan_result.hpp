@@ -38,27 +38,42 @@ namespace lfs::vis {
         }
     }
 
+    // Capture bool-returning allocation failures without interrupting their
+    // cleanup paths. Queued-attachment validation consumes the captured error.
+    class VulkanImportErrorScope {
+        inline static thread_local std::string* current_ = nullptr;
+        std::string* previous_;
+
+    public:
+        explicit VulkanImportErrorScope(std::string& error) : previous_(current_) { current_ = &error; }
+        ~VulkanImportErrorScope() {
+            if (previous_ && previous_->empty() && current_)
+                *previous_ = *current_;
+            current_ = previous_;
+        }
+        static void record(const std::string& error) {
+            if (current_ && current_->empty())
+                *current_ = error;
+        }
+    };
+
     [[nodiscard]] inline std::string formatVkCheckFailure(
         const std::string_view expression,
         const VkResult result,
         const std::string_view context,
         const std::string_view file,
         const int line) {
+        std::string message;
         if (context.empty()) {
-            return std::format("{} failed: {} ({}) ({}:{})",
-                               expression,
-                               vkResultToString(result),
-                               static_cast<int>(result),
-                               file,
-                               line);
+            message = std::format("{} failed: {} ({}) ({}:{})",
+                                  expression, vkResultToString(result), static_cast<int>(result), file, line);
+        } else {
+            message = std::format("{} failed: {} ({}) — {} ({}:{})",
+                                  expression, vkResultToString(result), static_cast<int>(result), context, file, line);
         }
-        return std::format("{} failed: {} ({}) — {} ({}:{})",
-                           expression,
-                           vkResultToString(result),
-                           static_cast<int>(result),
-                           context,
-                           file,
-                           line);
+        // Some allocation paths log this diagnostic directly and return false.
+        VulkanImportErrorScope::record(message);
+        return message;
     }
 
     [[nodiscard]] inline std::string formatVkCheckFailure(
@@ -71,6 +86,7 @@ namespace lfs::vis {
     }
 
     [[nodiscard]] inline bool logVkFailure(std::string message) {
+        VulkanImportErrorScope::record(message);
         LOG_ERROR("Vulkan: {}", message);
         return false;
     }

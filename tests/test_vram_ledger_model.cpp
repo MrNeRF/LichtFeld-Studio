@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "diagnostics/vram_ledger_model.hpp"
+#include "diagnostics/vram_owner_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
 #include <gtest/gtest.h>
@@ -662,4 +663,62 @@ TEST(VramLedger, IncompleteNamedVmaCoverageYieldsGap) {
         EXPECT_EQ(full_f->attributed_bytes, full_f->measured_bytes);
         EXPECT_EQ(full_f->closure, LedgerClosureState::Closed);
     }
+}
+
+TEST(VramLedger, SharedSplatImportDoesNotAllocateAgain) {
+    VramProfilerSnapshot snap;
+    snap.process.process_memory_valid = true;
+    snap.process.process_used = 700;
+    snap.process.exportable_splat_bytes = 600;
+    snap.rows.push_back(make_row("vulkan.external_tensor.alias", "exportable_splat_block@1", 600,
+                                 VramRowKind::Sampled));
+    // A standalone external tensor has its own backing and must remain counted.
+    snap.rows.push_back(make_row("vulkan.external_tensor.buffer", "output@2", 100,
+                                 VramRowKind::Sampled));
+    EXPECT_EQ(buildLiveLedger(snap).attributed_bytes, 700u);
+    const auto owners = buildVramOwnerBreakdown(snap);
+    EXPECT_EQ(owners.signed_residual_bytes, 0);
+}
+
+TEST(VramLedger, SharedArenaIsDetectedByDefaultPolicy) {
+    VramProfilerSnapshot snap;
+    snap.process.process_memory_valid = true;
+    snap.process.process_used = 800;
+    snap.process.shared_scratch_bytes = 800;
+    snap.accounted_arena_live_bytes = 800;
+    snap.rows.push_back(make_row("shared.scratch", "cuda_vulkan_arena@1", 800,
+                                 VramRowKind::Sampled));
+    EXPECT_EQ(buildLiveLedger(snap).attributed_bytes, 800u);
+    // Scratch without an installed shared arena must not hide a separate arena.
+    snap.rows.clear();
+    EXPECT_EQ(buildLiveLedger(snap).attributed_bytes, 1600u);
+}
+
+TEST(VramLedger, DecoderPoolIsNotDirectMemoryAndHostMemoryIsExcluded) {
+    VramProfilerSnapshot snap;
+    snap.process.process_memory_valid = true;
+    snap.process.process_used = 1200;
+    snap.process.cuda_pool_valid = true;
+    snap.process.cuda_pool_reserved = 1000;
+    snap.process.cuda_pool_used = 700;
+    snap.process.pinned_host_used = 5000;
+    snap.process.pinned_host_cached = 3000;
+    snap.rows.push_back(make_row("io.nvimagecodec", "default_pool", 400,
+                                 VramRowKind::Static, VramAllocationMethod::Async));
+    snap.rows.push_back(make_row("io.nvimagecodec", "driver_or_direct", 200,
+                                 VramRowKind::Static, VramAllocationMethod::External));
+    EXPECT_EQ(buildLiveLedger(snap).attributed_bytes, 1200u);
+}
+
+TEST(VramLedger, DirectTensorStorageAndPrivateArenaArePhysicalReservations) {
+    VramProfilerSnapshot snap;
+    snap.process.process_memory_valid = true;
+    snap.process.process_used = 900;
+    snap.accounted_direct_live_bytes = 100;
+    snap.gauges.push_back({"vram.audit.tensor.cuda_direct_live_bytes", 500});
+    snap.rows.push_back(make_row("optimizer.adam", "means.exp_avg", 500,
+                                 VramRowKind::Sampled, VramAllocationMethod::Direct));
+    snap.rows.push_back(make_row("rasterizer.fastgs", "arena.capacity", 300,
+                                 VramRowKind::Sampled));
+    EXPECT_EQ(buildLiveLedger(snap).attributed_bytes, 900u);
 }

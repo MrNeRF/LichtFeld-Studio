@@ -265,6 +265,7 @@ namespace lfs::app {
             checkpoint_params.optimization.perf_bench = params.optimization.perf_bench;
             checkpoint_params.optimization.perf_bench_warmup = params.optimization.perf_bench_warmup;
             checkpoint_params.cli_iterations_set = params.cli_iterations_set;
+            checkpoint_params.cli_step_values_set = params.cli_step_values_set;
             checkpoint_params.no_download = params.no_download;
             checkpoint_params.cli_bg_color_set = params.cli_bg_color_set;
             if (params.cli_iterations_set)
@@ -514,6 +515,8 @@ namespace lfs::app {
                 cli_params.save_project_path;
             checkpoint_params.cli_iterations_set =
                 cli_params.cli_iterations_set;
+            checkpoint_params.cli_step_values_set =
+                cli_params.cli_step_values_set;
             checkpoint_params.cli_bg_color_set =
                 cli_params.cli_bg_color_set;
             checkpoint_params.overrides = cli_params.overrides;

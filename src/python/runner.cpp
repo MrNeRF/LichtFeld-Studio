@@ -2116,19 +2116,38 @@ def _lfs_format_code(code):
     // Frame callback for animations
     static std::function<void(float)> g_frame_callback;
     static std::mutex g_frame_mutex;
+    static std::chrono::steady_clock::time_point g_frame_callback_deadline{};
+    static bool g_frame_callback_warn_on_expiry = false;
+    static bool g_frame_callback_deprecation_logged = false;
 
-    void set_frame_callback(std::function<void(float)> callback) {
+    void set_frame_callback(std::function<void(float)> callback, const std::optional<double> duration_s) {
         std::lock_guard lock(g_frame_mutex);
         g_frame_callback = std::move(callback);
+        g_frame_callback_warn_on_expiry = !duration_s.has_value();
+        const auto duration = std::chrono::duration<double>(duration_s.value_or(10.0));
+        g_frame_callback_deadline = std::chrono::steady_clock::now() +
+                                    std::chrono::duration_cast<std::chrono::steady_clock::duration>(duration);
     }
 
     void clear_frame_callback() {
         std::lock_guard lock(g_frame_mutex);
         g_frame_callback = nullptr;
+        g_frame_callback_deadline = {};
+        g_frame_callback_warn_on_expiry = false;
     }
 
     bool has_frame_callback() {
         std::lock_guard lock(g_frame_mutex);
+        if (g_frame_callback && g_frame_callback_deadline != std::chrono::steady_clock::time_point{} &&
+            std::chrono::steady_clock::now() >= g_frame_callback_deadline) {
+            g_frame_callback = nullptr;
+            g_frame_callback_deadline = {};
+            if (g_frame_callback_warn_on_expiry && !g_frame_callback_deprecation_logged) {
+                g_frame_callback_deprecation_logged = true;
+                LOG_WARN("Python frame callback expired after 10 seconds; pass duration_s to set_frame_callback");
+            }
+            g_frame_callback_warn_on_expiry = false;
+        }
         return g_frame_callback != nullptr;
     }
 

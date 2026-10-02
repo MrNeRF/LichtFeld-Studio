@@ -831,7 +831,7 @@ namespace lfs::vis {
     std::expected<lfs::io::LoadResult, std::string> SceneManager::stageSplatFile(
         const std::filesystem::path& path,
         lfs::io::ProgressCallback progress,
-        lfs::io::CancelCallback cancel_requested, const bool preserve_raw) {
+        lfs::io::CancelCallback cancel_requested, const bool preserve_raw, std::string* user_error) {
         LOG_TIMER("SceneManager::stageSplatFile");
 
         try {
@@ -855,6 +855,10 @@ namespace lfs::vis {
             auto load_result = loader->load(path, options);
             if (!load_result) {
                 LOG_ERROR("Failed to load splat file: {}", load_result.error().format());
+                if (user_error)
+                    *user_error = load_result.error().message.empty()
+                                      ? std::string(lfs::io::error_code_to_string(load_result.error().code))
+                                      : load_result.error().message;
                 return std::unexpected(load_result.error().format());
             }
             return std::move(*load_result);
@@ -872,7 +876,7 @@ namespace lfs::vis {
                                                     const bool is_visible,
                                                     lfs::io::LoadResult load_result,
                                                     const bool replace_scene,
-                                                    const bool defer_import_license) {
+                                                    const bool defer_import_license, core::Uuid* imported_uuid, uint32_t* import_selection_generation, const bool internal_import) {
         LOG_TIMER("SceneManager::attachLoadedSplatFile");
         (void)is_visible;
 
@@ -888,7 +892,7 @@ namespace lfs::vis {
                 }
             }
             quantizeViewerLoadedPlyShN(path, load_result);
-            if (replace_scene && !clear()) {
+            if (replace_scene && !clear(internal_import)) {
                 throw std::runtime_error(LOC("file_drop.blocked_during_training"));
             }
             scene_.setCombinedModelAllocator(splat_allocator);
@@ -919,7 +923,7 @@ namespace lfs::vis {
             if (mesh_data && *mesh_data) {
                 LOG_INFO("Adding mesh '{}' ({} vertices, {} faces)", name,
                          (*mesh_data)->vertex_count(), (*mesh_data)->face_count());
-                const core::NodeId node_id = scene_.addMesh(name, *mesh_data, core::NULL_NODE);
+                const core::NodeId node_id = scene_.addMesh(name, *mesh_data, core::NULL_NODE, imported_uuid);
                 if (node_id == core::NULL_NODE) {
                     throw std::runtime_error("Failed to add mesh node '" + name + "'");
                 }
@@ -954,7 +958,7 @@ namespace lfs::vis {
                     .node_type = static_cast<int>(core::NodeType::MESH)}
                     .emit();
 
-                selectNode(node_id);
+                selectNode(node_id, import_selection_generation);
 
                 attached_name = added_name;
             } else {
@@ -969,7 +973,7 @@ namespace lfs::vis {
 
                 const core::NodeId node_id = scene_.addSplat(
                     name,
-                    std::make_unique<lfs::core::SplatData>(std::move(**splat_data)));
+                    std::make_unique<lfs::core::SplatData>(std::move(**splat_data)), core::NULL_NODE, imported_uuid);
                 if (node_id == core::NULL_NODE) {
                     throw std::runtime_error("Failed to add splat node '" + name + "'");
                 }
@@ -1045,7 +1049,7 @@ namespace lfs::vis {
                     updateCropBoxToFitScene(true);
                 }
 
-                selectNode(node_id);
+                selectNode(node_id, import_selection_generation);
 
                 // Check for companion PPISP file
                 auto ppisp_path = lfs::training::find_ppisp_companion(path);
@@ -1139,7 +1143,7 @@ namespace lfs::vis {
                                                     const bool is_visible,
                                                     lfs::io::LoadResult load_result,
                                                     const bool preserve_raw, const core::NodeId parent,
-                                                    const bool defer_import_license) {
+                                                    const bool defer_import_license, core::Uuid* imported_uuid, uint32_t* import_selection_generation) {
         LOG_TIMER_TRACE("SceneManager::attachLoadedSplatNode");
 
         try {
@@ -1165,7 +1169,7 @@ namespace lfs::vis {
 
             auto* mesh_data = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&load_result.data);
             if (mesh_data && *mesh_data) {
-                const core::NodeId node_id = scene_.addMesh(name, *mesh_data, core::NULL_NODE);
+                const core::NodeId node_id = scene_.addMesh(name, *mesh_data, core::NULL_NODE, imported_uuid);
                 if (node_id == core::NULL_NODE) {
                     throw std::runtime_error("Failed to add mesh node '" + name + "'");
                 }
@@ -1190,7 +1194,7 @@ namespace lfs::vis {
                     .emit();
 
                 if (is_visible)
-                    selectNode(node_id);
+                    selectNode(node_id, import_selection_generation);
 
                 LOG_DEBUG("Added mesh '{}' ({} vertices, {} faces)", added_name,
                           (*mesh_data)->vertex_count(), (*mesh_data)->face_count());
@@ -1205,7 +1209,7 @@ namespace lfs::vis {
             const size_t gaussian_count = (*splat_data)->size();
             const core::NodeId node_id = scene_.addSplat(
                 name,
-                std::make_unique<lfs::core::SplatData>(std::move(**splat_data)), parent);
+                std::make_unique<lfs::core::SplatData>(std::move(**splat_data)), parent, imported_uuid);
             if (node_id == core::NULL_NODE) {
                 throw std::runtime_error("Failed to add splat node '" + name + "'");
             }
@@ -1251,7 +1255,7 @@ namespace lfs::vis {
                 .emit();
 
             if (is_visible)
-                selectNode(node_id);
+                selectNode(node_id, import_selection_generation);
 
             auto ppisp_path = preserve_raw ? std::filesystem::path{} : lfs::training::find_ppisp_companion(path);
             if (!ppisp_path.empty()) {
@@ -1359,7 +1363,7 @@ namespace lfs::vis {
                         if (installed) {
                             scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                             if (auto* rendering = services().renderingOrNull()) {
-                                rendering->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
+                                rendering->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
                             }
                         }
                     } catch (const std::exception& e) {
@@ -1423,7 +1427,7 @@ namespace lfs::vis {
         }
     }
 
-    bool SceneManager::resetToEmptyState(const bool trainer_already_cleared) {
+    bool SceneManager::resetToEmptyState(const bool trainer_already_cleared, const bool internal_import) {
         if (!trainer_already_cleared) {
             if (auto* trainer = services().trainerOrNull()) {
                 if (!trainer->clearTrainer()) {
@@ -1438,6 +1442,8 @@ namespace lfs::vis {
             op::operators().cancelModalOperator();
         }
 
+        if (!internal_import)
+            state::SceneReplacing{.scene = &scene_}.emit();
         selection_.clearNodeSelection();
         selection_.invalidateNodeMask();
         clearAppearanceModel();
@@ -1447,7 +1453,7 @@ namespace lfs::vis {
         // copy from freed memory and the device faults asynchronously.
         drainGpuForTensorRelease();
         clearMeshCpuCache();
-        scene_.clear();
+        scene_.clear(true);
         python::set_application_scene(&scene_);
 
         if (lfs::io::CacheLoader::hasInstance()) {
@@ -1549,7 +1555,7 @@ namespace lfs::vis {
     std::expected<void, std::string> SceneManager::removeNodeImpl(const core::NodeId id,
                                                                   const bool keep_children,
                                                                   const HistoryMode history_mode,
-                                                                  const TrainingRemovalImpact training_removal_impact) {
+                                                                  const TrainingRemovalImpact training_removal_impact, const bool internal_import) {
         assert(id != core::NULL_NODE);
 
         const auto* node_to_remove = scene_.getNodeById(id);
@@ -1703,7 +1709,7 @@ namespace lfs::vis {
         }
 
         if (scene_.getNodeCount() == 0) {
-            if (!resetToEmptyState(trainer_cleared)) {
+            if (!resetToEmptyState(trainer_cleared, internal_import)) {
                 return std::unexpected("Cannot finish scene reset while the training worker is still stopping");
             }
         }
@@ -1877,6 +1883,19 @@ namespace lfs::vis {
         syncCropBoxToRenderSettings();
     }
 
+    bool SceneManager::discardFailedImport(const core::Uuid& uuid) {
+        const auto* node = scene_.getNodeByUuid(uuid);
+        if (!node)
+            return true; // Already removed from this scene.
+        if (const auto result = removeNodeImpl(node->id, false, HistoryMode::Skip, classifyTrainingRemovalImpact(node->id), true); !result) {
+            LOG_ERROR("Could not discard failed import: {}", result.error());
+            return false;
+        }
+        scene_.discardUnconsolidatedModelCache();
+        core::Tensor::trim_memory_pool();
+        return scene_.getNodeByUuid(uuid) == nullptr;
+    }
+
     void SceneManager::removeNode(const core::NodeId id, const bool keep_children) {
         if (id == core::NULL_NODE) {
             return;
@@ -1900,7 +1919,7 @@ namespace lfs::vis {
         selectNode(id);
     }
 
-    void SceneManager::selectNode(const core::NodeId id) {
+    void SceneManager::selectNode(const core::NodeId id, uint32_t* import_selection_generation) {
         const auto* node = scene_.getNodeById(id);
         if (!node)
             return;
@@ -1908,6 +1927,8 @@ namespace lfs::vis {
             return;
 
         selection_.selectNode(id);
+        if (import_selection_generation)
+            *import_selection_generation = selection_.generation();
 
         syncCropToolRenderSettings(node);
         python::invalidate_poll_caches(1);
@@ -1989,7 +2010,7 @@ namespace lfs::vis {
         selection_.clearNodeSelection();
         python::invalidate_poll_caches(1);
         if (auto* rm = services().renderingOrNull())
-            rm->markDirty(DirtyFlag::SELECTION);
+            rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         LOG_TRACE("Cleared node selection");
     }
 
@@ -2821,7 +2842,7 @@ namespace lfs::vis {
     void SceneManager::syncCropBoxToRenderSettings() {
         // Scene graph is single source of truth - just trigger re-render
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         }
     }
 
@@ -3337,7 +3358,7 @@ namespace lfs::vis {
         }
     }
 
-    bool SceneManager::clear() {
+    bool SceneManager::clear(const bool internal_import) {
         LOG_DEBUG("Clearing scene");
 
         // Check if clearing is allowed via state machine
@@ -3349,7 +3370,7 @@ namespace lfs::vis {
             }
         }
         op::undoHistory().clear();
-        return resetToEmptyState(false);
+        return resetToEmptyState(false, internal_import);
     }
 
     void SceneManager::switchToEditMode() {
@@ -3860,7 +3881,7 @@ namespace lfs::vis {
             if (!pointcloud_node_names.empty()) {
                 scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                 if (services().renderingOrNull()) {
-                    services().renderingOrNull()->markDirty(DirtyFlag::SPLATS);
+                    services().renderingOrNull()->markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
                 }
             }
             return;
@@ -4018,7 +4039,7 @@ namespace lfs::vis {
             if (!pointcloud_node_names.empty()) {
                 scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                 if (services().renderingOrNull()) {
-                    services().renderingOrNull()->markDirty(DirtyFlag::SPLATS);
+                    services().renderingOrNull()->markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
                 }
             }
             return;
@@ -4077,7 +4098,7 @@ namespace lfs::vis {
     size_t SceneManager::applyDeleted() {
         const size_t removed = scene_.applyDeleted();
         if (removed > 0 && services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
+            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         }
         return removed;
     }
@@ -5995,7 +6016,7 @@ namespace lfs::vis {
         if (auto* rm = services().renderingOrNull()) {
             rm->clearCursorPreviewState();
             rm->clearPreviewSelection();
-            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION, lfs::vis::FrameReason::SceneChange);
         }
 
         return {};
@@ -6111,7 +6132,7 @@ namespace lfs::vis {
         op::pushSceneSnapshotIfChanged(std::move(entry));
 
         if (auto* rm = services().renderingOrNull())
-            rm->markDirty(DirtyFlag::SELECTION);
+            rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
 
     void SceneManager::deselectAllGaussians() {
@@ -6128,7 +6149,7 @@ namespace lfs::vis {
         op::pushSceneSnapshotIfChanged(std::move(entry));
 
         if (auto* rm = services().renderingOrNull())
-            rm->markDirty(DirtyFlag::SELECTION);
+            rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
 
     void SceneManager::selectAllGaussians() {
@@ -6203,7 +6224,7 @@ namespace lfs::vis {
         }
 
         if (rendering_manager)
-            rendering_manager->markDirty(DirtyFlag::SELECTION);
+            rendering_manager->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
 
     void SceneManager::copySelectionToClipboard() {
@@ -6244,7 +6265,7 @@ namespace lfs::vis {
             addToSelection(name);
 
         if (auto* rm = services().renderingOrNull())
-            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION, lfs::vis::FrameReason::SceneChange);
     }
 
     SelectionResult SceneManager::selectBrush(float x, float y, float radius, const std::string& mode, const int camera_index) {
@@ -6343,7 +6364,7 @@ namespace lfs::vis {
         if (selection_preview_before_) {
             scene_.restoreSelectionState(*selection_preview_before_);
             if (auto* rm = services().renderingOrNull())
-                rm->markDirty(DirtyFlag::SELECTION);
+                rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         }
         selection_preview_snapshot_.reset();
         selection_preview_before_.reset();

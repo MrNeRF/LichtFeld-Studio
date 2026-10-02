@@ -122,7 +122,18 @@ namespace lfs::training {
         float loss;
     };
 
-    LFS_BRIDGE_API core::Tensor expand_row_mask(const core::Tensor& row_mask, const core::TensorShape& target_shape);
+    // Stateless helper shared by training consumers; no DLL-owned state.
+    inline core::Tensor expand_row_mask(const core::Tensor& row_mask, const core::TensorShape& target_shape) {
+        if (row_mask.shape().rank() == 0 || target_shape.rank() == 0) {
+            return row_mask;
+        }
+        if (row_mask.shape().rank() == 1 && target_shape.rank() > 1) {
+            std::vector<size_t> dims(target_shape.rank(), 1);
+            dims[0] = row_mask.shape()[0];
+            return row_mask.reshape(core::TensorShape{dims}).expand(target_shape);
+        }
+        return row_mask;
+    }
 
     class CommandCenter {
     public:

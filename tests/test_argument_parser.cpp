@@ -1716,6 +1716,165 @@ TEST(ArgumentParserTest, EvalStepsAcceptCommaListsAndRepeats) {
     EXPECT_EQ((*parsed)->optimization.eval_steps, (std::vector<size_t>{1000, 7000, 30000}));
 }
 
+// Catches a parser that accepts only one spelling or fails to store the selected enum value.
+TEST(ArgumentParserTest, EvalSpaceAcceptsBothRegisteredValues) {
+    const auto data_path = make_test_path("lfs_arg_parser_eval_space_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_space_output");
+    const std::vector<std::pair<const char*, lfs::core::param::EvalSpace>> cases = {
+        {"distorted", lfs::core::param::EvalSpace::Distorted},
+        {"undistorted", lfs::core::param::EvalSpace::Undistorted},
+    };
+
+    for (const auto& [value, expected] : cases) {
+        const char* argv[] = {
+            "LichtFeld-Studio",
+            "-d",
+            data_path.c_str(),
+            "-o",
+            output_path.c_str(),
+            "--undistort",
+            "--eval-space",
+            value,
+        };
+        auto parsed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(argv)), argv);
+        ASSERT_TRUE(parsed.has_value()) << value << ": " << parsed.error();
+        EXPECT_EQ((*parsed)->optimization.eval_space, expected) << value;
+        EXPECT_TRUE((*parsed)->overrides.has_optimization_key("eval_space")) << value;
+    }
+}
+
+// Catches an unvalidated CLI map or JSON enum that silently falls back to distorted evaluation.
+TEST(ArgumentParserTest, EvalSpaceRejectsInvalidCliAndConfigValues) {
+    const auto data_path = make_test_path("lfs_arg_parser_bad_eval_space_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bad_eval_space_output");
+
+    const char* cli_argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--undistort",
+        "--eval-space",
+        "source",
+    };
+    auto from_cli = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(cli_argv)), cli_argv);
+    ASSERT_FALSE(from_cli.has_value());
+    EXPECT_NE(from_cli.error().find("eval_space"), std::string::npos) << from_cli.error();
+
+    const auto config_path =
+        std::filesystem::path(make_test_path("lfs_arg_parser_bad_eval_space_config")) /
+        "config.json";
+    auto optimization = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+    optimization["undistort"] = true;
+    optimization["eval_space"] = "source";
+    std::ofstream(config_path) << nlohmann::json{{"optimization", optimization}}.dump();
+    const auto config_text = config_path.string();
+    const char* config_argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--config",
+        config_text.c_str(),
+    };
+    auto from_config = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(config_argv)), config_argv);
+    ASSERT_FALSE(from_config.has_value());
+    EXPECT_NE(from_config.error().find("eval_space"), std::string::npos)
+        << from_config.error();
+}
+
+// Catches an explicit CLI selection being accepted when there is no undistorted render space.
+TEST(ArgumentParserTest, EvalSpaceCliWithoutUndistortStopsTheRun) {
+    const auto data_path = make_test_path("lfs_arg_parser_eval_space_no_undistort_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_space_no_undistort_output");
+
+    for (const auto& args : std::vector<std::vector<const char*>>{
+             {"LichtFeld-Studio", "-d", data_path.c_str(), "-o", output_path.c_str(),
+              "--eval-space", "distorted"},
+             {"LichtFeld-Studio", "-d", data_path.c_str(), "-o", output_path.c_str(),
+              "--eval-space=undistorted"}}) {
+        auto parsed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(args.size()), args.data());
+        ASSERT_FALSE(parsed.has_value());
+        EXPECT_NE(parsed.error().find("--eval-space needs --undistort"), std::string::npos)
+            << parsed.error();
+    }
+}
+
+// Every saved training config carries eval_space; reusing one without --undistort must still
+// load, the value simply has no effect there.
+TEST(ArgumentParserTest, EvalSpaceConfigWithoutUndistortIsAccepted) {
+    const auto directory = make_test_path("lfs_arg_parser_eval_space_config_rule");
+    const auto data_path = make_test_path("lfs_arg_parser_eval_space_config_rule_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_space_config_rule_output");
+    const auto config_path = std::filesystem::path(directory) / "config.json";
+    auto optimization = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+    optimization["undistort"] = false;
+    const auto config_text = config_path.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--config",
+        config_text.c_str(),
+    };
+
+    for (const char* value : {"distorted", "undistorted"}) {
+        optimization["eval_space"] = value;
+        std::ofstream(config_path) << nlohmann::json{{"optimization", optimization}}.dump();
+        auto parsed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(argv)), argv);
+        EXPECT_TRUE(parsed.has_value()) << value << ": " << parsed.error();
+    }
+}
+
+// Catches missing serialization, config loading, or explicit override replay during resume.
+TEST(ArgumentParserTest, EvalSpaceConfigRoundTripAndResumeKeepTheValue) {
+    const auto directory = make_test_path("lfs_arg_parser_eval_space_round_trip");
+    const auto data_path = make_test_path("lfs_arg_parser_eval_space_round_trip_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_space_round_trip_output");
+    const auto config_path = std::filesystem::path(directory) / "training_config.json";
+    lfs::core::param::TrainingParameters written;
+    written.optimization.undistort = true;
+    written.optimization.eval_space = lfs::core::param::EvalSpace::Undistorted;
+    const auto saved = lfs::core::param::save_training_parameters_to_json(written, config_path);
+    ASSERT_TRUE(saved.has_value()) << saved.error();
+
+    const auto config_text = config_path.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--config",
+        config_text.c_str(),
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.undistort);
+    EXPECT_EQ((*parsed)->optimization.eval_space,
+              lfs::core::param::EvalSpace::Undistorted);
+    EXPECT_EQ((*parsed)->optimization.to_json().at("eval_space"), "undistorted");
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("eval_space"));
+
+    lfs::core::param::TrainingParameters restored;
+    restored.optimization.undistort = false;
+    restored.optimization.eval_space = lfs::core::param::EvalSpace::Distorted;
+    apply_explicit_training_overrides(restored, (*parsed)->overrides);
+    EXPECT_TRUE(restored.optimization.undistort);
+    EXPECT_EQ(restored.optimization.eval_space,
+              lfs::core::param::EvalSpace::Undistorted);
+}
+
 TEST(ArgumentParserTest, EvalStepsRejectNonPositiveOrMalformedValues) {
     const auto data_path = make_test_path("lfs_arg_parser_bad_eval_steps_data");
     const auto output_path = make_test_path("lfs_arg_parser_bad_eval_steps_output");
@@ -1888,4 +2047,98 @@ TEST(ArgumentParserTest, EvalAllRejectsTestEvery) {
         static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
     EXPECT_NE(parsed.error().find("--test-every"), std::string::npos) << parsed.error();
+}
+
+// Catches a conflict check placed after a mode's early return or blind to -i, joined or = spellings.
+TEST(ArgumentParserTest, IterationsAndStepsScalerConflictBeforeModeChecks) {
+    const std::vector<std::vector<std::string>> cases{
+        {"--iter", "2500", "--steps-scaler", "0.5"},
+        {"-i", "2500", "--steps-scaler", "0.5"},
+        {"--steps-scaler", "0.5", "--iter", "2500"},
+        {"--iter=2500", "--steps-scaler=0.5"},
+        {"-i2500", "--steps-scaler", "0.5"},
+        {"--headless", "--iter", "2500", "--steps-scaler", "0.5"},
+        {"--resume", "missing.resume", "-i", "2500", "--steps-scaler", "2"},
+        {"-v", "missing.ply", "--iter", "2500", "--steps-scaler", "0.5"},
+        {"--render-camera-path", "missing.json", "--iter", "2500", "--steps-scaler", "0.5"},
+        {"--import-cameras", "missing", "--iter", "2500", "--steps-scaler", "0.5"},
+    };
+    for (const auto& values : cases) {
+        SCOPED_TRACE(nlohmann::json(values).dump());
+        std::vector<const char*> argv{"LichtFeld-Studio"};
+        for (const auto& value : values)
+            argv.push_back(value.c_str());
+        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+        ASSERT_FALSE(parsed);
+        EXPECT_EQ(parsed.error(), "--iter and --steps-scaler are mutually exclusive: --iter sets the iteration count exactly, --steps-scaler rescales the default schedule");
+    }
+}
+
+// Catches --iter starting to rescale the timetable.
+TEST(ArgumentParserTest, IterationsAlonePreserveDefaultTimetable) {
+    const char* argv[]{"LichtFeld-Studio", "--iter", "7000"};
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    const auto& opt = (*parsed)->optimization;
+    const auto defaults = lfs::core::param::OptimizationParameters::mrnf_defaults();
+    EXPECT_EQ(opt.iterations, 7000u);
+    EXPECT_FLOAT_EQ(opt.steps_scaler, 1.f);
+    EXPECT_EQ(opt.stop_refine, defaults.stop_refine);
+    EXPECT_EQ(opt.refine_every, defaults.refine_every);
+    EXPECT_EQ(opt.sh_degree_interval, defaults.sh_degree_interval);
+    EXPECT_EQ(opt.eval_steps, defaults.eval_steps);
+    EXPECT_EQ(opt.save_steps, defaults.save_steps);
+}
+
+// Catches step scaling applied after explicit CLI step values.
+TEST(ArgumentParserTest, ScalingPrecedesAbsoluteStepOverrides) {
+    const char* argv[]{"LichtFeld-Studio", "--steps-scaler", "0.5", "--sh-degree-interval", "1000",
+                       "--morton-reorder-interval", "3000", "--fill-pacing-iter", "1234", "--eval", "--eval-steps", "1000"};
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    const auto& opt = (*parsed)->optimization;
+    EXPECT_EQ(opt.sh_degree_interval, 1000u);
+    EXPECT_EQ(opt.morton_reorder_interval, 3000u);
+    EXPECT_EQ(opt.fill_pacing_iter, 1234u);
+    EXPECT_EQ(opt.eval_steps, std::vector<size_t>{1000});
+    EXPECT_EQ(opt.iterations, 15000u);
+    EXPECT_EQ(opt.stop_refine, 14250u);
+    EXPECT_EQ(opt.refine_every, 82u);
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("morton_reorder_interval"));
+    lfs::core::param::TrainingParameters restored;
+    apply_explicit_training_overrides(restored, (*parsed)->overrides);
+    EXPECT_EQ(restored.optimization.morton_reorder_interval, 3000u);
+    EXPECT_EQ(restored.optimization.fill_pacing_iter, 1234u);
+    EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>{1000});
+}
+
+// Catches a config steps_scaler multiplying an explicit --iter.
+TEST(ArgumentParserTest, ConfigScalingPrecedesExplicitIterations) {
+    const auto path = std::filesystem::path(make_test_path("lfs_arg_parser_step_scaling")) / "config.json";
+    auto json = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+    json["steps_scaler"] = 0.5f;
+    std::ofstream(path) << json.dump();
+    const auto path_text = path.string();
+    const char* argv[]{"LichtFeld-Studio", "--config", path_text.c_str(), "--iter", "2500"};
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    std::filesystem::remove(path);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ((*parsed)->optimization.iterations, 2500u);
+    EXPECT_EQ((*parsed)->optimization.stop_refine, 14250u);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.steps_scaler, 0.5f);
+}
+
+// Catches help text that hides the --iter / --steps-scaler conflict.
+TEST(ArgumentParserTest, StepScalingHelpShowsMutualExclusion) {
+    EXPECT_NE(lfs::core::args::optimization_cli_help("--iter").find("; cannot be combined with --steps-scaler"), std::string::npos);
+    EXPECT_NE(lfs::core::args::optimization_cli_help("--steps-scaler").find("; cannot be combined with --iter"), std::string::npos);
+}
+
+// Catches a joined short value such as -i2500 being parsed but then ignored.
+TEST(ArgumentParserTest, JoinedShortIterationValueIsUsed) {
+    const char* argv[]{"LichtFeld-Studio", "-i2500"};
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ((*parsed)->optimization.iterations, 2500u);
+    EXPECT_TRUE((*parsed)->cli_iterations_set);
 }

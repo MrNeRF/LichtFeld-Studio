@@ -21,6 +21,7 @@
 #include <iomanip>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <sstream>
@@ -177,6 +178,16 @@ namespace lfs::core {
                 return parse_overlay_object(text).contains(key);
             }
 
+            // Older builds keep both keys as unknown data while rewriting steps_scaler,
+            // so the image share is trusted only next to the total it was written with.
+            std::optional<float> stored_image_count_scaler(const nlohmann::json& json, const float steps_scaler) {
+                if (!json.contains("image_count_scaler") || !json.contains("image_count_scaler_total"))
+                    return std::nullopt;
+                if (json.at("image_count_scaler_total").get<float>() != steps_scaler)
+                    return std::nullopt;
+                return json.at("image_count_scaler").get<float>();
+            }
+
             void apply_optimization_json_overlay(
                 OptimizationParameters& params,
                 const nlohmann::json& json,
@@ -189,7 +200,16 @@ namespace lfs::core {
                         LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
                     }
                 }
+                if (json.contains("eval_space")) {
+                    const auto eval_space = json.at("eval_space").get<std::string>();
+                    if (!eval_space_from_string(eval_space)) {
+                        throw std::invalid_argument(
+                            "eval_space must be 'distorted' or 'undistorted'");
+                    }
+                }
                 read_registered_optimization_properties(json, params, skip_missing);
+                if (const auto image_count_scaler = stored_image_count_scaler(json, params.steps_scaler))
+                    params.image_count_scaler = *image_count_scaler;
 
                 if (json.contains("eval_steps")) {
                     params.eval_steps.clear();
@@ -268,6 +288,19 @@ namespace lfs::core {
                         merged[it.key()] = it.value();
                     dataset.loading_params = LoadingParams::from_json(merged);
                 }
+            }
+
+            [[nodiscard]] lfs::Error config_import_error(std::string detail, const std::filesystem::path& path) {
+                lfs::SmallFields fields;
+                fields.add("path", path_to_utf8(path));
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::IO,
+                    .user_message = "The config file could not be imported.",
+                    .detail = std::move(detail),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                    .fields = std::move(fields),
+                });
             }
 
             std::expected<nlohmann::json, std::string> read_json_file(const std::filesystem::path& path) {
@@ -385,6 +418,8 @@ namespace lfs::core {
             opt_json["strategy"] = canonical_strategy.empty() ? strategy : std::string(canonical_strategy);
 
             // Residue not represented by scalar registry properties.
+            opt_json["image_count_scaler"] = image_count_scaler;
+            opt_json["image_count_scaler_total"] = steps_scaler;
             opt_json["eval_steps"] = eval_steps;
             opt_json["save_steps"] = save_steps;
             opt_json["enable_save_eval_images"] = enable_save_eval_images;
@@ -451,6 +486,8 @@ namespace lfs::core {
                 return std::format("init_opacity must be finite and within (0, 1) (got {})", init_opacity);
             if (!std::isfinite(mask_opacity_penalty_power) || mask_opacity_penalty_power <= 0.0f)
                 return std::format("mask_opacity_penalty_power must be finite and positive (got {})", mask_opacity_penalty_power);
+            if (!std::isfinite(image_count_scaler) || image_count_scaler <= 0.f)
+                return std::format("image_count_scaler must be finite and positive (got {})", image_count_scaler);
             if (!std::isfinite(steps_scaler))
                 return std::format("steps_scaler must be finite (got {})", steps_scaler);
             if (!std::isfinite(max_screen_share))
@@ -557,6 +594,8 @@ namespace lfs::core {
                 normal_loss_space != NormalLossSpace::CameraOpenGL &&
                 normal_loss_space != NormalLossSpace::World)
                 return "normal_loss_space must be 'auto', 'camera-opencv', 'camera-opengl', or 'world'";
+            if (eval_space != EvalSpace::Distorted && eval_space != EvalSpace::Undistorted)
+                return "eval_space must be 'distorted' or 'undistorted'";
             if (normal_start_fraction > normal_end_fraction)
                 return std::format(
                     "normal_start_fraction must not exceed normal_end_fraction ({} > {})",
@@ -597,9 +636,10 @@ namespace lfs::core {
                 return std::format("freeze_lr_scale must be within [0, 1] (got {})", freeze_lr_scale);
             }
             if (!add_splat_paths.empty()) {
-                if (resume_checkpoint.has_value() ||
-                    resume_project.has_value() ||
-                    project_path.has_value()) {
+                if (!add_splats_applied &&
+                    (resume_checkpoint.has_value() ||
+                     resume_project.has_value() ||
+                     project_path.has_value())) {
                     return "--add-splat cannot be used together with --resume";
                 }
                 if (!add_splat_freeze.empty() && add_splat_freeze.size() != add_splat_paths.size()) {
@@ -609,7 +649,7 @@ namespace lfs::core {
                     if (path.empty()) {
                         return "--add-splat path cannot be empty";
                     }
-                    if (!std::filesystem::exists(path)) {
+                    if (!add_splats_applied && !std::filesystem::exists(path)) {
                         return std::format("Added splat does not exist: '{}'",
                                            lfs::core::path_to_utf8(path));
                     }
@@ -802,6 +842,9 @@ namespace lfs::core {
                 }
             }
             apply_optimization_json_overlay(params, json, false);
+            // Legacy GUI saves recorded the image factor in steps_scaler.
+            if (!stored_image_count_scaler(json, params.steps_scaler))
+                params.image_count_scaler = params.steps_scaler > 0.f ? params.steps_scaler : 1.f;
             return params;
         }
 
@@ -868,6 +911,68 @@ namespace lfs::core {
         std::expected<OptimizationParameters, std::string> read_optim_params_from_json(const std::filesystem::path& path) {
             ExplicitTrainingOverrides unused;
             return read_optim_params_from_json(path, unused);
+        }
+
+        std::expected<TrainingParameters, lfs::Error> read_training_parameters_from_json(
+            const std::filesystem::path& path,
+            const TrainingParameters& defaults) {
+            auto json_result = read_json_file(path);
+            if (!json_result) {
+                return std::unexpected(config_import_error(std::move(json_result.error()), path));
+            }
+
+            const auto& json = *json_result;
+            const auto& opt_json = json.contains("optimization") ? json["optimization"] : json;
+            if (!opt_json.is_object()) {
+                return std::unexpected(config_import_error("Optimization parameters must be a JSON object", path));
+            }
+
+            try {
+                TrainingParameters params = defaults;
+                params.optimization = OptimizationParameters::mrnf_defaults();
+                if (opt_json.contains("strategy")) {
+                    const auto strategy = opt_json.at("strategy").get<std::string>();
+                    const auto canonical = canonical_strategy_name(strategy);
+                    if (!canonical.empty()) {
+                        params.optimization = OptimizationParameters::defaults_for_strategy(canonical);
+                    }
+                }
+                apply_optimization_json_overlay(params.optimization, opt_json, true);
+
+                if (json.contains("dataset")) {
+                    if (!json["dataset"].is_object()) {
+                        return std::unexpected(config_import_error("Dataset parameters must be a JSON object", path));
+                    }
+                    apply_dataset_json_overlay(params.dataset, json["dataset"]);
+                }
+                if (json.contains("server")) {
+                    if (!json["server"].is_object()) {
+                        return std::unexpected(config_import_error("Server parameters must be a JSON object", path));
+                    }
+                    const auto& server_json = json["server"];
+                    if (server_json.contains("tcp_server_connection_port")) {
+                        params.server.tcp_server_connection_port =
+                            server_json["tcp_server_connection_port"].get<int>();
+                    }
+                    if (server_json.contains("tcp_broadcast_connection_port")) {
+                        params.server.tcp_broadcast_connection_port =
+                            server_json["tcp_broadcast_connection_port"].get<int>();
+                    }
+                    if (server_json.contains("tcp_connection")) {
+                        params.server.tcp_connection = server_json["tcp_connection"].get<bool>();
+                    }
+                }
+
+                if (const auto error = params.optimization.validate(); !error.empty()) {
+                    return std::unexpected(config_import_error("Invalid optimization parameters: " + error, path));
+                }
+                if (const auto error = params.dataset.validate(); !error.empty()) {
+                    return std::unexpected(config_import_error("Invalid dataset parameters: " + error, path));
+                }
+                return params;
+            } catch (const std::exception& e) {
+                return std::unexpected(config_import_error(std::format("Error parsing training parameters: {}", e.what()), path));
+            }
         }
 
         std::expected<void, std::string> save_training_parameters_to_json(
@@ -989,6 +1094,7 @@ namespace lfs::core {
             json["loading_params"] = loading_params.to_json();
             json["invert_masks"] = invert_masks;
             json["mask_threshold"] = mask_threshold;
+            json["centralize_dataset"] = centralize_dataset;
             if (!output_name.empty())
                 json["output_name"] = output_name;
 
@@ -1029,6 +1135,9 @@ namespace lfs::core {
             }
             if (j.contains("mask_threshold")) {
                 dataset.mask_threshold = j["mask_threshold"].get<float>();
+            }
+            if (j.contains("centralize_dataset")) {
+                dataset.centralize_dataset = j["centralize_dataset"].get<std::string>();
             }
 
             return dataset;
