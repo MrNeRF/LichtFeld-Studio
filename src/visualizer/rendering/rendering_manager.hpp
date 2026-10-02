@@ -330,6 +330,7 @@ namespace lfs::vis {
         // reconstruction pipeline never receives a reduced-resolution image.
         void reportSceneUpscalerRuntimeSelection(ViewId view, SceneUpscalerSelection selection);
         [[nodiscard]] SceneUpscalerSelection sceneUpscalerRuntimeSelection(ViewId view = kNoView) const;
+        [[nodiscard]] bool sceneUpscalerModeUnsupported(ViewId view) const;
 
         // Entering computes ortho_scale so the view at the pivot matches the current
         // lens. Leaving ortho keeps the focal length the user set.

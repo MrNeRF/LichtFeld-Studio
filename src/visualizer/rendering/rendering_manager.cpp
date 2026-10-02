@@ -809,6 +809,11 @@ namespace lfs::vis {
         return viewState(view == kNoView ? view_source_.activeView() : view).scene_upscaler_runtime_selection_;
     }
 
+    bool RenderingManager::sceneUpscalerModeUnsupported(const ViewId view) const {
+        std::lock_guard lock(settings_mutex_);
+        return viewState(view).scene_upscaler_mode_unsupported_;
+    }
+
     void RenderingManager::setOrthographic(const bool enabled, const float viewport_height, const float distance_to_pivot) {
         auto settings = getSettings();
         if (enabled && !settings.orthographic) {

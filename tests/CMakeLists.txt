@@ -72,6 +72,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_menu_bar_title.cpp
 
         test_preferences_migration.cpp
+        test_scene_upscaler_registry.cpp
         test_screen_layout.cpp
         test_screen.cpp
         test_view_render_state.cpp
@@ -234,6 +235,7 @@ endif()
 # =============================================================================
 if(BUILD_TEMPORAL_CPU_TESTS)
     add_executable(lichtfeld_temporal_cpu_tests
+        test_scene_upscaler_plugin_api.cpp
         test_scene_motion_contract.cpp
         test_scene_temporal_coordinator.cpp
         test_scene_temporal_plan.cpp
@@ -243,7 +245,7 @@ if(BUILD_TEMPORAL_CPU_TESTS)
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_plan.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_resolve.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/temporal_frame_tracker.cpp
-        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/passes/vulkan_scene_dlss_pipeline_contract.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/passes/vulkan_scene_plugin_pipeline_contract.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/passes/vulkan_scene_temporal_pipeline_contract.cpp
     )
     target_include_directories(lichtfeld_temporal_cpu_tests PRIVATE

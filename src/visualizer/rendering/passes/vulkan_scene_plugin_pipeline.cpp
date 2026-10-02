@@ -2,11 +2,12 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "vulkan_scene_dlss_pipeline.hpp"
+#include "vulkan_scene_plugin_pipeline.hpp"
 
+#include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
-#include "rendering/nvidia_dlss_plugin.hpp"
 #include "rendering/scene_temporal_resolve.hpp"
+#include "rendering/scene_upscaler_plugin.hpp"
 #include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_result.hpp"
@@ -15,7 +16,6 @@
 #include <array>
 #include <chrono>
 #include <format>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -41,9 +41,22 @@ namespace lfs::vis {
             }
             return LFS_SCENE_UPSCALER_PLUGIN_BALANCED;
         }
+
+        [[nodiscard]] constexpr std::string_view qualityName(
+            const SceneTemporalQuality quality) noexcept {
+            switch (quality) {
+            case SceneTemporalQuality::Quality:
+                return "quality";
+            case SceneTemporalQuality::Balanced:
+                return "balanced";
+            case SceneTemporalQuality::Performance:
+                return "performance";
+            }
+            return "unknown";
+        }
     } // namespace
 
-    struct VulkanSceneDlssPipeline::Impl {
+    struct VulkanScenePluginPipeline::Impl {
         struct OutputResource {
             VkImage image = VK_NULL_HANDLE;
             VmaAllocation allocation = VK_NULL_HANDLE;
@@ -61,23 +74,33 @@ namespace lfs::vis {
             std::uint32_t pending_reset_flags = LFS_SCENE_UPSCALER_PLUGIN_RESET_REQUESTED;
             std::chrono::steady_clock::time_point previous_evaluation{};
             bool has_previous_evaluation = false;
+            std::optional<VulkanScenePluginPipelineRequest> evaluated_input;
+            VulkanScenePluginPipelineResult cached_result;
+
+            void forgetEvaluation() {
+                evaluated_input.reset();
+                cached_result = {};
+            }
         };
 
+        SceneUpscalerPlugin* plugin = nullptr;
         VulkanContext* context = nullptr;
         VkDevice device = VK_NULL_HANDLE;
         VmaAllocator allocator = VK_NULL_HANDLE;
         SceneTemporalCoordinator coordinator;
         VulkanSceneMotionPass motion;
-        VulkanSceneDlssDepthPass depth;
+        VulkanScenePluginDepthPass depth;
         std::vector<OutputResource> outputs;
         std::array<ViewState, static_cast<std::size_t>(TemporalViewId::Count)> views{};
         bool motion_initialized = false;
         bool depth_initialized = false;
         bool runtime_initialized = false;
+        bool capacity_warned = false;
 
         ~Impl() { destroy(); }
 
-        [[nodiscard]] bool init(VulkanContext& ctx) {
+        [[nodiscard]] bool init(VulkanContext& ctx, SceneUpscalerPlugin& upscaler) {
+            plugin = &upscaler;
             context = &ctx;
             device = ctx.device();
             allocator = ctx.allocator();
@@ -103,14 +126,14 @@ namespace lfs::vis {
                 .get_instance_proc_addr = vkGetInstanceProcAddr,
                 .get_device_proc_addr = vkGetDeviceProcAddr,
             };
-            runtime_initialized = NvidiaDlssPlugin::instance().initializeRuntime(config);
+            runtime_initialized = plugin->initializeRuntime(config);
             return runtime_initialized;
         }
 
         void destroyOutput(OutputResource& output) {
             if (!output.vram_label.empty()) {
                 lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
-                    "vulkan.scene_dlss.output", output.vram_label, 0);
+                    "vulkan.scene_plugin.output", output.vram_label, 0);
             }
             if (output.view != VK_NULL_HANDLE)
                 vkDestroyImageView(device, output.view, nullptr);
@@ -160,8 +183,8 @@ namespace lfs::vis {
                                             &output.image,
                                             &output.allocation,
                                             &allocation_result),
-                             "vmaCreateImage(scene_dlss.output)",
-                             "DLSS output allocation failed"))
+                             "vmaCreateImage(scene_plugin.output)",
+                             "plugin output allocation failed"))
                 return false;
             VkImageViewCreateInfo view_info{};
             view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -172,8 +195,8 @@ namespace lfs::vis {
             view_info.subresourceRange.levelCount = 1;
             view_info.subresourceRange.layerCount = 1;
             if (!vk_try_bool(vkCreateImageView(device, &view_info, nullptr, &output.view),
-                             "vkCreateImageView(scene_dlss.output)",
-                             "DLSS output view creation failed")) {
+                             "vkCreateImageView(scene_plugin.output)",
+                             "plugin output view creation failed")) {
                 destroyOutput(output);
                 return false;
             }
@@ -181,11 +204,11 @@ namespace lfs::vis {
             output.allocation_bytes = static_cast<std::size_t>(allocation_result.size);
             output.vram_label = std::format("slot{}:{}x{}", slot, extent.x, extent.y);
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
-                "vulkan.scene_dlss.output", output.vram_label, output.allocation_bytes);
+                "vulkan.scene_plugin.output", output.vram_label, output.allocation_bytes);
             context->setDebugObjectName(
-                VK_OBJECT_TYPE_IMAGE, output.image, "scene_dlss.output");
+                VK_OBJECT_TYPE_IMAGE, output.image, "scene_plugin.output");
             context->setDebugObjectName(
-                VK_OBJECT_TYPE_IMAGE_VIEW, output.view, "scene_dlss.output.view");
+                VK_OBJECT_TYPE_IMAGE_VIEW, output.view, "scene_plugin.output.view");
             return true;
         }
 
@@ -235,10 +258,13 @@ namespace lfs::vis {
 
             bool acquired_identity = false;
             if (view.plugin_identity == LFS_SCENE_UPSCALER_PLUGIN_VIEW_INVALID) {
-                const auto identity = NvidiaDlssPlugin::instance().acquireViewIdentity();
+                const auto identity = plugin->acquireViewIdentity();
                 if (!identity) {
-                    static std::once_flag warning;
-                    std::call_once(warning, [] { LOG_WARN("DLSS plugin view capacity reached; additional targets use non-DLSS upscaling"); });
+                    if (!capacity_warned) {
+                        capacity_warned = true;
+                        LOG_WARN("{} view capacity reached; additional views use other upscaling",
+                                 plugin->info().name);
+                    }
                     return false;
                 }
                 view.plugin_identity = *identity;
@@ -254,81 +280,100 @@ namespace lfs::vis {
                 .output_height = static_cast<std::uint32_t>(prepared.plan.output_extent.y),
                 .motion_vectors_include_jitter = 0,
             };
-            if (!NvidiaDlssPlugin::instance().createFeature(command_buffer, feature)) {
+            if (!plugin->createFeature(command_buffer, feature)) {
                 if (acquired_identity) {
-                    NvidiaDlssPlugin::instance().releaseViewIdentity(view.plugin_identity);
+                    plugin->releaseViewIdentity(view.plugin_identity);
                     view.plugin_identity = LFS_SCENE_UPSCALER_PLUGIN_VIEW_INVALID;
                 }
                 return false;
             }
-            if (changed)
+            if (changed) {
                 view.pending_reset_flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_QUALITY |
                                             LFS_SCENE_UPSCALER_PLUGIN_RESET_RENDER_SIZE |
                                             LFS_SCENE_UPSCALER_PLUGIN_RESET_OUTPUT_SIZE;
+                LOG_INFO("{} configured: view={} preset={} render={}x{} output={}x{}",
+                         plugin->info().name,
+                         feature.view,
+                         qualityName(quality),
+                         feature.render_width,
+                         feature.render_height,
+                         feature.output_width,
+                         feature.output_height);
+            }
             view.feature = feature;
             view.feature_configured = true;
             return true;
         }
 
-        [[nodiscard]] VulkanSceneDlssPipelineResult fail(
+        [[nodiscard]] VulkanScenePluginPipelineResult fail(
             const PreparedSceneTemporalFrame& prepared,
-            const VulkanSceneDlssPipelineStatus status,
+            const VulkanScenePluginPipelineStatus status,
             const TemporalResetReason reason) {
             coordinator.discard(prepared, reason);
-            views.at(viewIndex(prepared.view)).pending_reset_flags |=
-                LFS_SCENE_UPSCALER_PLUGIN_RESET_RUNTIME;
+            auto& view = views.at(viewIndex(prepared.view));
+            view.pending_reset_flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_RUNTIME;
+            view.forgetEvaluation();
             return {.status = status, .view = prepared.view};
         }
 
-        [[nodiscard]] VulkanSceneDlssPipelineResult record(
+        [[nodiscard]] VulkanScenePluginPipelineResult record(
             const VkCommandBuffer command_buffer,
-            const VulkanSceneDlssPipelineRequest& request) {
-            if (!validVulkanSceneDlssPipelineRequest(request) ||
+            const VulkanScenePluginPipelineRequest& request) {
+            if (!validVulkanScenePluginPipelineRequest(request) ||
                 command_buffer == VK_NULL_HANDLE) {
-                return {.status = VulkanSceneDlssPipelineStatus::InvalidRequest,
+                return {.status = VulkanScenePluginPipelineStatus::InvalidRequest,
                         .view = request.temporal.temporal.view};
             }
             if (!ensureRuntime())
-                return {.status = VulkanSceneDlssPipelineStatus::RuntimeUnavailable,
+                return {.status = VulkanScenePluginPipelineStatus::RuntimeUnavailable,
                         .view = request.temporal.temporal.view};
+            if (validTemporalViewId(request.temporal.temporal.view)) {
+                // Presenting the same published frame again must not feed it to the
+                // vendor history a second time.
+                const auto& view = views.at(viewIndex(request.temporal.temporal.view));
+                if (view.pending_reset_flags == LFS_SCENE_UPSCALER_PLUGIN_RESET_NONE &&
+                    view.evaluated_input && view.cached_result.resolved() &&
+                    reusableVulkanScenePluginPipelineInput(request, *view.evaluated_input))
+                    return view.cached_result;
+            }
 
             const auto prepared = coordinator.prepare(request.temporal.temporal);
             if (!prepared.active())
-                return {.status = VulkanSceneDlssPipelineStatus::Inactive,
+                return {.status = VulkanScenePluginPipelineStatus::Inactive,
                         .view = request.temporal.temporal.view};
             const auto view_projections = makeTemporalMotionViewProjectionPair(prepared.frame);
             if (!view_projections)
                 return fail(prepared,
-                            VulkanSceneDlssPipelineStatus::InvalidRequest,
+                            VulkanScenePluginPipelineStatus::InvalidRequest,
                             TemporalResetReason::Projection);
 
             if (!motion_initialized)
                 motion_initialized = motion.init(*context);
             if (!motion_initialized)
                 return fail(prepared,
-                            VulkanSceneDlssPipelineStatus::MotionUnavailable,
+                            VulkanScenePluginPipelineStatus::MotionUnavailable,
                             TemporalResetReason::RuntimeUnavailable);
             const auto resource_slot = temporalMotionResourceSlot(
                 request.temporal.frame_slot, request.temporal.temporal.view);
             if (!resource_slot)
                 return fail(prepared,
-                            VulkanSceneDlssPipelineStatus::InvalidRequest,
+                            VulkanScenePluginPipelineStatus::InvalidRequest,
                             TemporalResetReason::InvalidInput);
             auto motion_params = request.temporal.motion;
             motion_params.inverse_current_view_projection = glm::inverse(view_projections->current);
             motion_params.previous_view_projection = view_projections->previous;
             if (!motion.record(command_buffer, motion_params, *resource_slot))
                 return fail(prepared,
-                            VulkanSceneDlssPipelineStatus::MotionFailure,
+                            VulkanScenePluginPipelineStatus::MotionFailure,
                             TemporalResetReason::ResolveFailure);
 
             if (!depth_initialized)
                 depth_initialized = depth.init(*context);
             if (!depth_initialized)
                 return fail(prepared,
-                            VulkanSceneDlssPipelineStatus::DepthUnavailable,
+                            VulkanScenePluginPipelineStatus::DepthUnavailable,
                             TemporalResetReason::RuntimeUnavailable);
-            const VulkanSceneDlssDepthParams depth_params{
+            const VulkanScenePluginDepthParams depth_params{
                 .enabled = true,
                 .current_depth_view = request.temporal.motion.depth_view,
                 .current_depth_layout =
@@ -339,17 +384,17 @@ namespace lfs::vis {
             };
             if (!depth.record(command_buffer, depth_params, *resource_slot))
                 return fail(prepared,
-                            VulkanSceneDlssPipelineStatus::DepthFailure,
+                            VulkanScenePluginPipelineStatus::DepthFailure,
                             TemporalResetReason::ResolveFailure);
 
             auto* const output = ensureOutput(*resource_slot, prepared.plan.output_extent);
             if (output == nullptr)
                 return fail(prepared,
-                            VulkanSceneDlssPipelineStatus::OutputFailure,
+                            VulkanScenePluginPipelineStatus::OutputFailure,
                             TemporalResetReason::ResolveFailure);
             if (!ensureFeature(command_buffer, prepared, request.quality))
                 return fail(prepared,
-                            VulkanSceneDlssPipelineStatus::FeatureFailure,
+                            VulkanScenePluginPipelineStatus::FeatureFailure,
                             TemporalResetReason::RuntimeUnavailable);
             auto& view = views.at(viewIndex(prepared.view));
 
@@ -436,10 +481,15 @@ namespace lfs::vis {
                 .pre_exposure = 1.0f,
                 .frame_time_milliseconds = frameTimeMilliseconds(view),
                 .reset_flags = view.pending_reset_flags | pluginResetFlags(prepared.frame.reset_reasons),
+                .camera_near = prepared.frame.current.near_plane,
+                .camera_far = prepared.frame.current.far_plane,
+                .camera_vertical_fov_radians = sceneUpscalerCameraVerticalFovRadians(prepared.frame.current),
+                // Scene units have no canonical metre scale; 1 is the neutral value.
+                .view_space_to_meters = 1.0f,
             };
-            if (!NvidiaDlssPlugin::instance().evaluate(evaluation))
+            if (!plugin->evaluate(evaluation))
                 return fail(prepared,
-                            VulkanSceneDlssPipelineStatus::EvaluateFailure,
+                            VulkanScenePluginPipelineStatus::EvaluateFailure,
                             TemporalResetReason::ResolveFailure);
             view.pending_reset_flags = LFS_SCENE_UPSCALER_PLUGIN_RESET_NONE;
             output->initialized = true;
@@ -459,7 +509,7 @@ namespace lfs::vis {
                                     SceneHistoryStorage::VulkanImage,
                                     SceneHistoryStorage::VulkanImage))
                 return fail(prepared,
-                            VulkanSceneDlssPipelineStatus::CommitFailure,
+                            VulkanScenePluginPipelineStatus::CommitFailure,
                             TemporalResetReason::ResolveFailure);
             const SceneHistoryContract history{
                 .color_storage = SceneHistoryStorage::VulkanImage,
@@ -468,13 +518,16 @@ namespace lfs::vis {
                 .depth_extent = prepared.plan.render_extent,
                 .sequence = prepared.frame.sequence + 1,
             };
-            return {
-                .status = VulkanSceneDlssPipelineStatus::Resolved,
+            view.cached_result = {
+                .status = VulkanScenePluginPipelineStatus::Resolved,
                 .view = prepared.view,
                 .sequence = history.sequence,
                 .output_view = output->view,
+                .output_layout = VK_IMAGE_LAYOUT_GENERAL,
                 .history = history,
             };
+            view.evaluated_input = request;
+            return view.cached_result;
         }
 
         void reset(const TemporalViewId view, const TemporalResetReason reason) {
@@ -483,6 +536,7 @@ namespace lfs::vis {
                 auto& state = views.at(viewIndex(view));
                 state.pending_reset_flags |= pluginResetFlags(reason);
                 state.has_previous_evaluation = false;
+                state.forgetEvaluation();
             }
         }
 
@@ -491,6 +545,7 @@ namespace lfs::vis {
             for (auto& state : views) {
                 state.pending_reset_flags |= pluginResetFlags(reason);
                 state.has_previous_evaluation = false;
+                state.forgetEvaluation();
             }
         }
 
@@ -510,55 +565,60 @@ namespace lfs::vis {
             for (auto& view : views) {
                 if (view.plugin_identity == LFS_SCENE_UPSCALER_PLUGIN_VIEW_INVALID)
                     continue;
-                NvidiaDlssPlugin::instance().releaseViewIdentity(view.plugin_identity);
+                plugin->releaseViewIdentity(view.plugin_identity);
                 view.plugin_identity = LFS_SCENE_UPSCALER_PLUGIN_VIEW_INVALID;
                 view.feature = {};
                 view.feature_configured = false;
+                view.forgetEvaluation();
             }
         }
     };
 
-    VulkanSceneDlssPipeline::VulkanSceneDlssPipeline() = default;
-    VulkanSceneDlssPipeline::~VulkanSceneDlssPipeline() = default;
-    VulkanSceneDlssPipeline::VulkanSceneDlssPipeline(
-        VulkanSceneDlssPipeline&&) noexcept = default;
-    VulkanSceneDlssPipeline& VulkanSceneDlssPipeline::operator=(
-        VulkanSceneDlssPipeline&&) noexcept = default;
+    VulkanScenePluginPipeline::VulkanScenePluginPipeline() = default;
+    VulkanScenePluginPipeline::~VulkanScenePluginPipeline() = default;
+    VulkanScenePluginPipeline::VulkanScenePluginPipeline(
+        VulkanScenePluginPipeline&&) noexcept = default;
+    VulkanScenePluginPipeline& VulkanScenePluginPipeline::operator=(
+        VulkanScenePluginPipeline&&) noexcept = default;
 
-    bool VulkanSceneDlssPipeline::init(VulkanContext& context) {
+    bool VulkanScenePluginPipeline::init(VulkanContext& context, SceneUpscalerPlugin& plugin) {
         if (!impl_)
             impl_ = std::make_unique<Impl>();
-        return impl_->init(context);
+        return impl_->init(context, plugin);
     }
 
-    VulkanSceneDlssPipelineResult VulkanSceneDlssPipeline::record(
+    SceneUpscalerPlugin* VulkanScenePluginPipeline::plugin() const noexcept {
+        return impl_ ? impl_->plugin : nullptr;
+    }
+
+    VulkanScenePluginPipelineResult VulkanScenePluginPipeline::record(
         const VkCommandBuffer command_buffer,
-        const VulkanSceneDlssPipelineRequest& request) {
+        const VulkanScenePluginPipelineRequest& request) {
         return impl_ ? impl_->record(command_buffer, request)
-                     : VulkanSceneDlssPipelineResult{
-                           .status = VulkanSceneDlssPipelineStatus::InvalidRequest,
+                     : VulkanScenePluginPipelineResult{
+                           .status = VulkanScenePluginPipelineStatus::InvalidRequest,
                            .view = request.temporal.temporal.view};
     }
 
-    void VulkanSceneDlssPipeline::reset(const TemporalViewId view,
-                                        const TemporalResetReason reason) {
+    void VulkanScenePluginPipeline::reset(const TemporalViewId view,
+                                          const TemporalResetReason reason) {
         if (impl_)
             impl_->reset(view, reason);
     }
 
-    void VulkanSceneDlssPipeline::resetAll(const TemporalResetReason reason) {
+    void VulkanScenePluginPipeline::resetAll(const TemporalResetReason reason) {
         if (impl_)
             impl_->resetAll(reason);
     }
 
-    void VulkanSceneDlssPipeline::releaseResources(const TemporalResetReason reason) {
+    void VulkanScenePluginPipeline::releaseResources(const TemporalResetReason reason) {
         if (impl_)
             impl_->releaseResources(reason);
     }
 
-    void VulkanSceneDlssPipeline::shutdown() { impl_.reset(); }
+    void VulkanScenePluginPipeline::shutdown() { impl_.reset(); }
 
-    std::size_t VulkanSceneDlssPipeline::residentOutputCount() const {
+    std::size_t VulkanScenePluginPipeline::residentOutputCount() const {
         if (!impl_)
             return 0;
         return static_cast<std::size_t>(std::count_if(

@@ -135,6 +135,8 @@ namespace lfs::vis {
         uint64_t depth_window_projection_generation_ = 0;
         uint64_t depth_window_mode_epoch_ = 0;
         SceneUpscalerSelection scene_upscaler_runtime_selection_{};
+        // The requested reconstruction cannot serve the current view mode.
+        bool scene_upscaler_mode_unsupported_ = false;
         mutable std::mutex depth_window_transition_mutex_;
         mutable std::mutex vulkan_mesh_frame_mutex_;
         VulkanMeshFrame vulkan_mesh_frame_;

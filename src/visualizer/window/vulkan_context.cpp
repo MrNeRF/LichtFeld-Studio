@@ -6,7 +6,7 @@
 #include "core/vulkan_helpers.hpp"
 
 #include "core/crash_handler.hpp"
-#include "rendering/nvidia_dlss_plugin.hpp"
+#include "rendering/scene_upscaler_plugin.hpp"
 
 #include "core/cuda_error.hpp"
 #include "core/cuda_vulkan_interop.hpp"
@@ -648,7 +648,8 @@ namespace lfs::vis {
         // Optional vendor runtimes retain the Vulkan device passed at lazy
         // initialization. Shut them down after all GPU work is retired and
         // before the allocator/device they reference are destroyed.
-        NvidiaDlssPlugin::instance().shutdownRuntime();
+        for (auto* const plugin : sceneUpscalerPlugins())
+            plugin->shutdownRuntime();
 
         // #1488: surface leaked External* counts after idle, before device destroy.
         {
@@ -2140,19 +2141,19 @@ namespace lfs::vis {
                 available_extension_count);
             available_extensions.resize(available_extension_count);
         }
-        const auto dlss_instance_extensions =
-            NvidiaDlssPlugin::instance().requiredInstanceExtensions();
-        const auto missing_dlss_instance_extension = std::ranges::find_if(
-            dlss_instance_extensions,
-            [&available_extensions](const std::string& name) {
-                return !extensionAvailable(available_extensions, name.c_str());
-            });
-        if (missing_dlss_instance_extension != dlss_instance_extensions.end()) {
-            NvidiaDlssPlugin::instance().markBootstrapFailed(std::format(
-                "required Vulkan instance extension '{}' is unavailable",
-                *missing_dlss_instance_extension));
-        } else {
-            for (const auto& name : dlss_instance_extensions)
+        for (auto* const plugin : sceneUpscalerPlugins()) {
+            const auto plugin_extensions = plugin->requiredInstanceExtensions();
+            const auto missing = std::ranges::find_if(
+                plugin_extensions,
+                [&available_extensions](const std::string& name) {
+                    return !extensionAvailable(available_extensions, name.c_str());
+                });
+            if (missing != plugin_extensions.end()) {
+                plugin->markBootstrapFailed(std::format(
+                    "required Vulkan instance extension '{}' is unavailable", *missing));
+                continue;
+            }
+            for (const auto& name : plugin_extensions)
                 appendUniqueExtension(extensions, name.c_str());
         }
 #if LFS_HAS_CUDA && (defined(_WIN32) || defined(__linux__))
@@ -2646,19 +2647,19 @@ namespace lfs::vis {
         }
 
         std::vector<const char*> extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-        const auto dlss_device_extensions =
-            NvidiaDlssPlugin::instance().requiredDeviceExtensions(instance_, physical_device_);
-        const auto missing_dlss_device_extension = std::ranges::find_if(
-            dlss_device_extensions,
-            [&available_extensions](const std::string& name) {
-                return !extensionAvailable(available_extensions, name.c_str());
-            });
-        if (missing_dlss_device_extension != dlss_device_extensions.end()) {
-            NvidiaDlssPlugin::instance().markBootstrapFailed(std::format(
-                "required Vulkan device extension '{}' is unavailable",
-                *missing_dlss_device_extension));
-        } else {
-            for (const auto& name : dlss_device_extensions)
+        for (auto* const plugin : sceneUpscalerPlugins()) {
+            const auto plugin_extensions = plugin->requiredDeviceExtensions(instance_, physical_device_);
+            const auto missing = std::ranges::find_if(
+                plugin_extensions,
+                [&available_extensions](const std::string& name) {
+                    return !extensionAvailable(available_extensions, name.c_str());
+                });
+            if (missing != plugin_extensions.end()) {
+                plugin->markBootstrapFailed(std::format(
+                    "required Vulkan device extension '{}' is unavailable", *missing));
+                continue;
+            }
+            for (const auto& name : plugin_extensions)
                 appendUniqueExtension(extensions, name.c_str());
         }
 #if LFS_HAS_CUDA && (defined(_WIN32) || defined(__linux__))

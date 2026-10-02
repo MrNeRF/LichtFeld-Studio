@@ -139,11 +139,13 @@ The [test prerequisites](#tests) still apply.
 
 Creates a self-contained package that works on any machine with an NVIDIA driver.
 
-The optional NVIDIA DLSS scene-reconstruction plugin is off by default. To
-include it, pass `-DLFS_ENABLE_NVIDIA_DLSS=ON` and provide an NVIDIA DLSS SDK
-checkout (including Git LFS objects), typically at `external/nvidia-dlss-sdk`,
-or an explicit `-DLFS_NVIDIA_DLSS_ROOT=` path. CMake never downloads the SDK or
-accepts its license.
+The optional NVIDIA DLSS and AMD FSR 3.1 scene-reconstruction plugins are off
+by default. To include them, pass `-DLFS_ENABLE_NVIDIA_DLSS=ON` and/or
+`-DLFS_ENABLE_AMD_FSR3=ON` and provide the SDK checkouts, typically at
+`external/nvidia-dlss-sdk` (including Git LFS objects) and
+`external/fidelityfx-sdk` (FidelityFX SDK v1.1.4), or explicit
+`-DLFS_NVIDIA_DLSS_ROOT=` and `-DLFS_AMD_FSR3_ROOT=` paths. CMake never
+downloads either SDK or accepts its license.
 
 ```bash
 cmake -B build -DBUILD_PORTABLE=ON
@@ -155,9 +157,10 @@ cmake --install build --prefix ./dist
 # Example training run (writes /path/to/output/project.licht)
 ./dist/bin/run_lichtfeld.sh -d /path/to/data -o /path/to/output
 
-# Portable package with the NVIDIA DLSS plugin:
+# Portable package with the NVIDIA DLSS and AMD FSR 3.1 plugins:
 # git clone https://github.com/NVIDIA/DLSS external/nvidia-dlss-sdk
-# cmake -B build -DBUILD_PORTABLE=ON -DLFS_ENABLE_NVIDIA_DLSS=ON
+# git clone --branch v1.1.4 https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK external/fidelityfx-sdk
+# cmake -B build -DBUILD_PORTABLE=ON -DLFS_ENABLE_NVIDIA_DLSS=ON -DLFS_ENABLE_AMD_FSR3=ON
 ```
 
 ### macOS portable app (Apple Silicon)
@@ -299,6 +302,10 @@ dist/
 | `LFS_CUDA_COMPILER_CACHE` | *(empty)* | Compiler cache for CUDA only. Empty follows the auto-detected launcher; `OFF` disables CUDA caching; or name/path of a launcher such as `ccache`. Needed where nvcc cannot be wrapped by sccache |
 | `LFS_ENABLE_NVIDIA_DLSS` | OFF | Build the optional external NVIDIA DLSS viewport plugin |
 | `LFS_NVIDIA_DLSS_ROOT` | *(empty)* | Path to an NVIDIA DLSS SDK checkout supplied separately; required when the plugin is enabled |
+| `LFS_ENABLE_AMD_FSR3` | OFF | Build the optional external AMD FSR 3.1 viewport plugin |
+| `LFS_AMD_FSR3_ROOT` | *(empty)* | Path to an AMD FidelityFX SDK v1.1.4 checkout supplied separately; required when the plugin is enabled |
+| `LFS_AMD_FSR3_LIBRARY_DIR` | *(empty)* | Optional directory containing prebuilt FidelityFX FSR 3.1 upscaler and Vulkan backend libraries |
+| `LFS_AMD_FSR3_BUILD_SDK` | ON | Build the required FidelityFX static libraries from an isolated copy of the supplied SDK when prebuilt libraries are absent; Linux and macOS use vcpkg glslang |
 
 The DLSS option builds a separate plugin under `scene_upscalers/nvidia`; the
 main executable and `lfs_visualizer` do not link to NGX. The plugin is opened
@@ -309,6 +316,14 @@ corresponding vendor runtime subject to NVIDIA's redistribution terms. The
 official SDK repository is [NVIDIA/DLSS](https://github.com/NVIDIA/DLSS).
 When the plugin is enabled, a missing or incomplete SDK is a configuration
 error rather than silently producing a build without the requested backend.
+
+The FSR option follows the same boundary under `scene_upscalers/amd`. FidelityFX
+FSR 3.1 and its Vulkan backend are linked only into that optional MIT-licensed
+module; the main executable and `lfs_visualizer` do not link to FidelityFX.
+When libraries are absent, the build compiles them from an isolated copy of the
+supplied SDK (on Linux and macOS with glslang from vcpkg and small SDK v1.1.4
+compatibility patches). The SDK license is staged with the plugin and installed
+with the package licenses.
 
 ## Preprocess Model Downloads
 

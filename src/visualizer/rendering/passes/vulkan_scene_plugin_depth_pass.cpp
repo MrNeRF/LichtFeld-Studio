@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "vulkan_scene_dlss_depth_pass.hpp"
+#include "vulkan_scene_plugin_depth_pass.hpp"
 
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -16,18 +16,18 @@
 #include <vector>
 #include <vk_mem_alloc.h>
 
-#include "viewport/scene_dlss_depth.comp.spv.h"
+#include "viewport/scene_plugin_depth.comp.spv.h"
 
 namespace lfs::vis {
     namespace {
-        struct alignas(16) DlssDepthPush {
+        struct alignas(16) PluginDepthPush {
             glm::ivec4 extent_encoding{0};
             glm::vec4 planes{0.0f};
         };
-        static_assert(sizeof(DlssDepthPush) == 32);
+        static_assert(sizeof(PluginDepthPush) == 32);
     } // namespace
 
-    struct VulkanSceneDlssDepthPass::Impl {
+    struct VulkanScenePluginDepthPass::Impl {
         struct Resource {
             VkImage image = VK_NULL_HANDLE;
             VmaAllocation allocation = VK_NULL_HANDLE;
@@ -71,7 +71,7 @@ namespace lfs::vis {
             const auto required = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
                                   VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
             if ((format.optimalTilingFeatures & required) != required) {
-                LOG_ERROR("DLSS R32F normalized-depth images are unsupported");
+                LOG_ERROR("Plugin R32F normalized-depth images are unsupported");
                 return false;
             }
             return true;
@@ -80,7 +80,7 @@ namespace lfs::vis {
         void destroyResource(Resource& resource) {
             if (!resource.vram_label.empty()) {
                 lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
-                    "vulkan.scene_dlss.depth", resource.vram_label, 0);
+                    "vulkan.scene_plugin.depth", resource.vram_label, 0);
             }
             if (resource.view != VK_NULL_HANDLE)
                 vkDestroyImageView(device, resource.view, nullptr);
@@ -123,8 +123,8 @@ namespace lfs::vis {
             sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             if (!vk_try_bool(vkCreateSampler(device, &sampler_info, nullptr, &sampler),
-                             "vkCreateSampler(scene_dlss_depth)",
-                             "DLSS depth sampler creation failed")) {
+                             "vkCreateSampler(scene_plugin_depth)",
+                             "Plugin depth sampler creation failed")) {
                 destroyStaticResources();
                 return false;
             }
@@ -141,14 +141,14 @@ namespace lfs::vis {
             descriptor_info.pBindings = bindings.data();
             if (!vk_try_bool(vkCreateDescriptorSetLayout(
                                  device, &descriptor_info, nullptr, &descriptor_layout),
-                             "vkCreateDescriptorSetLayout(scene_dlss_depth)",
-                             "DLSS depth descriptor layout creation failed")) {
+                             "vkCreateDescriptorSetLayout(scene_plugin_depth)",
+                             "Plugin depth descriptor layout creation failed")) {
                 destroyStaticResources();
                 return false;
             }
 
             const VkPushConstantRange push_range{
-                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(DlssDepthPush)};
+                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PluginDepthPush)};
             VkPipelineLayoutCreateInfo layout_info{
                 VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
             layout_info.setLayoutCount = 1;
@@ -157,19 +157,19 @@ namespace lfs::vis {
             layout_info.pPushConstantRanges = &push_range;
             if (!vk_try_bool(vkCreatePipelineLayout(
                                  device, &layout_info, nullptr, &pipeline_layout),
-                             "vkCreatePipelineLayout(scene_dlss_depth)",
-                             "DLSS depth pipeline layout creation failed")) {
+                             "vkCreatePipelineLayout(scene_plugin_depth)",
+                             "Plugin depth pipeline layout creation failed")) {
                 destroyStaticResources();
                 return false;
             }
 
             VkShaderModuleCreateInfo shader_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-            shader_info.codeSize = sizeof(viewport_shaders::kSceneDlssDepthCompSpv);
-            shader_info.pCode = viewport_shaders::kSceneDlssDepthCompSpv;
+            shader_info.codeSize = sizeof(viewport_shaders::kScenePluginDepthCompSpv);
+            shader_info.pCode = viewport_shaders::kScenePluginDepthCompSpv;
             VkShaderModule shader = VK_NULL_HANDLE;
             if (!vk_try_bool(vkCreateShaderModule(device, &shader_info, nullptr, &shader),
-                             "vkCreateShaderModule(scene_dlss_depth)",
-                             "DLSS depth shader creation failed")) {
+                             "vkCreateShaderModule(scene_plugin_depth)",
+                             "Plugin depth shader creation failed")) {
                 destroyStaticResources();
                 return false;
             }
@@ -187,8 +187,8 @@ namespace lfs::vis {
                 device, pipeline_cache, 1, &pipeline_info, nullptr, &pipeline);
             vkDestroyShaderModule(device, shader, nullptr);
             if (!vk_try_bool(result,
-                             "vkCreateComputePipelines(scene_dlss_depth)",
-                             "DLSS depth compute pipeline creation failed")) {
+                             "vkCreateComputePipelines(scene_plugin_depth)",
+                             "Plugin depth compute pipeline creation failed")) {
                 destroyStaticResources();
                 return false;
             }
@@ -219,8 +219,8 @@ namespace lfs::vis {
                                             &resource.image,
                                             &resource.allocation,
                                             &allocation_result),
-                             "vmaCreateImage(scene_dlss_depth)",
-                             "DLSS normalized-depth allocation failed"))
+                             "vmaCreateImage(scene_plugin_depth)",
+                             "Plugin normalized-depth allocation failed"))
                 return false;
 
             VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -232,20 +232,20 @@ namespace lfs::vis {
             view_info.subresourceRange.layerCount = 1;
             if (!vk_try_bool(vkCreateImageView(
                                  device, &view_info, nullptr, &resource.view),
-                             "vkCreateImageView(scene_dlss_depth)",
-                             "DLSS normalized-depth view creation failed"))
+                             "vkCreateImageView(scene_plugin_depth)",
+                             "Plugin normalized-depth view creation failed"))
                 return false;
 
             resource.extent = extent;
             resource.vram_label = std::format("slot{}:{}x{}", slot, extent.x, extent.y);
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
-                "vulkan.scene_dlss.depth",
+                "vulkan.scene_plugin.depth",
                 resource.vram_label,
                 static_cast<std::size_t>(allocation_result.size));
             context->setDebugObjectName(
-                VK_OBJECT_TYPE_IMAGE, resource.image, "scene_dlss.depth");
+                VK_OBJECT_TYPE_IMAGE, resource.image, "scene_plugin.depth");
             context->setDebugObjectName(
-                VK_OBJECT_TYPE_IMAGE_VIEW, resource.view, "scene_dlss.depth.view");
+                VK_OBJECT_TYPE_IMAGE_VIEW, resource.view, "scene_plugin.depth.view");
             return true;
         }
 
@@ -257,7 +257,7 @@ namespace lfs::vis {
             if (resource.image != VK_NULL_HANDLE && resource.extent == extent)
                 return true;
             if (resource.image != VK_NULL_HANDLE && !context->waitForSubmittedFrames()) {
-                LOG_ERROR("Could not retire Vulkan frames before DLSS depth resize: {}",
+                LOG_ERROR("Could not retire Vulkan frames before plugin depth resize: {}",
                           context->lastError());
                 return false;
             }
@@ -270,12 +270,12 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool record(const VkCommandBuffer command_buffer,
-                                  const VulkanSceneDlssDepthParams& params,
+                                  const VulkanScenePluginDepthParams& params,
                                   const std::size_t slot) {
             const glm::ivec2 extent{params.depth.width, params.depth.height};
-            const auto encoding = sceneDlssDepthEncodingCode(params.depth);
+            const auto encoding = scenePluginDepthEncodingCode(params.depth);
             if (command_buffer == VK_NULL_HANDLE ||
-                !canRecordVulkanSceneDlssDepth(params) || encoding == 0 ||
+                !canRecordVulkanScenePluginDepth(params) || encoding == 0 ||
                 !createStaticResources() || !ensureResource(slot, extent))
                 return false;
 
@@ -320,7 +320,7 @@ namespace lfs::vis {
             writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             writes[1].pImageInfo = &output;
 
-            const DlssDepthPush push{
+            const PluginDepthPush push{
                 .extent_encoding = {extent.x,
                                     extent.y,
                                     static_cast<int>(encoding),
@@ -358,43 +358,43 @@ namespace lfs::vis {
         }
     };
 
-    VulkanSceneDlssDepthPass::VulkanSceneDlssDepthPass() = default;
-    VulkanSceneDlssDepthPass::~VulkanSceneDlssDepthPass() = default;
-    VulkanSceneDlssDepthPass::VulkanSceneDlssDepthPass(
-        VulkanSceneDlssDepthPass&&) noexcept = default;
-    VulkanSceneDlssDepthPass& VulkanSceneDlssDepthPass::operator=(
-        VulkanSceneDlssDepthPass&&) noexcept = default;
+    VulkanScenePluginDepthPass::VulkanScenePluginDepthPass() = default;
+    VulkanScenePluginDepthPass::~VulkanScenePluginDepthPass() = default;
+    VulkanScenePluginDepthPass::VulkanScenePluginDepthPass(
+        VulkanScenePluginDepthPass&&) noexcept = default;
+    VulkanScenePluginDepthPass& VulkanScenePluginDepthPass::operator=(
+        VulkanScenePluginDepthPass&&) noexcept = default;
 
-    bool VulkanSceneDlssDepthPass::init(VulkanContext& context) {
+    bool VulkanScenePluginDepthPass::init(VulkanContext& context) {
         if (!impl_)
             impl_ = std::make_unique<Impl>();
         return impl_->init(context);
     }
 
-    bool VulkanSceneDlssDepthPass::record(
+    bool VulkanScenePluginDepthPass::record(
         const VkCommandBuffer command_buffer,
-        const VulkanSceneDlssDepthParams& params,
+        const VulkanScenePluginDepthParams& params,
         const std::size_t resource_slot) {
         return impl_ && impl_->record(command_buffer, params, resource_slot);
     }
 
-    void VulkanSceneDlssDepthPass::shutdown() { impl_.reset(); }
+    void VulkanScenePluginDepthPass::shutdown() { impl_.reset(); }
 
-    VkImageView VulkanSceneDlssDepthPass::depthView(
+    VkImageView VulkanScenePluginDepthPass::depthView(
         const std::size_t resource_slot) const {
         return impl_ && resource_slot < impl_->resources.size()
                    ? impl_->resources[resource_slot].view
                    : VK_NULL_HANDLE;
     }
 
-    VkImage VulkanSceneDlssDepthPass::depthImage(
+    VkImage VulkanScenePluginDepthPass::depthImage(
         const std::size_t resource_slot) const {
         return impl_ && resource_slot < impl_->resources.size()
                    ? impl_->resources[resource_slot].image
                    : VK_NULL_HANDLE;
     }
 
-    bool VulkanSceneDlssDepthPass::initialized() const {
+    bool VulkanScenePluginDepthPass::initialized() const {
         return impl_ && impl_->pipeline != VK_NULL_HANDLE;
     }
 

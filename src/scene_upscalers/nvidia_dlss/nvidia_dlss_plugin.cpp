@@ -231,7 +231,8 @@ namespace {
             if (!runtime_initialized_ || parameters_ == nullptr)
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_UNAVAILABLE,
                             "NGX runtime is not initialized");
-            if (settings.struct_size < sizeof(LfsSceneUpscalerOptimalSettingsV1) ||
+            if (settings.struct_size <
+                    offsetof(LfsSceneUpscalerOptimalSettingsV1, jitter_phase_count) ||
                 output_width < MIN_DLSS_OUTPUT_EXTENT ||
                 output_height < MIN_DLSS_OUTPUT_EXTENT || !validQuality(quality))
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_INVALID_ARGUMENT,
@@ -328,7 +329,7 @@ namespace {
             if (!runtime_initialized_ || parameters_ == nullptr)
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_UNAVAILABLE,
                             "NGX runtime is not initialized");
-            if (evaluation.struct_size < sizeof(LfsSceneUpscalerEvaluateV1) ||
+            if (evaluation.struct_size < offsetof(LfsSceneUpscalerEvaluateV1, camera_near) ||
                 !validView(evaluation.view) || evaluation.command_buffer == VK_NULL_HANDLE ||
                 !validImage(evaluation.color, false) ||
                 !validImage(evaluation.depth, false) ||

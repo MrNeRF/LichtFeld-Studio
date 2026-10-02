@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace lfs::vis {
 
@@ -18,11 +19,13 @@ namespace lfs::vis {
         Spatial,
         Temporal,
         NvidiaDlss,
+        AmdFsr3,
     };
 
     enum class SceneUpscalerFallback : std::uint8_t {
         None = 0,
         RuntimeUnavailable,
+        UnsupportedMode,
     };
 
     struct SceneUpscalerPreset {
@@ -50,7 +53,8 @@ namespace lfs::vis {
         constexpr bool operator==(const SceneUpscalerSelection&) const = default;
     };
 
-    [[nodiscard]] LFS_VIS_API std::span<const SceneUpscalerDescriptor> sceneUpscalerDescriptors();
+    // Built-in backends plus every optional plugin that is installed.
+    [[nodiscard]] LFS_VIS_API std::vector<SceneUpscalerDescriptor> sceneUpscalerDescriptors();
     [[nodiscard]] LFS_VIS_API const SceneUpscalerDescriptor& sceneUpscalerDescriptor(
         SceneUpscalerBackend backend);
     [[nodiscard]] LFS_VIS_API std::optional<SceneUpscalerBackend> sceneUpscalerBackendFromId(
@@ -66,7 +70,9 @@ namespace lfs::vis {
         std::optional<std::string_view> explicit_preset_id,
         std::string_view remembered_preset_id);
     [[nodiscard]] LFS_VIS_API SceneUpscalerSelection resolveSceneUpscalerSelection(
-        SceneUpscalerBackend requested, bool runtime_available);
+        SceneUpscalerBackend requested,
+        bool runtime_available,
+        SceneUpscalerFallback fallback = SceneUpscalerFallback::RuntimeUnavailable);
     [[nodiscard]] LFS_VIS_API std::string_view sceneUpscalerFallbackId(
         SceneUpscalerFallback fallback) noexcept;
 

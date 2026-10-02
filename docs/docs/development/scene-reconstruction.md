@@ -20,19 +20,22 @@ The built-in registry exposes:
 | `spatial` | Spatial | `quality` (0.75), `balanced` (0.67), `performance` (0.50) | None |
 | `temporal` | Temporal | `quality` (0.75), `balanced` (0.67), `performance` (0.50) | Depth, motion, jitter and per-view color/depth history |
 | `nvidia-dlss` | NVIDIA DLSS (optional) | `quality` (2/3), `balanced` (0.58), `performance` (0.50) | Depth, motion and jitter; history is owned by the NGX feature |
+| `amd-fsr3` | AMD FSR 3.1 (optional) | `quality` (2/3), `balanced` (1/1.7), `performance` (0.50) | Depth, motion and jitter; history is owned by the FidelityFX feature |
 
 The renderer's existing `render_scale` remains the base scene scale. A selected
 backend's input multiplier is applied independently, so reconstruction does not
 rewrite the base control. Native presentation ignores the multiplier.
-For NVIDIA DLSS, the table records the catalog's bootstrap values only. Once
-NGX is initialized, its optimal-settings query selects the exact render extent
-for the current output size and preset; that result is cached until one of
-those inputs changes.
+For NVIDIA DLSS and AMD FSR 3.1, the table records the catalog's bootstrap
+values only. Once the vendor runtime is initialized, its optimal-settings query
+selects the exact render extent for the current output size and preset; that
+result is cached until one of those inputs changes.
 
 The requested backend, effective backend, fallback state, and runtime readiness
 are distinct. The built-in spatial Vulkan pipeline is created lazily on first
 use. If creation fails, the frame is presented through the native path and the
 transition is logged; the saved request is not silently rewritten.
+Mode-ineligible temporal requests report `unsupported_mode`, while runtime
+failures continue to report `runtime_unavailable`.
 
 ## Spatial path
 
@@ -107,16 +110,16 @@ from the runtime catalog and Native remains selected. If the plugin is valid but
 the separately staged NVIDIA runtime is missing or unsupported, the request is
 retained, presentation falls back atomically to Native, and diagnostics report
 both the NGX failure and the effective Native fallback. The failure is latched
-instead of being retried every frame; selecting Native and then NVIDIA DLSS is
-the explicit retry action after correcting the installation.
+instead of being retried every frame; selecting another backend and then NVIDIA
+DLSS again is the explicit retry action after correcting the installation.
 
 DLSS consumes the same reviewed temporal frame contract as the built-in
 Temporal backend: unjittered current-to-previous pixel motion, the exact jitter
 applied to the rendered color image, scene/camera/backend reset reasons and
 independent main/left/right view identity. Switching between Temporal and DLSS
 changes the history key. A failed DLSS initialization or evaluation is latched
-to native presentation instead of being retried every frame; selecting Native
-before selecting DLSS again is the explicit retry action. Split output is
+to native presentation instead of being retried every frame; selecting another
+backend before selecting DLSS again is the explicit retry action. Split output is
 transactional, so both panels resolve through DLSS or both remain native.
 
 VkSplat publishes positive linear view depth, while NGX expects raster depth.
@@ -139,10 +142,8 @@ cmake -S . -B build -DLFS_ENABLE_NVIDIA_DLSS=ON -DLFS_NVIDIA_DLSS_ROOT=/path/to/
 ```
 
 Both Debug and Release SDK runtimes are supported in ordinary opt-in developer
-builds. Portable configurations default `LFS_ENABLE_NVIDIA_DLSS=ON` and
-therefore require the SDK at `external/nvidia-dlss-sdk` unless
-`LFS_NVIDIA_DLSS_ROOT` is set explicitly. Pass `-DLFS_ENABLE_NVIDIA_DLSS=OFF`
-to build a portable package without the plugin.
+builds. Portable configurations look for the SDK at `external/nvidia-dlss-sdk`
+when the plugin is enabled and `LFS_NVIDIA_DLSS_ROOT` is not set.
 CMake never downloads the SDK or accepts its license for a developer build.
 Anyone redistributing a portable package must satisfy NVIDIA's SDK and runtime
 redistribution terms.
@@ -151,6 +152,64 @@ discovery: it checks out a pinned `NVIDIA/DLSS` revision with Git LFS before
 configuration, then stages the external LichtFeld plugin and matching vendor
 runtime in the package. Missing portable SDK artifacts are fatal rather than
 silently producing a package without the advertised backend.
+
+## Plugin host
+
+Every optional vendor backend goes through the same host code; only the plugin
+module is vendor specific. `rendering/scene_upscaler_plugin.cpp` lists each
+plugin's backend, ABI identifier, directory under `scene_upscalers/`, module
+stem and cache folder, and loads it through the C ABI described above.
+`VulkanScenePluginPipeline` records motion, plugin depth and evaluation for
+whichever plugin is selected, and the viewport, render manager and Vulkan
+bootstrap iterate the plugin list instead of naming vendors. Adding a backend
+means adding a plugin module, one row in that list and one registry descriptor.
+
+Vendor differences are declared by the plugin, not by the host:
+
+- `capabilities` advertises `DYNAMIC_VIEW_IDS` (one feature per independent
+  3D view) and `REQUIRES_PERSPECTIVE` (orthographic views stay native and
+  report `unsupported_mode`).
+- `optimal_settings` returns the exact render extent for an output size and
+  preset and, through the optional `jitter_phase_count` tail, the jitter
+  sequence length the vendor expects. The host wraps its Halton sequence and
+  sizes the static-scene settle burst to that length; 0 keeps the default.
+- Every evaluation carries the frame's near plane, far plane and vertical field
+  of view in an optional tail, for plugins that linearize depth themselves.
+
+The host always supplies jitter-free motion vectors
+(`motion_vectors_include_jitter = 0`) and the exact applied jitter, so plugins
+translate that one convention into their SDK's. When a frame is presented
+again without a newly published color/depth generation, the pipeline reuses the
+last resolved output instead of feeding the same sample into vendor history
+twice.
+
+## Optional AMD FSR 3.1 plugin
+
+The AMD FSR 3.1 plugin builds `lfs_scene_upscaler_amd_fsr3` under
+`scene_upscalers/amd` (`.dll`, `.so`, or `.dylib` on macOS, where it runs on
+MoltenVK). Only that module links the FidelityFX SDK. It consumes the same LDR
+`RGBA8` color, `R32_SFLOAT` raster depth and `RG16F` motion as DLSS, uses a
+neutral pre-exposure and view-space scale, and disables the optional RCAS
+sharpening pass, which hardens splat edges. Reactive and transparency masks
+remain absent until the renderer can publish semantically correct material
+signals. Up to eight views may hold an FSR feature at once.
+
+Ordinary developer builds leave the plugin disabled. Use the
+[AMD FidelityFX SDK v1.1.4 release](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v1.1.4)
+and enable it explicitly:
+
+```sh
+git clone --branch v1.1.4 https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK external/fidelityfx-sdk
+cmake -S . -B build -DLFS_ENABLE_AMD_FSR3=ON -DLFS_AMD_FSR3_ROOT=external/fidelityfx-sdk
+```
+
+When prebuilt libraries are absent, `LFS_AMD_FSR3_BUILD_SDK=ON` builds the FSR
+upscaler and Vulkan backend from an isolated copy of the SDK. Windows uses the
+SDK's own project. Linux and macOS use `src/scene_upscalers/amd_fsr3/posix`,
+which drives the SDK shader compiler with vcpkg's glslang (built with its
+SPIR-V optimizer) and applies small SDK v1.1.4 compatibility patches. On macOS,
+build one architecture at a time. The SDK license is staged next to the plugin
+and installed with the package licenses.
 
 ## Persistence and safe mode
 

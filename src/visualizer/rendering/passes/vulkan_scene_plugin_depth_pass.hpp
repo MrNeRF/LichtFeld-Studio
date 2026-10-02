@@ -14,7 +14,7 @@ namespace lfs::vis {
 
     class VulkanContext;
 
-    struct VulkanSceneDlssDepthParams {
+    struct VulkanScenePluginDepthParams {
         bool enabled = false;
         VkImageView current_depth_view = VK_NULL_HANDLE;
         VkImageLayout current_depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -22,8 +22,8 @@ namespace lfs::vis {
         glm::ivec2 allocation_extent{0, 0};
     };
 
-    [[nodiscard]] inline bool canRecordVulkanSceneDlssDepth(
-        const VulkanSceneDlssDepthParams& params) noexcept {
+    [[nodiscard]] inline bool canRecordVulkanScenePluginDepth(
+        const VulkanScenePluginDepthParams& params) noexcept {
         return params.enabled && params.current_depth_view != VK_NULL_HANDLE &&
                params.depth.available() && params.depth.valid() &&
                params.depth.storage == SceneDepthStorage::VulkanImage &&
@@ -35,7 +35,7 @@ namespace lfs::vis {
                 params.current_depth_layout == VK_IMAGE_LAYOUT_GENERAL);
     }
 
-    [[nodiscard]] constexpr std::uint32_t sceneDlssDepthEncodingCode(
+    [[nodiscard]] constexpr std::uint32_t scenePluginDepthEncodingCode(
         const SceneDepthContract& depth) noexcept {
         if (depth.encoding == SceneDepthEncoding::VulkanNdc)
             return 1;
@@ -44,19 +44,19 @@ namespace lfs::vis {
         return 0;
     }
 
-    class VulkanSceneDlssDepthPass {
+    class VulkanScenePluginDepthPass {
     public:
-        VulkanSceneDlssDepthPass();
-        ~VulkanSceneDlssDepthPass();
+        VulkanScenePluginDepthPass();
+        ~VulkanScenePluginDepthPass();
 
-        VulkanSceneDlssDepthPass(const VulkanSceneDlssDepthPass&) = delete;
-        VulkanSceneDlssDepthPass& operator=(const VulkanSceneDlssDepthPass&) = delete;
-        VulkanSceneDlssDepthPass(VulkanSceneDlssDepthPass&&) noexcept;
-        VulkanSceneDlssDepthPass& operator=(VulkanSceneDlssDepthPass&&) noexcept;
+        VulkanScenePluginDepthPass(const VulkanScenePluginDepthPass&) = delete;
+        VulkanScenePluginDepthPass& operator=(const VulkanScenePluginDepthPass&) = delete;
+        VulkanScenePluginDepthPass(VulkanScenePluginDepthPass&&) noexcept;
+        VulkanScenePluginDepthPass& operator=(VulkanScenePluginDepthPass&&) noexcept;
 
         [[nodiscard]] bool init(VulkanContext& context);
         [[nodiscard]] bool record(VkCommandBuffer command_buffer,
-                                  const VulkanSceneDlssDepthParams& params,
+                                  const VulkanScenePluginDepthParams& params,
                                   std::size_t resource_slot);
         void shutdown();
 

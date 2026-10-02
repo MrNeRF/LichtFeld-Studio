@@ -48,7 +48,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/rendering_manager_vulkan.cpp
         rendering/display_tensors.cpp
         rendering/rendering_manager_viewport.cpp
-        rendering/nvidia_dlss_plugin.cpp
+        rendering/scene_upscaler_plugin.cpp
         rendering/scene_upscaler_registry.cpp
         rendering/scene_temporal_coordinator.cpp
         rendering/scene_temporal_plan.cpp
@@ -70,9 +70,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/passes/vulkan_viewport_pass.cpp
         rendering/passes/vulkan_mesh_pass.cpp
         rendering/passes/vulkan_scene_motion_pass.cpp
-        rendering/passes/vulkan_scene_dlss_depth_pass.cpp
-        rendering/passes/vulkan_scene_dlss_pipeline_contract.cpp
-        rendering/passes/vulkan_scene_dlss_pipeline.cpp
+        rendering/passes/vulkan_scene_plugin_depth_pass.cpp
+        rendering/passes/vulkan_scene_plugin_pipeline_contract.cpp
+        rendering/passes/vulkan_scene_plugin_pipeline.cpp
         rendering/passes/vulkan_scene_depth_history_pass.cpp
         rendering/passes/vulkan_scene_temporal_resolve_pass.cpp
         rendering/passes/vulkan_scene_temporal_pipeline_contract.cpp
@@ -365,7 +365,7 @@ compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/split_view.frag
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vksplat_compose.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vksplat_compose.comp.spv.h" kVkSplatComposeCompSpv
     "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/vulkan/shader/src/slang/display_color.inc")
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_motion_reproject.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_motion_reproject.comp.spv.h" kSceneMotionReprojectCompSpv)
-compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_dlss_depth.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_dlss_depth.comp.spv.h" kSceneDlssDepthCompSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_plugin_depth.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_plugin_depth.comp.spv.h" kScenePluginDepthCompSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_temporal_resolve.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_temporal_resolve.comp.spv.h" kSceneTemporalResolveCompSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_depth_history.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_depth_history.comp.spv.h" kSceneDepthHistoryCompSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.vert.spv.h" kPointCloudVertSpv)
