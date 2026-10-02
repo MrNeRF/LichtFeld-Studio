@@ -4561,7 +4561,7 @@ namespace lfs::vis {
                                         : parameter_manager_->createForDataset({}, {});
         auto result = lfs::core::param::read_training_parameters_from_json(path, current_params);
         if (!result) {
-            state::ConfigLoadFailed{.path = path, .error = result.error()}.emit();
+            state::ConfigLoadFailed{.path = path, .error = std::string(result.error().detail())}.emit();
             return;
         }
         result->optimization.apply_step_scaling();

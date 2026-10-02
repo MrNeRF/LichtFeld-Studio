@@ -183,7 +183,7 @@ namespace {
         const auto imported = lfs::core::param::read_training_parameters_from_json(config_path);
         std::error_code ec;
         std::filesystem::remove(config_path, ec);
-        ASSERT_TRUE(imported) << imported.error();
+        ASSERT_TRUE(imported) << imported.error().detail();
 
         EXPECT_EQ(imported->dataset.data_path, source.dataset.data_path);
         EXPECT_EQ(imported->dataset.output_path, source.dataset.output_path);
@@ -221,7 +221,7 @@ namespace {
         defaults.server.tcp_server_connection_port = 23456;
         const auto partial = lfs::core::param::read_training_parameters_from_json(partial_path, defaults);
         std::filesystem::remove(partial_path, ec);
-        ASSERT_TRUE(partial) << partial.error();
+        ASSERT_TRUE(partial) << partial.error().detail();
         EXPECT_EQ(partial->dataset.max_width, 640);
         EXPECT_EQ(partial->server.tcp_server_connection_port, 23456);
         EXPECT_EQ(partial->optimization.iterations, 4321u);
