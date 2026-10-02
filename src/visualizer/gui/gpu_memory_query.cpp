@@ -292,7 +292,9 @@ namespace lfs::vis::gui {
 
 #ifdef __APPLE__
         struct AcceleratorStats {
-            size_t allocated = 0;
+            // Resident GPU memory of all clients. "Alloc system memory" also
+            // counts reserved address space and routinely exceeds the working set.
+            size_t in_use = 0;
             float utilization = -1.f;
         };
 
@@ -317,9 +319,9 @@ namespace lfs::vis::gui {
                                CFNumberGetValue(static_cast<CFNumberRef>(value), kCFNumberSInt64Type, &out);
                     };
                     int64_t utilization = 0;
-                    int64_t allocated = 0;
-                    if (read(CFSTR("Device Utilization %"), utilization) && read(CFSTR("Alloc system memory"), allocated))
-                        result = AcceleratorStats{.allocated = static_cast<size_t>(std::max<int64_t>(allocated, 0)),
+                    int64_t in_use = 0;
+                    if (read(CFSTR("Device Utilization %"), utilization) && read(CFSTR("In use system memory"), in_use))
+                        result = AcceleratorStats{.in_use = static_cast<size_t>(std::max<int64_t>(in_use, 0)),
                                                   .utilization = std::clamp(static_cast<float>(utilization), 0.f, 100.f)};
                 }
                 CFRelease(stats);
@@ -380,12 +382,12 @@ namespace lfs::vis::gui {
     }
 
     GpuMemoryInfo selectUnifiedGpuMemory(const size_t process_used, const size_t working_set,
-                                         const size_t gpu_allocated, const size_t host_available) {
+                                         const size_t gpu_in_use, const size_t host_available) {
         GpuMemoryInfo info;
         info.unified_memory = true;
         info.process_used = process_used;
         info.total = working_set;
-        const size_t gpu_free = working_set - std::min(gpu_allocated, working_set);
+        const size_t gpu_free = working_set - std::min(gpu_in_use, working_set);
         info.total_used = std::max(working_set - std::min(gpu_free, host_available), std::min(process_used, working_set));
         return info;
     }
@@ -416,7 +418,7 @@ namespace lfs::vis::gui {
             const auto host = lfs::core::host_metrics::memory();
             if (stats && host) {
                 auto info = selectUnifiedGpuMemory(device->process_memory_used_bytes,
-                                                   device->process_memory_budget_bytes, stats->allocated,
+                                                   device->process_memory_budget_bytes, stats->in_use,
                                                    host->available_bytes);
                 info.device_name = shortenGpuDeviceName(device->name);
                 info.gpu_utilization_percent = stats->utilization;
