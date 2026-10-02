@@ -39,6 +39,13 @@ namespace {
         EXPECT_TRUE(s.live_holders.empty());
     }
 
+    TEST(FrameDemandLedger, DeadlineElapsedDuringPresentWakesImmediately) {
+        const auto deadline = t0() + 16ms;
+        EXPECT_DOUBLE_EQ(lfs::vis::secondsUntilFrameDeadline(deadline, t0()), 0.016);
+        EXPECT_DOUBLE_EQ(lfs::vis::secondsUntilFrameDeadline(deadline, deadline), 0.0);
+        EXPECT_DOUBLE_EQ(lfs::vis::secondsUntilFrameDeadline(deadline, t0() + 100ms), 0.0);
+    }
+
     TEST(FrameDemandLedger, OneShotIsConsumedExactlyOnce) {
         FrameDemandLedger ledger;
         int wakes = 0;
@@ -117,6 +124,66 @@ namespace {
         EXPECT_EQ(ledger.snapshot(t0()).live_holders.size(), 0u);
         EXPECT_EQ(ledger.snapshot(t0()).holders_expired, 1u);
         EXPECT_FALSE(ledger.nextDeadline(t0() + 10ms).has_value());
+    }
+
+    TEST(FrameDemandLedger, ThumbnailCompletionCanRequestAViewFromAnAnimationPredicate) {
+        FrameDemandLedger ledger;
+        bool thumbnail_ready = true;
+        auto token = ledger.hold(FrameReason::GuiAnimation, FrameScope::Gui, 0, 0,
+                                 Cadence::display(), Finite::alive([&] {
+                                     // Camera thumbnail readiness is checked by the visible GUI holder.
+                                     // It invalidates the viewport overlay while the plan is evaluated.
+                                     if (thumbnail_ready) {
+                                         ledger.request(FrameRequest{.reason = FrameReason::Overlay,
+                                                                     .scope = FrameScope::View,
+                                                                     .views = 1,
+                                                                     .flags = DirtyFlag::OVERLAY});
+                                     }
+                                     return thumbnail_ready;
+                                 }));
+        const auto plan = ledger.plan(t0());
+        EXPECT_EQ(plan.render_views, 1u);
+        EXPECT_EQ(plan.view_flags[0], DirtyFlag::OVERLAY);
+        EXPECT_TRUE(plan.reasons.test(static_cast<std::size_t>(FrameReason::Overlay)));
+        ledger.noteViewRendered(plan.render_views, plan);
+        ledger.notePresented(plan);
+        thumbnail_ready = false;
+        EXPECT_TRUE(ledger.plan(t0() + 20ms).empty());
+        EXPECT_FALSE(ledger.nextDeadline(t0() + 20ms).has_value());
+        EXPECT_EQ(ledger.snapshot().views_rendered[0], 1u);
+    }
+
+    TEST(FrameDemandLedger, ExternalSchedulerCanPublishDemandDuringDeadlineEvaluation) {
+        FrameDemandLedger ledger;
+        bool publish = true;
+        auto token = ledger.hold(FrameReason::TrainingPreview, FrameScope::View, 1, DirtyFlag::SPLATS,
+                                 Cadence::external([&](FrameClock::time_point now) {
+                                     if (std::exchange(publish, false))
+                                         ledger.request(FrameRequest{.reason = FrameReason::TrainingProgress,
+                                                                     .scope = FrameScope::Gui});
+                                     return std::optional{now + 250ms};
+                                 }),
+                                 Finite::alive([] { return true; }));
+        EXPECT_EQ(ledger.nextDeadline(t0()), t0());
+        const auto plan = ledger.plan(t0());
+        EXPECT_TRUE(plan.present);
+        EXPECT_EQ(plan.render_views, 0u);
+        token.release();
+        EXPECT_TRUE(ledger.plan(t0() + 1s).empty());
+    }
+
+    TEST(FrameDemandLedger, PredicateCanReleaseItsOwnHolder) {
+        FrameDemandLedger ledger;
+        lfs::vis::DemandToken token;
+        token = ledger.hold(FrameReason::GuiAnimation, FrameScope::Gui, 0, 0, Cadence::display(),
+                            Finite::alive([&] {
+                                token.release();
+                                return true;
+                            }));
+        EXPECT_TRUE(ledger.plan(t0()).empty());
+        EXPECT_FALSE(token.active());
+        EXPECT_EQ(ledger.liveHolderCount(), 0u);
+        EXPECT_FALSE(ledger.nextDeadline(t0()).has_value());
     }
 
     TEST(FrameDemandLedger, HolderEndsAtItsDeadline) {

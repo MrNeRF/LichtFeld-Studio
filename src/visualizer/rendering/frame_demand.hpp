@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -109,6 +110,12 @@ namespace lfs::vis {
 
     using FrameClock = std::chrono::steady_clock;
     using ReasonSet = std::bitset<static_cast<std::size_t>(FrameReason::Count)>;
+
+    [[nodiscard]] inline double secondsUntilFrameDeadline(const FrameClock::time_point deadline,
+                                                          const FrameClock::time_point now) {
+        // Due work must wake immediately, including deadlines elapsed during present.
+        return std::max(0.0, std::chrono::duration<double>(deadline - now).count());
+    }
 
     [[nodiscard]] constexpr bool trainingPreviewStepAdvanced(const int previous_iteration,
                                                              const int current_iteration) {
@@ -306,7 +313,7 @@ namespace lfs::vis {
             {
                 std::lock_guard lock(mutex_);
                 id = ++next_holder_id_;
-                holders_.push_back(Holder{
+                holders_.push_back(std::make_shared<Holder>(Holder{
                     .id = id,
                     .reason = reason,
                     .scope = scope,
@@ -317,7 +324,7 @@ namespace lfs::vis {
                     .detail = std::move(detail),
                     .created = FrameClock::now(),
                     .last_fired = {},
-                });
+                }));
                 wake = wake_;
             }
             if (wake && wake_loop)
@@ -340,6 +347,14 @@ namespace lfs::vis {
         // Called once per loop iteration after the event wait. Consumes due
         // one-shots and wakes, advances holders, drops expired ones.
         [[nodiscard]] FramePlan plan(const FrameClock::time_point now) {
+            auto sampled_holders = sampleHolders(now);
+            // GUI predicates can publish thumbnail/overlay changes through request().
+            // Keep their storage alive, but never call application code under mutex_.
+            for (auto& sample : sampled_holders) {
+                sample.expired = sample.holder->finite.expired(now);
+                if (!sample.expired)
+                    sampleExternalDeadline(sample, now);
+            }
             std::lock_guard lock(mutex_);
             FramePlan plan;
 
@@ -358,14 +373,19 @@ namespace lfs::vis {
             one_shots_ = std::move(later);
 
             // Holders.
-            std::erase_if(holders_, [&](const Holder& h) {
-                const bool expired = h.finite.expired(now);
-                if (expired)
+            for (const auto& sample : sampled_holders) {
+                const auto it = std::find(holders_.begin(), holders_.end(), sample.holder);
+                // A callback or another thread may have released this token.
+                if (it == holders_.end())
+                    continue;
+                if (sample.expired) {
+                    holders_.erase(it);
                     ++holders_expired_;
-                return expired;
-            });
-            for (auto& h : holders_) {
-                if (!holderDue(h, now, plan))
+                    continue;
+                }
+                auto& h = **it;
+                if (h.cadence.kind != Cadence::Kind::PerEvent &&
+                    (!sample.next_due || *sample.next_due > now))
                     continue;
                 h.last_fired = now;
                 apply(plan, h.reason, h.scope, h.views, h.flags, h.detail);
@@ -380,6 +400,9 @@ namespace lfs::vis {
 
         // Earliest time anything needs the loop awake; empty means block forever.
         [[nodiscard]] std::optional<FrameClock::time_point> nextDeadline(const FrameClock::time_point now) const {
+            auto sampled_holders = sampleHolders(now);
+            for (auto& sample : sampled_holders)
+                sampleExternalDeadline(sample, now);
             std::lock_guard lock(mutex_);
             std::optional<FrameClock::time_point> earliest;
             const auto consider = [&](const FrameClock::time_point t) {
@@ -390,11 +413,13 @@ namespace lfs::vis {
                 consider(r.not_before > now ? r.not_before : now);
             for (const auto& w : wakes_)
                 consider(w.when);
-            for (const auto& h : holders_) {
-                if (const auto d = h.finite.deadline())
+            for (const auto& sample : sampled_holders) {
+                if (std::find(holders_.begin(), holders_.end(), sample.holder) == holders_.end())
+                    continue;
+                if (const auto d = sample.holder->finite.deadline())
                     consider(*d);
-                if (const auto due = holderNextDue(h, now))
-                    consider(*due);
+                if (sample.next_due)
+                    consider(*sample.next_due);
             }
             return earliest;
         }
@@ -437,7 +462,7 @@ namespace lfs::vis {
             s.last_frame_reasons = last_frame_reasons_;
             s.last_frame_details = last_frame_details_;
             for (const auto& h : holders_)
-                s.live_holders.push_back(LiveHolderInfo{h.reason, h.scope, h.detail, now - h.created});
+                s.live_holders.push_back(LiveHolderInfo{h->reason, h->scope, h->detail, now - h->created});
             return s;
         }
 
@@ -490,9 +515,39 @@ namespace lfs::vis {
             std::string why;
         };
 
-        void releaseHolder(const std::uint64_t id) {
+        struct HolderSample {
+            std::shared_ptr<Holder> holder;
+            std::optional<FrameClock::time_point> next_due;
+            bool expired = false;
+        };
+
+        [[nodiscard]] std::vector<HolderSample> sampleHolders(const FrameClock::time_point now) const {
             std::lock_guard lock(mutex_);
-            std::erase_if(holders_, [id](const Holder& h) { return h.id == id; });
+            std::vector<HolderSample> samples;
+            samples.reserve(holders_.size());
+            for (const auto& holder : holders_)
+                samples.push_back({holder, holderNextDue(*holder, now)});
+            return samples;
+        }
+
+        static void sampleExternalDeadline(HolderSample& sample, const FrameClock::time_point now) {
+            const auto& cadence = sample.holder->cadence;
+            if (cadence.kind == Cadence::Kind::External && cadence.next_due)
+                sample.next_due = cadence.next_due(now);
+        }
+
+        void releaseHolder(const std::uint64_t id) {
+            // Destruction of callback captures can also re-enter the ledger.
+            std::shared_ptr<Holder> released;
+            {
+                std::lock_guard lock(mutex_);
+                const auto it = std::find_if(holders_.begin(), holders_.end(),
+                                             [id](const auto& h) { return h->id == id; });
+                if (it != holders_.end()) {
+                    released = std::move(*it);
+                    holders_.erase(it);
+                }
+            }
         }
 
         static void apply(FramePlan& plan, const FrameReason reason, const FrameScope scope, const ViewMask views,
@@ -522,23 +577,16 @@ namespace lfs::vis {
             case Cadence::Kind::Interval:
                 return h.last_fired == FrameClock::time_point{} ? now : h.last_fired + h.cadence.interval;
             case Cadence::Kind::External:
-                return h.cadence.next_due ? h.cadence.next_due(now) : std::nullopt;
+                return std::nullopt; // evaluated outside the lock by sampleExternalDeadline()
             }
             return std::nullopt;
-        }
-
-        [[nodiscard]] bool holderDue(const Holder& h, const FrameClock::time_point now, const FramePlan&) const {
-            if (h.cadence.kind == Cadence::Kind::PerEvent)
-                return true;
-            const auto due = holderNextDue(h, now);
-            return due && *due <= now;
         }
 
         mutable std::mutex mutex_;
         std::function<void()> wake_;
         FrameClock::duration display_interval_{std::chrono::microseconds{16667}};
         std::vector<FrameRequest> one_shots_;
-        std::vector<Holder> holders_;
+        std::vector<std::shared_ptr<Holder>> holders_;
         std::vector<Wake> wakes_;
         std::uint64_t next_holder_id_ = 0;
         FrameClock::time_point last_plan_started_{};

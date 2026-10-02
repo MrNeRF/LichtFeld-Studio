@@ -2527,14 +2527,17 @@ namespace lfs::vis {
                 timeout_source = source;
             }
         };
-        if (continuous_animation)
-            consider_timeout(displayFrameInterval(), "animation_cadence");
+        if (continuous_animation) {
+            const double elapsed = std::chrono::duration<double>(
+                                       std::chrono::high_resolution_clock::now() - last_frame_time_)
+                                       .count();
+            consider_timeout(std::max(0.0, displayFrameInterval() - elapsed),
+                             "animation_cadence");
+        }
         if (rendering_manager_) {
             if (const auto deadline = rendering_manager_->frameDemandLedger().nextDeadline(
                     std::chrono::steady_clock::now())) {
-                consider_timeout(std::chrono::duration<double>(
-                                     *deadline - std::chrono::steady_clock::now())
-                                     .count(),
+                consider_timeout(secondsUntilFrameDeadline(*deadline, std::chrono::steady_clock::now()),
                                  "frame_ledger");
             }
         }
