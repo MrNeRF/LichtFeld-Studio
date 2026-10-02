@@ -19,17 +19,19 @@ struct RasterParameters {
     float4 panorama;
     uint4 mask_limits;
 };
-struct RasterStatus { ulong required; uint error, blend_threads; };
-// Keep in sync with the host reservation in tile_rasterizer.mm. A multiple
-// of 64 preserves cooperative load boundaries; 576 fits summaries into the
-// retired sort buffers without an extra per-frame GPU allocation.
+struct RasterStatus { ulong required; uint error, blend_threads, maximum_tile_instances; };
+// Keep in sync with the host reservation in tile_rasterizer.mm. Dedicated
+// summaries are admitted against completed frame counts, never sort buffers.
+constant uint kDepthChunkSize=576u;
 // Dense views benefit from earlier depth parallelism. Sparse views retain
 // long serial lists to avoid partial-buffer traffic and replay overhead.
-
+uint depth_split_threshold(device const RasterStatus& status, constant RasterParameters& p) {
+    return status.required > ulong(p.tiles) * 896ul ? 2048u : 16384u;
+}
 uint4 clipped_bounds(ProjectedSplat s, constant RasterParameters& p) {
     if (!all(isfinite(s.mean_depth)) || s.mean_depth.z <= 0 ||
         !all(isfinite(s.conic_opacity)) || !all(isfinite(s.color))) return uint4(0);
-    if(p.mode==3u && p.camera.z==2u) {
+    if(p.camera.z==2u) {
         const uint span=p.columns*16u;
         if(s.bounds.x>=span || s.bounds.z<s.bounds.x || s.bounds.z-s.bounds.x>span ||
            (s.bounds.x%16u) || (s.bounds.z%16u))return uint4(0);
@@ -97,9 +99,6 @@ kernel void scan_add(device ulong* output [[buffer(0)]],
 uint live_sort_blocks(device const RasterStatus& status) {
     return max(1u, uint(((status.error ? 0ul : status.required) + 2047ul) / 2048ul));
 }
-
-
-
 // Both source and intersection sorts use the existing GPU-sized radix scratch.
 void write_sort_dispatch(device const RasterStatus& status, device uint* dispatch_args) {
     const ulong live=status.error?0:status.required;
@@ -117,7 +116,11 @@ kernel void tile_status(device const ulong* counts [[buffer(0)]],
     status.required = p.count ? offsets[p.count - 1] + counts[p.count - 1] : 0;
     status.error = status.required > p.capacity ? 1 : 0;
     status.blend_threads = (p.unused & 128u) ? 32u : 64u;
+    status.maximum_tile_instances=0u;
     write_sort_dispatch(status, dispatch_args);
+    const bool parallel=status.required<=p.mask_limits.z;
+    dispatch_args[18]=parallel?(uint(((status.error?0ul:status.required)+ulong(kDepthChunkSize-1u))/ulong(kDepthChunkSize))+p.tiles)*8u:1u;
+    dispatch_args[19]=1u;dispatch_args[20]=1u;
 }
 // Sort the exact existing radial-distance key before duplicating a source into
 // tiles. Stable tile-only sorting then preserves its full depth and tie order.
@@ -196,7 +199,7 @@ kernel void tile_instances(device const ProjectedSplat* splats [[buffer(0)]],
     ulong at = offsets[i];
     for (uint y = bounds.y / 16; y < (bounds.w + 15) / 16; ++y)
         for (uint x = bounds.x / 16; x < (bounds.z + 15) / 16; ++x) {
-            const uint column=p.mode==3u && p.camera.z==2u?x%p.columns:x;
+            const uint column=p.camera.z==2u?x%p.columns:x;
             const uint tile = y * p.columns + column;
             // Source sorting already preserves the full radial key and ties.
             // The remaining stable pass needs only the exact tile ID.
@@ -403,13 +406,25 @@ kernel void tile_ranges(device const ulong* keys [[buffer(0)]],
 }
 
 // Specialize the blend body to retain only the active renderer features.
-
+kernel void tile_depth_batches(device const uint* ranges [[buffer(0)]],
+                               device uint2* jobs [[buffer(1)]],
+                               constant RasterParameters& p [[buffer(2)]],
+                               device const RasterStatus& status [[buffer(3)]],
+                               uint tile [[thread_position_in_grid]]) {
+    if (tile >= p.tiles || status.error || status.required > p.mask_limits.z)
+        return;
+    const uint begin = ranges[tile * 2u], end = ranges[tile * 2u + 1u];
+    const uint base = begin / kDepthChunkSize + tile;
+    const uint chunks = end - begin > depth_split_threshold(status,p) ? (end - begin) / kDepthChunkSize + uint((end - begin) % kDepthChunkSize != 0u) : uint(end > begin);
+    for (uint chunk = 0u; chunk < chunks; ++chunk)
+        jobs[base + chunk] = uint2(tile, begin + chunk * kDepthChunkSize);
+}
 constant uint kRasterMode [[function_constant(0)]];
 constant uint kRasterFlags [[function_constant(1)]];
 kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                        device const uint* indices [[buffer(1)]],
                        device const uint* ranges [[buffer(2)]],
-                       device const RasterStatus& status [[buffer(3)]],
+                       device RasterStatus& status [[buffer(3)]],
                        constant RasterParameters& p [[buffer(4)]],
                        device const float4* overlay_params [[buffer(5)]],
                        device const uint* overlay_flags [[buffer(6)]],
@@ -419,10 +434,10 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                        device const GutSplat* gut [[buffer(10)]],
                        device const uint* logical_ids [[buffer(11)]],
                        constant uint& logical_count [[buffer(12)]],
-
-
-
-
+                       device const uint2* depth_jobs [[buffer(13)]],
+                       device float4* partial_color [[buffer(14)]],
+                       device float4* partial_depth [[buffer(15)]],
+                       device uint* partial_pick [[buffer(16)]],
                        texture2d<float, access::write> color [[texture(0)]],
                        texture2d<float, access::write> depth [[texture(1)]],
                        texture2d<uint, access::write> pick [[texture(2)]],
@@ -437,7 +452,17 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     // half composition and the GUT saturation/depth convention.
     const bool single_simd=(kRasterFlags&128u)!=0;
     const uint subtiles=single_simd?8u:4u, pixel_height=single_simd?4u:8u;
-    const uint tile=group/subtiles, subtile=group%subtiles;
+    const bool prefix=(kRasterFlags&1024u)!=0u;
+    const bool depth_dispatch=(kRasterFlags&512u)!=0u && !prefix;
+    const uint job_slot=group/subtiles;
+    if(depth_dispatch && depth_jobs[job_slot].x==0xffffffffu)return;
+    const uint tile=depth_dispatch?depth_jobs[job_slot].x:job_slot, subtile=group%subtiles;
+    const uint slot=prefix?ranges[tile*2u]/kDepthChunkSize+tile:job_slot;
+    const bool depth_batch=(kRasterFlags&512u)!=0u && status.required<=p.mask_limits.z && ranges[tile*2u+1u]-ranges[tile*2u]>depth_split_threshold(status,p);
+    if(lane==0u && subtile==0u && !depth_dispatch)
+        atomic_fetch_max_explicit(reinterpret_cast<device atomic_uint*>(&status.maximum_tile_instances),
+                                  ranges[tile*2u+1u]-ranges[tile*2u],memory_order_relaxed);
+    if(depth_dispatch && (!depth_batch || depth_jobs[slot].y==ranges[tile*2u]))return;
     threadgroup float4 means[64], conics[64], colors[64];
     threadgroup GutSplat geometry[64];
     threadgroup half4 macro_chol[64];
@@ -471,7 +496,16 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     const bool valid = pixel.x < p.width && pixel.y < p.height;
     bool done = !valid;
     float local_cutoff=1e-4f;
-
+    if(depth_dispatch) {
+        const uint first=ranges[tile*2u]/kDepthChunkSize+tile;
+        const float prefix_transmittance=valid?partial_color[first*256u+subtile*32u+lane].w:0.f;
+        done=done || prefix_transmittance<1e-4f;
+        // Subsequent chunks can only lower incoming T. A conservative bound
+        // from the prefix avoids resolving contributions guaranteed to lie
+        // behind the final saturation point. Compose replays that one chunk.
+        local_cutoff=1e-4f*.99999f/max(prefix_transmittance,1e-4f);
+        if(simd_all(done))return;
+    }
     float median_transmittance = 1;
     float transmittance = 1, weighted_depth = 0, nearest = 0, median = 1e10f;
     float valid_depth_weight=0;
@@ -482,8 +516,8 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     float3 composed_rgb=0;
     float composed_transmittance=1;
     uint picked = 0xffffffff;
-    const uint begin = status.error ? 0 : ranges[2 * tile];
-    const uint end = status.error ? 0 : ranges[2*tile+1];
+    const uint begin = status.error ? 0 : depth_batch && !prefix?depth_jobs[slot].y:ranges[2 * tile];
+    const uint end = status.error ? 0 : depth_batch?begin+min(kDepthChunkSize,ranges[2*tile+1]-begin):ranges[2*tile+1];
     // A camera ray is invariant across every Gaussian and tile batch. Compute
     // spherical trigonometry once per live pixel, never inside the hot loop.
     float3 gut_origin=0,gut_direction=float3(0,0,1);
@@ -608,7 +642,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             const uint logical=(kRasterFlags&8u)?logical_ids[ids[j]]:ids[j];
             if((kRasterFlags&8u) && logical>=logical_count)continue;
             float2 d = float2(pixel) - means[j].xy;
-            if(p.camera.z==2u && kRasterMode!=3u) d.x-=p.panorama.x*round(d.x/p.panorama.x);
+            if(kRasterFlags&8192u) d.x-=p.panorama.x*round(d.x/p.panorama.x);
             const float4 c = conics[j];
             if (separate_median && median_transmittance > .5f) {
                 // Portal coverage keeps its display footprint, while the
@@ -684,7 +718,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 const half2 center=uniform_macro?macro_center[j]:half2((means[j].xy+p.render_origin.xy-pixel_macro_origin)/overlay_tile_extent);
                 const half4 chol=macro_chol[j];
                 half2 delta=pixel_macro_coord-center;
-                if(p.camera.z==2u && kRasterMode!=3u) delta.x-=half(p.panorama.x/overlay_tile_extent.x)*round(delta.x/half(p.panorama.x/overlay_tile_extent.x));
+                if(kRasterFlags&8192u) delta.x-=half(p.panorama.x/overlay_tile_extent.x)*round(delta.x/half(p.panorama.x/overlay_tile_extent.x));
                 // The macro reference rounds the X product before adding Y.
                 const half dx=half(chol.x*delta.x);
                 const half u=half(dx+chol.y*delta.y),v=half(chol.z*delta.y);
@@ -723,7 +757,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                     // center as the reference, independently of the body
                     // footprint. A half body deliberately leaves q unused.
                     float2 ring_delta=float2(pixel)-overlay_center;
-                    if(p.camera.z==2u && kRasterMode!=3u) ring_delta.x-=p.panorama.x*round(ring_delta.x/p.panorama.x);
+                    if(kRasterFlags&8192u) ring_delta.x-=p.panorama.x*round(ring_delta.x/p.panorama.x);
                     const float sigma_over_2=.5f*(c.x*ring_delta.x*ring_delta.x+c.z*ring_delta.y*ring_delta.y)+c.y*ring_delta.x*ring_delta.y;
                     const float gaussian=exp(-sigma_over_2);
                     const float boundary=(.5f/255.f)/max(c.w,1e-8f);
@@ -737,7 +771,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                     // Desktop marker mode contributes dots only, without the
                     // Gaussian body outside the marker's circular support.
                     float2 marker_delta=float2(pixel)-overlay_center;
-                    if(p.camera.z==2u && kRasterMode!=3u) marker_delta.x-=p.panorama.x*round(marker_delta.x/p.panorama.x);
+                    if(kRasterFlags&8192u) marker_delta.x-=p.panorama.x*round(marker_delta.x/p.panorama.x);
                     // Match the desktop's rounded distance comparisons at
                     // the hard marker boundaries, rather than squared radii.
                     const float marker_distance=length(marker_delta);
@@ -798,7 +832,13 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     if (valid) {
         if(kRasterFlags&64u){rgb=composed_rgb;transmittance=composed_transmittance;}
         const float alpha = 1 - transmittance;
-
+        if(depth_batch) {
+            const uint at=slot*256u+subtile*32u+lane;
+            partial_color[at]=float4(rgb,transmittance);
+            partial_depth[at]=float4(weighted_depth,valid_depth_weight,nearest,median);
+            partial_pick[at]=picked;
+            return;
+        }
         // Premultiplied RGBA. Background alpha participates in composition.
         color.write(float4(rgb + p.background.rgb*p.background.a*transmittance,
                             alpha + p.background.a*transmittance), pixel);
@@ -806,4 +846,134 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
         depth.write(float4(weighted_depth, alpha, (kRasterFlags&2u)?valid_depth_weight:nearest, median), pixel);
         pick.write(uint4(picked), pixel);
     }
+}
+
+// Partial front-to-back colors and weighted depths are linear in incoming T.
+// The prefix already resolved its exact depth and saturation. Later chunks
+// replay only a median crossing or final saturation, using cooperative reads
+// and conservative compaction. No contributors or original IDs are truncated.
+kernel void tile_depth_compose(device const ProjectedSplat* splats [[buffer(0)]],
+                               device const uint* indices [[buffer(1)]],
+                               device const uint* ranges [[buffer(2)]],
+                               device const RasterStatus& status [[buffer(3)]],
+                               constant RasterParameters& p [[buffer(4)]],
+                               device const float4* partial_color [[buffer(14)]],
+                               device const float4* partial_depth [[buffer(15)]],
+                               device const uint* partial_pick [[buffer(16)]],
+                               texture2d<float, access::write> color [[texture(0)]],
+                               texture2d<float, access::write> depth [[texture(1)]],
+                               texture2d<uint, access::write> pick [[texture(2)]],
+                               uint group [[threadgroup_position_in_grid]],
+                               uint lane [[thread_index_in_threadgroup]]) {
+    if(status.required>p.mask_limits.z)return;
+    const uint tile = group / 8u, subtile = group % 8u;
+    const uint2 pixel = uint2(tile % p.columns * 16u + subtile % 2u * 8u + lane % 8u,
+                              tile / p.columns * 16u + subtile / 2u * 4u + lane / 8u);
+    const bool valid = pixel.x < p.width && pixel.y < p.height;
+    const uint begin = status.error ? 0u : ranges[tile * 2u], end = status.error ? 0u : ranges[tile * 2u + 1u];
+    // The prefix pass wrote short, empty and overflow tiles directly.
+    if (end - begin <= depth_split_threshold(status,p))
+        return;
+    threadgroup float4 replay_means[64], replay_conics[64], replay_colors[64];
+    threadgroup uint replay_ids[64];
+    float3 rgb = 0;
+    float transmittance = 1, weighted_depth = 0, valid_depth_weight = 0, nearest = 0, median = 1e10f;
+    uint picked = 0xffffffffu;
+    const uint chunks = (end - begin) / kDepthChunkSize + uint((end - begin) % kDepthChunkSize != 0u);
+    for (uint chunk = 0; chunk < chunks; ++chunk) {
+        const uint batch = begin + chunk * kDepthChunkSize;
+        const bool active = valid && transmittance >= 1e-4f;
+        if (!simd_any(active))
+            break;
+        const uint slot = begin / kDepthChunkSize + tile + (batch - begin) / kDepthChunkSize;
+        const uint at = slot * 256u + subtile * 32u + lane;
+        const float4 rgba = active ? partial_color[at] : float4(0, 0, 0, 1);
+        const float4 z = active ? partial_depth[at] : float4(0);
+        const float incoming = transmittance, next = incoming * rgba.w;
+        const bool crossing = active && incoming > .5f && next <= .5f;
+        const bool saturating = active && next < 1e-4f;
+        bool replay = active && incoming != 1.f && (crossing || saturating);
+        const bool replay_color = replay && saturating;
+        if (active && !replay_color) {
+            rgb += rgba.xyz * incoming;
+            weighted_depth += z.x * incoming;
+            valid_depth_weight += z.y * incoming;
+            if (picked == 0xffffffffu && partial_pick[at] != 0xffffffffu) {
+                picked = partial_pick[at];
+                nearest = z.z;
+            }
+            if (crossing && incoming == 1.f)
+                median = z.w;
+            transmittance = next;
+        }
+        float replay_transmittance = incoming;
+        const uint chunk_size = min(kDepthChunkSize, end - batch);
+        for (uint block = 0; block < chunk_size; block += 64u) {
+            const uint offset = batch + block;
+            if (!simd_any(replay))
+                break;
+            const uint available = min(64u, chunk_size - block);
+            const uint2 live_min = simd_min(replay ? pixel : uint2(0xffffffffu));
+            const uint2 live_max = simd_max(replay ? pixel : uint2(0));
+            uint candidates = 0;
+            for (uint source_offset = 0; source_offset < 64u; source_offset += 32u) {
+                const uint source = source_offset + lane;
+                const uint id = source < available ? indices[offset + source] : 0u;
+                ProjectedSplat v{};
+                if (source < available)
+                    v = splats[id];
+                const uint active = source < available && conic_intersects_pixels(v, live_min, live_max) ? 1u : 0u;
+                const uint destination = candidates + simd_prefix_exclusive_sum(active);
+                candidates += simd_sum(active);
+                if (active) {
+                    replay_means[destination] = v.mean_depth;
+                    replay_means[destination].w = max(8.f, 2.f * log(max(v.conic_opacity.w, .5f / 255.f) * 510.f)) + 1e-3f;
+                    replay_conics[destination] = v.conic_opacity;
+                    replay_colors[destination] = v.color;
+                    replay_ids[destination] = id;
+                }
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+            for (uint j = 0; j < candidates && replay; ++j) {
+                const float2 d = float2(pixel) - replay_means[j].xy;
+                const float4 c = replay_conics[j];
+                const float q = c.x * d.x * d.x + 2 * c.y * d.x * d.y + c.z * d.y * d.y;
+                if (q < 0.f || !isfinite(q) || q > replay_means[j].w)
+                    continue;
+                const float alpha = min(c.w * exp(-.5f * q), .999f);
+                if (alpha < .5f / 255.f)
+                    continue;
+                const float splat_depth = replay_means[j].z;
+                if (replay_color) {
+                    const float weight = alpha * replay_transmittance;
+                    if (picked == 0xffffffffu) {
+                        picked = replay_ids[j];
+                        nearest = splat_depth;
+                    }
+                    if (p.unused & 2u) {
+                        if (splat_depth <= p.clip.y) {
+                            weighted_depth += splat_depth * weight;
+                            valid_depth_weight += weight;
+                        }
+                    } else
+                        weighted_depth += splat_depth * weight;
+                    rgb += clamp(replay_colors[j].xyz, 0.f, 4.f) * weight;
+                }
+                const float remaining = replay_transmittance * (1 - alpha);
+                if (replay_transmittance > .5f && remaining <= .5f)
+                    median = splat_depth;
+                replay_transmittance = remaining;
+                replay = remaining >= 1e-4f && (replay_color || remaining > .5f);
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        if (replay_color)
+            transmittance = replay_transmittance;
+    }
+    if (!valid)
+        return;
+    const float alpha = 1 - transmittance;
+    color.write(float4(rgb + p.background.rgb * p.background.a * transmittance, alpha + p.background.a * transmittance), pixel);
+    depth.write(float4(weighted_depth, alpha, (p.unused & 2u) ? valid_depth_weight : nearest, median), pixel);
+    pick.write(uint4(picked), pixel);
 }

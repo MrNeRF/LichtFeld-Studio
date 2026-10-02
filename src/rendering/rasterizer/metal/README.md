@@ -20,6 +20,11 @@ selection queries and readback tickets. Tensor access uses the public
 Output recycling waits for native producers, readbacks and compositor consumers;
 closed views retire independently.
 
+Dense Gaussian blending can split long lists into parallel summaries. These
+use separate scratch admitted from completed counts within the device working
+set. Growing frames use the complete serial path until that scratch fits;
+parallel summaries never alias sorting buffers.
+
 ## Storage layout
 
 - Geometry: float32 xyz, with float32 or padded IEEE half scale, rotation and

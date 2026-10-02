@@ -150,6 +150,23 @@ static void compare_depth_chunks(id<MTLDevice> device, uint32_t n) {
             compare(actual, std::vector<ProjectedSplat>(splats.begin(), splats.begin() + count), w, h, bg, RasterMode::Gaussian, expected_depth, 1.5f);
         }
     }
+    // Start with one tile, warm its smaller parallel reservation, then expand
+    // every source to four tiles. That first expanded frame must preserve the
+    // complete image before larger summaries can be admitted from its counts.
+    RasterFrame growing(device, w, h, n, n * 4);
+    for (bool expanded : {false, false, true, true, true}) {
+        for (auto& splat : splats)
+            splat.bounds = {0, 0, expanded ? w : 16, expanded ? h : 16};
+        std::memcpy(input.contents, splats.data(), splats.size() * sizeof(ProjectedSplat));
+        auto command = [queue commandBuffer];
+        raster.encode(command, {input}, n, RasterMode::Gaussian, bg, growing);
+        const auto actual = readback(device, command, growing);
+        wait(command);
+        require(growing.status().error == RasterError::None &&
+                    growing.status().required_instances == uint64_t(n) * (expanded ? 4 : 1),
+                "Growing dense frame lost its complete tile membership");
+        compare(actual, splats, w, h, bg, RasterMode::Gaussian);
+    }
     RasterFrame overflow(device, w, h, n, n * 2);
     auto command = [queue commandBuffer];
     raster.encode(command, {input}, n, RasterMode::Gaussian, bg, overflow);
@@ -167,10 +184,8 @@ static void compare_dense_gut_subtiles(id<MTLDevice> device) {
     std::vector<ProjectedSplat> splats(n);
     std::vector<GutSplat> geometry(n);
     for (uint32_t i = 0; i < n; ++i) {
-        splats[i] = {{9, 8, 3, 20}, {1, 0, 1, .05f},
-                     {float(i % 7) / 7, float(i % 11) / 11, float(i % 13) / 13, float(i / 3 + 1)}, {0, 0, w, h}};
-        geometry[i] = {{2.5f, 0, 0, 2}, {0, 2.5f, 0, 0}, {0, 0, 2.5f, 0},
-                       {float(int(i % 5) - 2) * .15f, float(int(i % 7) - 3) * .15f, 3 + .02f * (i % 8), .05f}};
+        splats[i] = {{9, 8, 3, 20}, {1, 0, 1, .05f}, {float(i % 7) / 7, float(i % 11) / 11, float(i % 13) / 13, float(i / 3 + 1)}, {0, 0, w, h}};
+        geometry[i] = {{2.5f, 0, 0, 2}, {0, 2.5f, 0, 0}, {0, 0, 2.5f, 0}, {float(int(i % 5) - 2) * .15f, float(int(i % 7) - 3) * .15f, 3 + .02f * (i % 8), .05f}};
     }
     auto input = [device newBufferWithBytes:splats.data() length:splats.size() * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
     auto gut = [device newBufferWithBytes:geometry.data() length:geometry.size() * sizeof(GutSplat) options:MTLResourceStorageModeShared];
@@ -413,10 +428,12 @@ static void compare_half_ring_threshold(id<MTLDevice> device) {
     const std::array<ProjectedSplat, 2> source = {{
         {{34.547904968f, 66.692443848f, 4.f, 3.f},
          {2.882635355f, .016116982f, 2.940344095f, .790994585f},
-         {.4f, .2f, .1f, 16.f}, {0, 0, 128, 96}},
+         {.4f, .2f, .1f, 16.f},
+         {0, 0, 128, 96}},
         {{82.307426453f, 71.455528259f, 4.f, 3.f},
          {2.921408415f, -.013935118f, 2.862745047f, .772662878f},
-         {.4f, .2f, .1f, 16.f}, {0, 0, 128, 96}},
+         {.4f, .2f, .1f, 16.f},
+         {0, 0, 128, 96}},
     }};
     const std::array<simd_uint2, 2> pixels = {{{33, 68}, {81, 73}}};
     std::array<simd_float4, 207> parameters{};
@@ -584,7 +601,9 @@ static void run(id<MTLDevice> device) {
         const auto sparse_read = readback(device, sparse_command, sparse);
         wait(sparse_command);
         const auto status = sparse.status();
-        require(status.required_instances == (phase == 2 ? 6u : phase == 3 ? 0u : 1u), "Sparse source/instance extent changed the exact count");
+        require(status.required_instances == (phase == 2 ? 6u : phase == 3 ? 0u
+                                                                           : 1u),
+                "Sparse source/instance extent changed the exact count");
         require(status.error == (phase == 2 ? RasterError::InstanceCapacityExceeded : RasterError::None), "Sparse overflow/recovery status differs");
         compare(sparse_read, phase == 2 ? std::vector<ProjectedSplat>{} : sparse_sources, width, height, bg, RasterMode::Gaussian);
     }
@@ -872,9 +891,7 @@ static void compare_tight_projection(id<MTLDevice> device) {
     RasterFrame frames[2] = {{device, w, h, n, n * 63}, {device, w, h, n, n * 63}};
     size_t reduced = 0;
     for (uint32_t scenario = 0; scenario < 8; ++scenario) {
-        Projection camera{matrix_identity_float4x4, matrix_identity_float4x4, {},
-                          {100, 100, 64.25f, 48.75f}, {.01f, 1000, 1, scenario % 2 ? 0.f : .3f},
-                          {w, h, scenario / 4, scenario % 2}};
+        Projection camera{matrix_identity_float4x4, matrix_identity_float4x4, {}, {100, 100, 64.25f, 48.75f}, {.01f, 1000, 1, scenario % 2 ? 0.f : .3f}, {w, h, scenario / 4, scenario % 2}};
         if (scenario % 4 >= 2)
             camera.model_to_world.columns[3].x = .7f;
         Readback images[2];
@@ -904,7 +921,6 @@ static void compare_tight_projection(id<MTLDevice> device) {
     std::printf("Tight Gaussian bounds preserved all pixel/depth/pick bits; removed %zu tile instances.\n", reduced);
 }
 
-
 // The tile radix grows from one byte to two at 257 columns. Compare a fresh
 // full-key frame with reused depth-before-duplication frames and an empty cut;
 // keys must stay stable across radix parity changes and partial edge tiles.
@@ -917,9 +933,7 @@ static void compare_tile_key_widths(id<MTLDevice> device) {
         std::vector<ProjectedSplat> splats(n);
         for (uint32_t i = 0; i < n; ++i) {
             const uint32_t x = i % width;
-            splats[i] = {{float(x), 0, float(i % 7 + 1), 35}, {.02f, 0, 1, .2f},
-                         {float(i % 11) / 11, float(i % 13) / 13, float(i % 17) / 17, float(i % 5 + 1)},
-                         {x > 35 ? x - 35 : 0, 0, std::min(width, x + 36), 1}};
+            splats[i] = {{float(x), 0, float(i % 7 + 1), 35}, {.02f, 0, 1, .2f}, {float(i % 11) / 11, float(i % 13) / 13, float(i % 17) / 17, float(i % 5 + 1)}, {x > 35 ? x - 35 : 0, 0, std::min(width, x + 36), 1}};
         }
         auto input = [device newBufferWithBytes:splats.data() length:n * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
         RasterFrame frame(device, width, 1, n, n * 6);
@@ -952,7 +966,6 @@ static void compare_tile_key_widths(id<MTLDevice> device) {
     }
 }
 
-
 // GUT depth is the closest point on a 3D ray. Deliberately disagree with the
 // projected center Z so the separate 2D Portal median cannot silently win.
 static void compare_portal_gut_median(id<MTLDevice> device) {
@@ -963,8 +976,7 @@ static void compare_portal_gut_median(id<MTLDevice> device) {
     auto queue = [device newCommandQueue];
     TileRasterizer raster(device);
     RasterFrame frame(device, 1, 1, 1, 1);
-    Projection camera{matrix_identity_float4x4, matrix_identity_float4x4, {},
-                      {1, 1, .5f, .5f}, {.01f, 100, 1, .3f}, {1, 1, 0, 0}};
+    Projection camera{matrix_identity_float4x4, matrix_identity_float4x4, {}, {1, 1, .5f, .5f}, {.01f, 100, 1, .3f}, {1, 1, 0, 0}};
     camera.rasterization.w = 1;
     for (auto model : {CameraModel::Perspective, CameraModel::Orthographic})
         for (bool exact : {false, true}) {
@@ -1089,10 +1101,10 @@ static void compare_perspective_depth_boundary(id<MTLDevice> device) {
         0x1.01024e0000000p-7f,
         0x1.35c6880000000p+2f};
     Projection camera{};
-    camera.model_to_world=matrix_identity_float4x4;
+    camera.model_to_world = matrix_identity_float4x4;
     // Desktop import maps dataset Y/Z into visualizer world axes.
-    camera.model_to_world.columns[1].y=-1;
-    camera.model_to_world.columns[2].z=-1;
+    camera.model_to_world.columns[1].y = -1;
+    camera.model_to_world.columns[2].z = -1;
     camera.world_to_camera.columns[0] = {0x1.6a09e60000000p-1f, 0x1.e2b7de0000000p-3f, -0x1.5555560000000p-1f, 0x0.0p+0f};
     camera.world_to_camera.columns[1] = {0x0.0p+0f, -0x1.e2b7de0000000p-1f, -0x1.5555560000000p-2f, 0x0.0p+0f};
     camera.world_to_camera.columns[2] = {-0x1.6a09e60000000p-1f, 0x1.e2b7de0000000p-3f, -0x1.5555560000000p-1f, 0x0.0p+0f};
@@ -1103,33 +1115,34 @@ static void compare_perspective_depth_boundary(id<MTLDevice> device) {
     camera.rasterization = {0x1.0000000000000p+0f, 0x0.0p+0f, 0x1.86a0000000000p+16f, 0x0.0p+0f};
     camera.display = {0x0.0p+0f, 0x1.0000000000000p+0f, 0x0.0p+0f, 0x1.0000000000000p+0f};
     camera.panorama = {0x1.e000000000000p+9f, 0x1.0e00000000000p+9f, 0x0.0p+0f, 0x0.0p+0f};
-    camera.extent={960,540,0,0};
+    camera.extent = {960, 540, 0, 0};
 
-    constexpr uint32_t count=10;
-    const float dc[count*3]{};
-    const auto buffer=[&](const void* data,size_t size) {
+    constexpr uint32_t count = 10;
+    const float dc[count * 3]{};
+    const auto buffer = [&](const void* data, size_t size) {
         return [device newBufferWithBytes:data length:size options:MTLResourceStorageModeShared];
     };
     SplatBuffers input;
-    input.count=count; input.storage=ShStorage::CanonicalFloat32;
-    input.means={buffer(means,sizeof(means))};
-    input.log_scales={buffer(scales,sizeof(scales))};
-    input.rotations={buffer(rotations,sizeof(rotations))};
-    input.opacity_logits={buffer(opacities,sizeof(opacities))};
-    input.sh0={buffer(dc,sizeof(dc))};
-    auto projected=[device newBufferWithLength:count*sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
-    auto queue=[device newCommandQueue];
+    input.count = count;
+    input.storage = ShStorage::CanonicalFloat32;
+    input.means = {buffer(means, sizeof(means))};
+    input.log_scales = {buffer(scales, sizeof(scales))};
+    input.rotations = {buffer(rotations, sizeof(rotations))};
+    input.opacity_logits = {buffer(opacities, sizeof(opacities))};
+    input.sh0 = {buffer(dc, sizeof(dc))};
+    auto projected = [device newBufferWithLength:count * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    auto queue = [device newCommandQueue];
     SplatPreprocessor projection(device);
     TileRasterizer raster(device);
-    RasterFrame frame(device,960,540,count,count*60*34);
-    for (bool exact : {false,true}) {
-        auto command=[queue commandBuffer];
-        projection.encode(command,input,camera,0,PrimitiveMode::Gaussian,{projected});
-        raster.encode(command,{projected},count,RasterMode::Gaussian,{0,0,0,1},frame,{}, {},camera,{},false,false,nullptr,exact);
-        auto actual=readback(device,command,frame);
+    RasterFrame frame(device, 960, 540, count, count * 60 * 34);
+    for (bool exact : {false, true}) {
+        auto command = [queue commandBuffer];
+        projection.encode(command, input, camera, 0, PrimitiveMode::Gaussian, {projected});
+        raster.encode(command, {projected}, count, RasterMode::Gaussian, {0, 0, 0, 1}, frame, {}, {}, camera, {}, false, false, nullptr, exact);
+        auto actual = readback(device, command, frame);
         wait(command);
-        require(frame.status().error==RasterError::None,"Perspective boundary rasterization failed");
-        const auto depth=reinterpret_cast<const float*>(static_cast<const char*>(actual.depth.contents)+536*actual.depth_stride)+238*4;
+        require(frame.status().error == RasterError::None, "Perspective boundary rasterization failed");
+        const auto depth = reinterpret_cast<const float*>(static_cast<const char*>(actual.depth.contents) + 536 * actual.depth_stride) + 238 * 4;
         check_perspective_snapshot(device, projected, count, 238, 536, depth,
                                    3.9756839275360107f, exact,
                                    "Perspective rounding changed median from foreground to distant background");
@@ -1194,10 +1207,10 @@ static void compare_reverse_perspective_depth_boundary(id<MTLDevice> device) {
         0x1.dce3860000000p+1f,
         0x1.9152ba0000000p+0f};
     Projection camera{};
-    camera.model_to_world=matrix_identity_float4x4;
+    camera.model_to_world = matrix_identity_float4x4;
     // Desktop import maps dataset Y/Z into visualizer world axes.
-    camera.model_to_world.columns[1].y=-1;
-    camera.model_to_world.columns[2].z=-1;
+    camera.model_to_world.columns[1].y = -1;
+    camera.model_to_world.columns[2].z = -1;
     camera.world_to_camera.columns[0] = {-0x1.6a09e60000000p-1f, -0x1.2c834a0000000p-3f, 0x1.6228660000000p-1f, 0x0.0p+0f};
     camera.world_to_camera.columns[1] = {0x0.0p+0f, -0x1.f4dad20000000p-1f, -0x1.a8fd480000000p-3f, 0x0.0p+0f};
     camera.world_to_camera.columns[2] = {0x1.6a09e60000000p-1f, -0x1.2c834a0000000p-3f, 0x1.6228660000000p-1f, 0x0.0p+0f};
@@ -1208,33 +1221,34 @@ static void compare_reverse_perspective_depth_boundary(id<MTLDevice> device) {
     camera.rasterization = {0x1.0000000000000p+0f, 0x0.0p+0f, 0x1.86a0000000000p+16f, 0x0.0p+0f};
     camera.display = {0x0.0p+0f, 0x1.0000000000000p+0f, 0x0.0p+0f, 0x1.0000000000000p+0f};
     camera.panorama = {0x1.e000000000000p+9f, 0x1.0e00000000000p+9f, 0x0.0p+0f, 0x0.0p+0f};
-    camera.extent={960,540,0,0};
+    camera.extent = {960, 540, 0, 0};
 
-    constexpr uint32_t count=13;
-    const float dc[count*3]{};
-    const auto buffer=[&](const void* data,size_t size) {
+    constexpr uint32_t count = 13;
+    const float dc[count * 3]{};
+    const auto buffer = [&](const void* data, size_t size) {
         return [device newBufferWithBytes:data length:size options:MTLResourceStorageModeShared];
     };
     SplatBuffers input;
-    input.count=count; input.storage=ShStorage::CanonicalFloat32;
-    input.means={buffer(means,sizeof(means))};
-    input.log_scales={buffer(scales,sizeof(scales))};
-    input.rotations={buffer(rotations,sizeof(rotations))};
-    input.opacity_logits={buffer(opacities,sizeof(opacities))};
-    input.sh0={buffer(dc,sizeof(dc))};
-    auto projected=[device newBufferWithLength:count*sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
-    auto queue=[device newCommandQueue];
+    input.count = count;
+    input.storage = ShStorage::CanonicalFloat32;
+    input.means = {buffer(means, sizeof(means))};
+    input.log_scales = {buffer(scales, sizeof(scales))};
+    input.rotations = {buffer(rotations, sizeof(rotations))};
+    input.opacity_logits = {buffer(opacities, sizeof(opacities))};
+    input.sh0 = {buffer(dc, sizeof(dc))};
+    auto projected = [device newBufferWithLength:count * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    auto queue = [device newCommandQueue];
     SplatPreprocessor projection(device);
     TileRasterizer raster(device);
-    RasterFrame frame(device,960,540,count,count*60*34);
-    for (bool exact : {false,true}) {
-        auto command=[queue commandBuffer];
-        projection.encode(command,input,camera,0,PrimitiveMode::Gaussian,{projected});
-        raster.encode(command,{projected},count,RasterMode::Gaussian,{0,0,0,1},frame,{}, {},camera,{},false,false,nullptr,exact);
-        auto actual=readback(device,command,frame);
+    RasterFrame frame(device, 960, 540, count, count * 60 * 34);
+    for (bool exact : {false, true}) {
+        auto command = [queue commandBuffer];
+        projection.encode(command, input, camera, 0, PrimitiveMode::Gaussian, {projected});
+        raster.encode(command, {projected}, count, RasterMode::Gaussian, {0, 0, 0, 1}, frame, {}, {}, camera, {}, false, false, nullptr, exact);
+        auto actual = readback(device, command, frame);
         wait(command);
-        require(frame.status().error==RasterError::None,"Perspective boundary rasterization failed");
-        const auto depth=reinterpret_cast<const float*>(static_cast<const char*>(actual.depth.contents)+356*actual.depth_stride)+396*4;
+        require(frame.status().error == RasterError::None, "Perspective boundary rasterization failed");
+        const auto depth = reinterpret_cast<const float*>(static_cast<const char*>(actual.depth.contents) + 356 * actual.depth_stride) + 396 * 4;
         check_perspective_snapshot(device, projected, count, 396, 356, depth,
                                    10.653661727905273f, exact,
                                    "Reverse-view perspective rounding moved the median across a depth gap");

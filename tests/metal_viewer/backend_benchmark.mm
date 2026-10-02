@@ -1040,6 +1040,7 @@ namespace {
                                     {"reserved_instances", diagnostics->reserved_instances},
                                     {"input_splats", diagnostics->input_splats},
                                     {"blend_threads_per_group", diagnostics->blend_threads},
+                                    {"maximum_tile_instances", diagnostics->maximum_tile_instances},
                                     {"counter_timestamps_available", diagnostics->counter_timestamps_available}};
             if (o.profile_gpu) {
                 const std::array<const char*, 6> stages{"command", "projection", "instances", "sort", "blend", "present"};

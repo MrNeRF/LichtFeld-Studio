@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "tile_rasterizer.hpp"
+#include "frame_budget.hpp"
 #include "gpu_profile.hpp"
 #include "tile_shader_source.hpp"
 #include <array>
@@ -17,6 +18,10 @@
 namespace lfs::rendering::metal {
     namespace {
         // Keep in sync with the embedded Metal shader.
+        constexpr uint32_t kDepthChunkSize = 576;
+        // Below this length the extra summary/compose passes cost more than
+        // serial blending in the real-scene corpus; keep that cheaper path.
+        constexpr uint32_t kParallelMinTileInstances = 32768;
         uint32_t ceil_div(uint32_t n, uint32_t d) { return n / d + (n % d != 0); }
         struct alignas(16) RasterParameters {
             uint32_t count, width, height, columns, tiles, capacity, mode, unused;
@@ -75,6 +80,8 @@ namespace lfs::rendering::metal {
         id<MTLDevice> device;
         uint32_t width, height, max_splats, capacity, tiles, columns, sort_blocks;
         id<MTLBuffer> counts, offsets, status, histogram, histogram_offsets, digit_offsets, ranges, dispatch_args;
+        id<MTLBuffer> depth_jobs, partial_color, partial_depth, partial_pick;
+        uint32_t parallel_instances = 0;
         std::array<id<MTLBuffer>, 2> keys, indices;
         id<MTLTexture> color, depth, pick;
         ScanStorage count_scan;
@@ -98,8 +105,7 @@ namespace lfs::rendering::metal {
         f.counts = allocate(device, size_t(max_splats) * 8);
         f.offsets = allocate(device, size_t(max_splats) * 8);
         f.status = allocate(device, sizeof(RasterStatus), MTLResourceStorageModeShared);
-        // Three raster dispatches plus at most four live histogram scan levels.
-        // ceil(UINT32_MAX / 2048) * 256 requires four 256-way scan levels.
+        // Source/instance sorting and an optional parallel blend dispatch.
         f.dispatch_args = allocate(device, 21 * sizeof(uint32_t));
         f.ranges = allocate(device, size_t(f.tiles) * 8);
         for (int i = 0; i < 2; ++i) {
@@ -237,7 +243,7 @@ namespace lfs::rendering::metal {
             throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal tile shader compilation failed");
         impl_->library = library;
         for (const char* name : {"tile_counts", "scan_blocks", "scan_add", "tile_status", "source_keys", "tile_instances",
-                                 "tile_histogram", "tile_scatter", "source_histogram", "source_scatter", "source_ranges", "tile_ranges", "source_compact", "source_permutation", "digit_scan", "digit_offsets"}) {
+                                 "tile_histogram", "tile_scatter", "source_histogram", "source_scatter", "source_ranges", "tile_ranges", "tile_depth_batches", "tile_depth_compose", "source_compact", "source_permutation", "digit_scan", "digit_offsets"}) {
             const bool source_keys = (std::string_view(name) == "source_histogram" || std::string_view(name) == "source_scatter" || std::string_view(name) == "source_ranges");
             const char* function_name = std::string_view(name) == "source_ranges" ? "tile_ranges"
                                         : source_keys                             ? (std::string_view(name) == "source_histogram" ? "tile_histogram" : "tile_scatter")
@@ -317,9 +323,16 @@ namespace lfs::rendering::metal {
         check_mask(overlay.preview, preview_count);
         bool single_simd = mode == RasterMode::Gaussian && projection.display.z != 1.f;
         RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u) | (macro_half_display ? 64u : 0u) | (single_simd ? 128u : 0u) | (exact_median ? 2048u : 0u) | (background.w == 1.f ? 4096u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
+        // Keep periodic GS arithmetic out of the perspective/orthographic blend
+        // specialization. A runtime branch in the contributor loop prevents the
+        // compiler from retaining its compact ordinary-GS arithmetic.
+        if (projection.extent.z == uint32_t(CameraModel::Equirectangular) && mode != RasterMode::Gut)
+            p.unused |= 8192u;
         // Compile/cache the default before reserving the frame or encoding work. A
         // specialization failure cannot strand its busy flag or partial scratch.
         auto blend_pipeline = impl_->blendPipeline(uint32_t(mode), p.unused);
+        id<MTLComputePipelineState> prefix_pipeline = nil;
+        bool depth_batches = false;
         if (f->in_flight.exchange(true, std::memory_order_acq_rel))
             throw std::logic_error(std::format("Metal viewer frame reservation is still in flight (extent={}x{}, capacity={}, count={})", f->width, f->height, f->capacity, count));
         // Completion already publishes this shared status; inspecting the last
@@ -332,6 +345,40 @@ namespace lfs::rendering::metal {
             if (count >= 4096 && count <= f->capacity && f->previous_source_count == count &&
                 f->completed.load(std::memory_order_acquire)) {
                 const auto previous = *static_cast<const RasterStatus*>(f->status.contents);
+                // The former sort-buffer alias only admitted this optimization
+                // at small extents. Own scratch follows completed dense counts,
+                // leaving the maximum sort reservation and sparse frames alone.
+                if (mode == RasterMode::Gaussian && !(p.unused & (1u | 4u | 8u | 16u | 32u | 64u | 8192u)) &&
+                    previous.error == RasterError::None &&
+                    previous.maximum_tile_instances > kParallelMinTileInstances) {
+                    const uint32_t needed = uint32_t(std::min<uint64_t>(f->capacity, previous.required_instances + previous.required_instances / 8));
+                    if (needed > f->parallel_instances) {
+                        const size_t slots = ceil_div(needed, kDepthChunkSize) + size_t(f->tiles);
+                        const size_t rgba_bytes = slots * 256 * 16, pick_bytes = slots * 256 * 4, job_bytes = slots * 8;
+                        const uint64_t allocated = impl_->device.currentAllocatedSize, recommended = impl_->device.recommendedMaxWorkingSetSize;
+                        if (rgba_bytes <= impl_->device.maxBufferLength && pick_bytes <= impl_->device.maxBufferLength &&
+                            frameFitsWorkingSet(allocated, rgba_bytes * 2 + pick_bytes + job_bytes, recommended)) {
+                            auto jobs = [impl_->device newBufferWithLength:job_bytes options:MTLResourceStorageModePrivate];
+                            auto colors = [impl_->device newBufferWithLength:rgba_bytes options:MTLResourceStorageModePrivate];
+                            auto depths = [impl_->device newBufferWithLength:rgba_bytes options:MTLResourceStorageModePrivate];
+                            auto picks = [impl_->device newBufferWithLength:pick_bytes options:MTLResourceStorageModePrivate];
+                            if (jobs && colors && depths && picks) {
+                                f->depth_jobs = jobs;
+                                f->partial_color = colors;
+                                f->partial_depth = depths;
+                                f->partial_pick = picks;
+                                f->parallel_instances = needed;
+                            }
+                        }
+                    }
+                    if (f->parallel_instances) {
+                        depth_batches = true;
+                        p.unused |= 512u;
+                        p.mask_limits.z = f->parallel_instances;
+                        blend_pipeline = impl_->blendPipeline(uint32_t(mode), p.unused);
+                        prefix_pipeline = impl_->blendPipeline(uint32_t(mode), p.unused | 1024u);
+                    }
+                }
                 source_sorted = previous.error == RasterError::None &&
                                 previous.required_instances > uint64_t(count) * 5 / 4;
                 if (mode == RasterMode::Gut && previous.error == RasterError::None &&
@@ -483,6 +530,17 @@ namespace lfs::rendering::metal {
             [e endEncoding];
         }
 
+        if (depth_batches) {
+            auto clear_jobs = [command blitCommandEncoder];
+            [clear_jobs fillBuffer:f->depth_jobs range:NSMakeRange(0, f->depth_jobs.length) value:255];
+            [clear_jobs endEncoding];
+            e = impl_->begin(command, "tile_depth_batches", profile, GpuStage::Blend);
+            [e setBuffer:f->ranges offset:0 atIndex:0];
+            [e setBuffer:f->depth_jobs offset:0 atIndex:1];
+            [e setBytes:&p length:sizeof(p) atIndex:2];
+            [e setBuffer:f->status offset:0 atIndex:3];
+            dispatch(e, f->tiles);
+        }
         e = profiledCompute(command, profile, GpuStage::Blend);
         if (!e)
             throw std::runtime_error(std::format("Could not encode Metal viewer blend pass (command_status={}, count={}, extent={}x{})", long(command.status), count, f->width, f->height));
@@ -490,6 +548,10 @@ namespace lfs::rendering::metal {
         [e setComputePipelineState:blend_pipeline];
         set_projected(e);
         const uint32_t sorted = (4 + (std::bit_width(f->tiles - 1) + 7) / 8) % 2;
+        [e setBuffer:f->depth_jobs ?: f->counts offset:0 atIndex:13];
+        [e setBuffer:f->partial_color ?: f->counts offset:0 atIndex:14];
+        [e setBuffer:f->partial_depth ?: f->counts offset:0 atIndex:15];
+        [e setBuffer:f->partial_pick ?: f->counts offset:0 atIndex:16];
         [e setBuffer:gut.buffer ?: f->counts offset:gut.buffer ? gut.offset : 0 atIndex:10];
         [e setBuffer:f->indices[sorted] offset:0 atIndex:1];
         [e setBuffer:f->ranges offset:0 atIndex:2];
@@ -504,7 +566,30 @@ namespace lfs::rendering::metal {
         [e setTexture:f->depth atIndex:1];
         [e setTexture:f->pick atIndex:2];
 
-        [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * (single_simd ? 8 : 4), 1, 1) threadsPerThreadgroup:MTLSizeMake(single_simd ? 32 : 64, 1, 1)];
+        if (depth_batches) {
+            [e setComputePipelineState:prefix_pipeline];
+            [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * 8, 1, 1) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+            [e memoryBarrierWithScope:MTLBarrierScopeBuffers];
+            [e setComputePipelineState:blend_pipeline];
+            [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:18 * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+        } else
+            [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * (single_simd ? 8 : 4), 1, 1) threadsPerThreadgroup:MTLSizeMake(single_simd ? 32 : 64, 1, 1)];
         [e endEncoding];
+        if (depth_batches) {
+            e = impl_->begin(command, "tile_depth_compose", profile, GpuStage::Blend);
+            set_projected(e);
+            [e setBuffer:f->indices[sorted] offset:0 atIndex:1];
+            [e setBuffer:f->ranges offset:0 atIndex:2];
+            [e setBuffer:f->status offset:0 atIndex:3];
+            [e setBytes:&p length:sizeof(p) atIndex:4];
+            [e setBuffer:f->partial_color offset:0 atIndex:14];
+            [e setBuffer:f->partial_depth offset:0 atIndex:15];
+            [e setBuffer:f->partial_pick offset:0 atIndex:16];
+            [e setTexture:f->color atIndex:0];
+            [e setTexture:f->depth atIndex:1];
+            [e setTexture:f->pick atIndex:2];
+            [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * 8, 1, 1) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+            [e endEncoding];
+        }
     }
 } // namespace lfs::rendering::metal

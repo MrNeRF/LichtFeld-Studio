@@ -1424,6 +1424,7 @@ namespace lfs::vis {
                 const auto status = frame->raster->status();
                 result.required_instances = status.required_instances;
                 result.blend_threads = status.blend_threads;
+                result.maximum_tile_instances = status.maximum_tile_instances;
             }
             result.gpu_command_ms = (frame->command.GPUEndTime - frame->command.GPUStartTime) * 1000.;
             if (!std::isfinite(result.gpu_command_ms) || result.gpu_command_ms < 0)

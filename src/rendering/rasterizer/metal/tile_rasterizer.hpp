@@ -14,11 +14,13 @@ namespace lfs::rendering::metal {
         uint64_t required_instances;
         RasterError error;
         uint32_t blend_threads; // completed GPU dispatch: 32 or 64; reuses reserved status space
+        uint32_t maximum_tile_instances;
     };
-    static_assert(sizeof(RasterStatus) == 16);
+    static_assert(sizeof(RasterStatus) == 24);
 
-    // One reservation per in-flight frame. All GPU buffers and textures are allocated
-    // up front; encode neither allocates frame storage nor reads counts back to CPU.
+    // One reservation per in-flight frame. Core scratch and outputs are allocated
+    // up front. Optional parallel summaries follow already completed dense counts
+    // within the device working set; encode never waits for a GPU count readback.
     // Completion releases the reservation even if its public wrapper is destroyed.
     class RasterFrame {
     public:

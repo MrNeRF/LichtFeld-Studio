@@ -387,6 +387,11 @@ static void run(bool compare_vulkan) {
     require(vis::MetalViewportRenderer::supports(model, request), "3DGS panorama was rejected");
     const auto gaussian_panorama = snapshot(request);
     require(gaussian_panorama.ptr<float>()[center] > .3f, "3DGS panorama lost the forward hemisphere");
+    model.means_raw() = Tensor::from_vector(std::vector<float>{0, 0, 3}, {1, 3}, Device::GPU);
+    const auto gaussian_seam = snapshot(request);
+    require(gaussian_seam.ptr<float>()[seam_row] > .3f && gaussian_seam.ptr<float>()[seam_row + 95 * 3] > .3f,
+            "3DGS panorama clipped the rear hemisphere or lost a longitude seam");
+    model.means_raw() = Tensor::from_vector(std::vector<float>{0, 0, -3}, {1, 3}, Device::GPU);
     request.gut = true;
     request.equirectangular = false;
     require(renderer.releaseAll().has_value(), "Native scene release failed");
