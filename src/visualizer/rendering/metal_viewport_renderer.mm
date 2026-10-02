@@ -15,6 +15,8 @@
 #include "selection_query.hpp"
 #include "splat_preprocessor.hpp"
 #include "tile_rasterizer.hpp"
+#include "vulkan_scene_output.hpp"
+#include "window/vulkan_context.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -845,7 +847,7 @@ namespace lfs::vis {
             [f.command waitUntilCompleted];
             if (f.command.status != MTLCommandBufferStatusCompleted)
                 throw std::runtime_error(std::format("Metal point raster failed (command_status={}, error={})", long(f.command.status), f.command.error.localizedDescription.UTF8String ?: "none"));
-            return PointSceneRenderer::RenderResult{.image = f.color.image, .image_view = f.color.view, .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .generation = f.generation, .depth_image = f.depth.image, .depth_image_view = f.depth.view, .depth_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .depth_generation = f.generation, .size = f.size, .flip_y = false, .viewer_backend = rendering::ViewerBackend::Metal};
+            return PointSceneRenderer::RenderResult{.image = sceneImageHandle(f.color.image), .image_view = sceneImageViewHandle(f.color.view), .image_layout = sceneImageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL), .generation = f.generation, .depth_image = sceneImageHandle(f.depth.image), .depth_image_view = sceneImageViewHandle(f.depth.view), .depth_image_layout = sceneImageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL), .depth_generation = f.generation, .size = f.size, .flip_y = false, .viewer_backend = rendering::ViewerBackend::Metal};
         } catch (const std::exception& e) { return nativeError(e); }
     }
     bool MetalViewportRenderer::supports(const core::SplatData& model, const rendering::ViewportRenderRequest& r) {
@@ -1222,7 +1224,7 @@ namespace lfs::vis {
             i.serial = serial;
             f.consumer_serial = context.lastFrameSubmitSerial() + (context.hasActiveFrame() ? 1 : 0);
             i.target(slot).latest = &f;
-            return SceneRenderer::RenderResult{.image = f.color.image, .image_view = f.color.view, .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .generation = f.generation, .depth_image = f.depth.image, .depth_image_view = f.depth.view, .depth_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .depth_generation = f.generation, .size = f.size, .alloc_size = f.size, .flip_y = false, .completion_semaphore = i.completion, .completion_value = serial, .lod_streaming_active = refine, .viewer_backend = rendering::ViewerBackend::Metal};
+            return SceneRenderer::RenderResult{.image = sceneImageHandle(f.color.image), .image_view = sceneImageViewHandle(f.color.view), .image_layout = sceneImageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL), .generation = f.generation, .depth_image = sceneImageHandle(f.depth.image), .depth_image_view = sceneImageViewHandle(f.depth.view), .depth_image_layout = sceneImageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL), .depth_generation = f.generation, .size = f.size, .alloc_size = f.size, .flip_y = false, .completion_semaphore = sceneTimelineHandle(i.completion), .completion_value = serial, .lod_streaming_active = refine, .viewer_backend = rendering::ViewerBackend::Metal};
         } catch (const std::exception& e) { return nativeError(e); }
     }
     glm::ivec2 MetalViewportRenderer::size(Slot slot) const {

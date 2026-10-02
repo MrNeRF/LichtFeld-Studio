@@ -26,6 +26,7 @@
 #include "scene_upscaler_plugin.hpp"
 #include "scene_upscaler_registry.hpp"
 #include "vksplat_shared_scratch_install.hpp"
+#include "vulkan_scene_output.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
 #endif
@@ -3036,7 +3037,7 @@ namespace lfs::vis {
                     }
                     note_lod_page_generation(result->lod_page_generation);
                     note_vksplat_render_progress(*result);
-                    latest_vksplat_completion_semaphore = result->completion_semaphore;
+                    latest_vksplat_completion_semaphore = vulkanSceneTimeline(result->completion_semaphore);
                     latest_vksplat_completion_value = result->completion_value;
                     lfs::rendering::FrameMetadata metadata{};
                     metadata.valid = true;
@@ -3044,13 +3045,13 @@ namespace lfs::vis {
                     metadata.viewer_backend_mask = rendering::viewerBackendBit(result->viewer_backend);
                     return RenderedPanel{.image = nullptr,
                                          .metadata = std::move(metadata),
-                                         .external_image = result->image,
-                                         .external_image_view = result->image_view,
-                                         .external_image_layout = result->image_layout,
+                                         .external_image = vulkanSceneImage(result->image),
+                                         .external_image_view = vulkanSceneImageView(result->image_view),
+                                         .external_image_layout = vulkanSceneImageLayout(result->image_layout),
                                          .external_image_generation = result->generation,
-                                         .depth_image = result->depth_image,
-                                         .depth_image_view = result->depth_image_view,
-                                         .depth_image_layout = result->depth_image_layout,
+                                         .depth_image = vulkanSceneImage(result->depth_image),
+                                         .depth_image_view = vulkanSceneImageView(result->depth_image_view),
+                                         .depth_image_layout = vulkanSceneImageLayout(result->depth_image_layout),
                                          .depth_image_format = VK_FORMAT_R32_SFLOAT,
                                          .depth_image_generation = result->depth_generation,
                                          .depth_image_size = result->size,
@@ -3611,9 +3612,9 @@ namespace lfs::vis {
                                         compare_panel.metadata.valid = true;
                                         compare_panel.metadata.flip_y = rendered->flip_y;
                                         compare_panel.metadata.viewer_backend_mask = rendering::viewerBackendBit(rendered->viewer_backend);
-                                        compare_panel.external_image = rendered->image;
-                                        compare_panel.external_image_view = rendered->image_view;
-                                        compare_panel.external_image_layout = rendered->image_layout;
+                                        compare_panel.external_image = vulkanSceneImage(rendered->image);
+                                        compare_panel.external_image_view = vulkanSceneImageView(rendered->image_view);
+                                        compare_panel.external_image_layout = vulkanSceneImageLayout(rendered->image_layout);
                                         compare_panel.external_image_generation = rendered->generation;
                                         compare_panel.flip_y = rendered->flip_y;
                                         compare_panel.size = rendered->size;
@@ -3956,9 +3957,9 @@ namespace lfs::vis {
                 render_lock.reset();
                 view_state.vksplat_stale_frame_guard_.onSuccess();
                 clearVulkanViewportImageState(view_state, render_result->size, render_result->flip_y);
-                view_state.vulkan_external_viewport_image_ = render_result->image;
-                view_state.vulkan_external_viewport_image_view_ = render_result->image_view;
-                view_state.vulkan_external_viewport_image_layout_ = render_result->image_layout;
+                view_state.vulkan_external_viewport_image_ = vulkanSceneImage(render_result->image);
+                view_state.vulkan_external_viewport_image_view_ = vulkanSceneImageView(render_result->image_view);
+                view_state.vulkan_external_viewport_image_layout_ = vulkanSceneImageLayout(render_result->image_layout);
                 view_state.vulkan_external_viewport_image_generation_ = render_result->generation;
 
                 lfs::rendering::FrameMetadata metadata{};
@@ -3993,12 +3994,12 @@ namespace lfs::vis {
                 if (!frame_ctx.scene_state.meshes.empty() ||
                     environmentBackgroundEnabled(frame_settings)) {
                     auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
-                    if (render_result->depth_image_view != VK_NULL_HANDLE) {
+                    if (vulkanSceneImageView(render_result->depth_image_view) != VK_NULL_HANDLE) {
                         // Hardware depth attachment stores Vulkan-native NDC z; the
                         // depth-blit pass can use it directly without near/far conversion.
-                        mesh_frame.depth_blit.external_image = render_result->depth_image;
-                        mesh_frame.depth_blit.external_image_view = render_result->depth_image_view;
-                        mesh_frame.depth_blit.external_image_layout = render_result->depth_image_layout;
+                        mesh_frame.depth_blit.external_image = vulkanSceneImage(render_result->depth_image);
+                        mesh_frame.depth_blit.external_image_view = vulkanSceneImageView(render_result->depth_image_view);
+                        mesh_frame.depth_blit.external_image_layout = vulkanSceneImageLayout(render_result->depth_image_layout);
                         mesh_frame.depth_blit.external_image_format = VK_FORMAT_R32_SFLOAT;
                         mesh_frame.depth_blit.external_image_generation = render_result->depth_generation;
                         mesh_frame.depth_blit.external_image_size = render_result->size;
@@ -4283,14 +4284,14 @@ namespace lfs::vis {
                             const bool publish_mesh_frame =
                                 !frame_ctx.scene_state.meshes.empty() ||
                                 environmentBackgroundEnabled(frame_settings) ||
-                                render_result.depth_image_view != VK_NULL_HANDLE ||
+                                vulkanSceneImageView(render_result.depth_image_view) != VK_NULL_HANDLE ||
                                 pending_split_view.enabled;
                             if (publish_mesh_frame) {
                                 auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
-                                if (render_result.depth_image_view != VK_NULL_HANDLE) {
-                                    mesh_frame.depth_blit.external_image = render_result.depth_image;
-                                    mesh_frame.depth_blit.external_image_view = render_result.depth_image_view;
-                                    mesh_frame.depth_blit.external_image_layout = render_result.depth_image_layout;
+                                if (vulkanSceneImageView(render_result.depth_image_view) != VK_NULL_HANDLE) {
+                                    mesh_frame.depth_blit.external_image = vulkanSceneImage(render_result.depth_image);
+                                    mesh_frame.depth_blit.external_image_view = vulkanSceneImageView(render_result.depth_image_view);
+                                    mesh_frame.depth_blit.external_image_layout = vulkanSceneImageLayout(render_result.depth_image_layout);
                                     mesh_frame.depth_blit.external_image_format = VK_FORMAT_R32_SFLOAT;
                                     mesh_frame.depth_blit.external_image_generation = render_result.depth_generation;
                                     mesh_frame.depth_blit.external_image_size = render_result.size;
@@ -4479,9 +4480,9 @@ namespace lfs::vis {
                         clearVulkanViewportImageState(view_state, render_result.size,
                                                       render_result.flip_y,
                                                       render_result.alloc_size);
-                        view_state.vulkan_external_viewport_image_ = render_result.image;
-                        view_state.vulkan_external_viewport_image_view_ = render_result.image_view;
-                        view_state.vulkan_external_viewport_image_layout_ = render_result.image_layout;
+                        view_state.vulkan_external_viewport_image_ = vulkanSceneImage(render_result.image);
+                        view_state.vulkan_external_viewport_image_view_ = vulkanSceneImageView(render_result.image_view);
+                        view_state.vulkan_external_viewport_image_layout_ = vulkanSceneImageLayout(render_result.image_layout);
                         view_state.vulkan_external_viewport_image_generation_ = render_result.generation;
                         const auto capture_composite_request = make_capture_composite_request();
                         view_state.viewport_artifact_service_.setLazyCapture(
@@ -4552,7 +4553,7 @@ namespace lfs::vis {
                                     view_state.vulkan_external_viewport_image_layout_,
                                 .external_image_generation =
                                     view_state.vulkan_external_viewport_image_generation_,
-                                .completion_semaphore = render_result.completion_semaphore,
+                                .completion_semaphore = vulkanSceneTimeline(render_result.completion_semaphore),
                                 .completion_value = render_result.completion_value,
                                 .size = view_state.vulkan_viewport_image_size_,
                                 .alloc_size = view_state.vulkan_viewport_image_alloc_size_,

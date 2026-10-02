@@ -6,7 +6,7 @@
 #include "lod_page_cache.hpp"
 #include "render_target_id.hpp"
 #include "rendering/rendering.hpp"
-#include "window/vulkan_context.hpp"
+#include "scene_output.hpp"
 #include <chrono>
 #include <expected>
 #include <functional>
@@ -16,23 +16,24 @@
 #include <vector>
 
 namespace lfs::vis {
-    // Scene APIs are selected once per platform. Vulkan images here are the
-    // compositor's transport, independent of the API that rasterizes the scene.
+    class VulkanContext;
+    // Scene APIs are selected once per platform. Opaque output handles describe
+    // compositor transport, independent of the API that rasterizes the scene.
     class LFS_VIS_API SceneRenderer {
     public:
         struct RenderResult {
-            VkImage image = VK_NULL_HANDLE;
-            VkImageView image_view = VK_NULL_HANDLE;
-            VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            SceneImageHandle image;
+            SceneImageViewHandle image_view;
+            SceneImageLayout image_layout;
             std::uint64_t generation = 0;
-            VkImage depth_image = VK_NULL_HANDLE;
-            VkImageView depth_image_view = VK_NULL_HANDLE;
-            VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            SceneImageHandle depth_image;
+            SceneImageViewHandle depth_image_view;
+            SceneImageLayout depth_image_layout;
             std::uint64_t depth_generation = 0;
             glm::ivec2 size{0, 0};       // valid/logical extent (compose/readback)
-            glm::ivec2 alloc_size{0, 0}; // bucketed VkImage extent (may exceed size)
+            glm::ivec2 alloc_size{0, 0}; // allocated image extent (may exceed size)
             bool flip_y = false;
-            VkSemaphore completion_semaphore = VK_NULL_HANDLE;
+            SceneTimelineHandle completion_semaphore;
             std::uint64_t completion_value = 0;
             std::uint64_t lod_page_generation = 0;
             // True while page decodes/uploads are still in flight.
@@ -138,13 +139,13 @@ namespace lfs::vis {
     class LFS_VIS_API PointSceneRenderer {
     public:
         struct RenderResult {
-            VkImage image = VK_NULL_HANDLE;
-            VkImageView image_view = VK_NULL_HANDLE;
-            VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            SceneImageHandle image;
+            SceneImageViewHandle image_view;
+            SceneImageLayout image_layout;
             std::uint64_t generation = 0;
-            VkImage depth_image = VK_NULL_HANDLE;
-            VkImageView depth_image_view = VK_NULL_HANDLE;
-            VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            SceneImageHandle depth_image;
+            SceneImageViewHandle depth_image_view;
+            SceneImageLayout depth_image_layout;
             std::uint64_t depth_generation = 0;
             glm::ivec2 size{0, 0};
             bool flip_y = false;
@@ -167,9 +168,9 @@ namespace lfs::vis {
         };
 
         struct RenderRequest {
-            // Positions/colors are float [N, 3] tensors. Either CUDA or CPU; we
-            // copy to Vulkan device-local on first use and cache by pointer plus
-            // caller-provided content revisions for in-place tensor mutations.
+            // Positions/colors are float [N, 3] tensors in resident GPU or CPU
+            // storage. Uploads cache ownership and caller-provided content
+            // revisions for in-place tensor mutations.
             const lfs::core::Tensor* positions = nullptr;
             const lfs::core::Tensor* colors = nullptr;
             std::uint64_t positions_revision = 0;

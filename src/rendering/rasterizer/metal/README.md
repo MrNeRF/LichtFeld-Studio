@@ -8,6 +8,8 @@ The desktop UI, grid, gizmos, temporal effects and upscalers use the existing
 Vulkan compositor. Native color and depth textures are imported on the same
 GPU; interactive presentation does not read the full frame back to the CPU.
 Scene rasterization has no per-frame backend fallback or viewer preference.
+Scene results carry opaque compositor handles; `vulkan_scene_output.hpp` converts
+them at the presentation boundary without changing ownership or completion.
 
 `SplatPreprocessor` projects resident geometry and evaluates SH on the GPU.
 `TileRasterizer` builds tile intersections, sorts stable full-width radial keys,

@@ -4,6 +4,7 @@
 
 #include "vksplat_viewport_renderer.hpp"
 #include "rendering/rasterizer/vulkan/src/display_color.h"
+#include "vulkan_scene_output.hpp"
 
 #include "core/tensor_rad.hpp"
 
@@ -7905,18 +7906,18 @@ namespace lfs::vis {
         auto& updated_output = ring_.slotAt(target, ring_slot);
         updated_output.completion_value = completion_value;
         return RenderResult{
-            .image = updated_output.image.image,
-            .image_view = updated_output.image.view,
-            .image_layout = updated_output.layout,
+            .image = sceneImageHandle(updated_output.image.image),
+            .image_view = sceneImageViewHandle(updated_output.image.view),
+            .image_layout = sceneImageLayout(updated_output.layout),
             .generation = updated_output.generation,
-            .depth_image = updated_output.depth_image.image,
-            .depth_image_view = updated_output.depth_image.view,
-            .depth_image_layout = updated_output.depth_layout,
+            .depth_image = sceneImageHandle(updated_output.depth_image.image),
+            .depth_image_view = sceneImageViewHandle(updated_output.depth_image.view),
+            .depth_image_layout = sceneImageLayout(updated_output.depth_layout),
             .depth_generation = updated_output.generation,
             .size = size,
             .alloc_size = updated_output.alloc_size,
             .flip_y = false,
-            .completion_semaphore = render_complete_timeline_,
+            .completion_semaphore = sceneTimelineHandle(render_complete_timeline_),
             .completion_value = completion_value,
         };
     }
@@ -9132,18 +9133,18 @@ namespace lfs::vis {
              !lod_upload_engine_.idle() ||
              lod_fades_active);
         return RenderResult{
-            .image = output.image.image,
-            .image_view = output.image.view,
-            .image_layout = output.layout,
+            .image = sceneImageHandle(output.image.image),
+            .image_view = sceneImageViewHandle(output.image.view),
+            .image_layout = sceneImageLayout(output.layout),
             .generation = output.generation,
-            .depth_image = output.depth_image.image,
-            .depth_image_view = output.depth_image.view,
-            .depth_image_layout = output.depth_layout,
+            .depth_image = sceneImageHandle(output.depth_image.image),
+            .depth_image_view = sceneImageViewHandle(output.depth_image.view),
+            .depth_image_layout = sceneImageLayout(output.depth_layout),
             .depth_generation = output.generation,
             .size = size,
             .alloc_size = output.alloc_size,
             .flip_y = false,
-            .completion_semaphore = render_complete_timeline_,
+            .completion_semaphore = sceneTimelineHandle(render_complete_timeline_),
             .completion_value = completion_value,
             .lod_page_generation = lod_page_generation,
             .lod_streaming_active = lod_streaming_active,

@@ -62,6 +62,7 @@
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include "visualizer/input/input_bindings.hpp"
 #include "visualizer/preferences.hpp"
+#include "window/vulkan_context.hpp"
 #include <cmath>
 #include <condition_variable>
 #if LFS_HAS_CUDA

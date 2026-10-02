@@ -17,6 +17,7 @@
 #include "core/training_manager.hpp"
 #include "scene_renderer.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
+#include "window/vulkan_context.hpp"
 #include <algorithm>
 #include <cmath>
 #include <format>

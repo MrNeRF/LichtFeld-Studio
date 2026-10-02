@@ -8,6 +8,7 @@
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
 #include "vksplat_viewport_renderer.hpp"
+#include "vulkan_scene_output.hpp"
 #import <Metal/Metal.h>
 #include <Python.h>
 #include <algorithm>
@@ -431,7 +432,8 @@ namespace {
             throw std::runtime_error("Missing real GPU frame completion");
         VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
         info.semaphoreCount = 1;
-        info.pSemaphores = &frame.completion_semaphore;
+        const VkSemaphore completion = vis::vulkanSceneTimeline(frame.completion_semaphore);
+        info.pSemaphores = &completion;
         info.pValues = &frame.completion_value;
         if (vkWaitSemaphores(context.device(), &info, 30'000'000'000ull) != VK_SUCCESS)
             throw std::runtime_error("GPU frame completion timed out or failed");

@@ -337,7 +337,7 @@ namespace lfs::rendering::metal {
             throw std::logic_error(std::format("Metal viewer frame reservation is still in flight (extent={}x{}, capacity={}, count={})", f->width, f->height, f->capacity, count));
         // Completion already publishes this shared status; inspecting the last
         // finished frame adds no GPU readback, allocation or synchronization.
-        // Sparse/culled frames keep the original intersection sort. A changing
+        // Extremely sparse frames keep the original intersection sort. A changing
         // camera can choose the less efficient path for one frame, but both
         // paths preserve the exact full-width key and original source IDs.
         bool source_sorted = false;

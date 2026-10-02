@@ -5,6 +5,7 @@
 #include "io/ply_to_rad_lod.hpp"
 #include "metal_rad_pager.hpp"
 #include "metal_viewport_renderer.hpp"
+#include "window/vulkan_context.hpp"
 #include <Python.h>
 #include <bit>
 #include <chrono>

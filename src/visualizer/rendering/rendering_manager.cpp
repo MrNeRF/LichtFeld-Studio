@@ -22,7 +22,6 @@
 #include "training/trainer.hpp"
 #endif
 #include "core/training_manager.hpp"
-#include "scene_renderer.hpp"
 #include "visualizer/app_store.hpp"
 
 #include <algorithm>
