@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "amd_fsr3_plugin.hpp"
+#include "scene_upscaler_plugin.hpp"
 
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
@@ -17,7 +17,6 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
-#include <utility>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -27,27 +26,34 @@
 
 namespace lfs::vis {
     namespace {
-        constexpr std::string_view PLUGIN_ID = "amd-fsr3";
         constexpr std::string_view PROJECT_ID = "7fc73d74-f126-4146-b028-4bc1026e5c3b";
         constexpr std::string_view ENGINE_VERSION = "LichtFeld Studio";
 
 #ifdef _WIN32
-        constexpr const wchar_t* PLUGIN_FILENAME = L"lfs_scene_upscaler_amd_fsr3.dll";
         using NativeLibrary = HMODULE;
-#elif defined(__APPLE__)
-        constexpr const char* PLUGIN_FILENAME = "liblfs_scene_upscaler_amd_fsr3.dylib";
-        using NativeLibrary = void*;
 #else
-        constexpr const char* PLUGIN_FILENAME = "liblfs_scene_upscaler_amd_fsr3.so";
         using NativeLibrary = void*;
 #endif
 
-        [[nodiscard]] std::vector<std::filesystem::path> pluginCandidates() {
+        [[nodiscard]] std::string pluginFilename(const std::string_view library) {
+#if defined(_WIN32)
+            return std::format("{}.dll", library);
+#elif defined(__APPLE__)
+            return std::format("lib{}.dylib", library);
+#else
+            return std::format("lib{}.so", library);
+#endif
+        }
+
+        [[nodiscard]] std::vector<std::filesystem::path> pluginCandidates(
+            const SceneUpscalerPluginInfo& info) {
             std::vector<std::filesystem::path> result;
-            const auto append = [&result](const std::filesystem::path& root) {
+            const auto filename = pluginFilename(info.library);
+            const auto append = [&](const std::filesystem::path& root) {
                 if (root.empty())
                     return;
-                const auto candidate = root / "scene_upscalers" / "amd" / PLUGIN_FILENAME;
+                const auto candidate =
+                    root / "scene_upscalers" / info.directory / filename;
                 if (std::ranges::find(result, candidate) == result.end())
                     result.push_back(candidate);
             };
@@ -110,7 +116,9 @@ namespace lfs::vis {
         }
     } // namespace
 
-    struct AmdFsr3Plugin::Impl {
+    struct SceneUpscalerPlugin::Impl {
+        explicit Impl(const SceneUpscalerPluginInfo& plugin_info) : info(plugin_info) {}
+
         struct OptimalSettingsCache {
             std::uint32_t output_width = 0;
             std::uint32_t output_height = 0;
@@ -118,11 +126,12 @@ namespace lfs::vis {
             LfsSceneUpscalerOptimalSettingsV1 settings{};
         };
 
+        const SceneUpscalerPluginInfo& info;
         mutable std::mutex mutex;
         NativeLibrary library = nullptr;
         const LfsSceneUpscalerPluginApiV1* api = nullptr;
         void* plugin = nullptr;
-        AmdFsr3PluginState state = AmdFsr3PluginState::Unprobed;
+        SceneUpscalerPluginState state = SceneUpscalerPluginState::Unprobed;
         std::filesystem::path library_path;
         std::wstring application_data_path;
         std::wstring plugin_directory;
@@ -130,20 +139,22 @@ namespace lfs::vis {
         std::optional<OptimalSettingsCache> optimal_settings_cache;
         bool loading_enabled = true;
         bool runtime_initialized = false;
-        std::optional<std::thread::id> fidelityfx_thread_id;
-        bool fidelityfx_thread_mismatch_warned = false;
+        std::optional<SceneUpscalerPluginViewIdentityAllocator> view_identity_allocator;
+        std::optional<std::thread::id> vendor_thread_id;
+        bool vendor_thread_mismatch_warned = false;
 
-        void noteFidelityFxCallerThreadLocked() {
+        void noteVendorCallerThreadLocked() {
             const auto thread_id = std::this_thread::get_id();
-            if (!fidelityfx_thread_id) {
-                fidelityfx_thread_id = thread_id;
+            if (!vendor_thread_id) {
+                vendor_thread_id = thread_id;
                 return;
             }
-            if (*fidelityfx_thread_id != thread_id && !fidelityfx_thread_mismatch_warned) {
-                fidelityfx_thread_mismatch_warned = true;
-                LOG_WARN("AMD FidelityFX called from a different thread than the first "
-                         "initializeRuntime/evaluate/createFeature caller; vendor calls are "
-                         "serialized and expected to remain on one render thread");
+            if (*vendor_thread_id != thread_id && !vendor_thread_mismatch_warned) {
+                vendor_thread_mismatch_warned = true;
+                LOG_WARN("{} called from a different thread than the first "
+                         "initializeRuntime/evaluate/createFeature caller; vendor runtimes "
+                         "are not thread-safe",
+                         info.name);
             }
         }
 
@@ -162,7 +173,7 @@ namespace lfs::vis {
             return result;
         }
 
-        void failLocked(const AmdFsr3PluginState failed_state, std::string reason) {
+        void failLocked(const SceneUpscalerPluginState failed_state, std::string reason) {
             state = failed_state;
             diagnostic = std::move(reason);
         }
@@ -186,27 +197,27 @@ namespace lfs::vis {
 
         [[nodiscard]] bool probeLocked() {
             if (!loading_enabled) {
-                state = AmdFsr3PluginState::DisabledBySafeMode;
+                state = SceneUpscalerPluginState::DisabledBySafeMode;
                 diagnostic = "optional scene-reconstruction plugins are disabled in safe mode";
                 return false;
             }
-            if (state == AmdFsr3PluginState::BootstrapReady ||
-                state == AmdFsr3PluginState::RuntimeReady ||
-                state == AmdFsr3PluginState::RuntimeMissing ||
-                state == AmdFsr3PluginState::UnsupportedEnvironment ||
-                state == AmdFsr3PluginState::RuntimeFailed) {
+            if (state == SceneUpscalerPluginState::BootstrapReady ||
+                state == SceneUpscalerPluginState::RuntimeReady ||
+                state == SceneUpscalerPluginState::RuntimeMissing ||
+                state == SceneUpscalerPluginState::UnsupportedEnvironment ||
+                state == SceneUpscalerPluginState::RuntimeFailed) {
                 return plugin != nullptr;
             }
-            if (state == AmdFsr3PluginState::DisabledBySafeMode ||
-                state == AmdFsr3PluginState::NotInstalled ||
-                state == AmdFsr3PluginState::InvalidPlugin ||
-                state == AmdFsr3PluginState::BootstrapFailed)
+            if (state == SceneUpscalerPluginState::DisabledBySafeMode ||
+                state == SceneUpscalerPluginState::NotInstalled ||
+                state == SceneUpscalerPluginState::InvalidPlugin ||
+                state == SceneUpscalerPluginState::BootstrapFailed)
                 return false;
             destroyLocked();
 
             std::error_code error;
             std::filesystem::path candidate;
-            for (const auto& path : pluginCandidates()) {
+            for (const auto& path : pluginCandidates(info)) {
                 if (std::filesystem::is_regular_file(path, error) && !error) {
                     candidate = path;
                     break;
@@ -214,18 +225,18 @@ namespace lfs::vis {
                 error.clear();
             }
             if (candidate.empty()) {
-                state = AmdFsr3PluginState::NotInstalled;
-                diagnostic = "AMD FSR 3.1 plugin is not installed";
+                state = SceneUpscalerPluginState::NotInstalled;
+                diagnostic = std::format("{} plugin is not installed", info.name);
                 return false;
             }
 
             library = loadLibrary(candidate);
             if (library == nullptr) {
-                failLocked(AmdFsr3PluginState::InvalidPlugin,
+                failLocked(SceneUpscalerPluginState::InvalidPlugin,
                            std::format("failed to load '{}': {}",
                                        candidate.string(),
                                        nativeLoadError()));
-                LOG_WARN("Optional AMD FSR 3.1 plugin is invalid: {}", diagnostic);
+                LOG_WARN("Optional {} plugin is invalid: {}", info.name, diagnostic);
                 return false;
             }
             library_path = candidate;
@@ -233,9 +244,10 @@ namespace lfs::vis {
             const auto get_api = reinterpret_cast<LfsSceneUpscalerGetPluginApiV1Fn>(
                 loadSymbol(library, LFS_SCENE_UPSCALER_PLUGIN_ENTRY_V1));
             if (get_api == nullptr) {
-                failLocked(AmdFsr3PluginState::InvalidPlugin,
+                failLocked(SceneUpscalerPluginState::InvalidPlugin,
                            "plugin entry point is missing");
-                LOG_WARN("Optional AMD FSR 3.1 plugin '{}' is invalid: {}",
+                LOG_WARN("Optional {} plugin '{}' is invalid: {}",
+                         info.name,
                          candidate.string(),
                          diagnostic);
                 destroyLocked();
@@ -243,10 +255,11 @@ namespace lfs::vis {
             }
             api = get_api();
             if (!lfs_scene_upscaler_plugin_api_v1_complete(api) ||
-                std::string_view(api->plugin_id) != PLUGIN_ID) {
-                failLocked(AmdFsr3PluginState::InvalidPlugin,
+                std::string_view(api->plugin_id) != info.id) {
+                failLocked(SceneUpscalerPluginState::InvalidPlugin,
                            "plugin ABI or identifier is incompatible");
-                LOG_WARN("Optional AMD FSR 3.1 plugin '{}' is invalid: {}",
+                LOG_WARN("Optional {} plugin '{}' is invalid: {}",
+                         info.name,
                          candidate.string(),
                          diagnostic);
                 destroyLocked();
@@ -255,15 +268,16 @@ namespace lfs::vis {
 
             const auto paths = lfs::core::UserPaths::resolve();
             if (!paths) {
-                failLocked(AmdFsr3PluginState::InvalidPlugin,
-                           "cannot resolve the FidelityFX cache directory");
-                LOG_WARN("Optional AMD FSR 3.1 plugin '{}' cannot be initialized: {}",
+                failLocked(SceneUpscalerPluginState::InvalidPlugin,
+                           "cannot resolve the plugin cache directory");
+                LOG_WARN("Optional {} plugin '{}' cannot be initialized: {}",
+                         info.name,
                          candidate.string(),
                          diagnostic);
                 destroyLocked();
                 return false;
             }
-            const auto data_path = paths->cacheDir() / "fidelityfx";
+            const auto data_path = paths->cacheDir() / info.cache_dir;
             application_data_path = data_path.wstring();
             plugin_directory = candidate.parent_path().wstring();
             const LfsSceneUpscalerBootstrapConfigV1 config{
@@ -275,15 +289,16 @@ namespace lfs::vis {
             };
             plugin = api->create(&config);
             if (plugin == nullptr) {
-                failLocked(AmdFsr3PluginState::InvalidPlugin,
+                failLocked(SceneUpscalerPluginState::InvalidPlugin,
                            "plugin bootstrap context creation failed");
-                LOG_WARN("Optional AMD FSR 3.1 plugin '{}' cannot be initialized: {}",
+                LOG_WARN("Optional {} plugin '{}' cannot be initialized: {}",
+                         info.name,
                          candidate.string(),
                          diagnostic);
                 destroyLocked();
                 return false;
             }
-            state = AmdFsr3PluginState::BootstrapReady;
+            state = SceneUpscalerPluginState::BootstrapReady;
             diagnostic.clear();
             LOG_INFO("Discovered optional scene-reconstruction plugin '{}' at {}",
                      api->display_name,
@@ -309,86 +324,83 @@ namespace lfs::vis {
                                     : api->required_instance_extensions(plugin, &sink);
             if (result != LFS_SCENE_UPSCALER_PLUGIN_OK) {
                 const auto plugin_error = pluginErrorLocked();
-                failLocked(AmdFsr3PluginState::BootstrapFailed,
+                failLocked(SceneUpscalerPluginState::BootstrapFailed,
                            plugin_error.empty()
                                ? "plugin could not report required Vulkan extensions"
                                : plugin_error);
-                LOG_WARN("AMD FSR 3.1 bootstrap unavailable: {}", diagnostic);
+                LOG_WARN("{} bootstrap unavailable: {}", info.name, diagnostic);
                 extensions.clear();
             }
             return extensions;
         }
     };
 
-    AmdFsr3Plugin& AmdFsr3Plugin::instance() {
-        static AmdFsr3Plugin plugin;
-        return plugin;
-    }
+    SceneUpscalerPlugin::SceneUpscalerPlugin(const SceneUpscalerPluginInfo& info)
+        : info_(info),
+          impl_(new Impl(info_)) {}
 
-    AmdFsr3Plugin::AmdFsr3Plugin() : impl_(new Impl) {}
-
-    AmdFsr3Plugin::~AmdFsr3Plugin() {
+    SceneUpscalerPlugin::~SceneUpscalerPlugin() {
         shutdown();
         delete impl_;
     }
 
-    void AmdFsr3Plugin::configure(const bool loading_enabled) {
+    void SceneUpscalerPlugin::configure(const bool loading_enabled) {
         std::scoped_lock lock(impl_->mutex);
         if (impl_->loading_enabled == loading_enabled &&
-            impl_->state != AmdFsr3PluginState::Unprobed)
+            impl_->state != SceneUpscalerPluginState::Unprobed)
             return;
         impl_->destroyLocked();
         impl_->loading_enabled = loading_enabled;
-        impl_->state = loading_enabled ? AmdFsr3PluginState::Unprobed
-                                       : AmdFsr3PluginState::DisabledBySafeMode;
+        impl_->state = loading_enabled ? SceneUpscalerPluginState::Unprobed
+                                       : SceneUpscalerPluginState::DisabledBySafeMode;
         impl_->diagnostic = loading_enabled
                                 ? std::string{}
                                 : "optional scene-reconstruction plugins are disabled in safe mode";
     }
 
-    bool AmdFsr3Plugin::probe() {
+    bool SceneUpscalerPlugin::probe() {
         std::scoped_lock lock(impl_->mutex);
         return impl_->probeLocked();
     }
 
-    bool AmdFsr3Plugin::available() { return probe(); }
+    bool SceneUpscalerPlugin::available() { return probe(); }
 
-    AmdFsr3PluginState AmdFsr3Plugin::state() const {
+    SceneUpscalerPluginState SceneUpscalerPlugin::state() const {
         std::scoped_lock lock(impl_->mutex);
         return impl_->state;
     }
 
-    std::string AmdFsr3Plugin::diagnostic() const {
+    std::string SceneUpscalerPlugin::diagnostic() const {
         std::scoped_lock lock(impl_->mutex);
         return impl_->diagnostic;
     }
 
-    std::filesystem::path AmdFsr3Plugin::libraryPath() const {
+    std::filesystem::path SceneUpscalerPlugin::libraryPath() const {
         std::scoped_lock lock(impl_->mutex);
         return impl_->library_path;
     }
 
-    std::vector<std::string> AmdFsr3Plugin::requiredInstanceExtensions() {
+    std::vector<std::string> SceneUpscalerPlugin::requiredInstanceExtensions() {
         std::scoped_lock lock(impl_->mutex);
         return impl_->extensionsLocked(false, VK_NULL_HANDLE, VK_NULL_HANDLE);
     }
 
-    std::vector<std::string> AmdFsr3Plugin::requiredDeviceExtensions(
+    std::vector<std::string> SceneUpscalerPlugin::requiredDeviceExtensions(
         const VkInstance instance,
         const VkPhysicalDevice physical_device) {
         std::scoped_lock lock(impl_->mutex);
         return impl_->extensionsLocked(true, instance, physical_device);
     }
 
-    void AmdFsr3Plugin::markBootstrapFailed(std::string reason) {
+    void SceneUpscalerPlugin::markBootstrapFailed(std::string reason) {
         std::scoped_lock lock(impl_->mutex);
-        impl_->failLocked(AmdFsr3PluginState::BootstrapFailed, std::move(reason));
-        LOG_WARN("AMD FSR 3.1 bootstrap unavailable: {}", impl_->diagnostic);
+        impl_->failLocked(SceneUpscalerPluginState::BootstrapFailed, std::move(reason));
+        LOG_WARN("{} bootstrap unavailable: {}", info_.name, impl_->diagnostic);
     }
 
-    bool AmdFsr3Plugin::initializeRuntime(const LfsSceneUpscalerRuntimeConfigV1& config) {
+    bool SceneUpscalerPlugin::initializeRuntime(const LfsSceneUpscalerRuntimeConfigV1& config) {
         std::scoped_lock lock(impl_->mutex);
-        impl_->noteFidelityFxCallerThreadLocked();
+        impl_->noteVendorCallerThreadLocked();
         if (!impl_->probeLocked())
             return false;
         if (impl_->runtime_initialized)
@@ -398,8 +410,8 @@ namespace lfs::vis {
             std::filesystem::path(impl_->application_data_path), error);
         if (error) {
             impl_->failLocked(
-                AmdFsr3PluginState::RuntimeFailed,
-                std::format("cannot create the FidelityFX cache directory: {}",
+                SceneUpscalerPluginState::RuntimeFailed,
+                std::format("cannot create the plugin cache directory: {}",
                             error.message()));
             return false;
         }
@@ -408,26 +420,26 @@ namespace lfs::vis {
             const auto failed_state = [&] {
                 switch (result) {
                 case LFS_SCENE_UPSCALER_PLUGIN_UNAVAILABLE:
-                    return AmdFsr3PluginState::RuntimeMissing;
+                    return SceneUpscalerPluginState::RuntimeMissing;
                 case LFS_SCENE_UPSCALER_PLUGIN_UNSUPPORTED_DEVICE:
-                    return AmdFsr3PluginState::UnsupportedEnvironment;
+                    return SceneUpscalerPluginState::UnsupportedEnvironment;
                 default:
-                    return AmdFsr3PluginState::RuntimeFailed;
+                    return SceneUpscalerPluginState::RuntimeFailed;
                 }
             }();
             impl_->failLocked(failed_state, impl_->pluginErrorLocked());
             if (impl_->diagnostic.empty())
-                impl_->diagnostic = "FidelityFX runtime initialization failed";
+                impl_->diagnostic = "plugin runtime initialization failed";
             return false;
         }
         impl_->runtime_initialized = true;
         impl_->optimal_settings_cache.reset();
-        impl_->state = AmdFsr3PluginState::RuntimeReady;
+        impl_->state = SceneUpscalerPluginState::RuntimeReady;
         impl_->diagnostic.clear();
         return true;
     }
 
-    std::optional<LfsSceneUpscalerOptimalSettingsV1> AmdFsr3Plugin::optimalSettings(
+    std::optional<LfsSceneUpscalerOptimalSettingsV1> SceneUpscalerPlugin::optimalSettings(
         const std::uint32_t output_width,
         const std::uint32_t output_height,
         const std::uint32_t quality) {
@@ -457,13 +469,39 @@ namespace lfs::vis {
         return settings;
     }
 
-    bool AmdFsr3Plugin::createFeature(
+    std::optional<std::uint32_t> SceneUpscalerPlugin::acquireViewIdentity() {
+        std::scoped_lock lock(impl_->mutex);
+        if (!impl_->probeLocked())
+            return std::nullopt;
+        if (!impl_->view_identity_allocator) {
+            impl_->view_identity_allocator.emplace(
+                lfs_scene_upscaler_plugin_api_v1_supports_dynamic_view_ids(impl_->api) != 0);
+        }
+        return impl_->view_identity_allocator->acquire();
+    }
+
+    void SceneUpscalerPlugin::releaseViewIdentity(const std::uint32_t view) {
+        std::scoped_lock lock(impl_->mutex);
+        if (!impl_->view_identity_allocator ||
+            !impl_->view_identity_allocator->owns(view))
+            return;
+        if (impl_->runtime_initialized && impl_->api != nullptr && impl_->plugin != nullptr)
+            impl_->api->release_feature(impl_->plugin, view);
+        impl_->view_identity_allocator->release(view);
+    }
+
+    bool SceneUpscalerPlugin::createFeature(
         const VkCommandBuffer command_buffer,
         const LfsSceneUpscalerFeatureConfigV1& config) {
         std::scoped_lock lock(impl_->mutex);
-        impl_->noteFidelityFxCallerThreadLocked();
+        impl_->noteVendorCallerThreadLocked();
         if (!impl_->runtime_initialized)
             return false;
+        if (!impl_->view_identity_allocator ||
+            !impl_->view_identity_allocator->owns(config.view)) {
+            impl_->diagnostic = "feature identity was not allocated by the host";
+            return false;
+        }
         if (impl_->api->create_feature(impl_->plugin, command_buffer, &config) !=
             LFS_SCENE_UPSCALER_PLUGIN_OK) {
             impl_->diagnostic = impl_->pluginErrorLocked();
@@ -472,11 +510,16 @@ namespace lfs::vis {
         return true;
     }
 
-    bool AmdFsr3Plugin::evaluate(const LfsSceneUpscalerEvaluateV1& evaluation) {
+    bool SceneUpscalerPlugin::evaluate(const LfsSceneUpscalerEvaluateV1& evaluation) {
         std::scoped_lock lock(impl_->mutex);
-        impl_->noteFidelityFxCallerThreadLocked();
+        impl_->noteVendorCallerThreadLocked();
         if (!impl_->runtime_initialized)
             return false;
+        if (!impl_->view_identity_allocator ||
+            !impl_->view_identity_allocator->owns(evaluation.view)) {
+            impl_->diagnostic = "evaluation identity was not allocated by the host";
+            return false;
+        }
         if (impl_->api->evaluate(impl_->plugin, &evaluation) !=
             LFS_SCENE_UPSCALER_PLUGIN_OK) {
             impl_->diagnostic = impl_->pluginErrorLocked();
@@ -485,33 +528,65 @@ namespace lfs::vis {
         return true;
     }
 
-    void AmdFsr3Plugin::releaseFeature(const std::uint32_t view) {
-        std::scoped_lock lock(impl_->mutex);
-        if (impl_->runtime_initialized)
-            impl_->api->release_feature(impl_->plugin, view);
+    void SceneUpscalerPlugin::releaseFeature(const std::uint32_t view) {
+        releaseViewIdentity(view);
     }
 
-    void AmdFsr3Plugin::shutdownRuntime() {
+    void SceneUpscalerPlugin::shutdownRuntime() {
         std::scoped_lock lock(impl_->mutex);
         if (!impl_->runtime_initialized)
             return;
         impl_->api->shutdown_runtime(impl_->plugin);
         impl_->runtime_initialized = false;
         impl_->optimal_settings_cache.reset();
-        impl_->state = AmdFsr3PluginState::BootstrapReady;
+        impl_->state = SceneUpscalerPluginState::BootstrapReady;
     }
 
-    void AmdFsr3Plugin::shutdown() {
+    void SceneUpscalerPlugin::shutdown() {
         std::scoped_lock lock(impl_->mutex);
         impl_->destroyLocked();
-        impl_->state = impl_->loading_enabled ? AmdFsr3PluginState::Unprobed
-                                              : AmdFsr3PluginState::DisabledBySafeMode;
+        impl_->state = impl_->loading_enabled ? SceneUpscalerPluginState::Unprobed
+                                              : SceneUpscalerPluginState::DisabledBySafeMode;
     }
 
-    void configureAmdFsr3PluginLoading(const bool enabled) {
-        AmdFsr3Plugin::instance().configure(enabled);
+    bool SceneUpscalerPlugin::hasCapability(const LfsSceneUpscalerPluginCapability capability) {
+        std::scoped_lock lock(impl_->mutex);
+        return impl_->probeLocked() &&
+               lfs_scene_upscaler_plugin_api_v1_has_capability(impl_->api, capability) != 0;
     }
 
-    bool amdFsr3PluginAvailable() { return AmdFsr3Plugin::instance().available(); }
+    std::span<SceneUpscalerPlugin* const> sceneUpscalerPlugins() {
+        static SceneUpscalerPlugin nvidia_dlss({
+            .backend = SceneUpscalerBackend::NvidiaDlss,
+            .id = "nvidia-dlss",
+            .name = "NVIDIA DLSS",
+            .directory = "nvidia",
+            .library = "lfs_scene_upscaler_nvidia_dlss",
+            .cache_dir = "ngx",
+        });
+        static SceneUpscalerPlugin amd_fsr3({
+            .backend = SceneUpscalerBackend::AmdFsr3,
+            .id = "amd-fsr3",
+            .name = "AMD FSR 3.1",
+            .directory = "amd",
+            .library = "lfs_scene_upscaler_amd_fsr3",
+            .cache_dir = "fidelityfx",
+        });
+        static const std::array<SceneUpscalerPlugin*, 2> PLUGINS{&nvidia_dlss, &amd_fsr3};
+        return PLUGINS;
+    }
+
+    SceneUpscalerPlugin* sceneUpscalerPlugin(const SceneUpscalerBackend backend) {
+        for (auto* const plugin : sceneUpscalerPlugins()) {
+            if (plugin->info().backend == backend)
+                return plugin;
+        }
+        return nullptr;
+    }
+
+    void configureSceneUpscalerPluginLoading(const bool enabled) {
+        for (auto* const plugin : sceneUpscalerPlugins())
+            plugin->configure(enabled);
+    }
 
 } // namespace lfs::vis

@@ -4,8 +4,7 @@
 
 #include "rendering/scene_upscaler_registry.hpp"
 
-#include "rendering/amd_fsr3_plugin.hpp"
-#include "rendering/nvidia_dlss_plugin.hpp"
+#include "rendering/scene_upscaler_plugin.hpp"
 
 #include <algorithm>
 #include <array>
@@ -120,42 +119,16 @@ namespace lfs::vis {
             },
         };
 
-        template <bool IncludeNvidiaDlss, bool IncludeAmdFsr3>
-        [[nodiscard]] constexpr auto makeAvailableDescriptors() {
-            constexpr std::size_t count =
-                DESCRIPTORS.size() - (IncludeNvidiaDlss ? 0u : 1u) -
-                (IncludeAmdFsr3 ? 0u : 1u);
-            std::array<SceneUpscalerDescriptor, count> filtered{};
-            std::size_t index = 0;
-            for (const auto& descriptor : DESCRIPTORS) {
-                if ((!IncludeNvidiaDlss &&
-                     descriptor.backend == SceneUpscalerBackend::NvidiaDlss) ||
-                    (!IncludeAmdFsr3 &&
-                     descriptor.backend == SceneUpscalerBackend::AmdFsr3)) {
-                    continue;
-                }
-                filtered[index++] = descriptor;
-            }
-            return filtered;
-        }
-
-        constexpr auto CORE_DESCRIPTORS = makeAvailableDescriptors<false, false>();
-        constexpr auto DESCRIPTORS_WITH_NVIDIA_DLSS =
-            makeAvailableDescriptors<true, false>();
-        constexpr auto DESCRIPTORS_WITH_AMD_FSR3 =
-            makeAvailableDescriptors<false, true>();
     } // namespace
 
-    std::span<const SceneUpscalerDescriptor> sceneUpscalerDescriptors() {
-        const bool nvidia_dlss_available = nvidiaDlssPluginAvailable();
-        const bool amd_fsr3_available = amdFsr3PluginAvailable();
-        if (nvidia_dlss_available && amd_fsr3_available)
-            return DESCRIPTORS;
-        if (nvidia_dlss_available)
-            return DESCRIPTORS_WITH_NVIDIA_DLSS;
-        if (amd_fsr3_available)
-            return DESCRIPTORS_WITH_AMD_FSR3;
-        return CORE_DESCRIPTORS;
+    std::vector<SceneUpscalerDescriptor> sceneUpscalerDescriptors() {
+        std::vector<SceneUpscalerDescriptor> available;
+        for (const auto& descriptor : DESCRIPTORS) {
+            auto* const plugin = sceneUpscalerPlugin(descriptor.backend);
+            if (plugin == nullptr || plugin->available())
+                available.push_back(descriptor);
+        }
+        return available;
     }
 
     const SceneUpscalerDescriptor& sceneUpscalerDescriptor(const SceneUpscalerBackend backend) {

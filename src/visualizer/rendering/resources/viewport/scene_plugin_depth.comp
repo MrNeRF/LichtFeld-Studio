@@ -7,9 +7,9 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform sampler2D u_source_depth;
-layout(set = 0, binding = 1, r32f) uniform writeonly image2D u_dlss_depth;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D u_plugin_depth;
 
-layout(push_constant) uniform DlssDepthParams {
+layout(push_constant) uniform PluginDepthParams {
     ivec4 extent_encoding; // xy = valid extent, z = 1 NDC, 2 perspective linear, 3 ortho linear, w = flip y
     vec4 planes;           // x = near, y = far
 } params;
@@ -45,5 +45,5 @@ void main() {
     if (isnan(depth) || isinf(depth) || depth < 0.0 || depth >= 1.0) {
         depth = 1.0;
     }
-    imageStore(u_dlss_depth, pixel, vec4(depth, 0.0, 0.0, 0.0));
+    imageStore(u_plugin_depth, pixel, vec4(depth, 0.0, 0.0, 0.0));
 }

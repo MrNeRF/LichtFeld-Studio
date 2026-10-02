@@ -19,6 +19,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -33,13 +34,10 @@ namespace {
 
     constexpr std::string_view PLUGIN_ID = "amd-fsr3";
     constexpr std::string_view DISPLAY_NAME = "AMD FSR 3.1";
-    constexpr std::size_t VIEW_COUNT = LFS_SCENE_UPSCALER_PLUGIN_VIEW_COUNT;
+    // FidelityFX sizes its scratch memory for a fixed number of contexts.
+    constexpr std::size_t MAX_VIEWS = 8;
     constexpr std::size_t SHARED_RESOURCE_COUNT = 3;
     constexpr std::uint32_t MIN_OUTPUT_EXTENT = 32;
-
-    [[nodiscard]] bool validView(const std::uint32_t view) noexcept {
-        return static_cast<std::size_t>(view) < VIEW_COUNT;
-    }
 
     [[nodiscard]] bool validQuality(const std::uint32_t quality) noexcept {
         return quality == LFS_SCENE_UPSCALER_PLUGIN_QUALITY ||
@@ -180,7 +178,7 @@ namespace {
 
             constexpr std::size_t CONTEXTS_PER_VIEW =
                 FFX_FSR3UPSCALER_CONTEXT_COUNT + 1;
-            constexpr std::size_t MAX_CONTEXTS = VIEW_COUNT * CONTEXTS_PER_VIEW;
+            constexpr std::size_t MAX_CONTEXTS = MAX_VIEWS * CONTEXTS_PER_VIEW;
             const std::size_t scratch_size =
                 ffxGetScratchMemorySizeVK(config.physical_device, MAX_CONTEXTS);
             if (scratch_size == 0)
@@ -217,7 +215,8 @@ namespace {
             if (!runtime_initialized_)
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_UNAVAILABLE,
                             "FidelityFX runtime is not initialized");
-            if (settings.struct_size < sizeof(LfsSceneUpscalerOptimalSettingsV1) ||
+            if (settings.struct_size < offsetof(LfsSceneUpscalerOptimalSettingsV1,
+                                                jitter_phase_count) ||
                 output_width < MIN_OUTPUT_EXTENT ||
                 output_height < MIN_OUTPUT_EXTENT || !validQuality(quality)) {
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_INVALID_ARGUMENT,
@@ -245,6 +244,15 @@ namespace {
             // Presets select only the SDK's reconstruction ratio. LichtFeld
             // does not add RCAS sharpening on top of the reconstructed image.
             settings.sharpness = 0.0f;
+            if (settings.struct_size >= offsetof(LfsSceneUpscalerOptimalSettingsV1,
+                                                 jitter_phase_count) +
+                                            sizeof(settings.jitter_phase_count)) {
+                settings.jitter_phase_count = static_cast<std::uint32_t>(
+                    std::max(ffxFsr3UpscalerGetJitterPhaseCount(
+                                 static_cast<std::int32_t>(render_width),
+                                 static_cast<std::int32_t>(output_width)),
+                             1));
+            }
             last_error_.clear();
             return LFS_SCENE_UPSCALER_PLUGIN_OK;
         }
@@ -258,7 +266,8 @@ namespace {
                             "FidelityFX runtime is not initialized");
             if (command_buffer == VK_NULL_HANDLE ||
                 config.struct_size < sizeof(LfsSceneUpscalerFeatureConfigV1) ||
-                !validView(config.view) || !validQuality(config.quality) ||
+                !lfs_scene_upscaler_plugin_view_id_valid(config.view) ||
+                !validQuality(config.quality) ||
                 config.render_width == 0 || config.render_height == 0 ||
                 config.output_width < MIN_OUTPUT_EXTENT ||
                 config.output_height < MIN_OUTPUT_EXTENT ||
@@ -268,7 +277,10 @@ namespace {
                             "invalid AMD FSR 3.1 feature configuration");
             }
 
-            auto& view = views_[static_cast<std::size_t>(config.view)];
+            if (!views_.contains(config.view) && views_.size() >= MAX_VIEWS)
+                return fail(LFS_SCENE_UPSCALER_PLUGIN_UNAVAILABLE,
+                            std::format("AMD FSR 3.1 supports at most {} views", MAX_VIEWS));
+            auto& view = views_[config.view];
             if (view.configured && sameFeatureConfig(view.config, config)) {
                 last_error_.clear();
                 return LFS_SCENE_UPSCALER_PLUGIN_OK;
@@ -339,7 +351,6 @@ namespace {
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_UNAVAILABLE,
                             "FidelityFX runtime is not initialized");
             if (evaluation.struct_size < REQUIRED_EVALUATION_SIZE ||
-                !validView(evaluation.view) ||
                 evaluation.command_buffer == VK_NULL_HANDLE ||
                 !validImage(evaluation.color, false) ||
                 !validImage(evaluation.depth, false) ||
@@ -349,7 +360,11 @@ namespace {
                             "invalid AMD FSR 3.1 evaluation resources");
             }
 
-            auto& view = views_[static_cast<std::size_t>(evaluation.view)];
+            const auto found = views_.find(evaluation.view);
+            if (found == views_.end())
+                return fail(LFS_SCENE_UPSCALER_PLUGIN_UNAVAILABLE,
+                            "AMD FSR 3.1 feature is not configured for this view");
+            auto& view = found->second;
             if (!view.configured || !view.context_created ||
                 !view.shared_context_created ||
                 view.shared_count != SHARED_RESOURCE_COUNT) {
@@ -413,8 +428,10 @@ namespace {
 
         void releaseFeature(const std::uint32_t view) {
             std::scoped_lock lock(mutex_);
-            if (validView(view))
-                releaseFeatureLocked(views_[static_cast<std::size_t>(view)]);
+            if (const auto found = views_.find(view); found != views_.end()) {
+                releaseFeatureLocked(found->second);
+                views_.erase(found);
+            }
         }
 
         void shutdownRuntime() {
@@ -552,8 +569,9 @@ namespace {
         }
 
         void shutdownRuntimeLocked() noexcept {
-            for (auto& view : views_)
+            for (auto& [id, view] : views_)
                 releaseFeatureLocked(view);
+            views_.clear();
             clearRuntimeLocked();
         }
 
@@ -567,7 +585,7 @@ namespace {
         mutable std::mutex mutex_;
         FfxInterface backend_{};
         std::vector<std::byte> scratch_;
-        std::array<ViewState, VIEW_COUNT> views_{};
+        std::unordered_map<std::uint32_t, ViewState> views_;
         std::string last_error_;
         bool runtime_initialized_ = false;
     };
@@ -731,6 +749,8 @@ namespace {
         .release_feature = &releaseFeature,
         .shutdown_runtime = &shutdownRuntime,
         .last_error = &lastError,
+        .capabilities = LFS_SCENE_UPSCALER_PLUGIN_CAPABILITY_DYNAMIC_VIEW_IDS |
+                        LFS_SCENE_UPSCALER_PLUGIN_CAPABILITY_REQUIRES_PERSPECTIVE,
     };
 } // namespace
 

@@ -19,9 +19,8 @@ namespace lfs::vis {
 
     class VulkanContext;
 
-    // Vectors are in top-left render pixels and point from the current pixel to
-    // its previous-frame position. Whether they contain the temporal sample
-    // offset is determined by the supplied current/previous projection pair.
+    // Vectors are jitter-free, in top-left render pixels, pointing from the
+    // current pixel to its previous-frame position.
     struct VulkanSceneMotionParams {
         bool enabled = false;
         VkImageView depth_view = VK_NULL_HANDLE;

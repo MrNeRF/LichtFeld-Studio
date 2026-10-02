@@ -66,6 +66,9 @@ typedef enum LfsSceneUpscalerPluginCapability {
     LFS_SCENE_UPSCALER_PLUGIN_CAPABILITY_NONE = 0,
     /* The plugin accepts arbitrary non-invalid uint32 view identities. */
     LFS_SCENE_UPSCALER_PLUGIN_CAPABILITY_DYNAMIC_VIEW_IDS = 1ull << 0u,
+    /* The plugin linearizes depth from the perspective camera fields of
+     * LfsSceneUpscalerEvaluateV1 and cannot reconstruct orthographic views. */
+    LFS_SCENE_UPSCALER_PLUGIN_CAPABILITY_REQUIRES_PERSPECTIVE = 1ull << 1u,
 } LfsSceneUpscalerPluginCapability;
 
 typedef enum LfsSceneUpscalerPluginResetFlag {
@@ -113,6 +116,9 @@ typedef struct LfsSceneUpscalerOptimalSettingsV1 {
     uint32_t maximum_width;
     uint32_t maximum_height;
     float sharpness;
+    /* Optional tail: jitter sequence length the plugin expects at
+     * render_width; 0 keeps the host's default sequence. */
+    uint32_t jitter_phase_count;
 } LfsSceneUpscalerOptimalSettingsV1;
 
 typedef struct LfsSceneUpscalerFeatureConfigV1 {
@@ -159,10 +165,8 @@ typedef struct LfsSceneUpscalerEvaluateV1 {
     float frame_time_milliseconds;
     uint32_t reset_flags;
     /*
-     * Perspective camera parameters used by reconstruction backends that
-     * linearize raster depth internally. Appended to preserve the v1 prefix
-     * consumed by older plugins; readers must validate struct_size before
-     * accessing this tail.
+     * Optional tail: perspective camera of the current frame, for plugins that
+     * linearize raster depth themselves. Readers must check struct_size.
      */
     float camera_near;
     float camera_far;
@@ -227,12 +231,18 @@ static inline int lfs_scene_upscaler_plugin_api_v1_complete(
            api->last_error != NULL;
 }
 
-static inline int lfs_scene_upscaler_plugin_api_v1_supports_dynamic_view_ids(
-    const LfsSceneUpscalerPluginApiV1* api) {
+static inline int lfs_scene_upscaler_plugin_api_v1_has_capability(
+    const LfsSceneUpscalerPluginApiV1* api, const uint64_t capability) {
     const size_t capabilities_end =
         offsetof(LfsSceneUpscalerPluginApiV1, capabilities) + sizeof(api->capabilities);
     return api != NULL && api->struct_size >= capabilities_end &&
-           (api->capabilities & LFS_SCENE_UPSCALER_PLUGIN_CAPABILITY_DYNAMIC_VIEW_IDS) != 0;
+           (api->capabilities & capability) != 0;
+}
+
+static inline int lfs_scene_upscaler_plugin_api_v1_supports_dynamic_view_ids(
+    const LfsSceneUpscalerPluginApiV1* api) {
+    return lfs_scene_upscaler_plugin_api_v1_has_capability(
+        api, LFS_SCENE_UPSCALER_PLUGIN_CAPABILITY_DYNAMIC_VIEW_IDS);
 }
 
 static inline int lfs_scene_upscaler_plugin_view_id_valid(const uint32_t view) {

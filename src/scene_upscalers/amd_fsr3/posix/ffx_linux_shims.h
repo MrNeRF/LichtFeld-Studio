@@ -79,8 +79,9 @@ static inline int ffx_linux_wcscmp(const wchar_t* left, const wchar_t* right) {
     ffx_linux_wcscpy_s((destination), sizeof(destination) / sizeof((destination)[0]), (source))
 #define FFX_WCSCPY_SIZED(destination, destination_size, source) \
     ffx_linux_wcscpy_s((destination), (destination_size), (source))
-#define wcscpy_s(...) \
-    FFX_WCSCPY_SELECT(__VA_ARGS__, FFX_WCSCPY_SIZED, FFX_WCSCPY_ARRAY)(__VA_ARGS__)
+#define wcscpy_s(...)                                                  \
+    FFX_WCSCPY_SELECT(__VA_ARGS__, FFX_WCSCPY_SIZED, FFX_WCSCPY_ARRAY) \
+    (__VA_ARGS__)
 
 static inline int ffx_linux_wcstombs_s(size_t* converted, char* destination, size_t destination_size,
                                        const wchar_t* source, size_t count) {

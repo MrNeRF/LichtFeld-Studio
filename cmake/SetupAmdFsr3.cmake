@@ -4,11 +4,7 @@
 
 include_guard(GLOBAL)
 
-if(BUILD_PORTABLE AND NOT DEFINED CACHE{LFS_ENABLE_AMD_FSR3})
-    set(LFS_ENABLE_AMD_FSR3 ON CACHE BOOL
-        "Build the optional external AMD FSR 3.1 scene-reconstruction plugin")
-endif()
-
+# Opt-in for every build; the nightly package passes -DLFS_ENABLE_AMD_FSR3=ON.
 option(LFS_ENABLE_AMD_FSR3
     "Build the optional external AMD FSR 3.1 scene-reconstruction plugin"
     OFF)
@@ -16,14 +12,9 @@ set(LFS_AMD_FSR3_ROOT "" CACHE PATH
     "Path to an AMD FidelityFX SDK 1.1.4 checkout; the SDK is never fetched by CMake")
 set(LFS_AMD_FSR3_LIBRARY_DIR "" CACHE PATH
     "Optional directory containing prebuilt FidelityFX FSR 3.1 Vulkan libraries")
-if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
-    set(_lfs_amd_fsr3_build_sdk_default ON)
-else()
-    set(_lfs_amd_fsr3_build_sdk_default OFF)
-endif()
 option(LFS_AMD_FSR3_BUILD_SDK
     "Build the user-provided FidelityFX FSR 3.1 Vulkan SDK when libraries are absent"
-    ${_lfs_amd_fsr3_build_sdk_default})
+    ON)
 
 set(_lfs_amd_fsr3_download_url
     "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v1.1.4")
@@ -222,7 +213,7 @@ if(NOT _lfs_fsr3_effect_library OR NOT _lfs_fsr3_backend_library)
         endif()
 
         set(_lfs_fsr3_posix_dir
-            "${CMAKE_SOURCE_DIR}/src/scene_upscalers/amd_fsr3/linux")
+            "${CMAKE_SOURCE_DIR}/src/scene_upscalers/amd_fsr3/posix")
         ExternalProject_Add(lfs_amd_fsr3_sdk
             PREFIX "${_lfs_fsr3_stage_root}/prefix"
             SOURCE_DIR "${_lfs_fsr3_stage_source}"

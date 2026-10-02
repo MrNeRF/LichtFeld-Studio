@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "visualizer/rendering/nvidia_dlss_plugin.hpp"
+#include "visualizer/rendering/scene_upscaler_plugin.hpp"
 #include "visualizer/rendering/scene_upscaler_plugin_api.h"
 
 #include <cstddef>
@@ -29,6 +29,8 @@ namespace lfs::vis {
                      "lfs_scene_upscaler_plugin_get_api_v1");
         EXPECT_EQ(LFS_SCENE_UPSCALER_PLUGIN_VIEW_COUNT, 3);
 
+        EXPECT_EQ(offsetof(LfsSceneUpscalerOptimalSettingsV1, jitter_phase_count),
+                  offsetof(LfsSceneUpscalerOptimalSettingsV1, sharpness) + sizeof(float));
         constexpr std::size_t LEGACY_EVALUATION_PREFIX =
             offsetof(LfsSceneUpscalerEvaluateV1, reset_flags) +
             sizeof(std::uint32_t);
@@ -114,8 +116,23 @@ namespace lfs::vis {
         EXPECT_FALSE(lfs_scene_upscaler_plugin_api_v1_supports_dynamic_view_ids(&dynamic));
     }
 
+    TEST(SceneUpscalerPluginApi, PerspectiveRequirementIsOptInAndDetectable) {
+        LfsSceneUpscalerPluginApiV1 legacy{};
+        legacy.struct_size = offsetof(LfsSceneUpscalerPluginApiV1, capabilities);
+        legacy.capabilities = LFS_SCENE_UPSCALER_PLUGIN_CAPABILITY_REQUIRES_PERSPECTIVE;
+        EXPECT_FALSE(lfs_scene_upscaler_plugin_api_v1_has_capability(
+            &legacy, LFS_SCENE_UPSCALER_PLUGIN_CAPABILITY_REQUIRES_PERSPECTIVE));
+
+        LfsSceneUpscalerPluginApiV1 perspective{};
+        perspective.struct_size = sizeof(perspective);
+        perspective.capabilities = LFS_SCENE_UPSCALER_PLUGIN_CAPABILITY_REQUIRES_PERSPECTIVE;
+        EXPECT_TRUE(lfs_scene_upscaler_plugin_api_v1_has_capability(
+            &perspective, LFS_SCENE_UPSCALER_PLUGIN_CAPABILITY_REQUIRES_PERSPECTIVE));
+        EXPECT_FALSE(lfs_scene_upscaler_plugin_api_v1_supports_dynamic_view_ids(&perspective));
+    }
+
     TEST(SceneUpscalerPluginApi, ViewIdentityAllocatorAvoidsAliasesUntilRetirement) {
-        NvidiaDlssViewIdentityAllocator dynamic(true);
+        SceneUpscalerPluginViewIdentityAllocator dynamic(true);
         const auto first = dynamic.acquire();
         const auto second = dynamic.acquire();
         ASSERT_TRUE(first.has_value());
@@ -129,7 +146,7 @@ namespace lfs::vis {
         ASSERT_TRUE(next_after_retirement.has_value());
         EXPECT_GT(*next_after_retirement, *second);
 
-        NvidiaDlssViewIdentityAllocator legacy(false);
+        SceneUpscalerPluginViewIdentityAllocator legacy(false);
         const auto legacy_main = legacy.acquire();
         const auto legacy_left = legacy.acquire();
         const auto legacy_right = legacy.acquire();
@@ -141,7 +158,7 @@ namespace lfs::vis {
         EXPECT_EQ(*legacy_right, LFS_SCENE_UPSCALER_PLUGIN_VIEW_SPLIT_RIGHT);
         EXPECT_FALSE(legacy.acquire().has_value());
 
-        NvidiaDlssViewIdentityAllocator pipelines(true);
+        SceneUpscalerPluginViewIdentityAllocator pipelines(true);
         const auto pipeline_a = pipelines.acquire();
         const auto pipeline_b = pipelines.acquire();
         ASSERT_TRUE(pipeline_a.has_value());

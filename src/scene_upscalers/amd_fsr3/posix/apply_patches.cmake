@@ -6,11 +6,6 @@ if(NOT FFX_SDK_STAGE_DIR OR NOT FFX_PATCH_DIR)
 endif()
 
 find_program(FFX_PATCH_EXECUTABLE NAMES patch REQUIRED)
-if(NOT FFX_PATCH_EXECUTABLE)
-    message(FATAL_ERROR
-        "AMD FSR 3.1 POSIX SDK patching requires the 'patch' executable, "
-        "but it was not found in PATH")
-endif()
 
 # Do not use git apply: the staged SDK can be inside LichtFeld's Git worktree.
 foreach(patch_name IN ITEMS

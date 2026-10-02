@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "visualizer/rendering/scene_upscaler_plugin.hpp"
 #include "visualizer/rendering/scene_upscaler_registry.hpp"
 
 #include <algorithm>
@@ -95,6 +96,16 @@ namespace lfs::vis {
             SceneUpscalerBackend::AmdFsr3, std::nullopt, "performance");
         ASSERT_TRUE(remembered_fsr3.has_value());
         EXPECT_EQ(remembered_fsr3->id, "performance");
+    }
+
+    TEST(SceneUpscalerRegistry, EveryPluginHasMatchingDescriptor) {
+        for (const auto* const plugin : sceneUpscalerPlugins()) {
+            const auto& info = plugin->info();
+            EXPECT_EQ(sceneUpscalerPlugin(info.backend), plugin);
+            EXPECT_EQ(sceneUpscalerDescriptor(info.backend).id, info.id);
+        }
+        EXPECT_EQ(sceneUpscalerPlugin(SceneUpscalerBackend::Native), nullptr);
+        EXPECT_EQ(sceneUpscalerPlugin(SceneUpscalerBackend::Temporal), nullptr);
     }
 
     TEST(SceneUpscalerRegistry, BackendOnlyUpdateRestoresRememberedPresetEvenWhenIdsOverlap) {

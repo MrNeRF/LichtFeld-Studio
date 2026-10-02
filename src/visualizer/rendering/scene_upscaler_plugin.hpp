@@ -6,18 +6,21 @@
 
 #include "core/export.hpp"
 #include "rendering/scene_upscaler_plugin_api.h"
+#include "rendering/scene_upscaler_registry.hpp"
 
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::vis {
 
-    enum class NvidiaDlssPluginState : std::uint8_t {
+    enum class SceneUpscalerPluginState : std::uint8_t {
         Unprobed = 0,
         DisabledBySafeMode,
         NotInstalled,
@@ -35,9 +38,9 @@ namespace lfs::vis {
      * use IDs above the legacy three-view range; older plugins are limited to
      * those three IDs and therefore fail allocation instead of aliasing them.
      */
-    class LFS_VIS_API NvidiaDlssViewIdentityAllocator final {
+    class LFS_VIS_API SceneUpscalerPluginViewIdentityAllocator final {
     public:
-        explicit NvidiaDlssViewIdentityAllocator(bool dynamic_view_ids) noexcept
+        explicit SceneUpscalerPluginViewIdentityAllocator(bool dynamic_view_ids) noexcept
             : dynamic_view_ids_(dynamic_view_ids) {}
 
         [[nodiscard]] std::optional<std::uint32_t> acquire() {
@@ -67,19 +70,33 @@ namespace lfs::vis {
         std::set<std::uint32_t> allocated_;
     };
 
-    class LFS_VIS_API NvidiaDlssPlugin final {
+    // Identity of one optional vendor plugin. The host knows only where the
+    // module lives; everything else is negotiated through the plugin C ABI.
+    struct SceneUpscalerPluginInfo {
+        SceneUpscalerBackend backend;
+        std::string_view id;        // Required LfsSceneUpscalerPluginApiV1::plugin_id.
+        std::string_view name;      // Label for diagnostics before the module is loaded.
+        std::string_view directory; // Under <app>/scene_upscalers/.
+        std::string_view library;   // Module stem without platform prefix/suffix.
+        std::string_view cache_dir; // Under the user cache directory.
+    };
+
+    class LFS_VIS_API SceneUpscalerPlugin final {
     public:
-        static NvidiaDlssPlugin& instance();
+        explicit SceneUpscalerPlugin(const SceneUpscalerPluginInfo& info);
+        ~SceneUpscalerPlugin();
 
-        NvidiaDlssPlugin(const NvidiaDlssPlugin&) = delete;
-        NvidiaDlssPlugin& operator=(const NvidiaDlssPlugin&) = delete;
+        SceneUpscalerPlugin(const SceneUpscalerPlugin&) = delete;
+        SceneUpscalerPlugin& operator=(const SceneUpscalerPlugin&) = delete;
 
+        [[nodiscard]] const SceneUpscalerPluginInfo& info() const noexcept { return info_; }
         void configure(bool loading_enabled);
         [[nodiscard]] bool probe();
         [[nodiscard]] bool available();
-        [[nodiscard]] NvidiaDlssPluginState state() const;
+        [[nodiscard]] SceneUpscalerPluginState state() const;
         [[nodiscard]] std::string diagnostic() const;
         [[nodiscard]] std::filesystem::path libraryPath() const;
+        [[nodiscard]] bool hasCapability(LfsSceneUpscalerPluginCapability capability);
 
         [[nodiscard]] std::vector<std::string> requiredInstanceExtensions();
         [[nodiscard]] std::vector<std::string> requiredDeviceExtensions(
@@ -100,14 +117,15 @@ namespace lfs::vis {
         void shutdown();
 
     private:
-        NvidiaDlssPlugin();
-        ~NvidiaDlssPlugin();
-
         struct Impl;
+        SceneUpscalerPluginInfo info_;
         Impl* impl_;
     };
 
-    LFS_VIS_API void configureNvidiaDlssPluginLoading(bool enabled);
-    [[nodiscard]] LFS_VIS_API bool nvidiaDlssPluginAvailable();
+    // Every optional plugin backend the host knows how to discover.
+    [[nodiscard]] LFS_VIS_API std::span<SceneUpscalerPlugin* const> sceneUpscalerPlugins();
+    // nullptr for built-in backends.
+    [[nodiscard]] LFS_VIS_API SceneUpscalerPlugin* sceneUpscalerPlugin(SceneUpscalerBackend backend);
+    LFS_VIS_API void configureSceneUpscalerPluginLoading(bool enabled);
 
 } // namespace lfs::vis

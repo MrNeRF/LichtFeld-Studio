@@ -76,6 +76,7 @@
 #include "rendering/image_layout.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/scene_upscaler_plugin.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
@@ -5305,7 +5306,7 @@ namespace lfs::vis::gui {
             params.scene_upscaler = sceneUpscalerBackendFromId(settings.scene_upscaler)
                                         .value_or(SceneUpscalerBackend::Native);
             params.scene_upscaler_mode_unsupported =
-                rendering_manager->sceneUpscalerModeUnsupported();
+                rendering_manager->sceneUpscalerModeUnsupported(id);
             params.background_color = settings.background_color;
             params.grid_enabled =
                 settings.show_grid &&
@@ -5486,24 +5487,10 @@ namespace lfs::vis::gui {
                     },
                     .frame_slot = frame_slot,
                 };
-                if (params.scene_upscaler == SceneUpscalerBackend::NvidiaDlss &&
+                if (sceneUpscalerPlugin(params.scene_upscaler) != nullptr &&
                     params.external_scene_image != VK_NULL_HANDLE &&
                     params.depth_blit.external_image != VK_NULL_HANDLE) {
-                    VulkanSceneDlssPipelineRequest dlss_request{
-                        .temporal = *params.temporal,
-                        .color_image = params.external_scene_image,
-                        .color_format = VK_FORMAT_R8G8B8A8_UNORM,
-                        .depth_image = params.depth_blit.external_image,
-                        .depth_format = params.depth_blit.external_image_format,
-                        .quality = temporal_frame->quality,
-                    };
-                    if (validVulkanSceneDlssPipelineRequest(dlss_request))
-                        params.dlss = dlss_request;
-                }
-                if (params.scene_upscaler == SceneUpscalerBackend::AmdFsr3 &&
-                    params.external_scene_image != VK_NULL_HANDLE &&
-                    params.depth_blit.external_image != VK_NULL_HANDLE) {
-                    VulkanSceneFsr3PipelineRequest fsr3_request{
+                    VulkanScenePluginPipelineRequest plugin_request{
                         .temporal = *params.temporal,
                         .color_image = params.external_scene_image,
                         .color_format = VK_FORMAT_R8G8B8A8_UNORM,
@@ -5513,8 +5500,8 @@ namespace lfs::vis::gui {
                         .depth_generation = params.depth_blit.external_image_generation,
                         .quality = temporal_frame->quality,
                     };
-                    if (validVulkanSceneFsr3PipelineRequest(fsr3_request))
-                        params.fsr3 = fsr3_request;
+                    if (validVulkanScenePluginPipelineRequest(plugin_request))
+                        params.plugin = plugin_request;
                 }
             }
 
@@ -5608,44 +5595,17 @@ namespace lfs::vis::gui {
                     params.split_view.left, TemporalViewId::SplitLeft);
                 params.split_temporal[1] = make_split_temporal_request(
                     params.split_view.right, TemporalViewId::SplitRight);
-                if (params.scene_upscaler == SceneUpscalerBackend::NvidiaDlss) {
-                    const auto make_split_dlss_request =
+                if (sceneUpscalerPlugin(params.scene_upscaler) != nullptr) {
+                    const auto make_split_plugin_request =
                         [](const VulkanSplitViewPanel& panel,
                            const std::optional<VulkanSceneTemporalPipelineRequest>& temporal)
-                        -> std::optional<VulkanSceneDlssPipelineRequest> {
+                        -> std::optional<VulkanScenePluginPipelineRequest> {
                         if (!temporal ||
                             panel.external_image == VK_NULL_HANDLE ||
                             panel.depth_image == VK_NULL_HANDLE) {
                             return std::nullopt;
                         }
-                        VulkanSceneDlssPipelineRequest request{
-                            .temporal = *temporal,
-                            .color_image = panel.external_image,
-                            .color_format = VK_FORMAT_R8G8B8A8_UNORM,
-                            .depth_image = panel.depth_image,
-                            .depth_format = panel.depth_image_format,
-                            .quality = panel.temporal_quality,
-                        };
-                        if (!validVulkanSceneDlssPipelineRequest(request))
-                            return std::nullopt;
-                        return request;
-                    };
-                    params.split_dlss[0] = make_split_dlss_request(
-                        params.split_view.left, params.split_temporal[0]);
-                    params.split_dlss[1] = make_split_dlss_request(
-                        params.split_view.right, params.split_temporal[1]);
-                }
-                if (params.scene_upscaler == SceneUpscalerBackend::AmdFsr3) {
-                    const auto make_split_fsr3_request =
-                        [](const VulkanSplitViewPanel& panel,
-                           const std::optional<VulkanSceneTemporalPipelineRequest>& temporal)
-                        -> std::optional<VulkanSceneFsr3PipelineRequest> {
-                        if (!temporal ||
-                            panel.external_image == VK_NULL_HANDLE ||
-                            panel.depth_image == VK_NULL_HANDLE) {
-                            return std::nullopt;
-                        }
-                        VulkanSceneFsr3PipelineRequest request{
+                        VulkanScenePluginPipelineRequest request{
                             .temporal = *temporal,
                             .color_image = panel.external_image,
                             .color_format = VK_FORMAT_R8G8B8A8_UNORM,
@@ -5655,13 +5615,13 @@ namespace lfs::vis::gui {
                             .depth_generation = panel.depth_image_generation,
                             .quality = panel.temporal_quality,
                         };
-                        if (!validVulkanSceneFsr3PipelineRequest(request))
+                        if (!validVulkanScenePluginPipelineRequest(request))
                             return std::nullopt;
                         return request;
                     };
-                    params.split_fsr3[0] = make_split_fsr3_request(
+                    params.split_plugin[0] = make_split_plugin_request(
                         params.split_view.left, params.split_temporal[0]);
-                    params.split_fsr3[1] = make_split_fsr3_request(
+                    params.split_plugin[1] = make_split_plugin_request(
                         params.split_view.right, params.split_temporal[1]);
                 }
             }
