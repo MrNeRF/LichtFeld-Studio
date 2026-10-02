@@ -392,7 +392,7 @@ namespace lfs::core {
         return stats;
     }
 
-    void RasterizerMemoryArena::record_viewer_turn(const double turn_ms) {
+    void RasterizerMemoryArena::update_viewer_turn_cost(const double turn_ms) {
         std::lock_guard<std::mutex> lock(stats_mutex_);
         viewer_turn_ring_[viewer_turn_count_ % 5u] = turn_ms;
         ++viewer_turn_count_;
@@ -610,7 +610,7 @@ namespace lfs::core {
             }
         }
         if (consumed) {
-            record_viewer_turn(turn_ms);
+            update_viewer_turn_cost(turn_ms);
             LOG_PERF("arena.viewer_turn took %.3fms", turn_ms);
         }
         return consumed;

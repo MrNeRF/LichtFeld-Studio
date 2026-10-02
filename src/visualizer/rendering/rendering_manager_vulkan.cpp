@@ -4265,7 +4265,7 @@ namespace lfs::vis {
                         // when requested. Resetting it again after a parked
                         // retry adds that delay to every subsequent interval.
                         if (is_training && (frame_dirty & ~DirtyFlag::SPLATS) != 0)
-                            frame_lifecycle_service_.noteTrainingRender();
+                            frame_lifecycle_service_.restartTrainingRefresh();
                         vksplat_stale_frame_guard_.onSuccess();
                         render_lock.reset();
                         note_lod_page_generation(render_result.lod_page_generation);

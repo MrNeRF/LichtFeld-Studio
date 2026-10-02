@@ -2443,7 +2443,7 @@ namespace lfs::vis {
         EXPECT_EQ(service.handleTrainingRefresh(true, interval), DirtyFlag::SPLATS);
         // Motion deferred the requested preview until the camera came to rest.
         std::this_thread::sleep_for(std::chrono::milliseconds(60));
-        service.noteTrainingRender();
+        service.restartTrainingRefresh();
         EXPECT_EQ(service.handleTrainingRefresh(true, interval), 0u);
         EXPECT_GT(service.secondsUntilTrainingRefresh(interval), 0.0);
         // A pause still publishes the final training state immediately.

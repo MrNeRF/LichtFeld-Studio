@@ -434,7 +434,7 @@ namespace lfs::core {
         // Must not be called with sync_mutex_ held.
         bool wait_release_event();
         // Update the completed-turn history without holding a CUDA event lock.
-        void record_viewer_turn(double turn_ms);
+        void update_viewer_turn_cost(double turn_ms);
         bool install_external_backing_impl(ExternalBacking backing, bool wait, uint32_t timeout_ms = 0);
         char* allocate_internal(Arena& arena, size_t size, uint64_t frame_id,
                                 const char* label);
