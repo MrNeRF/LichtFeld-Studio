@@ -3233,7 +3233,7 @@ namespace lfs::training {
         const auto image_loader = getActiveImageLoader();
         auto prepared = prepare_evaluation_view(
             camera, params,
-            [&](lfs::core::Camera& render_camera, const float mip_filter_dilation)
+            [&](lfs::core::Camera& render_camera, const float dilation_scale)
                 -> std::expected<EvaluationRenderResult, std::string> {
                 const std::shared_lock lock(render_mutex_);
                 // Exclude the non-refining optimizer writes for the metric read window
@@ -3259,7 +3259,7 @@ namespace lfs::training {
                     } else {
                         output = fast_rasterize(
                             render_camera, model, background, params.optimization.mip_filter,
-                            {}, false, mip_filter_dilation);
+                            {}, false, dilation_scale);
                     }
 
                     raw_image = output.image;
@@ -3333,14 +3333,9 @@ namespace lfs::training {
 
             if (include_ssim) {
                 SSIM ssim_metric(true);
-                const auto ssim_mask = prepared->erode_ssim_mask && mask.is_valid()
-                                           ? lfs::training::erode_metrics_mask(
-                                                 mask, 5, rendered.stream())
-                                           : mask;
-                if (!prepared->erode_ssim_mask || !mask.is_valid() ||
-                    ssim_mask.to(lfs::core::DataType::Float32).sum().item<float>() > 0.0f) {
-                    snapshot.ssim = ssim_metric.compute(rendered, gt_image, ssim_mask);
-                }
+                snapshot.ssim = ssim_metric.compute(
+                    rendered, gt_image,
+                    ssim_evaluation_mask(mask, prepared->erode_ssim_mask, camera.image_name(), rendered.stream()));
             }
         } catch (const std::exception& e) {
             return std::unexpected(e.what());

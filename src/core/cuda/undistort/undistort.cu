@@ -272,6 +272,7 @@ namespace lfs::core {
                 float* __restrict__ dst,
                 const int channels,
                 const int output_y_offset,
+                const int quadrature,
                 const UndistortParams params) {
             const int ox = blockIdx.x * BLOCK_DIM + threadIdx.x;
             const int oy = output_y_offset + blockIdx.y * BLOCK_DIM + threadIdx.y;
@@ -279,12 +280,12 @@ namespace lfs::core {
                 return;
 
             float result[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            for (int qy = 0; qy < AREA_QUADRATURE; ++qy) {
-                for (int qx = 0; qx < AREA_QUADRATURE; ++qx) {
+            for (int qy = 0; qy < quadrature; ++qy) {
+                for (int qx = 0; qx < quadrature; ++qx) {
                     const float pixel_x = static_cast<float>(ox) +
-                                          (static_cast<float>(qx) + 0.5f) / AREA_QUADRATURE;
+                                          (static_cast<float>(qx) + 0.5f) / quadrature;
                     const float pixel_y = static_cast<float>(oy) +
-                                          (static_cast<float>(qy) + 0.5f) / AREA_QUADRATURE;
+                                          (static_cast<float>(qy) + 0.5f) / quadrature;
                     const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
                     const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
                     float dnx, dny;
@@ -305,7 +306,7 @@ namespace lfs::core {
 
             const int output_index = oy * params.dst_width + ox;
             const int output_plane = params.dst_width * params.dst_height;
-            constexpr float inverse_samples = 1.0f / (AREA_QUADRATURE * AREA_QUADRATURE);
+            const float inverse_samples = 1.0f / static_cast<float>(quadrature * quadrature);
             for (int channel = 0; channel < channels; ++channel)
                 dst[channel * output_plane + output_index] = result[channel] * inverse_samples;
         }
@@ -512,6 +513,7 @@ namespace lfs::core {
                 const int channels,
                 const AreaFilterMode mode,
                 const int output_y_offset,
+                const int quadrature,
                 const UndistortParams params) {
             const int ox = blockIdx.x * BLOCK_DIM + threadIdx.x;
             const int oy = output_y_offset + blockIdx.y * BLOCK_DIM + threadIdx.y;
@@ -521,12 +523,12 @@ namespace lfs::core {
             float result[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             float valid_samples = 0.0f;
             const int input_plane = params.src_width * params.src_height;
-            for (int qy = 0; qy < AREA_QUADRATURE; ++qy) {
-                for (int qx = 0; qx < AREA_QUADRATURE; ++qx) {
+            for (int qy = 0; qy < quadrature; ++qy) {
+                for (int qx = 0; qx < quadrature; ++qx) {
                     const float pixel_x = static_cast<float>(ox) +
-                                          (static_cast<float>(qx) + 0.5f) / AREA_QUADRATURE;
+                                          (static_cast<float>(qx) + 0.5f) / quadrature;
                     const float pixel_y = static_cast<float>(oy) +
-                                          (static_cast<float>(qy) + 0.5f) / AREA_QUADRATURE;
+                                          (static_cast<float>(qy) + 0.5f) / quadrature;
                     const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
                     const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
                     float dnx, dny;
@@ -942,8 +944,17 @@ namespace lfs::core {
             }
         }
 
+        // At least one sample per source pixel along each axis, so strong minification still
+        // integrates the whole footprint instead of aliasing on a fixed sample lattice.
+        int area_quadrature(const UndistortParams& params) {
+            const float minification = std::max(params.src_fx / params.dst_fx,
+                                                params.src_fy / params.dst_fy);
+            return std::max(AREA_QUADRATURE, static_cast<int>(std::ceil(minification)));
+        }
+
         bool is_identity_resample(const UndistortParams& params) {
-            if (params.src_width != params.dst_width ||
+            if (params.model_type != CameraModelType::PINHOLE ||
+                params.src_width != params.dst_width ||
                 params.src_height != params.dst_height ||
                 params.src_fx != params.dst_fx || params.src_fy != params.dst_fy ||
                 params.src_cx != params.dst_cx || params.src_cy != params.dst_cy) {
@@ -1333,7 +1344,8 @@ namespace lfs::core {
                 (params.dst_width + BLOCK_DIM - 1) / BLOCK_DIM,
                 (tile_rows + BLOCK_DIM - 1) / BLOCK_DIM);
             undistort_image_kernel<<<grid, block, 0, stream>>>(
-                input.ptr<float>(), dst.ptr<float>(), channels, output_y, params);
+                input.ptr<float>(), dst.ptr<float>(), channels, output_y,
+                area_quadrature(params), params);
         }
         const cudaError_t error = cudaGetLastError();
         assert(error == cudaSuccess && "undistort_image_kernel launch failed");
@@ -1410,7 +1422,8 @@ namespace lfs::core {
                     (params.dst_width + BLOCK_DIM - 1) / BLOCK_DIM,
                     (tile_rows + BLOCK_DIM - 1) / BLOCK_DIM);
                 undistort_area_kernel<<<grid, block, 0, stream>>>(
-                    input.ptr<float>(), dst.ptr<float>(), channels, mode, output_y, params);
+                    input.ptr<float>(), dst.ptr<float>(), channels, mode, output_y,
+                    area_quadrature(params), params);
             }
             const cudaError_t error = cudaGetLastError();
             assert(error == cudaSuccess && "undistort_area_kernel launch failed");

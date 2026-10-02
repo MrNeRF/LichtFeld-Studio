@@ -350,6 +350,20 @@ TEST(GeomMetricHelpers, FlatRenderedDepthAbsRel) {
     EXPECT_NEAR(*absrel, 0.2f, 1.0e-5f);
 }
 
+// Catches a sample halfway between a rendered pixel and an empty one being blended toward zero depth.
+TEST(GeomMetricHelpers, SampleNextToEmptyDepthIsSkipped) {
+    constexpr int kH = 8;
+    constexpr int kW = 8;
+    std::vector<float> depth(static_cast<size_t>(kH * kW), 2.0f);
+    for (int y = 0; y < kH; ++y)
+        depth[static_cast<size_t>(y) * kW + 4] = 0.0f;
+    const std::vector<lfs::training::DepthAbsRelSample> samples{{4.0f, 4.5f, 2.0f}, {1.5f, 4.5f, 2.0f}};
+
+    const auto absrel = median_depth_absrel(cpu_hw(depth, kH, kW), samples);
+    ASSERT_TRUE(absrel.has_value());
+    EXPECT_NEAR(*absrel, 0.0f, 1.0e-6f);
+}
+
 TEST(MetricsEvaluatorGeom, MatchingRenderedAndPriorNormalIsNearZero) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
@@ -576,13 +590,13 @@ TEST(MetricsEvaluatorUndistort, SharedPreparationMatchesCachedInteractiveInputsI
         std::vector<std::pair<int, int>> render_sizes;
         std::vector<float> render_dilations;
         const auto render = [&render_calls, &render_sizes, &render_dilations](
-                                Camera& render_camera, const float mip_filter_dilation)
+                                Camera& render_camera, const float dilation_scale)
             -> std::expected<lfs::training::EvaluationRenderResult, std::string> {
             ++render_calls;
             const auto height = static_cast<size_t>(render_camera.image_height());
             const auto width = static_cast<size_t>(render_camera.image_width());
             render_sizes.emplace_back(static_cast<int>(width), static_cast<int>(height));
-            render_dilations.push_back(mip_filter_dilation);
+            render_dilations.push_back(dilation_scale);
             assert(height > 0);
             assert(width > 0);
             auto image = Tensor::full({size_t{3}, height, width}, 128.0f / 255.0f,
@@ -629,7 +643,7 @@ TEST(MetricsEvaluatorUndistort, SharedPreparationMatchesCachedInteractiveInputsI
             EXPECT_EQ(render_sizes, (std::vector<std::pair<int, int>>{
                                         {scaled.dst_width * 2, scaled.dst_height * 2},
                                         {scaled.dst_width * 2, scaled.dst_height * 2}}));
-            EXPECT_EQ(render_dilations, (std::vector<float>{0.4f, 0.4f}));
+            EXPECT_EQ(render_dilations, (std::vector<float>{4.0f, 4.0f}));
             EXPECT_EQ(batch->render_geometry.width, kW);
             EXPECT_EQ(batch->render_geometry.height, kH);
             EXPECT_FALSE(batch->render_geometry.undistorted);
@@ -650,7 +664,7 @@ TEST(MetricsEvaluatorUndistort, SharedPreparationMatchesCachedInteractiveInputsI
             EXPECT_EQ(render_sizes, (std::vector<std::pair<int, int>>{
                                         {scaled.dst_width, scaled.dst_height},
                                         {scaled.dst_width, scaled.dst_height}}));
-            EXPECT_EQ(render_dilations, (std::vector<float>{0.1f, 0.1f}));
+            EXPECT_EQ(render_dilations, (std::vector<float>{1.0f, 1.0f}));
             EXPECT_EQ(batch->render_geometry.width, scaled.dst_width);
             EXPECT_EQ(batch->render_geometry.height, scaled.dst_height);
             EXPECT_TRUE(batch->render_geometry.undistorted);
@@ -719,6 +733,35 @@ TEST(MetricsEvaluatorUndistort, ThinMaskFallsBackToPartialSsimWindows) {
     EXPECT_FLOAT_EQ(metrics.ssim, *view.ssim);
 
     std::filesystem::remove_all(tmp);
+}
+
+// Catches the evaluation copy of a prepared camera losing its undistorted state, which makes the
+// GUT renderer apply the lens distortion a second time.
+TEST(MetricsEvaluatorUndistort, TransformCopyKeepsPreparedUndistortion) {
+    const auto camera = make_distorted_eval_camera("copy.png", {}, 64, 48);
+    const Camera copy(*camera, camera->world_view_transform());
+    EXPECT_TRUE(copy.is_undistort_prepared());
+    EXPECT_EQ(copy.undistort_params().dst_width, camera->undistort_params().dst_width);
+    EXPECT_EQ(copy.undistort_params().dst_fx, camera->undistort_params().dst_fx);
+}
+
+// Catches a supersampled evaluation render whose screen-space dilation ignores the scale when the
+// mip filter is off: the footprint of a subpixel splat then shrinks about threefold.
+TEST(MetricsEvaluatorUndistort, SupersampledRenderKeepsTheSplatFootprint) {
+    auto splat = make_front_facing_splat();
+    splat.scaling_raw() = Tensor::full({1, 3}, -4.2f, Device::CUDA);
+    splat.opacity_raw() = Tensor::zeros({1}, Device::CUDA);
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    auto base = make_eval_camera("footprint.png", {}, 64, 64);
+    auto supersampled = make_eval_camera("footprint.png", {}, 128, 128);
+    const auto alpha_area = [&](Camera& camera, const float dilation_scale) {
+        return lfs::training::fast_rasterize(camera, splat, background, false, {}, false, dilation_scale)
+            .alpha.sum()
+            .item<float>();
+    };
+    const float base_area = alpha_area(*base, 1.0f);
+    ASSERT_GT(base_area, 0.1f);
+    EXPECT_NEAR(alpha_area(*supersampled, 4.0f) / 4.0f, base_area, 0.03f * base_area);
 }
 
 TEST(MetricsEvaluatorGeom, RotatedPriorReportsKnownAngle) {

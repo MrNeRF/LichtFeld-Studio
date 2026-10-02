@@ -303,6 +303,9 @@ namespace lfs::training {
             const float v10 = depth[static_cast<size_t>(y0) * static_cast<size_t>(width) + static_cast<size_t>(x1)];
             const float v01 = depth[static_cast<size_t>(y1) * static_cast<size_t>(width) + static_cast<size_t>(x0)];
             const float v11 = depth[static_cast<size_t>(y1) * static_cast<size_t>(width) + static_cast<size_t>(x1)];
+            // Pixels without depth (empty or outside the valid region) would pull the blend toward zero.
+            if (!(v00 > 0.0f && v10 > 0.0f && v01 > 0.0f && v11 > 0.0f))
+                return std::numeric_limits<float>::quiet_NaN();
             return v00 * (1.0f - wx) * (1.0f - wy) +
                    v10 * wx * (1.0f - wy) +
                    v01 * (1.0f - wx) * wy +
@@ -370,6 +373,18 @@ namespace lfs::training {
             return nlohmann::json::object();
         }
     } // namespace
+
+    lfs::core::Tensor ssim_evaluation_mask(const lfs::core::Tensor& mask, const bool complete_windows_only,
+                                           const std::string_view camera_name, const cudaStream_t stream) {
+        if (!complete_windows_only || !mask.is_valid())
+            return mask;
+        auto complete_windows = lfs::training::erode_metrics_mask(mask, 5, stream);
+        if (complete_windows.to(lfs::core::DataType::Float32).sum().item<float>() > 0.0f)
+            return complete_windows;
+        LOG_WARN("Eval: camera '{}' has no complete SSIM window inside the evaluated pixels; SSIM includes partial windows",
+                 camera_name);
+        return mask;
+    }
 
     std::expected<PreparedEvaluationView, std::string> prepare_evaluation_view(
         lfs::core::Camera& camera,
@@ -455,7 +470,7 @@ namespace lfs::training {
             lfs::core::Camera* render_camera = &camera;
             int render_width = inputs.source_width;
             int render_height = inputs.source_height;
-            float mip_filter_dilation = 0.1f;
+            float dilation_scale = 1.0f;
             const bool distorted_evaluation =
                 scaled_undistort &&
                 params.optimization.eval_space == lfs::core::param::EvalSpace::Distorted;
@@ -505,7 +520,7 @@ namespace lfs::training {
                     inverse_warp->dst_fy = fy;
                     inverse_warp->dst_cx = cx;
                     inverse_warp->dst_cy = cy;
-                    mip_filter_dilation = 0.1f * factor * factor;
+                    dilation_scale = static_cast<float>(factor * factor);
                     geometry = {
                         .width = inputs.source_width,
                         .height = inputs.source_height,
@@ -537,7 +552,7 @@ namespace lfs::training {
                     .undistorted = false};
             }
 
-            auto rendered = render(*render_camera, mip_filter_dilation);
+            auto rendered = render(*render_camera, dilation_scale);
             if (!rendered)
                 return std::unexpected(rendered.error());
             if (!rendered->output.image.is_valid())
@@ -1089,7 +1104,7 @@ namespace lfs::training {
             auto& splatData_mutable = const_cast<lfs::core::SplatData&>(splatData);
             auto prepared = prepare_evaluation_view(
                 *cam, _params,
-                [&](lfs::core::Camera& render_camera, const float mip_filter_dilation)
+                [&](lfs::core::Camera& render_camera, const float dilation_scale)
                     -> std::expected<EvaluationRenderResult, std::string> {
                     try {
                         RenderOutput output;
@@ -1101,7 +1116,7 @@ namespace lfs::training {
                             output = fast_rasterize(
                                 render_camera, splatData_mutable, background,
                                 _params.optimization.mip_filter, {}, render_normal,
-                                mip_filter_dilation);
+                                dilation_scale);
                         }
                         auto raw_image = output.image;
                         if (appearance_ && output.image.is_valid())
@@ -1143,18 +1158,9 @@ namespace lfs::training {
             float ssim = 0.0f;
             try {
                 psnr = _psnr_metric->compute(r_output.image, gt_image, mask);
-                auto ssim_mask = mask;
-                if (erode_ssim_mask && mask.is_valid()) {
-                    auto complete_windows = lfs::training::erode_metrics_mask(
-                        mask, 5, r_output.image.stream());
-                    if (complete_windows.to(lfs::core::DataType::Float32).sum().item<float>() > 0.0f) {
-                        ssim_mask = std::move(complete_windows);
-                    } else {
-                        LOG_WARN("Eval: camera '{}' has no complete SSIM window inside the evaluated pixels; SSIM includes partial windows",
-                                 cam->image_name());
-                    }
-                }
-                ssim = _ssim_metric->compute(r_output.image, gt_image, ssim_mask);
+                ssim = _ssim_metric->compute(
+                    r_output.image, gt_image,
+                    ssim_evaluation_mask(mask, erode_ssim_mask, cam->image_name(), r_output.image.stream()));
             } catch (const std::exception& e) {
                 LOG_WARN("Eval: skipping camera '{}' (metric computation failed: {})", cam->image_name(), e.what());
                 view.skipped_reason = std::string("metric computation failed: ") + e.what();

@@ -358,7 +358,7 @@ namespace lfs::training {
         const core::Tensor& bg_image,
         bool render_normal,
         bool render_depth,
-        float mip_filter_dilation) {
+        float dilation_scale) {
         // Get camera parameters
         const int full_width = viewpoint_camera.image_width();
         const int full_height = viewpoint_camera.image_height();
@@ -520,7 +520,7 @@ namespace lfs::training {
                  gaussian_model._max_screen_share.numel() >= static_cast<size_t>(n_primitives))
                     ? gaussian_model._max_screen_share.ptr<float>()
                     : nullptr,
-                mip_filter_dilation);
+                dilation_scale);
         } catch (const std::exception& e) {
             // Dump all input data for debugging
             dump_crash_data(

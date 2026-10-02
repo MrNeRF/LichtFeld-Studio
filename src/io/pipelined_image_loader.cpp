@@ -496,6 +496,12 @@ namespace lfs::io {
             if (!params.undistort)
                 return;
 
+            // The slot spans float staging to completion, so concurrent 8K loads never hold more
+            // than one set of full-resolution warp buffers.
+            const UndistortSlotGuard slot;
+            const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
+            const lfs::core::CUDAStreamGuard stream_guard(stream);
+            tensor.sync_to_stream(stream);
             const bool restore_uint8 = params.output_uint8;
             if (tensor.dtype() == lfs::core::DataType::UInt8) {
                 tensor = tensor.to(lfs::core::DataType::Float32) / 255.0f;
@@ -510,9 +516,7 @@ namespace lfs::io {
                 static_cast<int>(tensor.shape()[1]),
                 params.resize_factor,
                 params.max_width);
-            const UndistortSlotGuard slot;
-            tensor = lfs::core::undistort_image(
-                tensor, scaled, static_cast<cudaStream_t>(params.cuda_stream));
+            tensor = lfs::core::undistort_image(tensor, scaled, stream);
 
             if (restore_uint8) {
                 auto uint8_tensor = lfs::core::Tensor::empty(
@@ -523,12 +527,14 @@ namespace lfs::io {
                     tensor.shape()[1],
                     tensor.shape()[2],
                     tensor.shape()[0],
-                    static_cast<cudaStream_t>(params.cuda_stream));
+                    stream);
                 tensor = std::move(uint8_tensor);
             } else {
-                tensor = quantize_rgb_to_u16_grid(
-                    tensor, static_cast<cudaStream_t>(params.cuda_stream));
+                tensor = quantize_rgb_to_u16_grid(tensor, stream);
             }
+            const cudaError_t status = cudaStreamSynchronize(stream);
+            if (status != cudaSuccess)
+                throw std::runtime_error(std::string("undistortion failed: ") + cudaGetErrorString(status));
         }
 
         lfs::core::Tensor process_mask(lfs::core::Tensor mask, const float threshold) {
@@ -1408,11 +1414,12 @@ namespace lfs::io {
             return;
 
         try {
-            auto encode_tensor = tensor.dtype() == lfs::core::DataType::UInt8
-                                     ? tensor.to(lfs::core::DataType::Float32) / 255.0f
-                                     : tensor;
             auto bytes = lossless
-                             ? nvcodec.encode_to_jpeg2k(encode_tensor, cuda_stream)
+                             ? nvcodec.encode_to_jpeg2k(
+                                   tensor.dtype() == lfs::core::DataType::UInt8
+                                       ? tensor.to(lfs::core::DataType::Float32) / 255.0f
+                                       : tensor,
+                                   cuda_stream)
                              : nvcodec.encode_to_jpeg(tensor, config_.cache_jpeg_quality, cuda_stream);
             put_in_jpeg_cache(cache_key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
         } catch (...) {
