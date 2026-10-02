@@ -7,6 +7,7 @@
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
 #include "io/project_chapters.hpp"
+#include "training/training_manager.hpp"
 
 #include <filesystem>
 #include <format>
@@ -14,6 +15,9 @@
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <random>
+
+#include <filesystem>
+#include <fstream>
 
 namespace {
 
@@ -139,6 +143,88 @@ namespace {
         EXPECT_EQ(recreated.dataset.data_path, "/tmp/override_dataset");
         EXPECT_EQ(recreated.dataset.output_path, "/tmp/override_output");
         EXPECT_EQ(recreated.dataset.images, "images_4");
+    }
+
+    TEST(ParameterManagerTest, TrainingConfigRoundTripsDatasetAndTrainingValues) {
+        const auto config_path =
+            std::filesystem::temp_directory_path() / "lfs_training_config_roundtrip_test.json";
+        lfs::core::param::TrainingParameters source;
+        source.dataset.data_path = "/tmp/config_dataset";
+        source.dataset.output_path = "/tmp/config_output";
+        source.dataset.images = "images_2";
+        source.dataset.resize_factor = 2;
+        source.dataset.max_width = 800;
+        source.dataset.test_every = 5;
+        source.dataset.invert_masks = true;
+        source.dataset.mask_threshold = 0.7f;
+        source.dataset.centralize_dataset = "by_cameras";
+        source.dataset.loading_params.use_cpu_memory = false;
+        source.dataset.loading_params.use_16bit_color = false;
+        source.optimization = lfs::core::param::OptimizationParameters::mrnf_defaults();
+        source.optimization.iterations = 1234;
+        source.optimization.undistort = true;
+
+        lfs::vis::ParameterManager parameter_manager;
+        ASSERT_TRUE(parameter_manager.ensureLoaded());
+        lfs::vis::TrainerManager trainer_manager;
+        trainer_manager.getEditableDatasetParams() = source.dataset;
+        lfs::core::param::TrainingParameters session_defaults;
+        session_defaults.optimization.iterations = 1234;
+        session_defaults.optimization.undistort = true;
+        session_defaults.server.tcp_connection = true;
+        session_defaults.server.tcp_server_connection_port = 12345;
+        parameter_manager.setSessionDefaults(session_defaults);
+        const auto edited_params = trainer_manager.getEditableTrainingParams(parameter_manager);
+        ASSERT_EQ(parameter_manager.getDatasetConfig().max_width, 3840);
+        ASSERT_EQ(edited_params.dataset.max_width, 800);
+        ASSERT_TRUE(edited_params.server.tcp_connection);
+        ASSERT_EQ(edited_params.server.tcp_server_connection_port, 12345);
+        ASSERT_TRUE(lfs::core::param::save_training_parameters_to_json(edited_params, config_path));
+        const auto imported = lfs::core::param::read_training_parameters_from_json(config_path);
+        std::error_code ec;
+        std::filesystem::remove(config_path, ec);
+        ASSERT_TRUE(imported) << imported.error();
+
+        EXPECT_EQ(imported->dataset.data_path, source.dataset.data_path);
+        EXPECT_EQ(imported->dataset.output_path, source.dataset.output_path);
+        EXPECT_EQ(imported->dataset.images, "images_2");
+        EXPECT_EQ(imported->dataset.resize_factor, 2);
+        EXPECT_EQ(imported->dataset.max_width, 800);
+        EXPECT_EQ(imported->dataset.test_every, 5);
+        EXPECT_TRUE(imported->dataset.invert_masks);
+        EXPECT_FLOAT_EQ(imported->dataset.mask_threshold, 0.7f);
+        EXPECT_EQ(imported->dataset.centralize_dataset, "by_cameras");
+        EXPECT_FALSE(imported->dataset.loading_params.use_cpu_memory);
+        EXPECT_FALSE(imported->dataset.loading_params.use_16bit_color);
+        EXPECT_EQ(imported->optimization.iterations, 1234u);
+        EXPECT_TRUE(imported->optimization.undistort);
+        EXPECT_TRUE(imported->server.tcp_connection);
+        EXPECT_EQ(imported->server.tcp_server_connection_port, 12345);
+
+        trainer_manager.importTrainingParams(*imported, parameter_manager);
+        const auto training_params = trainer_manager.getEditableTrainingParams(parameter_manager);
+        EXPECT_EQ(training_params.dataset.max_width, 800);
+        EXPECT_EQ(training_params.dataset.resize_factor, 2);
+        EXPECT_EQ(training_params.dataset.images, "images_2");
+        EXPECT_EQ(training_params.dataset.test_every, 5);
+        EXPECT_EQ(training_params.optimization.iterations, 1234u);
+        EXPECT_TRUE(training_params.optimization.undistort);
+        EXPECT_TRUE(training_params.server.tcp_connection);
+        EXPECT_EQ(training_params.server.tcp_server_connection_port, 12345);
+
+        const auto partial_path =
+            std::filesystem::temp_directory_path() / "lfs_training_config_partial_test.json";
+        std::ofstream(partial_path)
+            << nlohmann::json{{"optimization", {{"iterations", 4321}}}}.dump();
+        auto defaults = training_params;
+        defaults.dataset.max_width = 640;
+        defaults.server.tcp_server_connection_port = 23456;
+        const auto partial = lfs::core::param::read_training_parameters_from_json(partial_path, defaults);
+        std::filesystem::remove(partial_path, ec);
+        ASSERT_TRUE(partial) << partial.error();
+        EXPECT_EQ(partial->dataset.max_width, 640);
+        EXPECT_EQ(partial->server.tcp_server_connection_port, 23456);
+        EXPECT_EQ(partial->optimization.iterations, 4321u);
     }
 
     TEST(ParameterManagerTest, SessionDefaultsCanReplaceCheckpointImportState) {

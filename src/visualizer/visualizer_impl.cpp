@@ -4525,13 +4525,20 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::handleLoadConfigFile(const std::filesystem::path& path) {
-        auto result = lfs::core::param::read_optim_params_from_json(path);
+        const auto current_params = trainer_manager_
+                                        ? trainer_manager_->getEditableTrainingParams(*parameter_manager_)
+                                        : parameter_manager_->createForDataset({}, {});
+        auto result = lfs::core::param::read_training_parameters_from_json(path, current_params);
         if (!result) {
             state::ConfigLoadFailed{.path = path, .error = result.error()}.emit();
             return;
         }
-        result->apply_step_scaling();
-        parameter_manager_->importParams(*result);
+        result->optimization.apply_step_scaling();
+        if (trainer_manager_) {
+            trainer_manager_->importTrainingParams(*result, *parameter_manager_);
+        } else {
+            parameter_manager_->importTrainingParams(*result);
+        }
         parameter_manager_->markDirty();
 
         // Bump scene generation so all panels (e.g. training panel) pick up

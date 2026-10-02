@@ -136,6 +136,7 @@ namespace lfs::vis {
 
         // Dataset config (CLI overrides JSON defaults)
         lfs::core::param::DatasetConfig dataset_config_;
+        lfs::core::param::ServerConfig server_config_;
         std::vector<lfs::core::param::OutputFormat> export_formats_;
 
         mutable std::mutex params_mutex_;
