@@ -54,6 +54,10 @@ namespace lfs::core {
         [[nodiscard]] std::function<Tensor(TensorShape, size_t, DataType, std::string_view)>
         splat_allocator(bool preserve_float_shN = false);
         void drain(GpuBackend backend);
+        // Runs `release` while no tensor work is in flight on the device.
+        // MoltenVK keeps all device memory resident for every queue, so memory
+        // freed while any queue has unfinished work faults.
+        void run_while_idle(GpuBackend backend, const std::function<void()>& release);
         [[nodiscard]] std::shared_ptr<void> execution_scope(GpuBackend backend);
         [[nodiscard]] Tensor empty(TensorShape shape, DataType dtype,
                                    GpuBackend backend, size_t capacity = 0);

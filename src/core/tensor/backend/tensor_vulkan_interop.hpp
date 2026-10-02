@@ -16,6 +16,7 @@ namespace lfs::core::internal {
         virtual ~TensorVulkanInteropBackend() = default;
         virtual void shutdown() {}
         virtual void drain() = 0;
+        virtual void run_while_idle(const std::function<void()>& release) { release(); }
         virtual void release_timeline(void* semaphore) = 0;
         virtual std::shared_ptr<void> execution_scope() = 0;
         virtual Tensor empty_splat(TensorShape shape, size_t capacity, DataType dtype,

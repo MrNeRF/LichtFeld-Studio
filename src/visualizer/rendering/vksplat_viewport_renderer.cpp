@@ -4601,6 +4601,19 @@ namespace lfs::vis {
                                          context.vkCmdEndConditionalRendering());
             context.flushPipelineCache();
             renderer_.assignBufferLabels(buffers_);
+#ifdef __APPLE__
+            // MoltenVK keeps all device memory resident for every queue without
+            // keeping it alive, so growth buffers are freed only with nothing in flight.
+            renderer_.setMemoryReleaseGate([this](const std::function<void()>& release) {
+                for (const VkQueue queue : {context_->graphicsQueue(), context_->computeQueue()}) {
+                    if (const VkResult result = lfs::rendering::vk_queue_wait_idle_synced(queue); result != VK_SUCCESS)
+                        lfs::rendering::throw_vk_result(result, "vkQueueWaitIdle",
+                                                        "VkSplat could not idle the queue before freeing growth buffers",
+                                                        LFS_SOURCE_SITE_CURRENT());
+                }
+                context_->tensorInterop().run_while_idle(active_tensor_backend_, release);
+            });
+#endif
             renderer_.setCpuTimerCallback([](const std::string_view name, const double ms) {
                 LOG_PERF("{} took {:.2f}ms", name, ms);
             });
