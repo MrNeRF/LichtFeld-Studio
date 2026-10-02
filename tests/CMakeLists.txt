@@ -32,6 +32,10 @@ if(BUILD_LOCALIZATION_TESTS)
     endif()
 endif()
 
+if(BUILD_TESTS OR BUILD_VISUALIZER_TESTS)
+    add_subdirectory(vulkan_viewer)
+endif()
+
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 

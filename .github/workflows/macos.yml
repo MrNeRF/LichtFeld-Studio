@@ -65,7 +65,7 @@ jobs:
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Configure
-        run: cmake --preset macos-release -DBUILD_TESTS=ON -DLFS_METAL_TEST_REQUIRE_DEVICE=ON -DLFS_TEST_METAL_VULKAN_INTEROP=ON
+        run: cmake --preset macos-release -DBUILD_TESTS=ON -DLFS_METAL_TEST_REQUIRE_DEVICE=ON -DLFS_TEST_METAL_VULKAN_INTEROP=ON -DLFS_BUILD_VULKAN_DEPTH_TESTS=ON
 
       - name: Remove vcpkg build intermediates
         run: |
@@ -86,6 +86,13 @@ jobs:
           icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
           test -f "$icd"
           VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release -R '^lichtfeld_tests$' --no-tests=error --verbose
+
+      - name: Check Vulkan HiGS depth independently of Metal tensors
+        run: |
+          icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          test -f "$icd"
+          VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release \
+            -R '^VulkanDepthContracts$' --no-tests=error --output-on-failure
 
       - name: Run native viewer contracts with Metal validation
         run: |
