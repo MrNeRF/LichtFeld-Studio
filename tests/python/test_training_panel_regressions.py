@@ -241,7 +241,7 @@ def test_restore_failure_keeps_detail_below_error_badge(training_panel_module, m
 @pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
 @pytest.mark.parametrize("state,actions", [
     ("ready", ("start", "clear")),
-    ("completed", ("switch_edit", "reset", "clear")),
+    ("completed", ("start_new", "switch_edit", "reset", "clear")),
     ("paused", ("resume", "save_project", "reset", "stop")),
 ])
 def test_toolbar_fit_uses_measured_width_and_can_restore_captions(training_panel_module, monkeypatch, scale, state, actions):
