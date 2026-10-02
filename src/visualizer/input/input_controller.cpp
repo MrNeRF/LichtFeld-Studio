@@ -2889,7 +2889,7 @@ namespace lfs::vis {
             .rotation = target_viewport.getRotationMatrix(),
             .translation = target_viewport.getTranslation()}
             .emit();
-        publishCameraMove(&target_viewport, /*preserve_gt_comparison=*/true);
+        publishCameraMove(&target_viewport, true);
 
         auto* const rendering_manager = services().renderingOrNull();
 

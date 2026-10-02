@@ -2362,4 +2362,29 @@ namespace lfs::vis {
         }
     }
 
+    TEST_F(InputControllerFocusTest, DatasetCameraJumpPreservesComparison) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
+        SceneManager scene_manager;
+        screen::ScreenService rendering_views;
+        RenderingManager rendering_manager{rendering_views};
+        services().set(&scene_manager);
+        services().set(&rendering_manager);
+        ASSERT_EQ(rendering_views.activeView(), controller_views.viewId(viewport));
+        auto& scene = scene_manager.getScene();
+        const auto group = scene.addCameraGroup("Cameras", scene.addGroup("Dataset"), 1);
+        scene.addCamera("camera", group, std::make_shared<core::Camera>(core::Tensor::eye(3, core::Device::CPU), core::Tensor::zeros({3}, core::Device::CPU), 100.0f, 100.0f, 32.0f, 32.0f, core::Tensor(), core::Tensor(), core::CameraModelType::PINHOLE, "camera", std::filesystem::path{}, std::filesystem::path{}, 64, 64, 17));
+        const auto view = rendering_views.activeView();
+        rendering_manager.editViewSettings(view, [](ViewSettings& settings) {
+            settings.split_view_mode = SplitViewMode::GTComparison;
+        });
+        core::events::cmd::GoToCamView{.cam_id = 17}.emit();
+        controller.update(0.016f);
+        EXPECT_EQ(rendering_manager.getCurrentCameraId(), 17);
+        EXPECT_EQ(rendering_manager.settingsForView(view).split_view_mode, SplitViewMode::GTComparison);
+        core::events::cmd::ResetCamera{}.emit();
+        EXPECT_EQ(rendering_manager.settingsForView(view).split_view_mode, SplitViewMode::Disabled);
+    }
+
 } // namespace lfs::vis
