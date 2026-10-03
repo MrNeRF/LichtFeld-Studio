@@ -385,6 +385,8 @@ body {
 
 #fps-value {
     margin-left: 16dp;
+    min-width: 128dp;
+    text-align: right;
 }
 
 #fps-label {
@@ -511,3 +513,17 @@ body.fit-9 #gpu-mem {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+
+/* Keep metric columns stable when digits change. */
+#fps-value, #loss-value, #gaussians-value, #time-value, #eta-value, #step-value {
+    font-family: "JetBrains Mono";
+}
+#loss-value { min-width: 44dp; }
+#gaussians-value { min-width: 44dp; }
+#eta-value { min-width: 52dp; }
+
+#mcp-compact { display: none; }
+body.fit-8 #mcp-summary { display: none; }
+body.fit-8 #mcp-compact { display: block; }
+body.fit-8 #mcp-chip { margin-right: 4dp; padding: 0 3dp; }
+body.fit-8 #fps-value { margin-left: 6dp; min-width: 110dp; }

@@ -2922,7 +2922,12 @@ def is_point_cloud_forced() -> bool:
     """Check if point cloud mode is forced (pre-training mode)"""
 
 def get_fps() -> float:
-    """Get current FPS"""
+    """
+    Get viewport renders per second over the last second (cached presents excluded)
+    """
+
+def get_ui_fps() -> float:
+    """Get GUI presents per second over the last second"""
 
 def get_content_type() -> str:
     """Get content type (empty, splat_files, dataset)"""

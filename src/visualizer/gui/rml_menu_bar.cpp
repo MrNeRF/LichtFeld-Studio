@@ -1291,8 +1291,10 @@ namespace lfs::vis::gui {
             return nullptr;
         };
 
-        if (auto* button = find_button(menu_toolbar_))
-            return button;
+        if (toolbar_fits_) {
+            if (auto* button = find_button(menu_toolbar_))
+                return button;
+        }
         return find_button(menu_window_controls_);
     }
 
@@ -1559,10 +1561,13 @@ namespace lfs::vis::gui {
 
         const float dp_ratio = rml_manager_->getDpRatio();
         const int bar_h = static_cast<int>(bar_height_ * dp_ratio);
+        if (dp_ratio != last_dp_ratio_)
+            render_needed_ = true;
+        last_dp_ratio_ = dp_ratio;
 
         // Portal status and transfer progress can change the right cluster's width.
         // Lay it out before reserving space for the viewport toolbar.
-        if (render_needed_ || screen_w != last_ctx_w_) {
+        if (render_needed_ || screen_w != last_ctx_w_ || dp_ratio != last_dp_ratio_) {
             rml_context_->SetDimensions(Rml::Vector2i(screen_w, std::max(bar_h, last_ctx_h_)));
             rml_context_->Update();
         }

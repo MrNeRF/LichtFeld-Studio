@@ -2542,6 +2542,8 @@ namespace lfs::vis {
                              "animation_cadence");
         }
         if (rendering_manager_) {
+            if (const auto deadline = rendering_manager_->fpsIdleDeadline())
+                consider_timeout(secondsUntilFrameDeadline(*deadline, FrameClock::now()), "fps_idle");
             if (const auto deadline = rendering_manager_->frameDemandLedger().nextDeadline(
                     std::chrono::steady_clock::now())) {
                 consider_timeout(secondsUntilFrameDeadline(*deadline, std::chrono::steady_clock::now()),
@@ -2660,6 +2662,9 @@ namespace lfs::vis {
             }
         }
 
+        if (gui_manager_)
+            gui_manager_->prepareLayout();
+
         // Update input controller with viewport bounds
         if (gui_manager_) {
             auto pos = gui_manager_->getViewportPos();
@@ -2755,6 +2760,7 @@ namespace lfs::vis {
             !frame_demand.viewport_export_locked && !frame_demand.viewport_resize_deferring) {
             rendering_manager_->markDirty(DirtyFlag::ALL, FrameReason::SceneChange, "view_inputs_changed");
         }
+        rendering_manager_->refreshIdleFps(FrameClock::now());
         auto ledger_plan = rendering_manager_->frameDemandLedger().plan(
             std::chrono::steady_clock::now());
         if (!ledger_plan.present && frame_demand.shouldRenderFrame()) {
@@ -2863,7 +2869,8 @@ namespace lfs::vis {
                 rendering_manager_->pendingDirtyMask() == DirtyFlag::SPLATS;
             const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
             rendering_manager_->retainVksplatScratch();
-            rendering_manager_->frameDemandLedger().countViewRendered(ledger_plan.render_views, ledger_plan);
+            if (vulkan_frame.rendered)
+                rendering_manager_->countViewRendered(ledger_plan);
             last_rendered_view_fingerprint_ = current_view_fingerprint;
             has_rendered_view_fingerprint_ = true;
             // A preview refresh parked until training frees the shared scratch
@@ -2937,9 +2944,7 @@ namespace lfs::vis {
             window_manager_->updateWindowSize("pre_gui_render");
             presented_gui_frame = gui_manager_->render();
             window_manager_->refreshResizeCursor();
-            // Count presented frames (GUI-only included). Scene FPS still comes
-            // from framerate_controller_ inside renderVulkanFrame; this is
-            // measurement-only and does not affect pacing.
+            // Count only successful presents, including GUI-only frames.
             if (presented_gui_frame && rendering_manager_) {
                 rendering_manager_->countPresentedFrame(ledger_plan);
                 std::string reasons;

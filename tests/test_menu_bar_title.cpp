@@ -166,6 +166,23 @@ namespace {
         lfs::vis::gui::RmlMenuBar bar_;
     };
 
+    TEST_F(MenuBarTitleTest, HiddenToolbarKeepsItsWidthAcrossScaleChanges) {
+        resize(1600, 1.0f, true);
+        const float base_width = el("menu-toolbar")->GetOffsetWidth();
+        ASSERT_GT(base_width, 0);
+        RmlMenuBarTestAccess::toolbar(bar_, false, 400);
+        context_->Update();
+        for (float dp : {2.0f, 1.5f, 1.0f}) {
+            context_->SetDensityIndependentPixelRatio(dp);
+            context_->Update();
+            EXPECT_FALSE(el("menu-toolbar")->IsVisible());
+            EXPECT_NEAR(el("menu-toolbar")->GetOffsetWidth(), base_width * dp, 1.0f);
+        }
+        resize(1600, 1.0f, true);
+        EXPECT_TRUE(el("menu-toolbar")->IsVisible());
+        EXPECT_FLOAT_EQ(el("menu-toolbar")->GetOffsetWidth(), base_width);
+    }
+
     TEST_F(MenuBarTitleTest, ConstrainsAndCentersTitleBetweenMenusAndControls) {
         for (float dp : {1.0f, 1.5f}) {
             for (int width : {1600, 1200, 1000}) {

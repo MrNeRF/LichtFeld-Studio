@@ -5844,11 +5844,6 @@ namespace lfs::vis::gui {
 
         promptFileAssociation();
 
-        if (pending_ui_scale_ > 0.0f) {
-            applyUiScale(pending_ui_scale_);
-            pending_ui_scale_ = 0.0f;
-        }
-
         drag_drop_.pollEvents();
         drag_drop_hovering_ = drag_drop_.isDragHovering();
 
@@ -6800,25 +6795,21 @@ namespace lfs::vis::gui {
             app_store().gt_metrics_overlay_config.set(gt_metrics_config);
             published_gt_metrics_overlay_config_ = gt_metrics_config;
         }
-        const auto publish_vram_hud_overlay_if_due = [&]() {
-            const auto now = std::chrono::steady_clock::now();
+        const auto update_vram_hud_overlay = [&]() {
             if (!isVramHudOverlayVisible()) {
                 perf_sampler_.stop();
                 if (perf_hud_visible_published_) {
                     app_store().perf_hud.set(AppStore::PerfHud{});
                     perf_hud_visible_published_ = false;
                 }
-                if (vram_hud_visible_published_) {
-                    app_store().vram_hud.set(AppStore::VramHud{});
-                    vram_hud_visible_published_ = false;
-                }
-                next_vram_hud_publish_ = {};
+                rml_viewport_overlay_.setVramHudOverlay({});
                 return;
             }
 
             perf_sampler_.start();
 
-            if (isVramHudPublishDue(now)) {
+            {
+                RmlViewportOverlay::VramHudOverlayState overlay;
                 const auto memory = queryGpuMemory();
                 auto perf_snapshot = std::make_shared<AppStore::PerfHudSnapshot>();
                 perf_snapshot->vram_process_bytes = memory.process_used;
@@ -6834,17 +6825,10 @@ namespace lfs::vis::gui {
                     perf_snapshot->per_core_cpu_percent = sample->host.per_core_cpu_percent;
                     perf_snapshot->cpu_valid = sample->host.cpu_valid;
                 }
-                // FPS: same fallback chain as the status bar (rml_status_bar.cpp).
-                // app_store().fps is only set from Python; viewer path uses RM rates.
-                float rate = app_store().fps.get();
-                if (rate <= 0.0f) {
-                    if (auto* const rm = viewer_ ? viewer_->getRenderingManager() : nullptr) {
-                        const float scene_fps = rm->getAverageFPS();
-                        const float presented_fps = rm->getPresentedAverageFPS();
-                        rate = scene_fps > 0.0f ? scene_fps : presented_fps;
-                    }
+                if (auto* rm = viewer_->getRenderingManager()) {
+                    perf_snapshot->rate = rm->getAverageFPS();
+                    perf_snapshot->ui_fps = rm->getPresentedAverageFPS();
                 }
-                perf_snapshot->rate = rate;
 
                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
                 if (profiler.enabled()) {
@@ -6873,21 +6857,17 @@ namespace lfs::vis::gui {
                         ledger.closure == lfs::diagnostics::LedgerClosureState::Closed;
                     perf_snapshot->ledger_over =
                         ledger.closure == lfs::diagnostics::LedgerClosureState::Over;
-                    app_store().vram_hud.set(AppStore::VramHud{
-                        .visible = true,
-                        .snapshot = std::make_shared<const lfs::diagnostics::VramProfilerSnapshot>(
-                            snapshot)});
-                    vram_hud_visible_published_ = true;
-                } else if (vram_hud_visible_published_) {
-                    app_store().vram_hud.set(AppStore::VramHud{});
-                    vram_hud_visible_published_ = false;
+                    overlay.visible = true;
+                    overlay.snapshot = snapshot;
                 }
-                app_store().perf_hud.set(AppStore::PerfHud{
-                    .visible = true,
-                    .expanded = perf_hud_expanded_,
-                    .snapshot = std::move(perf_snapshot)});
+                // Measurements belong to this frame. Publishing them through the
+                // reactive store would request another frame just to measure it.
+                overlay.perf_hud = {.visible = true,
+                                    .expanded = perf_hud_expanded_,
+                                    .snapshot = std::move(perf_snapshot)};
+                app_store().perf_hud.set({.visible = true, .expanded = perf_hud_expanded_});
+                rml_viewport_overlay_.setVramHudOverlay(std::move(overlay));
                 perf_hud_visible_published_ = true;
-                next_vram_hud_publish_ = now + std::chrono::milliseconds(250);
             }
         };
         if (startup_overlay_.isVisible()) {
@@ -7023,7 +7003,7 @@ namespace lfs::vis::gui {
             draw_screen_overlay_content();
         }
 
-        publish_vram_hud_overlay_if_due();
+        update_vram_hud_overlay();
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render", 0.10);
             rml_viewport_overlay_.renderCached();
@@ -8089,6 +8069,7 @@ namespace lfs::vis::gui {
 
         ui::FocusTrainingPanel::when([this](const auto&) {
             focus_panel_name_ = "Training";
+            lfs::python::request_redraw();
         });
 
         ui::ToggleUI::when([this](const auto&) {
@@ -8097,12 +8078,16 @@ namespace lfs::vis::gui {
 
         ui::ToggleVramHud::when([this](const auto&) {
             show_vram_hud_ = !show_vram_hud_;
-            next_vram_hud_publish_ = {};
             LayoutState state;
             state.load();
             state.perf_hud_visible = show_vram_hud_;
             state.perf_hud_expanded = perf_hud_expanded_;
             state.saveUserPreferences();
+            if (auto* rm = viewer_->getRenderingManager())
+                rm->frameDemandLedger().request({.reason = FrameReason::GuiLayout,
+                                                 .scope = FrameScope::Gui,
+                                                 .views = 0,
+                                                 .detail = "performance_hud"});
         });
 
         ui::TogglePerfHudExpanded::when([this](const auto&) {
@@ -8112,6 +8097,11 @@ namespace lfs::vis::gui {
             state.perf_hud_visible = show_vram_hud_;
             state.perf_hud_expanded = perf_hud_expanded_;
             state.saveUserPreferences();
+            if (auto* rm = viewer_->getRenderingManager())
+                rm->frameDemandLedger().request({.reason = FrameReason::GuiLayout,
+                                                 .scope = FrameScope::Gui,
+                                                 .views = 0,
+                                                 .detail = "performance_hud"});
         });
 
         ui::OpenPerfHudLedger::when([this](const auto&) {
@@ -8122,6 +8112,11 @@ namespace lfs::vis::gui {
             state.perf_hud_expanded = true;
             state.vram_hud_active_tab = "ledger";
             state.saveUserPreferences();
+            if (auto* rm = viewer_->getRenderingManager())
+                rm->frameDemandLedger().request({.reason = FrameReason::GuiLayout,
+                                                 .scope = FrameScope::Gui,
+                                                 .views = 0,
+                                                 .detail = "performance_hud"});
         });
 
         ui::ToggleFullscreen::when([this](const auto&) {
@@ -8131,6 +8126,7 @@ namespace lfs::vis::gui {
         internal::DisplayScaleChanged::when([this](const auto& e) {
             if (lfs::vis::loadUiScalePreference() <= 0.0f) {
                 pending_ui_scale_ = std::clamp(e.scale, 1.0f, 4.0f);
+                lfs::python::request_redraw();
             }
         });
 
@@ -8255,6 +8251,7 @@ namespace lfs::vis::gui {
 
         internal::TrainerReady::when([this](const auto&) {
             focus_panel_name_ = "Training";
+            lfs::python::request_redraw();
         });
     }
 
@@ -8363,6 +8360,29 @@ namespace lfs::vis::gui {
         window_states_[name] = show;
     }
 
+    void GuiManager::prepareLayout() {
+        if (pending_ui_scale_ > 0.0f) {
+            applyUiScale(pending_ui_scale_);
+            pending_ui_scale_ = 0.0f;
+        }
+        if (ui_visibility_resize_active_)
+            return;
+        const auto size = viewer_->getWindowManager()->getWindowSize();
+        const float menu_h = rml_menu_bar_.barHeight();
+        const float status_h = PanelLayoutManager::STATUS_BAR_HEIGHT * current_ui_scale_;
+        const ScreenState screen{
+            .work_pos = {0.0f, menu_h},
+            .work_size = {static_cast<float>(size.x), std::max(0.0f, size.y - menu_h - status_h)}};
+        panel_layout_.enforceWidthConstraints(show_main_panel_, ui_hidden_, screen);
+        const auto layout = panel_layout_.computeViewportLayout(
+            show_main_panel_, ui_hidden_, window_states_["python_console"], screen);
+        if (layout.pos != viewport_layout_.pos || layout.size != viewport_layout_.size) {
+            viewport_layout_ = layout;
+            if (auto* rm = viewer_->getRenderingManager())
+                rm->markDirty(DirtyFlag::VIEWPORT, FrameReason::ViewportResize, "gui_layout");
+        }
+    }
+
     void GuiManager::prepareInput() {
         if (python::has_python_modals())
             python::draw_python_modals(viewer_ && viewer_->getSceneManager() ? &viewer_->getSceneManager()->getScene() : nullptr);
@@ -8390,12 +8410,6 @@ namespace lfs::vis::gui {
 
     bool GuiManager::isVramHudOverlayVisible() const {
         return show_vram_hud_;
-    }
-
-    bool GuiManager::isVramHudPublishDue(const std::chrono::steady_clock::time_point now) const {
-        return isVramHudOverlayVisible() &&
-               (next_vram_hud_publish_ == std::chrono::steady_clock::time_point{} ||
-                now >= next_vram_hud_publish_);
     }
 
     void GuiManager::syncVisiblePanelsBeforeSceneRender() {
@@ -8546,8 +8560,6 @@ namespace lfs::vis::gui {
             return true;
         if (ui_layout_settle_frames_ > 0)
             return true;
-        if (isVramHudPublishDue(now))
-            return true;
         if (rml_viewport_overlay_.needsAnimationFrame())
             return true;
         if (rml_menu_bar_.needsAnimationFrame())
@@ -8604,7 +8616,6 @@ namespace lfs::vis::gui {
         add(global_context_menu_ && global_context_menu_->needsAnimationFrame(), "context_menu");
         add(video_widget_ && video_widget_->isVideoPlaying(), "video");
         add(ui_layout_settle_frames_ > 0, "layout_settle");
-        add(isVramHudPublishDue(now), "vram_hud");
         add(rml_viewport_overlay_.needsAnimationFrame(), "viewport_overlay");
         add(rml_menu_bar_.needsAnimationFrame(), "menu_bar");
         if (const auto right_panel_demand = rml_right_panel_.animationDemandDescription();
@@ -8689,17 +8700,6 @@ namespace lfs::vis::gui {
         result = min_delay(result, rml_status_bar_.secondsUntilAnimationFrame(now),
                            "status_bar");
 
-        // VRAM HUD cadence: when armed and not yet due, wake at the publish deadline.
-        if (isVramHudOverlayVisible()) {
-            if (next_vram_hud_publish_ != std::chrono::steady_clock::time_point{} &&
-                now < next_vram_hud_publish_) {
-                const double remaining =
-                    std::chrono::duration<double>(next_vram_hud_publish_ - now).count();
-                if (remaining > 0.0)
-                    result = min_delay(result, remaining, "vram_hud");
-            }
-        }
-
         if (camera_thumbnail_refresh_pending_.load(std::memory_order_acquire)) {
             const auto due_ns = camera_thumbnail_refresh_due_ns_.load(std::memory_order_acquire);
             const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -8769,8 +8769,6 @@ namespace lfs::vis::gui {
         applyDefaultWindowStates(window_states_);
         show_vram_hud_ = false;
         perf_hud_expanded_ = true;
-        vram_hud_visible_published_ = false;
-        next_vram_hud_publish_ = {};
         app_store().vram_hud.set(AppStore::VramHud{});
 
         LayoutState user_preferences;

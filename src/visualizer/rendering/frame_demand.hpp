@@ -48,6 +48,7 @@ namespace lfs::vis {
         Tooltip,
         StatusMessage,
         HudSample,
+        FpsIdle,
         Playback,
         Video,
         Export,
@@ -80,6 +81,7 @@ namespace lfs::vis {
         case FrameReason::Tooltip: return "Tooltip";
         case FrameReason::StatusMessage: return "StatusMessage";
         case FrameReason::HudSample: return "HudSample";
+        case FrameReason::FpsIdle: return "FpsIdle";
         case FrameReason::Playback: return "Playback";
         case FrameReason::Video: return "Video";
         case FrameReason::Export: return "Export";

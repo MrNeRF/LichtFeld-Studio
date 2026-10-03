@@ -163,6 +163,8 @@ def test_every_render_mode_is_quiet_when_idle(tmp_path: Path) -> None:
                 time.sleep(1)
                 utilization.append(_gpu_utilization())
             after = _ledger(endpoint)
+            assert after["ui_fps"] == 0, mode["name"]
+            assert after["viewport_fps"] == 0, mode["name"]
             assert after.get("views_rendered", 0) == 0, mode["name"]
             assert after.get("frames_presented", 0) == 0, mode["name"]
             assert after.get("frames_without_reason", 0) == 0, mode["name"]
@@ -193,7 +195,11 @@ def test_every_render_mode_is_quiet_when_idle(tmp_path: Path) -> None:
             assert navigated.get("frames_presented", 0) <= navigated.get("views_rendered", 0) + 1
             time.sleep(2)
             quiet = _ledger(endpoint)
-            assert quiet.get("frames_presented", 0) == navigated.get("frames_presented", 0)
+            assert quiet["ui_fps"] == quiet["viewport_fps"] == 0
+            assert quiet["views_rendered"] == navigated["views_rendered"]
+            assert 0 <= quiet["frames_presented"] - navigated["frames_presented"] <= 1
+            if quiet["frames_presented"] != navigated["frames_presented"]:
+                assert quiet["last_frame_reasons"] == ["FpsIdle"]
     finally:
         if app.poll() is None:
             # Stop only the process launched above, after confirming its executable

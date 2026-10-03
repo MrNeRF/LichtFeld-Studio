@@ -2042,7 +2042,10 @@
     "gpu": "GPU",
     "strategy_default": "Standaard",
     "split": "Splitsing:",
-    "ui_fps": "UI FPS"
+    "ui_fps": "UI FPS",
+    "mcp_name": "MCP",
+    "ui": "UI",
+    "view": "Beeld"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub-URL of verkorte vorm:",

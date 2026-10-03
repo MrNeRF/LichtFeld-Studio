@@ -310,8 +310,13 @@ set_tests_properties(lichtfeld_format_tests PROPERTIES
     TIMEOUT 300
 )
 
-add_executable(lichtfeld_frame_tests test_frame_demand_ledger.cpp)
+add_executable(lichtfeld_frame_tests
+    test_frame_demand_ledger.cpp
+    test_framerate_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/framerate_controller.cpp)
+
 target_include_directories(lichtfeld_frame_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/include
     ${CMAKE_SOURCE_DIR}/src/visualizer/rendering
     ${CMAKE_SOURCE_DIR}/src/visualizer
     ${CMAKE_SOURCE_DIR}/src

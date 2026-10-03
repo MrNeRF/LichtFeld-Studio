@@ -2561,8 +2561,6 @@ namespace lfs::vis {
             }
         } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
 
-        framerate_controller_.beginFrame();
-
         const FrameContext frame_ctx{
             .viewport = context.viewport,
             .viewport_region = context.viewport_region,
@@ -4022,7 +4020,8 @@ namespace lfs::vis {
                     .external_image_generation = vulkan_external_viewport_image_generation_,
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_,
-                    .matches_viewport_extent = true};
+                    .matches_viewport_extent = true,
+                    .rendered = true};
             };
             if (auto vk_result = try_vulkan(); vk_result) {
                 if (scene_manager && vk_result->matches_viewport_extent)
@@ -4417,7 +4416,8 @@ namespace lfs::vis {
                                             .image_generation = vulkan_viewport_image_generation_,
                                             .size = vulkan_viewport_image_size_,
                                             .flip_y = vulkan_viewport_image_flip_y_,
-                                            .matches_viewport_extent = true};
+                                            .matches_viewport_extent = true,
+                                            .rendered = true};
                                 }
                                 LOG_WARN("VkSplat PPISP correction produced no valid viewport image; falling back to uncorrected external image");
                             } else {
@@ -4504,7 +4504,8 @@ namespace lfs::vis {
                                 .size = vulkan_viewport_image_size_,
                                 .alloc_size = vulkan_viewport_image_alloc_size_,
                                 .flip_y = vulkan_viewport_image_flip_y_,
-                                .matches_viewport_extent = true};
+                                .matches_viewport_extent = true,
+                                .rendered = true};
                     };
 
                     const DirtyMask non_overlay_dirty = frame_dirty & ~DirtyFlag::SELECTION;
@@ -4810,6 +4811,7 @@ namespace lfs::vis {
             }
             if (scene_manager)
                 noteImportRenderFrame(scene_manager->getScene().renderGeneration(), render_error);
+            result.rendered = true;
             return result;
         }
 
@@ -4929,7 +4931,8 @@ namespace lfs::vis {
                 .image_generation = vulkan_viewport_image_generation_,
                 .size = vulkan_viewport_image_size_,
                 .flip_y = vulkan_viewport_image_flip_y_,
-                .matches_viewport_extent = true};
+                .matches_viewport_extent = true,
+                .rendered = true};
     }
 
     std::expected<void, std::string> RenderingManager::ensureVksplatTrainingSharedScratchReady(

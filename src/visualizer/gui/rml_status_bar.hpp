@@ -95,7 +95,7 @@ namespace lfs::vis::gui {
             float h = 0.0f;
         };
 
-        bool updateContent(const PanelDrawContext& ctx, bool force_refresh);
+        bool updateContent(const PanelDrawContext& ctx);
         bool updateTheme();
         bool layoutFits(float reserve_px) const;
         LFS_VIS_API void fitToAvailableWidth(bool allow_expand);
@@ -283,8 +283,6 @@ namespace lfs::vis::gui {
         bool model_animation_active_ = false;
         bool rml_animation_active_ = false;
         bool animation_active_ = false;
-        bool reactive_fps_available_ = false;
-        float reactive_fps_value_ = 0.0f;
         std::vector<lfs::core::reactive::SubscriptionToken> subscriptions_;
         int fit_level_ = 0;
         float last_dp_ratio_ = 0.0f;

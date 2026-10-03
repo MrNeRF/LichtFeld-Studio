@@ -49,7 +49,7 @@ namespace lfs::vis::gui {
         void setState(State state);
         [[nodiscard]] bool isVisible() const noexcept { return state_.visible || state_.perf_hud.visible; }
         [[nodiscard]] bool needsAnimationFrame() const noexcept {
-            return pointer_captured_ || sparkline_tick_due();
+            return pointer_captured_;
         }
         [[nodiscard]] bool isCapturingPointer() const noexcept { return pointer_captured_; }
 

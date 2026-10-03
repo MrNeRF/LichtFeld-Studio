@@ -8,12 +8,12 @@
 
 #include <chrono>
 #include <deque>
+#include <mutex>
 
 namespace lfs::vis {
 
     struct FramerateSettings {
-        float time_window_seconds = 5.0f; // Time window to keep frame samples (seconds)
-        size_t max_frame_samples = 1000;  // Maximum number of frame samples to keep
+        float time_window_seconds = 1.0f; // Trailing timestamp window (seconds)
         // Passive live-preview splat re-render cadence while training (UI panels keep
         // full rate; retained last splat image is shown between ticks). A few Hz:
         // enough to feel live, low enough that step-boundary lock cost stays <<5%.
@@ -23,40 +23,18 @@ namespace lfs::vis {
 
     class FramerateController {
     public:
-        FramerateController();
+        using Clock = std::chrono::steady_clock;
 
         const FramerateSettings& getSettings() const { return settings_; }
-
-        // Call at the beginning of each frame
-        void beginFrame();
-
-        // Get current FPS statistics
-        float getAverageFPS() {
-            cleanupOldFrames();
-            updateFPSStats();
-            return average_fps_;
-        }
+        LFS_VIS_API void beginFrame(Clock::time_point now = Clock::now());
+        LFS_VIS_API float getAverageFPS(Clock::time_point now = Clock::now()) const;
 
     private:
-        LFS_VIS_API void updateFPSStats();
-        LFS_VIS_API void cleanupOldFrames(); // Remove old frames based on time and size limits
+        void prune(Clock::time_point now) const;
 
         FramerateSettings settings_;
-
-        // Timing with timestamps
-        std::chrono::high_resolution_clock::time_point frame_start_time_;
-        std::chrono::high_resolution_clock::time_point last_frame_time_;
-
-        // Frame timing data with timestamps
-        struct FrameData {
-            float duration; // Frame time in seconds
-            std::chrono::high_resolution_clock::time_point timestamp;
-        };
-        std::deque<FrameData> frame_times_; // Store recent frame data with timestamps
-
-        // FPS tracking
-        float current_fps_ = 0.0f; // very noisy right now
-        float average_fps_ = 0.0f; // average is over time_window_seconds
+        mutable std::mutex mutex_;
+        mutable std::deque<Clock::time_point> frames_;
     };
 
 } // namespace lfs::vis

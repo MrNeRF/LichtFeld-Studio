@@ -1017,10 +1017,9 @@ namespace lfs::vis::gui {
         if (perf_cpu_value_)
             perf_cpu_value_->SetInnerRML(s.cpu_valid ? std::format("{:.0f}%", cpu) : "--");
         if (perf_rate_) {
-            // Keep unit literal off the SetInnerRML line (check_ui_hardcoded is line-based);
-            // fps is a design-exempt technical unit, same pattern as "{:.1f} iter/s" above.
-            const std::string rate_text =
-                s.rate > 0.0f ? std::format("{:.1f} fps", s.rate) : std::string("--");
+            const std::string rate_text = std::format(
+                "{} {:.0f} · {} {:.0f} {}", LOC("status_bar.ui"), s.ui_fps,
+                LOC("status_bar.view"), s.rate, LOC("status.fps"));
             perf_rate_->SetInnerRML(rate_text);
         }
 

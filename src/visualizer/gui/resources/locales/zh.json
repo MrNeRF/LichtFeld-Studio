@@ -2042,7 +2042,10 @@
     "gpu": "GPU",
     "strategy_default": "默认",
     "split": "分割：",
-    "ui_fps": "UI FPS"
+    "ui_fps": "UI FPS",
+    "mcp_name": "MCP",
+    "ui": "界面",
+    "view": "视图"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL 或简写：",

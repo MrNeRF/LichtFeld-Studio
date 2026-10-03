@@ -630,7 +630,8 @@ namespace lfs::vis::gui {
         if (w <= 0 || h <= 0)
             return;
 
-        const bool dims_changed = (w != last_fbo_w_ || h != last_fbo_h_);
+        const float dp_ratio = rml_manager_->getDpRatio();
+        const bool dims_changed = (w != last_fbo_w_ || h != last_fbo_h_ || dp_ratio != last_dp_ratio_);
         const bool layout_changed = (layout.scene_h != last_scene_h_ ||
                                      layout.splitter_h != last_splitter_h_);
         const bool tabs_changed = syncTabData(tabs, active_tab);
@@ -639,7 +640,6 @@ namespace lfs::vis::gui {
                                   tabs_changed || dims_changed || input_dirty_;
 
         if (needs_render) {
-            const float dp_ratio = rml_manager_->getDpRatio();
             const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * dp_ratio;
 
             if (resize_handle_el_) {
@@ -690,6 +690,7 @@ namespace lfs::vis::gui {
                 }
             }
 
+            last_dp_ratio_ = dp_ratio;
             last_fbo_w_ = w;
             last_fbo_h_ = h;
             last_scene_h_ = layout.scene_h;

@@ -69,6 +69,7 @@ namespace lfs::vis {
             float process_cpu_percent = -1.0f;
             std::vector<float> per_core_cpu_percent;
             float rate = 0.0f;
+            float ui_fps = 0.0f;
             bool gpu_utilization_valid = false;
             bool cpu_valid = false;
             bool ledger_valid = false; // false when profiler off → badge unknown (not GAP)

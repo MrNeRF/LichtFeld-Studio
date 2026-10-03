@@ -121,6 +121,7 @@ namespace lfs::vis::gui {
         float prev_mouse_y_ = 0;
 
         bool render_needed_ = true;
+        float last_dp_ratio_ = 0.0f;
         int last_fbo_w_ = 0;
         int last_fbo_h_ = 0;
         float last_scene_h_ = -1.0f;

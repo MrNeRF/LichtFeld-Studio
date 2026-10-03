@@ -1155,7 +1155,10 @@ namespace lfs::app {
                 if (reset)
                     ledger.resetCounters();
                 const auto snapshot = ledger.snapshot();
-                return json{{"success", true}, {"frames", frame_snapshot_json(snapshot)}};
+                auto frames = frame_snapshot_json(snapshot);
+                frames["ui_fps"] = rendering->getPresentedAverageFPS();
+                frames["viewport_fps"] = rendering->getAverageFPS();
+                return json{{"success", true}, {"frames", std::move(frames)}};
             });
 
         registry.register_tool(

@@ -1269,6 +1269,7 @@ namespace {
                 } else {
                     output->write(filtered);
                 }
+                lfs::python::request_redraw();
             });
         });
     }

@@ -102,7 +102,7 @@ body {
 }
 
 #menu-toolbar.hidden {
-    display: none;
+    visibility: hidden;
 }
 
 .menu-portal-connection {

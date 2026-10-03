@@ -2042,7 +2042,10 @@
     "gpu": "GPU",
     "strategy_default": "デフォルト",
     "split": "分割:",
-    "ui_fps": "UI FPS"
+    "ui_fps": "UI FPS",
+    "mcp_name": "MCP",
+    "ui": "UI",
+    "view": "ビュー"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL または短縮形式:",

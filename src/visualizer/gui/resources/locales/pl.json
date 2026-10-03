@@ -2042,7 +2042,10 @@
     "gpu": "GPU",
     "strategy_default": "Domyślny",
     "split": "Podział:",
-    "ui_fps": "UI FPS"
+    "ui_fps": "UI FPS",
+    "mcp_name": "MCP",
+    "ui": "UI",
+    "view": "Widok"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "URL GitHub lub skrót:",

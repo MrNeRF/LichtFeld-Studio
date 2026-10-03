@@ -239,6 +239,7 @@ namespace lfs::vis::gui {
         int last_mouse_y_ = 0;
         int last_hovered_label_ = -1;
         bool last_toolbar_hovered_ = false;
+        float last_dp_ratio_ = 0.0f;
         int last_ctx_w_ = 0;
         int last_ctx_h_ = 0;
         int last_document_h_ = 0;

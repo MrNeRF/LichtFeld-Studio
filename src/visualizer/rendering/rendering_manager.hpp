@@ -115,6 +115,7 @@ namespace lfs::vis {
             // extent in the current request. Internal reconstruction resolution
             // may differ from that extent.
             bool matches_viewport_extent = false;
+            bool rendered = false; // Fresh output; cached and deferred results stay false.
 
             // Split-view right panel. The left panel reuses the `image` slot above
             // (rideshares the existing scene-image interop). When this is set, the
@@ -425,8 +426,27 @@ namespace lfs::vis {
         }
         // Measurement only — does not affect scene render pacing/limiting.
         void countPresentedFrame(const FramePlan& plan) {
-            presented_framerate_controller_.beginFrame();
+            const auto now = FrameClock::now();
+            presented_framerate_controller_.beginFrame(now);
             frame_demand_ledger_.countPresented(plan);
+            auto activity = plan.reasons;
+            activity.reset(static_cast<std::size_t>(FrameReason::FpsIdle));
+            if (activity.any())
+                fps_idle_due_ = now + std::chrono::seconds(1);
+        }
+        void countViewRendered(const FramePlan& plan) {
+            framerate_controller_.beginFrame();
+            frame_demand_ledger_.countViewRendered(plan.render_views, plan);
+        }
+        std::optional<FrameClock::time_point> fpsIdleDeadline() const { return fps_idle_due_; }
+        void refreshIdleFps(const FrameClock::time_point now) {
+            if (fps_idle_due_ && now >= *fps_idle_due_) {
+                fps_idle_due_.reset();
+                frame_demand_ledger_.request({.reason = FrameReason::FpsIdle,
+                                              .scope = FrameScope::Gui,
+                                              .views = 0,
+                                              .detail = "fps_window_expired"});
+            }
         }
 
         // Access to the auxiliary rendering engine used by point-cloud, mesh, and readback paths.
@@ -820,6 +840,7 @@ namespace lfs::vis {
         // Parallel presented-frame counter (GUI-only frames included). Does not
         // drive pacing — scene path still uses framerate_controller_ alone.
         mutable FramerateController presented_framerate_controller_;
+        std::optional<FrameClock::time_point> fps_idle_due_;
 
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;

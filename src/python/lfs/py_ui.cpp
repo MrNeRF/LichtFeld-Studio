@@ -5916,7 +5916,14 @@ namespace lfs::python {
                 }
                 return rm->getAverageFPS();
             },
-            "Get current FPS");
+            "Get viewport renders per second over the last second (cached presents excluded)");
+
+        m.def(
+            "get_ui_fps", []() -> float {
+                auto* rm = get_rendering_manager();
+                return rm ? rm->getPresentedAverageFPS() : 0.0f;
+            },
+            "Get GUI presents per second over the last second");
 
         m.def(
             "get_content_type", []() -> const char* {
