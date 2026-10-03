@@ -494,6 +494,18 @@ namespace lfs::vis {
         });
         callback_cleanup_.add([] { python::set_scene_generation_callback(nullptr); });
         app_store().scene_generation.set(python::get_scene_generation());
+        // RuntimeState writes publish view inputs just like native edits. Drain
+        // these subscriptions before planning the frame, including Python writes.
+        const auto bind_view_input = [this](auto& signal, const DirtyMask flags, const FrameReason reason) {
+            auto token = std::make_shared<core::reactive::SubscriptionToken>(
+                signal.subscribe([this, flags, reason](const auto&) {
+                    rendering_manager_->markDirty(flags, reason, "runtime_state");
+                }));
+            callback_cleanup_.add([token] { token->reset(); });
+        };
+        bind_view_input(app_store().scene_generation, DirtyFlag::ALL, FrameReason::SceneChange);
+        bind_view_input(app_store().selection_generation, DirtyFlag::SELECTION | DirtyFlag::OVERLAY, FrameReason::Selection);
+        bind_view_input(app_store().render_settings_generation, DirtyFlag::ALL, FrameReason::SettingsChange);
         auto active_tool_poll_cache_token = std::make_shared<core::reactive::SubscriptionToken>(
             app_store().active_tool.subscribe([](const std::string&) {
                 gui::PanelRegistry::instance().invalidate_poll_cache();
@@ -4639,26 +4651,20 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::handleLoadConfigFile(const std::filesystem::path& path) {
-        const auto current_params = trainer_manager_
-                                        ? trainer_manager_->getEditableTrainingParams(*parameter_manager_)
-                                        : parameter_manager_->createForDataset({}, {});
-        auto result = lfs::core::param::read_training_parameters_from_json(path, current_params);
+        const bool dataset_editable = !trainer_manager_ || trainer_manager_->isDatasetEditable();
+        auto result = parameter_manager_->importConfigFile(path, dataset_editable);
         if (!result) {
             state::ConfigLoadFailed{.path = path, .error = std::string(result.error().detail())}.emit();
             return;
         }
-        result->optimization.apply_step_scaling();
-        if (trainer_manager_) {
-            trainer_manager_->importTrainingParams(*result, *parameter_manager_);
-        } else {
-            parameter_manager_->importTrainingParams(*result);
-        }
-        parameter_manager_->markDirty();
 
         // Bump scene generation so all panels (e.g. training panel) pick up
         // the new parameter values.  Without this, importing a config after a
         // dataset is already loaded leaves the UI showing stale defaults.
         python::bump_scene_generation();
+        // The scene generation is a view input: refresh it once after import.
+        if (rendering_manager_)
+            rendering_manager_->markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
     }
 
     void VisualizerImpl::handleTrainingCompleted([[maybe_unused]] const state::TrainingCompleted& event) {

@@ -352,6 +352,25 @@ namespace lfs::vis {
         LOG_INFO("Imported params: strategy={}, iter={}, sh={}", params.strategy, params.iterations, params.sh_degree);
     }
 
+    std::expected<void, lfs::Error> ParameterManager::importConfigFile(const std::filesystem::path& path, const bool import_dataset) {
+        const auto defaults = createForDataset(dataset_config_.data_path, dataset_config_.output_path);
+        auto candidate = lfs::core::param::read_training_parameters_from_json(path, defaults);
+        if (!candidate)
+            return std::unexpected(candidate.error());
+
+        if (!import_dataset)
+            candidate->dataset = dataset_config_;
+        // Config files change settings, not the loaded dataset or its output destination.
+        candidate->dataset.data_path = dataset_config_.data_path;
+        candidate->dataset.output_path = dataset_config_.output_path;
+        candidate->dataset.output_path_explicit = dataset_config_.output_path_explicit;
+        // The upstream parser validates the entire configuration before applying it.
+        candidate->optimization.apply_step_scaling();
+        importTrainingParams(*candidate);
+        markDirty();
+        return {};
+    }
+
     void ParameterManager::importTrainingParams(const lfs::core::param::TrainingParameters& params) {
         if (const auto result = ensureLoaded(); !result) {
             LOG_ERROR("Failed to load params: {}", result.error());

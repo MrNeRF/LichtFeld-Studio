@@ -1760,7 +1760,9 @@ def test_save_modified_pc_unbound_writes_dataset_ply(training_panel_module, monk
 
     training_panel_module.TrainingPanel()._save_modified_pc()
 
-    assert ply_calls == [(pc, "/data/scene_a/sparse/0/points3D.ply")]
+    assert [(cloud, Path(path)) for cloud, path in ply_calls] == [
+        (pc, Path("/data/scene_a/sparse/0/points3D.ply"))
+    ]
     assert scene.is_point_cloud_modified is False
 
 

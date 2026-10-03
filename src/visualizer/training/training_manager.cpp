@@ -773,6 +773,8 @@ namespace lfs::vis {
             const auto& params = trainer->getParams();
             pending_opt_params_ = params.optimization;
             pending_dataset_params_ = params.dataset;
+            if (auto* const param_mgr = services().paramsOrNull())
+                param_mgr->getDatasetConfig() = params.dataset;
             // A new training run has no resumable elapsed-time authority.
             clearRestoredProjectMetrics();
             accumulated_training_time_ =
@@ -2534,23 +2536,34 @@ namespace lfs::vis {
         return trainer_->computeCameraMetrics(*cam, include_ssim, appearance);
     }
 
-    lfs::core::param::TrainingParameters TrainerManager::getEditableTrainingParams(
-        const ParameterManager& parameter_manager) const {
-        auto params = parameter_manager.createForDataset(
-            pending_dataset_params_.data_path,
-            pending_dataset_params_.output_path);
-        params.dataset = (hasTrainer() || !pending_dataset_params_.data_path.empty())
-                             ? pending_dataset_params_
-                             : parameter_manager.getDatasetConfig();
-        return params;
+    lfs::core::param::DatasetConfig& TrainerManager::getEditableDatasetParams() {
+        if (auto* const param_mgr = services().paramsOrNull())
+            return param_mgr->getDatasetConfig();
+        return pending_dataset_params_;
     }
 
-    void TrainerManager::importTrainingParams(
-        const lfs::core::param::TrainingParameters& params,
-        ParameterManager& parameter_manager) {
-        parameter_manager.importTrainingParams(params);
-        pending_opt_params_ = params.optimization;
-        pending_dataset_params_ = params.dataset;
+    const lfs::core::param::DatasetConfig& TrainerManager::getEditableDatasetParams() const {
+        if (const auto* const param_mgr = services().paramsOrNull())
+            return param_mgr->getDatasetConfig();
+        return pending_dataset_params_;
+    }
+
+    bool TrainerManager::isDatasetEditable() const {
+        return !hasTrainer() || (getState() == TrainingState::Ready && getCurrentIteration() == 0);
+    }
+
+    lfs::core::param::TrainingParameters TrainerManager::getEditableTrainingParams(
+        const ParameterManager& parameter_manager) const {
+        const auto& configured_dataset = parameter_manager.getDatasetConfig();
+        auto params = parameter_manager.createForDataset(
+            configured_dataset.data_path,
+            configured_dataset.output_path);
+        if (hasTrainer() && trainer_->isInitialized() && !isDatasetEditable()) {
+            params.dataset = trainer_->getParams().dataset;
+        } else if (services().paramsOrNull() || hasTrainer() || !pending_dataset_params_.data_path.empty()) {
+            params.dataset = getEditableDatasetParams();
+        }
+        return params;
     }
 
     void TrainerManager::applyPendingParams() {
@@ -2571,9 +2584,7 @@ namespace lfs::vis {
         const auto previous_params = trainer_->getParams();
         auto params = previous_params;
 
-        // Use the same composed values for export and training. The dataset
-        // panel edits pending_dataset_params_; optimization edits the shared
-        // ParameterManager state.
+        // Export and training use the same shared editable configuration.
         if (auto* const param_mgr = services().paramsOrNull()) {
             const auto editable_params = getEditableTrainingParams(*param_mgr);
             params.dataset = editable_params.dataset;
