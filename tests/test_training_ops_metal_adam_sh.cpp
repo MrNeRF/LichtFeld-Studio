@@ -756,6 +756,50 @@ namespace {
         expect_equal(host<float>(bounds), expected.bounds, "reencoded bounds");
     }
 
+    TEST_P(PortableAdamShMorton, RangeDecodePreservesBlockBoundariesAndTail) {
+        constexpr size_t n = 513;
+        constexpr uint32_t rest = 15, cells = rest * 3;
+        const uint32_t slots = lfs::core::sh_float4_slots_for_rest(rest);
+        const auto source = pattern(lfs::core::sh_swizzled_float_count(n, rest), .25f, 29);
+        const auto f32 = gpu_f(source);
+        const auto f16 = f32.to(DataType::Float16);
+        auto codes = Tensor::zeros({quant::sh_value_u16_count(n, rest)}, Device::GPU, DataType::Float16);
+        auto bounds = Tensor::zeros({quant::n_bounds_for_prims(n) * 2}, Device::GPU);
+        sh->encode_q16(f32, codes, bounds, n, rest, 0, 0);
+        const Codes q16(16, host<uint8_t>(codes));
+        const auto q_bounds = host<float>(bounds);
+        // Unaligned rows, float4 padding, 32-row swizzle blocks, 256-row
+        // Q16 bounds and the final partial storage block. The CPU reference
+        // reads the original layout, independently of the range kernel.
+        constexpr std::array<std::pair<uint64_t, size_t>, 6> ranges{{
+            {0, 1}, {42, 91}, {32 * cells - 1, cells + 2},
+            {256 * cells - 2, 92}, {512 * cells - 1, cells + 1}, {n * cells - 1, 1},
+        }};
+        for (const auto storage : {ops::ShStorage::Float32, ops::ShStorage::IeeeFloat16, ops::ShStorage::Q16}) {
+            for (const auto [offset, count] : ranges) {
+                SCOPED_TRACE(std::to_string(offset) + "+" + std::to_string(count));
+                std::vector<float> expected(count + 4, -7.25f);
+                auto output = gpu_f(expected);
+                const ops::ShRangeParams range{
+                    .canonical_float_offset = offset, .float_count = count, .primitives = n,
+                    .destination_rest = rest, .layout_rest = rest, .storage = storage,
+                };
+                const auto& values = storage == ops::ShStorage::Q16 ? codes : storage == ops::ShStorage::IeeeFloat16 ? f16 : f32;
+                sh->decode_range(values, storage == ops::ShStorage::Q16 ? bounds : Tensor{}, output, range);
+                for (size_t i = 0; i < count; ++i) {
+                    const uint32_t prim = (offset + i) / cells, cell = (offset + i) % cells;
+                    float value = source[slot_index(prim, cell / 4, slots) * 4 + cell % 4];
+                    if (storage == ops::ShStorage::IeeeFloat16)
+                        value = static_cast<float>(static_cast<_Float16>(value));
+                    if (storage == ops::ShStorage::Q16)
+                        value = q16.decode(slot_index(prim, cell, cells), q_bounds[2 * (prim / 256)], q_bounds[2 * (prim / 256) + 1]);
+                    expected[i] = value;
+                }
+                expect_equal(host<float>(output), expected, "range and untouched tail");
+            }
+        }
+    }
+
     TEST_P(PortableAdamShMorton, RowOpsMatchCpu) {
         constexpr size_t n = 70;
         constexpr uint32_t rest = 8;

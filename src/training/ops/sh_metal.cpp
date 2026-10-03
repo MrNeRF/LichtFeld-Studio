@@ -187,8 +187,8 @@ namespace lfs::training {
         }
 
         struct RangeParams {
-            uint64_t values, bounds, destination, offset, count;
-            uint32_t floats_per_primitive, width, storage;
+            uint64_t values, bounds, destination, count;
+            uint32_t primitive_offset, cell_offset, floats_per_primitive, width, storage;
         };
 
         void decode_range(const Tensor& values, const Tensor& bounds, Tensor& canonical, const ShRangeParams& p) {
@@ -203,13 +203,17 @@ namespace lfs::training {
             const uint32_t slots = core::sh_float4_slots_for_rest(p.layout_rest);
             if (p.storage != ShStorage::Q16 && slots == 0)
                 throw std::invalid_argument("SH range decode has no source slots");
+            // Divide the absolute 64-bit offset once on the host. Each shader
+            // lane only needs a 32-bit local quotient and a bounded carry.
+            const uint32_t floats_per_primitive = p.destination_rest * core::kShChannels;
             const RangeParams params{
                 .values = mk::live_address(values),
                 .bounds = p.storage == ShStorage::Q16 ? mk::live_address(bounds) : 0,
                 .destination = mk::live_address(canonical),
-                .offset = p.canonical_float_offset,
                 .count = p.float_count,
-                .floats_per_primitive = p.destination_rest * core::kShChannels,
+                .primitive_offset = static_cast<uint32_t>(p.canonical_float_offset / floats_per_primitive),
+                .cell_offset = static_cast<uint32_t>(p.canonical_float_offset % floats_per_primitive),
+                .floats_per_primitive = floats_per_primitive,
                 .width = p.storage == ShStorage::Q16 ? quant::n_value_cells_per_prim(p.layout_rest) : slots,
                 .storage = p.storage == ShStorage::Q16 ? 2u : p.storage == ShStorage::IeeeFloat16 ? 1u
                                                                                                   : 0u,

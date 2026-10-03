@@ -195,8 +195,9 @@ struct ShRangeParams {
     device const void* values;
     device const float2* bounds;
     device float* destination;
-    ulong offset;
     ulong count;
+    uint primitive_offset;
+    uint cell_offset;
     uint floats_per_primitive;
     uint width;
     uint storage;
@@ -205,9 +206,11 @@ struct ShRangeParams {
 kernel void sh_decode_range(constant ShRangeParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
     if (ulong(i) >= p.count)
         return;
-    const ulong canonical = p.offset + i;
-    const uint prim = uint(canonical / p.floats_per_primitive);
-    const uint cell = uint(canonical % p.floats_per_primitive);
+    const uint local_cell = i % p.floats_per_primitive;
+    const uint until_next = p.floats_per_primitive - p.cell_offset;
+    const bool carry = local_cell >= until_next;
+    const uint prim = p.primitive_offset + i / p.floats_per_primitive + uint(carry);
+    const uint cell = carry ? local_cell - until_next : local_cell + p.cell_offset;
     if (p.storage == kShRangeQ16) {
         const float2 mm = p.bounds[prim / 256u];
         p.destination[i] =
