@@ -9,6 +9,7 @@
 #include "core/tensor/backend/vulkan/vk_ops_common.hpp"
 #include "core/tensor/backend/vulkan/vk_recorder.hpp"
 #include "core/tensor/internal/tensor_impl.hpp"
+#include "mesh_mask_camera.hpp"
 #include "training_shader_table.hpp"
 
 #include <algorithm>
@@ -18,6 +19,7 @@
 #include <mutex>
 #include <ranges>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace lfs::training {
@@ -48,18 +50,26 @@ namespace lfs::training {
             }
         };
 
+        struct MeshPush {
+            uint64_t vertices, indices, samples, large_faces, counters, mask, camera;
+            int32_t vertex_count, face_count;
+            float z_near;
+            int32_t padding;
+        };
+        static_assert(sizeof(MeshPush) == 72);
+
         std::shared_ptr<Pipeline> pipeline_for(const std::shared_ptr<VulkanContext>& context,
+                                               const std::string_view module_name, const uint32_t push_size,
                                                const uint32_t operation) {
             static std::mutex mutex;
-            static std::map<std::pair<uint64_t, uint32_t>, std::shared_ptr<Pipeline>> cache;
-            const auto key = std::pair{context->context_id(), operation};
+            static std::map<std::tuple<uint64_t, std::string_view, uint32_t>, std::shared_ptr<Pipeline>> cache;
+            const auto key = std::tuple{context->context_id(), module_name, operation};
             std::lock_guard lock(mutex);
             if (const auto found = cache.find(key); found != cache.end())
                 return found->second;
 
             const auto modules = vulkan::embedded_training_shaders();
-            const auto module = std::ranges::find(modules, std::string_view("masks"),
-                                                  &vulkan::EmbeddedShader::name);
+            const auto module = std::ranges::find(modules, module_name, &vulkan::EmbeddedShader::name);
             LFS_ASSERT_MSG(module != modules.end(), "Vulkan mask shader module is missing");
             VkShaderModuleCreateInfo shader_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
             shader_info.codeSize = module->words.size_bytes();
@@ -72,11 +82,11 @@ namespace lfs::training {
             pipeline->context = context;
             VkPhysicalDeviceProperties properties{};
             vkGetPhysicalDeviceProperties(context->physical_device(), &properties);
-            LFS_ASSERT_MSG(sizeof(Push) <= properties.limits.maxPushConstantsSize,
+            LFS_ASSERT_MSG(push_size <= properties.limits.maxPushConstantsSize,
                            "Vulkan mask parameters exceed device push-constant limit");
             VkPushConstantRange range{};
             range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            range.size = sizeof(Push);
+            range.size = push_size;
             VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
             layout_info.pushConstantRangeCount = 1;
             layout_info.pPushConstantRanges = &range;
@@ -112,12 +122,13 @@ namespace lfs::training {
             return storage;
         }
 
-        void launch(const std::shared_ptr<VulkanContext>& context, const Push& push, const uint32_t operation,
+        template <class Parameters>
+        void launch(const std::shared_ptr<VulkanContext>& context, const Parameters& push, const uint32_t operation,
                     const std::vector<StorageRef>& reads, const std::vector<StorageRef>& writes,
-                    const uint32_t group_count) {
+                    const uint32_t group_count, const std::string_view module_name = "masks") {
             if (group_count == 0)
                 return;
-            const auto pipeline = pipeline_for(context, operation);
+            const auto pipeline = pipeline_for(context, module_name, sizeof(Parameters), operation);
             context->recorders().record(reads, writes, [&](const VkCommandBuffer command) {
                 vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->handle);
                 vkCmdPushConstants(command, pipeline->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
@@ -219,10 +230,55 @@ namespace lfs::training {
                     0.0f, weight, true);
         }
 
+        Tensor mesh_coverage(In vertices, In indices, const MeshMaskCamera& camera, In samples,
+                             const core::UndistortParams* distortion, const float z_near) {
+            const Tensor* const sample_map = distortion ? &samples : nullptr;
+            validate_mesh_coverage(vertices, indices, camera, sample_map, distortion, z_near);
+            auto mask = Tensor::zeros({static_cast<size_t>(camera.height), static_cast<size_t>(camera.width)},
+                                      core::Device::GPU, core::DataType::UInt8);
+            const auto face_count = static_cast<uint32_t>(indices.shape()[0]);
+            if (face_count == 0)
+                return mask;
+            const auto packed = pack_mesh_mask_camera(camera, sample_map, distortion);
+            const auto camera_block =
+                Tensor::from_blob(const_cast<MeshMaskCameraBlock*>(&packed), {sizeof(packed)},
+                                  core::Device::CPU, core::DataType::UInt8)
+                    .clone()
+                    .to(core::Device::GPU);
+            const auto input_vertices = vertices.contiguous();
+            const auto input_indices = indices.contiguous();
+            const auto input_samples = sample_map ? sample_map->contiguous() : Tensor{};
+            auto large_faces = Tensor::empty({face_count}, core::Device::GPU, core::DataType::Int32);
+            auto counters = Tensor::zeros({size_t{2}}, core::Device::GPU, core::DataType::Int32);
+
+            const StorageRef vertex_ref = ref(input_vertices), index_ref = ref(input_indices),
+                             camera_ref = ref(camera_block), large_ref = ref(large_faces),
+                             counter_ref = ref(counters), mask_ref = ref(mask);
+            const StorageRef sample_ref = sample_map ? ref(input_samples) : StorageRef{};
+            const MeshPush push{vk::address(vertex_ref), vk::address(index_ref),
+                                sample_map ? vk::address(sample_ref) : 0, vk::address(large_ref),
+                                vk::address(counter_ref), vk::address(mask_ref), vk::address(camera_ref),
+                                static_cast<int32_t>(input_vertices.shape()[0]), static_cast<int32_t>(face_count),
+                                z_near, 0};
+            std::vector<StorageRef> reads{vertex_ref, index_ref, camera_ref};
+            if (sample_map)
+                reads.push_back(sample_ref);
+            const auto context = acquire_vulkan_context();
+            const uint32_t prepare_groups =
+                std::min(kMeshMaskMaxPrepareGroups,
+                         (face_count + kMeshMaskThreads - 1) / kMeshMaskThreads);
+            launch(context, push, 0, reads, {large_ref, counter_ref, mask_ref}, prepare_groups, "mesh_mask");
+            reads.push_back(large_ref);
+            launch(context, push, 1, reads, {counter_ref, mask_ref},
+                   std::min(kMeshMaskMaxLargeGroups, face_count), "mesh_mask");
+            return mask;
+        }
+
         const MaskOps kVulkanMaskOps{
             .photometric_weight = photometric_weight,
             .opacity_penalty = opacity_penalty,
             .alpha_consistency = alpha_consistency,
+            .mesh_coverage = mesh_coverage,
         };
     } // namespace
 

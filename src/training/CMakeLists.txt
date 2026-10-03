@@ -167,6 +167,7 @@ if(APPLE)
         kernels/metal/gsplat.metal
         kernels/metal/photometric.metal
         kernels/metal/masks.metal
+        kernels/metal/mesh_mask.metal
         kernels/metal/extra_loss.metal
         kernels/metal/geometry.metal
         kernels/metal/mrnf.metal

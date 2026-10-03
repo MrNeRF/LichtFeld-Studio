@@ -9,6 +9,7 @@
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/parameters.hpp"
+#include "core/shared_image_ops.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
@@ -358,7 +359,29 @@ TEST(GeomMetricHelpers, FlatRenderedDepthAbsRel) {
     EXPECT_NEAR(*absrel, 0.2f, 1.0e-5f);
 }
 
-class MetricsEvaluatorGeom : public lfs::test::CudaBackendTest {};
+// The evaluator follows the default backend, so these run once per backend.
+class MetricsEvaluatorBackendTest : public ::testing::TestWithParam<lfs::core::GpuBackend> {
+protected:
+    void SetUp() override {
+        if (!lfs::core::gpu_backend_available(GetParam()))
+            GTEST_SKIP() << lfs::core::gpu_backend_name(GetParam()) << " unavailable";
+        backend_.emplace(GetParam());
+        ASSERT_TRUE(backend_->switched());
+    }
+
+private:
+    std::optional<lfs::test::DefaultGpuBackendForTesting> backend_;
+};
+
+std::string backend_test_name(const ::testing::TestParamInfo<lfs::core::GpuBackend>& info) {
+    return lfs::core::gpu_backend_name(info.param);
+}
+
+class MetricsEvaluatorGeom : public MetricsEvaluatorBackendTest {};
+INSTANTIATE_TEST_SUITE_P(Backends, MetricsEvaluatorGeom,
+                         ::testing::Values(lfs::core::GpuBackend::CUDA, lfs::core::GpuBackend::Vulkan,
+                                           lfs::core::GpuBackend::Metal),
+                         backend_test_name);
 
 // Catches a sample halfway between a rendered pixel and an empty one being blended toward zero depth.
 TEST(GeomMetricHelpers, SampleNextToEmptyDepthIsSkipped) {
@@ -374,7 +397,7 @@ TEST(GeomMetricHelpers, SampleNextToEmptyDepthIsSkipped) {
     EXPECT_NEAR(*absrel, 0.0f, 1.0e-6f);
 }
 
-TEST_F(MetricsEvaluatorGeom, MatchingRenderedAndPriorNormalIsNearZero) {
+TEST_P(MetricsEvaluatorGeom, MatchingRenderedAndPriorNormalIsNearZero) {
     ensure_image_loader();
 
     const auto tmp = std::filesystem::temp_directory_path() / "lfs_geom_metrics_match";
@@ -561,9 +584,13 @@ TEST(MetricsEvaluatorUndistort, UndistortedGroundTruthEqualsTrainingLoaderImage)
 
 // Catches the evaluation reference being downscaled by the host bilinear decoder while
 // training images get the GPU Lanczos filter.
-class MetricsEvaluatorImages : public lfs::test::CudaBackendTest {};
+class MetricsEvaluatorImages : public MetricsEvaluatorBackendTest {};
+INSTANTIATE_TEST_SUITE_P(Backends, MetricsEvaluatorImages,
+                         ::testing::Values(lfs::core::GpuBackend::CUDA, lfs::core::GpuBackend::Vulkan,
+                                           lfs::core::GpuBackend::Metal),
+                         backend_test_name);
 
-TEST_F(MetricsEvaluatorImages, DownscaledGroundTruthMatchesGpuLanczos) {
+TEST_P(MetricsEvaluatorImages, DownscaledGroundTruthMatchesGpuLanczos) {
     ensure_image_loader();
 
     const auto tmp = std::filesystem::temp_directory_path() / "lfs_downscaled_eval_gt";
@@ -596,9 +623,12 @@ TEST_F(MetricsEvaluatorImages, DownscaledGroundTruthMatchesGpuLanczos) {
     ASSERT_EQ(gt.dtype(), DataType::UInt8);
     ASSERT_EQ(gt.shape(), lfs::core::TensorShape({3, kH * kMaxWidth / kW, kMaxWidth}));
 
-    const auto expected = lfs::core::lanczos_resize(
-        Tensor::from_blob(pixels.data(), lfs::core::TensorShape({kH, kW, 3}), Device::CPU, DataType::UInt8).to(Device::CUDA),
-        static_cast<int>(gt.shape()[1]), static_cast<int>(gt.shape()[2]), 2, nullptr);
+    const auto expected = lfs::core::shared_image_ops(GetParam())
+                              ->resize(Tensor::from_blob(pixels.data(), lfs::core::TensorShape({kH, kW, 3}),
+                                                         Device::CPU, DataType::UInt8)
+                                           .to(Device::GPU),
+                                       static_cast<int>(gt.shape()[1]), static_cast<int>(gt.shape()[2]),
+                                       lfs::gpu_ops::Resample::LanczosRGB, 2);
     const auto expected_values = expected.cpu().to_vector();
     const auto actual_values = gt.cpu().to_vector_uint8();
     ASSERT_EQ(expected_values.size(), actual_values.size());
@@ -612,7 +642,7 @@ TEST_F(MetricsEvaluatorImages, DownscaledGroundTruthMatchesGpuLanczos) {
 
 // Catches an RGBA reference that keeps the colour stored under transparent pixels, a binarised alpha, or a
 // reference composited over the configured colour instead of the background the render uses.
-TEST_F(MetricsEvaluatorImages, RgbaReferenceShowsTheRenderBackgroundWhereTransparent) {
+TEST_P(MetricsEvaluatorImages, RgbaReferenceShowsTheRenderBackgroundWhereTransparent) {
     ensure_image_loader();
 
     const auto tmp = std::filesystem::temp_directory_path() / "lfs_rgba_eval_reference";
@@ -937,7 +967,7 @@ TEST(MetricsEvaluatorUndistort, SupersampledRenderKeepsTheSplatFootprint) {
 
 // Catches a mesh mask that is not projected through the evaluation camera, ignores the invert
 // flag, or lets a view without any covered pixel through.
-TEST_F(MetricsEvaluatorGeom, CoverageSelectsTheEvaluatedPixels) {
+TEST_P(MetricsEvaluatorGeom, CoverageSelectsTheEvaluatedPixels) {
     ensure_image_loader();
     const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_mesh_mask";
     std::filesystem::remove_all(tmp);
@@ -983,7 +1013,7 @@ TEST_F(MetricsEvaluatorGeom, CoverageSelectsTheEvaluatedPixels) {
     std::filesystem::remove_all(tmp);
 }
 
-TEST_F(MetricsEvaluatorGeom, RotatedPriorReportsKnownAngle) {
+TEST_P(MetricsEvaluatorGeom, RotatedPriorReportsKnownAngle) {
     ensure_image_loader();
 
     const auto tmp = std::filesystem::temp_directory_path() / "lfs_geom_metrics_rot";
@@ -1016,7 +1046,7 @@ TEST_F(MetricsEvaluatorGeom, RotatedPriorReportsKnownAngle) {
     std::filesystem::remove_all(tmp);
 }
 
-TEST_F(MetricsEvaluatorGeom, SparsePointAbsRelAgainstRenderedDepth) {
+TEST_P(MetricsEvaluatorGeom, SparsePointAbsRelAgainstRenderedDepth) {
 
     const auto tmp = std::filesystem::temp_directory_path() / "lfs_geom_metrics_depth";
     std::filesystem::remove_all(tmp);

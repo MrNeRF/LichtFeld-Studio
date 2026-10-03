@@ -538,6 +538,7 @@ if(NOT LFS_HAS_CUDA)
             test_vulkan_trainer_start.cpp
             test_session_loader_storage.cpp
             test_training_command_masks.cpp
+            test_mesh_mask_kernels.cpp
             test_training_ops_parity.cpp
             test_training_ops_vulkan_gsplat.cpp
             test_tensor_vulkan_training_fault.cpp
