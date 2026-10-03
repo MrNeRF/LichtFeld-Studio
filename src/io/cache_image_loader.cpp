@@ -523,10 +523,11 @@ namespace lfs::io {
                         if (params.output_uint8) {
                             auto uint8_tensor = Tensor::empty(
                                 tensor.shape(), Device::CUDA, DataType::UInt8);
-                            lfs::io::cuda::launch_float32_chw_to_uint8_chw(
-                                tensor.ptr<float>(), uint8_tensor.ptr<uint8_t>(),
-                                tensor.shape()[1], tensor.shape()[2], tensor.shape()[0],
+                            const lfs::core::CUDAStreamGuard execution_scope(
                                 static_cast<cudaStream_t>(params.cuda_stream));
+                            lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(
+                                tensor, uint8_tensor, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW,
+                                tensor.shape()[1], tensor.shape()[2], tensor.shape()[0], {});
                             return uint8_tensor;
                         }
                         return tensor;

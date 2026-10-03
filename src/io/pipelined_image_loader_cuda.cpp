@@ -345,13 +345,10 @@ namespace lfs::io {
             if (restore_uint8) {
                 auto uint8_tensor = lfs::core::Tensor::empty(
                     tensor.shape(), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
-                cuda::launch_float32_chw_to_uint8_chw(
-                    tensor.ptr<float>(),
-                    uint8_tensor.ptr<uint8_t>(),
-                    tensor.shape()[1],
-                    tensor.shape()[2],
-                    tensor.shape()[0],
-                    stream);
+                const lfs::core::CUDAStreamGuard execution_scope(stream);
+                lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(
+                    tensor, uint8_tensor, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW,
+                    tensor.shape()[1], tensor.shape()[2], tensor.shape()[0], {});
                 tensor = std::move(uint8_tensor);
             } else {
                 tensor = quantize_rgb_to_u16_grid(tensor, stream);
