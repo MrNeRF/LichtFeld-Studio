@@ -17,6 +17,7 @@
 #include "internal/resource_paths.hpp"
 #include "operation/undo_history.hpp"
 #include "preferences.hpp"
+#include "python/python_runtime.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/services.hpp"
 
@@ -28,13 +29,16 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <ctime>
 #include <format>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string_view>
+#include <thread>
 
 namespace lfs::vis::gui {
 
@@ -381,6 +385,8 @@ namespace lfs::vis::gui {
     }
 
     NativeScenePanel::~NativeScenePanel() {
+        if (log_handler_)
+            core::Logger::get().remove_log_handler(*log_handler_);
         clearElementCache();
     }
 
@@ -1303,7 +1309,23 @@ namespace lfs::vis::gui {
     void NativeScenePanel::setTab(const Tab tab) {
         if (active_tab_ == tab)
             return;
+        if (log_handler_) {
+            core::Logger::get().remove_log_handler(*log_handler_);
+            log_handler_.reset();
+        }
         active_tab_ = tab;
+        if (tab == Tab::Logging) {
+            const auto generation = std::make_shared<std::atomic<uint64_t>>(
+                core::Logger::get().buffered_log_generation());
+            log_handler_ = core::Logger::get().add_log_handler(
+                [generation, gui_thread = std::this_thread::get_id()](auto, const auto&, auto) {
+                    const auto current = core::Logger::get().buffered_log_generation();
+                    const auto previous = generation->exchange(current);
+                    // Rendering can itself log; only background producers need a wakeup.
+                    if (current != previous && std::this_thread::get_id() != gui_thread)
+                        python::request_redraw();
+                });
+        }
         host_.markContentDirty();
     }
 

@@ -190,6 +190,7 @@ namespace lfs::vis::gui {
         Rml::Element* logging_empty_el_ = nullptr;
 
         Tab active_tab_ = Tab::Scene;
+        std::optional<core::LogHandlerToken> log_handler_;
         std::optional<SceneTreeSessionChrome> pending_tree_chrome_;
         std::string last_language_;
         uint64_t last_history_generation_ = 0;
