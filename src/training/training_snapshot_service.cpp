@@ -922,7 +922,11 @@ namespace lfs::training {
         void issue_native_to_slot(size_t slot_index, size_t pinned_offset,
                                   const lfs::core::Tensor& source, size_t source_offset, size_t bytes) {
             validate_slot_range(slot_index, pinned_offset, bytes);
-            ring->enqueue(source, source_offset, bytes, slot_index, pinned_offset, true);
+            // Capture waits for the last ring fence before training resumes.
+            // A direct copy already makes the host slot immutable; an extra
+            // source-to-device-scratch copy adds traffic without extending
+            // the snapshot lifetime. Encoded SH still uses device_scratch.
+            ring->enqueue(source, source_offset, bytes, slot_index, pinned_offset);
         }
 
         void issue_sh_to_slot(
