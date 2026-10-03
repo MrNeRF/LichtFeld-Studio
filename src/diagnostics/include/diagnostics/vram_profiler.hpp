@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -289,6 +290,9 @@ namespace lfs::diagnostics {
         std::vector<VramMarker> markers;
         TrainingStateLedger training_state;
     };
+
+    // Device memory the driver attributes to this process; nullopt where NVML cannot report it.
+    [[nodiscard]] LFS_DIAGNOSTICS_API std::optional<std::size_t> process_device_memory_bytes();
 
     class LFS_DIAGNOSTICS_API VramScope {
     public:
