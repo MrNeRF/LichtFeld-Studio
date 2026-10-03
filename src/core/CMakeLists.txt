@@ -267,6 +267,7 @@ set(CORE_SOURCES
         nodes/registry.cpp
         nodes/tree.cpp
         nodes/evaluator.cpp
+        nodes/device.cpp
         nodes/builtin.cpp
         nodes/builtin_common.cpp
         nodes/builtin_input.cpp

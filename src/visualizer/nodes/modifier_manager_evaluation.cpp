@@ -53,17 +53,7 @@ namespace lfs::vis {
                 include(object.points->normals);
             }
             if (node->mesh) {
-                auto mesh = std::make_shared<core::MeshData>();
-                mesh->vertices = node->mesh->vertices;
-                mesh->indices = node->mesh->indices;
-                mesh->normals = node->mesh->normals;
-                mesh->tangents = node->mesh->tangents;
-                mesh->colors = node->mesh->colors;
-                mesh->texcoords = node->mesh->texcoords;
-                mesh->materials = node->mesh->materials;
-                mesh->submeshes = node->mesh->submeshes;
-                mesh->texture_images = node->mesh->texture_images;
-                object.mesh = std::move(mesh);
+                object.mesh = node->mesh->readOnlySnapshot();
                 include(object.mesh->vertices);
                 include(object.mesh->indices);
                 include(object.mesh->normals);

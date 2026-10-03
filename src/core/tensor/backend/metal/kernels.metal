@@ -2119,7 +2119,8 @@ static float dot_rounded(float3 a, float3 b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-// kOp 0 builds hashed cells, 1 marks radius matches, 2 counts other references.
+// kOp 0 builds hashed cells, 1 marks radius matches, 2 counts other references,
+// 3 estimates nearest-neighbour spacing.
 struct RadiusParams {
     device const float* points;
     device const uchar* references;
@@ -2140,7 +2141,7 @@ static float3 radius_point(constant RadiusParams& params, uint i) {
 }
 
 static int3 radius_cell(float3 point, float radius) {
-    return int3(clamp(floor(point / radius * 0.5f), -268435456.0f, 268435456.0f));
+    return int3(clamp(floor(point / radius), -268435456.0f, 268435456.0f));
 }
 
 static uint radius_bucket(int3 cell, uint mask) {
@@ -2165,29 +2166,73 @@ static int radius_count(constant RadiusParams& params, uint i) {
         return 0;
     const int3 center = radius_cell(point, params.radius);
     int count = 0;
-    for (int z = -1; z <= 1; ++z) {
-        for (int y = -1; y <= 1; ++y) {
-            for (int x = -1; x <= 1; ++x) {
-                const int3 target = center + int3(x, y, z);
-                for (int j = params.heads[radius_bucket(target, params.bucket_mask)]; j >= 0; j = params.next[j]) {
-                    const float3 other = radius_point(params, uint(j));
-                    if (uint(j) != i && all(radius_cell(other, params.radius) == target) && within_radius(point, other, params.radius)) {
-                        if (++count == int(params.exclude_self))
-                            return count;
-                    }
-                }
+    for (int slot = 0; slot < 27; ++slot) {
+        const int neighbor = slot == 0 ? 13 : (slot <= 13 ? slot - 1 : slot);
+        const int x = neighbor % 3 - 1;
+        const int y = neighbor / 3 % 3 - 1;
+        const int z = neighbor / 9 - 1;
+        const int3 target = center + int3(x, y, z);
+        for (int j = params.heads[radius_bucket(target, params.bucket_mask)]; j >= 0; j = params.next[j]) {
+            const float3 other = radius_point(params, uint(j));
+            if (uint(j) != i && all(radius_cell(other, params.radius) == target) && within_radius(point, other, params.radius)) {
+                if (++count == int(params.exclude_self))
+                    return count;
             }
         }
     }
     return count;
 }
 
+static float radius_spacing(constant RadiusParams& p, uint i) {
+    const float3 point = radius_point(p, i);
+    if (!all(isfinite(point)))
+        return 0;
+    const int3 center = radius_cell(point, p.radius);
+    float3 best = float3(INFINITY);
+    int found = 0;
+
+    for (int extent = 1; extent <= 2; ++extent) {
+        for (int z = -extent; z <= extent; ++z) {
+            for (int y = -extent; y <= extent; ++y) {
+                for (int x = -extent; x <= extent; ++x) {
+                    if (extent == 2 && abs(x) <= 1 && abs(y) <= 1 && abs(z) <= 1)
+                        continue;
+                    const int3 target = center + int3(x, y, z);
+                    int visited = 0;
+                    for (int j = p.heads[radius_bucket(target, p.bucket_mask)]; j >= 0 && visited < 128; j = p.next[j], ++visited) {
+                        const float3 other = radius_point(p, uint(j));
+                        if (uint(j) == i || !all(radius_cell(other, p.radius) == target))
+                            continue;
+                        const float3 delta = point - other;
+                        const float distance = dot(delta, delta);
+                        if (distance < best.z) {
+                            best.z = max(best.y, distance);
+                            best.y = max(best.x, min(best.y, distance));
+                            best.x = min(best.x, distance);
+                        }
+                        found = min(found + 1, 3);
+                    }
+                }
+            }
+        }
+        if (found == 3)
+            break;
+    }
+    float sum = 0;
+    for (int k = 0; k < found; ++k)
+        sum += sqrt(best[k]);
+    return found ? sum / found : p.radius * 4;
+}
 kernel void radius_neighbors(constant RadiusParams& params [[buffer(0)]], uint i [[thread_position_in_grid]]) {
     i += params.query_begin;
     if (i >= params.query_end)
         return;
     if (i >= params.count)
         return;
+    if (kOp == 3) {
+        ((device float*)params.output)[i] = radius_spacing(params, i);
+        return;
+    }
     if (kOp == 2) {
         ((device int*)params.output)[i] = radius_count(params, i);
         return;

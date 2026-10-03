@@ -18,6 +18,16 @@ namespace lfs::core::internal {
         }
     } // namespace
 
+    void CudaBackendOps::point_neighbor_spacing(const StorageRef points, const StorageRef references,
+                                                const StorageRef heads, const StorageRef next, const StorageRef output,
+                                                const size_t count, const size_t buckets, const float cell_width,
+                                                const ExecContext context) {
+        LFS_FACADE_TRACE(point_neighbor_spacing);
+        tensor_ops::launch_point_neighbor_spacing(cuda_pointer<const float>(points), cuda_pointer<const uint8_t>(references),
+                                                  cuda_pointer<int32_t>(heads), cuda_pointer<int32_t>(next), cuda_pointer<float>(output),
+                                                  count, buckets, cell_width, context.cuda_stream);
+    }
+
     void CudaBackendOps::radius_neighbors(const StorageRef points, const StorageRef references,
                                           const StorageRef heads, const StorageRef next, const StorageRef output,
                                           const size_t count, const size_t buckets, const float radius,

@@ -75,6 +75,53 @@ TEST_F(NodesModifierManager, StackOrderEvaluationAndJsonRoundTrip) {
     EXPECT_EQ(manager.toJson(false), saved);
 }
 
+TEST_F(NodesModifierManager, ObjectInfoUploadsCpuMeshBeforeTransformAndJoin) {
+    using namespace lfs::nodes;
+    using lfs::core::Device;
+    using lfs::core::Tensor;
+    lfs::vis::SceneManager scene;
+    scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+    const auto host_id = scene.getScene().addSplat("Host", model());
+    const auto host = scene.getScene().getNodeUuid(host_id);
+    auto mesh = std::make_shared<lfs::core::MeshData>();
+    mesh->vertices = Tensor::from_vector({0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f}, {3, 3}, Device::CPU);
+    mesh->indices = Tensor::from_vector({0, 1, 2}, {1, 3}, Device::CPU);
+    scene.getScene().addMesh("Reference", mesh);
+    auto& manager = scene.modifierManager();
+    NodeTypeInfo check;
+    check.id = "test.gpu_mesh";
+    check.inputs = {{"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)}};
+    check.outputs = check.inputs;
+    check.evaluate = [](NodeContext& context) {
+        const auto* geometry = context.input("Geometry").get_if<Geometry>();
+        ASSERT_NE(geometry, nullptr);
+        ASSERT_TRUE(geometry->mesh);
+        EXPECT_EQ(geometry->mesh->mesh->vertices.device(), Device::GPU);
+        EXPECT_EQ(geometry->mesh->mesh->indices.device(), Device::GPU);
+        context.set_output("Geometry", *geometry);
+    };
+    manager.registry().register_type(std::move(check));
+    auto& tree = manager.newTree("CPU mesh join");
+    tree.add_node("lfs.object_info", "Reference").properties["object"] = "Reference";
+    tree.add_node("lfs.transform_geometry", "Transform");
+    tree.add_node("test.gpu_mesh", "Check");
+    tree.add_node("lfs.mesh_to_splats", "Sample").input_values["Max Count"] = int64_t(12);
+    tree.add_node("lfs.join_geometry", "Join");
+    ASSERT_TRUE(tree.add_link({"Reference", "Geometry", "Transform", "Geometry"}));
+    ASSERT_TRUE(tree.add_link({"Transform", "Geometry", "Check", "Geometry"}));
+    ASSERT_TRUE(tree.add_link({"Check", "Geometry", "Sample", "Geometry"}));
+    ASSERT_TRUE(tree.add_link({"Sample", "Geometry", "Join", "Geometry"}));
+    ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Join", "Geometry"}));
+    ASSERT_TRUE(tree.add_link({"Join", "Geometry", tree.output_node().name, "Geometry"}));
+    manager.addModifier(host, tree.uuid);
+    const auto result = manager.evaluate(host);
+    ASSERT_TRUE(result.ok) << result.errors.size();
+    ASSERT_TRUE(result.geometry.splats);
+    EXPECT_EQ(result.geometry.splats->means.device(), Device::GPU);
+    EXPECT_EQ(result.geometry.splats->means.shape()[0], 13);
+    EXPECT_EQ(mesh->vertices.device(), Device::CPU);
+}
+
 TEST_F(NodesModifierManager, ScriptedInputBurstHasOneUndoAndOneQueuedEvaluation) {
     lfs::vis::SceneManager scene;
     scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);

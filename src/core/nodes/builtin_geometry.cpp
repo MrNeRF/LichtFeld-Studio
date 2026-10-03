@@ -72,7 +72,7 @@ namespace lfs::nodes::builtin {
             auto o = context.evaluate_field("Offset", fc, VECTOR_SOCKET);
             auto m = copy_mesh(*geometry.mesh->mesh, blend(geometry.mesh->mesh->vertices, p + o, w),
                                geometry.mesh->mesh->indices);
-            geometry.mesh = MeshComponent{std::move(m)};
+            geometry.mesh = MeshComponent{std::move(m), geometry.mesh->textures};
         }
         context.set_output("Geometry", std::move(geometry));
     }
@@ -105,7 +105,7 @@ namespace lfs::nodes::builtin {
                     matrix_tensor(glm::transpose(glm::inverse(glm::mat3(matrix))), source.normals.device()));
                 mesh->normals = safe_divide(transformed, (transformed * transformed).sum(1, true).sqrt());
             }
-            geometry.mesh = MeshComponent{std::move(mesh)};
+            geometry.mesh = MeshComponent{std::move(mesh), geometry.mesh->textures};
         }
         context.set_output("Geometry", std::move(geometry));
     }
@@ -128,7 +128,7 @@ namespace lfs::nodes::builtin {
         if (source.mesh && source.mesh->mesh) {
             auto fc = field_context(*source.mesh);
             auto mask = selection(context, "Selection", fc, true);
-            result.mesh = MeshComponent{filter_mesh_faces(*source.mesh->mesh, mask, selected)};
+            result.mesh = MeshComponent{filter_mesh_faces(*source.mesh->mesh, mask, selected), source.mesh->textures};
         }
         return result;
     }
@@ -180,7 +180,26 @@ namespace lfs::nodes::builtin {
         return result;
     }
 
-    Geometry join_geometries(const std::vector<Geometry>& values) {
+    Geometry join_geometries(const std::vector<Geometry>& source_values) {
+        auto values = source_values;
+        GeometryDeviceCache devices;
+        std::optional<core::GpuBackendScope> scope;
+        std::optional<core::Device> device;
+        for (const auto& value : values) {
+            const Tensor* tensor = value.splats                     ? &value.splats->means
+                                   : value.points                   ? &value.points->positions
+                                   : value.mesh && value.mesh->mesh ? &value.mesh->mesh->vertices
+                                                                    : nullptr;
+            if (tensor) {
+                device = tensor->device();
+                if (const auto backend = core::gpu_backend_of(*tensor))
+                    scope.emplace(*backend);
+                break;
+            }
+        }
+        if (device)
+            for (auto& value : values)
+                value = devices.convert(std::move(value), *device);
         Geometry result;
         std::vector<const SplatsComponent*> splats;
         std::vector<const PointsComponent*> points;
@@ -293,7 +312,11 @@ namespace lfs::nodes::builtin {
             mesh->tangents = join_vertex_data(&core::MeshData::tangents, 4, 0);
             mesh->texcoords = join_vertex_data(&core::MeshData::texcoords, 2, 0);
             mesh->colors = join_vertex_data(&core::MeshData::colors, 4, 1);
-            result.mesh = MeshComponent{std::move(mesh)};
+            MeshComponent component{std::move(mesh)};
+            for (const auto& value : values)
+                if (value.mesh && value.mesh->mesh)
+                    component.textures.insert(component.textures.end(), value.mesh->textures.begin(), value.mesh->textures.end());
+            result.mesh = std::move(component);
         }
         return result;
     }

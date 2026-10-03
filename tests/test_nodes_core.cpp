@@ -52,6 +52,12 @@ namespace {
             return GetParam().backend ? Device::GPU : Device::CPU;
         }
 
+        EvalResult evaluate(const NodeTree& tree, EvalInputs inputs, EvalHost* host = nullptr,
+                            EvalCache* cache = nullptr, const EvalControl& control = {}) const {
+            inputs.device = device();
+            return lfs::nodes::evaluate(tree, std::move(inputs), host, cache, control);
+        }
+
         Tensor tensor(std::vector<float> values, TensorShape shape) const {
             Tensor result = Tensor::from_vector(values, std::move(shape), Device::CPU);
             return device() == Device::CPU ? result : result.to(device());
@@ -967,6 +973,20 @@ namespace {
         EXPECT_EQ(empty.numel(), 0u);
     }
 
+    TEST_P(NodesCore, PointNeighbourSpacingExpandsAndHandlesEmptyInputs) {
+        const auto points = tensor({0, 0, 0, 1.8f, 0, 0, 1.9f, 0, 0, 2, 0, 0}, {4, 3});
+        const auto spacing = lfs::core::point_neighbor_spacing(points, 1.0f);
+        const auto values = host<float>(spacing);
+        EXPECT_EQ(spacing.device(), device());
+        ASSERT_EQ(values.size(), 4);
+        EXPECT_NEAR(values[0], 1.9f, 1e-5f);
+        EXPECT_NEAR(values[1], 0.7f, 1e-5f);
+        EXPECT_NEAR(values[2], 0.7f, 1e-5f);
+        EXPECT_NEAR(values[3], 2.3f / 3, 1e-5f);
+        EXPECT_EQ(lfs::core::point_neighbor_spacing(Tensor::empty({0, 3}, device()), 1.0f).numel(), 0);
+        EXPECT_FLOAT_EQ(host<float>(lfs::core::point_neighbor_spacing(tensor({0, 0, 0}, {1, 3}), 1.0f))[0], 4.0f);
+    }
+
     TEST_P(NodesCore, ScaleClampGuaranteesAspectOnRandomLogScales) {
         std::mt19937 random(27);
         std::uniform_real_distribution<float> value(-15, 10);
@@ -1089,7 +1109,7 @@ namespace {
         EXPECT_NEAR(clamped.geometry.splats->scaling.exp().max().item<float>(), 2.0f, 1e-5f);
     }
 
-    TEST_P(NodesCore, PointsToSplatsLargeCloudUsesOneSampledRadius) {
+    TEST_P(NodesCore, PointsToSplatsLargeCloudKeepsLocalRadiusVariation) {
         constexpr size_t count = 300001;
         Geometry geometry;
         geometry.points = PointsComponent{
@@ -1100,7 +1120,7 @@ namespace {
         ASSERT_TRUE(result.ok);
         ASSERT_EQ(result.geometry.splats->means.shape()[0], count);
         const auto scales = result.geometry.splats->scaling;
-        EXPECT_EQ(scales.min().item<float>(), scales.max().item<float>());
+        EXPECT_LT(scales.min().item<float>(), scales.max().item<float>());
         EXPECT_TRUE(std::isfinite(scales.min().item<float>()));
     }
 
@@ -1502,6 +1522,128 @@ namespace {
         const auto elapsed =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         std::cout << "[NodesCoreScale " << GetParam().name << "] synchronized total " << elapsed << " ms\n";
+    }
+
+    TEST_P(NodesCore, CpuMeshUploadsOnceAndJoinsGpuSplats) {
+        if (device() == Device::CPU)
+            GTEST_SKIP() << "GPU upload contract";
+        auto mesh = std::make_shared<lfs::core::MeshData>();
+        mesh->vertices = Tensor::from_vector({0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f}, {3, 3}, Device::CPU);
+        mesh->indices = Tensor::from_vector({0, 1, 2}, {1, 3}, Device::CPU);
+        mesh->texcoords = Tensor::zeros({3, 2}, Device::CPU);
+        mesh->materials.emplace_back();
+        mesh->materials[0].albedo_tex = 1;
+        mesh->texture_images.push_back({{255, 128, 0}, 1, 1, 3});
+        GeometryDeviceCache uploads;
+        const auto first = uploads.convert(geometry_from_mesh(mesh), Device::GPU);
+        const auto second = uploads.convert(geometry_from_mesh(mesh), Device::GPU);
+        EXPECT_EQ(first.mesh->mesh, second.mesh->mesh);
+        EXPECT_EQ(first.mesh->textures[0].data_ptr(), second.mesh->textures[0].data_ptr());
+        EXPECT_EQ(first.mesh->mesh->vertices.device(), Device::GPU);
+        EXPECT_EQ(first.mesh->textures[0].device(), Device::GPU);
+        mesh->mark_dirty();
+        const auto third = uploads.convert(geometry_from_mesh(mesh), Device::GPU);
+        EXPECT_NE(first.mesh->mesh, third.mesh->mesh);
+        EXPECT_EQ(mesh->vertices.device(), Device::CPU);
+        const auto snapshot = mesh->readOnlySnapshot();
+        EXPECT_EQ(snapshot->id(), mesh->id());
+        EXPECT_EQ(snapshot->generation(), mesh->generation());
+        NodeTypeInfo source;
+        source.id = "test.cpu_mesh";
+        source.outputs = {{"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)}};
+        source.evaluate = [mesh](NodeContext& context) { context.set_output("Geometry", geometry_from_mesh(mesh)); };
+        registry_.register_type(std::move(source));
+        NodeTree tree(registry_);
+        tree.add_node("test.cpu_mesh", "Mesh");
+        tree.add_node("lfs.mesh_to_splats", "Sample").input_values["Max Count"] = int64_t(12);
+        tree.add_node("lfs.join_geometry", "Join");
+        ASSERT_TRUE(tree.add_link({"Mesh", "Geometry", "Sample", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Join", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Sample", "Geometry", "Join", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Join", "Geometry", tree.output_node().name, "Geometry"}));
+        const auto result = lfs::nodes::evaluate(tree, {.geometry = splats()});
+        ASSERT_TRUE(result.ok);
+        EXPECT_EQ(result.geometry.splats->means.shape()[0], 15);
+        EXPECT_EQ(result.geometry.splats->means.device(), Device::GPU);
+        EXPECT_EQ(lfs::core::gpu_backend_of(result.geometry.splats->means), GetParam().backend);
+        NodeTree points(registry_);
+        points.add_node("lfs.mesh_to_points", "Points");
+        ASSERT_TRUE(points.add_link({points.input_node().name, "Geometry", "Points", "Geometry"}));
+        ASSERT_TRUE(points.add_link({"Points", "Geometry", points.output_node().name, "Geometry"}));
+        const auto gpu_points = lfs::nodes::evaluate(points, {.geometry = geometry_from_mesh(mesh)});
+        ASSERT_TRUE(gpu_points.ok);
+        EXPECT_EQ(gpu_points.geometry.points->positions.device(), Device::GPU);
+
+        Geometry cloud;
+        cloud.points = PointsComponent{Tensor::zeros({3, 3}, Device::CPU),
+                                       Tensor::full({3, 3}, 255, Device::CPU, lfs::core::DataType::UInt8),
+                                       {}};
+        NodeTree conversion(registry_);
+        conversion.add_node("lfs.points_to_splats", "Convert").input_values["Radius"] = 0.1f;
+        ASSERT_TRUE(conversion.add_link({conversion.input_node().name, "Geometry", "Convert", "Geometry"}));
+        ASSERT_TRUE(conversion.add_link({"Convert", "Geometry", conversion.output_node().name, "Geometry"}));
+        EvalCache cache;
+        const auto converted = lfs::nodes::evaluate(conversion, {.geometry = cloud, .geometry_generation = 1}, nullptr, &cache);
+        ASSERT_TRUE(converted.ok);
+        EXPECT_EQ(converted.geometry.splats->means.device(), Device::GPU);
+        EXPECT_NEAR((converted.geometry.splats->sh0 * 0.28209479177387814f + 0.5f).mean().item<float>(), 1.0f, 1e-5f);
+        const auto repeated = lfs::nodes::evaluate(conversion, {.geometry = cloud, .geometry_generation = 1}, nullptr, &cache);
+        ASSERT_TRUE(repeated.ok);
+        EXPECT_TRUE(repeated.nodes.at(conversion.input_node().name).cached);
+        EXPECT_EQ(converted.geometry.splats->means.data_ptr(), repeated.geometry.splats->means.data_ptr());
+    }
+
+    TEST_P(NodesCoreScale, SpatialOperationsStayInteractive) {
+        if (device() == Device::CPU)
+            GTEST_SKIP() << "Performance regression requires GPU";
+        using lfs::core::DataType;
+        constexpr size_t count = 1'000'000;
+        const auto index = Tensor::arange(static_cast<float>(count)).to(device());
+        const auto cluster = (index / 16).floor();
+        const auto x = cluster - (cluster / 50).floor() * 50;
+        const auto y = (cluster / 50).floor() - (cluster / 2500).floor() * 50;
+        const auto z = (cluster / 2500).floor();
+        Geometry geometry;
+        geometry.splats = SplatsComponent{
+            Tensor::stack({x, y, z}, 1) + Tensor::uniform({count, 3}, -0.01f, 0.01f, device(), DataType::Float32, 31),
+            Tensor::zeros({count, 3}, device()),
+            Tensor::zeros({count, 0, 3}, device()),
+            Tensor::uniform({count, 1}, -11, 0, device(), DataType::Float32, 17).expand({static_cast<int>(count), 3}).contiguous(),
+            Tensor::cat({Tensor::ones({count, 1}, device()), Tensor::zeros({count, 3}, device())}, 1),
+            Tensor::ones({count}, device()),
+            0,
+            1,
+            {}};
+        geometry.splats->means.sum().item<float>();
+        const auto measure = [&](const char* label, auto action) {
+            const auto start = std::chrono::steady_clock::now();
+            action();
+            const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            std::cout << "[NodesSpatialPerformance " << GetParam().name << "] " << label << " " << elapsed << " ms\n";
+            EXPECT_LT(elapsed, 2000.0) << label;
+        };
+        measure("Remove Floaters relative 1M", [&] {
+            const auto result = single("lfs.remove_floaters", geometry, [](Node& node) { node.input_values["Min Neighbours"] = int64_t(3); });
+            ASSERT_TRUE(result.ok);
+            result.geometry.splats->means.sum().item<float>();
+        });
+        measure("Neighbour Count relative 1M", [&] {
+            const auto value = field_result("lfs.neighbour_count", "Count", INT_SOCKET, geometry, [](Node& node) {
+                node.input_values["Radius"] = 3.0f;
+                node.properties["relative_to_size"] = true;
+            });
+            value.sum().item<int>();
+        });
+        for (const size_t points : {140000u, 200000u, 1000000u}) {
+            Geometry cloud;
+            cloud.points = PointsComponent{geometry.splats->means.slice(0, 0, points), Tensor::ones({points, 3}, device()), {}};
+            const std::string label = "Points to Splats auto " + std::to_string(points);
+            measure(label.c_str(), [&] {
+                const auto result = single("lfs.points_to_splats", cloud);
+                ASSERT_TRUE(result.ok);
+                result.geometry.splats->scaling.sum().item<float>();
+            });
+        }
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, NodesCoreScale, testing::ValuesIn(test_targets()),

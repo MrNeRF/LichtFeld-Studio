@@ -2212,7 +2212,7 @@ namespace lfs::core::internal {
     static void radius_query(const StorageRef points, const StorageRef references, const StorageRef heads,
                              const StorageRef next, const StorageRef output, const size_t count,
                              const size_t buckets, const float radius, const bool exclude_self,
-                             const std::optional<StorageRef> queries, const int32_t max_count) {
+                             const std::optional<StorageRef> queries, const int32_t max_count, const bool spacing = false) {
         struct RadiusParams {
             uint64_t points, references, heads, next, output, queries;
             uint32_t count, bucket_mask;
@@ -2236,24 +2236,33 @@ namespace lfs::core::internal {
         std::vector<StorageRef> uses{points, references, heads, next, output};
         if (queries)
             uses.push_back(*queries);
-        const size_t batch = exclude_self ? 8192 : count;
+        const size_t batch = exclude_self && !max_count ? 8192 : count;
         for (size_t begin = 0; begin < count; begin += batch) {
             params.query_begin = static_cast<uint32_t>(begin);
             params.query_end = static_cast<uint32_t>(std::min(begin + batch, count));
             dispatch_addressed(*context, uses, context->pipeline("radius_neighbors", {{0, 0}}), params, params.query_end - begin);
-            if (exclude_self)
+            if (exclude_self && !max_count)
                 context->wait(context->flush());
         }
-        const size_t query_batch = exclude_self ? 8192 : count;
+        const size_t query_batch = exclude_self && !max_count ? 8192 : count;
+        const uint32_t mode = spacing ? 3u : (max_count ? 2u : 1u);
         for (size_t begin = 0; begin < count; begin += query_batch) {
             params.query_begin = static_cast<uint32_t>(begin);
             params.query_end = static_cast<uint32_t>(std::min(begin + query_batch, count));
-            dispatch_addressed(*context, uses, context->pipeline("radius_neighbors", {{0, max_count ? 2u : 1u}}), params, params.query_end - begin);
-            // Isolation queries yield the GPU between bounded query batches.
-            // Otherwise a dense-radius dispatch can monopolize it for seconds.
-            if (exclude_self)
+            dispatch_addressed(*context, uses, context->pipeline("radius_neighbors", {{0, mode}}),
+                               params, params.query_end - begin);
+            // Boolean queries retain their bounded-batch scheduling. Saturating
+            // counts and bounded spacing searches do not require host waits.
+            if (exclude_self && !max_count)
                 context->wait(context->flush());
         }
+    }
+
+    void MetalBackendOps::point_neighbor_spacing(const StorageRef points, const StorageRef references, const StorageRef heads,
+                                                 const StorageRef next, const StorageRef output, const size_t count,
+                                                 const size_t buckets, const float cell_width, ExecContext) {
+        LFS_FACADE_TRACE(point_neighbor_spacing);
+        radius_query(points, references, heads, next, output, count, buckets, cell_width, false, std::nullopt, 0, true);
     }
 
     void MetalBackendOps::radius_neighbors(const StorageRef points, const StorageRef references, const StorageRef heads,

@@ -309,9 +309,12 @@ Clean-up
 
 Conversion
 - **Points to Splats** (radius, 0 = half the mean three-nearest-neighbour distance;
-  per-point radii clamp to 0.25–4 times the median). Distance matrices and Float32
-  row sorts are chunked on device. Above 300,000 points, one radius is estimated
-  from a random 4096-point sample. **Splats to Points**, **Mesh to Points** (vertices).
+  per-point radii clamp to 0.25–4 times the median). A device spatial hash searches
+  27 neighbouring cells, expanding once to 125 cells if fewer than three neighbours
+  were found. Each cell examines at most 128 hash entries, bounding dense-region
+  work; this is a local spacing estimate, not an exact global k-NN search. A bounded
+  sample determines the cell width; no pairwise distance matrix is built.
+  **Splats to Points**, **Mesh to Points** (vertices).
 - **Mesh to Splats** (core; density per surface unit², max count default 2,000,000,
   opacity default 0.95, seed). Area-weighted face sampling and uniform barycentrics
   create flat degree-zero Gaussians oriented to interpolated vertex/face normals.
@@ -396,10 +399,20 @@ source copies once per source generation, and publishes separate payload
 storage after its own fence completes. This separation matters on Metal:
 logical queues share one in-order timeline, and storage readiness tracks GPU
 readers as well as writers. A worker cache must not reuse displayed storage as
-its scratch/input storage. Isolation queries build and query their spatial
-hash in bounded batches, waiting only on the current queue's marker, to avoid
-monopolizing the GPU with a dense million-point dispatch. No host copies or
+its scratch/input storage. Saturating neighbour-count queries check the current
+cell first and exit immediately at the requested count. Cells are one radius
+wide, limiting unnecessary candidates in the exact 27-cell search. Their hash build and
+query dispatches are queue-ordered, without host waits between query batches.
+Boolean radius queries retain their bounded-batch scheduling. No host copies or
 device-wide waits are performed by the canvas or result installation.
+
+Evaluation uses the GPU whenever available, including CPU-origin mesh and point
+payloads. The worker retains uploaded source geometry; mesh attributes and used
+albedo textures are cached by `MeshData::id()` and generation. Node outputs are
+normalized to the evaluation device, and Join Geometry also aligns operands to
+its first input. An explicit CPU evaluation override supports offline execution
+and backend-contract tests. Simplify remains a host-library operation; its result
+is transferred back before downstream nodes run.
 
 Only the viewer thread installs fence-complete results. Pending or failed
 requests leave the previous successful payload visible. The worker preserves

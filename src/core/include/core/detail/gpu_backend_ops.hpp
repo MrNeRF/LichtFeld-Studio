@@ -160,6 +160,9 @@ namespace lfs::core {
                                                 StorageRef heads, StorageRef next, StorageRef output,
                                                 size_t count, size_t buckets, float radius, int32_t max_count,
                                                 std::optional<StorageRef> queries, ExecContext context) = 0;
+            virtual void point_neighbor_spacing(StorageRef points, StorageRef references,
+                                                StorageRef heads, StorageRef next, StorageRef output,
+                                                size_t count, size_t buckets, float cell_width, ExecContext context) = 0;
             virtual void rasterize_points(const PointRasterProgram& program, ExecContext context) = 0;
             virtual void mark_points_2d(StorageRef mask, StorageRef points, size_t count,
                                         const PointRegion2D& region, const StorageRef* geometry,
@@ -477,6 +480,8 @@ namespace lfs::core {
                                         StorageRef heads, StorageRef next, StorageRef output,
                                         size_t count, size_t buckets, float radius, int32_t max_count,
                                         std::optional<StorageRef> queries, ExecContext context) override;
+            void point_neighbor_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
+                                        size_t, size_t, float, ExecContext) override;
             void project_points(StorageRef points, StorageRef output, size_t count,
                                 const PointProjection& projection,
                                 const StorageRef* transforms, size_t transform_count,

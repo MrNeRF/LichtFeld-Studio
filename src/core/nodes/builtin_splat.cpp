@@ -42,13 +42,10 @@ namespace lfs::nodes::builtin {
                 return {0, 1};
             constexpr size_t kMaximumSamples = 200'000;
             const size_t stride = std::max<size_t>((count + kMaximumSamples - 1) / kMaximumSamples, 1);
-            std::vector<int> sample_indices;
-            sample_indices.reserve((count + stride - 1) / stride);
-            for (size_t index = 0; index < count; index += stride)
-                sample_indices.push_back(static_cast<int>(index));
-            auto indices = Tensor::from_vector(sample_indices, {sample_indices.size()}, Device::CPU);
-            if (colour.device() != Device::CPU)
-                indices = indices.to(colour.device());
+            const size_t samples = (count + stride - 1) / stride;
+            const auto indices = (Tensor::linspace(0, static_cast<float>(samples - 1), samples, colour.device()) *
+                                  static_cast<float>(stride))
+                                     .to(DataType::Int32);
             const auto luma = rec709_luma(colour.index_select(0, indices)).to(DataType::Float32);
             const auto sorted = luma.sort(0, false).first;
             const size_t last = sorted.numel() - 1;

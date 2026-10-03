@@ -1,32 +1,35 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "builtin_common.hpp"
+#include "core/tensor_spatial.hpp"
 #include <numbers>
-#include <unordered_map>
 namespace lfs::nodes::builtin {
     namespace {
         Tensor auto_point_radius(const Tensor& positions) {
             const size_t count = positions.shape()[0];
             if (count < 2)
                 return Tensor::full({count}, 1e-6f, positions.device());
-            Tensor samples = positions;
-            if (count > 300000) {
-                const auto indices = Tensor::multinomial(Tensor::ones({count}, positions.device()), 4096, false, 0);
-                samples = positions.index_select(0, indices);
-            }
-            const size_t sampled = samples.shape()[0];
-            auto radii = Tensor::empty({sampled}, positions.device());
-            // Bound the distance matrix and sorting scratch independently of N.
-            const size_t chunk = std::max<size_t>(1, (1024 * 1024) / sampled);
-            for (size_t begin = 0; begin < sampled; begin += chunk) {
-                const size_t end = std::min(begin + chunk, sampled);
-                const auto sorted = samples.slice(0, begin, end).cdist(samples).to(DataType::Float32).sort(1).first;
-                radii.slice(0, begin, end).copy_from(sorted.slice(1, 1, std::min<size_t>(4, sampled)).mean(1) * 0.5f);
-            }
+            // Estimate a robust cell width from a bounded, evenly spaced sample.
+            // Outliers must not make all of a dense reconstruction share one cell.
+            const size_t sampled = std::min<size_t>(4096, count);
+            const auto indices = (Tensor::linspace(0, static_cast<float>(sampled - 1), sampled, positions.device()) *
+                                  (static_cast<float>(count) / sampled))
+                                     .to(DataType::Int32);
+            const auto sample = positions.index_select(0, indices).sort(0).first;
+            const auto extent = sample.slice(0, sampled * 95 / 100, sampled * 95 / 100 + 1) -
+                                sample.slice(0, sampled * 5 / 100, sampled * 5 / 100 + 1);
+            std::array<float, 3> widths;
+            for (int axis = 0; axis < 3; ++axis)
+                widths[axis] = channel(extent, axis).item<float>();
+            std::ranges::sort(widths);
+            const float width = std::max(1e-6f, widths[1] < widths[2] * 1e-3f
+                                                    ? 2 * widths[2] / count
+                                                : widths[0] < widths[2] * 1e-3f
+                                                    ? 2 * std::sqrt(widths[1] * widths[2] / count)
+                                                    : 2 * std::cbrt(widths[0] * widths[1] * widths[2] / count));
+            auto radii = core::point_neighbor_spacing(positions, width) * 0.5f;
             const auto sorted = radii.sort().first;
-            const auto median = sorted.slice(0, (sampled - 1) / 2, sampled / 2 + 1).mean().maximum(1e-6f);
-            if (count > sampled)
-                return median.expand({static_cast<int>(count)}).contiguous();
+            const auto median = sorted.slice(0, (count - 1) / 2, count / 2 + 1).mean().maximum(1e-6f);
             return radii.maximum(median * 0.25f).minimum(median * 4.0f).maximum(1e-6f);
         }
 
@@ -71,8 +74,9 @@ namespace lfs::nodes::builtin {
                                                           Tensor::where(y.ge(z).unsqueeze(1), qy, qz))));
         }
 
-        Tensor mesh_colours(const core::MeshData& mesh, const Tensor& faces,
+        Tensor mesh_colours(const MeshComponent& component, const Tensor& faces,
                             const Tensor& vertices, const Tensor& weights) {
+            const auto& mesh = *component.mesh;
             const size_t count = faces.numel();
             const auto device = mesh.vertices.device();
             const auto interpolate = [&](const Tensor& attribute) {
@@ -84,7 +88,6 @@ namespace lfs::nodes::builtin {
             Tensor uv;
             if (mesh.has_texcoords())
                 uv = interpolate(mesh.texcoords);
-            std::unordered_map<uint32_t, Tensor> textures;
             const auto material_colour = [&](size_t index) {
                 const auto& material = mesh.materials[index];
                 auto base = vector_tensor(glm::vec3(material.base_color), device);
@@ -94,22 +97,15 @@ namespace lfs::nodes::builtin {
                 if (image.width <= 0 || image.height <= 0 || image.channels < 3 ||
                     image.pixels.size() != static_cast<size_t>(image.width) * image.height * image.channels)
                     return base;
-                auto found = textures.find(material.albedo_tex);
-                if (found == textures.end()) {
-                    // Texture images are already CPU assets; upload each image once.
-                    auto pixels = Tensor::from_blob(const_cast<uint8_t*>(image.pixels.data()),
-                                                    {static_cast<size_t>(image.width) * image.height, static_cast<size_t>(image.channels)},
-                                                    Device::CPU, DataType::UInt8)
-                                      .clone()
-                                      .to(device);
-                    found = textures.emplace(material.albedo_tex, pixels.slice(1, 0, 3).to(DataType::Float32) / 255.0f).first;
-                }
+                const auto& texture = component.textures.at(material.albedo_tex - 1);
+                if (!texture.is_valid())
+                    return base;
                 // The loader applies aiProcess_FlipUVs; image row zero is top.
                 // Repeat addressing matches mesh rendering, with no second V flip.
                 const auto wrapped = uv - uv.floor();
                 const auto x = (channel(wrapped, 0) * static_cast<float>(image.width)).floor().clamp(0, image.width - 1).to(DataType::Int32);
                 const auto y = (channel(wrapped, 1) * static_cast<float>(image.height)).floor().clamp(0, image.height - 1).to(DataType::Int32);
-                return found->second.index_select(0, y * image.width + x) * base;
+                return texture.index_select(0, y * image.width + x) * base;
             };
             if (mesh.submeshes.empty() && !mesh.materials.empty())
                 return material_colour(0).expand({static_cast<int>(count), 3}).contiguous();
@@ -200,7 +196,7 @@ namespace lfs::nodes::builtin {
         const float opacity = std::clamp(input_float(context, "Opacity", 0.95f), 1e-6f, 1 - 1e-6f);
         geometry.splats = SplatsComponent{
             positions,
-            (mesh_colours(mesh, faces, vertices, weights) - 0.5f) / kShC0,
+            (mesh_colours(*geometry.mesh, faces, vertices, weights) - 0.5f) / kShC0,
             Tensor::zeros({count, 0, 3}, device),
             vector_tensor({std::log(r), std::log(r), std::log(0.1f * r)}, device).expand({static_cast<int>(count), 3}).contiguous(),
             surface_rotation(normal),

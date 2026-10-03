@@ -87,8 +87,10 @@ namespace lfs::vis {
         std::unordered_map<std::string, std::uint64_t> node_runs_;
         std::unordered_map<std::string, lfs::nodes::EvalCache> caches_;
         std::unordered_map<core::Uuid, lfs::nodes::Geometry> sources_;
+        std::unordered_map<core::Uuid, std::shared_ptr<const core::MeshData>> source_meshes_;
         std::unordered_map<core::Uuid, ModifierHostResult> previous_hosts_;
         std::uint64_t source_generation_ = 0;
+        lfs::nodes::GeometryDeviceCache source_devices_;
         std::unique_ptr<core::TensorWorkQueue> queue_;
         std::jthread thread_;
     };

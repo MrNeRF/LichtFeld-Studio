@@ -48,6 +48,9 @@ namespace lfs::nodes {
 
     struct MeshComponent {
         std::shared_ptr<const core::MeshData> mesh;
+        // Albedo RGB tensors, indexed by the mesh's one-based texture handles.
+        // Immutable device uploads are shared across derived mesh components.
+        std::vector<core::Tensor> textures;
     };
 
     struct Geometry {

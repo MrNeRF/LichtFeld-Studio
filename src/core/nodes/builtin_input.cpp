@@ -10,18 +10,22 @@ namespace lfs::nodes {
     void set_stored_selection(Node& node, const core::Tensor& selection) {
         if (selection.dtype() != core::DataType::Bool && selection.dtype() != core::DataType::UInt8)
             throw NodeError("Stored Selection requires a Bool or UInt8 tensor");
-        // Capturing a user selection is a one-time serialization boundary.
-        const auto cpu = selection.cpu().contiguous();
-        const auto* values = cpu.ptr<std::uint8_t>();
-        std::vector<std::uint8_t> packed((cpu.numel() + 7) / 8, 0);
-        std::size_t selected_count = 0;
-        for (std::size_t index = 0; index < cpu.numel(); ++index)
-            if (values[index]) {
-                packed[index / 8] |= static_cast<std::uint8_t>(1U << (index % 8));
-                ++selected_count;
-            }
-        node.properties["data"] = core::base64_encode(packed);
-        node.properties["size"] = cpu.numel();
+        using namespace builtin;
+        std::optional<core::GpuBackendScope> scope;
+        if (const auto backend = core::gpu_backend_of(selection))
+            scope.emplace(*backend);
+        const size_t size = selection.numel();
+        const size_t bytes = (size + 7) / 8;
+        auto bits = selection.ne(0).to(DataType::Float32).reshape({-1});
+        if (size % 8)
+            bits = Tensor::cat({bits, Tensor::zeros({bytes * 8 - size}, selection.device())});
+        const auto weights = Tensor::from_vector({1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f}, {1, 8}, Device::CPU).to(selection.device());
+        // Only the packed serialization payload and one count cross to the host.
+        const auto packed = bytes ? (bits.reshape({static_cast<int>(bytes), 8}) * weights).sum(1).to(DataType::UInt8).cpu()
+                                  : Tensor::empty({0}, Device::CPU, DataType::UInt8);
+        const auto selected_count = selection.count_nonzero();
+        node.properties["data"] = core::base64_encode(packed.ptr<uint8_t>(), bytes);
+        node.properties["size"] = size;
         node.properties["selected_count"] = selected_count;
     }
 
@@ -32,23 +36,29 @@ namespace lfs::nodes {
         if (packed.size() != (size + 7) / 8)
             throw NodeError("Stored Selection bitmask length does not match its element count");
         const bool invert = node.properties.value("invert", false);
-        // Decode once, then retain the uploaded tensor across evaluations of this field.
-        auto decoded = Tensor::empty({size}, Device::CPU, DataType::Bool);
-        auto* values = decoded.ptr<std::uint8_t>();
-        for (std::size_t index = 0; index < size; ++index)
-            values[index] = ((packed[index / 8] >> (index % 8)) & 1U) != 0;
+        // Base64 is a host serialization boundary; unpack the bits on the
+        // evaluation device once and retain them with the cached field.
+        const auto encoded = Tensor::from_blob(const_cast<uint8_t*>(packed.data()), {packed.size()}, Device::CPU, DataType::UInt8).clone();
         struct Cache {
             Tensor device_values;
             std::mutex mutex;
         };
         const auto cache = std::make_shared<Cache>();
-        return Field(std::string(BOOL_SOCKET), [decoded, cache, invert, size](const FieldContext& context,
+        return Field(std::string(BOOL_SOCKET), [encoded, cache, invert, size](const FieldContext& context,
                                                                               FieldMemo& memo) {
             std::lock_guard lock(cache->mutex);
             const auto positions = position_field().evaluate(context, memo);
             if (!cache->device_values.is_valid() || cache->device_values.device() != context.device() ||
-                core::gpu_backend_of(cache->device_values) != core::gpu_backend_of(positions))
-                cache->device_values = decoded.to(context.device());
+                core::gpu_backend_of(cache->device_values) != core::gpu_backend_of(positions)) {
+                if (!size) {
+                    cache->device_values = Tensor::empty({0}, context.device(), DataType::Bool);
+                } else {
+                    const auto weights = Tensor::from_vector({1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f}, {1, 8}, Device::CPU).to(context.device());
+                    const auto values = encoded.to(context.device()).to(DataType::Float32).unsqueeze(1);
+                    const auto bit = (values / weights).floor();
+                    cache->device_values = (bit - (bit / 2).floor() * 2).ne(0).reshape({-1}).slice(0, 0, size);
+                }
+            }
             const auto count = context.size();
             Tensor result;
             if (count == size)

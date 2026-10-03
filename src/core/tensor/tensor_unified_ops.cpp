@@ -1093,7 +1093,7 @@ namespace lfs::core {
                            "eye requires a rank-2 output shape");
             LFS_ASSERT_MSG(args.dtype == DataType::Float32,
                            "eye currently supports only Float32");
-            result = load(LoadOp::Const, {args.shape, args.device, args.dtype, args.use_pinned, 0.0f});
+            result = load(LoadOp::Const, {.shape = args.shape, .device = args.device, .dtype = args.dtype, .use_pinned = args.use_pinned, .args = 0.0f});
             if (!result.is_valid())
                 return result;
             if (result.numel() == 0)

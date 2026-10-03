@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/nodes/device.hpp"
 #include "core/nodes/tree.hpp"
 
 #include <chrono>
@@ -33,6 +34,9 @@ namespace lfs::nodes {
         Geometry geometry;
         std::unordered_map<std::string, Value> interface_overrides;
         std::uint64_t geometry_generation = 0;
+        // Explicit CPU execution remains available for tests/offline callers.
+        // Unspecified chooses GPU whenever the selected backend is available.
+        std::optional<core::Device> device;
     };
 
     struct NodeEvaluation {
@@ -65,8 +69,10 @@ namespace lfs::nodes {
 
     struct EvalCache {
         std::unordered_map<std::string, CachedNodeOutput> nodes;
+        GeometryDeviceCache devices;
         void clear() {
             nodes.clear();
+            devices.clear();
         }
     };
 

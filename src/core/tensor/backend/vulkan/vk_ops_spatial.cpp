@@ -55,7 +55,7 @@ namespace lfs::core::internal {
     static void radiusQuery(const StorageRef points, const StorageRef references,
                             const StorageRef heads, const StorageRef next, const StorageRef output,
                             const size_t count, const size_t buckets, const float radius, const bool exclude_self,
-                            const std::optional<StorageRef> queries, const int32_t max_count) {
+                            const std::optional<StorageRef> queries, const int32_t max_count, const bool spacing = false) {
         const auto context = acquire_vulkan_context();
         RadiusPush push{
             .points = vk::address(points),
@@ -81,12 +81,12 @@ namespace lfs::core::internal {
         };
         const std::array build_reads{points, references, heads};
         const std::array build_writes{heads, next};
-        const size_t batch = exclude_self ? 8192 : count;
+        const size_t batch = exclude_self && !max_count ? 8192 : count;
         for (size_t begin = 0; begin < count; begin += batch) {
             push.query_begin = static_cast<uint32_t>(begin);
             push.query_end = static_cast<uint32_t>(std::min(begin + batch, count));
             dispatch(0, build_reads, build_writes, push.query_end - begin);
-            if (exclude_self)
+            if (exclude_self && !max_count)
                 context->wait(context->recorders().flush_current());
         }
         std::vector<StorageRef> query_reads{points, references, heads, next};
@@ -94,15 +94,23 @@ namespace lfs::core::internal {
             query_reads.push_back(*queries);
         const std::array query_writes{output};
         // Boolean mode packs four results per output word. Counts own one Int32.
-        const size_t query_batch = exclude_self ? 8192 : count;
+        const size_t query_batch = exclude_self && !max_count ? 8192 : count;
+        const uint32_t mode = spacing ? 3u : (max_count ? 2u : 1u);
         for (size_t begin = 0; begin < count; begin += query_batch) {
             push.query_begin = static_cast<uint32_t>(begin);
             push.query_end = static_cast<uint32_t>(std::min(begin + query_batch, count));
-            const size_t work = max_count ? push.query_end - begin : (push.query_end - begin + 3) / 4;
-            dispatch(max_count ? 2 : 1, query_reads, query_writes, work);
-            if (exclude_self)
+            const size_t work = max_count || spacing ? push.query_end - begin : (push.query_end - begin + 3) / 4;
+            dispatch(mode, query_reads, query_writes, work);
+            if (exclude_self && !max_count)
                 context->wait(context->recorders().flush_current());
         }
+    }
+
+    void VulkanBackendOps::point_neighbor_spacing(const StorageRef points, const StorageRef references,
+                                                  const StorageRef heads, const StorageRef next, const StorageRef output,
+                                                  const size_t count, const size_t buckets, const float cell_width, ExecContext) {
+        LFS_FACADE_TRACE(point_neighbor_spacing);
+        radiusQuery(points, references, heads, next, output, count, buckets, cell_width, false, std::nullopt, 0, true);
     }
 
     void VulkanBackendOps::radius_neighbors(const StorageRef points, const StorageRef references,

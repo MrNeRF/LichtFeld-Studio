@@ -3,6 +3,7 @@
 
 #include "core/nodes/evaluator.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_execution.hpp"
 
 #include <algorithm>
 #include <format>
@@ -123,6 +124,11 @@ namespace lfs::nodes {
 
     EvalResult evaluate(const NodeTree& tree, EvalInputs inputs, EvalHost* host, EvalCache* cache,
                         const EvalControl& control) {
+        const auto backend = geometry_backend(inputs.geometry).value_or(core::TensorExecutionTarget::current().backend());
+        core::GpuBackendScope execution_scope(backend);
+        const auto device = inputs.device.value_or(evaluation_device());
+        GeometryDeviceCache local_devices;
+        auto& devices = cache ? cache->devices : local_devices;
         EvalResult result;
         result.geometry = inputs.geometry;
         FieldMemo memo;
@@ -184,6 +190,8 @@ namespace lfs::nodes {
             }
             hash_combine(key, std::hash<std::string>{}(node.properties.dump()));
             hash_combine(key, std::hash<std::uint64_t>{}(inputs.geometry_generation));
+            hash_combine(key, static_cast<size_t>(device));
+            hash_combine(key, static_cast<size_t>(backend));
             for (const auto& [identifier, value] : node.input_values) {
                 hash_combine(key, std::hash<std::string>{}(identifier));
                 hash_combine(key, hash_value(value));
@@ -300,8 +308,11 @@ namespace lfs::nodes {
                     }
                 }
                 for (const auto& declaration : type->inputs)
-                    for (auto& value : context.inputs_[declaration.identifier])
+                    for (auto& value : context.inputs_[declaration.identifier]) {
                         value = prepare_input(value, declaration);
+                        if (auto* geometry = value.get_if<Geometry>())
+                            *geometry = devices.convert(std::move(*geometry), device);
+                    }
                 if (node.type_id == "lfs.group_input") {
                     for (const auto& declaration : tree.interface.inputs) {
                         const auto override_value = inputs.interface_overrides.find(declaration.identifier);
@@ -324,22 +335,16 @@ namespace lfs::nodes {
                             context.outputs_[output.identifier] = output.default_value;
                     }
                 } else if (type->evaluate) {
-                    std::optional<core::GpuBackendScope> backend_scope;
-                    for (const auto& declaration : type->inputs) {
-                        if (const auto* geometry = context.input(declaration.identifier).get_if<Geometry>()) {
-                            if (const auto backend = geometry_backend(*geometry)) {
-                                backend_scope.emplace(*backend);
-                                break;
-                            }
-                        }
-                    }
                     type->evaluate(context);
                 } else {
                     throw NodeError(std::format("Node type '{}' has no evaluator", type->id));
                 }
-                for (const auto& output : type->outputs)
+                for (const auto& output : type->outputs) {
                     if (!context.outputs_.contains(output.identifier))
                         context.outputs_[output.identifier] = output.default_value;
+                    if (auto* geometry = context.outputs_[output.identifier].get_if<Geometry>())
+                        *geometry = devices.convert(std::move(*geometry), device);
+                }
                 evaluation.outputs = std::move(context.outputs_);
                 evaluation.ok = true;
             } catch (const std::exception& exception) {

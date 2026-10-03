@@ -61,8 +61,7 @@ namespace lfs::nodes::builtin {
                     const size_t keep_count =
                         std::max<size_t>(static_cast<size_t>(selected_count * keep_fraction), 1);
                     const size_t threshold_index = selected_count - keep_count;
-                    const float threshold =
-                        sorted.slice(0, threshold_index, threshold_index + 1).item<float>();
+                    const auto threshold = sorted.slice(0, threshold_index, threshold_index + 1);
                     const auto keep = selected.logical_not().logical_or(importance.ge(threshold));
                     splats = filter_splats(splats, keep);
                 }

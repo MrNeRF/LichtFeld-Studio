@@ -76,7 +76,7 @@ namespace lfs::vis {
                 result->materials = source.materials;
                 result->submeshes = source.submeshes;
                 result->texture_images = source.texture_images;
-                geometry.mesh = lfs::nodes::MeshComponent{std::move(result)};
+                geometry.mesh = lfs::nodes::MeshComponent{std::move(result), geometry.mesh->textures};
             }
             return geometry;
         }
@@ -178,10 +178,10 @@ namespace lfs::vis {
                 points.means = copied(points.means);
                 points.colors = copied(points.colors);
                 points.normals = copied(points.normals);
-                return geometry_from_point_cloud(points);
+                return Geometry{std::nullopt, PointsComponent{points.means, points.colors, {}}, std::nullopt};
             }
             if (object.mesh)
-                return geometry_from_mesh(copyMesh(*object.mesh));
+                return geometry_from_mesh(object.mesh);
             return {};
         }
 
@@ -195,7 +195,8 @@ namespace lfs::vis {
                     if (const auto backend = core::gpu_backend_of(*tensor))
                         return backend;
             }
-            return std::nullopt;
+            const auto backend = core::default_gpu_backend();
+            return core::gpu_backend_available(backend) ? std::optional{backend} : std::nullopt;
         }
 
         std::optional<FieldContext> fieldContext(const Geometry& geometry, const std::uint64_t identity) {
@@ -533,7 +534,11 @@ namespace lfs::vis {
                 for (const auto& modifier : object.stack.modifiers)
                     modifier_ids.insert(modifier.uuid);
             std::erase_if(caches_, [&](const auto& entry) { return !modifier_ids.contains(entry.first); });
+            // Keep the previous immutable captures alive until their replacement
+            // uploads are resolved, including meshes unchanged by a scene edit.
+            decltype(source_meshes_) previous_meshes;
             if (source_generation_ != request.source_generation) {
+                previous_meshes = std::move(source_meshes_);
                 sources_.clear();
                 previous_hosts_.clear();
                 source_generation_ = request.source_generation;
@@ -541,8 +546,16 @@ namespace lfs::vis {
             for (const auto& object : request.objects) {
                 if (cancelled())
                     break;
-                if (!sources_.contains(object.uuid))
-                    sources_[object.uuid] = storedGeometry(object);
+                if (!sources_.contains(object.uuid)) {
+                    auto geometry = source_devices_.convert(storedGeometry(object), backend ? core::Device::GPU : core::Device::CPU);
+                    // Resolve cached textures by the source identity before
+                    // separating already-GPU geometry from renderer storage.
+                    if (object.mesh && object.mesh->vertices.device() == core::Device::GPU)
+                        geometry.mesh->mesh = copyMesh(*geometry.mesh->mesh);
+                    sources_[object.uuid] = std::move(geometry);
+                    if (object.mesh)
+                        source_meshes_[object.uuid] = object.mesh;
+                }
             }
             // Finish the short source-copy phase before encoding any expensive
             // nodes, so the renderer's imported source buffers cannot inherit their

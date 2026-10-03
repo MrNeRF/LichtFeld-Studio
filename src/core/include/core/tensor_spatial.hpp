@@ -136,4 +136,11 @@ namespace lfs::core {
     // radius_neighbors; an optional query mask leaves unused counts at zero.
     LFS_CORE_API Tensor radius_neighbor_counts(const Tensor& points, const Tensor& references, float radius,
                                                int32_t max_count, const Tensor* queries = nullptr);
+
+    // Approximate mean distance to the nearest three other points. Search 27
+    // cells, expanding once to 125 when fewer than three are found. Each cell
+    // visits at most 128 hash entries, bounding work even for coincident clouds.
+    // Float32 [N,3] -> Float32 [N], same device/backend. A point with no local
+    // neighbours uses four times cell_width. Nonfinite points produce zero.
+    LFS_CORE_API Tensor point_neighbor_spacing(const Tensor& points, float cell_width);
 } // namespace lfs::core
