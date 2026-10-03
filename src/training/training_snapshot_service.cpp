@@ -151,6 +151,10 @@ namespace lfs::training {
                 }
                 break;
             }
+#elif defined(__APPLE__)
+            // /proc is unavailable on macOS. Reuse core's Mach resident-size
+            // query instead of reporting a zero delta for every capture.
+            return core::host_metrics::sample().process_rss_bytes;
 #endif
             return 0;
         }

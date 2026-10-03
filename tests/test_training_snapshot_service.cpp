@@ -23,6 +23,11 @@
 
 #include <gtest/gtest.h>
 
+#if defined(__APPLE__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -370,6 +375,59 @@ namespace {
         EXPECT_NE(lfs::format_for_developer(deferred_autosave.error()).find("deferred"),
                   std::string::npos);
     }
+
+#if defined(__APPLE__)
+    TEST_F(TrainingSnapshotServiceTest, MeasuresResidentCpuStateDuringCapture) {
+        constexpr std::size_t resident_bytes = 32 * MIB;
+        constexpr std::size_t count = 512;
+        auto params = make_snapshot_test_params(count);
+        auto model = make_snapshot_test_splat(count);
+        lfs::training::MCMC strategy(*model);
+        strategy.initialize(params.optimization);
+        struct ResidentPages {
+            void* data = MAP_FAILED;
+            ~ResidentPages() {
+                if (data != MAP_FAILED)
+                    munmap(data, resident_bytes);
+            }
+        } pages;
+        lfs::training::TrainingSnapshotService service({
+            .ring_slots = 2,
+            .band_bytes = 64 * 1024,
+            .calibration_bytes = 64,
+            .calibration_iterations = 4,
+        });
+        const lfs::training::TrainingSnapshotCaptureRequest request{
+            .iteration = 500,
+            .strategy = strategy,
+            .params = params,
+            .capture_additional_cpu_state = [&](const lfs::core::Uuid&)
+                -> lfs::Result<lfs::training::TrainingSnapshotCpuStateMetrics> {
+                // Separate VM pages cannot reuse resident allocator storage.
+                // Touch every page after prepare's baseline, and retain it
+                // through the final sample. Allow ample unrelated RSS noise.
+                pages.data = mmap(nullptr, resident_bytes, PROT_READ | PROT_WRITE,
+                                  MAP_PRIVATE | MAP_ANON, -1, 0);
+                if (pages.data == MAP_FAILED)
+                    throw std::runtime_error("Could not allocate RSS regression pages");
+                auto* bytes = static_cast<volatile std::byte*>(pages.data);
+                const auto page_size = static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
+                for (std::size_t i = 0; i < resident_bytes; i += page_size)
+                    bytes[i] = std::byte{0x5a};
+                return lfs::training::TrainingSnapshotCpuStateMetrics{};
+            },
+        };
+        ASSERT_TRUE(service.initialize(request));
+        auto prepared = service.prepare(request);
+        ASSERT_TRUE(prepared.has_value()) << lfs::format_for_developer(prepared.error());
+        auto pending = service.capture(std::move(*prepared), request);
+        ASSERT_TRUE(pending.has_value()) << lfs::format_for_developer(pending.error());
+        auto captured = pending->wait();
+        ASSERT_TRUE(captured.has_value()) << lfs::format_for_developer(captured.error());
+        EXPECT_GE(captured->metrics.host_rss_delta_bytes, resident_bytes / 2);
+        EXPECT_TRUE(captured->metrics.consistency_proven);
+    }
+#endif
 
     TEST_F(TrainingSnapshotServiceTest,
            CapturesByteExactLfkpAndOwnsPostResumeBytes) {
