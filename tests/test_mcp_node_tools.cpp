@@ -205,7 +205,11 @@ namespace lfs::vis {
         EXPECT_EQ(resource("editor")["selected_nodes"], json::array({"Correct"}));
         op::undoHistory().clear();
         call("editor_arrange");
+        EXPECT_EQ(op::undoHistory().undoCount(), 0u); // A single selected card stays anchored.
+        call("editor_arrange", {{"nodes", {"Group Input", "Correct"}}});
         EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+        EXPECT_TRUE(mcp::ToolRegistry::instance().call_tool("nodes.editor_arrange", {{"nodes", {"Missing"}}}).contains("error"));
+        call("editor_arrange", {{"selection_only", false}});
         call("editor_frame");
         call("editor_view", {{"pan", {123, 234}}, {"zoom", 0.75}});
         EXPECT_EQ(resource("editor")["pan"], json::array({123, 234}));

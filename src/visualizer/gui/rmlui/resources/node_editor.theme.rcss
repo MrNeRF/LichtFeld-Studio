@@ -18,6 +18,9 @@
 .node-title, .socket-row, .socket-input {
     color: @{text};
 }
+.node-category-icon {
+    image-color: @{text};
+}
 .target-type, .node-description, .node-eval-time, #node-canvas-notice {
     color: @{text_dim};
 }

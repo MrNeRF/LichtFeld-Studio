@@ -55,11 +55,23 @@ body {
     white-space: nowrap;
     overflow: hidden;
 }
-.node-title > span:first-child {
+.node-title-label {
     flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+.node-category-icon {
+    width: 14dp;
+    height: 14dp;
+    flex-shrink: 0;
+    vertical-align: middle;
+    pointer-events: none;
+}
+#node-add-menu .node-category-icon {
+    width: 11dp;
+    height: 11dp;
+    margin-right: 5dp;
 }
 .socket-rows {
     padding: 6dp 10dp;
@@ -220,13 +232,6 @@ body {
 .node-box.lod-values .value-fallback {
     display: block;
 }
-.node-box.lod-labels .socket-rows {
-    opacity: 0;
-    pointer-events: none;
-}
-.node-box.lod-labels .node-title {
-    overflow: visible;
-}
 #node-canvas-notice {
     position: absolute;
     left: 0;
@@ -303,14 +308,39 @@ body {
     flex-shrink: 0;
     margin: 0;
 }
-.modifier-row .modifier-rename {
+.modifier-name {
+    position: relative;
     flex: 1;
     width: 0;
     min-width: 0;
     height: 22dp;
+}
+.modifier-row .modifier-rename {
+    box-sizing: border-box;
+    width: 100%;
+    height: 22dp;
     font-size: 12dp;
     border-width: 0;
     background-color: transparent;
+    opacity: 0;
+}
+.modifier-name-label {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 22dp;
+    line-height: 22dp;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+}
+.modifier-rename:focus {
+    opacity: 1;
+}
+.modifier-rename:focus + .modifier-name-label {
+    display: none;
 }
 .modifier-status {
     width: 6dp;
@@ -368,6 +398,16 @@ body {
     width: 210dp;
     height: 155dp;
 }
+colour-offset {
+    display: block;
+    width: 88dp;
+    height: 88dp;
+    margin: 2dp auto 6dp;
+    cursor: crosshair;
+}
+#node-editor-sidebar .node-swatch {
+    width: 100%;
+}
 .node-footer {
     height: 20dp;
     line-height: 20dp;
@@ -376,9 +416,6 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-.node-box.lod-labels .node-footer {
-    visibility: hidden;
 }
 .node-progress {
     display: none;

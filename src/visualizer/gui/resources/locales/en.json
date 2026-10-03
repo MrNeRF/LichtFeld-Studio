@@ -1,4 +1,5 @@
 {
+  "node_editor.colour_offset_hint": "Drag to tint; double-click to reset to neutral",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Process GPU memory reported by the operating system or GPU driver.",
   "ui.vram_process_unavailable_tooltip": "Process GPU memory is unavailable. Device usage includes other applications.",

@@ -1,4 +1,5 @@
 {
+  "node_editor.colour_offset_hint": "Arrastra para teñir; doble clic para restablecer a neutro",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Memoria GPU del proceso según el sistema operativo o el controlador GPU.",
   "ui.vram_process_unavailable_tooltip": "La memoria GPU del proceso no está disponible. El uso del dispositivo incluye otras aplicaciones.",

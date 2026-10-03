@@ -1,4 +1,5 @@
 {
+  "node_editor.colour_offset_hint": "드래그하여 색조 조정, 두 번 클릭하여 중립으로 초기화",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "운영 체제 또는 GPU 드라이버가 보고한 프로세스 GPU 메모리입니다.",
   "ui.vram_process_unavailable_tooltip": "프로세스 GPU 메모리를 확인할 수 없습니다. 장치 사용량에는 다른 애플리케이션이 포함됩니다.",

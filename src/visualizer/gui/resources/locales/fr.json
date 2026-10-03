@@ -1,4 +1,5 @@
 {
+  "node_editor.colour_offset_hint": "Glisser pour teinter ; double-cliquer pour revenir au neutre",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Mémoire GPU du processus indiquée par le système ou le pilote GPU.",
   "ui.vram_process_unavailable_tooltip": "La mémoire GPU du processus est indisponible. L’utilisation du périphérique inclut les autres applications.",

@@ -1,4 +1,5 @@
 {
+  "node_editor.colour_offset_hint": "Ziehen zum Färben; Doppelklick setzt auf neutral zurück",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "GPU-Speicher des Prozesses laut Betriebssystem oder GPU-Treiber.",
   "ui.vram_process_unavailable_tooltip": "GPU-Speicher des Prozesses ist nicht verfügbar. Die Gerätenutzung umfasst andere Anwendungen.",

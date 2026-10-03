@@ -2,19 +2,27 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/event_bridge/event_bridge.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/nodes/tree.hpp"
+#include "gui/rmlui/elements/color_picker_element.hpp"
+#include "gui/rmlui/elements/colour_offset_element.hpp"
 #include "gui/rmlui/elements/node_canvas_dom.hpp"
 #include "gui/rmlui/elements/node_canvas_element.hpp"
 #include "gui/rmlui/elements/node_canvas_widgets.hpp"
+#include "gui/rmlui/rml_theme.hpp"
+#include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "theme/theme.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
 #include "visualizer/operation/undo_history.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementInstancer.h>
+#include <RmlUi/Core/ElementText.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <SDL3/SDL_scancode.h>
+#include <cmath>
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <thread>
@@ -34,12 +42,24 @@ namespace {
 
     class NodeCanvasWidgets : public ::testing::Test {
     protected:
+        static lfs::vis::SceneManager isolatedScene() {
+            // Earlier fixtures also create SceneManagers with global handlers.
+            // Clear them before installing this fixture's scene handlers.
+            lfs::event::EventBridge::instance().clear_all();
+            return lfs::vis::SceneManager{};
+        }
+
         void SetUp() override {
             lfs::vis::op::undoHistory().clear();
             ASSERT_TRUE(Rml::Initialise());
             const auto resources = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui";
+            auto& localization = lfs::event::LocalizationManager::getInstance();
+            localization.reset();
+            ASSERT_TRUE(localization.initialize((resources / "resources/locales").string()));
             ASSERT_TRUE(Rml::LoadFontFace((resources / "assets/fonts/Inter-Regular.ttf").string()));
             Rml::Factory::RegisterElementInstancer("node-canvas", &instancer_);
+            Rml::Factory::RegisterElementInstancer("colour-offset", &offset_instancer_);
+            Rml::Factory::RegisterElementInstancer("color-picker", &picker_instancer_);
             context_ = Rml::CreateContext("node_widgets", {1000, 700}, &renderer_);
             ASSERT_NE(context_, nullptr);
             context_->SetDensityIndependentPixelRatio(2.0f);
@@ -80,6 +100,8 @@ namespace {
         }
 
         void TearDown() override {
+            lfs::vis::setTheme(original_theme_);
+            lfs::event::LocalizationManager::getInstance().reset();
             lfs::vis::op::undoHistory().clear();
             // SceneManager's process-lifetime handlers must not outlive this fixture.
             lfs::event::EventBridge::instance().clear_all();
@@ -134,8 +156,11 @@ namespace {
         }
 
         WidgetRenderer renderer_;
+        const lfs::vis::Theme original_theme_ = lfs::vis::theme();
         Rml::ElementInstancerGeneric<lfs::vis::gui::NodeCanvasElement> instancer_;
-        lfs::vis::SceneManager scene_;
+        Rml::ElementInstancerGeneric<lfs::vis::gui::ColourOffsetElement> offset_instancer_;
+        Rml::ElementInstancerGeneric<lfs::vis::gui::ColorPickerElement> picker_instancer_;
+        lfs::vis::SceneManager scene_ = isolatedScene();
         Rml::Context* context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
         Rml::Element* field_ = nullptr;
@@ -143,6 +168,123 @@ namespace {
         lfs::core::Uuid host_;
         std::string tree_;
     };
+
+    TEST_F(NodeCanvasWidgets, CardContentsRemainVisibleAndContrastingAcrossThemesAndZoom) {
+        attachGraph();
+        auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        const auto resources = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources";
+        const auto base = lfs::vis::gui::rml_theme::loadBaseRCSS((resources / "node_editor.rcss").string());
+        const auto style = lfs::vis::gui::rml_theme::loadBaseRCSS((resources / "node_editor.theme.rcss").string());
+        const auto luminance = [](const Rml::Colourb colour) {
+            const auto linear = [](const Rml::byte channel) {
+                const double s = channel / 255.0;
+                return s <= 0.04045 ? s / 12.92 : std::pow((s + 0.055) / 1.055, 2.4);
+            };
+            return 0.2126 * linear(colour.red) + 0.7152 * linear(colour.green) + 0.0722 * linear(colour.blue);
+        };
+        std::string active_theme;
+        for (const auto* mode : {"dark", "light"}) {
+            ASSERT_TRUE(lfs::vis::setThemeFamilySelection("lichtfeld", mode));
+            if (!active_theme.empty())
+                context_->ActivateTheme(active_theme, false);
+            active_theme = lfs::vis::currentThemeId();
+            context_->ActivateTheme(active_theme, true);
+            lfs::vis::gui::rml_theme::applyTheme(document_, base, style);
+            for (const float zoom : {1.0f, 0.75f, 0.6f, 0.5f, 0.3f, 1.4f, 1.0f}) {
+                SCOPED_TRACE(std::string(mode) + " zoom=" + std::to_string(zoom));
+                context_->Update();
+                canvas->setView({}, zoom);
+                context_->Update();
+                context_->Render();
+                auto* card = canvas->QuerySelector(".node-box[data-node=Correct]");
+                ASSERT_NE(card, nullptr);
+                const auto card_bottom = card->GetAbsoluteOffset().y + card->GetBox().GetSize(Rml::BoxArea::Border).y;
+                const double background = luminance(card->GetComputedValues().background_color());
+                for (const auto* selector : {".socket-row.output .socket-label", ".socket-input.linked > .socket-label", ".node-settings", ".node-footer"}) {
+                    SCOPED_TRACE(selector);
+                    auto* element = card->QuerySelector(selector);
+                    ASSERT_NE(element, nullptr);
+                    EXPECT_GT(element->GetBox().GetSize().x, 0.0f);
+                    EXPECT_GT(element->GetBox().GetSize().y, 0.0f);
+                    EXPECT_FALSE(element->GetInnerRML().empty());
+                    EXPECT_LE(element->GetAbsoluteOffset().y + element->GetBox().GetSize().y, card_bottom);
+                    if (zoom >= 0.75f)
+                        EXPECT_GE(element->GetComputedValues().font_size(), 11.0f * context_->GetDensityIndependentPixelRatio());
+                    for (auto* ancestor = element; ancestor && ancestor != canvas; ancestor = ancestor->GetParentNode()) {
+                        EXPECT_NE(ancestor->GetComputedValues().display(), Rml::Style::Display::None);
+                        EXPECT_EQ(ancestor->GetComputedValues().visibility(), Rml::Style::Visibility::Visible);
+                        EXPECT_GT(ancestor->GetComputedValues().opacity(), 0.9f);
+                    }
+                    const auto colour = element->GetComputedValues().color();
+                    EXPECT_EQ(colour.alpha, 255);
+                    const double foreground = luminance(colour);
+                    EXPECT_GE((std::max(foreground, background) + 0.05) / (std::min(foreground, background) + 0.05), 3.0);
+                }
+            }
+        }
+    }
+
+    TEST_F(NodeCanvasWidgets, KeepingOverviewLabelsDoesNotEnlargeCardsIntoNeighbours) {
+        attachGraph();
+        auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        ASSERT_TRUE(canvas->arrange(false));
+        for (const float zoom : {0.3f, 0.5f, 0.6f, 1.0f, 1.4f}) {
+            SCOPED_TRACE(zoom);
+            canvas->setView({}, zoom);
+            context_->Update();
+            const auto nodes = canvas->viewState().at("nodes");
+            for (std::size_t i = 0; i < nodes.size(); ++i) {
+                const auto a = nodes[i].at("bounds").get<std::array<float, 4>>();
+                for (std::size_t j = i + 1; j < nodes.size(); ++j) {
+                    const auto b = nodes[j].at("bounds").get<std::array<float, 4>>();
+                    EXPECT_FALSE(a[0] < b[0] + b[2] && a[0] + a[2] > b[0] &&
+                                 a[1] < b[1] + b[3] && a[1] + a[3] > b[1]);
+                }
+            }
+        }
+    }
+
+    TEST_F(NodeCanvasWidgets, ModifierNameElidesUntilFocusedAndStatusItemsDoNotSplit) {
+        attachGraph();
+        auto& manager = scene_.modifierManager();
+        const std::string name = "Garden — Colour & Detail with a long modifier name";
+        ASSERT_TRUE(manager.renameModifier(host_, manager.stack(host_)->modifiers.front().name, name));
+        auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        ASSERT_TRUE(canvas->selectNodes({"Correct"}, std::nullopt));
+        context_->Update();
+        auto* rename = dynamic_cast<Rml::ElementFormControlInput*>(canvas->QuerySelector(".modifier-rename"));
+        auto* label = canvas->QuerySelector(".modifier-name-label");
+        ASSERT_NE(rename, nullptr);
+        ASSERT_NE(label, nullptr);
+        EXPECT_EQ(rename->GetAttribute<Rml::String>("title", ""), name);
+        EXPECT_EQ(lfs::vis::gui::resolveRmlTooltip(rename), name);
+        EXPECT_EQ(rename->GetValue(), name);
+        EXPECT_EQ(label->GetComputedValues().text_overflow(), Rml::Style::TextOverflow::Ellipsis);
+        EXPECT_GT(label->GetBox().GetSize().x, 120.0f);
+        EXPECT_EQ(rename->GetComputedValues().opacity(), 0.0f);
+        const auto position = rename->GetAbsoluteOffset() + rename->GetBox().GetSize() * 0.5f;
+        context_->ProcessMouseMove(static_cast<int>(position.x), static_cast<int>(position.y), 0);
+        EXPECT_EQ(lfs::vis::gui::resolveRmlTooltip(context_->GetHoverElement()), name);
+        context_->ProcessMouseButtonDown(0, 0);
+        context_->ProcessMouseButtonUp(0, 0);
+        context_->Update();
+        EXPECT_EQ(context_->GetFocusElement(), rename);
+        EXPECT_EQ(label->GetComputedValues().display(), Rml::Style::Display::None);
+        EXPECT_EQ(rename->GetComputedValues().opacity(), 1.0f);
+        rename->SetValue("Renamed");
+        Rml::Dictionary change;
+        change["linebreak"] = true;
+        rename->DispatchEvent("change", change);
+        context_->Update();
+        EXPECT_EQ(manager.stack(host_)->modifiers.front().name, "Renamed");
+
+        const auto text = lfs::vis::gui::node_widgets::nonBreakingStatus("Last run: 1.00M · 11% selected · cached · 12 ms");
+        EXPECT_EQ(text, "Last\u00a0run:\u00a01.00M · 11%\u00a0selected · cached · 12\u00a0ms");
+        auto* status = dynamic_cast<Rml::ElementText*>(canvas->GetElementById("node-inspector-last-run")->GetChild(0));
+        ASSERT_NE(status, nullptr);
+        EXPECT_EQ(status->GetText().find(" ms"), std::string::npos);
+        EXPECT_NE(status->GetText().find("\u00a0ms"), std::string::npos);
+    }
 
     TEST_F(NodeCanvasWidgets, DoubleClickOpensEditableNumberAndEnterClampsValue) {
         field_->DispatchEvent("dblclick", {});
@@ -236,6 +378,109 @@ namespace {
         const auto* tree = scene_.modifierManager().tree(tree_);
         EXPECT_EQ(std::ranges::count(tree->nodes, "lfs.hsv_range", &lfs::nodes::Node::type_id), 1);
         EXPECT_EQ(canvas->QuerySelector(".node-box[data-node=Correct]"), card);
+    }
+
+    TEST_F(NodeCanvasWidgets, ArrangeSubsetIsOneLayoutUndoAndPreservesUnselectedCards) {
+        attachGraph();
+        auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        auto& manager = scene_.modifierManager();
+        auto* tree = manager.tree(tree_);
+        const auto before = tree->to_json();
+        auto* card = canvas->QuerySelector(".node-box[data-node=Correct]");
+        ASSERT_TRUE(canvas->selectNodes({"Correct", "Value"}, std::nullopt));
+        context_->Update();
+        lfs::vis::op::undoHistory().clear();
+        const auto view = canvas->viewState();
+        ASSERT_TRUE(canvas->arrange());
+        context_->Update();
+        EXPECT_EQ(tree->input_node().location, (std::array<float, 2>{20, 20}));
+        EXPECT_EQ(tree->output_node().location, (std::array<float, 2>{530, 20}));
+        EXPECT_EQ(canvas->viewState()["pan"], view["pan"]);
+        EXPECT_EQ(canvas->viewState()["zoom"], view["zoom"]);
+        EXPECT_EQ(canvas->QuerySelector(".node-box[data-node=Correct]"), card);
+        EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+        expectNoEvaluation();
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(manager.tree(tree_)->to_json(), before);
+        EXPECT_FALSE(canvas->arrange(true, std::unordered_set<std::string>{"Missing"}));
+    }
+
+    TEST_F(NodeCanvasWidgets, ColourControlsAreCompactAndSignedWheelEditsOneUndo) {
+        attachGraph();
+        auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        ASSERT_TRUE(canvas->selectNodes({"Correct"}, std::nullopt));
+        context_->Update();
+        auto* sidebar = canvas->GetElementById("node-editor-sidebar");
+        auto* wheel = sidebar->QuerySelector("colour-offset[data-input=Shadows]");
+        ASSERT_NE(wheel, nullptr);
+        EXPECT_EQ(sidebar->QuerySelector("input[data-input=Shadows]"), nullptr);
+        auto* swatch = sidebar->QuerySelector(".node-swatch[data-input=Shadows]");
+        ASSERT_NE(swatch, nullptr);
+        EXPECT_EQ(swatch->GetAttribute<int>("data-offset", 0), 1);
+        const auto bounds = wheel->GetBox().GetSize();
+        EXPECT_FLOAT_EQ(bounds.x, 176);
+        EXPECT_FLOAT_EQ(bounds.y, 176);
+        lfs::vis::op::undoHistory().clear();
+        const auto origin = wheel->GetAbsoluteOffset(Rml::BoxArea::Content);
+        context_->ProcessMouseMove(static_cast<int>(origin.x + bounds.x * 0.5f),
+                                   static_cast<int>(origin.y + bounds.y * 0.5f), 0);
+        context_->ProcessMouseButtonDown(0, 0);
+        for (int i = 1; i <= 10; ++i) {
+            context_->ProcessMouseMove(static_cast<int>(origin.x + bounds.x * 0.5f + i * 4.0f),
+                                       static_cast<int>(origin.y + bounds.y * 0.5f), 0);
+            context_->Update();
+            EXPECT_EQ(sidebar->QuerySelector("colour-offset[data-input=Shadows]"), wheel);
+        }
+        context_->ProcessMouseButtonUp(0, 0);
+        context_->Update();
+        auto& manager = scene_.modifierManager();
+        const auto values = [&]() {
+            return lfs::vis::gui::node_widgets::valuePayload(*manager.tree(tree_)->find_node("Correct"), "Shadows", glm::vec3(0));
+        };
+        EXPECT_GT(values()[0].get<float>(), 0.4f);
+        EXPECT_LT(values()[1].get<float>(), -0.2f);
+        EXPECT_LT(values()[2].get<float>(), -0.2f);
+        EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+        wheel->DispatchEvent("dblclick", {});
+        context_->Update();
+        EXPECT_EQ(values()[0], 0.0f);
+        EXPECT_EQ(values()[1], 0.0f);
+        EXPECT_EQ(values()[2], 0.0f);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_GT(values()[0].get<float>(), 0.4f);
+    }
+
+    TEST_F(NodeCanvasWidgets, SignedSwatchUsesStandardPickerWithLiveSingleUndoDrag) {
+        attachGraph();
+        auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        ASSERT_TRUE(canvas->selectNodes({"Correct"}, std::nullopt));
+        context_->Update();
+        auto* swatch = canvas->GetElementById("node-editor-sidebar")->QuerySelector(".node-swatch[data-input=Shadows]");
+        ASSERT_NE(swatch, nullptr);
+        swatch->DispatchEvent("click", {});
+        context_->Update();
+        auto* picker = canvas->QuerySelector("color-picker");
+        ASSERT_NE(picker, nullptr);
+        EXPECT_FLOAT_EQ(picker->GetAttribute<float>("red", 0), 0.5f);
+        EXPECT_FLOAT_EQ(picker->GetAttribute<float>("green", 0), 0.5f);
+        EXPECT_FLOAT_EQ(picker->GetAttribute<float>("blue", 0), 0.5f);
+        const auto origin = picker->GetAbsoluteOffset(Rml::BoxArea::Content);
+        const auto size = picker->GetBox().GetSize();
+        lfs::vis::op::undoHistory().clear();
+        context_->ProcessMouseMove(static_cast<int>(origin.x + size.x * 0.1f), static_cast<int>(origin.y + size.y * 0.4f), 0);
+        context_->ProcessMouseButtonDown(0, 0);
+        for (int i = 1; i <= 10; ++i) {
+            context_->ProcessMouseMove(static_cast<int>(origin.x + size.x * (0.1f + i * 0.05f)), static_cast<int>(origin.y + size.y * 0.4f), 0);
+            context_->Update();
+        }
+        context_->ProcessMouseButtonUp(0, 0);
+        context_->Update();
+        const auto values = lfs::vis::gui::node_widgets::valuePayload(
+            *scene_.modifierManager().tree(tree_)->find_node("Correct"), "Shadows", glm::vec3(0));
+        EXPECT_NEAR(values[0].get<float>(), 0.2f, 0.02f);
+        EXPECT_LT(values[1].get<float>(), -0.5f);
+        EXPECT_LT(values[2].get<float>(), -0.5f);
+        EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
     }
 
     TEST_F(NodeCanvasWidgets, InspectorSwitchUsesChangeEventAndRequestsOnce) {

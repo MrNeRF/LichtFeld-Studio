@@ -2,6 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/elements/node_canvas_widgets.hpp"
+#include "core/event_bridge/localization_manager.hpp"
+#include "gui/rmlui/rml_theme.hpp"
+#include "internal/resource_paths.hpp"
 
 #include <RmlUi/Core/Element.h>
 
@@ -10,6 +13,20 @@
 #include <ranges>
 
 namespace lfs::vis::gui::node_widgets {
+    std::string categoryIcon(const std::string_view category) {
+        const auto icon = category == "Input"        ? "scene/group"
+                          : category == "Selection"  ? "selection"
+                          : category == "Colour"     ? "color-picker"
+                          : category == "Splat"      ? "scene/splat"
+                          : category == "Geometry"   ? "scene/mesh"
+                          : category == "Clean-up"   ? "brush"
+                          : category == "Conversion" ? "puzzle"
+                          : category == "Output"     ? "viewport-export"
+                                                     : "settings";
+        const auto path = rml_theme::pathToRmlImageSource(getAssetPath("icon/" + std::string(icon) + ".png"));
+        return "<img class=\"node-category-icon\" src=\"" + escape(path) + "\" title=\"" + escape(category) + "\"/>";
+    }
+
     void layoutCard(Rml::Element& card, const float zoom, const float dp_ratio) {
         const auto px = [](const float value) { return std::format("{}px", value); };
         const float scale = zoom * dp_ratio;
@@ -21,11 +38,13 @@ namespace lfs::vis::gui::node_widgets {
         };
         // Layout at the displayed size so text and native card decorations are
         // rasterized at their actual density, without scaling cached textures.
-        card.SetProperty("font-size", px(std::max(12.0f * zoom, 11.0f) * dp_ratio));
+        const float minimum_font = 11.0f * std::min(zoom / 0.75f, 1.0f);
+        card.SetProperty("font-size", px(std::max(12.0f * zoom, minimum_font) * dp_ratio));
         card.SetProperty("border-radius", px(6.0f * scale));
         card.SetProperty("border-width", px(std::max(zoom, 0.75f) * dp_ratio));
         card.SetClass("lod-values", zoom < 0.75f);
-        card.SetClass("lod-labels", zoom < 0.65f);
+        // Only value editors disappear with LOD. Below editing zoom, body text
+        // scales to fit existing rows instead of hiding or enlarging the cards.
         if (auto* title = card.QuerySelector(".node-title")) {
             title->SetProperty("font-size", px(std::max(13.0f * zoom, 11.0f) * dp_ratio));
             const auto height = px(std::max(26.0f * zoom, 18.0f) * dp_ratio);
@@ -36,10 +55,14 @@ namespace lfs::vis::gui::node_widgets {
         if (auto* rows = card.QuerySelector(".socket-rows"))
             rows->SetProperty("padding", px(6.0f * scale) + " " + px(10.0f * scale));
         apply(".node-footer", "height", 20.0f);
+        apply(".node-category-icon", "width", 14.0f);
+        apply(".node-category-icon", "height", 14.0f);
         apply(".node-footer", "line-height", 20.0f);
         apply(".node-footer", "padding-left", 10.0f);
-        if (auto* footer = card.QuerySelector(".node-footer"))
-            footer->SetProperty("font-size", px(std::max(11.0f * zoom, 11.0f) * dp_ratio));
+        Rml::ElementList captions;
+        card.QuerySelectorAll(captions, ".node-footer, .node-settings");
+        for (auto* caption : captions)
+            caption->SetProperty("font-size", px(std::max(11.0f * zoom, minimum_font) * dp_ratio));
         apply(".socket-row, .socket-input, .node-bool, .node-colour", "height", 22.0f);
         apply(".socket-row, .socket-input", "min-height", 22.0f);
         apply(".node-settings", "height", 22.0f);
@@ -79,6 +102,26 @@ namespace lfs::vis::gui::node_widgets {
             case '"': result += "&quot;"; break;
             default: result += ch; break;
             }
+        }
+        return result;
+    }
+
+    std::string nonBreakingStatus(const std::string_view text) {
+        std::string result;
+        std::size_t start = 0;
+        while (start < text.size()) {
+            const auto separator = text.find(" · ", start);
+            const auto end = separator == std::string_view::npos ? text.size() : separator;
+            for (const char ch : text.substr(start, end - start)) {
+                if (ch == ' ')
+                    result += "\xc2\xa0";
+                else
+                    result += ch;
+            }
+            if (separator == std::string_view::npos)
+                break;
+            result += " · ";
+            start = separator + std::string_view(" · ").size();
         }
         return result;
     }
@@ -193,18 +236,14 @@ namespace lfs::vis::gui::node_widgets {
             const auto channel = [&](const size_t index) {
                 return value.is_array() && value.size() > index ? value[index].get<float>() : 0.0f;
             };
-            const auto byte = [](const float v) { return static_cast<int>(std::clamp(v, 0.0f, 1.0f) * 255.0f); };
+            const bool offset = socket.min == -1.0 && socket.max == 1.0;
+            const auto byte = [offset](const float v) { return static_cast<int>(std::clamp(offset ? (v + 1.0f) * 0.5f : v, 0.0f, 1.0f) * 255.0f); };
             std::string html = "<div class=\"node-colour\"><span>" + escape(label) +
                                "</span><button class=\"color-swatch node-swatch\" data-action=\"colour-popup\"" +
-                               attributes + std::format(" data-red=\"{}\" data-green=\"{}\" data-blue=\"{}\" style=\"background-color:rgb({},{},{});\"></button></div>", channel(0), channel(1), channel(2), byte(channel(0)), byte(channel(1)), byte(channel(2)));
-            if (!inline_value) {
-                constexpr std::string_view channels[] = {"R", "G", "B"};
-                html += "<div class=\"node-vector\">";
-                for (size_t index = 0; index < 3; ++index)
-                    html += numericField(channels[index], channel(index), false, 0.0, 1.0, 0.01,
-                                         attributes + std::format(" data-component=\"{}\"", index));
-                html += "</div>";
-            }
+                               attributes + std::format(" data-offset=\"{}\" data-red=\"{}\" data-green=\"{}\" data-blue=\"{}\" style=\"background-color:rgb({},{},{});\"></button></div>", offset ? 1 : 0, channel(0), channel(1), channel(2), byte(channel(0)), byte(channel(1)), byte(channel(2)));
+            if (!inline_value && offset)
+                html += std::format("<colour-offset{} red=\"{}\" green=\"{}\" blue=\"{}\" title=\"{}\"/>",
+                                    attributes, channel(0), channel(1), channel(2), escape(LOC("node_editor.colour_offset_hint")));
             return html;
         }
         const auto text = value.is_string() ? value.get<std::string>() : std::string{};

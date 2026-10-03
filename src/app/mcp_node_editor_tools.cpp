@@ -55,7 +55,11 @@ namespace lfs::app {
                 if (!canvas->showModifier(item->uuid))
                     return failure("Unable to show the modifier", "modifier");
             } else if (operation == "arrange") {
-                canvas->arrange();
+                std::optional<std::unordered_set<std::string>> nodes;
+                if (args.contains("nodes"))
+                    nodes = args["nodes"].get<std::unordered_set<std::string>>();
+                if (!canvas->arrange(args.value("selection_only", true), nodes))
+                    return failure("An arranged node is not in the shown graph", "nodes");
                 canvas->refresh();
             } else if (operation == "frame") {
                 canvas->headerAction("frame", 0.0f, 0.0f);
@@ -107,6 +111,9 @@ namespace lfs::app {
                 required = {"target"};
             } else if (operation == "select") {
                 properties = {{"nodes", {{"type", "array"}, {"items", stringSchema()}}}, {"links", {{"type", "array"}, {"items", {{"type", "object"}}}}}};
+            } else if (operation == "arrange") {
+                properties = {{"selection_only", {{"type", "boolean"}, {"default", true}, {"description", "Arrange selected nodes, or all nodes if none are selected. False arranges the whole graph."}}},
+                              {"nodes", {{"type", "array"}, {"items", stringSchema()}, {"description", "Explicit node identifiers to arrange; overrides selection_only. Their bounding-box centre stays fixed."}}}};
             } else if (operation == "view") {
                 properties = {{"pan", pointSchema()}, {"zoom", {{"type", "number"}, {"minimum", 0.3}, {"maximum", 2.5}}}};
             } else if (operation == "preview_selection") {

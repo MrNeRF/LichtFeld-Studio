@@ -113,6 +113,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/area_editors.cpp
         gui/node_canvas_interaction.cpp
         gui/node_canvas_layout.cpp
+        gui/node_canvas_routing.cpp
         gui/async_task_manager.cpp
         gui/gallery_scene_publication.cpp
         gui/bounds_gizmo.cpp
@@ -241,6 +242,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/rml_tooltip.cpp
         gui/rmlui/elements/chromaticity_element.cpp
         gui/rmlui/elements/color_picker_element.cpp
+        gui/rmlui/elements/colour_offset_element.cpp
         gui/rmlui/elements/crf_curve_element.cpp
         gui/rmlui/elements/loss_graph_element.cpp
         gui/rmlui/elements/node_canvas_element.cpp

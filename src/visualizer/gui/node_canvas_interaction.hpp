@@ -6,6 +6,7 @@
 #include "core/export.hpp"
 #include "input/navigation_gestures.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -121,6 +122,13 @@ namespace lfs::vis::gui {
         [[nodiscard]] const std::unordered_set<std::string>& selectedNodes() const { return selected_nodes_; }
         [[nodiscard]] const std::vector<CanvasNode>& nodes() const { return nodes_; }
         [[nodiscard]] const std::vector<CanvasLink>& links() const { return links_; }
+        // Graph-space routes are shared by drawing, selection and knife gestures.
+        // View-only changes do not invalidate them.
+        [[nodiscard]] const std::vector<std::vector<CanvasPoint>>& wirePaths() const;
+        [[nodiscard]] std::uint64_t routeGeneration() const {
+            (void)wirePaths();
+            return route_generation_;
+        }
         [[nodiscard]] bool draggingWire() const;
         [[nodiscard]] bool active() const;
         [[nodiscard]] CanvasPoint pointer() const { return pointer_; }
@@ -128,7 +136,8 @@ namespace lfs::vis::gui {
         [[nodiscard]] const std::vector<CanvasPoint>& cutPoints() const { return cut_points_; }
         [[nodiscard]] bool canSnapTo(const CanvasSocket& socket) const;
         [[nodiscard]] std::unordered_map<std::string, CanvasPoint>
-        arrangedPositions(std::string_view input, std::string_view output) const;
+        arrangedPositions(std::string_view input, std::string_view output,
+                          const std::unordered_set<std::string>& subset = {}) const;
 
     private:
         enum class Mode { Idle,
@@ -167,6 +176,12 @@ namespace lfs::vis::gui {
         std::vector<CanvasPoint> cut_points_;
         std::vector<CanvasNode> move_start_nodes_;
         std::vector<CanvasLink> move_start_links_;
+        std::vector<std::vector<CanvasPoint>> move_start_paths_;
+        mutable std::vector<CanvasNode> routed_nodes_;
+        mutable std::vector<CanvasLink> routed_links_;
+        mutable std::vector<std::vector<CanvasPoint>> wire_paths_;
+        mutable float routed_dp_ratio_ = 0.0f;
+        mutable std::uint64_t route_generation_ = 0;
         CanvasRect viewport_;
     };
 

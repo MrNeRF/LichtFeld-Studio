@@ -63,12 +63,12 @@ namespace lfs::vis::gui {
                 column = true;
                 ++category_count;
                 html += "<button class=\"node-add-heading\" data-category=\"" + node_widgets::escape(category) +
-                        "\">" + node_widgets::escape(category) + "<span class=\"settings-arrow\"></span></button>";
+                        "\">" + node_widgets::categoryIcon(category) + node_widgets::escape(category) + "<span class=\"settings-arrow\"></span></button>";
                 submenus += "<div class=\"node-add-category\" data-category=\"" + node_widgets::escape(category) + "\">";
             }
             submenus += std::format(R"(<button class="node-add-item" data-type="{}" data-search="{}" title="{}">{}</button>)",
                                     node_widgets::escape(type->id), node_widgets::escape(type->label),
-                                    node_widgets::escape(type->description), node_widgets::escape(type->label));
+                                    node_widgets::escape(type->description), node_widgets::categoryIcon(type->category) + node_widgets::escape(type->label));
         }
         if (column)
             submenus += "</div>";

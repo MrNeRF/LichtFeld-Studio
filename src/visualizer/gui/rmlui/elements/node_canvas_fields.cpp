@@ -118,13 +118,16 @@ namespace lfs::vis::gui {
         bool control = false;
         bool sidebar = false;
         bool popup = false;
+        Rml::Element* colour = nullptr;
         for (auto* element = target; element && element != this; element = element->GetParentNode()) {
             if (element->IsClassSet("node-scrub"))
                 field = element;
             if (element->IsClassSet("node-swatch"))
                 swatch = element;
+            if (element->GetTagName() == "colour-offset" || element->GetTagName() == "color-picker")
+                colour = element;
             control |= element->GetTagName() == "input" || element->GetTagName() == "select" ||
-                       element->GetTagName() == "button" || element->GetTagName() == "color-picker";
+                       element->GetTagName() == "button" || colour;
             sidebar |= element == sidebar_element_;
             popup |= element->IsClassSet("node-colour-popup");
         }
@@ -147,16 +150,28 @@ namespace lfs::vis::gui {
             element->SetProperty("left", std::format("{}px", std::clamp(pointer.x, 0.0f, std::max(0.0f, size.x - 232.0f * dp_ratio_))));
             element->SetProperty("top", std::format("{}px", std::clamp(pointer.y, 0.0f, std::max(0.0f, size.y - 177.0f * dp_ratio_))));
             auto picker = GetOwnerDocument()->CreateElement("color-picker");
-            for (const char* name : {"data-node", "data-input"})
+            for (const char* name : {"data-node", "data-input", "data-offset"})
                 picker->SetAttribute(name, swatch->GetAttribute<Rml::String>(name, ""));
-            for (const char* channel : {"red", "green", "blue"})
-                picker->SetAttribute(channel, swatch->GetAttribute<Rml::String>(std::string("data-") + channel, "0"));
+            for (const char* channel : {"red", "green", "blue"}) {
+                const float value = swatch->GetAttribute<float>(std::string("data-") + channel, 0.0f);
+                picker->SetAttribute(channel, swatch->GetAttribute<int>("data-offset", 0) ? (value + 1.0f) * 0.5f : value);
+            }
             element->AppendChild(std::move(picker));
             AppendChild(std::move(element));
             event.StopPropagation();
             return true;
         }
         const int key = event.GetParameter("key_identifier", 0);
+        const bool editing_colour = active_field_ &&
+                                    (active_field_->GetTagName() == "colour-offset" || active_field_->GetTagName() == "color-picker");
+        if (editing_colour && (type == "mouseup" || type == "dragend"))
+            finishFieldEdit(false);
+        if (editing_colour && type == "keydown" && key == Rml::Input::KI_ESCAPE)
+            finishFieldEdit(true);
+        // Skip canvas interaction, but let motion reach the colour control.
+        if (editing_colour && (type == "mousedown" || type == "mousemove" || type == "mouseup" ||
+                               type == "dragstart" || type == "drag" || type == "dragend"))
+            return true;
         const bool enter = key == Rml::Input::KI_RETURN || key == Rml::Input::KI_NUMPADENTER;
         if ((type == "dblclick" || (type == "keydown" && enter && !active_field_)) && field && !target->IsClassSet("node-step")) {
             active_field_ = field;
@@ -190,7 +205,7 @@ namespace lfs::vis::gui {
             event.StopPropagation();
             return true;
         }
-        if (active_field_ && !active_field_->IsClassSet("is-editing")) {
+        if (active_field_ && !editing_colour && !active_field_->IsClassSet("is-editing")) {
             if (type == "mousemove" || type == "drag") {
                 if (field_step_direction_ != 0) {
                     event.StopPropagation();
@@ -308,10 +323,14 @@ namespace lfs::vis::gui {
                 const auto socket = std::ranges::find(descriptor->inputs, input_id,
                                                       &lfs::nodes::SocketDecl::identifier);
                 if (socket != descriptor->inputs.end()) {
-                    if (target->GetTagName() == "color-picker" && event) {
+                    if ((target->GetTagName() == "color-picker" || target->GetTagName() == "colour-offset") && event) {
+                        const bool signed_picker = target->GetTagName() == "color-picker" && target->GetAttribute<int>("data-offset", 0);
+                        const auto channel = [&](const char* name) {
+                            const float value = event->GetParameter(name, 0.0f);
+                            return signed_picker ? value * 2.0f - 1.0f : value;
+                        };
                         node->input_values[input_id] = glm::vec4(
-                            event->GetParameter("red", 0.0f), event->GetParameter("green", 0.0f),
-                            event->GetParameter("blue", 0.0f), 1.0f);
+                            channel("red"), channel("green"), channel("blue"), 1.0f);
                     } else if (target->HasAttribute("data-component")) {
                         const size_t component = static_cast<size_t>(
                             target->GetAttribute<int>("data-component", 0));

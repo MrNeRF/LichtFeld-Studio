@@ -53,7 +53,8 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool modifiersVisible() const;
         [[nodiscard]] bool needsModelUpdate() const;
         void invalidateView();
-        void arrange();
+        bool arrange(bool selection_only = true,
+                     const std::optional<std::unordered_set<std::string>>& nodes = std::nullopt);
         void setView(CanvasPoint pan, float zoom);
         [[nodiscard]] nlohmann::json viewState();
         void refresh() { syncModel(); }
@@ -185,7 +186,7 @@ namespace lfs::vis::gui {
         Rml::Vector2f geometry_size_;
         float geometry_zoom_ = -1.0f;
         std::size_t geometry_theme_ = 0;
-        std::vector<CanvasLink> geometry_links_;
+        std::uint64_t geometry_route_generation_ = 0;
         std::optional<CanvasLink> geometry_selected_link_;
         std::optional<CanvasLink> geometry_highlighted_link_;
         std::vector<CanvasNode> geometry_nodes_;

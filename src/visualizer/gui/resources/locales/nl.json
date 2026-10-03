@@ -1,4 +1,5 @@
 {
+  "node_editor.colour_offset_hint": "Sleep voor een tint; dubbelklik om neutraal te herstellen",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "GPU-geheugen van het proces volgens het besturingssysteem of GPU-stuurprogramma.",
   "ui.vram_process_unavailable_tooltip": "GPU-geheugen van het proces is niet beschikbaar. Het apparaatgebruik omvat andere toepassingen.",

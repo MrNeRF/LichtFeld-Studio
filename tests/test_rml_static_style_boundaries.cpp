@@ -80,7 +80,7 @@ TEST(RmlStaticStyleBoundaries, NodeEditorUsesDensityIndependentSharedControls) {
     EXPECT_NE(styles.find("font-size: 12dp"), std::string::npos);
     EXPECT_NE(styles.find(".node-scrub"), std::string::npos);
     EXPECT_NE(styles.find(".lod-values"), std::string::npos);
-    EXPECT_NE(styles.find(".lod-labels"), std::string::npos);
+    EXPECT_EQ(styles.find(".lod-labels"), std::string::npos);
     EXPECT_NE(theme.find("@{background}"), std::string::npos);
     EXPECT_NE(theme.find("@{text}"), std::string::npos);
     EXPECT_NE(document.find("components.rcss"), std::string::npos);

@@ -36,7 +36,6 @@ namespace lfs::vis::gui {
     namespace {
         constexpr float kNodeWidth = 224.0f;
         constexpr float kTitleHeight = 26.0f;
-        constexpr float kSocketRowHeight = 22.0f;
         constexpr float kSidebarWidth = 280.0f;
         constexpr int kBezierSegments = 64;
 
@@ -140,21 +139,13 @@ namespace lfs::vis::gui {
                                                      base, base + 4, base + 1});
         }
 
-        void ribbon(Rml::Mesh& mesh, const CanvasPoint from, const CanvasPoint to,
-                    const Rml::ColourbPremultiplied value, const float width, const float dp_ratio) {
-            const float tangent = std::max(std::abs(to.x - from.x) * 0.5f, 36.0f * dp_ratio);
-            const CanvasPoint b{from.x + tangent, from.y};
-            const CanvasPoint c{to.x - tangent, to.y};
+        void pathRibbon(Rml::Mesh& mesh, const std::vector<CanvasPoint>& points,
+                        const Rml::ColourbPremultiplied value, const float width, const float dp_ratio) {
             const int base = static_cast<int>(mesh.vertices.size());
             const Rml::ColourbPremultiplied transparent(0, 0, 0, 0);
-            for (int index = 0; index <= kBezierSegments; ++index) {
-                const float t = static_cast<float>(index) / kBezierSegments;
-                const float u = 1.0f - t;
-                const CanvasPoint point = from * (u * u * u) + b * (3.0f * u * u * t) +
-                                          c * (3.0f * u * t * t) + to * (t * t * t);
-                const CanvasPoint tangent_vector = (b - from) * (3.0f * u * u) +
-                                                   (c - b) * (6.0f * u * t) +
-                                                   (to - c) * (3.0f * t * t);
+            for (std::size_t index = 0; index < points.size(); ++index) {
+                const auto point = points[index];
+                const CanvasPoint tangent_vector = points[std::min(index + 1, points.size() - 1)] - points[index == 0 ? 0 : index - 1];
                 const float length = std::max(std::hypot(tangent_vector.x, tangent_vector.y), 0.001f);
                 const CanvasPoint normal{-tangent_vector.y / length, tangent_vector.x / length};
                 const float offsets[] = {-width * 0.5f - dp_ratio, -width * 0.5f,
@@ -167,12 +158,26 @@ namespace lfs::vis::gui {
                 }
                 if (index == 0)
                     continue;
-                const int row = base + index * 4;
+                const int row = base + static_cast<int>(index) * 4;
                 for (int edge = 0; edge < 3; ++edge)
                     mesh.indices.insert(mesh.indices.end(),
                                         {row - 4 + edge, row + edge, row + edge + 1,
                                          row - 4 + edge, row + edge + 1, row - 3 + edge});
             }
+        }
+
+        void ribbon(Rml::Mesh& mesh, const CanvasPoint from, const CanvasPoint to,
+                    const Rml::ColourbPremultiplied value, const float width, const float dp_ratio) {
+            const float tangent = std::max(std::abs(to.x - from.x) * 0.5f, 36.0f * dp_ratio);
+            const CanvasPoint b{from.x + tangent, from.y};
+            const CanvasPoint c{to.x - tangent, to.y};
+            std::vector<CanvasPoint> points;
+            for (int index = 0; index <= kBezierSegments; ++index) {
+                const float t = static_cast<float>(index) / kBezierSegments;
+                const float u = 1.0f - t;
+                points.push_back(from * (u * u * u) + b * (3.0f * u * u * t) + c * (3.0f * u * t * t) + to * (t * t * t));
+            }
+            pathRibbon(mesh, points, value, width, dp_ratio);
         }
 
         void straightRibbon(Rml::Mesh& mesh, const CanvasPoint from, const CanvasPoint to,
@@ -243,6 +248,7 @@ namespace lfs::vis::gui {
         AddEventListener("blur", this, true);
         AddEventListener("keydown", this, true);
         AddEventListener("change", this, true);
+        AddEventListener("mousedown", this, true);
     }
 
     NodeCanvasElement::~NodeCanvasElement() {
@@ -255,6 +261,7 @@ namespace lfs::vis::gui {
         RemoveEventListener("blur", this, true);
         RemoveEventListener("keydown", this, true);
         RemoveEventListener("change", this, true);
+        RemoveEventListener("mousedown", this, true);
         if (scene_manager_)
             scene_manager_->setModifierSelectionPreview({}, std::nullopt);
     }
@@ -419,12 +426,16 @@ namespace lfs::vis::gui {
 
     std::string NodeCanvasElement::categoryColor(const std::string_view category) const {
         const auto& palette = theme().palette;
-        const ThemeColor tint = category == "Selection" ? palette.secondary
-                                : category == "Input"   ? palette.success
-                                : category == "Splat"   ? palette.warning
-                                : category == "Colour"  ? palette.secondary
-                                                        : palette.info;
-        constexpr float strength = 0.18f;
+        const ThemeColor tint = category == "Selection"    ? palette.warning
+                                : category == "Input"      ? palette.success
+                                : category == "Splat"      ? palette.secondary
+                                : category == "Colour"     ? palette.warning
+                                : category == "Clean-up"   ? palette.success
+                                : category == "Conversion" ? palette.primary
+                                : category == "Utilities"  ? palette.text_dim
+                                : category == "Output"     ? palette.secondary
+                                                           : palette.info;
+        constexpr float strength = 0.32f;
         return rml_theme::colorToRml({palette.surface.x * (1.0f - strength) + tint.x * strength,
                                       palette.surface.y * (1.0f - strength) + tint.y * strength,
                                       palette.surface.z * (1.0f - strength) + tint.z * strength, 1.0f});
@@ -505,7 +516,7 @@ namespace lfs::vis::gui {
                 for (std::size_t j = i + 1; j < nodes.size() && !overlap; ++j)
                     overlap = nodes[i].bounds.intersects(nodes[j].bounds);
             if (overlap)
-                arrange();
+                arrange(false);
         }
         rebuildDom();
         const auto size = GetBox().GetSize(Rml::BoxArea::Content);
@@ -564,10 +575,11 @@ namespace lfs::vis::gui {
             else if (const auto error = evaluation.errors.find(node.name); error != evaluation.errors.end())
                 visual.error = error->second;
             const CanvasPoint origin{node.location[0] * dp_ratio_, node.location[1] * dp_ratio_};
+            constexpr float row_height = 22.0f;
             float row_y = std::max(kTitleHeight, 18.0f / interaction_.zoom()) + 6.0f;
             for (const auto& socket : outputs) {
-                visual.interaction.sockets.push_back({.node = node.name, .identifier = socket.identifier, .type = socket.type, .direction = CanvasSocketDirection::Output, .position = {origin.x + kNodeWidth * dp_ratio_, origin.y + (row_y + kSocketRowHeight * 0.5f) * dp_ratio_}});
-                row_y += kSocketRowHeight;
+                visual.interaction.sockets.push_back({.node = node.name, .identifier = socket.identifier, .type = socket.type, .direction = CanvasSocketDirection::Output, .position = {origin.x + kNodeWidth * dp_ratio_, origin.y + (row_y + row_height * 0.5f) * dp_ratio_}});
+                row_y += row_height;
             }
             const bool expanded = node_widgets::settingsExpanded(node);
             const auto settings = std::ranges::count_if(inputs, node_widgets::singleValue) +
@@ -576,19 +588,20 @@ namespace lfs::vis::gui {
                                   })
                                         : 0);
             if (settings > 0)
-                row_y += kSocketRowHeight;
+                row_y += row_height;
             if (type && expanded)
                 for (const auto& property : type->properties)
                     if (property.kind != lfs::nodes::PropertyKind::Data)
-                        row_y += kSocketRowHeight;
+                        row_y += row_height;
             for (const auto& socket : inputs) {
                 if (!node_widgets::inputVisible(*tree, node, socket))
                     continue;
-                visual.interaction.sockets.push_back({.node = node.name, .identifier = socket.identifier, .type = socket.type, .direction = CanvasSocketDirection::Input, .position = {origin.x, origin.y + (row_y + kSocketRowHeight * 0.5f) * dp_ratio_}, .multi_input = socket.multi_input});
-                row_y += kSocketRowHeight * node_widgets::inputRows(*tree, node, socket);
+                visual.interaction.sockets.push_back({.node = node.name, .identifier = socket.identifier, .type = socket.type, .direction = CanvasSocketDirection::Input, .position = {origin.x, origin.y + (row_y + row_height * 0.5f) * dp_ratio_}, .multi_input = socket.multi_input});
+                row_y += row_height * node_widgets::inputRows(*tree, node, socket);
             }
+            const float borders = 2.0f * std::max(1.0f, 0.75f / interaction_.zoom());
             visual.interaction.bounds = {origin.x, origin.y, kNodeWidth * dp_ratio_,
-                                         (row_y + 6.0f + 20.0f) * dp_ratio_};
+                                         (row_y + 6.0f + 20.0f + borders) * dp_ratio_};
             nodes.push_back(visual.interaction);
             visuals_.push_back(std::move(visual));
         }
@@ -724,7 +737,8 @@ namespace lfs::vis::gui {
                     content_state["outputs"].push_back({output.identifier, output.label, output.type});
                 if (node_content_state_[visual.interaction.id] != content_state) {
                     std::string title = "<div class=\"node-title\" style=\"background-color:" +
-                                        categoryColor(visual.category) + "\"><span>" + escape(visual.title) +
+                                        categoryColor(visual.category) + "\">" + node_widgets::categoryIcon(visual.category) +
+                                        "<span class=\"node-title-label\">" + escape(visual.title) +
                                         "</span>";
                     title += "</div><div class=\"socket-rows\">";
                     for (const auto& output : outputs)
@@ -784,7 +798,7 @@ namespace lfs::vis::gui {
                     const int count = node_widgets::inputRows(*tree, *node, inputs[index]);
                     if (row->GetAttribute<int>("data-rows", 0) != count) {
                         row->SetAttribute("data-rows", count);
-                        row->SetProperty("height", px(count * kSocketRowHeight * dp_ratio_ * interaction_.zoom()));
+                        row->SetProperty("height", px(count * 22.0f * dp_ratio_ * interaction_.zoom()));
                     }
                 }
             }
@@ -880,9 +894,11 @@ namespace lfs::vis::gui {
                                                                      "<input type=\"checkbox\" data-action=\"modifier-enabled\"" +
                         attributes +
                         (modifier.enabled ? " checked" : "") + "/>"
-                                                               "<input class=\"modifier-rename\" type=\"text\" data-action=\"modifier-rename\"" +
-                        attributes + " value=\"" + escape(modifier.name) + "\"/>"
-                                                                           "<span class=\"modifier-status" +
+                                                               "<div class=\"modifier-name\"><input class=\"modifier-rename\" type=\"text\" data-action=\"modifier-rename\"" +
+                        attributes + " title=\"" + escape(modifier.name) + "\" value=\"" + escape(modifier.name) + "\"/>"
+                                                                                                                   "<span class=\"modifier-name-label\">" +
+                        escape(modifier.name) + "</span></div>"
+                                                "<span class=\"modifier-status" +
                         std::string(disabled ? " disabled" : failed ? " failed"
                                                                     : "") +
                         "\" title=\"" + escape(status) + " · " +
@@ -907,7 +923,7 @@ namespace lfs::vis::gui {
                 html += "<div class=\"target-type\">" + escape(type ? type->category : node->type_id) + "</div>";
                 const auto last_run = nodeStatus(node->name);
                 html += "<div id=\"node-inspector-last-run\" class=\"node-eval-time\" data-preserve-content>" +
-                        escape(std::vformat(LOC("node_editor.last_run"), std::make_format_args(last_run))) + "</div>";
+                        escape(node_widgets::nonBreakingStatus(std::vformat(LOC("node_editor.last_run"), std::make_format_args(last_run)))) + "</div>";
                 html += "<label class=\"setting-row\"><span class=\"prop-label\">" +
                         escape(LOC("node_editor.node_on")) + "</span><input type=\"checkbox\" data-action=\"node-on\" data-node=\"" +
                         escape(node->name) + "\"" + (node->muted ? "" : " checked") + "/></label>";
@@ -988,20 +1004,26 @@ namespace lfs::vis::gui {
             grid_geometry_ = renderer->MakeGeometry(std::move(grid));
         }
 
-        if (view_changed || geometry_links_ != interaction_.links() ||
+        const auto route_generation = interaction_.routeGeneration();
+        if (view_changed || geometry_route_generation_ != route_generation ||
             geometry_selected_link_ != selected_link_ || geometry_highlighted_link_ != interaction_.highlightedLink()) {
             Rml::Mesh wires;
-            for (const auto& link : interaction_.links()) {
+            const auto& paths = interaction_.wirePaths();
+            for (std::size_t index = 0; index < interaction_.links().size(); ++index) {
+                const auto& link = interaction_.links()[index];
                 const bool selected = selected_link_ && *selected_link_ == link;
                 const bool highlighted = interaction_.highlightedLink() &&
                                          *interaction_.highlightedLink() == link;
-                ribbon(wires, interaction_.graphToScreen(link.from.position),
-                       interaction_.graphToScreen(link.to.position),
-                       color(socketColor(link.from.type), 0.85f),
-                       (selected || highlighted ? 3.5f : 2.5f) * dp_ratio_, dp_ratio_);
+                std::vector<CanvasPoint> points;
+                points.reserve(paths[index].size());
+                for (const auto point : paths[index])
+                    points.push_back(interaction_.graphToScreen(point));
+                pathRibbon(wires, points,
+                           color(socketColor(link.from.type), 0.85f),
+                           (selected || highlighted ? 3.5f : 2.5f) * dp_ratio_, dp_ratio_);
             }
             wire_geometry_ = renderer->MakeGeometry(std::move(wires));
-            geometry_links_ = interaction_.links();
+            geometry_route_generation_ = route_generation;
             geometry_selected_link_ = selected_link_;
             geometry_highlighted_link_ = interaction_.highlightedLink();
         }
@@ -1294,12 +1316,19 @@ namespace lfs::vis::gui {
         geometry_dirty_ = true;
     }
 
-    void NodeCanvasElement::arrange() {
+    bool NodeCanvasElement::arrange(const bool selection_only,
+                                    const std::optional<std::unordered_set<std::string>>& nodes) {
         auto* tree = activeTree();
         if (!tree)
-            return;
+            return false;
+        const auto subset = nodes.value_or(selection_only ? selected_nodes_ : std::unordered_set<std::string>{});
+        for (const auto& name : subset)
+            if (!tree->find_node(name))
+                return false;
+        if (nodes && nodes->empty())
+            return true;
         const auto before = tree->to_json();
-        const auto positions = interaction_.arrangedPositions(tree->input_node().name, tree->output_node().name);
+        const auto positions = interaction_.arrangedPositions(tree->input_node().name, tree->output_node().name, subset);
         for (auto& node : tree->nodes) {
             const auto found = positions.find(node.name);
             if (found != positions.end())
@@ -1308,9 +1337,10 @@ namespace lfs::vis::gui {
         manager_->recordTreeEdit(tree->uuid, before);
         rebuildModel();
         updateNodePositions();
-        frame_pending_ = true;
+        frame_pending_ = subset.empty();
         dom_dirty_ = true;
         geometry_dirty_ = true;
+        return true;
     }
 
     bool NodeCanvasElement::handleKey(const int scancode, const bool shift, const bool control,
@@ -1390,6 +1420,19 @@ namespace lfs::vis::gui {
     }
 
     void NodeCanvasElement::ProcessEvent(Rml::Event& event) {
+        // Colour elements change their value in the target's default action,
+        // before the canvas default action. Capture the undo snapshot first.
+        if (event.GetType() == "mousedown") {
+            auto* target = event.GetTargetElement();
+            if (editableMode() && event.GetParameter("button", 0) == 0 &&
+                (target->GetTagName() == "colour-offset" || target->GetTagName() == "color-picker")) {
+                active_field_ = target;
+                if (const auto* tree = activeTree())
+                    field_before_ = tree->to_json();
+                field_step_direction_ = 0;
+            }
+            return;
+        }
         if (!editableMode() || processAddMenuEvent(event) || processFieldEvent(event))
             return;
         // RmlUi mousemove has no bubbling default action. Live gestures must
@@ -1487,7 +1530,7 @@ namespace lfs::vis::gui {
                 event.StopPropagation();
                 return;
             }
-            commitControl(target, &event);
+            commitControl(target, &event, active_field_ != target);
             event.StopPropagation();
             return;
         }

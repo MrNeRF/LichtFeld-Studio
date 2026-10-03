@@ -1,4 +1,5 @@
 {
+  "node_editor.colour_offset_hint": "ドラッグで色合いを調整、ダブルクリックでニュートラルに戻す",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "OS または GPU ドライバーが報告するプロセスの GPU メモリ。",
   "ui.vram_process_unavailable_tooltip": "プロセスの GPU メモリは取得できません。デバイスの使用量には他のアプリケーションも含まれます。",

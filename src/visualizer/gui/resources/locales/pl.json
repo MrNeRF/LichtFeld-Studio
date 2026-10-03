@@ -1,4 +1,5 @@
 {
+  "node_editor.colour_offset_hint": "Przeciągnij, aby zabarwić; kliknij dwukrotnie, aby przywrócić neutralny",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Pamięć GPU procesu zgłaszana przez system operacyjny lub sterownik GPU.",
   "ui.vram_process_unavailable_tooltip": "Pamięć GPU procesu jest niedostępna. Użycie urządzenia obejmuje inne aplikacje.",

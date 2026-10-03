@@ -1,4 +1,5 @@
 {
+  "node_editor.colour_offset_hint": "Trascina per tingere; doppio clic per ripristinare il neutro",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Memoria GPU del processo riportata dal sistema operativo o dal driver GPU.",
   "ui.vram_process_unavailable_tooltip": "Memoria GPU del processo non disponibile. L’utilizzo del dispositivo include altre applicazioni.",

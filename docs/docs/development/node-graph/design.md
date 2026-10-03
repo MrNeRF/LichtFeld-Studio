@@ -378,6 +378,40 @@ N.register_node(Posterize)
   and evaluation time.
 - All strings localised.
 
+### Layout and colour controls
+
+Arrange (header, Shift+L, context menu, or MCP) lays out the selected subgraph
+around its existing bounding-box centre. Other nodes and the current view stay
+unchanged. With no selection it lays out and frames the entire graph. Both are
+single undo steps; MCP can also specify an explicit node list or force all nodes.
+
+Wires share cached graph-space paths between rendering, hit-testing, knife cuts
+and splice gestures. Clear forward curves stay cubic; obstructed/backward links
+use clearance lanes around cards, with rounded bends and a rectilinear visibility
+search when a single lane cannot connect them. Pan, selection and zoom without
+card-size changes reuse the paths. Moving any obstructing card invalidates them.
+Coincident cards can conceal a socket itself; Arrange resolves that physically
+unroutable case.
+
+Colour inputs show one swatch using the standard colour picker, without RGB
+number rows. Signed colour descriptors with bounds -1..1 additionally show an
+88dp opponent-colour wheel in the inspector. Its centre is neutral; dragging
+changes chroma while retaining the achromatic mean until a channel is clamped,
+and double-click resets all offsets to zero. Signed swatches/picker channels map
+-1..1 to 0..1 so neutral displays grey. Each wheel/picker gesture is one undo step.
+Cards show swatches only when inline settings are expanded; connected sockets
+remain visible. Titles and Add entries share category icons; title tints blend
+the active theme's semantic accents into its surface colour.
+
+Overview LOD hides value editors only, never the socket labels, settings
+expander or result footer. Body text retains its 11dp minimum at zoom ≥0.75;
+below that it scales with zoom to fit the existing rows without clipping or
+enlarging cards into their neighbours. Titles retain their readable minimum.
+Narrow footers use an ellipsis with the complete result in a tooltip.
+Modifier names similarly elide when not being edited, with their full name as a
+tooltip. Inspector status text wraps between bullet-separated items, not inside
+values such as `12 ms` or `11% selected`.
+
 ### Evaluation and interaction scheduling
 
 The canvas reads the manager's last result; it never evaluates a graph. Pan,

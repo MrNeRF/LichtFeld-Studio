@@ -165,12 +165,13 @@ namespace lfs::vis::gui {
             auto* footer = element->second->QuerySelector(".node-footer");
             const bool pending = busy_node_ == visual.interaction.id || queued_nodes_.contains(visual.interaction.id);
             text(footer, visual.error.empty() || pending ? nodeStatus(visual.interaction.id) : errorSummary(visual.error));
-            if (footer && footer->GetAttribute<Rml::String>("title", "") != visual.error)
-                footer->SetAttribute("title", visual.error);
+            const auto tooltip = visual.error.empty() ? nodeStatus(visual.interaction.id) : visual.error;
+            if (footer && footer->GetAttribute<Rml::String>("title", "") != tooltip)
+                footer->SetAttribute("title", tooltip);
             if (selected_nodes_.size() == 1 && selected_nodes_.contains(visual.interaction.id)) {
                 const auto last_run = nodeStatus(visual.interaction.id);
                 text(sidebar_element_->GetElementById("node-inspector-last-run"),
-                     std::vformat(LOC("node_editor.last_run"), std::make_format_args(last_run)));
+                     node_widgets::nonBreakingStatus(std::vformat(LOC("node_editor.last_run"), std::make_format_args(last_run))));
                 auto* error = sidebar_element_->GetElementById("node-inspector-error");
                 text(error, visual.error);
                 if (error)

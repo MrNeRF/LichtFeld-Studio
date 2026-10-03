@@ -440,12 +440,18 @@ namespace lfs::vis::gui {
         items.push_back({.kind = HeaderItem::Kind::Label,
                          .id = "title",
                          .label = LOC("editor.node_editor")});
-        items.push_back({.kind = HeaderItem::Kind::Button, .id = "add", .label = LOC("node_editor.add")});
+        items.push_back({.kind = HeaderItem::Kind::Button,
+                         .id = "add",
+                         .icon = "sequencer/plus",
+                         .tooltip = LOC("node_editor.add")});
         items.push_back({.kind = HeaderItem::Kind::Toggle, .id = "modifiers-visible", .label = LOC(canvas_ && canvas_->modifiersVisible() ? "node_editor.modifiers_on" : "node_editor.modifiers_off"), .active = canvas_ && canvas_->modifiersVisible()});
-        items.push_back({.kind = HeaderItem::Kind::Button, .id = "frame", .label = LOC("node_editor.frame")});
-        items.push_back({.kind = HeaderItem::Kind::Button, .id = "arrange", .label = LOC("node_editor.arrange")});
-        items.push_back({.kind = HeaderItem::Kind::Button, .id = "open", .label = LOC("node_editor.open")});
-        items.push_back({.kind = HeaderItem::Kind::Button, .id = "save", .label = LOC("node_editor.save")});
+        items.push_back({.kind = HeaderItem::Kind::Button, .id = "frame", .icon = "arrows-maximize", .tooltip = LOC("node_editor.frame")});
+        items.push_back({.kind = HeaderItem::Kind::Button, .id = "arrange", .icon = "layout-grid", .tooltip = LOC("node_editor.arrange")});
+        items.push_back({.kind = HeaderItem::Kind::Button, .id = "open", .icon = "archive", .tooltip = LOC("node_editor.open")});
+        items.push_back({.kind = HeaderItem::Kind::Button,
+                         .id = "save",
+                         .icon = "sequencer/export",
+                         .tooltip = LOC("node_editor.save")});
         items.push_back({.kind = HeaderItem::Kind::Spacer});
         if (canvas_)
             items.push_back({.kind = HeaderItem::Kind::Label, .id = "status", .label = canvas_->statusText()});

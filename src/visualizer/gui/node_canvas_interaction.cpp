@@ -42,6 +42,9 @@ namespace lfs::vis::gui {
 
         bool segmentsIntersect(const CanvasPoint a, const CanvasPoint b, const CanvasPoint c,
                                const CanvasPoint d) {
+            if (std::max(a.x, b.x) < std::min(c.x, d.x) || std::max(c.x, d.x) < std::min(a.x, b.x) ||
+                std::max(a.y, b.y) < std::min(c.y, d.y) || std::max(c.y, d.y) < std::min(a.y, b.y))
+                return false;
             const float ab_c = orientation(a, b, c);
             const float ab_d = orientation(a, b, d);
             const float cd_a = orientation(c, d, a);
@@ -50,23 +53,6 @@ namespace lfs::vis::gui {
                    ((cd_a <= 0.0f && cd_b >= 0.0f) || (cd_a >= 0.0f && cd_b <= 0.0f));
         }
 
-        std::vector<CanvasPoint> bezierPolyline(const CanvasLink& link, const float minimum_tangent,
-                                                const int segments = 64) {
-            std::vector<CanvasPoint> points;
-            points.reserve(static_cast<size_t>(segments + 1));
-            const CanvasPoint a = link.from.position;
-            const CanvasPoint d = link.to.position;
-            const float tangent = std::max(std::abs(d.x - a.x) * 0.5f, minimum_tangent);
-            const CanvasPoint b{a.x + tangent, a.y};
-            const CanvasPoint c{d.x - tangent, d.y};
-            for (int index = 0; index <= segments; ++index) {
-                const float t = static_cast<float>(index) / static_cast<float>(segments);
-                const float u = 1.0f - t;
-                points.push_back(a * (u * u * u) + b * (3.0f * u * u * t) +
-                                 c * (3.0f * u * t * t) + d * (t * t * t));
-            }
-            return points;
-        }
     } // namespace
 
     bool CanvasRect::contains(const CanvasPoint point) const {
@@ -236,8 +222,10 @@ namespace lfs::vis::gui {
         const float graph_radius_squared = radius * radius / (zoom_ * zoom_);
         std::optional<CanvasLink> result;
         float best = graph_radius_squared;
-        for (const auto& link : links_) {
-            const auto points = bezierPolyline(link, 36.0f * dp_ratio_ / zoom_);
+        const auto& paths = wirePaths();
+        for (std::size_t link_index = 0; link_index < links_.size(); ++link_index) {
+            const auto& link = links_[link_index];
+            const auto& points = paths[link_index];
             for (size_t index = 1; index < points.size(); ++index) {
                 const float distance = pointSegmentDistanceSquared(graph, points[index - 1], points[index]);
                 if (distance <= best) {
@@ -258,7 +246,9 @@ namespace lfs::vis::gui {
     std::optional<CanvasLink> NodeCanvasInteraction::spliceTarget(const CanvasNode& node) const {
         if (nodeHasLinks(node.id))
             return std::nullopt;
-        for (const auto& link : links_) {
+        const auto& paths = move_start_paths_.empty() ? wirePaths() : move_start_paths_;
+        for (std::size_t link_index = 0; link_index < links_.size(); ++link_index) {
+            const auto& link = links_[link_index];
             const auto type_input = std::ranges::find_if(node.sockets, [&](const CanvasSocket& socket) {
                 return socket.direction == CanvasSocketDirection::Input && compatible(link.from, socket);
             });
@@ -269,7 +259,9 @@ namespace lfs::vis::gui {
                 continue;
             CanvasPoint center{node.bounds.x + node.bounds.width * 0.5f,
                                node.bounds.y + node.bounds.height * 0.5f};
-            const auto points = bezierPolyline(link, 36.0f * dp_ratio_ / zoom_);
+            // Test the pre-drag route: the visible route already detours around
+            // the moving card, but dropping onto its original lane still splices.
+            const auto& points = paths[link_index];
             for (size_t index = 1; index < points.size(); ++index)
                 if (pointSegmentDistanceSquared(center, points[index - 1], points[index]) <=
                     12.0f * 12.0f * dp_ratio_ * dp_ratio_ / (zoom_ * zoom_))
@@ -282,8 +274,10 @@ namespace lfs::vis::gui {
         std::vector<CanvasLink> result;
         if (cut_points_.size() < 2)
             return result;
-        for (const auto& link : links_) {
-            const auto wire = bezierPolyline(link, 36.0f * dp_ratio_ / zoom_);
+        const auto& paths = wirePaths();
+        for (std::size_t link_index = 0; link_index < links_.size(); ++link_index) {
+            const auto& link = links_[link_index];
+            const auto& wire = paths[link_index];
             bool crossed = false;
             for (size_t cut = 1; cut < cut_points_.size() && !crossed; ++cut) {
                 const CanvasPoint a = screenToGraph(cut_points_[cut - 1]);
@@ -347,6 +341,7 @@ namespace lfs::vis::gui {
                 return !selected_nodes_.contains(item.id);
             });
             move_start_nodes_ = nodes_;
+            move_start_paths_ = wirePaths();
             move_start_links_ = links_;
             mode_ = Mode::MoveNodes;
             return {{.kind = CanvasCommandKind::Select,
@@ -483,6 +478,7 @@ namespace lfs::vis::gui {
         highlighted_link_.reset();
         cut_points_.clear();
         move_start_nodes_.clear();
+        move_start_paths_.clear();
         move_start_links_.clear();
         return commands;
     }
@@ -499,6 +495,7 @@ namespace lfs::vis::gui {
         highlighted_link_.reset();
         cut_points_.clear();
         move_start_nodes_.clear();
+        move_start_paths_.clear();
         move_start_links_.clear();
     }
 

@@ -67,7 +67,12 @@ work runs or fails.
 - `nodes_editor_show`: `target`, plus `modifier` or a `tree` used by that stack
 - `nodes_editor_select`: `nodes` (exact names), optional `links` (zero or one
   link object with the four socket endpoint fields)
-- `nodes_editor_arrange`: dependency layout plus frame, one undo step
+- `nodes_editor_arrange`: one undo step. By default, arrange only selected nodes
+  around their existing bounding-box centre, leaving other nodes and the view
+  unchanged. No selection arranges and frames the whole graph. Optional
+  `selection_only: false` always arranges the whole graph; `nodes: [exact names]`
+  overrides the selection with an explicit subset (an empty list does nothing).
+  Header Arrange and Shift+L use the same selection-aware behaviour.
 - `nodes_editor_frame`: frame all shown nodes
 - `nodes_editor_view`: optional `pan: [x,y]` in screen pixels, `zoom` (0.3–2.5)
 - `nodes_editor_preview_selection`: `enabled`

@@ -4,7 +4,10 @@
 #include "gui/node_canvas_interaction.hpp"
 #include "input/input_bindings.hpp"
 
+#include <chrono>
+#include <cmath>
 #include <gtest/gtest.h>
+#include <iostream>
 
 namespace {
     using namespace lfs::vis::gui;
@@ -135,6 +138,148 @@ namespace {
         (void)interaction.pointerMove({260, 200});
         EXPECT_FALSE(interaction.snappedSocket());
         EXPECT_TRUE(interaction.pointerUp({260, 200}).empty());
+    }
+
+    TEST(NodeCanvasInteraction, ArrangeSelectionPreservesCentreAndOtherNodes) {
+        auto interaction = graph();
+        const auto before = interaction.nodes();
+        const auto positions = interaction.arrangedPositions("A", "C", {"A", "B"});
+        ASSERT_EQ(positions.size(), 2u);
+        EXPECT_FALSE(positions.contains("C"));
+        EXPECT_EQ(interaction.nodes(), before);
+        const float low_x = std::min(positions.at("A").x, positions.at("B").x);
+        const float high_x = std::max(positions.at("A").x + 100, positions.at("B").x + 100);
+        const float low_y = std::min(positions.at("A").y, positions.at("B").y);
+        const float high_y = std::max(positions.at("A").y + 80, positions.at("B").y + 80);
+        EXPECT_FLOAT_EQ((low_x + high_x) * 0.5f, 180);
+        EXPECT_FLOAT_EQ((low_y + high_y) * 0.5f, 40);
+        const auto single = interaction.arrangedPositions("A", "C", {"B"});
+        EXPECT_EQ(single.at("B"), (CanvasPoint{260, 0}));
+    }
+
+    void expectVisiblePaths(const NodeCanvasInteraction& interaction) {
+        const auto& paths = interaction.wirePaths();
+        ASSERT_EQ(paths.size(), interaction.links().size());
+        for (std::size_t i = 0; i < paths.size(); ++i) {
+            const auto& path = paths[i];
+            ASSERT_GE(path.size(), 2u);
+            EXPECT_EQ(path.front(), interaction.links()[i].from.position);
+            EXPECT_EQ(path.back(), interaction.links()[i].to.position);
+            for (std::size_t j = 1; j < path.size(); ++j) {
+                const auto delta = path[j] - path[j - 1];
+                const int steps = static_cast<int>(std::hypot(delta.x, delta.y)) + 1;
+                for (int step = 0; step <= steps; ++step) {
+                    const auto p = path[j - 1] + delta * (static_cast<float>(step) / steps);
+                    for (const auto& node : interaction.nodes()) {
+                        const auto& r = node.bounds;
+                        ASSERT_FALSE(p.x > r.x + 0.01f && p.x < r.x + r.width - 0.01f &&
+                                     p.y > r.y + 0.01f && p.y < r.y + r.height - 0.01f)
+                            << "Link " << i << " crosses " << node.id << " at " << p.x << "," << p.y;
+                    }
+                }
+            }
+        }
+    }
+
+    TEST(NodeCanvasInteraction, ForwardBackwardAndParallelWiresAvoidCards) {
+        NodeCanvasInteraction interaction;
+        const CanvasLink forward{output("A", "lfs.float", {100, 40}), input("B", "lfs.float", {600, 40})};
+        const CanvasLink backward{output("B", "lfs.float", {700, 60}), input("A", "lfs.float", {0, 60})};
+        interaction.setGraph({{.id = "A", .bounds = {0, 0, 100, 100}},
+                              {.id = "B", .bounds = {600, 0, 100, 100}},
+                              {.id = "Obstacle", .bounds = {220, -30, 240, 180}}},
+                             {forward, forward, backward});
+        expectVisiblePaths(interaction);
+        EXPECT_NE(interaction.wirePaths()[0], interaction.wirePaths()[1]);
+        const auto generation = interaction.routeGeneration();
+        const auto routes = interaction.wirePaths();
+        interaction.setView({300, 200}, 0.5f);
+        interaction.setSelectedNodes({"A"});
+        EXPECT_EQ(interaction.routeGeneration(), generation);
+        EXPECT_EQ(interaction.wirePaths(), routes);
+        auto moved = interaction.nodes();
+        std::ranges::find(moved, "Obstacle", &CanvasNode::id)->bounds.y = 300;
+        interaction.setGraph(std::move(moved), interaction.links());
+        EXPECT_GT(interaction.routeGeneration(), generation);
+        expectVisiblePaths(interaction);
+    }
+
+    TEST(NodeCanvasInteraction, DetouredWireHitAndKnifeUseVisiblePath) {
+        NodeCanvasInteraction interaction;
+        const CanvasLink link{output("A", "lfs.float", {100, 40}), input("B", "lfs.float", {600, 40})};
+        interaction.setGraph({{.id = "A", .bounds = {0, 0, 100, 100}},
+                              {.id = "B", .bounds = {600, 0, 100, 100}},
+                              {.id = "Obstacle", .bounds = {220, -30, 240, 180}}},
+                             {link});
+        const auto& path = interaction.wirePaths()[0];
+        const auto corner = *std::ranges::min_element(path, {}, &CanvasPoint::y);
+        const CanvasPoint point{340, corner.y};
+        const auto selected = interaction.pointerDown(point, CanvasPointerButton::Left);
+        ASSERT_EQ(selected.size(), 1u);
+        EXPECT_EQ(selected[0].kind, CanvasCommandKind::SelectLink);
+        (void)interaction.pointerUp(point);
+        (void)interaction.pointerDown(point + CanvasPoint{0, -10}, CanvasPointerButton::Right, {.control = true});
+        const auto commands = interaction.pointerUp(point + CanvasPoint{0, 10});
+        ASSERT_EQ(commands.size(), 1u);
+        EXPECT_EQ(commands[0].kind, CanvasCommandKind::DeleteLinks);
+    }
+
+    TEST(NodeCanvasInteraction, KnifeDoesNotCutDisjointCollinearLane) {
+        auto interaction = graph();
+        const CanvasLink link{output("A", "lfs.float", {100, 40}), input("B", "lfs.float", {260, 40})};
+        interaction.setGraph(interaction.nodes(), {link});
+        (void)interaction.pointerDown({800, 40}, CanvasPointerButton::Right, {.control = true});
+        EXPECT_TRUE(interaction.pointerUp({900, 40}).empty());
+    }
+
+    TEST(NodeCanvasInteraction, RoutingFindsNarrowAndMultiTurnCorridors) {
+        NodeCanvasInteraction interaction;
+        const CanvasLink link{output("A", "lfs.float", {100, 40}), input("B", "lfs.float", {600, 40})};
+        interaction.setGraph({{.id = "A", .bounds = {0, 0, 100, 100}},
+                              {.id = "B", .bounds = {600, 0, 100, 100}},
+                              {.id = "Middle", .bounds = {240, -90, 200, 260}},
+                              {.id = "AboveDeparture", .bounds = {90, -150, 100, 100}},
+                              {.id = "BelowDeparture", .bounds = {90, 150, 100, 100}},
+                              {.id = "AboveArrival", .bounds = {510, -150, 100, 100}},
+                              {.id = "BelowArrival", .bounds = {510, 150, 100, 100}}},
+                             {link});
+        expectVisiblePaths(interaction);
+        interaction.setGraph({{.id = "A", .bounds = {0, 0, 100, 100}},
+                              {.id = "B", .bounds = {600, 0, 100, 100}},
+                              {.id = "Close", .bounds = {116, -30, 460, 180}}},
+                             {link});
+        expectVisiblePaths(interaction);
+    }
+
+    TEST(NodeCanvasInteraction, FiftyNodeRoutingCost) {
+        NodeCanvasInteraction interaction;
+        std::vector<CanvasNode> nodes;
+        std::vector<CanvasLink> links;
+        for (int i = 0; i < 50; ++i) {
+            const auto name = std::to_string(i);
+            const float x = (i / 5) * 300.0f;
+            const float y = (i % 5) * 180.0f;
+            nodes.push_back({.id = name, .bounds = {x, y, 224, 130}, .sockets = {input(name, "lfs.float", {x, y + 70}), output(name, "lfs.float", {x + 224, y + 40})}});
+            if (i >= 5)
+                links.push_back({nodes[i - 5].sockets[1], nodes[i].sockets[0]});
+            if (i >= 10 && i % 3 == 0)
+                links.push_back({nodes[i - 10].sockets[1], nodes[i].sockets[0]});
+        }
+        interaction.setGraph(nodes, links);
+        expectVisiblePaths(interaction);
+        double maximum = 0;
+        double sum = 0;
+        for (int frame = 0; frame < 60; ++frame) {
+            nodes[17].bounds.y += 0.2f;
+            const auto start = std::chrono::steady_clock::now();
+            interaction.setGraph(nodes, links);
+            (void)interaction.wirePaths();
+            const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            maximum = std::max(maximum, ms);
+            sum += ms;
+        }
+        std::cout << "50-node routing: mean " << sum / 60 << " ms, max " << maximum << " ms\n";
+        EXPECT_LT(maximum, 20.0); // Regression ceiling, not the live 2 ms frame target.
     }
 
     TEST(NodeCanvasInteraction, ReRoutesConnectedInput) {

@@ -12,6 +12,8 @@ namespace Rml {
 namespace lfs::vis::gui::node_widgets {
     void layoutCard(Rml::Element& card, float zoom, float dp_ratio);
     std::string escape(std::string_view text);
+    std::string nonBreakingStatus(std::string_view text);
+    std::string categoryIcon(std::string_view category);
     nlohmann::json valuePayload(const lfs::nodes::Node& node, std::string_view identifier,
                                 const lfs::nodes::Value& fallback);
     bool linked(const lfs::nodes::NodeTree& tree, const lfs::nodes::Node& node,

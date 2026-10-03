@@ -10,7 +10,42 @@
 
 namespace lfs::vis::gui {
     std::unordered_map<std::string, CanvasPoint> NodeCanvasInteraction::arrangedPositions(
-        const std::string_view input, const std::string_view output) const {
+        const std::string_view input, const std::string_view output,
+        const std::unordered_set<std::string>& subset) const {
+        if (!subset.empty()) {
+            std::vector<CanvasNode> nodes;
+            std::vector<CanvasLink> links;
+            for (const auto& node : nodes_)
+                if (subset.contains(node.id))
+                    nodes.push_back(node);
+            if (nodes.empty())
+                return {};
+            for (const auto& link : links_)
+                if (subset.contains(link.from.node) && subset.contains(link.to.node))
+                    links.push_back(link);
+            NodeCanvasInteraction selection;
+            selection.setDpRatio(dp_ratio_);
+            selection.setGraph(nodes, std::move(links));
+            auto positions = selection.arrangedPositions(input, output);
+            const auto centre = [&](const bool arranged) {
+                CanvasPoint low{nodes.front().bounds.x, nodes.front().bounds.y};
+                if (arranged)
+                    low = positions.at(nodes.front().id);
+                CanvasPoint high = low;
+                for (const auto& node : nodes) {
+                    const auto position = arranged ? positions.at(node.id) : CanvasPoint{node.bounds.x, node.bounds.y};
+                    low.x = std::min(low.x, position.x);
+                    low.y = std::min(low.y, position.y);
+                    high.x = std::max(high.x, position.x + node.bounds.width);
+                    high.y = std::max(high.y, position.y + node.bounds.height);
+                }
+                return (low + high) * 0.5f;
+            };
+            const auto offset = centre(false) - centre(true);
+            for (auto& [name, position] : positions)
+                position = position + offset;
+            return positions;
+        }
         const auto count = nodes_.size();
         std::unordered_map<std::string, std::size_t> indices;
         for (std::size_t i = 0; i < count; ++i)
