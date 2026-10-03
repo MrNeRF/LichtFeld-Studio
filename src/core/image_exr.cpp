@@ -130,7 +130,8 @@ namespace lfs::core::image_codecs {
                     try {
                         *static_cast<std::string*>(user) = message;
                     } catch (...) {
-                        // Fall back to the result code if storing the detail fails.
+                        // LFS-CENSUS-OK(empty-catch): the result code still reports the error when
+                        // storing its detail fails.
                         static_cast<std::string*>(user)->clear();
                     }
                 }
@@ -344,6 +345,7 @@ namespace lfs::core::image_codecs {
                     }
                 }
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): rethrown once every worker has joined.
                 worker.exception = std::current_exception();
                 failed.store(true, std::memory_order_relaxed);
             }
