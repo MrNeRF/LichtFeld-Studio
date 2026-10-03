@@ -82,8 +82,17 @@ namespace lfs::vis::gui {
         };
     }
 
+    bool isProjectDiskSpaceFailure(const state::TrainingCompleted& e) {
+        return !e.success && !e.user_stopped && e.error_info &&
+               e.error_info->code == lfs::to_string(lfs::ErrorCode::ResourceExhausted) &&
+               e.error_info->domain == lfs::to_string(lfs::ErrorDomain::IO);
+    }
+
     std::optional<lfs::ErrorNotification>
     translateTrainingCompleted(const state::TrainingCompleted& e) {
+        if (isProjectDiskSpaceFailure(e)) {
+            return std::nullopt; // the native disk-space modal offers Retry and Change Location
+        }
         if (e.user_stopped) {
             return std::nullopt; // a user-initiated Stop is not a failure
         }
@@ -208,8 +217,20 @@ namespace lfs::vis::gui {
             }
         };
 
-        state::TrainingCompleted::when(
-            [publish](const auto& e) { publish(translateTrainingCompleted(e)); });
+        state::TrainingCompleted::when([publish](const auto& e) {
+            if (isProjectDiskSpaceFailure(e)) {
+                state::DiskSpaceSaveFailed{.iteration = e.iteration,
+                                           .path = {},
+                                           .error = e.error_info->message,
+                                           .required_bytes = 0,
+                                           .available_bytes = 0,
+                                           .is_disk_space_error = true,
+                                           .is_project_save = true}
+                    .emit();
+                return;
+            }
+            publish(translateTrainingCompleted(e));
+        });
         state::DatasetLoadCompleted::when(
             [publish](const auto& e) { publish(translateDatasetLoadCompleted(e)); });
         state::ConfigLoadFailed::when(

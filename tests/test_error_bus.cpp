@@ -256,6 +256,30 @@ TEST(ErrorEventBridgeTest, TrainingOomMapsToResourceExhausted) {
     EXPECT_EQ(notification->error.code(), lfs::ErrorCode::ResourceExhausted);
 }
 
+// Fails if a training run whose project save ran out of disk space surfaces as GPU OOM instead of being
+// left to the disk-space dialog, or if a real GPU OOM stops reaching the error modal.
+TEST(ErrorEventBridgeTest, ProjectDiskSpaceFailureIsNotGpuOom) {
+    lfs::core::events::state::TrainingCompleted disk{};
+    disk.success = false;
+    disk.user_stopped = false;
+    disk.resource_exhausted = true;
+    disk.error = "There is not enough disk space to save the project.";
+    disk.error_info = lfs::core::WireError{.code = lfs::to_string(lfs::ErrorCode::ResourceExhausted),
+                                           .domain = lfs::to_string(lfs::ErrorDomain::IO),
+                                           .message = *disk.error};
+    EXPECT_TRUE(lfs::vis::gui::isProjectDiskSpaceFailure(disk));
+    EXPECT_FALSE(lfs::vis::gui::translateTrainingCompleted(disk).has_value());
+
+    auto gpu = disk;
+    gpu.error = "out of memory (12.0 GB)";
+    gpu.error_info->domain = lfs::to_string(lfs::ErrorDomain::Training);
+    gpu.error_info->message = *gpu.error;
+    EXPECT_FALSE(lfs::vis::gui::isProjectDiskSpaceFailure(gpu));
+    const auto notification = lfs::vis::gui::translateTrainingCompleted(gpu);
+    ASSERT_TRUE(notification.has_value());
+    EXPECT_EQ(notification->error.code(), lfs::ErrorCode::ResourceExhausted);
+}
+
 TEST(ErrorEventBridgeTest, TrainingSuccessDoesNotSurface) {
     lfs::core::events::state::TrainingCompleted success{};
     success.success = true;

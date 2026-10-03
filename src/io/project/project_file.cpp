@@ -7,6 +7,7 @@
 #include "project_container_internal.hpp"
 
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -1034,7 +1035,7 @@ namespace lfs::io::project::detail {
                 .code = lfs::ErrorCode::ResourceExhausted,
                 .domain = lfs::ErrorDomain::IO,
                 .operation_id = {},
-                .user_message = "There is not enough disk space to save the project.",
+                .user_message = lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE,
                 .detail = std::format("preflight requires {} bytes, volume reports {} available",
                                       required_bytes, space.available),
                 .detection = LFS_SOURCE_SITE_CURRENT(),

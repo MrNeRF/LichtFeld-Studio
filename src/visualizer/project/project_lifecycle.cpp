@@ -4,6 +4,7 @@
  */
 
 #include "project_lifecycle.hpp"
+#include "core/resource_messages.hpp"
 #include "io/project_operations.hpp"
 #include "io/sfm_observation_chapter.hpp"
 
@@ -76,11 +77,28 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 
 namespace lfs::vis::project {
 
     namespace {
+        // The save preflight reports a full volume as ResourceExhausted in the IO domain with byte fields;
+        // write paths that keep only the text still carry its message.
+        [[nodiscard]] bool isDiskSpaceSaveError(const std::optional<lfs::Error>& typed, const std::string_view text) {
+            if (typed)
+                return typed->code() == lfs::ErrorCode::ResourceExhausted && typed->domain() == lfs::ErrorDomain::IO;
+            return text.find(lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE) != std::string_view::npos;
+        }
+
+        [[nodiscard]] size_t errorFieldBytes(const lfs::Error& error, const std::string_view key) {
+            for (const auto& frame : error.frames())
+                for (const auto& entry : frame.fields.entries())
+                    if (entry.key == key)
+                        if (const auto* bytes = std::get_if<std::uint64_t>(&entry.value))
+                            return static_cast<size_t>(*bytes);
+            return 0;
+        }
 
         using Json = nlohmann::json;
         using lfs::io::project::ChunkKey;
@@ -5531,6 +5549,20 @@ namespace lfs::vis::project {
                             error, error);
                     }
                     autosave_memory_warning_published_ = true;
+                } else if (!was_autosave && isDiskSpaceSaveError(last_project_write_typed_error_, error)) {
+                    LOG_ERROR(
+                        "Project background write failed: {}",
+                        error);
+                    const auto& typed = last_project_write_typed_error_;
+                    lfs::core::events::state::DiskSpaceSaveFailed{
+                        .iteration = 0,
+                        .path = {},
+                        .error = lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE,
+                        .required_bytes = typed ? errorFieldBytes(*typed, "required_bytes") : 0,
+                        .available_bytes = typed ? errorFieldBytes(*typed, "available_bytes") : 0,
+                        .is_disk_space_error = true,
+                        .is_project_save = true}
+                        .emit();
                 } else {
                     LOG_ERROR(
                         "Project background write failed: {}",

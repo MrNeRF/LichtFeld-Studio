@@ -8158,18 +8158,36 @@ namespace lfs::vis::gui {
                 return std::format("{} bytes", bytes);
             };
 
-            const std::string subtitle = LOC(DiskSpaceDialog::EXPORT_FAILED);
+            const bool project_save = e.is_project_save;
+            const auto project_path = project_save ? viewer_->projectGetDisplayInfo().path : std::nullopt;
+            if (project_save && !project_path) {
+                LOG_ERROR("Project save failed without an open project: {}", e.error);
+                return;
+            }
+            const std::filesystem::path path = project_save ? *project_path : e.path;
+            size_t available_bytes = e.available_bytes;
+            if (project_save) {
+                std::error_code space_error;
+                const auto space = std::filesystem::space(path.parent_path(), space_error);
+                if (!space_error)
+                    available_bytes = static_cast<size_t>(space.available);
+            }
+            const std::string subtitle = !project_save     ? std::string(LOC(DiskSpaceDialog::EXPORT_FAILED))
+                                         : e.iteration > 0 ? LOCF(DiskSpaceDialog::CHECKPOINT_SAVE_FAILED, e.iteration)
+                                                           : std::string(LOC(ErrorModal::SAVE_FAILED));
 
             std::string body;
             body += std::format("<div>{}</div>", LOC(DiskSpaceDialog::INSUFFICIENT_SPACE_PREFIX));
             body += std::format("<div class=\"content-row\"><span class=\"dim-text\">{} </span>{}</div>",
-                                LOC(DiskSpaceDialog::LOCATION_LABEL), lfs::core::path_to_utf8(e.path.parent_path()));
-            body += std::format("<div class=\"content-row\"><span class=\"dim-text\">{} </span>{}</div>",
-                                LOC(DiskSpaceDialog::REQUIRED_LABEL), formatBytes(e.required_bytes));
-            if (e.available_bytes > 0) {
+                                LOC(DiskSpaceDialog::LOCATION_LABEL), lfs::core::path_to_utf8(path.parent_path()));
+            if (e.required_bytes > 0) {
+                body += std::format("<div class=\"content-row\"><span class=\"dim-text\">{} </span>{}</div>",
+                                    LOC(DiskSpaceDialog::REQUIRED_LABEL), formatBytes(e.required_bytes));
+            }
+            if (available_bytes > 0) {
                 body += std::format("<div class=\"content-row\"><span class=\"dim-text\">{} </span>"
                                     "<span class=\"error-text\">{}</span></div>",
-                                    LOC(DiskSpaceDialog::AVAILABLE_LABEL), formatBytes(e.available_bytes));
+                                    LOC(DiskSpaceDialog::AVAILABLE_LABEL), formatBytes(available_bytes));
             }
             body += std::format("<div class=\"warning-text\">{}</div>", LOC(DiskSpaceDialog::INSTRUCTION));
 
@@ -8183,23 +8201,50 @@ namespace lfs::vis::gui {
                 {LOC(DiskSpaceDialog::CHANGE_LOCATION), "warning"},
                 {LOC(DiskSpaceDialog::RETRY), "primary"}};
 
-            auto path = e.path;
-
-            req.on_result = [path](const lfs::core::ModalResult& result) {
+            req.on_result = [this, path, project_save, iteration = e.iteration](const lfs::core::ModalResult& result) {
+                // A project save that fails for lack of space reopens this dialog through its error.
+                const auto report = [&](const lfs::Result<void>& saved) {
+                    if (saved)
+                        return;
+                    if (saved.error().code() == lfs::ErrorCode::ResourceExhausted &&
+                        saved.error().domain() == lfs::ErrorDomain::IO) {
+                        state::DiskSpaceSaveFailed{.iteration = iteration,
+                                                   .path = {},
+                                                   .error = std::string(saved.error().user_message()),
+                                                   .required_bytes = 0,
+                                                   .available_bytes = 0,
+                                                   .is_disk_space_error = true,
+                                                   .is_project_save = true}
+                            .emit();
+                    } else {
+                        LOG_ERROR("Project save failed: {}", lfs::format_for_developer(saved.error()));
+                    }
+                };
                 if (result.button_label == LOC(DiskSpaceDialog::RETRY)) {
-                    LOG_INFO("Export disk-space failure: re-export manually from File > Export");
+                    if (project_save)
+                        report(viewer_->projectSave());
+                    else
+                        LOG_INFO("Export disk-space failure: re-export manually from File > Export");
                 } else if (result.button_label == LOC(DiskSpaceDialog::CHANGE_LOCATION)) {
-                    std::filesystem::path new_location = PickFolderDialog(path.parent_path());
-                    if (!new_location.empty()) {
+                    const std::filesystem::path new_location = PickFolderDialog(path.parent_path());
+                    if (new_location.empty())
+                        return;
+                    if (project_save)
+                        report(viewer_->projectSaveAs(new_location / path.filename()));
+                    else
                         LOG_INFO("Re-export manually using File > Export to: {}",
                                  lfs::core::path_to_utf8(new_location));
-                    }
+                } else if (project_save) {
+                    LOG_WARN("Project save cancelled by user; the trained state is not saved");
                 } else {
                     LOG_INFO("Export cancelled by user");
                 }
             };
-            req.on_cancel = []() {
-                LOG_INFO("Export cancelled by user");
+            req.on_cancel = [project_save]() {
+                if (project_save)
+                    LOG_WARN("Project save cancelled by user; the trained state is not saved");
+                else
+                    LOG_INFO("Export cancelled by user");
             };
 
             enqueueModal(std::move(req));
