@@ -1,6 +1,6 @@
 # Node Modifiers — Design (v1)
 
-Status: frozen for the v1 implementation. Later tree types (for example a
+Status: implemented. Later tree types (for example a
 pipeline tree: camera path → video diffusion → train) must fit without
 rewriting anything here.
 
@@ -183,9 +183,11 @@ plain text with short usage, starting-value and caveat lines.
   geometry generation). Editing one node re-runs only that node and its
   downstream nodes. Cached outputs share tensors, so cost is per changed
   field.
-- v1 runs evaluation synchronously on the viewer thread, coalesced to at
-  most once per frame after a change. Python nodes take the GIL. Each node
-  records its last evaluation time.
+- Evaluation runs on a background worker with its own tensor work queue:
+  the newest request wins, stale results are discarded, and the viewer
+  thread installs only fence-complete results (see "Evaluation and interaction scheduling" below). View-only edits
+  (pan, zoom, select, move) never evaluate. Python nodes take the GIL on the
+  worker. Each node records its last evaluation time.
 
 ### 3.7 Scene binding (evaluated payloads)
 
@@ -466,5 +468,3 @@ run counts, canvas CPU work (input/layout plus deferred RmlUi drawing), viewer
 frame CPU/present time, idle/busy viewport-frame samples, and request-to-install
 latency. These are CPU wall-clock measurements, not GPU timestamp queries.
 
-See [performance validation](performance-validation.md) for reproducible MCP
-gestures, measured Metal/Vulkan results, visual artifacts and remaining limits.
