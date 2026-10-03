@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "device_requirements.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
 #include "frame_budget.hpp"
@@ -694,7 +695,7 @@ static void run(bool compare_vulkan) {
 int main(int argc, char** argv) {
     @autoreleasepool {
         if (!core::gpu_backend_available(core::GpuBackend::Metal))
-            return 77;
+            return lfs::metal_test::unavailableMetal4();
         // Keep preference mutations local to this test, including direct runs.
         const auto home = std::filesystem::temp_directory_path() /
                           ("lichtfeld-metal-viewport-contracts-" + std::to_string(getpid()));

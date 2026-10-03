@@ -94,7 +94,8 @@ LichtFeld Studio is free and open source. If it is useful in your research, prod
 Prebuilt Windows binaries are distributed through the [LichtFeld Portal](https://portal.lichtfeld.io/). Access is paid: you register and make a donation of your choosing, which directly funds development, and in return you get the current release plus daily builds. Download the archive, unzip it, and run the executable. Binaries are not published on GitHub Releases.
 
 Building from source is free for everyone under GPLv3, on Windows, Linux and
-macOS Apple Silicon. macOS currently builds the viewer without CUDA training.
+macOS 26 or newer on Apple Silicon. macOS uses native Metal scene rendering
+and MoltenVK presentation, without requiring CUDA.
 
 For building from source and platform-specific notes, see the
 [Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki/). Developers can find
@@ -106,7 +107,8 @@ Current project notes:
 - Windows is the primary prebuilt distribution target today
 - Windows and Linux CUDA builds require an NVIDIA GPU with compute capability 7.5 or newer
   (GTX 16-series, RTX 20-series and up) and NVIDIA driver 570 or newer (CUDA 12.8+)
-- The macOS Apple Silicon viewer uses Vulkan through MoltenVK and does not require CUDA
+- The macOS Apple Silicon viewer requires macOS 26 and a Metal 4 GPU; Metal renders
+  scenes and Vulkan through MoltenVK presents the GUI
 - Source builds use modern C++23 toolchains
 
 ## Docs

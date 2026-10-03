@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "device_requirements.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
 #include <array>
@@ -141,8 +142,7 @@ static void run(GpuBackend backend) {
 int main() {
     @autoreleasepool {
         if (!gpu_backend_available(GpuBackend::Metal)) {
-            std::puts("SKIP: resident tensor interop requires macOS 26 and Metal 4; native viewer tests remain separate.");
-            return 77;
+            return lfs::metal_test::unavailableMetal4();
         }
         try {
             run(GpuBackend::Metal);

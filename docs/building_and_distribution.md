@@ -55,6 +55,10 @@ If you intentionally want a headless or experimental build, pass `-DLFS_ENFORCE_
 
 ## macOS Apple Silicon viewer build
 
+Requires macOS 26 or newer, Apple Silicon with Metal 4, and Xcode 26 or newer.
+The macOS presets set the deployment target to 26.0; a newer SDK does not change
+that baseline. Native Metal renders scenes and MoltenVK presents the GUI.
+
 Install Xcode 26 or newer (older Xcode versions lack `std::jthread`), then the host tools and Vulkan driver with Homebrew:
 
 ```bash

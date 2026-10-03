@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "device_requirements.hpp"
 #include "core/tensor_backend.hpp"
 #include "metal_viewport_renderer.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
@@ -244,7 +245,7 @@ namespace {
 int main(int argc, char** argv) {
     @autoreleasepool {
         if (!core::gpu_backend_available(core::GpuBackend::Metal))
-            return 77;
+            return lfs::metal_test::unavailableMetal4();
         const auto home = std::filesystem::temp_directory_path() / ("lichtfeld-metal-selection-contracts-" + std::to_string(getpid()));
         setenv("LFS_HOME", home.c_str(), 1);
         unsetenv("LFS_SAFE_MODE");

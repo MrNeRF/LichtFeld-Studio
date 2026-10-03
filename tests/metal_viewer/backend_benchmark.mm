@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "device_requirements.hpp"
 #include "core/tensor_backend.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -1082,8 +1083,7 @@ int main(int argc, char** argv) {
                 unsetenv("LFS_SAFE_MODE") != 0)
                 throw std::runtime_error("Cannot isolate benchmark preferences");
             if (!core::gpu_backend_available(core::GpuBackend::Metal)) {
-                std::puts("SKIP: resident Metal tensors require a compatible macOS/Metal device");
-                return 77;
+                return lfs::metal_test::unavailableMetal4();
             }
             Py_Initialize();
             const auto report = run(o).dump(2);

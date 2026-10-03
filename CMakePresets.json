@@ -101,7 +101,8 @@
         "VCPKG_TARGET_TRIPLET": "arm64-osx",
         "VCPKG_HOST_TRIPLET": "arm64-osx",
         "LFS_VCPKG_MAX_CONCURRENCY": "2",
-        "BUILD_TESTS": "OFF"
+        "BUILD_TESTS": "OFF",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "26.0"
       }
     },
     {

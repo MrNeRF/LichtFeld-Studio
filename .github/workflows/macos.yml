@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   build-macos:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 180
     env:
       VCPKG_ROOT: ${{ github.workspace }}/../vcpkg
@@ -42,11 +42,20 @@ jobs:
           cmake --version
           ninja --version
 
-      - name: Check Metal device
+      - name: Require macOS 26 and Metal 4
         run: |
-          device=$(osascript -l JavaScript -e 'ObjC.import("Metal"); var d = $.MTLCreateSystemDefaultDevice(); d ? ObjC.unwrap(d.name) : "NO_METAL_DEVICE";')
-          echo "Metal device: $device"
-          test "$device" != NO_METAL_DEVICE
+          sw_vers
+          xcodebuild -version
+          swift -e '
+            import Metal
+            guard #available(macOS 26.0, *) else {
+              fatalError("Native viewer contracts require macOS 26 or newer")
+            }
+            guard let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.metal4) else {
+              fatalError("Native viewer contracts require a Metal 4 device")
+            }
+            print("Metal 4 device: \(device.name)")
+          '
 
       - name: Restore vcpkg binary cache
         uses: actions/cache@v6
@@ -75,6 +84,27 @@ jobs:
 
       - name: Build application and tests
         run: cmake --build --preset macos-release
+
+      - name: Verify macOS deployment baseline
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import re
+          import subprocess
+          root = Path("build-macos-release")
+          app = root / "LichtFeld-Studio"
+          assert app.is_file(), "Missing application executable"
+          libraries = sorted(root.glob("liblfs*.dylib"))
+          assert libraries, "Missing application libraries"
+          for binary in [app, *libraries]:
+              load_commands = subprocess.check_output(["otool", "-l", str(binary)], text=True)
+              versions = re.findall(r"^\s*minos (\d+)\.(\d+)(?:\.(\d+))?\s*$", load_commands, re.M)
+              assert versions, f"Missing deployment version: {binary}"
+              for major, minor, patch in versions:
+                  version = (int(major), int(minor), int(patch or 0))
+                  assert version <= (26, 0, 0), f"Requires newer macOS: {binary}: {version}"
+              print(f"{binary.name}: macOS deployment baseline verified")
+          PYTHON
 
       - name: Check native Finder drag-and-drop event bridge (no GPU)
         run: |

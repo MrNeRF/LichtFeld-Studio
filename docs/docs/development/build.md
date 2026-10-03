@@ -56,9 +56,10 @@ training commands. Saved models, project metadata, dataset viewing, appearance
 settings and video export still use their shared application code.
 
 On Windows and Linux, this flag alone does not remove CUDA from the viewer
-dependencies. The macOS Apple Silicon viewer runs without CUDA: by default on
-the Metal tensor backend with macOS 26 and a Metal 4 GPU, else on the Vulkan
-tensor backend. Use the `macos-release` preset described below. With
+dependencies. The macOS Apple Silicon viewer requires macOS 26 or newer and
+a Metal 4 GPU. Native Metal scene rendering reads either Metal or Vulkan tensor
+storage; Vulkan through MoltenVK handles presentation. The build runs without
+CUDA. Use the `macos-release` preset described below. With
 `BUILD_TESTS=ON`, the build without training provides `lichtfeld_viewer_tests`;
 the full build retains `lichtfeld_tests`.
 
@@ -110,7 +111,11 @@ cmake --build --preset macos-release
 ./build-macos-release/LichtFeld-Studio
 ```
 
-This viewer build does not require CUDA. The macOS preset disables tests and
+This viewer build requires macOS 26 or newer, Apple Silicon and Xcode 26 or
+newer. Its deployment target is explicitly 26.0, including when the build host
+uses a newer SDK. The macOS GPU CI uses macos-26 with stable Xcode 26 and checks
+Metal 4 before running tests; required-device contracts fail if it is unavailable.
+This build does not require CUDA. The macOS preset disables tests and
 limits both vcpkg and Ninja to two concurrent jobs. The application selects
 Homebrew's MoltenVK manifest automatically unless a Vulkan driver variable is
 already set.

@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "device_requirements.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
@@ -105,7 +106,7 @@ static void run() {
 int main() {
     @autoreleasepool {
         if (!gpu_backend_available(GpuBackend::Metal))
-            return 77;
+            return lfs::metal_test::unavailableMetal4();
         try {
             run();
             return 0;

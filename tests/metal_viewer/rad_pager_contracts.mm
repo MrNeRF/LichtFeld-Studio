@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "device_requirements.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
 #include "io/ply_to_rad_lod.hpp"
@@ -177,8 +178,7 @@ static void run() {
 int main() {
     @autoreleasepool {
         if (!core::gpu_backend_available(core::GpuBackend::Metal)) {
-            std::fprintf(stderr, "Skipping RAD pager contract: resident Metal tensor backend unavailable\n");
-            return 77;
+            return lfs::metal_test::unavailableMetal4();
         }
         const auto home = std::filesystem::temp_directory_path() / ("lfs-metal-rad-home-" + std::to_string(getpid()));
         setenv("LFS_HOME", home.c_str(), 1);

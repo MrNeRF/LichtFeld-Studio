@@ -26,7 +26,7 @@ enable_language(OBJCXX)
 if(NOT TARGET lfs_metal_viewer)
     add_subdirectory(../../src/rendering/rasterizer/metal metal_viewer)
 endif()
-option(LFS_METAL_TEST_REQUIRE_DEVICE "Fail Metal contracts when no GPU is available" OFF)
+option(LFS_METAL_TEST_REQUIRE_DEVICE "Fail Metal contracts when their required GPU capability is unavailable" OFF)
 function(lfs_add_metal_contract target source test_name)
     add_executable(${target} ${source})
     target_link_libraries(${target} PRIVATE lfs_metal_viewer)
@@ -147,6 +147,8 @@ if(TARGET lfs_visualizer)
             add_executable(mac_viewer_backend_benchmark backend_benchmark.mm)
             target_link_libraries(mac_viewer_backend_benchmark PRIVATE lfs_viewer_vulkan_reference lfs_metal_viewer lfs_visualizer lfs_core lfs_io Python::Python)
             target_compile_options(mac_viewer_backend_benchmark PRIVATE -fobjc-arc)
+            target_compile_definitions(mac_viewer_backend_benchmark PRIVATE
+                LFS_METAL_TEST_REQUIRE_DEVICE=$<BOOL:${LFS_METAL_TEST_REQUIRE_DEVICE}>)
             target_include_directories(mac_viewer_backend_benchmark PRIVATE
                 "${CMAKE_SOURCE_DIR}/src/visualizer/rendering"
                 "${CMAKE_SOURCE_DIR}/src/visualizer"

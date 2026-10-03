@@ -241,6 +241,7 @@ if(NOT _lfs_fsr3_effect_library OR NOT _lfs_fsr3_backend_library)
                 -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
                 -DCMAKE_OSX_ARCHITECTURES:STRING=${CMAKE_OSX_ARCHITECTURES}
                 -DCMAKE_OSX_DEPLOYMENT_TARGET:STRING=${CMAKE_OSX_DEPLOYMENT_TARGET}
+                -DCMAKE_OSX_SYSROOT:PATH=${CMAKE_OSX_SYSROOT}
                 -DCMAKE_BUILD_TYPE:STRING=Release
                 -DVulkan_INCLUDE_DIR:PATH=${Vulkan_INCLUDE_DIR}
                 -DVulkan_LIBRARY:FILEPATH=${Vulkan_LIBRARY}
