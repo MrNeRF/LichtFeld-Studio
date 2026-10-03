@@ -501,26 +501,32 @@ body.fit-9 #status-message-section {
     overflow: hidden;
 }
 
+body.fit-9 #status-left {
+    display: none;
+}
+
 body.fit-9 #status-right {
-    flex-shrink: 1;
+    flex: 1 1 0px;
+    margin-left: 4dp;
     min-width: 0;
     overflow: hidden;
 }
 
 body.fit-9 #gpu-mem {
-    flex-shrink: 1;
+    flex: 1 1 0px;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 /* Keep metric columns stable when digits change. */
-#fps-value, #loss-value, #gaussians-value, #time-value, #eta-value, #step-value {
+#fps-value, #loss-value, #gaussians-value, #time-value, #eta-value, #step-value, #gpu-mem, #lfs-mem {
     font-family: "JetBrains Mono";
 }
 #loss-value { min-width: 44dp; }
-#gaussians-value { min-width: 44dp; }
-#eta-value { min-width: 52dp; }
+#gaussians-value { min-width: 80dp; }
+#step-value { min-width: 100dp; }
+#time-value, #eta-value { min-width: 60dp; }
 
 #mcp-compact { display: none; }
 body.fit-8 #mcp-summary { display: none; }

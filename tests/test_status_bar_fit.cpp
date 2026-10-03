@@ -149,7 +149,7 @@ namespace {
         std::string gpu_model_text = "NVIDIA GeForce RTX 5090";
         std::string gpu_mem_text = "GPU 18.75/31.99 GiB";
         std::string gpu_mem_color = "#ffffff";
-        std::string fps_value = "144";
+        std::string fps_value = "UI 144 · View 144";
         std::string fps_color = "#ffffff";
         std::string fps_label = " FPS";
         std::string git_commit = "abcdef12";
@@ -215,6 +215,9 @@ namespace {
             const auto font_path = std::filesystem::path(PROJECT_ROOT_PATH) /
                                    "src/visualizer/gui/assets/fonts/Inter-Regular.ttf";
             ASSERT_TRUE(Rml::LoadFontFace(font_path.string()));
+            ASSERT_TRUE(Rml::LoadFontFace((std::filesystem::path(PROJECT_ROOT_PATH) /
+                                           "src/rendering/resources/assets/JetBrainsMono-Regular.ttf")
+                                              .string()));
         }
 
         static void TearDownTestSuite() {
@@ -349,6 +352,8 @@ namespace {
             EXPECT_GE(fit_level, previous_fit_level);
             assertNoVerticalOverflow(document_);
             assertFlexSiblingsDoNotOverlap(document_);
+            auto* fps = document_->GetElementById("fps-value");
+            EXPECT_LE(fps->GetAbsoluteOffset().x + fps->GetOffsetWidth(), width);
             previous_fit_level = fit_level;
         }
 

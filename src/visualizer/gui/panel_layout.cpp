@@ -1044,7 +1044,8 @@ namespace lfs::vis::gui {
             return false;
         if (!shouldReserveLeftDockWidth())
             return false;
-        return maxLeftDockPanelWidth(show_main_panel, ui_hidden, screen) > 0.0f;
+        return maxLeftDockPanelWidth(show_main_panel, ui_hidden, screen) >=
+               LEFT_DOCK_MIN_WIDTH * lfs::python::get_shared_dpi_scale();
     }
 
     float PanelLayoutManager::computeViewportWidth(const bool show_main_panel,

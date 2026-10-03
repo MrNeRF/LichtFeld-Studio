@@ -727,7 +727,12 @@ TEST_F(PanelLayoutRenderDemandTest, PanelsGrowBackWhenTheWindowGrowsAgain) {
     EXPECT_FLOAT_EQ(layout.captureProjectState().left_dock_width, 320.0f);
     EXPECT_FLOAT_EQ(layout.captureProjectState().right_panel_width, 360.0f);
 
+    lfs::python::set_shared_dpi_scale(2.0f);
+    show(ScreenState{.work_size = {1000.0f, 700.0f}});
+    EXPECT_FALSE(layout.isLeftDockVisible());
+    lfs::python::set_shared_dpi_scale(1.0f);
     show(wide);
+    EXPECT_TRUE(layout.isLeftDockVisible());
     EXPECT_FLOAT_EQ(layout.getLeftDockWidth(), 320.0f);
     EXPECT_FLOAT_EQ(layout.getRightPanelWidth(), 360.0f);
     lfs::python::set_shared_dpi_scale(previous_dpi);

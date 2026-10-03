@@ -1309,6 +1309,16 @@ namespace lfs::vis::gui {
                y >= offset.y && y < offset.y + size.y;
     }
 
+    void RmlMenuBar::updateCompactLayout(const int screen_w, const float dp_ratio) {
+        if (auto* body = document_->GetElementById("body")) {
+            const bool compact = screen_w < 760.0f * dp_ratio;
+            if (body->IsClassSet("compact") != compact) {
+                body->SetClass("compact", compact);
+                render_needed_ = true;
+            }
+        }
+    }
+
     void RmlMenuBar::updateProjectTitleLayout(const int screen_w, const float dp_ratio) {
         if (!project_title_container_ || !project_title_el_)
             return;
@@ -1561,6 +1571,7 @@ namespace lfs::vis::gui {
 
         const float dp_ratio = rml_manager_->getDpRatio();
         const int bar_h = static_cast<int>(bar_height_ * dp_ratio);
+        updateCompactLayout(screen_w, dp_ratio);
         if (dp_ratio != last_dp_ratio_)
             render_needed_ = true;
         last_dp_ratio_ = dp_ratio;

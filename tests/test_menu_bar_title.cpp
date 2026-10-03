@@ -51,6 +51,8 @@ namespace lfs::vis::gui {
         }
         static void rebuildPortalStatus(RmlMenuBar& bar) { bar.rebuildPortalStatus(); }
         static void layout(RmlMenuBar& bar, int width, float dp) {
+            bar.updateCompactLayout(width, dp);
+            bar.rml_context_->Update();
             bar.updateProjectTitleLayout(width, dp);
         }
         static bool hit(const RmlMenuBar& bar, float x, float y) {
@@ -214,7 +216,7 @@ namespace {
             // The narrowest window SDL allows, and a little wider.
             for (int width : {640, 720}) {
                 SCOPED_TRACE(::testing::Message() << width << " dp=" << dp);
-                resize(static_cast<int>(width * dp), dp, false);
+                resize(width, dp, false);
                 const auto controls = bounds(el("menu-window-controls"));
                 Rml::ElementList labels;
                 document_->GetElementsByClassName(labels, "menu-label");
@@ -222,7 +224,7 @@ namespace {
                 ASSERT_EQ(labels.size(), 6u);
                 for (auto* label : labels)
                     EXPECT_LE(bounds(label).right, controls.left + 0.5f);
-                EXPECT_LE(bounds(el("menu-window-close")).right, width * dp + 0.5f);
+                EXPECT_LE(bounds(el("menu-window-close")).right, width + 0.5f);
             }
         }
     }
