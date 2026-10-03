@@ -438,6 +438,55 @@ namespace {
         return base;
     }
 
+    template <typename T>
+    T rgba_sample_as(const image_codecs::Image& decoded, const size_t index) {
+        if (decoded.sample_type == image_codecs::SampleType::UInt8) {
+            const auto value = decoded.data[index];
+            return std::is_same_v<T, uint16_t> ? static_cast<T>(value * 257) : value;
+        }
+        if (decoded.sample_type == image_codecs::SampleType::UInt16) {
+            const auto value = reinterpret_cast<const uint16_t*>(decoded.data.data())[index];
+            return std::is_same_v<T, uint16_t> ? value : static_cast<T>(std::lround(value / 257.0));
+        }
+        const float value = std::clamp(reinterpret_cast<const float*>(decoded.data.data())[index], 0.0f, 1.0f);
+        return static_cast<T>(std::lround(value * static_cast<float>(std::numeric_limits<T>::max())));
+    }
+
+    template <typename T>
+    std::tuple<T*, int, int, int>
+    load_image_with_alpha_t(const std::filesystem::path& p, const int res_div, const int max_width) {
+        image_codecs::Image decoded;
+        std::string error;
+        if (!image_codecs::decode(p, decoded, error))
+            throw std::runtime_error("Load failed: " + lfs::core::path_to_utf8(p) + (error.empty() ? "" : " : " + error));
+        if (decoded.channels != 4) {
+            LOG_ERROR("load_image_with_alpha: expected 4 channels, got {}", decoded.channels);
+            return std::make_tuple(nullptr, 0, 0, 0);
+        }
+        const size_t pixel_count = static_cast<size_t>(decoded.width) * decoded.height;
+        auto* out = static_cast<T*>(std::malloc(pixel_count * 4 * sizeof(T)));
+        if (!out) {
+            throw std::bad_alloc();
+        }
+        for (size_t i = 0; i < pixel_count * 4; ++i)
+            out[i] = rgba_sample_as<T>(decoded, i);
+
+        const auto [nw, nh] = lfs::core::resized_image_dimensions(decoded.width, decoded.height, res_div, max_width);
+        if (nw != decoded.width || nh != decoded.height) {
+            T* resized = nullptr;
+            try {
+                resized = downscale_resample_nch<T>(out, decoded.width, decoded.height, nw, nh, 4);
+            } catch (...) {
+                std::free(out);
+                throw;
+            }
+            std::free(out);
+            return {resized, nw, nh, 4};
+        }
+
+        return {out, decoded.width, decoded.height, 4};
+    }
+
     void* allocate_image_buffer(const std::size_t bytes, void*) {
         return std::malloc(bytes);
     }
@@ -565,42 +614,12 @@ namespace lfs::core {
 
     std::tuple<unsigned char*, int, int, int>
     load_image_with_alpha(std::filesystem::path p, int res_div, int max_width) {
-        image_codecs::Image decoded;
-        std::string error;
-        if (!image_codecs::decode(p, decoded, error))
-            throw std::runtime_error("Load failed: " + lfs::core::path_to_utf8(p) + (error.empty() ? "" : " : " + error));
-        if (decoded.channels != 4) {
-            LOG_ERROR("load_image_with_alpha: expected 4 channels, got {}", decoded.channels);
-            return std::make_tuple(nullptr, 0, 0, 0);
-        }
-        const size_t pixel_count = static_cast<size_t>(decoded.width) * decoded.height;
-        auto* out = static_cast<unsigned char*>(std::malloc(pixel_count * 4));
-        if (!out) {
-            throw std::bad_alloc();
-        }
-        for (size_t i = 0; i < pixel_count * 4; ++i) {
-            if (decoded.sample_type == image_codecs::SampleType::UInt8)
-                out[i] = decoded.data[i];
-            else if (decoded.sample_type == image_codecs::SampleType::UInt16)
-                out[i] = static_cast<unsigned char>(std::lround(reinterpret_cast<const uint16_t*>(decoded.data.data())[i] / 257.0));
-            else
-                out[i] = static_cast<unsigned char>(std::lround(std::clamp(reinterpret_cast<const float*>(decoded.data.data())[i], 0.0f, 1.0f) * 255.0f));
-        }
+        return ::load_image_with_alpha_t<unsigned char>(p, res_div, max_width);
+    }
 
-        const auto [nw, nh] = resized_image_dimensions(decoded.width, decoded.height, res_div, max_width);
-        if (nw != decoded.width || nh != decoded.height) {
-            unsigned char* resized = nullptr;
-            try {
-                resized = downscale_resample_nch<unsigned char>(out, decoded.width, decoded.height, nw, nh, 4);
-            } catch (...) {
-                std::free(out);
-                throw;
-            }
-            std::free(out);
-            return {resized, nw, nh, 4};
-        }
-
-        return {out, decoded.width, decoded.height, 4};
+    std::tuple<uint16_t*, int, int, int>
+    load_image_with_alpha_u16(std::filesystem::path p, int res_div, int max_width) {
+        return ::load_image_with_alpha_t<uint16_t>(p, res_div, max_width);
     }
 
     std::tuple<unsigned char*, int, int, int>

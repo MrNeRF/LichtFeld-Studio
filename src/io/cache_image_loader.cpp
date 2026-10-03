@@ -361,15 +361,24 @@ namespace lfs::io {
     }
 
     lfs::core::Tensor load_rgba_image_cpu_decoded(
-        const std::filesystem::path& path, const int resize_factor, const int max_width, void* const cuda_stream) {
+        const std::filesystem::path& path, const int resize_factor, const int max_width, void* const cuda_stream,
+        const bool decode_16bit) {
         using namespace lfs::core;
         const auto stream = static_cast<cudaStream_t>(cuda_stream);
+        const auto finish = [&](const auto* data, const int width, const int height, const int channels) {
+            if (!data || channels != 4)
+                throw std::runtime_error("Failed to decode RGBA image: " + path_to_utf8(path));
+            return hwc_to_chw(upload_hwc(data, width, height, channels, stream),
+                              resize_factor, max_width, false, stream);
+        };
+        if (decode_16bit) {
+            auto [data, width, height, channels] = load_image_with_alpha_u16(path, 1, 0);
+            const std::unique_ptr<uint16_t, decltype(&free_image)> owned(data, &free_image);
+            return finish(owned.get(), width, height, channels);
+        }
         auto [data, width, height, channels] = load_image_with_alpha(path, 1, 0);
         const std::unique_ptr<unsigned char, decltype(&free_image)> owned(data, &free_image);
-        if (!owned || channels != 4)
-            throw std::runtime_error("Failed to decode RGBA image: " + path_to_utf8(path));
-        return hwc_to_chw(upload_hwc(owned.get(), width, height, channels, stream),
-                          resize_factor, max_width, false, stream);
+        return finish(owned.get(), width, height, channels);
     }
 
     lfs::core::Tensor CacheLoader::load_cached_image_from_cpu(
