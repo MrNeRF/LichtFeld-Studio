@@ -363,8 +363,8 @@ namespace lfs::vis {
         for (auto* target : {&view.main_render_target_, &view.split_left_render_target_, &view.split_right_render_target_}) {
             if (!target->valid())
                 continue;
-            const bool splat_ready = !vksplat_viewport_renderer_ || vksplat_viewport_renderer_->releaseRenderTarget(*target);
-            const bool point_ready = !point_cloud_vulkan_renderer_ || point_cloud_vulkan_renderer_->releaseRenderTarget(*target);
+            const bool splat_ready = !scene_renderer_ || scene_renderer_->releaseRenderTarget(*target);
+            const bool point_ready = !point_scene_renderer_ || point_scene_renderer_->releaseRenderTarget(*target);
             if (splat_ready && point_ready) {
                 render_targets_.release(*target);
                 *target = {};
@@ -482,8 +482,8 @@ namespace lfs::vis {
             render_scale_setting = settings_.lod_render_scale;
         }
 
-        if (gpu_selection_eligible && vksplat_viewport_renderer_) {
-            const auto gpu = vksplat_viewport_renderer_->gpuLodSelectionStatus(this->state().main_render_target_);
+        if (gpu_selection_eligible && scene_renderer_) {
+            const auto gpu = scene_renderer_->gpuLodSelectionStatus(this->state().main_render_target_);
             if (gpu.active) {
                 // The CPU controller is frozen at its bootstrap cut in GPU
                 // mode; report the selector's live numbers instead.
@@ -536,11 +536,11 @@ namespace lfs::vis {
         ++point_cloud_data_revision_;
         ++point_cloud_preview_selection_revision_;
 
-        if (vksplat_viewport_renderer_) {
-            vksplat_viewport_renderer_->releaseSceneResources();
+        if (scene_renderer_) {
+            scene_renderer_->releaseSceneResources();
         }
-        if (point_cloud_vulkan_renderer_) {
-            point_cloud_vulkan_renderer_->reset();
+        if (point_scene_renderer_) {
+            point_scene_renderer_->reset();
         }
     }
 
@@ -567,16 +567,16 @@ namespace lfs::vis {
         point_cloud_colors_cache_size_ = 0;
         ++point_cloud_data_revision_;
         ++point_cloud_preview_selection_revision_;
-        if (vksplat_viewport_renderer_)
-            vksplat_viewport_renderer_->reset();
-        if (point_cloud_vulkan_renderer_)
-            point_cloud_vulkan_renderer_->reset();
+        if (scene_renderer_)
+            scene_renderer_->reset();
+        if (point_scene_renderer_)
+            point_scene_renderer_->reset();
         if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA))
             lfs::core::Tensor::trim_memory_pool();
     }
 
     void RenderingManager::noteVksplatIdleFrame(const bool training_active) {
-        if (!vksplat_viewport_renderer_) {
+        if (!scene_renderer_) {
             vksplat_idle_frame_count_ = 0;
             return;
         }
@@ -595,7 +595,7 @@ namespace lfs::vis {
         if (!training_active) {
             vksplat_idle_frame_count_ = 0;
             if (under_pressure) {
-                rendererTrainingInterop(*vksplat_viewport_renderer_).releaseScratchOnIdle(true);
+                rendererTrainingInterop(*scene_renderer_).releaseScratchOnIdle(true);
             }
             return;
         }
@@ -607,7 +607,7 @@ namespace lfs::vis {
             // During training the shared arena is owned by FastGS. Only release
             // private viewer allocations here; the terminal callback below is
             // the point at which the shared import may be relinquished.
-            rendererTrainingInterop(*vksplat_viewport_renderer_).releaseScratchOnIdle(false, vksplat_idle_frame_count_ >= kVksplatIdleScratchReleaseFrames);
+            rendererTrainingInterop(*scene_renderer_).releaseScratchOnIdle(false, vksplat_idle_frame_count_ >= kVksplatIdleScratchReleaseFrames);
             vksplat_idle_frame_count_ = 0;
         }
     }

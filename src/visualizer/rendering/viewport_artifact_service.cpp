@@ -63,12 +63,12 @@ namespace lfs::vis {
     }
 
     void ViewportArtifactService::setMetadata(const CachedRenderMetadata& metadata) {
-        const bool backend_changed = metadata_.viewer_backend_mask != metadata.viewer_backend_mask;
+        const bool backend_changed = metadata_.viewer_backend != metadata.viewer_backend;
         metadata_ = metadata;
-        // Wake the UI after publishing the actual output, including mixed split
-        // panels and fallbacks. Repeated frames using the same API stay silent.
+        // Wake the UI when published scene identity changes or a scene closes.
+        // Repeated frames using the same renderer stay silent.
         if (backend_changed)
-            app_store().viewer_backend_mask.set(metadata_.viewer_backend_mask);
+            app_store().viewer_backend.set(metadata_.viewer_backend);
     }
 
     void ViewportArtifactService::clearViewportOutput() {

@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/point_cloud.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
 #include "device_requirements.hpp"
@@ -7,6 +8,7 @@
 #include "metal_viewport_renderer.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
+#include "rendering/rendering.hpp"
 #include "scene_renderer_factory.hpp"
 #include "scene_training_interop.hpp"
 #include "viewport_interop_service.hpp"
@@ -27,6 +29,26 @@ using namespace lfs;
 static void require(bool ok, const char* message) {
     if (!ok)
         throw std::runtime_error(message);
+}
+static void tensor_point_identity_contract(bool compare_vulkan) {
+    for (const auto backend : {core::GpuBackend::Metal, core::GpuBackend::Vulkan}) {
+        if (backend == core::GpuBackend::Vulkan && !compare_vulkan)
+            continue;
+        core::GpuBackendScope scope(backend);
+        core::PointCloud points(
+            core::Tensor::from_vector(std::vector<float>{0, 0, -3}, {1, 3}, core::Device::GPU),
+            core::Tensor::from_vector(std::vector<float>{1, 0, 0}, {1, 3}, core::Device::GPU));
+        auto engine = rendering::RenderingEngine::create();
+        require(engine->initialize().has_value(), "Point utility initialization failed");
+        rendering::PointCloudRenderRequest request;
+        request.frame_view.size = {32, 32};
+        const auto result = engine->renderPointCloudImage(points, request);
+        require(result && result->image && result->metadata.valid, "Point utility render failed");
+        const auto expected = backend == core::GpuBackend::Metal ? rendering::ViewerBackend::Metal : rendering::ViewerBackend::Vulkan;
+        require(result->metadata.viewer_backend == expected, "Point utility reported a different raster API");
+        require(core::gpu_backend_of(*result->image) == backend, "Point utility output changed tensor backend");
+        require(result->image->cpu().is_valid(), "Point utility output was not readable");
+    }
 }
 static void transparent_threshold_contract(vis::VulkanContext& context) {
     using core::Device;
@@ -772,6 +794,7 @@ int main(int argc, char** argv) {
         Py_Initialize();
         try {
             const bool native_only = argc == 2 && std::string_view(argv[1]) == "--native-only";
+            tensor_point_identity_contract(!native_only);
             run(!native_only);
             return 0;
         } catch (const std::exception& e) {

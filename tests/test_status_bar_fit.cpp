@@ -50,8 +50,11 @@ namespace lfs::vis::gui {
         static void setModelHandle(RmlStatusBar& status_bar, Rml::DataModelHandle handle) {
             status_bar.model_handle_ = handle;
         }
-        static void updateBackends(RmlStatusBar& status_bar, std::optional<uint32_t> active_view_mask = std::nullopt) {
-            status_bar.updateBackendContent(active_view_mask);
+        static void updateBackends(RmlStatusBar& status_bar) {
+            status_bar.updateBackendContent();
+        }
+        static void updateBackends(RmlStatusBar& status_bar, std::optional<lfs::rendering::ViewerBackend> active_backend) {
+            status_bar.updateBackendContent(active_backend);
         }
         static bool applyTooltip(RmlStatusBar& status_bar, int width = 2400, int bar_height = 22) {
             return status_bar.applyHoverTooltip(width, bar_height, 700);
@@ -196,7 +199,7 @@ namespace {
         model.fps_color = "#ffffff";
         model.fps_label = " FPS";
         model.renderer_label = "R";
-        model.renderer_value = "Metal / Vulkan";
+        model.renderer_value = "Vulkan";
         model.renderer_tooltip = "Scene renderer";
         model.tensor_label = "T";
         model.tensor_value = "CUDA";
@@ -471,7 +474,7 @@ namespace {
         EXPECT_NE(tensor->GetInnerRML().find(">T<"), Rml::String::npos);
 
         model_.renderer_value = "Vulkan";
-        model_.renderer_tooltip = "Metal requested; Vulkan fallback";
+        model_.renderer_tooltip = "Scene renderer: Vulkan";
         model_handle_.DirtyVariable("renderer_value");
         model_handle_.DirtyVariable("renderer_tooltip");
         context_->Update();
@@ -494,19 +497,25 @@ namespace {
 
     TEST_F(StatusBarFitTest, BackendBadgeFollowsActiveViewInsteadOfLastPublishedView) {
         auto& store = lfs::vis::app_store();
-        const auto previous = store.viewer_backend_mask.get();
+        const auto previous = store.viewer_backend.get();
         struct Restore {
-            uint32_t value;
-            ~Restore() { lfs::vis::app_store().viewer_backend_mask.set(value); }
+            std::optional<lfs::rendering::ViewerBackend> value;
+            ~Restore() { lfs::vis::app_store().viewer_backend.set(value); }
         } restore{previous};
-        store.viewer_backend_mask.set(lfs::rendering::viewerBackendBit(lfs::rendering::ViewerBackend::Vulkan));
+        store.viewer_backend.set(lfs::rendering::ViewerBackend::Vulkan);
         lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(
-            status_bar_, lfs::rendering::viewerBackendBit(lfs::rendering::ViewerBackend::Metal));
+            status_bar_, lfs::rendering::ViewerBackend::Metal);
         EXPECT_EQ(lfs::vis::gui::RmlStatusBarTestAccess::model(status_bar_).renderer_value, "Metal");
-        store.viewer_backend_mask.set(lfs::rendering::viewerBackendBit(lfs::rendering::ViewerBackend::Metal));
+        store.viewer_backend.set(lfs::rendering::ViewerBackend::Metal);
         lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(
-            status_bar_, lfs::rendering::viewerBackendBit(lfs::rendering::ViewerBackend::Vulkan));
+            status_bar_, lfs::rendering::ViewerBackend::Vulkan);
         EXPECT_EQ(lfs::vis::gui::RmlStatusBarTestAccess::model(status_bar_).renderer_value, "Vulkan");
+        store.viewer_backend.set(lfs::rendering::ViewerBackend::Cuda);
+        lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_, std::nullopt);
+        EXPECT_EQ(lfs::vis::gui::RmlStatusBarTestAccess::model(status_bar_).renderer_value,
+                  lfs::rendering::viewerBackendDisplayName(lfs::rendering::desktopViewerBackend()));
+        lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_);
+        EXPECT_EQ(lfs::vis::gui::RmlStatusBarTestAccess::model(status_bar_).renderer_value, "CUDA");
     }
 
     TEST_F(StatusBarFitTest, BackendTooltipRevealsAboveBarAndClearsOnPointerLeave) {
@@ -586,16 +595,16 @@ namespace {
         EXPECT_EQ(tooltip->GetInnerRML(), model_.tensor_tooltip);
     }
 
-    TEST_F(StatusBarFitTest, BadgesReadEachPublishedBackendIncludingFallbackAndClose) {
+    TEST_F(StatusBarFitTest, BadgesTrackPublishedRendererAndSceneClose) {
         const ScopedStatusBarHome scoped_home;
         lfs::vis::ViewportArtifactService artifacts;
         lfs::vis::gui::RmlStatusBarTestAccess::bindStore(status_bar_);
         auto& store = lfs::vis::app_store();
-        store.viewer_backend_mask.set(0);
+        store.viewer_backend.set(std::nullopt);
         (void)store.store().drain_dirty_into_frame();
-        const auto publish = [&](uint32_t mask, const char* expected) {
+        const auto publish = [&](lfs::rendering::ViewerBackend backend, const char* expected) {
             lfs::rendering::FrameMetadata frame;
-            frame.viewer_backend_mask = mask;
+            frame.viewer_backend = backend;
             artifacts.setLazyCapture({}, frame, {64, 48});
             (void)store.store().drain_dirty_into_frame();
             EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar_));
@@ -611,10 +620,9 @@ namespace {
             EXPECT_FALSE(store.store().has_dirty());
             EXPECT_FALSE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar_));
         };
-        publish(2, "Metal");
-        publish(1, "Vulkan");
-        publish(3, "Metal / Vulkan");
-        publish(4, "CPU");
+        publish(lfs::rendering::ViewerBackend::Metal, "Metal");
+        publish(lfs::rendering::ViewerBackend::Vulkan, "Vulkan");
+        publish(lfs::rendering::ViewerBackend::Cuda, "CUDA");
         artifacts.clearViewportOutput();
         (void)store.store().drain_dirty_into_frame();
         EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar_));
@@ -626,7 +634,7 @@ namespace {
 #else
         EXPECT_EQ(model_.renderer_value, "Vulkan");
 #endif // Configured renderer, no scene frame.
-        EXPECT_EQ(store.viewer_backend_mask.get(), 0u);
+        EXPECT_FALSE(store.viewer_backend.get());
     }
 
     TEST_F(StatusBarFitTest, McpDetailsReserveOnlyTheirMeasuredOverlayArea) {

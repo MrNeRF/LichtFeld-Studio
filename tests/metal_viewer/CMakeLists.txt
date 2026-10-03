@@ -135,7 +135,7 @@ if(TARGET lfs_visualizer)
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
         # As with selection queries above, keep native validation independent
         # of MoltenVK's legacy GUT threadgroup-memory requirement. This test
-        # additionally exercises real Auto fallback and explicit Vulkan routes.
+        # additionally exercises the bound Vulkan reference adapters.
         add_test(NAME MacViewerParity_viewportTargets COMMAND metal_viewport_contracts)
         set_tests_properties(MacViewerParity_viewportTargets PROPERTIES
             LABELS "metal;gpu;metal4;parity" TIMEOUT 120 SKIP_RETURN_CODE 77)

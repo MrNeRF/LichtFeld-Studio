@@ -470,8 +470,8 @@ namespace lfs::vis {
 
         // FPS monitoring (scene renders vs. swapchain-presented GUI frames)
         float getAverageFPS() const { return this->state().framerate_controller_.getAverageFPS(); }
-        [[nodiscard]] uint32_t activeViewerBackendMask() const {
-            return this->state().viewport_artifact_service_.viewerBackendMask();
+        [[nodiscard]] std::optional<lfs::rendering::ViewerBackend> activeViewerBackend() const {
+            return this->state().viewport_artifact_service_.viewerBackend();
         }
         float getPresentedAverageFPS() const {
             return presented_framerate_controller_.getAverageFPS();
@@ -895,8 +895,8 @@ namespace lfs::vis {
         unsigned import_render_frames_ = 0;
         std::optional<std::string> import_render_result_;
         [[nodiscard]] float trainingRefreshIntervalSec(const ViewRenderState& view) const;
-        std::unique_ptr<SceneRenderer> vksplat_viewport_renderer_;
-        std::unique_ptr<PointSceneRenderer> point_cloud_vulkan_renderer_;
+        std::unique_ptr<SceneRenderer> scene_renderer_;
+        std::unique_ptr<PointSceneRenderer> point_scene_renderer_;
         std::unique_ptr<SparkLodController> lod_controller_;
         const lfs::core::SplatData* lod_controller_model_ = nullptr;
         bool lod_controller_needs_sync_traversal_ = false;

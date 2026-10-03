@@ -483,14 +483,14 @@ namespace lfs::vis {
         // The macro-tile (HiGS) chain only yields per-macro-tile median depth;
         // force the legacy per-pixel chain for the depth-capture render so the
         // readback matches the image resolution.
-        if (!vksplat_viewport_renderer_) {
-            vksplat_viewport_renderer_ = createSceneRenderer(*last_vulkan_context_);
+        if (!scene_renderer_) {
+            scene_renderer_ = createSceneRenderer(*last_vulkan_context_);
         }
-        vksplat_viewport_renderer_->setDepthCaptureMode(true, expected_depth);
+        scene_renderer_->setDepthCaptureMode(true, expected_depth);
         struct DepthCaptureModeGuard {
             SceneRenderer* renderer;
             ~DepthCaptureModeGuard() { renderer->setDepthCaptureMode(false); }
-        } depth_capture_guard{vksplat_viewport_renderer_.get()};
+        } depth_capture_guard{scene_renderer_.get()};
 
         auto rendered = renderPreviewImageToPreviewSlotWithState(
             settings,
@@ -556,12 +556,12 @@ namespace lfs::vis {
         // image and depth are read from the same render: the Preview output slot
         // and the pixel_depth scratch it just wrote (still resident — the Preview
         // path uses private scratch, which render() does not release).
-        auto image = vksplat_viewport_renderer_->readOutputImage(preview_render_target_);
+        auto image = scene_renderer_->readOutputImage(preview_render_target_);
         if (!image) {
             LOG_ERROR("Gaussian preview rgbd image readback failed: {}", image.error());
             return result;
         }
-        auto depth = vksplat_viewport_renderer_->readPreviewDepth(preview_render_target_);
+        auto depth = scene_renderer_->readPreviewDepth(preview_render_target_);
         if (!depth) {
             LOG_ERROR("Gaussian preview depth readback failed: {}", depth.error());
             return result;
@@ -853,9 +853,9 @@ namespace lfs::vis {
     }
 
     void RenderingManager::releasePreviewImageResources() {
-        if (vksplat_viewport_renderer_) {
-            if (vksplat_viewport_renderer_->hasRenderTarget(preview_render_target_) &&
-                vksplat_viewport_renderer_->releaseRenderTarget(preview_render_target_)) {
+        if (scene_renderer_) {
+            if (scene_renderer_->hasRenderTarget(preview_render_target_) &&
+                scene_renderer_->releaseRenderTarget(preview_render_target_)) {
                 render_targets_.release(preview_render_target_);
                 preview_render_target_ = render_targets_.allocate();
             }
@@ -993,13 +993,13 @@ namespace lfs::vis {
             std::unexpected("unsupported preview image readback format");
         if (readback_config.dtype == lfs::core::DataType::UInt8 &&
             readback_config.channels == 4) {
-            image = vksplat_viewport_renderer_->readOutputImageRgba8(
+            image = scene_renderer_->readOutputImageRgba8(
                 preview_render_target_);
         } else if (readback_config.dtype == lfs::core::DataType::UInt8) {
-            image = vksplat_viewport_renderer_->readOutputImageRgb8(
+            image = scene_renderer_->readOutputImageRgb8(
                 preview_render_target_);
         } else {
-            image = vksplat_viewport_renderer_->readOutputImage(
+            image = scene_renderer_->readOutputImage(
                 preview_render_target_);
         }
         if (!image) {
@@ -1102,13 +1102,13 @@ namespace lfs::vis {
                 lfs::rendering::gaussianRasterBackendId(request.raster_backend)));
         }
 
-        if (!vksplat_viewport_renderer_) {
-            vksplat_viewport_renderer_ = createSceneRenderer(*last_vulkan_context_);
+        if (!scene_renderer_) {
+            scene_renderer_ = createSceneRenderer(*last_vulkan_context_);
         }
 
         // Preview/export uses the renderer's exact two-batch count gate; one
         // render is complete for this view and can be read back immediately.
-        auto render_result = vksplat_viewport_renderer_->render(
+        auto render_result = scene_renderer_->render(
             model,
             request,
             false,
@@ -1209,7 +1209,7 @@ namespace lfs::vis {
                               tile_height,
                               rendered.error());
                     if (outstanding_export_ticket) {
-                        (void)vksplat_viewport_renderer_->waitReadbackTicket(*outstanding_export_ticket);
+                        (void)scene_renderer_->waitReadbackTicket(*outstanding_export_ticket);
                     }
                     return {};
                 }
@@ -1222,7 +1222,7 @@ namespace lfs::vis {
             }
             // After render of band N: wait prior band's copy (if any), then submit band N.
             if (outstanding_export_ticket) {
-                auto waited = vksplat_viewport_renderer_->waitReadbackTicket(*outstanding_export_ticket);
+                auto waited = scene_renderer_->waitReadbackTicket(*outstanding_export_ticket);
                 if (!waited) {
                     LOG_TRACE("Gaussian preview tiled prior-band readback failed at tile y={}: {}",
                               tile_y,
@@ -1231,7 +1231,7 @@ namespace lfs::vis {
                 }
                 outstanding_export_ticket.reset();
             }
-            auto ticket = vksplat_viewport_renderer_->submitReadOutputImageIntoCpuHwcTicket(
+            auto ticket = scene_renderer_->submitReadOutputImageIntoCpuHwcTicket(
                 preview_render_target_,
                 output,
                 0,
@@ -1247,7 +1247,7 @@ namespace lfs::vis {
             tile_y += tile_height;
         }
         if (outstanding_export_ticket) {
-            auto waited = vksplat_viewport_renderer_->waitReadbackTicket(*outstanding_export_ticket);
+            auto waited = scene_renderer_->waitReadbackTicket(*outstanding_export_ticket);
             if (!waited) {
                 LOG_TRACE("Gaussian preview tiled final-band readback failed: {}", waited.error());
                 return {};
@@ -1267,7 +1267,7 @@ namespace lfs::vis {
             return cached_depth;
         }
 
-        if (!vksplat_viewport_renderer_ || !last_vulkan_context_) {
+        if (!scene_renderer_ || !last_vulkan_context_) {
             return -1.0f;
         }
 
@@ -1275,14 +1275,14 @@ namespace lfs::vis {
 
         glm::ivec2 source_size = viewState(view).frame_lifecycle_service_.lastViewportSize();
 
-        const auto depth = vksplat_viewport_renderer_->sampleDepthAtPixel(
+        const auto depth = scene_renderer_->sampleDepthAtPixel(
             SceneRenderer::DepthSampleRequest{
                 .pixel = {x, y},
                 .source_size = source_size,
                 .target = target,
             });
         if (!depth) {
-            LOG_TRACE("VkSplat depth sample failed: {}", depth.error());
+            LOG_TRACE("Scene depth sample failed: {}", depth.error());
             return -1.0f;
         }
         return *depth;
@@ -1357,7 +1357,7 @@ namespace lfs::vis {
             return -1.0f;
         }
 
-        auto depth = vksplat_viewport_renderer_->readPreviewDepth(
+        auto depth = scene_renderer_->readPreviewDepth(
             preview_render_target_);
         if (!depth) {
             LOG_TRACE("Expected-depth pixel readback failed: {}", depth.error());

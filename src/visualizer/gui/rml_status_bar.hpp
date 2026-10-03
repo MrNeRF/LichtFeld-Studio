@@ -12,6 +12,7 @@
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/status_bar_mining.hpp"
+#include "rendering/viewer_backend.hpp"
 #include "visualizer/rendering/rendering_types.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/DataModelHandle.h>
@@ -103,7 +104,8 @@ namespace lfs::vis::gui {
         };
 
         bool updateContent(const PanelDrawContext& ctx, bool force_refresh);
-        LFS_VIS_API void updateBackendContent(std::optional<uint32_t> active_view_mask = std::nullopt);
+        LFS_VIS_API void updateBackendContent();
+        LFS_VIS_API void updateBackendContent(std::optional<rendering::ViewerBackend> published_backend);
         LFS_VIS_API bool applyHoverTooltip(int doc_w, int bar_h, int maximum_overlay_height,
                                            bool force_position = false);
         void updateHoverTooltip();
@@ -153,8 +155,8 @@ namespace lfs::vis::gui {
         Rml::Element* tooltip_target_ = nullptr;
         std::string tooltip_text_;
         struct BackendStatusStamp {
-            uint32_t mask;
-            int requested;
+            std::optional<rendering::ViewerBackend> published_backend;
+            int configured;
             int tensor;
             uint64_t language;
             bool operator==(const BackendStatusStamp&) const = default;

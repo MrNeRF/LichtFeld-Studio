@@ -5958,12 +5958,7 @@ namespace lfs::vis {
         if (readback_timeline_ == VK_NULL_HANDLE) {
             return std::unexpected("VkSplat readback timeline missing");
         }
-#ifdef __APPLE__
-        // Native Metal tickets reserve the high bit; Vulkan IDs stay disjoint.
-        constexpr auto max_readback_ticket = (std::uint64_t{1} << 63) - 1;
-#else
         constexpr auto max_readback_ticket = std::numeric_limits<std::uint64_t>::max();
-#endif
         if (next_readback_ticket_ == max_readback_ticket) {
             return std::unexpected("VkSplat readback ticket counter exhausted");
         }

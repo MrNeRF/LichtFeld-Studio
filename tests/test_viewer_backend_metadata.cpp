@@ -7,41 +7,40 @@
 namespace lfs::vis {
     TEST(ViewerBackendMetadata, TracksPublishedOutputAndClearsOnSceneClose) {
         ViewportArtifactService artifacts;
-        EXPECT_EQ(artifacts.viewerBackendMask(), 0u);
+        EXPECT_FALSE(artifacts.viewerBackend());
         rendering::FrameMetadata frame;
         frame.valid = true;
-        frame.viewer_backend_mask = rendering::viewerBackendBit(rendering::ViewerBackend::Metal);
+        frame.viewer_backend = rendering::ViewerBackend::Metal;
         artifacts.setLazyCapture([] { return std::shared_ptr<core::Tensor>{}; }, frame, {64, 48});
-        EXPECT_EQ(artifacts.viewerBackendMask(), 2u);
-        frame.viewer_backend_mask = rendering::viewerBackendBit(rendering::ViewerBackend::Vulkan);
+        EXPECT_EQ(artifacts.viewerBackend(), rendering::ViewerBackend::Metal);
+        frame.viewer_backend = rendering::ViewerBackend::Vulkan;
         artifacts.setLazyCaptureForCurrentOutput([] { return std::shared_ptr<core::Tensor>{}; }, frame, {64, 48});
-        EXPECT_EQ(artifacts.viewerBackendMask(), 1u);
+        EXPECT_EQ(artifacts.viewerBackend(), rendering::ViewerBackend::Vulkan);
         artifacts.clearViewportOutput();
-        EXPECT_EQ(artifacts.viewerBackendMask(), 0u);
+        EXPECT_FALSE(artifacts.viewerBackend());
     }
 
-    TEST(ViewerBackendMetadata, PreservesSoftwarePointCloudPanelBackend) {
+    TEST(ViewerBackendMetadata, PreservesCudaPointCloudPanelBackend) {
         ViewportArtifactService artifacts;
         rendering::FrameMetadata frame;
         frame.valid = true;
-        frame.viewer_backend_mask = rendering::softwareViewerBackendBit;
+        frame.viewer_backend = rendering::ViewerBackend::Cuda;
         artifacts.updateFromImageOutput({}, frame, {64, 48}, true);
-        EXPECT_EQ(artifacts.viewerBackendMask(), 4u);
+        EXPECT_EQ(artifacts.viewerBackend(), rendering::ViewerBackend::Cuda);
     }
 
-    TEST(ViewerBackendMetadata, PreservesMixedSplitAndCachedFrameWithoutCapturingPixels) {
+    TEST(ViewerBackendMetadata, PreservesCachedFrameIdentityWithoutCapturingPixels) {
         ViewportArtifactService artifacts;
         rendering::FrameMetadata frame;
         frame.valid = true;
-        frame.viewer_backend_mask = rendering::viewerBackendBit(rendering::ViewerBackend::Metal) |
-                                    rendering::viewerBackendBit(rendering::ViewerBackend::Vulkan);
+        frame.viewer_backend = rendering::ViewerBackend::Metal;
         FrameResources resources;
         resources.cached_metadata = makeCachedRenderMetadata(frame);
         resources.cached_result_size = {128, 48};
         artifacts.updateFromFrameResources(resources, true);
-        EXPECT_EQ(artifacts.viewerBackendMask(), 3u);
+        EXPECT_EQ(artifacts.viewerBackend(), rendering::ViewerBackend::Metal);
         EXPECT_FALSE(artifacts.getCapturedImageIfCurrent());
         artifacts.updateFromImageOutput({}, frame, {128, 48}, true);
-        EXPECT_EQ(artifacts.viewerBackendMask(), 3u);
+        EXPECT_EQ(artifacts.viewerBackend(), rendering::ViewerBackend::Metal);
     }
 } // namespace lfs::vis

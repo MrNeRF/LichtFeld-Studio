@@ -663,7 +663,7 @@ namespace lfs::vis::gui {
         bind(store.eval_lpips);
         bind(store.scene_generation);
         bind(store.selection_generation);
-        bind(store.viewer_backend_mask);
+        bind(store.viewer_backend);
         bind(store.language_generation);
         subscriptions_.push_back(store.fps.subscribe([this](const float& fps) {
             reactive_fps_available_ = true;
@@ -1698,7 +1698,10 @@ namespace lfs::vis::gui {
                        ui_only_fps ? std::format(" {}", LOC("status_bar.ui_fps"))
                                    : std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
         const auto* backend_manager = ctx.ui && ctx.ui->viewer ? ctx.ui->viewer->getRenderingManager() : nullptr;
-        updateBackendContent(backend_manager ? std::optional<uint32_t>(backend_manager->activeViewerBackendMask()) : std::nullopt);
+        if (backend_manager)
+            updateBackendContent(backend_manager->activeViewerBackend());
+        else
+            updateBackendContent();
         setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
 
         section_signature_ =
@@ -1728,41 +1731,27 @@ namespace lfs::vis::gui {
         return model_dirty_;
     }
 
-    void RmlStatusBar::updateBackendContent(const std::optional<uint32_t> active_view_mask) {
-        // Read published frame metadata, never predict the API from a preference
-        // or initialize a GPU just to paint the status bar.
-        const uint32_t backend_mask = active_view_mask.value_or(lfs::vis::app_store().viewer_backend_mask.get());
-        constexpr auto requested = rendering::desktopViewerBackend();
+    void RmlStatusBar::updateBackendContent() {
+        updateBackendContent(lfs::vis::app_store().viewer_backend.get());
+    }
+
+    void RmlStatusBar::updateBackendContent(const std::optional<rendering::ViewerBackend> published_backend) {
+        // Published identity belongs to the active view. Do not infer it from
+        // tensor preferences or reuse another view's output for an empty view.
+        constexpr auto configured = rendering::desktopViewerBackend();
         const auto tensor_backend = core::configured_gpu_backend();
-        const BackendStatusStamp stamp{backend_mask, static_cast<int>(requested),
+        const BackendStatusStamp stamp{published_backend, static_cast<int>(configured),
                                        static_cast<int>(tensor_backend),
                                        lfs::vis::app_store().language_generation.get()};
         if (backend_status_stamp_ == stamp)
             return;
         backend_status_stamp_ = stamp;
-        std::string active_renderer;
-        const auto append_backend = [&](const uint32_t bit, const char* name) {
-            if (backend_mask & bit) {
-                if (!active_renderer.empty())
-                    active_renderer += " / ";
-                active_renderer += name;
-            }
-        };
-        append_backend(rendering::viewerBackendBit(rendering::ViewerBackend::Metal), "Metal");
-        append_backend(rendering::viewerBackendBit(rendering::ViewerBackend::Vulkan), "Vulkan");
-        append_backend(rendering::softwareViewerBackendBit, "CPU");
-        // Until a scene publishes an output, show its configured renderer.
-        // The tooltip distinguishes this idle state from actual frame telemetry;
-        // the UI compositor is not the scene renderer represented by R.
-        if (active_renderer.empty()) {
-            active_renderer = std::string(rendering::viewerBackendName(requested));
-            active_renderer[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(active_renderer[0])));
-        }
+        const auto active_renderer = std::string(rendering::viewerBackendDisplayName(published_backend.value_or(configured)));
         setModelString("renderer_label", model_.renderer_label, LOC("status_bar.renderer_backend_short"));
         setModelString("renderer_value", model_.renderer_value, active_renderer);
         auto renderer_tooltip = std::string(LOC("status_bar.renderer_backend")) + ": " +
                                 LOC("status_bar.renderer_backend_tooltip");
-        if (!backend_mask)
+        if (!published_backend)
             renderer_tooltip += std::string("\n") + LOC("status_bar.backend_no_frame");
         setModelString("renderer_tooltip", model_.renderer_tooltip, std::move(renderer_tooltip));
         setModelString("tensor_label", model_.tensor_label, LOC("status_bar.tensor_backend_short"));
@@ -2001,7 +1990,10 @@ namespace lfs::vis::gui {
             return;
 
         const auto* backend_manager = ctx.ui && ctx.ui->viewer ? ctx.ui->viewer->getRenderingManager() : nullptr;
-        updateBackendContent(backend_manager ? std::optional<uint32_t>(backend_manager->activeViewerBackendMask()) : std::nullopt);
+        if (backend_manager)
+            updateBackendContent(backend_manager->activeViewerBackend());
+        else
+            updateBackendContent();
         const float overlay_height = overlayHeight();
         const int render_w = static_cast<int>(w_px);
         const int render_h = static_cast<int>(std::ceil(h_px + overlay_height));
@@ -2055,7 +2047,10 @@ namespace lfs::vis::gui {
         }
 
         const auto* backend_manager = ctx.ui && ctx.ui->viewer ? ctx.ui->viewer->getRenderingManager() : nullptr;
-        updateBackendContent(backend_manager ? std::optional<uint32_t>(backend_manager->activeViewerBackendMask()) : std::nullopt);
+        if (backend_manager)
+            updateBackendContent(backend_manager->activeViewerBackend());
+        else
+            updateBackendContent();
         float overlay_height = overlayHeight();
         const int render_w = static_cast<int>(w_px);
         int render_h = static_cast<int>(std::ceil(h_px + overlay_height));

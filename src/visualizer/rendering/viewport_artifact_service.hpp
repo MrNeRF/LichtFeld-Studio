@@ -24,7 +24,7 @@ namespace lfs::vis {
         ViewportArtifactService& operator=(const ViewportArtifactService&) = delete;
 
         [[nodiscard]] bool hasGpuFrame() const;
-        [[nodiscard]] uint32_t viewerBackendMask() const { return metadata_.viewer_backend_mask; }
+        [[nodiscard]] std::optional<lfs::rendering::ViewerBackend> viewerBackend() const { return metadata_.viewer_backend; }
 
         [[nodiscard]] const std::optional<lfs::rendering::GpuFrame>& gpuFrame() const { return gpu_frame_; }
         [[nodiscard]] glm::ivec2 renderedSize() const { return rendered_size_; }
