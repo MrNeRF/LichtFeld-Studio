@@ -10,13 +10,16 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "io/cache_image_loader.hpp"
 #include "training/dataset.hpp"
 #include "training/metrics/metrics.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -26,6 +29,7 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <thread>
 #include <torch/torch.h>
 #include <vector>
 
@@ -687,6 +691,76 @@ TEST(MetricsEvaluatorUndistort, SharedPreparationMatchesCachedInteractiveInputsI
 
 // A keep-mask narrower than the 11x11 SSIM window has no complete window after erosion; the
 // view must stay measured (SSIM over partial windows) instead of being dropped or reported as 0.
+// Catches evaluation reading render outputs on the caller's stream before the render stream has
+// produced them: the render waits behind a gate while the evaluation work is queued.
+TEST(MetricsEvaluatorUndistort, WaitsForRenderOutputsFromAnotherStream) {
+    ensure_image_loader();
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_render_stream";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 64;
+    constexpr int kH = 48;
+    const auto image_path = tmp / "gt.png";
+    const auto mask_path = tmp / "mask.png";
+    write_rgb_png(image_path, 130, 130, 130, kH, kW);
+    write_rgb_png(mask_path, 255, 255, 255, kH, kW);
+    auto cam = make_distorted_eval_camera(image_path, mask_path, kW, kH);
+    auto params = make_eval_params(tmp / "out");
+    params.optimization.undistort = true;
+    params.optimization.mask_mode = lfs::core::param::MaskMode::Ignore;
+
+    cudaStream_t render_stream = nullptr;
+    cudaStream_t gate_holder = nullptr;
+    cudaEvent_t gate = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&render_stream, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&gate_holder, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaEventCreateWithFlags(&gate, cudaEventDisableTiming), cudaSuccess);
+    std::atomic<bool> released{false};
+    bool gated = false;
+    const auto render = [&](Camera& render_camera, float) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        if (gated) {
+            EXPECT_EQ(cudaLaunchHostFunc(
+                          gate_holder,
+                          [](void* flag) {
+                              while (!static_cast<std::atomic<bool>*>(flag)->load(std::memory_order_acquire)) {
+                              }
+                          },
+                          &released),
+                      cudaSuccess);
+            EXPECT_EQ(cudaEventRecord(gate, gate_holder), cudaSuccess);
+            EXPECT_EQ(cudaStreamWaitEvent(render_stream, gate, 0), cudaSuccess);
+        }
+        const lfs::core::CUDAStreamGuard guard(render_stream);
+        lfs::training::RenderOutput output;
+        output.image = Tensor::full({size_t{3}, static_cast<size_t>(render_camera.image_height()),
+                                     static_cast<size_t>(render_camera.image_width())},
+                                    130.0f / 255.0f, Device::CUDA);
+        return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+    };
+
+    const auto ungated = prepare_evaluation_view(*cam, params, render);
+    ASSERT_TRUE(ungated.has_value()) << ungated.error().detail();
+    const auto expected = ungated->metric_mask.to(lfs::core::DataType::Float32).sum().item<float>();
+    ASSERT_GT(expected, 0.0f);
+
+    gated = true;
+    std::thread releaser([&released] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        released.store(true, std::memory_order_release);
+    });
+    const auto prepared = prepare_evaluation_view(*cam, params, render);
+    const auto actual = prepared ? prepared->metric_mask.to(lfs::core::DataType::Float32).sum().item<float>() : -1.0f;
+    releaser.join();
+    ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
+    EXPECT_EQ(actual, expected);
+
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    cudaEventDestroy(gate);
+    cudaStreamDestroy(gate_holder);
+    cudaStreamDestroy(render_stream);
+    std::filesystem::remove_all(tmp);
+}
+
 TEST(MetricsEvaluatorUndistort, ThinMaskFallsBackToPartialSsimWindows) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";

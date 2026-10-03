@@ -10,6 +10,7 @@
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include <algorithm>
 #include <array>
@@ -573,6 +574,8 @@ namespace lfs::core {
             _cached_mask_was_undistorted == (_undistort_prepared && apply_undistortion)) {
             return _cached_mask;
         }
+        // Loading stays on this camera's stream so uploads, intermediates and their reuse are ordered.
+        const CUDAStreamGuard stream_guard(_stream);
 
         Tensor mask;
         if (_in_memory_mask_raw.is_valid()) {
@@ -658,6 +661,9 @@ namespace lfs::core {
             // UInt8 truncates interpolated values such as 250.6 → 250.
             mask = mask.contiguous();
         }
+        if (_stream) {
+            LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "mask load sync");
+        }
         _cached_mask = mask;
         _mask_loaded = true;
         _cached_mask_resize_factor = resize_factor;
@@ -676,6 +682,8 @@ namespace lfs::core {
         if (_depth_loaded && _cached_depth.is_valid()) {
             return _cached_depth;
         }
+        // Loading stays on this camera's stream so uploads, intermediates and their reuse are ordered.
+        const CUDAStreamGuard stream_guard(_stream);
 
         if (_depth_path.empty() || !std::filesystem::exists(_depth_path)) {
             return Tensor();
@@ -740,6 +748,9 @@ namespace lfs::core {
         }
 
         _cached_depth = depth.contiguous();
+        if (_stream) {
+            LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "depth load sync");
+        }
         _depth_loaded = true;
 
         LOG_DEBUG("Loaded depth for {}: [{},{}]", _image_name, _cached_depth.shape()[0], _cached_depth.shape()[1]);
@@ -753,6 +764,8 @@ namespace lfs::core {
         if (_normal_loaded && _cached_normal.is_valid()) {
             return _cached_normal;
         }
+        // Loading stays on this camera's stream so uploads, intermediates and their reuse are ordered.
+        const CUDAStreamGuard stream_guard(_stream);
 
         if (_normal_path.empty() || !std::filesystem::exists(_normal_path)) {
             return Tensor();
@@ -858,6 +871,9 @@ namespace lfs::core {
         }
 
         _cached_normal = normal.contiguous();
+        if (_stream) {
+            LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal load sync");
+        }
         _normal_loaded = true;
 
         LOG_DEBUG("Loaded normal map for {}: [{},{}]", _image_name,

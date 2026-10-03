@@ -577,12 +577,20 @@ namespace lfs::training {
                 assert(rendered->raw_image.shape() == rendered->output.image.shape());
             }
 
+            // The render may finish on another stream; everything below runs on the caller's.
+            const cudaStream_t consumer = lfs::core::getCurrentCUDAStream();
+            for (const auto* produced : {&rendered->output.image, &rendered->raw_image, &rendered->output.alpha,
+                                         &rendered->output.depth, &rendered->output.normal}) {
+                if (produced->is_valid())
+                    produced->sync_to_stream(consumer);
+            }
+
             auto metric_mask = inputs.user_mask;
             if (warp_to_distorted) {
                 lfs::core::Tensor validity_mask;
                 rendered->output.image = lfs::core::distort_image_to_source(
                     rendered->output.image, *inverse_warp, validity_mask,
-                    rendered->output.image.stream());
+                    consumer);
                 assert(validity_mask.ndim() == 2);
                 assert(validity_mask.shape()[0] == static_cast<size_t>(inputs.source_height));
                 assert(validity_mask.shape()[1] == static_cast<size_t>(inputs.source_width));
@@ -590,22 +598,22 @@ namespace lfs::training {
                     lfs::core::Tensor raw_validity;
                     rendered->raw_image = lfs::core::distort_image_to_source(
                         rendered->raw_image, *inverse_warp, raw_validity,
-                        rendered->raw_image.stream());
+                        consumer);
                 }
                 if (rendered->output.alpha.is_valid()) {
                     rendered->output.alpha = lfs::core::distort_mask_to_source_area(
                         rendered->output.alpha, *inverse_warp,
-                        rendered->output.alpha.stream());
+                        consumer);
                 }
                 if (rendered->output.depth.is_valid()) {
                     rendered->output.depth = lfs::core::distort_depth_to_source_area(
                         rendered->output.depth, *inverse_warp,
-                        rendered->output.depth.stream());
+                        consumer);
                 }
                 if (rendered->output.normal.is_valid()) {
                     rendered->output.normal = lfs::core::distort_normal_to_source_area(
                         rendered->output.normal, *inverse_warp,
-                        rendered->output.normal.stream());
+                        consumer);
                 }
                 const auto validity_float = validity_mask.to(lfs::core::DataType::Float32);
                 const auto apply_validity = [&validity_float](lfs::core::Tensor& value) {
