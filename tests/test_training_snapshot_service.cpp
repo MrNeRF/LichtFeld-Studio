@@ -7,6 +7,8 @@
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_execution.hpp"
+#include "core/tensor_serialization.hpp"
 #include "core/uuid.hpp"
 #include "cuda_backend_test.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
@@ -210,6 +212,29 @@ namespace {
         std::optional<std::string> previous_;
     };
 
+    TEST(TrainingSnapshotSerializationTest, WritesDeterministicHeaderAndReadsLegacyPadding) {
+        using namespace lfs::core;
+        const auto tensor = Tensor::from_vector({1.f, 2.f, 3.f}, {3}, Device::CPU);
+        std::ostringstream stream(std::ios::binary | std::ios::out);
+        stream << tensor;
+        auto bytes = stream.str();
+        ASSERT_GE(bytes.size(), sizeof(TensorFileHeader));
+        constexpr size_t padding_begin = offsetof(TensorFileHeader, rank) + sizeof(uint16_t);
+        constexpr size_t padding_end = offsetof(TensorFileHeader, numel);
+        for (size_t i = padding_begin; i < padding_end; ++i) {
+            EXPECT_EQ(uint8_t(bytes[i]), 0u);
+            bytes[i] = char(0xa5); // Historical v1 writers stored arbitrary padding.
+        }
+        std::istringstream legacy(bytes, std::ios::binary | std::ios::in);
+        Tensor restored;
+        legacy >> restored;
+        EXPECT_EQ(restored.shape(), tensor.shape());
+        EXPECT_EQ(restored.to_vector(), tensor.to_vector());
+        std::ostringstream reencoded(std::ios::binary | std::ios::out);
+        reencoded << restored;
+        EXPECT_EQ(reencoded.str(), stream.str());
+    }
+
     TEST(TrainingSnapshotServiceConfigTest,
          RejectsPinnedRingLargerThan512MiB) {
         EXPECT_THROW(
@@ -222,7 +247,19 @@ namespace {
             std::invalid_argument);
     }
 
+#if LFS_HAS_CUDA
     class TrainingSnapshotServiceTest : public lfs::test::CudaBackendTest {};
+#else
+    // Exercise the selected backend on portable trainer builds too. The
+    // byte-exact and post-resume mutation checks are backend-independent.
+    class TrainingSnapshotServiceTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend()))
+                GTEST_SKIP() << "Selected GPU backend unavailable";
+        }
+    };
+#endif
 
     TEST_F(TrainingSnapshotServiceTest,
            ExplicitSavesUseRelaxedHostMemoryGate) {
@@ -370,7 +407,7 @@ namespace {
             lfs::core::TensorShape(
                 {expected_bounds, std::size_t{4}}));
         source_moments->joint_bounds.fill_(3.5f);
-        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        lfs::core::TensorExecutionTarget::current().wait();
 
         const auto original_means =
             model->means().cpu().to_vector();
@@ -457,7 +494,7 @@ namespace {
         // pageable checkpoint bytes.
         model->means().fill_(42.0f);
         source_moments->joint_bounds.fill_(7.5f);
-        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        lfs::core::TensorExecutionTarget::current().wait();
 
         auto captured = pending->wait();
         ASSERT_TRUE(captured.has_value())
@@ -619,7 +656,7 @@ namespace {
             shN_moments->joint_bounds.is_valid()) {
             shN_moments->joint_bounds.fill_(-1.25f);
         }
-        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        lfs::core::TensorExecutionTarget::current().wait();
 
         std::ostringstream reference_stream(
             std::ios::binary | std::ios::out);

@@ -525,6 +525,7 @@ if(NOT LFS_HAS_CUDA)
             test_training_ops_metal_losses.cpp
             test_training_ops_metal_adam_sh.cpp
             test_training_ops_metal_fast.cpp
+            test_training_snapshot_service.cpp
             test_ppisp_regularizer_portable.cpp)
     endif()
     if(APPLE)

@@ -8,7 +8,9 @@
 #include "core/path_utils.hpp"
 #include "core/tensor_serialization_sink.hpp"
 
+#include <array>
 #include <chrono>
+#include <cstring>
 #include <fstream>
 #include <ios>
 #include <limits>
@@ -120,7 +122,20 @@ namespace lfs::core {
             static_cast<uint16_t>(
                 descriptor.serialized_shape.rank()),
             descriptor.serialized_shape.elements()};
-        os.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        // Preserve the v1 native header layout without serializing its
+        // indeterminate padding. Snapshot and synchronous writers must
+        // produce identical bytes for the same tensor metadata and payload.
+        std::array<std::byte, sizeof(TensorFileHeader)> encoded_header{};
+        const auto encode_field = [&](size_t offset, const auto& value) {
+            std::memcpy(encoded_header.data() + offset, &value, sizeof(value));
+        };
+        encode_field(offsetof(TensorFileHeader, magic), header.magic);
+        encode_field(offsetof(TensorFileHeader, version), header.version);
+        encode_field(offsetof(TensorFileHeader, dtype), header.dtype);
+        encode_field(offsetof(TensorFileHeader, device), header.device);
+        encode_field(offsetof(TensorFileHeader, rank), header.rank);
+        encode_field(offsetof(TensorFileHeader, numel), header.numel);
+        os.write(reinterpret_cast<const char*>(encoded_header.data()), encoded_header.size());
 
         for (const size_t dim :
              descriptor.serialized_shape.dims()) {
