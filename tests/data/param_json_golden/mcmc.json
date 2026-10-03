@@ -24,6 +24,8 @@
   "enable_sparsity": false,
   "erank_reg": 0.0,
   "eval_all": false,
+  "eval_mask": "",
+  "eval_mask_invert": false,
   "eval_space": "distorted",
   "eval_steps": [
     7000,
