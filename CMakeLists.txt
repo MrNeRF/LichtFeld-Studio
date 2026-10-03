@@ -850,9 +850,12 @@ if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
         set(_vcpkg_debug_dlls)
     endif()
 
-    # The application uses OpenEXRCore only. The C++/utility libraries are
-    # installed by the standard vcpkg port for the test oracle, not for shipping.
-    set(_lfs_exr_cpp_dll_pattern "/(OpenEXR|OpenEXRUtil|Iex|IlmThread)-3_[0-9]+(_d)?[.]dll$")
+    # Core-only builds install none of these DLLs. Test-enabled builds also
+    # install the C++ oracle; keep its DLLs out of the application directory.
+    set(_lfs_exr_cpp_dll_pattern "^$")
+    if(TARGET OpenEXR::OpenEXR)
+        set(_lfs_exr_cpp_dll_pattern "/(OpenEXR|OpenEXRUtil|Iex|IlmThread|Imath)-3_[0-9]+(_d)?[.]dll$")
+    endif()
     list(FILTER _vcpkg_release_dlls EXCLUDE REGEX "${_lfs_exr_cpp_dll_pattern}")
     list(FILTER _vcpkg_debug_dlls EXCLUDE REGEX "${_lfs_exr_cpp_dll_pattern}")
 

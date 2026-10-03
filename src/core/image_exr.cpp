@@ -27,9 +27,14 @@ namespace lfs::core::image_codecs {
         };
 
         bool check(exr_result_t status, std::string& error) {
-            if (status == EXR_ERR_SUCCESS)
+            if (status == EXR_ERR_SUCCESS) {
+                error.clear();
                 return true;
+            }
+            const auto detail = std::move(error);
             error = std::string("EXR: ") + exr_get_error_code_as_string(status);
+            if (!detail.empty())
+                error += ": " + detail;
             return false;
         }
 
@@ -39,14 +44,26 @@ namespace lfs::core::image_codecs {
             int width = 0;
             int height = 0;
             bool grayscale = false;
+            int source_channels = 0;
             std::array<int, 4> channels{-1, -1, -1, -1};
         };
 
         bool open(const std::filesystem::path& path, Context& context, Header& header,
                   std::string& error) {
             exr_context_initializer_t init = EXR_DEFAULT_CONTEXT_INITIALIZER;
-            // Return diagnostics through the codec API, never print from the library.
-            init.error_handler_fn = [](exr_const_context_t, exr_result_t, const char*) {};
+            // Keep the library's useful details without printing or throwing through C.
+            init.user_data = &error;
+            init.error_handler_fn = [](exr_const_context_t ctxt, exr_result_t, const char* message) noexcept {
+                void* user = nullptr;
+                if (message && exr_get_user_data(ctxt, &user) == EXR_ERR_SUCCESS && user) {
+                    try {
+                        *static_cast<std::string*>(user) = message;
+                    } catch (...) {
+                        // Fall back to the result code if storing the detail fails.
+                        static_cast<std::string*>(user)->clear();
+                    }
+                }
+            };
             const auto name = path_to_utf8(path);
             if (!check(exr_start_read(&context.value, name.c_str(), &init), error) ||
                 !check(exr_get_storage(context.value, 0, &header.storage), error) ||
@@ -70,7 +87,7 @@ namespace lfs::core::image_codecs {
             const exr_attr_chlist_t* channels = nullptr;
             if (!check(exr_get_channels(context.value, 0, &channels), error))
                 return false;
-            // Preserve LoadEXR's contract: a single channel is replicated to RGB;
+            // Preserve LoadEXR's contract: a single channel is replicated to RGBA;
             // otherwise select the unlayered RGB channels and optional alpha.
             header.grayscale = channels->num_channels == 1;
             constexpr std::array<const char*, 4> names{"R", "G", "B", "A"};
@@ -86,6 +103,9 @@ namespace lfs::core::image_codecs {
                 error = "EXR: RGB channels not found";
                 return false;
             }
+            // Auxiliary channels such as Z do not make an RGB camera have alpha.
+            header.source_channels = header.grayscale ? 1 : header.channels[3] >= 0 ? 4
+                                                                                    : 3;
             for (const int index : header.channels) {
                 if (index >= 0 && (channels->entries[index].x_sampling != 1 || channels->entries[index].y_sampling != 1)) {
                     error = "EXR: subsampled RGB/alpha channels are not supported";
@@ -97,29 +117,47 @@ namespace lfs::core::image_codecs {
     } // namespace
 
     bool probe_exr(const std::filesystem::path& path, Probe& result, std::string& error) {
+        error.clear();
         Context context;
         Header header;
         if (!open(path, context, header, error))
             return false;
         // Header only: do not read the chunk table or decompress pixels for camera import.
-        result = {header.width, header.height, 4, SampleType::Float32};
+        result = {header.width, header.height, header.source_channels, SampleType::Float32};
         return true;
     }
 
     bool decode_exr(const std::filesystem::path& path, Image& result, std::string& error) {
+        error.clear();
         Context context;
         Header header;
         if (!open(path, context, header, error))
             return false;
+        std::error_code file_error;
+        const auto file_size = std::filesystem::file_size(path, file_error);
+        if (file_error) {
+            error = "EXR: unable to read file size: " + file_error.message();
+            return false;
+        }
+        int32_t chunk_count = 0;
+        uint64_t table_offset = 0;
+        if (!check(exr_get_chunk_count(context.value, 0, &chunk_count), error) ||
+            !check(exr_get_chunk_table_offset(context.value, 0, &table_offset), error))
+            return false;
+        // A real file must contain its offset table. Check before the library or
+        // the output buffer allocates from dimensions in a potentially damaged header.
+        // Do not impose a compression-ratio limit: uniform HDR images compress well.
+        if (chunk_count <= 0 || table_offset > file_size ||
+            uint64_t(chunk_count) > (file_size - table_offset) / sizeof(uint64_t)) {
+            error = "EXR: data window requires a chunk table larger than the file";
+            return false;
+        }
         Image image;
         image.width = header.width;
         image.height = header.height;
         image.channels = 4;
         image.sample_type = SampleType::Float32;
-        image.data.resize(size_t(header.width) * header.height * 4 * sizeof(float));
-        auto* pixels = reinterpret_cast<float*>(image.data.data());
-        for (size_t i = 0; i < image.data.size() / sizeof(float); i += 4)
-            pixels[i + 3] = 1.0f;
+        float* pixels = nullptr;
 
         Pipeline pipeline{EXR_DECODE_PIPELINE_INITIALIZER, context.value};
         bool initialized = false;
@@ -128,6 +166,18 @@ namespace lfs::core::image_codecs {
                 int64_t(x) + chunk.width > header.width || int64_t(y) + chunk.height > header.height) {
                 error = "EXR: chunk outside data window";
                 return false;
+            }
+            if (chunk.data_offset > file_size || chunk.packed_size > file_size - chunk.data_offset ||
+                (chunk.compression == EXR_COMPRESSION_NONE && chunk.packed_size != chunk.unpacked_size)) {
+                error = "EXR: chunk size is inconsistent with the file or data window";
+                return false;
+            }
+            // Delay full-image allocation until real pixel chunk metadata is available.
+            if (!pixels) {
+                image.data.resize(size_t(header.width) * header.height * 4 * sizeof(float));
+                pixels = reinterpret_cast<float*>(image.data.data());
+                for (size_t i = 0; i < image.data.size() / sizeof(float); i += 4)
+                    pixels[i + 3] = 1.0f;
             }
             const auto status = initialized
                                     ? exr_decoding_update(context.value, 0, &chunk, &pipeline.value)
@@ -186,7 +236,7 @@ namespace lfs::core::image_codecs {
         }
         if (header.grayscale) {
             for (size_t i = 0; i < image.data.size() / sizeof(float); i += 4)
-                pixels[i + 1] = pixels[i + 2] = pixels[i];
+                pixels[i + 1] = pixels[i + 2] = pixels[i + 3] = pixels[i];
         }
         result = std::move(image);
         return true;

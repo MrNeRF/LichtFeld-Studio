@@ -81,7 +81,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 | [libpng](https://libpng.sourceforge.net/) | PNG codec | PNG Reference Library License v2 |
 | [libtiff](https://libtiff.gitlab.io/libtiff/) | TIFF codec | libtiff License, BSD-style |
 | [OpenEXR](https://github.com/AcademySoftwareFoundation/openexr) | OpenEXRCore image codec (including DWAA/DWAB) | BSD-3-Clause; DWA patent grant / Apache-2.0 alternative (see upstream PATENTS) |
-| [Imath](https://github.com/AcademySoftwareFoundation/Imath) | OpenEXR half-float support | BSD-3-Clause |
+| [Imath](https://github.com/AcademySoftwareFoundation/Imath) | Optional OpenEXR C++ test reference dependency | BSD-3-Clause |
 | [OpenJPH](https://github.com/aous72/OpenJPH) | OpenEXR HTJ2K codec dependency | BSD-2-Clause |
 | [stb](https://github.com/nothings/stb) | Image decode and encode headers | MIT / Public Domain |
 | [nlohmann/json](https://github.com/nlohmann/json) | JSON for Modern C++ | MIT |

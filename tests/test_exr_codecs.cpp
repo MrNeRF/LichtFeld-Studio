@@ -17,7 +17,9 @@
 #include <OpenEXR/ImfTiledOutputFile.h>
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -68,6 +70,7 @@ namespace {
     struct Fixture {
         static constexpr int width = 19, height = 291;
         std::filesystem::path path;
+        int source_channels = 3;
         Fixture() {
             static std::atomic_uint64_t sequence{0};
             path = std::filesystem::temp_directory_path() /
@@ -82,14 +85,18 @@ namespace {
         void write(exr::Compression compression, bool tiled, exr::PixelType type,
                    bool grayscale = false, bool alpha = true,
                    Imath::V2i origin = {0, 0}, exr::LineOrder order = exr::INCREASING_Y,
-                   exr::LevelMode levels = exr::ONE_LEVEL) {
+                   exr::LevelMode levels = exr::ONE_LEVEL, bool auxiliary = true) {
+            source_channels = grayscale ? 1 : alpha ? 4
+                                                    : 3;
             exr::Header header(width, height);
             header.dataWindow() = {origin, origin + Imath::V2i(width - 1, height - 1)};
             header.compression() = compression;
             header.lineOrder() = order;
-            const std::vector<std::string> names = grayscale ? std::vector<std::string>{"Y"}
-                                                   : alpha   ? std::vector<std::string>{"R", "G", "B", "A", "Z"}
-                                                             : std::vector<std::string>{"R", "G", "B", "Z"};
+            std::vector<std::string> names = grayscale ? std::vector<std::string>{"Y"}
+                                             : alpha   ? std::vector<std::string>{"R", "G", "B", "A", "Z"}
+                                                       : std::vector<std::string>{"R", "G", "B", "Z"};
+            if (!grayscale && !auxiliary)
+                names.pop_back();
             std::vector<std::vector<float>> floats(names.size(), std::vector<float>(width * height));
             std::vector<std::vector<Imath::half>> halves(names.size(), std::vector<Imath::half>(width * height));
             std::vector<std::vector<uint32_t>> ints(names.size(), std::vector<uint32_t>(width * height));
@@ -150,7 +157,8 @@ namespace {
             if (grayscale) {
                 for (size_t i = 0; i < pixels.size(); i += 4) {
                     pixels[i + 1] = pixels[i + 2] = pixels[i];
-                    pixels[i + 3] = 1.0f;
+                    // LoadEXR historically copies a single channel into alpha too.
+                    pixels[i + 3] = pixels[i];
                 }
             }
             return pixels;
@@ -174,7 +182,7 @@ namespace {
         ASSERT_TRUE(codec::probe(fixture.path, info, error)) << error;
         EXPECT_EQ(info.width, image.width);
         EXPECT_EQ(info.height, image.height);
-        EXPECT_EQ(info.channels, image.channels);
+        EXPECT_EQ(info.channels, fixture.source_channels);
         EXPECT_EQ(info.sample_type, image.sample_type);
     }
 
@@ -192,7 +200,7 @@ namespace {
         f.write(compression, tiled, type, false, false, {-7, 13});
         expect_reference(f, tiled);
     }
-    TEST_P(ExrCodecs, GrayscaleReplicatesToRgb) {
+    TEST_P(ExrCodecs, GrayscaleReplicatesToRgba) {
         const auto [compression, tiled, type] = GetParam();
         Fixture f;
         f.write(compression, tiled, type, true);
@@ -201,8 +209,130 @@ namespace {
     INSTANTIATE_TEST_SUITE_P(AllSupportedCompression, ExrCodecs,
                              testing::Combine(testing::Values(exr::NO_COMPRESSION, exr::RLE_COMPRESSION, exr::ZIPS_COMPRESSION,
                                                               exr::ZIP_COMPRESSION, exr::PIZ_COMPRESSION, exr::PXR24_COMPRESSION,
-                                                              exr::B44_COMPRESSION, exr::B44A_COMPRESSION, exr::DWAA_COMPRESSION, exr::DWAB_COMPRESSION),
+                                                              exr::B44_COMPRESSION, exr::B44A_COMPRESSION, exr::DWAA_COMPRESSION, exr::DWAB_COMPRESSION,
+                                                              exr::HTJ2K32_COMPRESSION, exr::HTJ2K256_COMPRESSION),
                                               testing::Bool(), testing::Values(exr::HALF, exr::FLOAT, exr::UINT)));
+
+    TEST(ExrCodecRegression, PlainRgbaHalfFloat) {
+        for (const bool tiled : {false, true}) {
+            Fixture f;
+            f.write(exr::ZIP_COMPRESSION, tiled, exr::HALF, false, true, {0, 0}, exr::INCREASING_Y, exr::ONE_LEVEL, false);
+            expect_reference(f, tiled);
+        }
+    }
+
+    TEST(ExrCodecRegression, AllHalfValuesMatchImathConversion) {
+        // Core-only builds use OpenEXR's built-in half conversion instead of Imath.
+        // Cover every half bit pattern, including signed zero and subnormals.
+        Fixture f;
+        constexpr int width = 256, height = 256;
+        std::vector<Imath::half> values(width * height);
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i].setBits(static_cast<uint16_t>(i));
+        exr::Header header(width, height);
+        header.compression() = exr::NO_COMPRESSION;
+        header.channels().insert("Y", exr::Channel(exr::HALF));
+        exr::FrameBuffer frame;
+        frame.insert("Y", exr::Slice(exr::HALF, reinterpret_cast<char*>(values.data()),
+                                     sizeof(Imath::half), width * sizeof(Imath::half)));
+        {
+            OutputStream stream(f.path);
+            exr::OutputFile file(stream, header);
+            file.setFrameBuffer(frame);
+            file.writePixels(height);
+        }
+        codec::Image image;
+        std::string error;
+        ASSERT_TRUE(codec::decode(f.path, image, error)) << error;
+        ASSERT_EQ(image.data.size(), values.size() * 4 * sizeof(float));
+        const auto* pixels = reinterpret_cast<const float*>(image.data.data());
+        for (size_t i = 0; i < values.size(); ++i) {
+            const float expected = static_cast<float>(values[i]);
+            for (int c = 0; c < 4; ++c) {
+                const float actual = pixels[i * 4 + c];
+                if (std::isnan(expected))
+                    ASSERT_TRUE(std::isnan(actual)) << i;
+                else
+                    ASSERT_EQ(std::bit_cast<uint32_t>(actual), std::bit_cast<uint32_t>(expected)) << i;
+            }
+        }
+    }
+    TEST(ExrCodecRegression, ProbeReportsColorChannelsWithoutCountingAuxiliaryData) {
+        for (int channels : {1, 3, 4}) {
+            Fixture f;
+            f.write(exr::ZIP_COMPRESSION, false, exr::HALF, channels == 1, channels == 4);
+            codec::Probe info;
+            std::string error;
+            ASSERT_TRUE(codec::probe(f.path, info, error)) << error;
+            EXPECT_EQ(info.channels, channels);
+        }
+    }
+
+    std::vector<char> read_bytes(const std::filesystem::path& path) {
+        std::ifstream file(path, std::ios::binary);
+        return {(std::istreambuf_iterator<char>(file)), {}};
+    }
+
+    void write_bytes(const std::filesystem::path& path, const std::vector<char>& bytes) {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    }
+
+    size_t attribute_offset(const std::vector<char>& bytes, const char* attribute) {
+        size_t pos = 8;
+        while (bytes.at(pos) != 0) {
+            const size_t name = pos;
+            while (bytes.at(pos++) != 0) {}
+            while (bytes.at(pos++) != 0) {}
+            uint32_t size = 0;
+            for (int i = 0; i < 4; ++i)
+                size |= uint32_t(static_cast<unsigned char>(bytes.at(pos++))) << (8 * i);
+            if (std::strcmp(bytes.data() + name, attribute) == 0)
+                return pos;
+            pos += size;
+        }
+        throw std::runtime_error("fixture attribute not found");
+    }
+
+    TEST(ExrCodecRegression, OversizedDamagedDataWindowFailsBeforeImageAllocation) {
+        for (const bool huge_width : {false, true}) {
+            Fixture f;
+            f.write(huge_width ? exr::NO_COMPRESSION : exr::ZIP_COMPRESSION, false, exr::HALF);
+            auto bytes = read_bytes(f.path);
+            const size_t offset = attribute_offset(bytes, "dataWindow") + (huge_width ? 8 : 12);
+            constexpr uint32_t extent = 10000000;
+            for (int i = 0; i < 4; ++i)
+                bytes.at(offset + i) = static_cast<char>((extent >> (8 * i)) & 255);
+            write_bytes(f.path, bytes);
+            codec::Image image;
+            image.width = 7;
+            image.data = {42};
+            std::string error;
+            EXPECT_FALSE(codec::decode(f.path, image, error));
+            EXPECT_FALSE(error.empty());
+            EXPECT_EQ(image.width, 7);
+            EXPECT_EQ(image.data, std::vector<uint8_t>{42});
+        }
+    }
+
+    TEST(ExrCodecRegression, MissingFileIncludesLibraryDiagnostic) {
+        Fixture f;
+        codec::Image image;
+        std::string error;
+        ASSERT_FALSE(codec::decode(f.path, image, error));
+        EXPECT_NE(error.find("Unable to open file for read"), std::string::npos) << error;
+    }
+
+    TEST(ExrCodecRegression, TruncatedPixelPayloadFailsCleanly) {
+        Fixture f;
+        f.write(exr::ZIP_COMPRESSION, false, exr::HALF);
+        std::filesystem::resize_file(f.path, std::filesystem::file_size(f.path) / 2);
+        codec::Image image;
+        std::string error;
+        EXPECT_FALSE(codec::decode(f.path, image, error));
+        EXPECT_FALSE(error.empty());
+        EXPECT_TRUE(image.data.empty());
+    }
 
     TEST(ExrCodecRegression, DecreasingScanlines) {
         Fixture f;

@@ -476,7 +476,7 @@ TEST(ImageIoTest, ExrPreservesLinearHdrAndHighBitdepthPaths) {
     const auto [probe_width, probe_height, probe_channels] = lfs::core::get_image_info(path);
     EXPECT_EQ(probe_width, 2);
     EXPECT_EQ(probe_height, 1);
-    EXPECT_EQ(probe_channels, 4);
+    EXPECT_EQ(probe_channels, 3);
     auto [rgba, width, height, channels] = lfs::core::load_image_float(path);
     ASSERT_NE(rgba, nullptr);
     EXPECT_EQ(width, 2);

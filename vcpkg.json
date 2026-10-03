@@ -87,7 +87,11 @@
     "tests": {
       "description": "Dependencies used only by the C++ test targets",
       "dependencies": [
-        "gtest"
+        "gtest",
+        {
+          "name": "openexr",
+          "features": ["cpp"]
+        }
       ]
     },
     "vulkan-validation": {
@@ -105,10 +109,6 @@
     }
   },
   "overrides": [
-    {
-      "name": "openexr",
-      "version": "3.4.15"
-    },
     {
       "name": "cppzmq",
       "version": "4.11.0"
