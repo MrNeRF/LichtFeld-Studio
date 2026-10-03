@@ -222,6 +222,7 @@ set(LICHT_FORMAT_NON_WINDOWS_FILES
     ${CMAKE_SOURCE_DIR}/src/io/project/project_document.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/selection_chapter.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/session_chapters.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/sfm_observation_chapter.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/splat_chapter.cpp
     ${CMAKE_SOURCE_DIR}/src/visualizer/gui/layout_state.cpp
 )
