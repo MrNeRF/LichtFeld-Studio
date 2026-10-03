@@ -708,7 +708,7 @@ namespace lfs::training {
                     .width = f.width,
                     .height = f.height,
                     .grid_w = f.grid_w,
-                    .dilation_scale = params.dilation_scale,
+                    .unused0 = 0,
                     .unused1 = 0,
                     .unused2 = 0,
                 };

@@ -24,7 +24,7 @@ namespace lfs::app {
                         screen.closeEditor("node_editor");
                 });
                 if (auto* rendering = viewer.getRenderingManager())
-                    rendering->markDirty(vis::DirtyFlag::ALL);
+                    rendering->markDirty(vis::DirtyFlag::ALL, vis::FrameReason::Mcp, "node editor");
                 return editor(viewer);
             }
             if (!editor(viewer).value("open", false))
