@@ -91,7 +91,7 @@ namespace lfs::vis::screen {
         float trailing_extent = 0.0f; // solved extent of child `index + 1`
     };
 
-    struct LayoutGeometry {
+    struct LFS_VIS_API LayoutGeometry {
         Rect bounds;
         std::vector<AreaGeometry> areas;
         std::vector<DividerGeometry> dividers;

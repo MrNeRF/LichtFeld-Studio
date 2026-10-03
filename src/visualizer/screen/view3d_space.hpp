@@ -16,7 +16,7 @@
 namespace lfs::vis::screen {
 
     // The state of one 3D viewport: its camera and display settings.
-    class View3DSpace final : public SpaceData {
+    class LFS_VIS_API View3DSpace final : public SpaceData {
     public:
         View3DSpace() = default;
 
@@ -40,10 +40,10 @@ namespace lfs::vis::screen {
                                          Right,
                                          Left };
 
-    [[nodiscard]] ViewAxis alignedViewAxis(const glm::mat3& rotation);
+    [[nodiscard]] LFS_VIS_API ViewAxis alignedViewAxis(const glm::mat3& rotation);
 
     // Human-readable view name, e.g. "Top Orthographic" or "User Perspective".
-    [[nodiscard]] std::string viewLabel(const View3DSpace& view);
+    [[nodiscard]] LFS_VIS_API std::string viewLabel(const View3DSpace& view);
 
     // Switches projection, keeping the apparent size of what is at the pivot
     // when entering orthographic. `viewport_height` is in pixels.
