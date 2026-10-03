@@ -459,7 +459,8 @@ TEST_F(PipelinedImageLoaderTest, AlphaAsMaskKeepsSixteenBitColorAndAlpha) {
     }
 }
 
-// Catches an 8-bit alpha cache: a resized alpha would then change between the first and later epochs.
+// Catches an alpha that differs between the first load and later cache hits (an 8-bit cache, or a first load off
+// the cache's 16-bit grid), which can flip a thresholded mask between epochs.
 TEST_F(PipelinedImageLoaderTest, AlphaAsMaskCacheKeepsResizedAlpha) {
     constexpr int WIDTH = 64;
     constexpr int HEIGHT = 48;
@@ -479,7 +480,7 @@ TEST_F(PipelinedImageLoaderTest, AlphaAsMaskCacheKeepsResizedAlpha) {
     ASSERT_EQ(first.size(), static_cast<size_t>(WIDTH / 2) * (HEIGHT / 2));
     ASSERT_EQ(cached.size(), first.size());
     for (size_t pixel = 0; pixel < first.size(); ++pixel)
-        EXPECT_NEAR(cached[pixel], first[pixel], 1e-5f) << "pixel=" << pixel;
+        EXPECT_EQ(cached[pixel], first[pixel]) << "pixel=" << pixel;
 }
 
 TEST_F(PipelinedImageLoaderTest, ImmediateCacheHitDoesNotRepeatResize) {
