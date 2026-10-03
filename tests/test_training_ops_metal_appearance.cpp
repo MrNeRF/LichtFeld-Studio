@@ -82,7 +82,7 @@ namespace {
                 continue;
             const double limit = abs_tol + rel_tol * std::abs(expected[i]);
             if (!(std::abs(actual[i] - expected[i]) <= limit) && reported++ < 8)
-                ADD_FAILURE() << std::format("{}[{}]: metal {} vs reference {} (limit {})", what, i, actual[i], expected[i], limit);
+                ADD_FAILURE() << std::format("{}[{}]: actual {} vs reference {} (limit {})", what, i, actual[i], expected[i], limit);
         }
     }
 
@@ -557,7 +557,7 @@ namespace {
         const auto loss = [&](const PpispParams& q, const Doubles& image) {
             return weighted(ppisp_forward(q, image, H, W, 0, H, camera, frame), grad_values);
         };
-        const auto group = [&](Doubles PpispParams::*member) {
+        const auto group = [&](Doubles PpispParams::* member) {
             return finite_difference(p.*member, [&](const Doubles& values) {
                 PpispParams q = p;
                 q.*member = values;
@@ -592,7 +592,7 @@ namespace {
         table.backward({exposure, vignetting, color, crf}, gpu(rgb_values, {3, H, W}), gpu(grad_values, {3, H, W}),
                        {ge, gv, gc, gk}, grad_rgb, 2, 3, camera, frame);
 
-        const auto group = [&](Doubles PpispParams::*member) {
+        const auto group = [&](Doubles PpispParams::* member) {
             return finite_difference(p.*member, [&](const Doubles& values) {
                 PpispParams q = p;
                 q.*member = values;
@@ -1157,27 +1157,69 @@ namespace {
         p.distortion[2] = 0.001f;
         p.distortion[3] = -0.002f;
         const auto source = image_floats(3 * H * W);
+        // RGB undistortion integrates the pixel footprint with Lanczos-3, unlike
+        // mask/prior resampling. Keep this double-precision oracle independent
+        // of the GPU kernels, including normalization over in-bounds border taps.
+        constexpr int quadrature = 8;
+        const auto lanczos3 = [](const double x) {
+            if (std::abs(x) >= 3.0)
+                return 0.0;
+            if (std::abs(x) < 1e-12)
+                return 1.0;
+            const double px = M_PI * x;
+            return std::sin(px) / px * std::sin(px / 3.0) / (px / 3.0);
+        };
         Doubles expected(3 * 15 * 11);
         for (int oy = 0; oy < p.dst_height; ++oy) {
             for (int ox = 0; ox < p.dst_width; ++ox) {
-                const double x = (ox + 0.5 - p.dst_cx) / p.dst_fx, y = (oy + 0.5 - p.dst_cy) / p.dst_fy;
-                const double r2 = x * x + y * y;
-                const double radial = 1 + p.distortion[0] * r2 + p.distortion[1] * r2 * r2 + p.distortion[2] * r2 * r2 * r2;
-                const double p1 = p.distortion[3];
-                const double dx = x * radial + 2 * p1 * x * y, dy = y * radial + p1 * (r2 + 2 * y * y);
-                const double sx = dx * p.src_fx + p.src_cx - 0.5, sy = dy * p.src_fy + p.src_cy - 0.5;
-                const int x0 = static_cast<int>(std::floor(sx)), y0 = static_cast<int>(std::floor(sy));
-                const double fx = sx - x0, fy = sy - y0;
-                for (int c = 0; c < 3; ++c) {
-                    const auto tap = [&](const int yy, const int xx) {
-                        return xx >= 0 && yy >= 0 && xx < W && yy < H ? source[(c * H + yy) * W + xx] : 0.0f;
-                    };
-                    expected[(c * p.dst_height + oy) * p.dst_width + ox] =
-                        (1 - fy) * ((1 - fx) * tap(y0, x0) + fx * tap(y0, x0 + 1)) + fy * ((1 - fx) * tap(y0 + 1, x0) + fx * tap(y0 + 1, x0 + 1));
+                for (int qy = 0; qy < quadrature; ++qy) {
+                    for (int qx = 0; qx < quadrature; ++qx) {
+                        const double x = (ox + (qx + 0.5) / quadrature - p.dst_cx) / p.dst_fx;
+                        const double y = (oy + (qy + 0.5) / quadrature - p.dst_cy) / p.dst_fy;
+                        const double r2 = x * x + y * y;
+                        const double radial = 1 + p.distortion[0] * r2 + p.distortion[1] * r2 * r2 + p.distortion[2] * r2 * r2 * r2;
+                        const double p1 = p.distortion[3]; // Packed as k1, k2, k3, p1; p2 is absent.
+                        const double dx = x * radial + 2 * p1 * x * y, dy = y * radial + p1 * (r2 + 2 * y * y);
+                        const double sx = dx * p.src_fx + p.src_cx - 0.5, sy = dy * p.src_fy + p.src_cy - 0.5;
+                        const int x0 = static_cast<int>(std::floor(sx)), y0 = static_cast<int>(std::floor(sy));
+                        std::array<double, 3> value{};
+                        double weight_sum = 0, absolute_weight_sum = 0;
+                        for (int yy = y0 - 2; yy <= y0 + 3; ++yy) {
+                            for (int xx = x0 - 2; xx <= x0 + 3; ++xx) {
+                                if (xx < 0 || yy < 0 || xx >= W || yy >= H)
+                                    continue;
+                                const double weight = lanczos3(sx - xx) * lanczos3(sy - yy);
+                                weight_sum += weight;
+                                absolute_weight_sum += std::abs(weight);
+                                for (int c = 0; c < 3; ++c)
+                                    value[c] += weight * source[(c * H + yy) * W + xx];
+                            }
+                        }
+                        // This fixture stays on the Lanczos path, without the
+                        // ill-conditioned-weight bilinear/nearest fallback.
+                        ASSERT_GT(std::abs(weight_sum), 1e-4 * absolute_weight_sum);
+                        for (int c = 0; c < 3; ++c)
+                            expected[(c * p.dst_height + oy) * p.dst_width + ox] += value[c] / weight_sum / (quadrature * quadrature);
+                    }
                 }
             }
         }
-        expect_close(host(table->undistort(gpu(source, {3, H, W}), p, false)), expected, 1e-4, 1e-4, "undistort");
+        const auto actual = host(table->undistort(gpu(source, {3, H, W}), p, false));
+        RecordProperty("undistort_0", std::format("{:.9f}", actual[0]));
+        RecordProperty("undistort_5", std::format("{:.9f}", actual[5]));
+        RecordProperty("reference_0", std::format("{:.9f}", expected[0]));
+        RecordProperty("reference_5", std::format("{:.9f}", expected[5]));
+        expect_close(actual, expected, 1e-4, 1e-4, "undistort");
+        if (lfs::core::gpu_backend_available(GpuBackend::CUDA)) {
+            const lfs::core::GpuBackendScope cuda_scope(GpuBackend::CUDA);
+            const auto* cuda_table = lfs::core::shared_image_ops(GpuBackend::CUDA);
+            ASSERT_NE(cuda_table, nullptr);
+            const auto cuda = host(cuda_table->undistort(gpu(source, {3, H, W}), p, false));
+            RecordProperty("cuda_0", std::format("{:.9f}", cuda[0]));
+            RecordProperty("cuda_5", std::format("{:.9f}", cuda[5]));
+            expect_close(actual, widen(cuda), 1e-4, 1e-4, "undistort vs CUDA");
+            expect_close(cuda, expected, 1e-4, 1e-4, "CUDA undistort");
+        }
     }
     INSTANTIATE_TEST_SUITE_P(Backends, PortableAppearance, testing::Values(GpuBackend::Metal, GpuBackend::Vulkan),
                              [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
