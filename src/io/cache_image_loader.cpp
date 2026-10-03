@@ -197,6 +197,7 @@ namespace lfs::io {
 #if LFS_HAS_CUDA
         lfs::core::Tensor quantize_rgb_to_u16_grid(
             const lfs::core::Tensor& tensor, const cudaStream_t stream) {
+            const lfs::core::CUDAStreamGuard execution_scope(stream);
             const size_t channels = tensor.shape()[0];
             const size_t height = tensor.shape()[1];
             const size_t width = tensor.shape()[2];
@@ -207,12 +208,11 @@ namespace lfs::io {
             auto restored = lfs::core::Tensor::empty(
                 {height, width, channels}, lfs::core::Device::CUDA,
                 lfs::core::DataType::Float32);
-            cuda::launch_float32_hwc_to_uint16_hwc(
-                hwc.ptr<float>(), reinterpret_cast<uint16_t*>(quantized.data_ptr()),
-                height, width, channels, stream);
-            cuda::launch_uint16_hwc_to_float32_hwc(
-                reinterpret_cast<const uint16_t*>(quantized.data_ptr()), restored.ptr<float>(),
-                height, width, channels, stream);
+            const auto* image_ops = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA);
+            image_ops->convert(hwc, quantized, lfs::gpu_ops::ImageConversion::F32HWCToU16HWC,
+                               height, width, channels, {});
+            image_ops->convert(quantized, restored, lfs::gpu_ops::ImageConversion::U16HWCToF32HWC,
+                               height, width, channels, {});
             return restored.permute({2, 0, 1}).contiguous();
         }
 
