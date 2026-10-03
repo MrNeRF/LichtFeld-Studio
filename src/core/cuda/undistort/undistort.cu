@@ -7,6 +7,7 @@
 #include "undistort.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -25,6 +26,7 @@ namespace lfs::core {
         constexpr float NEWTON_EPSILON = 1e-6f;
         constexpr float MAX_FISHEYE_THETA = 1.56079632679f;
         constexpr int MAX_NEWTON_ITERATIONS = 20;
+        constexpr int THIN_PRISM_SEED_ITERATIONS = 5;
         constexpr float INVERSE_RESIDUAL_PIXELS = 5.0e-4f;
         // Float32 Newton stalls near 6e-4 px at 8k image scales; accepting up to 1e-2 px keeps
         // those pixels valid while the geometric error stays far below sampling resolution.
@@ -98,6 +100,46 @@ namespace lfs::core {
             dy = y * scale;
         }
 
+        // COLMAP ThinPrismFisheyeCameraModel evaluates the tangential and prism terms on the
+        // theta-scaled point (uu, vv), |(uu, vv)| = theta, independently of the radial polynomial.
+        __host__ __device__ void thin_prism_increment(
+            const float uu, const float vv,
+            const float* __restrict__ dist, const int num_dist,
+            float& tx, float& ty) {
+            const float p1 = num_dist > 4 ? dist[4] : 0.0f;
+            const float p2 = num_dist > 5 ? dist[5] : 0.0f;
+            const float sx1 = num_dist > 6 ? dist[6] : 0.0f;
+            const float sx2 = num_dist > 7 ? dist[7] : 0.0f;
+            const float sy1 = num_dist > 8 ? dist[8] : 0.0f;
+            const float sy2 = num_dist > 9 ? dist[9] : 0.0f;
+            const float u2 = uu * uu;
+            const float uv = uu * vv;
+            const float v2 = vv * vv;
+            const float r2 = u2 + v2;
+            const float r4 = r2 * r2;
+            tx = 2.0f * p1 * uv + p2 * (r2 + 2.0f * u2) + sx1 * r2 + sx2 * r4;
+            ty = 2.0f * p2 * uv + p1 * (r2 + 2.0f * v2) + sy1 * r2 + sy2 * r4;
+        }
+
+        __host__ __device__ void thin_prism_fisheye_from_theta_point(
+            const float uu, const float vv,
+            const float* __restrict__ dist, const int num_dist,
+            float& dx, float& dy) {
+            const float k1 = num_dist > 0 ? dist[0] : 0.0f;
+            const float k2 = num_dist > 1 ? dist[1] : 0.0f;
+            const float k3 = num_dist > 2 ? dist[2] : 0.0f;
+            const float k4 = num_dist > 3 ? dist[3] : 0.0f;
+            const float r2 = uu * uu + vv * vv;
+            const float r4 = r2 * r2;
+            const float r6 = r4 * r2;
+            const float r8 = r6 * r2;
+            const float radial = k1 * r2 + k2 * r4 + k3 * r6 + k4 * r8;
+            float tx, ty;
+            thin_prism_increment(uu, vv, dist, num_dist, tx, ty);
+            dx = uu + uu * radial + tx;
+            dy = vv + vv * radial + ty;
+        }
+
         __device__ void apply_distortion_thin_prism_fisheye(
             const float x, const float y,
             const float* __restrict__ dist, const int num_dist,
@@ -110,40 +152,9 @@ namespace lfs::core {
                 return;
             }
 
-            const float theta = atanf(r);
-            const float theta2 = theta * theta;
-            const float theta4 = theta2 * theta2;
-            const float theta6 = theta4 * theta2;
-            const float theta8 = theta4 * theta4;
-
-            const float k1 = num_dist > 0 ? dist[0] : 0.0f;
-            const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-            const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-            const float k4 = num_dist > 3 ? dist[3] : 0.0f;
-
-            const float theta_d = theta * (1.0f + k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8);
-            const float scale = theta_d / r;
-
-            float xd = x * scale;
-            float yd = y * scale;
-
-            const float p1 = num_dist > 4 ? dist[4] : 0.0f;
-            const float p2 = num_dist > 5 ? dist[5] : 0.0f;
-            const float r2 = xd * xd + yd * yd;
-            xd += 2.0f * p1 * xd * yd + p2 * (r2 + 2.0f * xd * xd);
-            yd += p1 * (r2 + 2.0f * yd * yd) + 2.0f * p2 * xd * yd;
-
-            const float s1 = num_dist > 6 ? dist[6] : 0.0f;
-            const float s2 = num_dist > 7 ? dist[7] : 0.0f;
-            const float s3 = num_dist > 8 ? dist[8] : 0.0f;
-            const float s4 = num_dist > 9 ? dist[9] : 0.0f;
-            const float r2d = xd * xd + yd * yd;
-            const float r4d = r2d * r2d;
-            xd += s1 * r2d + s2 * r4d;
-            yd += s3 * r2d + s4 * r4d;
-
-            dx = xd;
-            dy = yd;
+            const float theta_over_r = atanf(r) / r;
+            thin_prism_fisheye_from_theta_point(
+                x * theta_over_r, y * theta_over_r, dist, num_dist, dx, dy);
         }
 
         __device__ void apply_distortion(
@@ -314,16 +325,9 @@ namespace lfs::core {
         // The fisheye radial model is one-dimensional in the incidence angle: solving it in theta
         // stays well conditioned up to the angle limit, where Newton in the image plane cannot reach
         // the root because r = tan(theta) grows without bound.
-        __device__ bool inverse_fisheye_radial(
-            const float xd, const float yd, const float* __restrict__ dist,
-            float& ux, float& uy) {
-            const float theta_d = sqrtf(xd * xd + yd * yd);
-            if (theta_d < 1e-8f) {
-                ux = xd;
-                uy = yd;
-                return true;
-            }
-            float theta = fminf(theta_d, MAX_FISHEYE_THETA);
+        __host__ __device__ bool solve_fisheye_theta(
+            const float theta_d, const float* __restrict__ dist, float& theta) {
+            theta = fminf(theta_d, MAX_FISHEYE_THETA);
             for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
                 const float theta2 = theta * theta;
                 const float theta4 = theta2 * theta2;
@@ -341,7 +345,20 @@ namespace lfs::core {
                 if (fabsf(step) < 1e-7f)
                     break;
             }
-            if (!(theta > 0.0f) || theta >= MAX_FISHEYE_THETA)
+            return theta > 0.0f && theta < MAX_FISHEYE_THETA;
+        }
+
+        __host__ __device__ bool inverse_fisheye_radial(
+            const float xd, const float yd, const float* __restrict__ dist,
+            float& ux, float& uy) {
+            const float theta_d = sqrtf(xd * xd + yd * yd);
+            if (theta_d < 1e-8f) {
+                ux = xd;
+                uy = yd;
+                return true;
+            }
+            float theta;
+            if (!solve_fisheye_theta(theta_d, dist, theta))
                 return false;
             const float scale = tanf(theta) / theta_d;
             ux = xd * scale;
@@ -349,17 +366,57 @@ namespace lfs::core {
             return true;
         }
 
+        // The prism and tangential terms move the distorted radius away from the radial polynomial,
+        // which seeds the Newton solve near the angle limit at r = tan(theta) too far out to recover
+        // or rejects the ray outright; strip them by fixed-point iteration on the theta point first.
+        __host__ __device__ bool inverse_thin_prism_seed(
+            const float xd, const float yd, const float* __restrict__ dist, const int num_dist,
+            float& ux, float& uy) {
+            float wx = xd;
+            float wy = yd;
+            float theta = 0.0f;
+            for (int iter = 0; iter < THIN_PRISM_SEED_ITERATIONS; ++iter) {
+                float tx, ty;
+                thin_prism_increment(wx, wy, dist, num_dist, tx, ty);
+                const float zx = xd - tx;
+                const float zy = yd - ty;
+                const float theta_d = hypotf(zx, zy);
+                if (theta_d < 1e-8f) {
+                    wx = zx;
+                    wy = zy;
+                    theta = theta_d;
+                    continue;
+                }
+                if (!solve_fisheye_theta(theta_d, dist, theta))
+                    return false;
+                wx = zx * theta / theta_d;
+                wy = zy * theta / theta_d;
+            }
+            const float scale = theta > 1e-8f ? tanf(theta) / theta : 1.0f;
+            ux = wx * scale;
+            uy = wy * scale;
+            return true;
+        }
+
+        __host__ __device__ bool seed_inverse_distortion(
+            const float xd, const float yd, const CameraModelType model,
+            const float* __restrict__ dist, const int num_dist,
+            float& ux, float& uy) {
+            if (model == CameraModelType::THIN_PRISM_FISHEYE && num_dist > 4)
+                return inverse_thin_prism_seed(xd, yd, dist, num_dist, ux, uy);
+            if (model == CameraModelType::FISHEYE || model == CameraModelType::THIN_PRISM_FISHEYE)
+                return inverse_fisheye_radial(xd, yd, dist, ux, uy);
+            ux = xd;
+            uy = yd;
+            return true;
+        }
+
         __device__ bool inverse_distortion(
             const float xd, const float yd, const UndistortParams& params,
             float& ux, float& uy) {
-            if (params.model_type == CameraModelType::FISHEYE ||
-                params.model_type == CameraModelType::THIN_PRISM_FISHEYE) {
-                if (!inverse_fisheye_radial(xd, yd, params.distortion, ux, uy))
-                    return false;
-            } else {
-                ux = xd;
-                uy = yd;
-            }
+            if (!seed_inverse_distortion(xd, yd, params.model_type, params.distortion,
+                                         params.num_distortion, ux, uy))
+                return false;
 
             float previous_error_px = INFINITY;
             for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
@@ -694,31 +751,9 @@ namespace lfs::core {
                     dy = y;
                     return;
                 }
-                const float theta = std::atan(r);
-                const float theta2 = theta * theta;
-                const float k1 = num_dist > 0 ? dist[0] : 0.0f;
-                const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-                const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-                const float k4 = num_dist > 3 ? dist[3] : 0.0f;
-                const float theta_d = theta * (1.0f + k1 * theta2 + k2 * theta2 * theta2 +
-                                               k3 * theta2 * theta2 * theta2 + k4 * theta2 * theta2 * theta2 * theta2);
-                const float scale = theta_d / r;
-                float xd = x * scale;
-                float yd = y * scale;
-                const float p1 = num_dist > 4 ? dist[4] : 0.0f;
-                const float p2 = num_dist > 5 ? dist[5] : 0.0f;
-                const float r2d = xd * xd + yd * yd;
-                xd += 2.0f * p1 * xd * yd + p2 * (r2d + 2.0f * xd * xd);
-                yd += p1 * (r2d + 2.0f * yd * yd) + 2.0f * p2 * xd * yd;
-                const float s1 = num_dist > 6 ? dist[6] : 0.0f;
-                const float s2 = num_dist > 7 ? dist[7] : 0.0f;
-                const float s3 = num_dist > 8 ? dist[8] : 0.0f;
-                const float s4 = num_dist > 9 ? dist[9] : 0.0f;
-                const float r4d = r2d * r2d;
-                xd += s1 * r2d + s2 * r4d;
-                yd += s3 * r2d + s4 * r4d;
-                dx = xd;
-                dy = yd;
+                const float theta_over_r = std::atan(r) / r;
+                thin_prism_fisheye_from_theta_point(
+                    x * theta_over_r, y * theta_over_r, dist, num_dist, dx, dy);
                 break;
             }
             default:
@@ -879,8 +914,8 @@ namespace lfs::core {
 
             const float xd = (img_x - cx) / fx;
             const float yd = (img_y - cy) / fy;
-            ux = xd;
-            uy = yd;
+            if (!seed_inverse_distortion(xd, yd, model, dist, num_dist, ux, uy))
+                return false;
 
             for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
                 float fx_eval, fy_eval;
@@ -1012,7 +1047,7 @@ namespace lfs::core {
         // PINHOLE polynomial: [k1, k2, k3, p1, p2]               indices 0-4
         // PINHOLE rational:   [k1, k2, k3, k4, k5, k6, p1, p2]  indices 0-7
         // FISHEYE:            [k1, k2, k3, k4]                   indices 0-3
-        // THIN_PRISM_FISHEYE: [k1, k2, k3, k4, p1, p2, s1..s4]  indices 0-9
+        // THIN_PRISM_FISHEYE: [k1, k2, k3, k4, p1, p2, sx1, sx2, sy1, sy2]  indices 0-9
         std::memset(params.distortion, 0, sizeof(params.distortion));
         params.num_distortion = 0;
 
@@ -1075,16 +1110,19 @@ namespace lfs::core {
                 place(static_cast<int>(i), rad_vec[i]);
             break;
 
-        case CameraModelType::THIN_PRISM_FISHEYE:
-            if (rad_vec.size() > 4 || tan_vec.size() > 6) {
+        case CameraModelType::THIN_PRISM_FISHEYE: {
+            // Tangential tuple in COLMAP order {p1, p2, sx1, sy1}, optionally extended by {sx2, sy2}.
+            constexpr std::array<int, 6> thin_prism_slots = {4, 5, 6, 8, 7, 9};
+            if (rad_vec.size() > 4 || tan_vec.size() > thin_prism_slots.size()) {
                 throw std::invalid_argument(
                     "Thin prism fisheye distortion supports four radial and six tangential or prism coefficients");
             }
             for (size_t i = 0; i < rad_vec.size(); ++i)
                 place(static_cast<int>(i), rad_vec[i]);
             for (size_t i = 0; i < tan_vec.size(); ++i)
-                place(4 + static_cast<int>(i), tan_vec[i]);
+                place(thin_prism_slots[i], tan_vec[i]);
             break;
+        }
 
         default:
             if (!rad_vec.empty() || !tan_vec.empty()) {
