@@ -31,6 +31,7 @@
 #include "io/embedded_dataset.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
+#include "rendering/scene_renderer_factory.hpp"
 #if LFS_BUILD_TRAINER
 #include "tcp/include/tcp_publisher.hpp"
 #include "tcp/include/tcp_responder.hpp"
@@ -1097,7 +1098,7 @@ namespace lfs::app {
                         LOG_WARN("Failed to shut down tensor backend: {}", result.error().detail());
                 }
             } backend_lifetime;
-            auto renderer = vis::createSceneRenderer();
+            auto renderer = vis::createSceneRenderer(context);
             const auto splat_allocator = context.tensorInterop().splat_allocator(true);
 
             // Pipeline creation does not read the scene. Overlap it with the load.
@@ -1137,7 +1138,7 @@ namespace lfs::app {
                 }
                 return model;
             });
-            const auto pipelines = renderer->prepareDevice(context);
+            const auto pipelines = renderer->prepareDevice();
             auto loaded = loading.get();
             if (!pipelines) {
                 LOG_ERROR("Off-screen renderer initialization failed: {}", pipelines.error());
@@ -1191,13 +1192,13 @@ namespace lfs::app {
                 request.frame_view.focal_length_mm = cam_state.focal_length_mm;
                 // The loaded scene is immutable for the whole path. The live-training
                 // upload flag shares the training arena and disables the immutable HiGS chain.
-                auto rendered = renderer->render(context, *model, request, frame == 0,
+                auto rendered = renderer->render(*model, request, frame == 0,
                                                  target, false, true);
                 if (!rendered) {
                     LOG_ERROR("Failed to render frame {}: {}", frame, rendered.error());
                     return 1;
                 }
-                auto image = renderer->readOutputImage(context, target);
+                auto image = renderer->readOutputImage(target);
                 if (!image) {
                     LOG_ERROR("Failed to read frame {}: {}", frame, image.error());
                     return 1;

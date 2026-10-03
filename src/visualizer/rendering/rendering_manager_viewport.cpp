@@ -10,6 +10,7 @@
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
+#include "scene_renderer_factory.hpp"
 #include "split_view_service.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
@@ -466,6 +467,9 @@ namespace lfs::vis {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview depth render dimensions");
         }
+        if (!last_vulkan_context_) {
+            return std::unexpected("no Vulkan context is available");
+        }
         if (!hasRenderableGaussians(&model)) {
             return std::unexpected("no renderable Gaussian model is available");
         }
@@ -480,7 +484,7 @@ namespace lfs::vis {
         // force the legacy per-pixel chain for the depth-capture render so the
         // readback matches the image resolution.
         if (!vksplat_viewport_renderer_) {
-            vksplat_viewport_renderer_ = createSceneRenderer();
+            vksplat_viewport_renderer_ = createSceneRenderer(*last_vulkan_context_);
         }
         vksplat_viewport_renderer_->setDepthCaptureMode(true, expected_depth);
         struct DepthCaptureModeGuard {
@@ -552,14 +556,12 @@ namespace lfs::vis {
         // image and depth are read from the same render: the Preview output slot
         // and the pixel_depth scratch it just wrote (still resident — the Preview
         // path uses private scratch, which render() does not release).
-        auto image = vksplat_viewport_renderer_->readOutputImage(
-            *last_vulkan_context_, preview_render_target_);
+        auto image = vksplat_viewport_renderer_->readOutputImage(preview_render_target_);
         if (!image) {
             LOG_ERROR("Gaussian preview rgbd image readback failed: {}", image.error());
             return result;
         }
-        auto depth = vksplat_viewport_renderer_->readPreviewDepth(
-            *last_vulkan_context_, preview_render_target_);
+        auto depth = vksplat_viewport_renderer_->readPreviewDepth(preview_render_target_);
         if (!depth) {
             LOG_ERROR("Gaussian preview depth readback failed: {}", depth.error());
             return result;
@@ -992,15 +994,12 @@ namespace lfs::vis {
         if (readback_config.dtype == lfs::core::DataType::UInt8 &&
             readback_config.channels == 4) {
             image = vksplat_viewport_renderer_->readOutputImageRgba8(
-                *last_vulkan_context_,
                 preview_render_target_);
         } else if (readback_config.dtype == lfs::core::DataType::UInt8) {
             image = vksplat_viewport_renderer_->readOutputImageRgb8(
-                *last_vulkan_context_,
                 preview_render_target_);
         } else {
             image = vksplat_viewport_renderer_->readOutputImage(
-                *last_vulkan_context_,
                 preview_render_target_);
         }
         if (!image) {
@@ -1104,13 +1103,12 @@ namespace lfs::vis {
         }
 
         if (!vksplat_viewport_renderer_) {
-            vksplat_viewport_renderer_ = createSceneRenderer();
+            vksplat_viewport_renderer_ = createSceneRenderer(*last_vulkan_context_);
         }
 
         // Preview/export uses the renderer's exact two-batch count gate; one
         // render is complete for this view and can be read back immediately.
         auto render_result = vksplat_viewport_renderer_->render(
-            *last_vulkan_context_,
             model,
             request,
             false,
@@ -1234,7 +1232,6 @@ namespace lfs::vis {
                 outstanding_export_ticket.reset();
             }
             auto ticket = vksplat_viewport_renderer_->submitReadOutputImageIntoCpuHwcTicket(
-                *last_vulkan_context_,
                 preview_render_target_,
                 output,
                 0,
@@ -1279,7 +1276,6 @@ namespace lfs::vis {
         glm::ivec2 source_size = viewState(view).frame_lifecycle_service_.lastViewportSize();
 
         const auto depth = vksplat_viewport_renderer_->sampleDepthAtPixel(
-            *last_vulkan_context_,
             SceneRenderer::DepthSampleRequest{
                 .pixel = {x, y},
                 .source_size = source_size,
@@ -1362,7 +1358,6 @@ namespace lfs::vis {
         }
 
         auto depth = vksplat_viewport_renderer_->readPreviewDepth(
-            *last_vulkan_context_,
             preview_render_target_);
         if (!depth) {
             LOG_TRACE("Expected-depth pixel readback failed: {}", depth.error());

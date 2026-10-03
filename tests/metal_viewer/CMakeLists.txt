@@ -61,7 +61,8 @@ endif()
 if(TARGET lfs_visualizer)
     add_library(lfs_viewer_vulkan_reference STATIC
         ../../src/visualizer/rendering/vksplat_viewport_renderer.cpp
-        ../../src/visualizer/rendering/point_cloud_vulkan_renderer.cpp)
+        ../../src/visualizer/rendering/point_cloud_vulkan_renderer.cpp
+        ../../src/visualizer/rendering/vulkan_scene_renderer.cpp)
     target_compile_features(lfs_viewer_vulkan_reference PRIVATE cxx_std_23)
     set_target_properties(lfs_viewer_vulkan_reference PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_include_directories(lfs_viewer_vulkan_reference PRIVATE

@@ -17,6 +17,8 @@
 #include "rendering/selection_ops.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene_renderer.hpp"
+#include "scene_renderer_factory.hpp"
+#include "scene_training_interop.hpp"
 #include "theme/theme.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
@@ -593,7 +595,7 @@ namespace lfs::vis {
         if (!training_active) {
             vksplat_idle_frame_count_ = 0;
             if (under_pressure) {
-                vksplat_viewport_renderer_->releaseScratchOnIdle(true);
+                rendererTrainingInterop(*vksplat_viewport_renderer_).releaseScratchOnIdle(true);
             }
             return;
         }
@@ -605,9 +607,7 @@ namespace lfs::vis {
             // During training the shared arena is owned by FastGS. Only release
             // private viewer allocations here; the terminal callback below is
             // the point at which the shared import may be relinquished.
-            vksplat_viewport_renderer_->releaseScratchOnIdle(
-                false,
-                vksplat_idle_frame_count_ >= kVksplatIdleScratchReleaseFrames);
+            rendererTrainingInterop(*vksplat_viewport_renderer_).releaseScratchOnIdle(false, vksplat_idle_frame_count_ >= kVksplatIdleScratchReleaseFrames);
             vksplat_idle_frame_count_ = 0;
         }
     }

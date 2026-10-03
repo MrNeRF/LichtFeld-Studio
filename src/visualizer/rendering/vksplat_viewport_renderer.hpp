@@ -48,10 +48,18 @@ namespace lfs::vis {
     // renderer initialization without touching Vulkan.
     LFS_VIS_API void preloadVkSplatSpirvFiles();
 
-    class VksplatViewportRenderer : public SceneRenderer {
+    class VksplatViewportRenderer {
         friend struct VksplatScratchReleaseTestAccess;
 
     public:
+        using RenderResult = SceneRenderer::RenderResult;
+        using ReadbackStats = SceneRenderer::ReadbackStats;
+        using SelectionMaskShape = SceneRenderer::SelectionMaskShape;
+        using SelectionMaskRequest = SceneRenderer::SelectionMaskRequest;
+        using DepthSampleRequest = SceneRenderer::DepthSampleRequest;
+        using ReadbackTicketStatus = SceneRenderer::ReadbackTicketStatus;
+        using GpuLodSelectionStatus = SceneRenderer::GpuLodSelectionStatus;
+
         struct ModelInputSnapshot {
             const lfs::core::SplatData* model = nullptr;
             std::size_t count = 0;
@@ -216,6 +224,7 @@ namespace lfs::vis {
         // its storage without UAF. Pins stay until the timeline completes and freeCell runs.
         void abandonReadbackTicket(std::uint64_t ticket) const;
         // Observability counters for LOG_PERF / GT compare cycles.
+        [[nodiscard]] ReadbackStats readbackStats() const;
         [[nodiscard]] std::size_t outstandingReadbackTickets() const;
         [[nodiscard]] std::uint64_t readbackRingFullWaitCount() const;
         [[nodiscard]] std::uint64_t readbackCellPinWaitCount() const;

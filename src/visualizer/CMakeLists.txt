@@ -322,7 +322,8 @@ target_sources(lfs_visualizer
         rendering/scene_overlay_params.cpp)
 if(NOT APPLE)
     target_sources(lfs_visualizer PRIVATE
-        rendering/vksplat_viewport_renderer.cpp rendering/point_cloud_vulkan_renderer.cpp)
+        rendering/vksplat_viewport_renderer.cpp rendering/point_cloud_vulkan_renderer.cpp
+        rendering/vulkan_scene_renderer.cpp)
 endif()
 
 set(glslang_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/glslang"

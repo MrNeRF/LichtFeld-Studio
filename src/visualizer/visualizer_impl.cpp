@@ -1,4 +1,5 @@
 #if LFS_BUILD_TRAINER
+#include "rendering/scene_renderer_factory.hpp"
 #include "training/trainer.hpp"
 #endif
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors

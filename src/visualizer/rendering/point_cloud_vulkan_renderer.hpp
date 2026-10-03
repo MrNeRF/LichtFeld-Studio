@@ -29,10 +29,15 @@ namespace lfs::vis {
     // atomicMin path), then exposes the color + depth VkImages so the rendering
     // manager can route them through the same external-image plumbing as
     // VkSplat (no CUDA tensor staging on the display path).
-    class LFS_VIS_API PointCloudVulkanRenderer : public PointSceneRenderer {
+    class LFS_VIS_API PointCloudVulkanRenderer {
         friend struct PointCloudOutputOwnershipTestAccess;
 
     public:
+        using RenderResult = PointSceneRenderer::RenderResult;
+        using RenderRequest = PointSceneRenderer::RenderRequest;
+        using CropBox = PointSceneRenderer::CropBox;
+        using CropEllipsoid = PointSceneRenderer::CropEllipsoid;
+
         PointCloudVulkanRenderer();
         ~PointCloudVulkanRenderer();
 

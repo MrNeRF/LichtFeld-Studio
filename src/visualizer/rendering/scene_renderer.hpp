@@ -7,16 +7,14 @@
 #include "render_target_id.hpp"
 #include "rendering/rendering.hpp"
 #include "scene_output.hpp"
-#include <chrono>
 #include <expected>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace lfs::vis {
-    class VulkanContext;
+    class SceneTrainingInterop;
     // Scene APIs are selected once per platform. Opaque output handles describe
     // compositor transport, independent of the API that rasterizes the scene.
     class LFS_VIS_API SceneRenderer {
@@ -85,56 +83,71 @@ namespace lfs::vis {
             std::size_t pool_pages = 0;
             std::size_t streaming_jobs = 0;
         };
+        enum class OutputImageFormat { RgbFloat,
+                                       RgbaFloat,
+                                       Rgb8,
+                                       Rgba8 };
+        struct ReadbackRequest {
+            enum class Kind { Color,
+                              Depth };
+            RenderTargetId target;
+            core::Tensor& destination;
+            glm::ivec2 offset{0, 0};
+            Kind kind = Kind::Color;
+        };
+        struct ReadbackStats {
+            size_t outstanding = 0;
+            uint64_t ring_full_waits = 0;
+            uint64_t cell_pin_waits = 0;
+        };
+        struct LodSettings {
+            size_t page_pool_splats = 0;
+            float pool_vram_fraction = .6f;
+            uint32_t fade_frames = 8;
+        };
         virtual ~SceneRenderer() = default;
-        virtual std::expected<void, std::string> prepareDevice(VulkanContext&) { return {}; }
-        virtual std::expected<RenderResult, std::string> render(VulkanContext&, const core::SplatData&,
+        virtual std::expected<void, std::string> prepareDevice() { return {}; }
+        virtual std::expected<RenderResult, std::string> render(const core::SplatData&,
                                                                 const rendering::ViewportRenderRequest&, bool force_input_upload, RenderTargetId,
                                                                 bool synchronize_input_upload = false, bool deterministic_export = false) = 0;
-        virtual std::expected<RenderResult, std::string> rerenderSelectionOverlay(VulkanContext& c,
-                                                                                  const core::SplatData& m, const rendering::ViewportRenderRequest& r, RenderTargetId t,
-                                                                                  bool synchronize_input_read = false) { return render(c, m, r, false, t, synchronize_input_read); }
+        virtual std::expected<RenderResult, std::string> rerenderSelectionOverlay(
+            const core::SplatData& model, const rendering::ViewportRenderRequest& request,
+            RenderTargetId target, bool synchronize_input_read = false) {
+            return render(model, request, false, target, synchronize_input_read);
+        }
         virtual bool nextOutputImagesNeedResize(glm::ivec2, RenderTargetId) const = 0;
-        virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImage(VulkanContext&, RenderTargetId) const = 0;
-        virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImageRgba(VulkanContext&, RenderTargetId) const = 0;
-        virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImageRgb8(VulkanContext&, RenderTargetId) const = 0;
-        virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImageRgba8(VulkanContext&, RenderTargetId) const = 0;
-        virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readPreviewDepth(VulkanContext&, RenderTargetId) const = 0;
+        virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readColorImage(RenderTargetId, OutputImageFormat) const = 0;
+        std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImage(RenderTargetId target) const { return readColorImage(target, OutputImageFormat::RgbFloat); }
+        std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImageRgba(RenderTargetId target) const { return readColorImage(target, OutputImageFormat::RgbaFloat); }
+        std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImageRgb8(RenderTargetId target) const { return readColorImage(target, OutputImageFormat::Rgb8); }
+        std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImageRgba8(RenderTargetId target) const { return readColorImage(target, OutputImageFormat::Rgba8); }
+        virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readPreviewDepth(RenderTargetId) const = 0;
         virtual void setDepthCaptureMode(bool, bool expected = false) = 0;
-        virtual std::expected<void, std::string> readOutputImageIntoCpuHwc(VulkanContext&, RenderTargetId, core::Tensor&, int, int) const = 0;
-        virtual std::expected<float, std::string> sampleDepthAtPixel(VulkanContext&, const DepthSampleRequest&) const = 0;
-        virtual std::expected<uint64_t, std::string> submitReadOutputImageIntoCpuHwcTicket(VulkanContext&, RenderTargetId, core::Tensor&, int, int) const = 0;
-        virtual std::expected<uint64_t, std::string> submitReadOutputDepthImageTicket(VulkanContext&, RenderTargetId, core::Tensor&) const = 0;
+        virtual std::expected<void, std::string> readOutputImageIntoCpuHwc(RenderTargetId, core::Tensor&, int, int) const = 0;
+        virtual std::expected<float, std::string> sampleDepthAtPixel(const DepthSampleRequest&) const = 0;
+        virtual std::expected<uint64_t, std::string> submitReadbackTicket(const ReadbackRequest&) const = 0;
+        std::expected<uint64_t, std::string> submitReadOutputImageIntoCpuHwcTicket(RenderTargetId target, core::Tensor& destination, int x, int y) const {
+            return submitReadbackTicket({target, destination, {x, y}, ReadbackRequest::Kind::Color});
+        }
+        std::expected<uint64_t, std::string> submitReadOutputDepthImageTicket(RenderTargetId target, core::Tensor& destination) const {
+            return submitReadbackTicket({target, destination, {}, ReadbackRequest::Kind::Depth});
+        }
         virtual std::expected<ReadbackTicketStatus, std::string> pollReadbackTicket(uint64_t) const = 0;
         virtual std::expected<void, std::string> waitReadbackTicket(uint64_t) const = 0;
         virtual void abandonReadbackTicket(uint64_t) const = 0;
-        virtual size_t outstandingReadbackTickets() const = 0;
-        virtual uint64_t readbackRingFullWaitCount() const { return 0; }
-        virtual uint64_t readbackCellPinWaitCount() const { return 0; }
-        virtual std::expected<core::Tensor, std::string> buildSelectionMask(VulkanContext&, const core::SplatData&, const SelectionMaskRequest&, bool) = 0;
+        virtual ReadbackStats readbackStats() const = 0;
+        virtual std::expected<core::Tensor, std::string> buildSelectionMask(const core::SplatData&, const SelectionMaskRequest&, bool) = 0;
         virtual bool hasRenderTarget(RenderTargetId) const = 0;
         virtual bool releaseRenderTarget(RenderTargetId) = 0;
         virtual void releaseSceneResources() = 0;
         virtual void reset() = 0;
-        virtual void setLodPagePoolBudget(size_t) = 0;
-        virtual void setLodPoolVramFraction(float) = 0;
-        virtual void setLodFadeFrames(uint32_t) = 0;
+        virtual void configureLod(const LodSettings&) = 0;
         virtual GpuLodSelectionStatus gpuLodSelectionStatus(RenderTargetId) const = 0;
         virtual std::optional<LodPageCache::Snapshot> ensureLodPageCacheSnapshot(const core::SplatData&) { return std::nullopt; }
-        // CUDA/Vulkan shared scratch is optional; native readers order their own
-        // tensor access and do not participate in that arena's handoff protocol.
-        virtual bool hasLiveTrainerReleaseFence() const { return false; }
-        virtual void* renderCompleteTimeline() const { return nullptr; }
-        virtual uint64_t renderCompleteValue() const { return 0; }
-        virtual std::expected<void, std::string> ensureHandshakeReady(VulkanContext&) { return {}; }
-        virtual std::expected<void, std::string> ensureTrainingSharedScratchReady(VulkanContext&, size_t, glm::ivec2) { return {}; }
-        virtual void releaseScratchOnIdle(bool, bool = false) {}
-        virtual void requestArenaHandoff() {}
-        virtual void cancelArenaHandoff() {}
-        virtual bool pollArenaHandoff() { return true; }
-        virtual bool waitForArenaHandoff(std::chrono::milliseconds) { return true; }
         virtual void setCameraNavigating(bool) {}
         virtual bool takeRefinementRequest() { return false; }
-        virtual void setLiveSubmitCallback(std::function<void(uint64_t)>) {}
+        // Optional capability; its trainer protocol is defined separately.
+        virtual SceneTrainingInterop* trainingInterop() { return nullptr; }
     };
     class LFS_VIS_API PointSceneRenderer {
     public:
@@ -226,13 +239,10 @@ namespace lfs::vis {
 
         virtual ~PointSceneRenderer() = default;
         virtual bool takeRefinementRequest() { return false; }
-        virtual std::expected<RenderResult, std::string> render(VulkanContext&, const RenderRequest&, RenderTargetId) = 0;
-        virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImage(VulkanContext&, RenderTargetId) = 0;
+        virtual std::expected<RenderResult, std::string> render(const RenderRequest&, RenderTargetId) = 0;
+        virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImage(RenderTargetId) = 0;
         virtual bool hasRenderTarget(RenderTargetId) const = 0;
         virtual bool releaseRenderTarget(RenderTargetId) = 0;
         virtual void reset() = 0;
     };
-    LFS_VIS_API std::unique_ptr<SceneRenderer> createSceneRenderer();
-    LFS_VIS_API std::unique_ptr<PointSceneRenderer> createPointSceneRenderer();
-    LFS_VIS_API void preloadSceneRenderer();
 } // namespace lfs::vis

@@ -7,6 +7,7 @@
 #include <array>
 
 namespace lfs::vis {
+    class VulkanContext;
     // Explicit adapter at the pre-existing desktop string-error boundary.
     // Native callers retain the structured Result/Status instead.
     template <class T>

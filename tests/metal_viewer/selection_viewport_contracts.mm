@@ -1,11 +1,13 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "device_requirements.hpp"
 #include "core/tensor_backend.hpp"
+#include "device_requirements.hpp"
 #include "metal_viewport_renderer.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
+#include "scene_renderer_factory.hpp"
 #include "vksplat_viewport_renderer.hpp"
+#include "vulkan_scene_renderer_factory.hpp"
 #include <Python.h>
 #include <algorithm>
 #include <array>
@@ -131,8 +133,8 @@ namespace {
                               Tensor::from_vector(opacity, {count, 1}, Device::GPU), 1.f);
         model.deleted() = Tensor::from_vector(deleted, {count}, Device::GPU).to(core::DataType::Bool);
         model.notify_deleted_mask_changed();
-        auto native_adapter = vis::createSceneRenderer();
-        Adapter reference_adapter;
+        auto native_adapter = vis::createSceneRenderer(context);
+        auto reference_adapter = vis::createVulkanSceneRenderer(context);
         vis::MetalViewportRenderer native;
         precise_small_splats(context, native);
         size_t cases = 0, hits = 0, ring_hits = 0;
@@ -192,7 +194,7 @@ namespace {
                                 // Metal tensor kernels before any host/GPU wait.
                                 const auto editor_result = result->to(core::DataType::UInt8).cpu();
                                 request.picked_ring_id_out = &adapter_id;
-                                auto via_adapter = native_adapter->buildSelectionMask(context, model, request, true);
+                                auto via_adapter = native_adapter->buildSelectionMask(model, request, true);
                                 if (!via_adapter)
                                     throw std::runtime_error(via_adapter.error());
                                 const auto adapter_cpu = via_adapter->cpu();
@@ -200,7 +202,7 @@ namespace {
                                 reference_id = direct_id;
                                 if (!native_only) {
                                     request.picked_ring_id_out = &reference_id;
-                                    auto reference = reference_adapter.buildSelectionMask(context, half ? expanded : model, request, true);
+                                    auto reference = reference_adapter->buildSelectionMask(half ? expanded : model, request, true);
                                     if (!reference)
                                         throw std::runtime_error(reference.error());
                                     reference_cpu = reference->cpu();

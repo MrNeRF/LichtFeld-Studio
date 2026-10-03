@@ -6277,6 +6277,11 @@ namespace lfs::vis {
         reclaimCompletedFailedReadbackCells();
     }
 
+    VksplatViewportRenderer::ReadbackStats VksplatViewportRenderer::readbackStats() const {
+        std::lock_guard<std::mutex> lock(readback_mutex_);
+        return {readback_ring_.outstandingCount(), readback_ring_.ringFullWaitCount(), readback_ring_.cellPinWaitCount()};
+    }
+
     std::size_t VksplatViewportRenderer::outstandingReadbackTickets() const {
         std::lock_guard<std::mutex> lock(readback_mutex_);
         return readback_ring_.outstandingCount();
