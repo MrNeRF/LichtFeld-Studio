@@ -679,15 +679,18 @@ namespace lfs::vis {
             constexpr std::string_view probe_file = "generated/projection_forward.spv";
             std::vector<std::filesystem::path> search_paths;
 
+#if defined(LFS_VULKAN_MACOS_REFERENCE)
+            // Reference host layouts must never consume staged production SPIR-V.
+            search_paths.push_back(lfs::core::utf8_to_path(LFS_VULKAN_RASTERIZER_DEV_SPV_DIR));
+#else
             search_paths.push_back(lfs::core::getResourceBaseDir() / "shaders" / "vulkan_rasterizer");
-
 #if defined(LFS_VULKAN_RASTERIZER_DEV_SPV_DIR) && !defined(LFS_MACOS_PORTABLE_APP)
             search_paths.push_back(lfs::core::utf8_to_path(LFS_VULKAN_RASTERIZER_DEV_SPV_DIR));
 #endif
-
 #if defined(PROJECT_ROOT_PATH) && !defined(LFS_MACOS_PORTABLE_APP)
             search_paths.push_back(lfs::core::utf8_to_path(PROJECT_ROOT_PATH) /
                                    "src/rendering/rasterizer/vulkan/shader");
+#endif
 #endif
 
             for (const auto& path : search_paths) {

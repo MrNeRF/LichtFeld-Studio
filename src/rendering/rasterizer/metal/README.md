@@ -5,7 +5,7 @@
 macOS uses the Metal scene renderer through `SceneRenderer` and
 `PointSceneRenderer`. Windows and Linux use their Vulkan implementations.
 The desktop UI, grid, gizmos, temporal effects and upscalers use the existing
-Vulkan compositor. Native color and depth textures are imported on the same
+Vulkan compositor. Vulkan-owned color and depth textures are exported to Metal on the same
 GPU; interactive presentation does not read the full frame back to the CPU.
 Scene rasterization has no per-frame backend fallback or viewer preference.
 Scene results carry opaque compositor handles; `vulkan_scene_output.hpp` converts
@@ -71,3 +71,13 @@ contracts additionally need the test-only Vulkan reference renderer and the
 shared loaders. Run application stress checks with an isolated `LFS_HOME`:
 training, several viewports, repeated window captures, resizing and close/reopen.
 GPU contracts do not replace those application checks.
+
+The macOS comparison target is `lfs_vulkan_rasterizer_macos_reference`.
+Its explicit `LFS_VULKAN_MACOS_REFERENCE` profile uses raster batches of 256,
+radix workgroups of 256, a smaller legacy GUT staging batch and a serial
+polygon mask pass to fit MoltenVK/Metal threadgroup limits. Production Vulkan
+keeps raster batches of 1024 and radix workgroups of 512. The reference
+compares rendered semantics; its timings and passing contracts do not validate
+the production Vulkan profile or Windows/Linux hardware. The benchmark JSON
+records this limitation. The reference is absent when Mac tests are disabled
+and is never linked into the Mac application.

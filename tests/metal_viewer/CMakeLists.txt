@@ -58,7 +58,21 @@ if(TARGET lfs_core)
     set_target_properties(metal_tensor_reader_contracts PROPERTIES OBJCXX_STANDARD 23)
     set_property(TEST MetalViewerTensorReaderContracts APPEND PROPERTY LABELS metal4)
 endif()
-if(TARGET lfs_visualizer)
+if(TARGET lfs_visualizer AND TARGET lfs_vulkan_rasterizer_macos_reference)
+    foreach(profile IN ITEMS production macos_reference)
+        add_executable(vulkan_${profile}_profile_contracts vulkan_profile_contracts.cpp)
+        target_compile_features(vulkan_${profile}_profile_contracts PRIVATE cxx_std_23)
+        target_include_directories(vulkan_${profile}_profile_contracts PRIVATE
+            "${CMAKE_SOURCE_DIR}/src"
+            "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/vulkan/src"
+            "${CMAKE_SOURCE_DIR}/src/rendering/include")
+        target_link_libraries(vulkan_${profile}_profile_contracts PRIVATE lfs_core)
+        if(profile STREQUAL "macos_reference")
+            target_compile_definitions(vulkan_${profile}_profile_contracts PRIVATE LFS_VULKAN_MACOS_REFERENCE=1)
+        endif()
+        add_test(NAME VulkanProfile_${profile} COMMAND vulkan_${profile}_profile_contracts)
+        set_tests_properties(VulkanProfile_${profile} PROPERTIES LABELS "cpu;viewer-profile" TIMEOUT 30)
+    endforeach()
     add_library(lfs_viewer_vulkan_reference STATIC
         ../../src/visualizer/rendering/vksplat_viewport_renderer.cpp
         ../../src/visualizer/rendering/point_cloud_vulkan_renderer.cpp
@@ -70,7 +84,7 @@ if(TARGET lfs_visualizer)
         "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/src/visualizer"
         "${CMAKE_BINARY_DIR}/src/visualizer/generated/shaders")
     target_compile_definitions(lfs_viewer_vulkan_reference PRIVATE LFS_HAS_CUDA=0 LFS_BUILD_TRAINER=0)
-    target_link_libraries(lfs_viewer_vulkan_reference PUBLIC lfs_visualizer lfs_vulkan_rasterizer)
+    target_link_libraries(lfs_viewer_vulkan_reference PUBLIC lfs_visualizer lfs_vulkan_rasterizer_macos_reference)
     find_package(Python REQUIRED COMPONENTS Development.Embed)
     # These upstream viewer contracts are otherwise in the CUDA-only test list.
     # Run them on Mac too; do not add GPU requirements to the CPU visualizer suite.

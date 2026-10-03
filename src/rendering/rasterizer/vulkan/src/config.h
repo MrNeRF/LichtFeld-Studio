@@ -10,9 +10,9 @@
 #define TILE_HEIGHT 16
 #define TILE_WIDTH  16
 
-// macOS builds this rasterizer only for parity tests. Smaller batches keep
-// FP32/overlay staging within Apple's 32 KiB limit under GPU validation.
-#ifdef __APPLE__
+// Only the explicit test reference profile reduces staging for MoltenVK.
+// Production values are independent of the host platform.
+#ifdef LFS_VULKAN_MACOS_REFERENCE
 #define RASTER_BATCH_SIZE 256
 #else
 #define RASTER_BATCH_SIZE 1024
@@ -74,7 +74,7 @@ typedef int32_t sortingKey_t;
 #define _CEIL_DIV(x, m)   (((x) + (m) - 1) / (m))
 #define _CEIL_ROUND(x, m) (_CEIL_DIV(x, m) * (m))
 
-#ifdef __APPLE__
+#ifdef LFS_VULKAN_MACOS_REFERENCE
 #define RADIX_WORKGROUP_SIZE 256u
 #else
 #define RADIX_WORKGROUP_SIZE 512u

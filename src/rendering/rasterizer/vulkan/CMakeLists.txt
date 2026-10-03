@@ -2,7 +2,19 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-add_library(lfs_vulkan_rasterizer STATIC
+# The Apple rasterizer is a comparison fixture, never a desktop backend.
+if(APPLE)
+    if(NOT BUILD_TESTS)
+        message(FATAL_ERROR "The macOS Vulkan reference rasterizer is test-only")
+    endif()
+    set(_VULKAN_RASTERIZER_TARGET lfs_vulkan_rasterizer_macos_reference)
+    set(_VULKAN_REFERENCE_PROFILE ON)
+else()
+    set(_VULKAN_RASTERIZER_TARGET lfs_vulkan_rasterizer)
+    set(_VULKAN_REFERENCE_PROFILE OFF)
+endif()
+
+add_library(${_VULKAN_RASTERIZER_TARGET} STATIC
         src/barrier_planner.cpp
         src/buffer.cpp
         src/gs_pipeline.cpp
@@ -13,7 +25,7 @@ add_library(lfs_vulkan_rasterizer STATIC
         # depending on the visualizer module.
 )
 
-target_include_directories(lfs_vulkan_rasterizer
+target_include_directories(${_VULKAN_RASTERIZER_TARGET}
         PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -21,7 +33,7 @@ target_include_directories(lfs_vulkan_rasterizer
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/core/include>
 )
 
-target_link_libraries(lfs_vulkan_rasterizer
+target_link_libraries(${_VULKAN_RASTERIZER_TARGET}
         PUBLIC
         Vulkan::Vulkan
         GPUOpen::VulkanMemoryAllocator
@@ -31,19 +43,25 @@ target_link_libraries(lfs_vulkan_rasterizer
         lfs_diagnostics
 )
 
-target_compile_features(lfs_vulkan_rasterizer PUBLIC cxx_std_23)
-set_target_properties(lfs_vulkan_rasterizer PROPERTIES
+target_compile_features(${_VULKAN_RASTERIZER_TARGET} PUBLIC cxx_std_23)
+set_target_properties(${_VULKAN_RASTERIZER_TARGET} PROPERTIES
         POSITION_INDEPENDENT_CODE ON
 )
 
-target_compile_definitions(lfs_vulkan_rasterizer PRIVATE
+target_compile_definitions(${_VULKAN_RASTERIZER_TARGET} PRIVATE
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
 
-set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_BINARY_DIR}/shader")
-set_property(TARGET lfs_vulkan_rasterizer PROPERTY
+if(_VULKAN_REFERENCE_PROFILE)
+    # Public because the reference adapters share the host-side batch layout.
+    target_compile_definitions(${_VULKAN_RASTERIZER_TARGET} PUBLIC LFS_VULKAN_MACOS_REFERENCE=1)
+    set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_BINARY_DIR}/macos-reference/shader")
+else()
+    set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_BINARY_DIR}/shader")
+endif()
+set_property(TARGET ${_VULKAN_RASTERIZER_TARGET} PROPERTY
         LFS_VULKAN_RASTERIZER_SPV_DIR "${LFS_VULKAN_RASTERIZER_SPV_DIR}")
-target_compile_definitions(lfs_vulkan_rasterizer PUBLIC
+target_compile_definitions(${_VULKAN_RASTERIZER_TARGET} PUBLIC
         LFS_VULKAN_RASTERIZER_DEV_SPV_DIR="${LFS_VULKAN_RASTERIZER_SPV_DIR}/"
 )
 
@@ -112,14 +130,14 @@ set(_VULKAN_SLANG_FLAGS
         -line-directive-mode none
         -target spirv
 )
-if(APPLE)
+if(_VULKAN_REFERENCE_PROFILE)
     list(APPEND _VULKAN_SLANG_FLAGS -DLFS_VULKAN_MACOS_REFERENCE=1)
 endif()
 set(_VULKAN_GLSL_FLAGS
         -V
         --target-env vulkan1.2
 )
-if(APPLE)
+if(_VULKAN_REFERENCE_PROFILE)
     list(APPEND _VULKAN_GLSL_FLAGS -DLFS_VULKAN_MACOS_REFERENCE=1)
 endif()
 if(LFS_ENABLE_VULKAN_SHADER_DEBUG_INFO)
@@ -308,5 +326,5 @@ _vulkan_add_glsl_shader(upsweep_indirect    upsweep.comp)
 _vulkan_add_glsl_shader(spine_indirect      spine.comp)
 _vulkan_add_glsl_shader(downsweep_indirect  downsweep.comp)
 
-add_custom_target(lfs_vulkan_rasterizer_shaders DEPENDS ${VULKAN_RASTERIZER_SHADER_OUTPUTS})
-add_dependencies(lfs_vulkan_rasterizer lfs_vulkan_rasterizer_shaders)
+add_custom_target(${_VULKAN_RASTERIZER_TARGET}_shaders DEPENDS ${VULKAN_RASTERIZER_SHADER_OUTPUTS})
+add_dependencies(${_VULKAN_RASTERIZER_TARGET} ${_VULKAN_RASTERIZER_TARGET}_shaders)
