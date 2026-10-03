@@ -1,4 +1,7 @@
 {
+  "node_editor.paint": "Malen",
+  "node_editor.paint_done": "Malen beenden",
+  "node_editor.pick_colour": "Farbe aufnehmen",
   "node_editor.colour_offset_hint": "Ziehen zum Färben; Doppelklick setzt auf neutral zurück",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "GPU-Speicher des Prozesses laut Betriebssystem oder GPU-Treiber.",
@@ -3212,10 +3215,35 @@
   "node_editor.optional_selection": "Optional: ohne Verbindung wird alles ausgewählt",
   "node_editor.captured_count": "Erfasst: {} ausgewählt",
   "nodes": {
+    "paint_selection": {
+      "label": "Auswahl malen",
+      "description": "Malt eine lebendige geometrische Auswahl direkt auf Oberflächen der Szene.",
+      "help": "Wähle den Knoten, aktiviere Malen und ziehe über eine Oberfläche; Alt/Option löscht.\nMit [ und ] änderst du die Pinselgröße. Striche bleiben bei geänderter Elementanzahl gültig.",
+      "inputs": {
+        "Softness": "Anteil des Probenradius für den weichen Rand, 0–1. 0 ist hart; 0,5 ist der Standard."
+      },
+      "input_labels": {
+        "Softness": "Weichheit"
+      },
+      "outputs": {
+        "Selection": "Auswahlstärke: 0 ist nicht ausgewählt, 1 vollständig; Zwischenwerte erzeugen weiche Übergänge."
+      },
+      "output_labels": {
+        "Selection": "Auswahl"
+      },
+      "properties": {
+        "data": "Oberflächenstriche als host-lokale Proben. Beim Malen gefüllt; standardmäßig leer.",
+        "invert": "Gemalte Auswahl umkehren. Standard Aus behält gemalte Bereiche; Ein wählt den Rest."
+      },
+      "property_labels": {
+        "data": "Striche",
+        "invert": "Umkehren"
+      }
+    },
     "boolean": {
       "label": "Boolesch",
       "description": "Gibt dir einen Ein-/Aus-Schalter für mehrere verbundene Einstellungen.",
-      "help": "Schalte damit mehrere Optionen gemeinsam.\nVerbinde Wert mit einem booleschen Eingang; standardmässig ist er aus.",
+      "help": "Schalte damit mehrere Optionen gemeinsam.\nVerbinde Wert mit einem booleschen Eingang; standardmäßig ist er aus.",
       "inputs": {
         "Value": "Gemeinsamer Ein-/Aus-Wert. Standard Aus bedeutet falsch oder nicht ausgewählt; Ein bedeutet wahr oder ausgewählt."
       },

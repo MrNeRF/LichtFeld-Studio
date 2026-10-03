@@ -1,4 +1,7 @@
 {
+  "node_editor.paint": "Pintar",
+  "node_editor.paint_done": "Terminar de pintar",
+  "node_editor.pick_colour": "Tomar color",
   "node_editor.colour_offset_hint": "Arrastra para teñir; doble clic para restablecer a neutro",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Memoria GPU del proceso según el sistema operativo o el controlador GPU.",
@@ -3212,6 +3215,31 @@
   "node_editor.optional_selection": "Opcional: sin conectar selecciona todo",
   "node_editor.captured_count": "Capturado: {} seleccionados",
   "nodes": {
+    "paint_selection": {
+      "label": "Pintar selección",
+      "description": "Pinta una selección geométrica activa directamente sobre las superficies de la escena.",
+      "help": "Selecciona el nodo, activa Pintar y arrastra sobre una superficie; Alt/Opción borra.\nUsa [ y ] para cambiar el pincel. Los trazos siguen siendo válidos si cambia la cantidad de elementos.",
+      "inputs": {
+        "Softness": "Fracción del radio de cada muestra usada para el desvanecido, 0–1. 0 crea un borde duro; 0,5 es el valor inicial."
+      },
+      "input_labels": {
+        "Softness": "Suavidad"
+      },
+      "outputs": {
+        "Selection": "Intensidad de selección: 0 no seleccionado, 1 totalmente seleccionado; los valores intermedios crean transiciones suaves."
+      },
+      "output_labels": {
+        "Selection": "Selección"
+      },
+      "properties": {
+        "data": "Trazos de superficie guardados como muestras locales del objeto. Vacío de forma predeterminada.",
+        "invert": "Invierte la selección pintada. Desactivado conserva lo pintado; activado selecciona el resto."
+      },
+      "property_labels": {
+        "data": "Trazos",
+        "invert": "Invertir"
+      }
+    },
     "boolean": {
       "label": "Booleano",
       "description": "Proporciona un interruptor para controlar varios ajustes conectados.",

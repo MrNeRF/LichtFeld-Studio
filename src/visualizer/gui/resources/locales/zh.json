@@ -1,4 +1,7 @@
 {
+  "node_editor.paint": "绘制",
+  "node_editor.paint_done": "结束绘制",
+  "node_editor.pick_colour": "拾取颜色",
   "node_editor.colour_offset_hint": "拖动调整色调；双击重置为中性",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "操作系统或 GPU 驱动程序报告的进程 GPU 内存。",
@@ -3212,6 +3215,31 @@
   "node_editor.optional_selection": "可选：未连接时选择全部",
   "node_editor.captured_count": "已捕获：{} 个选中项",
   "nodes": {
+    "paint_selection": {
+      "label": "绘制选择",
+      "description": "直接在场景表面绘制实时几何选择区域。",
+      "help": "选择节点并开启绘制，然后在表面拖动；按住 Alt/Option 拖动可擦除。\n使用 [ 和 ] 调整笔刷大小。元素数量改变后笔画仍然有效。",
+      "inputs": {
+        "Softness": "每个采样半径中用于边缘渐隐的比例，范围 0–1。0 为硬边，默认值为 0.5。"
+      },
+      "input_labels": {
+        "Softness": "柔和度"
+      },
+      "outputs": {
+        "Selection": "选择强度：0 为未选择，1 为完全选择；中间值形成柔和过渡。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {
+        "data": "以宿主局部采样存储的表面笔画。默认为空。",
+        "invert": "反转绘制的选择。默认关闭时保留绘制区域；开启时选择其余区域。"
+      },
+      "property_labels": {
+        "data": "笔画",
+        "invert": "反转"
+      }
+    },
     "boolean": {
       "label": "布尔值",
       "description": "提供一个开关，同时控制多个已连接的设置。",

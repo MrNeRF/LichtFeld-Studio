@@ -1,4 +1,7 @@
 {
+  "node_editor.paint": "ペイント",
+  "node_editor.paint_done": "ペイント終了",
+  "node_editor.pick_colour": "色を採取",
   "node_editor.colour_offset_hint": "ドラッグで色合いを調整、ダブルクリックでニュートラルに戻す",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "OS または GPU ドライバーが報告するプロセスの GPU メモリ。",
@@ -3212,6 +3215,31 @@
   "node_editor.optional_selection": "省略可能: 未接続の場合はすべてを選択",
   "node_editor.captured_count": "取得済み: {} 選択",
   "nodes": {
+    "paint_selection": {
+      "label": "選択をペイント",
+      "description": "シーンのサーフェス上にライブの幾何学的な選択範囲を直接描きます。",
+      "help": "ノードを選択してペイントをオンにし、サーフェス上をドラッグします。Alt/Option ドラッグで消去します。\n[ と ] でブラシサイズを変更できます。要素数が変わってもストロークは保持されます。",
+      "inputs": {
+        "Softness": "各サンプル半径のうちエッジのフェードに使う割合（0～1）。0 は硬い境界、初期値は 0.5 です。"
+      },
+      "input_labels": {
+        "Softness": "柔らかさ"
+      },
+      "outputs": {
+        "Selection": "選択の強さです。0 は未選択、1 は完全選択で、中間値は滑らかに遷移します。"
+      },
+      "output_labels": {
+        "Selection": "選択"
+      },
+      "properties": {
+        "data": "ホストのローカルサンプルとして保存されるサーフェスストロークです。初期状態は空です。",
+        "invert": "ペイントした選択を反転します。初期値オフは描いた範囲を保ち、オンは残りを選びます。"
+      },
+      "property_labels": {
+        "data": "ストローク",
+        "invert": "反転"
+      }
+    },
     "boolean": {
       "label": "真偽値",
       "description": "複数の接続先を一つのオン／オフ値で切り替えます。",

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <numbers>
 #include <optional>
 #include <random>
@@ -333,7 +334,6 @@ namespace {
     TEST_P(NodesCore, SelectionBlendEndpointsPreserveRawAttributesExactly) {
         auto input = splats(1);
         input.splats->scaling = tensor({-3, 0, 3, -3, 0, 3, -3, 0, 3}, {3, 3});
-        input.splats->attributes["selection"] = tensor({0, 1, 0.5f}, {3});
         using Configure = std::function<void(Node&)>;
         const std::vector<std::pair<std::string, Configure>> writers = {
             {"lfs.set_position", [](Node& node) { node.input_values["Offset"] = glm::vec3(1, 2, 3); }},
@@ -352,38 +352,43 @@ namespace {
         const auto row = [&](const Tensor& value, size_t index) {
             return host<float>(value.slice(0, index, index + 1).contiguous());
         };
-        for (const auto& [type, configure] : writers) {
-            SCOPED_TRACE(type);
-            NodeTree tree(registry_);
-            auto& attribute = tree.add_node("lfs.named_attribute", "Selection");
-            attribute.input_values["Name"] = std::string("selection");
-            auto& writer = tree.add_node(type, "Writer");
-            configure(writer);
-            ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Writer", "Geometry"}));
-            ASSERT_TRUE(tree.add_link({"Selection", "Attribute", "Writer", "Selection"}));
-            ASSERT_TRUE(tree.add_link({"Writer", "Geometry", tree.output_node().name, "Geometry"}));
-            const auto result = evaluate(tree, {input, {}, 1});
-            ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
-                                                             : result.errors.begin()->second);
-            ASSERT_TRUE(result.geometry.splats);
-            const auto& before = *input.splats;
-            const auto& after = *result.geometry.splats;
-            EXPECT_EQ(row(after.means, 0), row(before.means, 0));
-            EXPECT_EQ(row(after.sh0, 0), row(before.sh0, 0));
-            EXPECT_EQ(row(after.shN, 0), row(before.shN, 0));
-            EXPECT_EQ(row(after.scaling, 0), row(before.scaling, 0));
-            EXPECT_EQ(row(after.rotation, 0), row(before.rotation, 0));
-            EXPECT_EQ(row(after.opacity, 0), row(before.opacity, 0));
-            for (const auto& [name, value] : before.attributes)
-                EXPECT_EQ(row(after.attributes.at(name), 0), row(value, 0));
+        // A NaN weight (e.g. a negative base raised to a fraction) must act as unselected.
+        for (const float unselected : {0.0f, std::numeric_limits<float>::quiet_NaN()}) {
+            for (const auto& [type, configure] : writers) {
+                SCOPED_TRACE(type + " unselected=" + std::to_string(unselected));
+                input.splats->attributes["selection"] = tensor({unselected, 1, 0.5f}, {3});
+                NodeTree tree(registry_);
+                auto& attribute = tree.add_node("lfs.named_attribute", "Selection");
+                attribute.input_values["Name"] = std::string("selection");
+                auto& writer = tree.add_node(type, "Writer");
+                configure(writer);
+                ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Writer", "Geometry"}));
+                ASSERT_TRUE(tree.add_link({"Selection", "Attribute", "Writer", "Selection"}));
+                ASSERT_TRUE(tree.add_link({"Writer", "Geometry", tree.output_node().name, "Geometry"}));
+                const auto result = evaluate(tree, {input, {}, 1});
+                ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
+                                                                 : result.errors.begin()->second);
+                ASSERT_TRUE(result.geometry.splats);
+                const auto& before = *input.splats;
+                const auto& after = *result.geometry.splats;
+                EXPECT_EQ(row(after.means, 0), row(before.means, 0));
+                EXPECT_EQ(row(after.sh0, 0), row(before.sh0, 0));
+                EXPECT_EQ(row(after.shN, 0), row(before.shN, 0));
+                EXPECT_EQ(row(after.scaling, 0), row(before.scaling, 0));
+                EXPECT_EQ(row(after.rotation, 0), row(before.rotation, 0));
+                EXPECT_EQ(row(after.opacity, 0), row(before.opacity, 0));
+                for (const auto& [name, value] : before.attributes)
+                    if (name != "selection") // The NaN weight itself never compares equal.
+                        EXPECT_EQ(row(after.attributes.at(name), 0), row(value, 0));
 
-            const bool selected_changed = row(after.means, 1) != row(before.means, 1) ||
-                                          row(after.sh0, 1) != row(before.sh0, 1) ||
-                                          row(after.shN, 1) != row(before.shN, 1) ||
-                                          row(after.scaling, 1) != row(before.scaling, 1) ||
-                                          row(after.rotation, 1) != row(before.rotation, 1) ||
-                                          row(after.opacity, 1) != row(before.opacity, 1);
-            EXPECT_TRUE(selected_changed);
+                const bool selected_changed = row(after.means, 1) != row(before.means, 1) ||
+                                              row(after.sh0, 1) != row(before.sh0, 1) ||
+                                              row(after.shN, 1) != row(before.shN, 1) ||
+                                              row(after.scaling, 1) != row(before.scaling, 1) ||
+                                              row(after.rotation, 1) != row(before.rotation, 1) ||
+                                              row(after.opacity, 1) != row(before.opacity, 1);
+                EXPECT_TRUE(selected_changed);
+            }
         }
     }
 
@@ -1060,6 +1065,98 @@ namespace {
             });
             EXPECT_EQ(host<float>(selected), (std::vector<float>{1, 0, 0}));
         }
+    }
+
+    TEST_P(NodesCore, PaintSelectionSamplesOverlapEraseAndMatchBruteForceAabb) {
+        auto geometry = splats(0);
+        geometry.splats->means = tensor({0.0f, 0.0f, 0.0f,
+                                         0.5f, 0.0f, 0.0f,
+                                         0.75f, 0.0f, 0.0f,
+                                         1.25f, 0.0f, 0.0f,
+                                         10.0f, 10.0f, 10.0f,
+                                         -20.0f, 4.0f, 7.0f},
+                                        {6, 3});
+        const nlohmann::json strokes = {
+            {{0.0f, 0.0f, 0.0f, 1.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f, 0.6f}},
+            {{0.5f, 0.0f, 0.0f, 0.25f, 0.0f}},
+        };
+        const auto selected = field_result(
+            "lfs.paint_selection", "Selection", FLOAT_SOCKET, geometry, [&](Node& node) {
+                node.properties["data"] = strokes;
+                node.input_values["Softness"] = 1.0f;
+            });
+        const auto actual = host<float>(selected);
+
+        const std::vector<glm::vec3> positions{{0, 0, 0}, {0.5f, 0, 0}, {0.75f, 0, 0}, {1.25f, 0, 0}, {10, 10, 10}, {-20, 4, 7}};
+        std::vector<float> brute;
+        for (const auto& position : positions) {
+            float selected = 0.0f;
+            for (const auto& stroke : strokes) {
+                float paint = 0.0f;
+                float erase = 0.0f;
+                for (const auto& sample : stroke) {
+                    const glm::vec3 centre(sample[0].get<float>(), sample[1].get<float>(), sample[2].get<float>());
+                    const float weight = std::clamp(1.0f - glm::distance(position, centre) / sample[3].get<float>(), 0.0f, 1.0f);
+                    if (sample[4].get<float>() == 0.0f)
+                        erase = std::max(erase, weight);
+                    else
+                        paint = std::max(paint, sample[4].get<float>() * weight);
+                }
+                selected = std::min(std::max(selected, paint), 1.0f - erase);
+            }
+            brute.push_back(selected);
+        }
+        ASSERT_EQ(actual.size(), brute.size());
+        for (std::size_t index = 0; index < brute.size(); ++index)
+            EXPECT_NEAR(actual[index], brute[index], 1e-5f) << index;
+        EXPECT_GT(actual[2], 0.0f);       // overlapping paint samples take their maximum
+        EXPECT_FLOAT_EQ(actual[1], 0.0f); // the erase sample removes its centre
+        EXPECT_FLOAT_EQ(actual[4], 0.0f); // rejected by the strokes' AABB
+    }
+
+    TEST_P(NodesCore, PaintSelectionStrokesApplyInOrder) {
+        auto geometry = splats(0);
+        geometry.splats->means = tensor({0, 0, 0, 3, 0, 0}, {2, 3});
+        const nlohmann::json paint = {{0.0f, 0.0f, 0.0f, 1.0f, 1.0f}, {3.0f, 0.0f, 0.0f, 1.0f, 1.0f}};
+        const nlohmann::json erase = {{0.0f, 0.0f, 0.0f, 1.0f, 0.0f}, {3.0f, 0.0f, 0.0f, 1.0f, 0.0f}};
+        const nlohmann::json repaint = {{0.0f, 0.0f, 0.0f, 1.0f, 1.0f}};
+        const auto selection = [&](const nlohmann::json& strokes) {
+            return host<float>(field_result("lfs.paint_selection", "Selection", FLOAT_SOCKET, geometry,
+                                            [&](Node& node) {
+                                                node.properties["data"] = strokes;
+                                                node.input_values["Softness"] = 0.0f;
+                                            }));
+        };
+        EXPECT_EQ(selection(nlohmann::json::array({paint})), (std::vector<float>{1.0f, 1.0f}));
+        EXPECT_EQ(selection(nlohmann::json::array({paint, erase})), (std::vector<float>{0.0f, 0.0f}));
+        // Painting over an erased patch selects it again; only the repainted point returns.
+        EXPECT_EQ(selection(nlohmann::json::array({paint, erase, repaint})), (std::vector<float>{1.0f, 0.0f}));
+        // Erasing first and painting later is not undone by the earlier erase.
+        EXPECT_EQ(selection(nlohmann::json::array({erase, paint})), (std::vector<float>{1.0f, 1.0f}));
+    }
+
+    TEST_P(NodesCore, PaintSelectionSoftnessEndpointsAndInvert) {
+        auto geometry = splats(0);
+        geometry.splats->means = tensor({0, 0, 0, 0.75f, 0, 0, 1.1f, 0, 0}, {3, 3});
+        const auto configure = [](Node& node, const float softness, const bool invert) {
+            node.properties["data"] = {{{0.0f, 0.0f, 0.0f, 1.0f, 1.0f}}};
+            node.properties["invert"] = invert;
+            node.input_values["Softness"] = softness;
+        };
+        const auto hard = field_result("lfs.paint_selection", "Selection", FLOAT_SOCKET, geometry,
+                                       [&](Node& node) { configure(node, 0.0f, false); });
+        EXPECT_EQ(host<float>(hard), (std::vector<float>{1.0f, 1.0f, 0.0f}));
+        const auto soft = field_result("lfs.paint_selection", "Selection", FLOAT_SOCKET, geometry,
+                                       [&](Node& node) { configure(node, 1.0f, false); });
+        const auto soft_values = host<float>(soft);
+        EXPECT_NEAR(soft_values[0], 1.0f, 1e-5f);
+        EXPECT_NEAR(soft_values[1], 0.25f, 1e-5f);
+        EXPECT_NEAR(soft_values[2], 0.0f, 1e-5f);
+        const auto inverted = field_result("lfs.paint_selection", "Selection", FLOAT_SOCKET, geometry,
+                                           [&](Node& node) { configure(node, 1.0f, true); });
+        const auto inverted_values = host<float>(inverted);
+        for (std::size_t index = 0; index < soft_values.size(); ++index)
+            EXPECT_NEAR(inverted_values[index], 1.0f - soft_values[index], 1e-5f);
     }
 
     TEST_P(NodesCore, ColourCorrectKnownSaturationAndWhiteBalanceMatrices) {

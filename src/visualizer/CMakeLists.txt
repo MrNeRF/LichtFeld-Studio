@@ -29,6 +29,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Geometry node modifiers
         nodes/modifier_manager.cpp
+        nodes/viewport_coordinates.cpp
         nodes/modifier_manager_evaluation.cpp
         nodes/modifier_evaluation_worker.cpp
 

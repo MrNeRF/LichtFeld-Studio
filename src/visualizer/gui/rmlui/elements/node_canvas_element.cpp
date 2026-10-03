@@ -282,6 +282,8 @@ namespace lfs::vis::gui {
         RemoveEventListener("mousedown", this, true);
         if (scene_manager_)
             scene_manager_->setModifierSelectionPreview({}, std::nullopt);
+        if (manager_)
+            manager_->clearViewportNodeSelection();
     }
 
     void NodeCanvasElement::setContext(SceneManager* scene_manager, GlobalContextMenu* context_menu) {
@@ -382,6 +384,25 @@ namespace lfs::vis::gui {
         updateSelectionPreview();
     }
 
+    bool NodeCanvasElement::paintSelectionSelected() const {
+        const auto* tree = activeTree();
+        const auto* node = tree && selected_nodes_.size() == 1
+                               ? tree->find_node(*selected_nodes_.begin())
+                               : nullptr;
+        return node && node->type_id == "lfs.paint_selection";
+    }
+
+    bool NodeCanvasElement::paintModeActive() const {
+        return manager_ && manager_->paintModeActive();
+    }
+
+    void NodeCanvasElement::togglePaintMode() {
+        if (manager_ && paintSelectionSelected()) {
+            manager_->setPaintMode(!manager_->paintModeActive());
+            dom_dirty_ = true;
+        }
+    }
+
     bool NodeCanvasElement::GetIntrinsicDimensions(Rml::Vector2f& dimensions, float& ratio) {
         dimensions = {640.0f, 320.0f};
         ratio = 0.0f;
@@ -468,6 +489,11 @@ namespace lfs::vis::gui {
             language_generation_ = language_generation;
             dom_dirty_ = true;
             closeAddMenu();
+        }
+        // Paint mode also ends from the viewport, MCP or a selection change.
+        if (const bool painting = paintModeActive(); painting != paint_mode_shown_) {
+            paint_mode_shown_ = painting;
+            dom_dirty_ = true;
         }
         const float ratio = currentDpRatio(this);
         const auto signature = rml_theme::currentThemeSignature();
@@ -556,6 +582,7 @@ namespace lfs::vis::gui {
 
     bool NodeCanvasElement::needsModelUpdate() const {
         return dom_dirty_ || geometry_dirty_ || frame_pending_ || pointer_down_ || field_step_direction_ != 0 ||
+               paintModeActive() != paint_mode_shown_ ||
                language_generation_ != event::LocalizationManager::getInstance().getCurrentLanguageGeneration() ||
                (manager_ && (manager_->generation() != last_generation_ || manager_->resultGeneration() != last_result_generation_ || manager_->progress().busy)) ||
                app_store().selection_generation.get() != last_selection_generation_;
@@ -669,6 +696,11 @@ namespace lfs::vis::gui {
     void NodeCanvasElement::updateSelectionPreview() {
         if (!scene_manager_ || !manager_)
             return;
+        const auto host = activeHost();
+        if (host && selected_nodes_.size() == 1 && !active_tree_uuid_.empty())
+            manager_->setViewportNodeSelection(*host, active_tree_uuid_, *selected_nodes_.begin());
+        else
+            manager_->clearViewportNodeSelection();
         if (!preview_selection_opt_out_ && selected_nodes_.size() == 1) {
             const auto* tree = activeTree();
             const auto* node = tree ? tree->find_node(*selected_nodes_.begin()) : nullptr;
@@ -679,7 +711,6 @@ namespace lfs::vis::gui {
                 }))
                 preview_selection_ = true;
         }
-        const auto host = activeHost();
         if (!preview_selection_ || !host || selected_nodes_.size() != 1 ||
             active_modifier_uuid_.empty()) {
             scene_manager_->setModifierSelectionPreview({}, std::nullopt);
@@ -765,6 +796,8 @@ namespace lfs::vis::gui {
                 nlohmann::json content_state = {
                     {"values", node->input_values},
                     {"properties", node->properties},
+                    {"selected", selected_nodes_.contains(visual.interaction.id)},
+                    {"paint_mode", manager_->paintModeActive()},
                     {"descriptor", reinterpret_cast<std::uintptr_t>(type.get())},
                     {"theme", theme_signature_},
                     {"language", language_generation_},
@@ -778,6 +811,13 @@ namespace lfs::vis::gui {
                                         categoryColor(visual.category) + "\">" + node_widgets::categoryIcon(visual.category) +
                                         "<span class=\"node-title-label\">" + escape(visual.title) +
                                         "</span>";
+                    if (node->type_id == "lfs.paint_selection" &&
+                        selected_nodes_.contains(node->name))
+                        title += "<button class=\"node-title-tool" +
+                                 std::string(manager_->paintModeActive() ? " active" : "") +
+                                 "\" data-action=\"paint-toggle\" data-node=\"" + escape(node->name) +
+                                 "\" title=\"" + escape(LOC("node_editor.paint")) +
+                                 "\">" + node_widgets::icon("brush") + "</button>";
                     title += "</div><div class=\"socket-rows\">";
                     for (const auto& output : outputs)
                         title += "<div class=\"socket-row output\" title=\"" + escape(output.description) + "\"><span class=\"socket-label\">" +
@@ -970,6 +1010,12 @@ namespace lfs::vis::gui {
                 html += "<label class=\"setting-row\"><span class=\"prop-label\">" +
                         escape(LOC("node_editor.node_on")) + "</span><input type=\"checkbox\" data-action=\"node-on\" data-node=\"" +
                         escape(node->name) + "\"" + (node->muted ? "" : " checked") + "/></label>";
+                if (node->type_id == "lfs.paint_selection")
+                    html += "<button class=\"btn sidebar-button" +
+                            std::string(manager_->paintModeActive() ? " active" : "") +
+                            "\" data-action=\"paint-toggle\" data-node=\"" + escape(node->name) +
+                            "\">" + escape(LOC(manager_->paintModeActive() ? "node_editor.paint_done" : "node_editor.paint")) +
+                            "</button>";
                 if (type) {
                     if (!type->help.empty()) {
                         const bool expanded = expanded_help_.try_emplace(type->id, true).first->second;
@@ -1438,6 +1484,11 @@ namespace lfs::vis::gui {
         }
         switch (scancode) {
         case SDL_SCANCODE_ESCAPE:
+            if (manager_ && (manager_->paintModeActive() || manager_->colourPickActive())) {
+                manager_->cancelViewportMode();
+                dom_dirty_ = true;
+                return true;
+            }
             interaction_.cancel();
             pointer_down_ = false;
             selected_nodes_ = interaction_.selectedNodes();
@@ -1649,6 +1700,29 @@ namespace lfs::vis::gui {
             }
         }
         if (type == "click" && target) {
+            if (action == "paint-toggle") {
+                togglePaintMode();
+                event.StopPropagation();
+                return;
+            }
+            if (action == "colour-pick") {
+                const std::string node = target->GetAttribute<Rml::String>("data-node", "");
+                const std::string input = target->GetAttribute<Rml::String>("data-input", "");
+                if (!node.empty() && !selected_nodes_.contains(node)) {
+                    selected_nodes_.clear();
+                    selected_nodes_.insert(node);
+                    interaction_.setSelectedNodes(selected_nodes_);
+                    updateSelectedClasses();
+                    updateSidebar();
+                    updateSelectionPreview();
+                    geometry_dirty_ = true;
+                }
+                (void)manager_->beginColourPick(node, input,
+                                                event.GetParameter<int>("shift_key", 0) != 0);
+                dom_dirty_ = true;
+                event.StopPropagation();
+                return;
+            }
             if (action == "node-settings") {
                 if (auto* tree = activeTree()) {
                     if (auto* node = tree->find_node(target->GetAttribute<Rml::String>("data-node", ""))) {

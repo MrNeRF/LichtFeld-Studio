@@ -392,12 +392,17 @@ namespace lfs::vis {
             Default,
             Resize,
             Hand,
-            DepthWindow
+            DepthWindow,
+            Eyedropper,
+            Paint
         };
         CursorType current_cursor_ = CursorType::Default;
         int depth_window_cursor_ = 0;
         SDL_Cursor* resize_cursor_ = nullptr;
         SDL_Cursor* hand_cursor_ = nullptr;
+        bool node_paint_dragging_ = false;
+        bool node_paint_erasing_ = false;
+        std::optional<glm::vec3> node_paint_last_world_;
 
         // Double-click detection
         static constexpr double DOUBLE_CLICK_TIME = 0.3;

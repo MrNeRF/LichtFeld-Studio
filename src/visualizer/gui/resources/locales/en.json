@@ -1,5 +1,8 @@
 {
   "node_editor.colour_offset_hint": "Drag to tint; double-click to reset to neutral",
+  "node_editor.paint": "Paint",
+  "node_editor.paint_done": "Finish Painting",
+  "node_editor.pick_colour": "Pick Colour",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Process GPU memory reported by the operating system or GPU driver.",
   "ui.vram_process_unavailable_tooltip": "Process GPU memory is unavailable. Device usage includes other applications.",
@@ -3212,6 +3215,31 @@
   "node_editor.optional_selection": "Optional: unconnected selects everything",
   "node_editor.captured_count": "Captured: {} selected",
   "nodes": {
+    "paint_selection": {
+      "label": "Paint Selection",
+      "description": "Paints a live, geometric selection directly onto surfaces in your scene.",
+      "help": "Select the node and turn on Paint, then drag over a surface; hold Alt/Option to erase.\nUse [ and ] to resize the brush. Each stroke remains valid when the element count changes.",
+      "inputs": {
+        "Softness": "Fraction of each sample radius used for the edge fade, 0–1. 0 gives a hard edge; 0.5 is the default."
+      },
+      "input_labels": {
+        "Softness": "Softness"
+      },
+      "outputs": {
+        "Selection": "Selection strength: 0 is unselected, 1 fully selected; values between them make soft transitions."
+      },
+      "output_labels": {
+        "Selection": "Selection"
+      },
+      "properties": {
+        "data": "Surface strokes stored as host-local samples. Painting fills this data; it is empty by default.",
+        "invert": "Reverse the painted selection. Off by default keeps painted areas; on selects the rest."
+      },
+      "property_labels": {
+        "data": "Strokes",
+        "invert": "Invert"
+      }
+    },
     "boolean": {
       "label": "Boolean",
       "description": "Gives you one on/off switch to control several connected settings.",

@@ -444,6 +444,12 @@ namespace lfs::vis::gui {
                          .id = "add",
                          .icon = "sequencer/plus",
                          .tooltip = LOC("node_editor.add")});
+        if (canvas_ && canvas_->paintSelectionSelected())
+            items.push_back({.kind = HeaderItem::Kind::Toggle,
+                             .id = "paint",
+                             .icon = "brush",
+                             .tooltip = LOC("node_editor.paint"),
+                             .active = canvas_->paintModeActive()});
         items.push_back({.kind = HeaderItem::Kind::Toggle, .id = "modifiers-visible", .label = LOC(canvas_ && canvas_->modifiersVisible() ? "node_editor.modifiers_on" : "node_editor.modifiers_off"), .active = canvas_ && canvas_->modifiersVisible()});
         items.push_back({.kind = HeaderItem::Kind::Button, .id = "frame", .icon = "arrows-maximize", .tooltip = LOC("node_editor.frame")});
         items.push_back({.kind = HeaderItem::Kind::Button, .id = "arrange", .icon = "layout-grid", .tooltip = LOC("node_editor.arrange")});
@@ -473,6 +479,9 @@ namespace lfs::vis::gui {
             preview_selection_ = !(canvas_ ? canvas_->previewSelection() : preview_selection_);
             if (canvas_)
                 canvas_->setPreviewSelection(preview_selection_);
+        } else if (action == "paint") {
+            if (canvas_)
+                canvas_->togglePaintMode();
         } else if (action == "sidebar") {
             sidebar_visible_ = !(canvas_ ? canvas_->sidebarVisible() : sidebar_visible_);
             if (canvas_)

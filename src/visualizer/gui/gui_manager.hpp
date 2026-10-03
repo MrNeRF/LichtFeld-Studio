@@ -229,6 +229,7 @@ namespace lfs::vis {
             bool isModalWindowOpen() const;
             [[nodiscard]] bool isHardwareSelectionRingActive() const;
             [[nodiscard]] bool selectionCursorNeedsRender(float mouse_x, float mouse_y) const;
+            [[nodiscard]] SDL_Cursor* pipetteCursor() const noexcept { return pipette_cursor_; }
             [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
             [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }

@@ -1,4 +1,7 @@
 {
+  "node_editor.paint": "Dipingi",
+  "node_editor.paint_done": "Termina pittura",
+  "node_editor.pick_colour": "Preleva colore",
   "node_editor.colour_offset_hint": "Trascina per tingere; doppio clic per ripristinare il neutro",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Memoria GPU del processo riportata dal sistema operativo o dal driver GPU.",
@@ -3212,6 +3215,31 @@
   "node_editor.optional_selection": "Opzionale: senza connessione seleziona tutto",
   "node_editor.captured_count": "Acquisiti: {} selezionati",
   "nodes": {
+    "paint_selection": {
+      "label": "Dipingi selezione",
+      "description": "Dipinge una selezione geometrica dinamica direttamente sulle superfici della scena.",
+      "help": "Seleziona il nodo, attiva Dipingi e trascina su una superficie; Alt/Option cancella.\nUsa [ e ] per ridimensionare il pennello. I tratti restano validi se cambia il numero di elementi.",
+      "inputs": {
+        "Softness": "Frazione del raggio di ogni campione usata per la sfumatura, 0–1. 0 dà un bordo netto; 0,5 è il valore predefinito."
+      },
+      "input_labels": {
+        "Softness": "Morbidezza"
+      },
+      "outputs": {
+        "Selection": "Intensità della selezione: 0 non selezionato, 1 completamente selezionato; i valori intermedi creano transizioni morbide."
+      },
+      "output_labels": {
+        "Selection": "Selezione"
+      },
+      "properties": {
+        "data": "Tratti sulla superficie memorizzati come campioni locali dell’oggetto. Vuoto per impostazione predefinita.",
+        "invert": "Inverte la selezione dipinta. Disattivato mantiene le aree dipinte; attivato seleziona il resto."
+      },
+      "property_labels": {
+        "data": "Tratti",
+        "invert": "Inverti"
+      }
+    },
     "boolean": {
       "label": "Booleano",
       "description": "Fornisce un interruttore comune per più impostazioni collegate.",

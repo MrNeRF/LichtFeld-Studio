@@ -19,6 +19,7 @@
 #include "gui/import_error.hpp"
 #include "ipc/view_context.hpp"
 #include "preferences.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
 #include "window/vulkan_result.hpp"
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -3399,6 +3400,26 @@ namespace lfs::vis::gui {
                                          2.0f);
             }
 
+            constexpr glm::vec3 node_shape_color{0.82f, 0.32f, 1.0f};
+            if (gizmo.node_box_active) {
+                appendProjectedBox(params, guide_view, settings, glm::vec3(-0.5f), glm::vec3(0.5f),
+                                   gizmo.node_box_transform,
+                                   cropGuideColor(node_shape_color, false, 0.0f), 2.4f);
+                if (gizmo.node_box_has_falloff)
+                    appendProjectedBox(params, guide_view, settings, glm::vec3(-0.5f), glm::vec3(0.5f),
+                                       gizmo.node_box_falloff_transform,
+                                       glm::vec4(node_shape_color, 0.3f), 1.3f);
+            }
+            if (gizmo.node_ellipsoid_active) {
+                appendProjectedEllipsoid(params, guide_view, settings, glm::vec3(1.0f),
+                                         gizmo.node_ellipsoid_transform,
+                                         cropGuideColor(node_shape_color, false, 0.0f), 2.4f);
+                if (gizmo.node_ellipsoid_has_falloff)
+                    appendProjectedEllipsoid(params, guide_view, settings, glm::vec3(1.0f),
+                                             gizmo.node_ellipsoid_falloff_transform,
+                                             glm::vec4(node_shape_color, 0.3f), 1.3f);
+            }
+
             if (!scene_state || !scene_manager) {
                 return;
             }
@@ -4232,15 +4253,18 @@ namespace lfs::vis::gui {
             return std::nullopt;
         }
 
+        const auto* const scene_manager = viewer_->getSceneManager();
+        const bool paint_mode = scene_manager && scene_manager->modifierManager().paintModeActive();
         const auto* const selection_tool = viewer_->getSelectionTool();
-        if (!selection_tool || !selection_tool->isEnabled() ||
-            viewer_->getEditorContext().getActiveTool() != ToolType::Selection) {
+        if (!paint_mode && (!selection_tool || !selection_tool->isEnabled() ||
+                            viewer_->getEditorContext().getActiveTool() != ToolType::Selection)) {
             return std::nullopt;
         }
 
         auto* const rendering = viewer_->getRenderingManager();
-        if (!rendering || rendering->getSelectionPreviewMode() != SelectionPreviewMode::Centers ||
-            !rendering->isCursorPreviewActive()) {
+        if (!rendering || (!paint_mode &&
+                           (rendering->getSelectionPreviewMode() != SelectionPreviewMode::Centers ||
+                            !rendering->isCursorPreviewActive()))) {
             return std::nullopt;
         }
 
@@ -4248,7 +4272,13 @@ namespace lfs::vis::gui {
         bool add_mode = true;
         [[maybe_unused]] float cursor_x = 0.0f;
         [[maybe_unused]] float cursor_y = 0.0f;
-        rendering->getCursorPreviewState(cursor_x, cursor_y, render_radius, add_mode);
+        if (paint_mode) {
+            render_radius = scene_manager->modifierManager().paintRadius();
+            if (const auto* input_controller = viewer_->getInputController())
+                add_mode = (input_controller->currentModifierKeys() & input::KEYMOD_ALT) == 0;
+        } else {
+            rendering->getCursorPreviewState(cursor_x, cursor_y, render_radius, add_mode);
+        }
         const auto panel = rendering->resolveViewerPanel(rendering->activeViewId(),
                                                          viewer_->getViewport(),
                                                          viewport_layout_.pos,
@@ -4270,12 +4300,14 @@ namespace lfs::vis::gui {
             return std::nullopt;
         }
         if (const auto* const input_controller = viewer_->getInputController();
-            input_controller && input_controller->hasViewportCursorOverride()) {
+            input_controller && input_controller->hasViewportCursorOverride() && !paint_mode) {
             return std::nullopt;
         }
 
-        const float screen_radius = render_radius *
-                                    (panel->width / static_cast<float>(panel->render_width));
+        const float screen_radius = paint_mode
+                                        ? render_radius
+                                        : render_radius *
+                                              (panel->width / static_cast<float>(panel->render_width));
         const int radius_px = std::lround(screen_radius);
         if (!useHardwareSelectionRing(true, SelectionPreviewMode::Centers, radius_px)) {
             return std::nullopt;
@@ -4283,8 +4315,14 @@ namespace lfs::vis::gui {
 
         std::optional<input::SelectionOp> selection_op;
         if (auto* const input_controller = viewer_->getInputController()) {
-            selection_op = input_controller->selectionDragOperation();
-            if (!selection_op) {
+            if (paint_mode) {
+                selection_op = (input_controller->currentModifierKeys() & input::KEYMOD_ALT) != 0
+                                   ? std::optional(input::SelectionOp::Remove)
+                                   : std::optional(input::SelectionOp::Add);
+            } else {
+                selection_op = input_controller->selectionDragOperation();
+            }
+            if (!paint_mode && !selection_op) {
                 selection_op = input::selectionOpForModifiers(
                     input_controller->getBindings(),
                     input::ToolMode::SELECTION,
@@ -8212,6 +8250,10 @@ namespace lfs::vis::gui {
         }
 
         if (!guiFocusState().want_capture_mouse && isPositionInViewport(mouse_x, mouse_y)) {
+            if (const auto* const scene_manager = viewer_ ? viewer_->getSceneManager() : nullptr;
+                scene_manager && scene_manager->modifierManager().paintModeActive()) {
+                return selectionCursorNeedsRender(mouse_x, mouse_y);
+            }
             if (auto* const sel = viewer_ ? viewer_->getSelectionTool() : nullptr; sel && sel->isEnabled()) {
                 return selectionCursorNeedsRender(mouse_x, mouse_y);
             }

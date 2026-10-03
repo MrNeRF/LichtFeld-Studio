@@ -66,7 +66,11 @@ namespace lfs::nodes::builtin {
     core::Tensor selection(const NodeContext& context, std::string_view socket, const FieldContext& domain,
                            bool structural) {
         core::Tensor value = context.evaluate_field(socket, domain, FLOAT_SOCKET);
-        return structural ? value.ge(0.5f) : value.clamp(0.0f, 1.0f);
+        if (structural)
+            return value.ge(0.5f);
+        // NaN (e.g. a negative base raised to a fraction) means unselected, not a NaN blend.
+        const auto clamped = value.clamp(0.0f, 1.0f);
+        return clamped.where(clamped.isnan().logical_not(), core::Tensor::zeros_like(clamped));
     }
 
     core::Tensor blend(const core::Tensor& old_value, const core::Tensor& new_value, core::Tensor weight) {

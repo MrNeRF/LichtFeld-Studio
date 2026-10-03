@@ -93,6 +93,8 @@ Select a node in the editor for its controls and How to use guidance.
 
 - [Neighbour Count](lfs.neighbour_count.md) — Counts nearby splats or points so you can find sparse parts of your scene.
 
+- [Paint Selection](lfs.paint_selection.md) — Paints a live, geometric selection directly onto surfaces in your scene.
+
 ## Splat
 
 - [Scale Clamp](lfs.scale_clamp.md) — Shortens needle-shaped Gaussians that show up as streaks when you move away from the capture path.

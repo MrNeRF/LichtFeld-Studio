@@ -13,6 +13,12 @@
 #include <ranges>
 
 namespace lfs::vis::gui::node_widgets {
+    std::string icon(const std::string_view name) {
+        const auto path = rml_theme::pathToRmlImageSource(
+            getAssetPath("icon/" + std::string(name) + ".png"));
+        return "<img src=\"" + escape(path) + "\"/>";
+    }
+
     std::string categoryIcon(const std::string_view category) {
         const auto icon = category == "Input"        ? "scene/group"
                           : category == "Selection"  ? "selection"
@@ -43,15 +49,24 @@ namespace lfs::vis::gui::node_widgets {
         card.SetProperty("border-radius", px(6.0f * scale));
         card.SetProperty("border-width", px(std::max(zoom, 0.75f) * dp_ratio));
         card.SetClass("lod-values", zoom < 0.75f);
+        card.SetClass("lod-compact", zoom < 0.45f);
         // Only value editors disappear with LOD. Below editing zoom, body text
         // scales to fit existing rows instead of hiding or enlarging the cards.
         if (auto* title = card.QuerySelector(".node-title")) {
-            title->SetProperty("font-size", px(std::max(13.0f * zoom, 11.0f) * dp_ratio));
-            const auto height = px(std::max(26.0f * zoom, 18.0f) * dp_ratio);
+            // Zoomed-out titles keep a smaller floor so names still fit the narrower card.
+            title->SetProperty("font-size", px(std::max(13.0f * zoom, 9.0f) * dp_ratio));
+            const auto height = px(std::max(26.0f * zoom, 16.0f) * dp_ratio);
             title->SetProperty("height", height);
             title->SetProperty("min-height", height);
             title->SetProperty("padding", "0 " + px(10.0f * scale));
+            title->SetProperty("gap", px(6.0f * scale));
         }
+        apply(".node-title-tool, .node-eyedropper", "width", 18.0f);
+        apply(".node-title-tool, .node-eyedropper", "min-width", 18.0f);
+        apply(".node-title-tool, .node-eyedropper", "height", 18.0f);
+        apply(".node-title-tool, .node-eyedropper", "padding", 2.0f);
+        apply(".node-title-tool img, .node-eyedropper img", "width", 14.0f);
+        apply(".node-title-tool img, .node-eyedropper img", "height", 14.0f);
         if (auto* rows = card.QuerySelector(".socket-rows"))
             rows->SetProperty("padding", px(6.0f * scale) + " " + px(10.0f * scale));
         apply(".node-footer", "height", 20.0f);
@@ -208,10 +223,17 @@ namespace lfs::vis::gui::node_widgets {
         const std::string label = inline_value ? socket.label : "";
         if (socket.type == lfs::nodes::FLOAT_SOCKET || socket.type == lfs::nodes::INT_SOCKET) {
             const bool integer = socket.type == lfs::nodes::INT_SOCKET;
-            return numericField(label, value.is_number() ? value.get<double>() : 0.0, integer,
-                                socket.min, socket.max, socket.step.value_or(integer ? 1.0 : 0.01),
-                                attributes, socket.soft_min, socket.soft_max,
-                                inline_value && socket.identifier == "Selection");
+            auto html = numericField(label, value.is_number() ? value.get<double>() : 0.0,
+                                     integer, socket.min, socket.max,
+                                     socket.step.value_or(integer ? 1.0 : 0.01), attributes,
+                                     socket.soft_min, socket.soft_max,
+                                     inline_value && socket.identifier == "Selection");
+            if (node.type_id == "lfs.hsv_range" && socket.identifier == "Hue")
+                html = "<div class=\"node-hsv-pick\">" + html +
+                       "<button class=\"node-eyedropper\" data-action=\"colour-pick\"" +
+                       attributes + " title=\"" + escape(LOC("node_editor.pick_colour")) +
+                       "\">" + icon("color-picker") + "</button></div>";
+            return html;
         }
         if (socket.type == lfs::nodes::BOOL_SOCKET)
             return "<label class=\"node-bool\"><input type=\"checkbox\"" + attributes +
@@ -241,6 +263,17 @@ namespace lfs::vis::gui::node_widgets {
             std::string html = "<div class=\"node-colour\"><span>" + escape(label) +
                                "</span><button class=\"color-swatch node-swatch\" data-action=\"colour-popup\"" +
                                attributes + std::format(" data-offset=\"{}\" data-red=\"{}\" data-green=\"{}\" data-blue=\"{}\" style=\"background-color:rgb({},{},{});\"></button></div>", offset ? 1 : 0, channel(0), channel(1), channel(2), byte(channel(0)), byte(channel(1)), byte(channel(2)));
+            const bool pickable =
+                ((node.type_id == "lfs.colour_key" || node.type_id == "lfs.recolour" ||
+                  node.type_id == "lfs.set_colour" || node.type_id == "lfs.colour") &&
+                 socket.identifier == "Colour") ||
+                (node.type_id == "lfs.mix_colour" &&
+                 (socket.identifier == "A" || socket.identifier == "B"));
+            if (pickable)
+                html.insert(html.rfind("</div>"),
+                            "<button class=\"node-eyedropper\" data-action=\"colour-pick\"" +
+                                attributes + " title=\"" + escape(LOC("node_editor.pick_colour")) +
+                                "\">" + icon("color-picker") + "</button>");
             if (!inline_value && offset)
                 html += std::format("<colour-offset{} red=\"{}\" green=\"{}\" blue=\"{}\" title=\"{}\"/>",
                                     attributes, channel(0), channel(1), channel(2), escape(LOC("node_editor.colour_offset_hint")));

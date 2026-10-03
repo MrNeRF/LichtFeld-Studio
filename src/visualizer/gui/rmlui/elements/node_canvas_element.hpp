@@ -47,6 +47,9 @@ namespace lfs::vis::gui {
         void setPreviewSelection(bool enabled);
         [[nodiscard]] bool sidebarVisible() const { return sidebar_visible_; }
         [[nodiscard]] bool previewSelection() const { return preview_selection_; }
+        [[nodiscard]] bool paintSelectionSelected() const;
+        [[nodiscard]] bool paintModeActive() const;
+        void togglePaintMode();
         bool handleKey(int scancode, bool shift, bool control, bool alt);
         void headerAction(std::string_view action, float screen_x, float screen_y);
         [[nodiscard]] std::string statusText() const;
@@ -167,6 +170,7 @@ namespace lfs::vis::gui {
         bool preview_selection_ = true;
         bool preview_selection_opt_out_ = false;
         bool dom_dirty_ = true;
+        bool paint_mode_shown_ = false;
         bool geometry_dirty_ = true;
         bool pointer_down_ = false;
         bool pending_context_menu_ = false;

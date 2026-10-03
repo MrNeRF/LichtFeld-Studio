@@ -1,4 +1,7 @@
 {
+  "node_editor.paint": "Schilderen",
+  "node_editor.paint_done": "Schilderen voltooien",
+  "node_editor.pick_colour": "Kleur kiezen",
   "node_editor.colour_offset_hint": "Sleep voor een tint; dubbelklik om neutraal te herstellen",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "GPU-geheugen van het proces volgens het besturingssysteem of GPU-stuurprogramma.",
@@ -3212,6 +3215,31 @@
   "node_editor.optional_selection": "Optioneel: zonder verbinding wordt alles geselecteerd",
   "node_editor.captured_count": "Vastgelegd: {} geselecteerd",
   "nodes": {
+    "paint_selection": {
+      "label": "Selectie schilderen",
+      "description": "Schildert een levende geometrische selectie rechtstreeks op oppervlakken in de scène.",
+      "help": "Selecteer de node, zet Schilderen aan en sleep over een oppervlak; Alt/Option wist.\nGebruik [ en ] om het penseel te vergroten of verkleinen. Streken blijven geldig als het elementaantal verandert.",
+      "inputs": {
+        "Softness": "Deel van de straal van elk monster voor de zachte rand, 0–1. 0 geeft een harde rand; 0,5 is standaard."
+      },
+      "input_labels": {
+        "Softness": "Zachtheid"
+      },
+      "outputs": {
+        "Selection": "Selectiesterkte: 0 is niet geselecteerd, 1 volledig; tussenwaarden geven zachte overgangen."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {
+        "data": "Oppervlaktestreken opgeslagen als host-lokale monsters. Standaard leeg.",
+        "invert": "Keer de geschilderde selectie om. Standaard uit behoudt geschilderde gebieden; aan kiest de rest."
+      },
+      "property_labels": {
+        "data": "Streken",
+        "invert": "Omkeren"
+      }
+    },
     "boolean": {
       "label": "Booleaans",
       "description": "Geeft je één aan-uitknop voor meerdere verbonden instellingen.",

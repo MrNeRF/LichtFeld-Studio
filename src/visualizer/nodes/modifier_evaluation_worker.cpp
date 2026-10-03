@@ -225,9 +225,10 @@ namespace lfs::vis {
             return context;
         }
 
-        bool sameGeometry(const FieldContext& left, const FieldContext& right) {
-            return left.domain == right.domain && left.size() == right.size() &&
-                   left.identity == right.identity;
+        // Attribute nodes replace tensors but keep element order, so tensor identity
+        // would hide every preview behind them. Structural nodes change the count.
+        bool sameElements(const FieldContext& left, const FieldContext& right) {
+            return left.domain == right.domain && left.size() == right.size();
         }
 
         void selectionPreviews(const NodeTree& tree, const EvalCache& cache,
@@ -311,7 +312,7 @@ namespace lfs::vis {
                 if (auto status = result.evaluation.nodes.find(modifier + "/" + node.name);
                     status != result.evaluation.nodes.end())
                     status->second.selected_share = found->second.second;
-                if (sameGeometry(*context, *displayed))
+                if (sameElements(*context, *displayed))
                     result.previews[modifier + "/" + node.name] = found->second.first;
             }
         }

@@ -3,6 +3,7 @@
 
 #include "visualizer/nodes/modifier_manager.hpp"
 #include "modifier_evaluation_worker.hpp"
+#include "visualizer/nodes/viewport_coordinates.hpp"
 
 #include "core/nodes/builtin.hpp"
 #include "core/splat_data_transform.hpp"
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <format>
 #include <glm/gtc/matrix_transform.hpp>
 #include <ranges>
@@ -158,7 +160,81 @@ namespace lfs::vis {
             trees.push_back(std::move(tree));
             return state;
         }
+
+        glm::vec3 vector_value(const lfs::nodes::Node& node, const std::string_view input,
+                               const glm::vec3 fallback = glm::vec3(0.0f)) {
+            const auto found = node.input_values.find(std::string(input));
+            if (found == node.input_values.end())
+                return fallback;
+            if (const auto* value = found->second.get_if<glm::vec3>())
+                return *value;
+            if (const auto* value = found->second.get_if<glm::vec4>())
+                return glm::vec3(*value);
+            return fallback;
+        }
+
+        float float_value(const lfs::nodes::Node& node, const std::string_view input,
+                          const float fallback = 0.0f) {
+            const auto found = node.input_values.find(std::string(input));
+            if (found == node.input_values.end())
+                return fallback;
+            if (const auto* value = found->second.get_if<float>())
+                return *value;
+            if (const auto* value = found->second.get_if<std::int64_t>())
+                return static_cast<float>(*value);
+            return fallback;
+        }
+
+        bool input_linked(const lfs::nodes::NodeTree& tree, const std::string_view node,
+                          const std::string_view input) {
+            return std::ranges::any_of(tree.links, [&](const auto& link) {
+                return link.to_node == node && link.to_socket == input;
+            });
+        }
     } // namespace
+
+    HsvPickBands centreHsvPickBands(const glm::vec3 rgb, const float saturation_width,
+                                    const float value_width) {
+        const glm::vec3 value = glm::clamp(rgb, glm::vec3(0.0f), glm::vec3(1.0f));
+        const float maximum = std::max({value.r, value.g, value.b});
+        const float minimum = std::min({value.r, value.g, value.b});
+        const float delta = maximum - minimum;
+        float hue = 0.0f;
+        if (delta > 1e-8f) {
+            if (maximum == value.r)
+                hue = std::fmod((value.g - value.b) / delta, 6.0f) / 6.0f;
+            else if (maximum == value.g)
+                hue = ((value.b - value.r) / delta + 2.0f) / 6.0f;
+            else
+                hue = ((value.r - value.g) / delta + 4.0f) / 6.0f;
+            if (hue < 0.0f)
+                hue += 1.0f;
+        }
+        const float saturation = maximum <= 1e-8f ? 0.0f : delta / maximum;
+        const auto centred_band = [](const float centre, const float requested_width) {
+            const float width = std::clamp(requested_width, 0.0f, 1.0f);
+            float minimum = centre - width * 0.5f;
+            float maximum = centre + width * 0.5f;
+            if (minimum < 0.0f) {
+                maximum -= minimum;
+                minimum = 0.0f;
+            }
+            if (maximum > 1.0f) {
+                minimum -= maximum - 1.0f;
+                maximum = 1.0f;
+            }
+            return std::pair{std::max(0.0f, minimum), std::min(1.0f, maximum)};
+        };
+        const auto saturation_band = centred_band(saturation, saturation_width);
+        const auto value_band = centred_band(maximum, value_width);
+        return {
+            .hue = hue,
+            .saturation_min = saturation_band.first,
+            .saturation_max = saturation_band.second,
+            .value_min = value_band.first,
+            .value_max = value_band.second,
+        };
+    }
 
     void to_json(nlohmann::json& json, const Modifier& modifier) {
         json = {{"uuid", modifier.uuid},
@@ -557,6 +633,9 @@ namespace lfs::vis {
     }
 
     void ModifierManager::clear() {
+        cancelViewportMode();
+        viewport_selection_.reset();
+        gizmo_before_.reset();
         worker_->invalidate(++output_generation_);
         ++source_generation_;
         clearEvaluatedPayloads();
@@ -608,6 +687,372 @@ namespace lfs::vis {
 
     std::uint64_t ModifierManager::generation() const {
         return generation_;
+    }
+
+    void ModifierManager::setViewportNodeSelection(const core::Uuid& host, std::string tree_uuid,
+                                                   std::string node_name, const bool editor_visible) {
+        const bool changed = !viewport_selection_ || viewport_selection_->host != host ||
+                             viewport_selection_->tree_uuid != tree_uuid ||
+                             viewport_selection_->node != node_name;
+        if (changed) {
+            if (paint_before_)
+                endPaintStroke(true);
+            paint_mode_ = false;
+            colour_pick_.reset();
+            gizmo_before_.reset();
+        }
+        viewport_selection_ = ViewportSelection{host, std::move(tree_uuid), std::move(node_name),
+                                                editor_visible};
+    }
+
+    void ModifierManager::setViewportEditorVisible(const bool visible) {
+        if (!viewport_selection_)
+            return;
+        viewport_selection_->editor_visible = visible;
+        if (!visible)
+            cancelViewportMode();
+    }
+
+    void ModifierManager::clearViewportNodeSelection() {
+        if (paint_before_)
+            endPaintStroke(true);
+        viewport_selection_.reset();
+        paint_mode_ = false;
+        colour_pick_.reset();
+        gizmo_before_.reset();
+    }
+
+    std::optional<NodeViewportGizmo> ModifierManager::viewportNodeGizmo() const {
+        if (!viewport_selection_ || !viewport_selection_->editor_visible)
+            return std::nullopt;
+        const auto* graph = tree(viewport_selection_->tree_uuid);
+        const auto* node = graph ? graph->find_node(viewport_selection_->node) : nullptr;
+        const auto* host = scene_manager_->getScene().getNodeByUuid(viewport_selection_->host);
+        if (!node || !host)
+            return std::nullopt;
+
+        NodeViewportGizmo result;
+        result.host = host->uuid;
+        result.host_id = host->id;
+        result.tree_uuid = graph->uuid;
+        result.node = node->name;
+        nodes::NodeViewportTransform transform;
+        std::vector<std::string_view> editable_inputs;
+        if (node->type_id == "lfs.box_selection") {
+            result.kind = NodeViewportGizmoKind::Box;
+            transform.translation = vector_value(*node, "Centre");
+            transform.rotation_degrees = vector_value(*node, "Rotation");
+            transform.scale = glm::max(vector_value(*node, "Size", glm::vec3(1.0f)), glm::vec3(1e-6f));
+            result.falloff = std::max(0.0f, float_value(*node, "Falloff"));
+            editable_inputs = {"Centre", "Rotation", "Size"};
+        } else if (node->type_id == "lfs.ellipsoid_selection") {
+            result.kind = NodeViewportGizmoKind::Ellipsoid;
+            transform.translation = vector_value(*node, "Centre");
+            transform.rotation_degrees = vector_value(*node, "Rotation");
+            transform.scale = glm::max(vector_value(*node, "Radii", glm::vec3(1.0f)), glm::vec3(1e-6f));
+            result.falloff = std::max(0.0f, float_value(*node, "Falloff"));
+            editable_inputs = {"Centre", "Rotation", "Radii"};
+        } else if (node->type_id == "lfs.transform_geometry") {
+            result.kind = NodeViewportGizmoKind::Transform;
+            transform.translation = vector_value(*node, "Translation");
+            transform.rotation_degrees = vector_value(*node, "Rotation");
+            transform.scale = glm::vec3(std::max(1e-6f, float_value(*node, "Scale", 1.0f)));
+            editable_inputs = {"Translation", "Rotation", "Scale"};
+        } else {
+            return std::nullopt;
+        }
+        result.editable = std::ranges::none_of(editable_inputs, [&](const auto input) {
+            return input_linked(*graph, node->name, input);
+        });
+        result.local_translation = transform.translation;
+        result.local_rotation = transform.rotation_degrees;
+        result.local_scale = transform.scale;
+        result.local_transform = nodes::ViewportCoordinates::composeLocal(transform);
+        const nodes::ViewportCoordinates coordinates(scene_manager_->getScene(), host->id);
+        if (!coordinates.valid())
+            return std::nullopt;
+        result.world_transform = coordinates.transformToWorld(transform);
+        return result;
+    }
+
+    bool ModifierManager::beginViewportNodeGizmoDrag() {
+        const auto state = viewportNodeGizmo();
+        auto* graph = state ? tree(state->tree_uuid) : nullptr;
+        if (!state || !state->editable || !graph || gizmo_before_)
+            return false;
+        gizmo_before_ = graph->to_json();
+        return true;
+    }
+
+    bool ModifierManager::updateViewportNodeGizmo(const glm::mat4& world_transform) {
+        const auto state = viewportNodeGizmo();
+        auto* graph = state ? tree(state->tree_uuid) : nullptr;
+        auto* node = graph ? graph->find_node(state->node) : nullptr;
+        if (!state || !state->editable || !node)
+            return false;
+        const nodes::ViewportCoordinates coordinates(scene_manager_->getScene(), state->host_id);
+        if (!coordinates.valid())
+            return false;
+        const auto local = coordinates.transformToLocal(world_transform);
+        if (state->kind == NodeViewportGizmoKind::Transform) {
+            node->input_values["Translation"] = local.translation;
+            node->input_values["Rotation"] = local.rotation_degrees;
+            node->input_values["Scale"] = std::max(1e-6f, (std::abs(local.scale.x) +
+                                                           std::abs(local.scale.y) +
+                                                           std::abs(local.scale.z)) /
+                                                              3.0f);
+        } else {
+            node->input_values["Centre"] = local.translation;
+            node->input_values["Rotation"] = local.rotation_degrees;
+            node->input_values[state->kind == NodeViewportGizmoKind::Box ? "Size" : "Radii"] =
+                glm::max(glm::abs(local.scale), glm::vec3(1e-6f));
+        }
+        markDirty(state->host);
+        return true;
+    }
+
+    void ModifierManager::endViewportNodeGizmoDrag(const bool cancel) {
+        if (!gizmo_before_ || !viewport_selection_)
+            return;
+        auto* graph = tree(viewport_selection_->tree_uuid);
+        if (!graph) {
+            gizmo_before_.reset();
+            return;
+        }
+        auto before = std::move(*gizmo_before_);
+        gizmo_before_.reset();
+        if (cancel) {
+            try {
+                const auto restored = lfs::nodes::NodeTree::from_json(before, registry_);
+                const auto* source = restored.find_node(viewport_selection_->node);
+                auto* destination = graph->find_node(viewport_selection_->node);
+                if (source && destination)
+                    destination->input_values = source->input_values;
+                markDirty(viewport_selection_->host);
+            } catch (const std::exception&) {
+                // LFS-CENSUS-OK(empty-catch): cancellation is best-effort; the live graph stays valid.
+            }
+            return;
+        }
+        recordTreeEdit(graph->uuid, std::move(before));
+    }
+
+    bool ModifierManager::setPaintMode(const bool enabled) {
+        if (!enabled) {
+            if (paint_before_)
+                endPaintStroke(false);
+            paint_mode_ = false;
+            return true;
+        }
+        if (!viewport_selection_)
+            return false;
+        const auto* graph = tree(viewport_selection_->tree_uuid);
+        const auto* node = graph ? graph->find_node(viewport_selection_->node) : nullptr;
+        if (!node || node->type_id != "lfs.paint_selection")
+            return false;
+        colour_pick_.reset();
+        paint_mode_ = true;
+        return true;
+    }
+
+    void ModifierManager::adjustPaintRadius(const float factor) {
+        if (std::isfinite(factor) && factor > 0.0f)
+            paint_radius_ = std::clamp(paint_radius_ * factor, 2.0f, 256.0f);
+    }
+
+    bool ModifierManager::beginPaintStroke() {
+        if (!paint_mode_ || paint_before_ || !viewport_selection_)
+            return false;
+        auto* graph = tree(viewport_selection_->tree_uuid);
+        auto* node = graph ? graph->find_node(viewport_selection_->node) : nullptr;
+        if (!node || node->type_id != "lfs.paint_selection")
+            return false;
+        paint_before_ = graph->to_json();
+        if (!node->properties.contains("data") || !node->properties["data"].is_array())
+            node->properties["data"] = nlohmann::json::array();
+        node->properties["data"].push_back(nlohmann::json::array());
+        return true;
+    }
+
+    bool ModifierManager::appendPaintSample(const PaintStrokeSample& sample,
+                                            const bool position_is_world) {
+        if (!paint_before_ || !viewport_selection_ || !std::isfinite(sample.radius) ||
+            sample.radius <= 0.0f)
+            return false;
+        auto* graph = tree(viewport_selection_->tree_uuid);
+        auto* node = graph ? graph->find_node(viewport_selection_->node) : nullptr;
+        const auto* host = scene_manager_->getScene().getNodeByUuid(viewport_selection_->host);
+        if (!node || !host || node->type_id != "lfs.paint_selection")
+            return false;
+        glm::vec3 position = sample.position;
+        float radius = sample.radius;
+        if (position_is_world) {
+            const nodes::ViewportCoordinates coordinates(scene_manager_->getScene(), host->id);
+            if (!coordinates.valid())
+                return false;
+            position = coordinates.pointToLocal(position);
+            radius = coordinates.radiusToLocal(radius);
+        }
+        auto& data = node->properties["data"];
+        if (!data.is_array() || data.empty() || !data.back().is_array())
+            return false;
+        data.back().push_back({position.x, position.y, position.z, radius,
+                               std::clamp(sample.value, 0.0f, 1.0f)});
+        markDirty(viewport_selection_->host);
+        return true;
+    }
+
+    void ModifierManager::endPaintStroke(const bool cancel) {
+        if (!paint_before_ || !viewport_selection_)
+            return;
+        auto* graph = tree(viewport_selection_->tree_uuid);
+        if (!graph) {
+            paint_before_.reset();
+            return;
+        }
+        auto before = std::move(*paint_before_);
+        paint_before_.reset();
+        if (cancel) {
+            try {
+                const auto restored = lfs::nodes::NodeTree::from_json(before, registry_);
+                const auto* source = restored.find_node(viewport_selection_->node);
+                auto* destination = graph->find_node(viewport_selection_->node);
+                if (source && destination)
+                    destination->properties = source->properties;
+                markDirty(viewport_selection_->host);
+            } catch (const std::exception&) {
+                // LFS-CENSUS-OK(empty-catch): cancellation is best-effort and the live graph remains valid.
+            }
+            return;
+        }
+        auto* node = graph->find_node(viewport_selection_->node);
+        if (node && node->properties.contains("data") && node->properties["data"].is_array() &&
+            !node->properties["data"].empty() && node->properties["data"].back().empty())
+            node->properties["data"].erase(node->properties["data"].end() - 1);
+        recordTreeEdit(graph->uuid, std::move(before));
+    }
+
+    ModifierResult ModifierManager::addPaintStroke(const std::vector<PaintStrokeSample>& samples,
+                                                   const bool positions_are_world) {
+        if (!viewport_selection_)
+            return std::unexpected(ModifierError{"No selected Paint Selection node"});
+        auto* graph = tree(viewport_selection_->tree_uuid);
+        auto* node = graph ? graph->find_node(viewport_selection_->node) : nullptr;
+        const auto* host = scene_manager_->getScene().getNodeByUuid(viewport_selection_->host);
+        if (!node || node->type_id != "lfs.paint_selection" || !host)
+            return std::unexpected(ModifierError{"The selected node is not Paint Selection"});
+        const auto before = graph->to_json();
+        nlohmann::json stroke = nlohmann::json::array();
+        std::optional<nodes::ViewportCoordinates> coordinates;
+        float radius_scale = 1.0f;
+        if (positions_are_world) {
+            coordinates.emplace(scene_manager_->getScene(), host->id);
+            if (!coordinates->valid())
+                return std::unexpected(ModifierError{"The host transform is not invertible"});
+            radius_scale = coordinates->radiusToLocal(1.0f);
+        }
+        for (const auto& sample : samples) {
+            if (!std::isfinite(sample.position.x) || !std::isfinite(sample.position.y) ||
+                !std::isfinite(sample.position.z) || !std::isfinite(sample.radius) ||
+                !std::isfinite(sample.value) || sample.radius <= 0.0f)
+                continue;
+            const glm::vec3 position = coordinates ? coordinates->pointToLocal(sample.position) : sample.position;
+            stroke.push_back({position.x, position.y, position.z, sample.radius * radius_scale,
+                              std::clamp(sample.value, 0.0f, 1.0f)});
+        }
+        if (stroke.empty())
+            return std::unexpected(ModifierError{"A stroke needs at least one finite sample with a positive radius"});
+        if (!node->properties.contains("data") || !node->properties["data"].is_array())
+            node->properties["data"] = nlohmann::json::array();
+        node->properties["data"].push_back(std::move(stroke));
+        recordTreeEdit(graph->uuid, before);
+        return {};
+    }
+
+    ModifierResult ModifierManager::clearPaintStrokes() {
+        if (!viewport_selection_)
+            return std::unexpected(ModifierError{"No selected Paint Selection node"});
+        auto* graph = tree(viewport_selection_->tree_uuid);
+        auto* node = graph ? graph->find_node(viewport_selection_->node) : nullptr;
+        if (!node || node->type_id != "lfs.paint_selection")
+            return std::unexpected(ModifierError{"The selected node is not Paint Selection"});
+        const auto before = graph->to_json();
+        node->properties["data"] = nlohmann::json::array();
+        recordTreeEdit(graph->uuid, before);
+        return {};
+    }
+
+    bool ModifierManager::beginColourPick(std::string node, std::string input, const bool widen_hue) {
+        if (!viewport_selection_ || viewport_selection_->node != node)
+            return false;
+        auto* graph = tree(viewport_selection_->tree_uuid);
+        auto* selected = graph ? graph->find_node(node) : nullptr;
+        if (!selected)
+            return false;
+        const bool hsv = selected->type_id == "lfs.hsv_range" && input == "Hue";
+        const bool colour =
+            (((selected->type_id == "lfs.colour_key" || selected->type_id == "lfs.recolour" ||
+               selected->type_id == "lfs.set_colour" || selected->type_id == "lfs.colour") &&
+              input == "Colour") ||
+             (selected->type_id == "lfs.mix_colour" && (input == "A" || input == "B")));
+        if (!hsv && !colour)
+            return false;
+        const auto type = registry_.find(selected->type_id);
+        if (hsv && input_linked(*graph, node, input))
+            return false;
+        if (!hsv) {
+            if (!type)
+                return false;
+            const auto socket = std::ranges::find(type->inputs, input,
+                                                  &lfs::nodes::SocketDecl::identifier);
+            if (socket == type->inputs.end() || socket->type != lfs::nodes::COLOUR_SOCKET ||
+                input_linked(*graph, node, input))
+                return false;
+        }
+        paint_mode_ = false;
+        colour_pick_ = ColourPick{std::move(node), std::move(input), widen_hue};
+        return true;
+    }
+
+    void ModifierManager::cancelViewportMode() {
+        if (paint_before_)
+            endPaintStroke(true);
+        paint_mode_ = false;
+        colour_pick_.reset();
+    }
+
+    ModifierResult ModifierManager::applyPickedColour(const glm::vec3 colour, const bool widen_hue) {
+        if (!viewport_selection_ || !colour_pick_)
+            return std::unexpected(ModifierError{"Colour pick mode is not active"});
+        auto* graph = tree(viewport_selection_->tree_uuid);
+        auto* node = graph ? graph->find_node(colour_pick_->node) : nullptr;
+        if (!node)
+            return std::unexpected(ModifierError{"The colour target node no longer exists"});
+        const auto before = graph->to_json();
+        if (node->type_id == "lfs.hsv_range" && colour_pick_->input == "Hue") {
+            const float saturation_width = float_value(*node, "Saturation Max", 1.0f) -
+                                           float_value(*node, "Saturation Min", 0.0f);
+            const float value_width = float_value(*node, "Value Max", 1.0f) -
+                                      float_value(*node, "Value Min", 0.0f);
+            const auto picked = centreHsvPickBands(colour, saturation_width, value_width);
+            if (widen_hue || colour_pick_->widen_hue) {
+                const float current = float_value(*node, "Hue");
+                const float difference = std::abs(current - picked.hue);
+                node->input_values["Hue Range"] =
+                    std::max(float_value(*node, "Hue Range"), std::min(difference, 1.0f - difference));
+            } else {
+                node->input_values["Hue"] = picked.hue;
+                node->input_values["Saturation Min"] = picked.saturation_min;
+                node->input_values["Saturation Max"] = picked.saturation_max;
+                node->input_values["Value Min"] = picked.value_min;
+                node->input_values["Value Max"] = picked.value_max;
+            }
+        } else {
+            node->input_values[colour_pick_->input] = glm::vec4(glm::clamp(colour, glm::vec3(0), glm::vec3(1)), 1.0f);
+        }
+        colour_pick_.reset();
+        recordTreeEdit(graph->uuid, before);
+        return {};
     }
 
     void ModifierManager::registerVisualizerNodes() {

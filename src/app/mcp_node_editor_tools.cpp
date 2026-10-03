@@ -15,6 +15,66 @@ namespace lfs::app {
     namespace {
         using namespace node_mcp;
 
+        json treeResult(const lfs::nodes::NodeTree& tree) {
+            return {{"success", true}, {"tree", tree.to_json()}};
+        }
+
+        struct ViewportNodeContext {
+            vis::ModifierManager* manager = nullptr;
+            lfs::nodes::NodeTree* tree = nullptr;
+            lfs::nodes::Node* node = nullptr;
+            core::Uuid host;
+        };
+
+        std::expected<ViewportNodeContext, json>
+        viewportNode(vis::VisualizerImpl& viewer, const std::string_view name) {
+            const auto state = editor(viewer);
+            if (!state.value("open", false))
+                return std::unexpected(failure("Open the Node Editor first", "node"));
+            auto& manager = viewer.getSceneManager()->modifierManager();
+            auto* graph = tree(manager, state);
+            const auto host = core::Uuid::from_string(state.value("target", ""));
+            auto* node = graph ? graph->find_node(name) : nullptr;
+            if (!graph || !host || !viewer.getSceneManager()->getScene().getNodeByUuid(*host))
+                return std::unexpected(failure("Show a modifier for a scene node first", "node"));
+            if (!node)
+                return std::unexpected(failure("Unknown node name in the shown graph", "node"));
+            manager.setViewportNodeSelection(*host, graph->uuid, node->name, true);
+            return ViewportNodeContext{&manager, graph, node, *host};
+        }
+
+        json matrixJson(const glm::mat4& value) {
+            json result = json::array();
+            for (int row = 0; row < 4; ++row) {
+                json values = json::array();
+                for (int column = 0; column < 4; ++column)
+                    values.push_back(value[column][row]);
+                result.push_back(std::move(values));
+            }
+            return result;
+        }
+
+        json vectorJson(const glm::vec3& value) {
+            return {value.x, value.y, value.z};
+        }
+
+        json gizmoState(vis::VisualizerImpl& viewer) {
+            const auto state = viewer.getSceneManager()->modifierManager().viewportNodeGizmo();
+            if (!state)
+                return failure("Select Box Selection, Ellipsoid Selection or Transform Geometry in the open Node Editor", "node");
+            const auto kind = state->kind == vis::NodeViewportGizmoKind::Box
+                                  ? "box"
+                              : state->kind == vis::NodeViewportGizmoKind::Ellipsoid ? "ellipsoid"
+                                                                                     : "transform";
+            return {{"success", true},
+                    {"node", state->node},
+                    {"target", state->host.to_string()},
+                    {"kind", kind},
+                    {"editable", state->editable},
+                    {"local", {{"matrix", matrixJson(state->local_transform)}, {"translation", vectorJson(state->local_translation)}, {"rotation", vectorJson(state->local_rotation)}, {"scale", vectorJson(state->local_scale)}, {"falloff", state->falloff}}},
+                    {"world", {{"matrix", matrixJson(state->world_transform)}, {"translation", vectorJson(glm::vec3(state->world_transform[3]))}}}};
+        }
+
         json editView(vis::VisualizerImpl& viewer, const json& args, const std::string_view operation) {
             if (operation == "open" || operation == "close") {
                 viewer.screens().edit([&](auto& screen) {
@@ -23,6 +83,7 @@ namespace lfs::app {
                     else
                         screen.closeEditor("node_editor");
                 });
+                viewer.getSceneManager()->modifierManager().setViewportEditorVisible(operation == "open");
                 if (auto* rendering = viewer.getRenderingManager())
                     rendering->markDirty(vis::DirtyFlag::ALL, vis::FrameReason::Mcp, "node editor");
                 return editor(viewer);
@@ -123,6 +184,118 @@ namespace lfs::app {
             add(registry, impl, "nodes.editor_" + operation, operation + " the Node Editor; returns the resulting editor state", properties, required,
                 [operation](auto& viewer, const json& args) { return editView(viewer, args, operation); });
         }
+        add(registry, impl, "nodes.gizmo_get", "Return the selected node's viewport gizmo in host-local and visualizer-world space", {}, {}, [](auto& viewer, const auto&) { return gizmoState(viewer); }, true);
+        add(registry, impl, "nodes.paint_stroke",
+            "Add one undoable Paint Selection stroke using world [x,y,z,radius?,value?] or screen [x,y,radius?,value?] samples",
+            {{"node", stringSchema()},
+             {"space", {{"type", "string"}, {"enum", {"world", "screen"}}, {"default", "world"}}},
+             {"samples", {{"type", "array"}, {"items", {{"type", "array"}, {"items", {{"type", "number"}}}, {"minItems", 2}, {"maxItems", 5}}}, {"minItems", 1}}},
+             {"erase", boolSchema()}},
+            {"node", "samples"}, [](auto& viewer, const json& args) {
+                auto context = viewportNode(viewer, args.at("node").get<std::string>());
+                if (!context)
+                    return context.error();
+                if (context->node->type_id != "lfs.paint_selection")
+                    return failure("node must be a Paint Selection node", "node");
+                const bool screen = args.value("space", "world") == "screen";
+                const bool erase = args.value("erase", false);
+                std::vector<vis::PaintStrokeSample> samples;
+                for (const auto& raw : args.at("samples")) {
+                    const std::size_t minimum = screen ? 2 : 3;
+                    if (!raw.is_array() || raw.size() < minimum ||
+                        std::ranges::any_of(raw, [](const auto& item) {
+                            return !item.is_number() || !std::isfinite(item.template get<float>());
+                        }))
+                        return failure("Each sample must contain finite numeric coordinates", "samples");
+                    glm::vec3 position;
+                    const std::size_t radius_index = screen ? 2 : 3;
+                    const std::size_t value_index = radius_index + 1;
+                    float radius = raw.size() > radius_index
+                                       ? raw[radius_index].get<float>()
+                                   : screen ? context->manager->paintRadius()
+                                            : 0.1f;
+                    if (screen) {
+                        auto* service = viewer.getSceneManager()->getSelectionService();
+                        const auto picked = service ? service->pickAtScreen(raw[0].get<float>(), raw[1].get<float>())
+                                                    : std::expected<vis::ViewportGaussianPick, vis::ViewportPickError>(std::unexpected(vis::ViewportPickError{"Selection service unavailable"}));
+                        if (!picked)
+                            return failure(picked.error().message, "samples");
+                        position = picked->world_position;
+                        const auto world_radius = service->worldRadiusAtScreen(
+                            raw[0].get<float>(), raw[1].get<float>(), position, radius);
+                        if (!world_radius)
+                            return failure(world_radius.error().message, "samples");
+                        radius = *world_radius;
+                    } else {
+                        position = {raw[0].get<float>(), raw[1].get<float>(), raw[2].get<float>()};
+                    }
+                    const float value = erase                      ? 0.0f
+                                        : raw.size() > value_index ? raw[value_index].get<float>()
+                                                                   : 1.0f;
+                    samples.push_back({position, radius, value});
+                }
+                const auto result = context->manager->addPaintStroke(samples, true);
+                if (!result)
+                    return failure(result.error().message, "samples");
+                return treeResult(*context->tree);
+            });
+        add(registry, impl, "nodes.paint_clear", "Clear every stroke from a Paint Selection node as one undo step",
+            {{"node", stringSchema()}}, {"node"}, [](auto& viewer, const json& args) {
+                auto context = viewportNode(viewer, args.at("node").get<std::string>());
+                if (!context)
+                    return context.error();
+                const auto result = context->manager->clearPaintStrokes();
+                if (!result)
+                    return failure(result.error().message, "node");
+                return treeResult(*context->tree);
+            });
+        add(registry, impl, "nodes.paint_mode",
+            "Turn viewport painting on or off for a Paint Selection node, optionally setting the brush radius in screen pixels",
+            {{"node", stringSchema()}, {"enabled", boolSchema()}, {"radius", {{"type", "number"}, {"minimum", 2}, {"maximum", 256}}}},
+            {"node", "enabled"}, [](auto& viewer, const json& args) {
+                auto context = viewportNode(viewer, args.at("node").get<std::string>());
+                if (!context)
+                    return context.error();
+                if (!context->manager->setPaintMode(args.at("enabled").get<bool>()))
+                    return failure("node must be a Paint Selection node", "node");
+                if (args.contains("radius")) {
+                    const float radius = args["radius"].get<float>();
+                    if (!std::isfinite(radius) || radius < 2.0f || radius > 256.0f)
+                        return failure("radius must be between 2 and 256 pixels", "radius");
+                    context->manager->adjustPaintRadius(radius / context->manager->paintRadius());
+                }
+                if (auto* rendering = viewer.getRenderingManager())
+                    rendering->markDirty(vis::DirtyFlag::ALL, vis::FrameReason::Mcp, "node paint mode");
+                return json{{"success", true},
+                            {"paint_mode", context->manager->paintModeActive()},
+                            {"radius", context->manager->paintRadius()}};
+            });
+        add(registry, impl, "nodes.pick_colour",
+            "Pick a Gaussian's stored base colour at a viewport screen coordinate and write one unlinked colour input",
+            {{"node", stringSchema()}, {"input", stringSchema()}, {"screen_x", {{"type", "number"}}}, {"screen_y", {{"type", "number"}}}},
+            {"node", "input", "screen_x", "screen_y"}, [](auto& viewer, const json& args) {
+                auto context = viewportNode(viewer, args.at("node").get<std::string>());
+                if (!context)
+                    return context.error();
+                if (!context->manager->beginColourPick(context->node->name,
+                                                       args.at("input").get<std::string>()))
+                    return failure("input must be an unlinked colour input, or Hue on HSV Range", "input");
+                auto* service = viewer.getSceneManager()->getSelectionService();
+                const auto picked = service ? service->pickAtScreen(args.at("screen_x").get<float>(),
+                                                                    args.at("screen_y").get<float>())
+                                            : std::expected<vis::ViewportGaussianPick, vis::ViewportPickError>(std::unexpected(vis::ViewportPickError{"Selection service unavailable"}));
+                if (!picked) {
+                    context->manager->cancelViewportMode();
+                    return failure(picked.error().message, "screen_x");
+                }
+                const auto result = context->manager->applyPickedColour(picked->colour);
+                if (!result)
+                    return failure(result.error().message, "input");
+                auto response = treeResult(*context->tree);
+                response["picked"] = {picked->colour.x, picked->colour.y, picked->colour.z};
+                response["stored_payload"] = picked->colour_from_stored_payload;
+                return response;
+            });
         registry.register_tool(mcp::McpTool{
                                    .name = "nodes.evaluate",
                                    .description = "Submit dirty modifier stacks to the evaluation worker. Optionally wait without blocking the viewer; job id nodes.evaluate.",

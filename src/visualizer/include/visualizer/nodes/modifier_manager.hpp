@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include <expected>
+#include <glm/glm.hpp>
 #include <memory>
 #include <optional>
 #include <string>
@@ -68,6 +69,44 @@ namespace lfs::vis {
     };
 
     using ModifierResult = std::expected<void, ModifierError>;
+
+    enum class NodeViewportGizmoKind {
+        Box,
+        Ellipsoid,
+        Transform,
+    };
+
+    struct NodeViewportGizmo {
+        core::Uuid host;
+        core::NodeId host_id = core::NULL_NODE;
+        std::string tree_uuid;
+        std::string node;
+        NodeViewportGizmoKind kind = NodeViewportGizmoKind::Box;
+        bool editable = false;
+        glm::mat4 world_transform{1.0f};
+        glm::mat4 local_transform{1.0f};
+        glm::vec3 local_translation{0.0f};
+        glm::vec3 local_rotation{0.0f};
+        glm::vec3 local_scale{1.0f};
+        float falloff = 0.0f;
+    };
+
+    struct PaintStrokeSample {
+        glm::vec3 position{0.0f};
+        float radius = 0.0f;
+        float value = 1.0f;
+    };
+
+    struct HsvPickBands {
+        float hue = 0.0f;
+        float saturation_min = 0.0f;
+        float saturation_max = 1.0f;
+        float value_min = 0.0f;
+        float value_max = 1.0f;
+    };
+
+    LFS_VIS_API HsvPickBands centreHsvPickBands(glm::vec3 rgb, float saturation_width,
+                                                float value_width);
 
     class LFS_VIS_API ModifierManager final {
     public:
@@ -129,6 +168,33 @@ namespace lfs::vis {
 
         std::uint64_t generation() const;
 
+        // The node canvas publishes only its current selection. Viewport tools
+        // consume this shared state and clear it when the editor is hidden.
+        void setViewportNodeSelection(const core::Uuid& host, std::string tree_uuid,
+                                      std::string node_name, bool editor_visible = true);
+        void setViewportEditorVisible(bool visible);
+        void clearViewportNodeSelection();
+        [[nodiscard]] std::optional<NodeViewportGizmo> viewportNodeGizmo() const;
+        bool beginViewportNodeGizmoDrag();
+        bool updateViewportNodeGizmo(const glm::mat4& world_transform);
+        void endViewportNodeGizmoDrag(bool cancel = false);
+
+        [[nodiscard]] bool paintModeActive() const noexcept { return paint_mode_; }
+        [[nodiscard]] float paintRadius() const noexcept { return paint_radius_; }
+        bool setPaintMode(bool enabled);
+        void adjustPaintRadius(float factor);
+        bool beginPaintStroke();
+        bool appendPaintSample(const PaintStrokeSample& sample, bool position_is_world = true);
+        void endPaintStroke(bool cancel = false);
+        [[nodiscard]] ModifierResult addPaintStroke(const std::vector<PaintStrokeSample>& samples,
+                                                    bool positions_are_world = false);
+        [[nodiscard]] ModifierResult clearPaintStrokes();
+
+        bool beginColourPick(std::string node, std::string input, bool widen_hue = false);
+        void cancelViewportMode();
+        [[nodiscard]] bool colourPickActive() const noexcept { return colour_pick_.has_value(); }
+        [[nodiscard]] ModifierResult applyPickedColour(glm::vec3 colour, bool widen_hue = false);
+
     private:
         struct RuntimeState {
             ModifierEvaluation evaluation;
@@ -168,6 +234,26 @@ namespace lfs::vis {
         std::uint64_t progress_event_generation_ = 0;
         std::string progress_event_node_;
         std::thread::id viewer_thread_;
+
+        struct ViewportSelection {
+            core::Uuid host;
+            std::string tree_uuid;
+            std::string node;
+            bool editor_visible = false;
+        };
+        struct ColourPick {
+            std::string node;
+            std::string input;
+            bool widen_hue = false;
+        };
+        std::optional<ViewportSelection> viewport_selection_;
+        std::optional<ColourPick> colour_pick_;
+        bool paint_mode_ = false;
+        // Viewport brush radius in logical screen pixels. Samples convert this
+        // to world and then host-local units at the picked surface depth.
+        float paint_radius_ = 25.0f;
+        std::optional<nlohmann::json> gizmo_before_;
+        std::optional<nlohmann::json> paint_before_;
     };
 
     LFS_VIS_API void to_json(nlohmann::json& json, const Modifier& modifier);

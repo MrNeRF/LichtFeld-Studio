@@ -5,9 +5,11 @@
 #include "core/tensor_backend.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
+#include "visualizer/nodes/viewport_coordinates.hpp"
 #include "visualizer/operation/undo_history.hpp"
 
 #include <future>
+#include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <thread>
 
@@ -103,6 +105,59 @@ TEST_F(NodesModifierManager, StackOrderEvaluationAndJsonRoundTrip) {
     const auto saved = manager.toJson(false);
     ASSERT_TRUE(manager.restoreJson(saved));
     EXPECT_EQ(manager.toJson(false), saved);
+}
+
+TEST_F(NodesModifierManager, ViewportCoordinatesRoundTripWithHostTransformAndBasisFlip) {
+    using lfs::vis::nodes::NodeViewportTransform;
+    using lfs::vis::nodes::ViewportCoordinates;
+    lfs::vis::SceneManager scene_manager;
+    scene_manager.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+    const auto id = scene_manager.getScene().addSplat("Host", model(1, lfs::core::Device::CPU));
+    const glm::mat4 host = glm::translate(glm::mat4(1.0f), {3.0f, -2.0f, 5.0f}) *
+                           glm::rotate(glm::mat4(1.0f), glm::radians(37.0f), {0.0f, 1.0f, 0.0f}) *
+                           glm::scale(glm::mat4(1.0f), {2.0f, 0.75f, 1.5f});
+    scene_manager.getScene().setNodeTransform(id, host);
+    const ViewportCoordinates coordinates(scene_manager.getScene(), id);
+    ASSERT_TRUE(coordinates.valid());
+
+    const glm::vec3 local_point(0.25f, -1.5f, 2.0f);
+    const glm::vec3 data_world = glm::vec3(host * glm::vec4(local_point, 1.0f));
+    const glm::vec3 expected_visualizer_world(data_world.x, -data_world.y, -data_world.z);
+    const glm::vec3 visualizer_world = coordinates.pointToWorld(local_point);
+    EXPECT_NEAR(visualizer_world.x, expected_visualizer_world.x, 1e-5f);
+    EXPECT_NEAR(visualizer_world.y, expected_visualizer_world.y, 1e-5f);
+    EXPECT_NEAR(visualizer_world.z, expected_visualizer_world.z, 1e-5f);
+    const glm::vec3 round_trip = coordinates.pointToLocal(visualizer_world);
+    EXPECT_NEAR(round_trip.x, local_point.x, 1e-5f);
+    EXPECT_NEAR(round_trip.y, local_point.y, 1e-5f);
+    EXPECT_NEAR(round_trip.z, local_point.z, 1e-5f);
+
+    const NodeViewportTransform local{
+        .translation = {0.4f, -0.7f, 1.2f},
+        .rotation_degrees = {13.0f, -21.0f, 32.0f},
+        .scale = {1.25f, 0.8f, 1.6f},
+    };
+    const auto recovered = coordinates.transformToLocal(coordinates.transformToWorld(local));
+    for (int axis = 0; axis < 3; ++axis) {
+        EXPECT_NEAR(recovered.translation[axis], local.translation[axis], 1e-4f);
+        EXPECT_NEAR(recovered.rotation_degrees[axis], local.rotation_degrees[axis], 1e-3f);
+        EXPECT_NEAR(recovered.scale[axis], local.scale[axis], 1e-4f);
+    }
+}
+
+TEST_F(NodesModifierManager, HsvEyedropperCentresBandsAndKeepsTheirWidthsAtBounds) {
+    const auto bands = lfs::vis::centreHsvPickBands({0.2f, 0.8f, 0.4f}, 0.2f, 0.4f);
+    EXPECT_NEAR(bands.hue, 1.0f / 3.0f + 1.0f / 18.0f, 1e-5f);
+    EXPECT_NEAR(bands.saturation_max - bands.saturation_min, 0.2f, 1e-5f);
+    EXPECT_NEAR(bands.value_max - bands.value_min, 0.4f, 1e-5f);
+    EXPECT_NEAR((bands.saturation_min + bands.saturation_max) * 0.5f, 0.75f, 1e-5f);
+    EXPECT_NEAR((bands.value_min + bands.value_max) * 0.5f, 0.8f, 1e-5f);
+
+    const auto edge = lfs::vis::centreHsvPickBands({1.0f, 0.0f, 0.0f}, 0.4f, 0.6f);
+    EXPECT_NEAR(edge.saturation_max - edge.saturation_min, 0.4f, 1e-5f);
+    EXPECT_NEAR(edge.value_max - edge.value_min, 0.6f, 1e-5f);
+    EXPECT_FLOAT_EQ(edge.saturation_max, 1.0f);
+    EXPECT_FLOAT_EQ(edge.value_max, 1.0f);
 }
 
 TEST_F(NodesModifierManager, ObjectInfoUploadsCpuMeshBeforeTransformAndJoin) {
@@ -287,6 +342,40 @@ TEST_F(NodesModifierManager, StoredSelectionSeparateUsesConsumerInputGeometry) {
         ASSERT_TRUE(status->second.selected_share);
         EXPECT_NEAR(*status->second.selected_share, 2.0 / 6.0, 1e-6);
         EXPECT_FALSE(manager.selectionPreview(host, modifier.uuid, "Stored"));
+    });
+}
+
+TEST_F(NodesModifierManager, SelectionPreviewSurvivesAttributeNodes) {
+    using namespace lfs::nodes;
+    for_each_worker_target([](const lfs::core::Device device) {
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto id = scene.getScene().addSplat("Host", model(6, device));
+        const auto host = scene.getScene().getNodeUuid(id);
+        auto& manager = scene.modifierManager();
+        auto& tree = manager.newTree("Preview opacity");
+        auto& stored = tree.add_node("lfs.stored_selection", "Stored");
+        set_stored_selection(stored, selection({true, false, true, false, false, false}));
+        const auto stored_properties = stored.properties;
+        tree.add_node("lfs.set_opacity", "Opacity").input_values["Opacity"] = 0.25f;
+        ASSERT_TRUE(tree.remove_link(
+            {tree.input_node().name, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Opacity", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Stored", "Selection", "Opacity", "Selection"}));
+        ASSERT_TRUE(tree.add_link({"Opacity", "Geometry", tree.output_node().name, "Geometry"}));
+        auto& modifier = manager.addModifier(host, tree.uuid, "Opacity");
+        modifier.stored_selections["Stored"] = stored_properties;
+
+        const auto result = manager.evaluate(host);
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
+                                                         : result.errors.begin()->second);
+        for (const auto* name : {"Stored", "Opacity"}) {
+            const auto preview = manager.selectionPreview(host, modifier.uuid, name);
+            ASSERT_TRUE(preview) << name;
+            EXPECT_EQ(preview->cpu().to_vector_bool(),
+                      (std::vector<bool>{true, false, true, false, false, false}))
+                << name;
+        }
     });
 }
 

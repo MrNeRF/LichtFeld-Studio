@@ -6,6 +6,133 @@
 #include <limits>
 namespace lfs::nodes::builtin {
 
+    namespace {
+        struct PaintSample {
+            glm::vec3 position{0.0f};
+            float radius = 0.0f;
+            float value = 1.0f;
+        };
+
+        using PaintStroke = std::vector<PaintSample>;
+
+        std::vector<PaintStroke> paint_strokes(const Node& node) {
+            std::vector<PaintStroke> result;
+            const auto data = node.properties.value("data", nlohmann::json::array());
+            if (!data.is_array())
+                return result;
+            for (const auto& stroke : data) {
+                if (!stroke.is_array())
+                    continue;
+                PaintStroke samples;
+                for (const auto& sample : stroke) {
+                    if (!sample.is_array() || sample.size() < 5)
+                        continue;
+                    try {
+                        PaintSample value{
+                            .position = {sample[0].get<float>(), sample[1].get<float>(), sample[2].get<float>()},
+                            .radius = sample[3].get<float>(),
+                            .value = sample[4].get<float>(),
+                        };
+                        if (std::isfinite(value.position.x) && std::isfinite(value.position.y) &&
+                            std::isfinite(value.position.z) && std::isfinite(value.radius) &&
+                            std::isfinite(value.value) && value.radius > 0.0f)
+                            samples.push_back(value);
+                    } catch (const nlohmann::json::exception&) {
+                        // A malformed sample is ignored instead of invalidating the graph.
+                    }
+                }
+                if (!samples.empty())
+                    result.push_back(std::move(samples));
+            }
+            return result;
+        }
+
+        // Strokes apply in order: painting raises the selection, erasing (value 0) lowers it,
+        // so repainting an erased patch selects it again.
+        Tensor paint_falloff(const Tensor& positions, const std::vector<PaintStroke>& strokes,
+                             const float softness) {
+            const std::size_t count = positions.shape()[0];
+            auto result = Tensor::zeros({count}, positions.device());
+            if (!count || strokes.empty())
+                return result;
+
+            glm::vec3 minimum(std::numeric_limits<float>::max());
+            glm::vec3 maximum(std::numeric_limits<float>::lowest());
+            for (const auto& stroke : strokes)
+                for (const auto& sample : stroke) {
+                    minimum = glm::min(minimum, sample.position - sample.radius);
+                    maximum = glm::max(maximum, sample.position + sample.radius);
+                }
+
+            const auto inside = positions.ge(vector_tensor(minimum, positions.device()))
+                                    .logical_and(positions.le(vector_tensor(maximum, positions.device())))
+                                    .to(DataType::Float32)
+                                    .sum(1)
+                                    .eq(3);
+            const auto eligible = inside.nonzero().reshape({-1}).to(DataType::Int32);
+            if (!eligible.numel())
+                return result;
+            const auto candidates = positions.index_select(0, eligible);
+
+            constexpr std::size_t pair_budget = 8 * 1024 * 1024;
+            constexpr std::size_t sample_tile = 2048;
+            auto selected = Tensor::zeros({candidates.shape()[0]}, positions.device());
+            for (const auto& stroke : strokes) {
+                auto painted = Tensor::zeros_like(selected);
+                auto erased = Tensor::zeros_like(selected);
+                for (std::size_t sample_begin = 0; sample_begin < stroke.size(); sample_begin += sample_tile) {
+                    const std::size_t sample_count = std::min(sample_tile, stroke.size() - sample_begin);
+                    std::vector<float> centres;
+                    std::vector<float> radii;
+                    std::vector<float> values;
+                    centres.reserve(sample_count * 3);
+                    radii.reserve(sample_count);
+                    values.reserve(sample_count);
+                    for (std::size_t index = sample_begin; index < sample_begin + sample_count; ++index) {
+                        centres.insert(centres.end(), {stroke[index].position.x, stroke[index].position.y,
+                                                       stroke[index].position.z});
+                        radii.push_back(stroke[index].radius);
+                        values.push_back(std::clamp(stroke[index].value, 0.0f, 1.0f));
+                    }
+                    const auto centre_tensor = Tensor::from_vector(centres, {sample_count, 3}).to(positions.device());
+                    const auto radius_tensor = Tensor::from_vector(radii, {1, sample_count}).to(positions.device());
+                    const auto value_tensor = Tensor::from_vector(values, {1, sample_count}).to(positions.device());
+                    const auto erase_tensor = value_tensor.eq(0).to(DataType::Float32);
+                    const std::size_t element_tile = std::max<std::size_t>(1, pair_budget / sample_count);
+                    for (std::size_t element_begin = 0; element_begin < candidates.shape()[0];
+                         element_begin += element_tile) {
+                        const std::size_t element_count =
+                            std::min(element_tile, candidates.shape()[0] - element_begin);
+                        const auto points = candidates.slice(0, element_begin, element_begin + element_count);
+                        const auto delta = points.unsqueeze(1) - centre_tensor.unsqueeze(0);
+                        const auto distance = (delta * delta).sum(2).sqrt() / radius_tensor;
+                        const auto weight = softness <= 0.0f
+                                                ? distance.le(1.0f).to(DataType::Float32)
+                                                : ((distance.neg() + 1.0f) / softness).clamp(0, 1);
+                        auto paint_destination = painted.slice(0, element_begin, element_begin + element_count);
+                        auto erase_destination = erased.slice(0, element_begin, element_begin + element_count);
+                        paint_destination.copy_from(paint_destination.maximum((weight * value_tensor).max(1)));
+                        erase_destination.copy_from(erase_destination.maximum((weight * erase_tensor).max(1)));
+                    }
+                }
+                selected = selected.maximum(painted).minimum(erased.neg() + 1.0f);
+            }
+            result.index_add_(0, eligible, selected);
+            return result;
+        }
+
+        void evaluate_paint_selection(NodeContext& context) {
+            const auto strokes = paint_strokes(context.node());
+            const float softness = std::clamp(input_float(context, "Softness", 0.5f), 0.0f, 1.0f);
+            const bool invert = property_bool(context, "invert", false);
+            context.set_output(
+                "Selection", operation(FLOAT_SOCKET, {position_field()}, [strokes, softness, invert](const auto& values) {
+                    auto weights = paint_falloff(values[0], strokes, softness);
+                    return invert ? weights.neg() + 1.0f : weights;
+                }));
+        }
+    } // namespace
+
     void evaluate_box(NodeContext& context, bool ellipsoid) {
         const auto centre = input_vector(context, "Centre");
         const auto extent = input_vector(context, ellipsoid ? "Radii" : "Size");
@@ -312,6 +439,12 @@ namespace lfs::nodes::builtin {
                             in("Value Max", f, 1.0f).range(0, 1).step_size(0.01),
                             in("Softness", f, 0.0f).minimum(0).step_size(0.01)},
                            {out("Selection", f)}, evaluate_hsv_range));
+        register_type(registry,
+                      type("lfs.paint_selection", "Selection",
+                           {in("Softness", f, 0.5f).range(0, 1).step_size(0.01)},
+                           {out("Selection", f)}, evaluate_paint_selection,
+                           {prop("data", PropertyKind::Data, nlohmann::json::array()),
+                            prop("invert", PropertyKind::Bool, false)}));
         register_type(registry, type("lfs.inside_mesh", "Selection",
                                      {in("Mesh", geo)}, {out("Selection", b)}, evaluate_inside_mesh));
         register_type(registry, type("lfs.neighbour_count", "Selection",

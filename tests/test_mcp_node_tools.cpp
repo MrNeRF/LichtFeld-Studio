@@ -9,6 +9,7 @@
 #include "visualizer/nodes/modifier_manager.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/scene/scene_manager.hpp"
+#include "visualizer/selection/selection_service.hpp"
 #include "visualizer/visualizer_impl.hpp"
 
 #include <RmlUi/Core.h>
@@ -122,7 +123,7 @@ namespace lfs::vis {
             EXPECT_TRUE(descriptor["annotations"].contains("destructiveHint"));
             EXPECT_TRUE(descriptor["annotations"].contains("idempotentHint"));
         }
-        EXPECT_EQ(count, 28u);
+        EXPECT_EQ(count, 33u);
     }
 
     TEST_F(McpNodeToolsTest, HostOnlyReferenceMatchesDescriptorText) {
@@ -253,5 +254,66 @@ namespace lfs::vis {
         EXPECT_FALSE(call("editor_close")["open"].get<bool>());
         EXPECT_TRUE(call("editor_open")["open"].get<bool>());
         EXPECT_EQ(resource("editor")["nodes"].size(), 3u);
+    }
+
+    TEST_F(McpNodeToolsTest, ViewportGizmoPaintAndColourPickToolsAreUndoable) {
+        const auto id = graph();
+        call("node_add", {{"tree", id}, {"type_id", "lfs.box_selection"}, {"name", "Box"}});
+        call("node_add", {{"tree", id}, {"type_id", "lfs.paint_selection"}, {"name", "Paint"}});
+        call("node_add", {{"tree", id}, {"type_id", "lfs.colour_key"}, {"name", "Key"}});
+        const auto modifier = call("modifier_add", {{"target", target_}, {"tree", id}})["modifier"];
+        call("editor_open");
+        call("editor_show", {{"target", target_}, {"modifier", modifier}});
+
+        call("editor_select", {{"nodes", {"Box"}}});
+        const auto gizmo = call("gizmo_get");
+        EXPECT_EQ(gizmo["kind"], "box");
+        EXPECT_TRUE(gizmo["editable"].get<bool>());
+        EXPECT_EQ(gizmo["local"]["translation"], json::array({0.0f, 0.0f, 0.0f}));
+
+        call("editor_select", {{"nodes", {"Paint"}}});
+        const auto painting = call("paint_mode", {{"node", "Paint"}, {"enabled", true}, {"radius", 40.0f}});
+        EXPECT_TRUE(painting["paint_mode"].get<bool>());
+        EXPECT_FLOAT_EQ(painting["radius"].get<float>(), 40.0f);
+        EXPECT_FALSE(call("paint_mode", {{"node", "Paint"}, {"enabled", false}})["paint_mode"].get<bool>());
+        op::undoHistory().clear();
+        call("paint_stroke", {{"node", "Paint"},
+                              {"space", "world"},
+                              {"samples", {{0.0f, 0.0f, 0.0f, 0.25f}, {0.1f, 0.0f, 0.0f, 0.25f}}}});
+        // Undo replaces the graph object, so look it up again after every command.
+        const auto node = [&](const char* name) -> lfs::nodes::Node* {
+            auto* const tree = viewer_->getSceneManager()->modifierManager().tree(id);
+            return tree ? tree->find_node(name) : nullptr;
+        };
+        ASSERT_NE(node("Paint"), nullptr);
+        EXPECT_EQ(node("Paint")->properties["data"].size(), 1u);
+        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        ASSERT_NE(node("Paint"), nullptr);
+        EXPECT_TRUE(node("Paint")->properties["data"].empty());
+
+        auto& scene_manager = *viewer_->getSceneManager();
+        scene_manager.initSelectionService();
+        auto* const selection = scene_manager.getSelectionService();
+        ASSERT_NE(selection, nullptr);
+        selection->setTestingViewport({.x = 0.0f,
+                                       .y = 0.0f,
+                                       .width = 100.0f,
+                                       .height = 100.0f,
+                                       .render_width = 100,
+                                       .render_height = 100});
+        selection->setTestingHoveredGaussianId(0);
+        call("editor_select", {{"nodes", {"Key"}}});
+        op::undoHistory().clear();
+        const auto picked = call("pick_colour", {{"node", "Key"},
+                                                 {"input", "Colour"},
+                                                 {"screen_x", 50.0f},
+                                                 {"screen_y", 50.0f}});
+        EXPECT_TRUE(picked["stored_payload"].get<bool>());
+        ASSERT_NE(node("Key"), nullptr);
+        const auto* const colour = node("Key")->input_values["Colour"].get_if<glm::vec4>();
+        ASSERT_NE(colour, nullptr);
+        EXPECT_EQ(*colour, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
     }
 } // namespace lfs::vis

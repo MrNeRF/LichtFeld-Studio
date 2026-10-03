@@ -152,3 +152,7 @@
     border-right-color: transparent;
     border-bottom-color: transparent;
 }
+.node-title-tool.active {
+    background-color: @{alpha(primary,0.45)};
+    border-radius: 4dp;
+}

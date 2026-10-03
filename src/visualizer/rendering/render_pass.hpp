@@ -48,6 +48,14 @@ namespace lfs::vis {
         glm::mat4 ellipsoid_transform{1};
         bool ellipsoid_affects_render = true;
         int ellipsoid_parent_node_index = -1;
+        bool node_box_active = false;
+        glm::mat4 node_box_transform{1};
+        glm::mat4 node_box_falloff_transform{1};
+        bool node_box_has_falloff = false;
+        bool node_ellipsoid_active = false;
+        glm::mat4 node_ellipsoid_transform{1};
+        glm::mat4 node_ellipsoid_falloff_transform{1};
+        bool node_ellipsoid_has_falloff = false;
     };
 
     struct FrameViewPanel {

@@ -1,4 +1,7 @@
 {
+  "node_editor.paint": "Maluj",
+  "node_editor.paint_done": "Zakończ malowanie",
+  "node_editor.pick_colour": "Pobierz kolor",
   "node_editor.colour_offset_hint": "Przeciągnij, aby zabarwić; kliknij dwukrotnie, aby przywrócić neutralny",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Pamięć GPU procesu zgłaszana przez system operacyjny lub sterownik GPU.",
@@ -3212,6 +3215,31 @@
   "node_editor.optional_selection": "Opcjonalne: bez połączenia zaznaczone jest wszystko",
   "node_editor.captured_count": "Przechwycono: {} zaznaczonych",
   "nodes": {
+    "paint_selection": {
+      "label": "Malowane zaznaczenie",
+      "description": "Maluje aktywne zaznaczenie geometryczne bezpośrednio na powierzchniach sceny.",
+      "help": "Wybierz węzeł, włącz Maluj i przeciągnij po powierzchni; Alt/Option wymazuje.\nKlawisze [ i ] zmieniają rozmiar pędzla. Pociągnięcia pozostają ważne po zmianie liczby elementów.",
+      "inputs": {
+        "Softness": "Część promienia próbki użyta na łagodne przejście, 0–1. 0 daje ostrą krawędź; wartość domyślna to 0,5."
+      },
+      "input_labels": {
+        "Softness": "Miękkość"
+      },
+      "outputs": {
+        "Selection": "Siła zaznaczenia: 0 oznacza brak, 1 pełne zaznaczenie; wartości pośrednie tworzą łagodne przejścia."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {
+        "data": "Pociągnięcia na powierzchni zapisane jako próbki lokalne obiektu. Domyślnie puste.",
+        "invert": "Odwraca malowane zaznaczenie. Domyślnie wyłączone zachowuje pomalowane obszary; włączone wybiera resztę."
+      },
+      "property_labels": {
+        "data": "Pociągnięcia",
+        "invert": "Odwróć"
+      }
+    },
     "boolean": {
       "label": "Wartość logiczna",
       "description": "Udostępnia jeden przełącznik do sterowania kilkoma połączonymi ustawieniami.",

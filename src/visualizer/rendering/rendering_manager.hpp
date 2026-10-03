@@ -655,6 +655,20 @@ namespace lfs::vis {
         }
         void setCropboxGizmoActive(bool active) { gizmo_state_.cropbox_active = active; }
         void setEllipsoidGizmoActive(bool active) { gizmo_state_.ellipsoid_active = active; }
+        void setNodeBoxGizmoState(bool active, const glm::mat4& transform,
+                                  const glm::mat4& falloff_transform, bool has_falloff) {
+            gizmo_state_.node_box_active = active;
+            gizmo_state_.node_box_transform = transform;
+            gizmo_state_.node_box_falloff_transform = falloff_transform;
+            gizmo_state_.node_box_has_falloff = has_falloff;
+        }
+        void setNodeEllipsoidGizmoState(bool active, const glm::mat4& transform,
+                                        const glm::mat4& falloff_transform, bool has_falloff) {
+            gizmo_state_.node_ellipsoid_active = active;
+            gizmo_state_.node_ellipsoid_transform = transform;
+            gizmo_state_.node_ellipsoid_falloff_transform = falloff_transform;
+            gizmo_state_.node_ellipsoid_has_falloff = has_falloff;
+        }
         [[nodiscard]] GizmoState getGizmoState() const { return gizmo_state_; }
 
         void setViewportResizeActive(

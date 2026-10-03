@@ -38,6 +38,7 @@
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
 #include <SDL3/SDL.h>
@@ -493,7 +494,6 @@ namespace lfs::vis {
             SDL_DestroyCursor(hand_cursor_);
             hand_cursor_ = nullptr;
         }
-
         // Reset cursor to default before destruction
         if (window_ && current_cursor_ != CursorType::Default) {
             SDL_SetCursor(SDL_GetDefaultCursor());
@@ -514,7 +514,6 @@ namespace lfs::vis {
         // Create cursors
         resize_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
         hand_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
-
         refreshMovementKeyCache();
         bindings_.setOnBindingsChanged([this]() { refreshMovementKeyCache(); });
     }
@@ -640,6 +639,10 @@ namespace lfs::vis {
     void InputController::onWindowFocusLost() {
         op::operators().cancelModalOperator();
         op::clearDepthWindowHover();
+        if (auto* const scene_manager = services().sceneOrNull())
+            scene_manager->modifierManager().cancelViewportMode();
+        node_paint_dragging_ = false;
+        node_paint_last_world_.reset();
         if (current_cursor_ != CursorType::Default) {
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
@@ -692,7 +695,8 @@ namespace lfs::vis {
     }
 
     bool InputController::hasViewportCursorOverride() const {
-        return current_cursor_ == CursorType::Resize;
+        return current_cursor_ == CursorType::Resize ||
+               current_cursor_ == CursorType::Eyedropper;
     }
 
     std::optional<input::SelectionOp> InputController::selectionDragOperation() const {
@@ -787,6 +791,67 @@ namespace lfs::vis {
             // commit to the wrong panel.
             text_input_viewport_click_button_ = button;
             return;
+        }
+
+        // Commit the stroke even when the pointer leaves the viewport before
+        // release, so a drag always corresponds to exactly one undo entry.
+        if (is_left_button && action == input::ACTION_RELEASE && node_paint_dragging_) {
+            if (auto* const scene_manager = services().sceneOrNull())
+                scene_manager->modifierManager().endPaintStroke(false);
+            node_paint_dragging_ = false;
+            node_paint_last_world_.reset();
+            return;
+        }
+
+        // Node graph viewport modes own the left button before normal selection
+        // tools. Both use SelectionService so screen/depth picking has one source
+        // of truth.
+        if (!over_gui && is_left_button && isInViewport(x, y)) {
+            if (auto* const scene_manager = services().sceneOrNull()) {
+                auto& modifiers = scene_manager->modifierManager();
+                auto* const selection = scene_manager->getSelectionService();
+                if (modifiers.colourPickActive()) {
+                    if (action == input::ACTION_PRESS && selection) {
+                        if (const auto picked = selection->pickAtScreen(
+                                static_cast<float>(x), static_cast<float>(y));
+                            picked) {
+                            (void)modifiers.applyPickedColour(
+                                picked->colour, (mods & input::KEYMOD_SHIFT) != 0);
+                        }
+                    }
+                    return;
+                }
+                if (modifiers.paintModeActive()) {
+                    if (action == input::ACTION_RELEASE) {
+                        if (node_paint_dragging_)
+                            modifiers.endPaintStroke(false);
+                        node_paint_dragging_ = false;
+                        node_paint_last_world_.reset();
+                        return;
+                    }
+                    if (action == input::ACTION_PRESS && selection && modifiers.beginPaintStroke()) {
+                        node_paint_erasing_ = (mods & input::KEYMOD_ALT) != 0;
+                        if (const auto picked = selection->pickAtScreen(
+                                static_cast<float>(x), static_cast<float>(y));
+                            picked) {
+                            const auto world_radius = selection->worldRadiusAtScreen(
+                                static_cast<float>(x), static_cast<float>(y),
+                                picked->world_position, modifiers.paintRadius());
+                            const PaintStrokeSample sample{
+                                .position = picked->world_position,
+                                .radius = world_radius.value_or(0.0f),
+                                .value = node_paint_erasing_ ? 0.0f : 1.0f,
+                            };
+                            node_paint_dragging_ = modifiers.appendPaintSample(sample, true);
+                            if (node_paint_dragging_)
+                                node_paint_last_world_ = sample.position;
+                        }
+                        if (!node_paint_dragging_)
+                            modifiers.endPaintStroke(true);
+                    }
+                    return;
+                }
+            }
         }
 
         const bool selection_pointer_blocked =
@@ -1391,6 +1456,50 @@ namespace lfs::vis {
             over_gui = isPointerOverBlockingUi(x, y);
             over_gui_hover = isPointerOverUiHover(x, y);
         }
+
+        if (!over_gui && isInViewport(x, y)) {
+            if (auto* const scene_manager = services().sceneOrNull()) {
+                auto& modifiers = scene_manager->modifierManager();
+                if (modifiers.colourPickActive()) {
+                    if (gui && gui->pipetteCursor())
+                        SDL_SetCursor(gui->pipetteCursor());
+                    current_cursor_ = CursorType::Eyedropper;
+                    last_mouse_pos_ = current_pos;
+                    return;
+                }
+                if (modifiers.paintModeActive()) {
+                    current_cursor_ = CursorType::Paint;
+                    if (node_paint_dragging_) {
+                        if (auto* const selection = scene_manager->getSelectionService()) {
+                            if (const auto picked = selection->pickAtScreen(
+                                    static_cast<float>(x), static_cast<float>(y));
+                                picked) {
+                                const auto world_radius = selection->worldRadiusAtScreen(
+                                    static_cast<float>(x), static_cast<float>(y),
+                                    picked->world_position, modifiers.paintRadius());
+                                const float spacing = world_radius.value_or(0.0f) / 3.0f;
+                                if (!node_paint_last_world_ ||
+                                    glm::distance(*node_paint_last_world_, picked->world_position) >= spacing) {
+                                    const PaintStrokeSample sample{
+                                        .position = picked->world_position,
+                                        .radius = world_radius.value_or(0.0f),
+                                        .value = node_paint_erasing_ ? 0.0f : 1.0f,
+                                    };
+                                    if (modifiers.appendPaintSample(sample, true))
+                                        node_paint_last_world_ = sample.position;
+                                }
+                            }
+                        }
+                    }
+                    last_mouse_pos_ = current_pos;
+                    return;
+                }
+            }
+        } else if (current_cursor_ == CursorType::Eyedropper ||
+                   current_cursor_ == CursorType::Paint) {
+            SDL_SetCursor(SDL_GetDefaultCursor());
+            current_cursor_ = CursorType::Default;
+        }
         const bool selection_pointer_blocked =
             op::operators().activeModalId() == op::to_string(op::BuiltinOp::SelectionStroke) &&
             (over_gui || (!input_router_ && !isInViewport(x, y)));
@@ -1622,6 +1731,15 @@ namespace lfs::vis {
         }
 
         const int mods = getModifierKeys();
+        if (!over_gui && isInViewport(mouse_x, mouse_y) &&
+            (mods & (input::KEYMOD_CTRL | input::KEYMOD_ALT)) != 0) {
+            if (auto* const scene_manager = services().sceneOrNull();
+                scene_manager && scene_manager->modifierManager().paintModeActive()) {
+                scene_manager->modifierManager().adjustPaintRadius(
+                    scrollStepScale(yoff, 1.1f, 0.9f));
+                return;
+            }
+        }
         const auto tool_mode = getCurrentToolMode();
         const input::Action scroll_action = bindings_.getActionForScroll(tool_mode, mods, held_keys_);
 
@@ -1840,6 +1958,29 @@ namespace lfs::vis {
         }
 
         auto* gui = services().guiOrNull();
+
+        if (action == input::ACTION_PRESS && !wants_text_input) {
+            if (auto* const scene_manager = services().sceneOrNull()) {
+                auto& modifiers = scene_manager->modifierManager();
+                if (logical_key == input::KEY_ESCAPE &&
+                    (modifiers.paintModeActive() || modifiers.colourPickActive())) {
+                    modifiers.cancelViewportMode();
+                    node_paint_dragging_ = false;
+                    node_paint_last_world_.reset();
+                    SDL_SetCursor(SDL_GetDefaultCursor());
+                    current_cursor_ = CursorType::Default;
+                    return;
+                }
+                if (modifiers.paintModeActive() &&
+                    (logical_key == input::KEY_LEFT_BRACKET ||
+                     logical_key == input::KEY_RIGHT_BRACKET)) {
+                    modifiers.adjustPaintRadius(logical_key == input::KEY_RIGHT_BRACKET
+                                                    ? 1.1f
+                                                    : 0.9f);
+                    return;
+                }
+            }
+        }
 
         // Forward to binding capture before Python panels or modal operators consume keys.
         if (action == input::ACTION_PRESS && bindings_.isCapturing()) {

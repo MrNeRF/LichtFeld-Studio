@@ -1,4 +1,7 @@
 {
+  "node_editor.paint": "페인트",
+  "node_editor.paint_done": "페인트 끝내기",
+  "node_editor.pick_colour": "색상 추출",
   "node_editor.colour_offset_hint": "드래그하여 색조 조정, 두 번 클릭하여 중립으로 초기화",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "운영 체제 또는 GPU 드라이버가 보고한 프로세스 GPU 메모리입니다.",
@@ -3212,6 +3215,31 @@
   "node_editor.optional_selection": "선택 사항: 연결하지 않으면 모두 선택",
   "node_editor.captured_count": "캡처됨: {}개 선택",
   "nodes": {
+    "paint_selection": {
+      "label": "선택 페인트",
+      "description": "장면 표면에 실시간 기하 선택 영역을 직접 그립니다.",
+      "help": "노드를 선택하고 페인트를 켠 뒤 표면 위를 드래그하세요. Alt/Option 드래그는 지웁니다.\n[ 및 ] 키로 브러시 크기를 조절합니다. 요소 수가 바뀌어도 스트로크는 유지됩니다.",
+      "inputs": {
+        "Softness": "각 샘플 반지름 중 가장자리 페이드에 쓰는 비율(0–1)입니다. 0은 단단한 가장자리이며 기본값은 0.5입니다."
+      },
+      "input_labels": {
+        "Softness": "부드러움"
+      },
+      "outputs": {
+        "Selection": "선택 강도입니다. 0은 선택 안 됨, 1은 완전히 선택됨이며 중간값은 부드럽게 전환됩니다."
+      },
+      "output_labels": {
+        "Selection": "선택"
+      },
+      "properties": {
+        "data": "호스트 로컬 샘플로 저장된 표면 스트로크입니다. 기본값은 비어 있습니다.",
+        "invert": "그린 선택을 반전합니다. 기본값 꺼짐은 그린 영역을 유지하고 켜면 나머지를 선택합니다."
+      },
+      "property_labels": {
+        "data": "스트로크",
+        "invert": "반전"
+      }
+    },
     "boolean": {
       "label": "불리언",
       "description": "하나의 켜기/끄기 값으로 연결된 여러 설정을 함께 제어합니다.",
