@@ -4056,12 +4056,12 @@
     },
     "scale_clamp": {
       "label": "Limiter les proportions",
-      "description": "Corrige les Gaussians en aiguille ou en galette qui créent des traînées loin du trajet de capture.",
-      "help": "Utilise-le après l'entraînement si de fines traînées apparaissent hors du trajet caméra.\nCommence avec Rapport max 8 ; réduire rend les splats plus ronds mais plus doux.\nSeule la forme change ; position, couleur et nombre restent identiques.",
+      "description": "Raccourcit les Gaussians en aiguille qui créent des traînées loin du trajet de capture.",
+      "help": "Utilise-le si de fines traînées apparaissent hors du trajet caméra.\nCommence avec Rapport max 16 ; une valeur moindre raccourcit plus d'aiguilles.\nLes splats plats des surfaces restent intacts sauf si « Inclure les plats » est activé.",
       "inputs": {
         "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
         "Selection": "Zone et force d'effet, 0–1 : 0 inchangé, 1 effet complet. Sans connexion, tout est concerné.",
-        "Max Aspect": "Rapport maximal entre axes le plus long et le plus court. 1 rend les splats ronds ; 8 est un bon départ."
+        "Max Aspect": "Rapport maximal entre axes long et médian. 16 est un bon départ ; réduire raccourcit plus d'aiguilles."
       },
       "input_labels": {
         "Geometry": "Géométrie",
@@ -4074,8 +4074,12 @@
       "output_labels": {
         "Geometry": "Géométrie"
       },
-      "properties": {},
-      "property_labels": {}
+      "properties": {
+        "include_flat": "Limite aussi l'aplatissement (axe long/court). Désactivé par défaut car les surfaces utilisent des splats plats."
+      },
+      "property_labels": {
+        "include_flat": "Inclure les plats"
+      }
     },
     "separate_colour": {
       "label": "Séparer la couleur",

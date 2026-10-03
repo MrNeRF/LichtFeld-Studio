@@ -4056,12 +4056,12 @@
     },
     "scale_clamp": {
       "label": "Achsenverhältnis begrenzen",
-      "description": "Korrigiert nadel- und scheibenförmige Gaussians, die abseits des Aufnahmepfads Streifen erzeugen.",
-      "help": "Nutze dies nach dem Training gegen dünne Streifen abseits des Kamerapfads.\nBeginne mit Max. Achsenverhältnis 8; kleinere Werte machen Splats runder und weicher.\nNur die Form ändert sich; Position, Farbe und Anzahl bleiben gleich.",
+      "description": "Verkürzt nadelförmige Gaussians, die abseits des Aufnahmepfads als Streifen sichtbar werden.",
+      "help": "Bei dünnen Streifen abseits des Kamerapfads verwenden.\nMit Max. Achsenverhältnis 16 beginnen; kleinere Werte verkürzen mehr Nadeln.\nFlache Oberflächen-Splats bleiben unverändert, ausser „Flache einbeziehen“ ist aktiv.",
       "inputs": {
         "Geometry": "Zu bearbeitende Geometrie. Verbinde eine Quelle; ohne Verbindung kommt keine Geometrie an.",
         "Selection": "Bearbeitungsstärke, 0–1: 0 unverändert, 1 volle Wirkung. Ohne Verbindung wird alles bearbeitet.",
-        "Max Aspect": "Grösstes Verhältnis zwischen längster und kürzester Splat-Achse. 1 macht Splats rund; 8 ist ein guter Anfang."
+        "Max Aspect": "Maximales Verhältnis von längster zu mittlerer Splat-Achse. 16 ist ein guter Start; kleiner verkürzt mehr Nadeln."
       },
       "input_labels": {
         "Geometry": "Geometrie",
@@ -4074,8 +4074,12 @@
       "output_labels": {
         "Geometry": "Geometrie"
       },
-      "properties": {},
-      "property_labels": {}
+      "properties": {
+        "include_flat": "Begrenzt auch flache Splats (längste/kürzeste Achse). Standardmässig aus, da Oberflächen aus flachen Splats bestehen."
+      },
+      "property_labels": {
+        "include_flat": "Flache einbeziehen"
+      }
     },
     "separate_colour": {
       "label": "Farbe aufteilen",

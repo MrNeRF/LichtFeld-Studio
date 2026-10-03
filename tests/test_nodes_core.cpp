@@ -236,7 +236,7 @@ namespace {
                 EXPECT_FALSE(property.description.empty()) << property.identifier;
         }
         EXPECT_EQ(registry.find("lfs.scale_clamp")->description,
-                  "Fixes needle- and pancake-shaped Gaussians that show up as streaks when you move away from the capture path.");
+                  "Shortens needle-shaped Gaussians that show up as streaks when you move away from the capture path.");
     }
 
     TEST(NodesCoreMetadata, JsonRoundTripPreservesMissingNodeAndToleratesUnknownKeys) {
@@ -991,7 +991,8 @@ namespace {
         EXPECT_FLOAT_EQ(*socket("lfs.remove_floaters", "Min Opacity").default_value.get_if<float>(), 0.02f);
         EXPECT_FLOAT_EQ(*socket("lfs.remove_floaters", "Isolation Radius").default_value.get_if<float>(),
                         3.0f);
-        EXPECT_FLOAT_EQ(*socket("lfs.scale_clamp", "Max Aspect").default_value.get_if<float>(), 8.0f);
+        EXPECT_FLOAT_EQ(*socket("lfs.scale_clamp", "Max Aspect").default_value.get_if<float>(), 16.0f);
+        EXPECT_EQ(socket("lfs.scale_clamp", "Max Aspect").min, 1.0);
         EXPECT_EQ(socket("lfs.colour_correct", "Midpoint").min, 0.01);
         EXPECT_EQ(socket("lfs.colour_correct", "Midpoint").max, 0.99);
         EXPECT_EQ(socket("lfs.recolour", "Weight").min, 0.0);
@@ -999,6 +1000,7 @@ namespace {
         EXPECT_EQ(socket("lfs.decimate", "Keep Fraction").min, 0.001);
         EXPECT_EQ(socket("lfs.decimate", "Keep Fraction").max, 1.0);
         EXPECT_FALSE(property("lfs.colour_correct", "auto_range").default_value.get<bool>());
+        EXPECT_FALSE(property("lfs.scale_clamp", "include_flat").default_value.get<bool>());
         EXPECT_TRUE(property("lfs.recolour", "keep_shading").default_value.get<bool>());
         EXPECT_TRUE(property("lfs.recolour", "fade_view_dependent").default_value.get<bool>());
         EXPECT_FLOAT_EQ(*socket("lfs.colour_key", "Tolerance").default_value.get_if<float>(), 0.1f);
@@ -1102,7 +1104,7 @@ namespace {
         EXPECT_EQ(host<float>(result.geometry.splats->shN), shn);
     }
 
-    TEST_P(NodesCore, ScaleClampUsesMidrangeAndSelectionWeight) {
+    TEST_P(NodesCore, ScaleClampBlendsNeedleWithoutChangingShortAxes) {
         auto geometry = splats();
         geometry.splats->scaling = tensor({-3, 0, 3, -3, 0, 3, -3, 0, 3}, {3, 3});
         auto result = single("lfs.scale_clamp", geometry, [](Node& node) {
@@ -1112,10 +1114,50 @@ namespace {
         ASSERT_TRUE(result.ok);
         const auto values = host<float>(result.geometry.splats->scaling);
         for (size_t index = 0; index < values.size(); index += 3) {
-            EXPECT_NEAR(values[index], -1.75f, 1e-5f);
+            EXPECT_FLOAT_EQ(values[index], -3);
             EXPECT_NEAR(values[index + 1], 0, 1e-5f);
-            EXPECT_NEAR(values[index + 2], 1.75f, 1e-5f);
+            EXPECT_NEAR(values[index + 2], 2, 1e-5f);
         }
+    }
+
+    TEST_P(NodesCore, ScaleClampShortensNeedlesAndPreservesFlatSplatsByDefault) {
+        const float log4 = std::log(4.0f);
+        const float log16 = std::log(16.0f);
+        const float log64 = std::log(64.0f);
+        auto geometry = splats();
+        geometry.splats->scaling = tensor({log64, 0, 0, log64, log64, 0, log4, 0, 0}, {3, 3});
+        const auto before = host<float>(geometry.splats->scaling);
+
+        const auto result = single("lfs.scale_clamp", geometry);
+        ASSERT_TRUE(result.ok);
+        const auto values = host<float>(result.geometry.splats->scaling);
+        EXPECT_NEAR(values[0], log16, 1e-5f);
+        EXPECT_FLOAT_EQ(values[1], before[1]);
+        EXPECT_FLOAT_EQ(values[2], before[2]);
+        EXPECT_EQ(std::vector<float>(values.begin() + 3, values.end()),
+                  std::vector<float>(before.begin() + 3, before.end()));
+
+        const auto with_flat = single("lfs.scale_clamp", geometry, [](Node& node) {
+            node.properties["include_flat"] = true;
+        });
+        ASSERT_TRUE(with_flat.ok);
+        const auto flat_values = host<float>(with_flat.geometry.splats->scaling);
+        EXPECT_LE(flat_values[3] - flat_values[5], log16 + 1e-5f);
+    }
+
+    TEST_P(NodesCore, ScaleClampHandlesEmptyInput) {
+        Geometry empty;
+        empty.splats = SplatsComponent{Tensor::empty({0, 3}, device()),
+                                       Tensor::empty({0, 3}, device()),
+                                       Tensor::empty({0, 3, 3}, device()),
+                                       Tensor::empty({0, 3}, device()),
+                                       Tensor::empty({0, 4}, device()),
+                                       Tensor::empty({0}, device()),
+                                       1};
+        const auto result = single("lfs.scale_clamp", empty);
+        ASSERT_TRUE(result.ok);
+        ASSERT_TRUE(result.geometry.splats);
+        EXPECT_EQ(result.geometry.splats->scaling.shape(), TensorShape({0, 3}));
     }
 
     TEST_P(NodesCore, InsideMeshHandlesNonConvexTorusAndOutsideBounds) {
@@ -1210,7 +1252,7 @@ namespace {
         EXPECT_FLOAT_EQ(host<float>(lfs::core::point_neighbor_spacing(tensor({0, 0, 0}, {1, 3}), 1.0f))[0], 4.0f);
     }
 
-    TEST_P(NodesCore, ScaleClampGuaranteesAspectOnRandomLogScales) {
+    TEST_P(NodesCore, ScaleClampGuaranteesNeedleAspectOnRandomLogScales) {
         std::mt19937 random(27);
         std::uniform_real_distribution<float> value(-15, 10);
         for (int sample = 0; sample < 16; ++sample) {
@@ -1220,7 +1262,10 @@ namespace {
             geometry.splats->scaling = tensor(scales, {3, 3});
             const auto result = single("lfs.scale_clamp", geometry, [](Node& node) { node.input_values["Max Aspect"] = 4.0f; });
             ASSERT_TRUE(result.ok);
-            EXPECT_LE((result.geometry.splats->scaling.max(1) - result.geometry.splats->scaling.min(1)).exp().max().item<float>(), 4.00001f);
+            const auto output = result.geometry.splats->scaling;
+            const auto largest = output.max(1);
+            const auto middle = output.sum(1) - largest - output.min(1);
+            EXPECT_LE((largest - middle).exp().max().item<float>(), 4.00001f);
         }
     }
 

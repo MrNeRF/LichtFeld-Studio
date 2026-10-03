@@ -4056,12 +4056,12 @@
     },
     "scale_clamp": {
       "label": "Asverhouding begrenzen",
-      "description": "Herstelt naald- en schijfvormige Gaussians die strepen tonen wanneer je het opnamepad verlaat.",
-      "help": "Gebruik dit na het trainen wanneer dunne strepen buiten het camerapad verschijnen.\nBegin met Max. asverhouding 8; lagere waarden maken splats ronder maar zachter.\nAlleen de vorm verandert; positie, kleur en aantal blijven gelijk.",
+      "description": "Verkort naaldvormige Gaussians die strepen tonen wanneer je het opnamepad verlaat.",
+      "help": "Gebruik dit wanneer dunne strepen buiten het camerapad verschijnen.\nBegin met Max. asverhouding 16; lagere waarden verkorten meer naalden.\nPlatte splats op oppervlakken blijven intact tenzij ‘Plat meenemen’ aanstaat.",
       "inputs": {
         "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
         "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
-        "Max Aspect": "Hoogste verhouding tussen langste en kortste splatas. 1 maakt elke splat rond; 8 is een goed begin."
+        "Max Aspect": "Hoogste verhouding tussen langste en middelste splatas. 16 is een goed begin; lager verkort meer naalden."
       },
       "input_labels": {
         "Geometry": "Geometrie",
@@ -4074,8 +4074,12 @@
       "output_labels": {
         "Geometry": "Geometrie"
       },
-      "properties": {},
-      "property_labels": {}
+      "properties": {
+        "include_flat": "Begrens ook platheid (langste tegenover kortste as). Standaard uit, omdat oppervlakken uit platte splats bestaan."
+      },
+      "property_labels": {
+        "include_flat": "Plat meenemen"
+      }
     },
     "separate_colour": {
       "label": "Kleur splitsen",

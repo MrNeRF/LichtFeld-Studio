@@ -4056,12 +4056,12 @@
     },
     "scale_clamp": {
       "label": "限制轴比",
-      "description": "修正远离拍摄路径时形成拖痕的针状或薄饼状 Gaussian。",
-      "help": "训练后，若相机路径以外出现细条纹，可使用此节点。\n从最大轴比 8 开始；更小的值使 splat 更圆但也更柔和。\n只改变形状；位置、颜色和数量保持不变。",
+      "description": "缩短远离拍摄路径时形成拖痕的针状 Gaussian。",
+      "help": "若相机路径以外出现细条纹，可使用此节点。\n从最大轴比 16 开始；值越小，缩短的针状 splat 越多。\n表面上的扁平 splat 保持不变，除非开启“包括扁平”。",
       "inputs": {
         "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
         "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
-        "Max Aspect": "允许的最长轴与最短轴的最大比值。1 使每个 splat 变圆；8 是合适起点。"
+        "Max Aspect": "允许的最长轴与中间轴的最大比值。16 是合适起点；值越小，缩短的针状 splat 越多。"
       },
       "input_labels": {
         "Geometry": "几何体",
@@ -4074,8 +4074,12 @@
       "output_labels": {
         "Geometry": "几何体"
       },
-      "properties": {},
-      "property_labels": {}
+      "properties": {
+        "include_flat": "同时限制扁平度（最长轴与最短轴之比）。默认关闭，因为表面由扁平 splat 构成。"
+      },
+      "property_labels": {
+        "include_flat": "包括扁平"
+      }
     },
     "separate_colour": {
       "label": "分离颜色",

@@ -4056,12 +4056,12 @@
     },
     "scale_clamp": {
       "label": "Limita proporzioni",
-      "description": "Corregge Gaussians ad ago o disco che creano strisce lontano dal percorso di acquisizione.",
-      "help": "Usalo dopo l'addestramento se compaiono strisce sottili fuori dal percorso della camera.\nInizia con Rapporto max 8; valori minori rendono gli splat più tondi ma più morbidi.\nCambia solo la forma; posizione, colore e numero restano invariati.",
+      "description": "Accorcia i Gaussians ad ago che creano strisce lontano dal percorso di acquisizione.",
+      "help": "Usalo se compaiono strisce sottili fuori dal percorso della camera.\nInizia con Rapporto max 16; valori minori accorciano più aghi.\nGli splat piatti sulle superfici restano invariati, salvo attivare «Includi piatti».",
       "inputs": {
         "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
         "Selection": "Dove applichi la modifica, 0–1: 0 invariato, 1 effetto completo. Senza collegamento riguarda tutto.",
-        "Max Aspect": "Rapporto massimo tra asse più lungo e più corto. 1 rende ogni splat tondo; 8 è un buon inizio."
+        "Max Aspect": "Rapporto massimo tra asse lungo e medio. 16 è un buon inizio; valori minori accorciano più aghi."
       },
       "input_labels": {
         "Geometry": "Geometria",
@@ -4074,8 +4074,12 @@
       "output_labels": {
         "Geometry": "Geometria"
       },
-      "properties": {},
-      "property_labels": {}
+      "properties": {
+        "include_flat": "Limita anche l'appiattimento (asse lungo/corto). Disattivo per default: le superfici sono fatte di splat piatti."
+      },
+      "property_labels": {
+        "include_flat": "Includi piatti"
+      }
     },
     "separate_colour": {
       "label": "Separa colore",

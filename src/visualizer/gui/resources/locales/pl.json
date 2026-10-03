@@ -4056,12 +4056,12 @@
     },
     "scale_clamp": {
       "label": "Ogranicz proporcje",
-      "description": "Poprawia igłowe i płaskie Gaussians, które tworzą smugi po oddaleniu od trasy rejestracji.",
-      "help": "Użyj po treningu, gdy poza trasą kamery pojawiają się cienkie smugi.\nZacznij od Maks. proporcji 8; mniejsze wartości dają bardziej okrągłe, ale miększe splaty.\nZmienia się tylko kształt; pozycja, kolor i liczba pozostają takie same.",
+      "description": "Skraca igłowe Gaussians, które tworzą smugi po oddaleniu od trasy rejestracji.",
+      "help": "Użyj, gdy poza trasą kamery pojawiają się cienkie smugi.\nZacznij od Maks. proporcji 16; mniejsze wartości skracają więcej igieł.\nPłaskie splaty powierzchni pozostają bez zmian, chyba że włączysz „Uwzględnij płaskie”.",
       "inputs": {
         "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
         "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
-        "Max Aspect": "Maksymalny stosunek najdłuższej osi splata do najkrótszej. 1 zaokrągla wszystkie splaty; 8 to dobry początek."
+        "Max Aspect": "Maksymalny stosunek najdłuższej osi do środkowej. 16 to dobry początek; mniej skraca więcej igieł."
       },
       "input_labels": {
         "Geometry": "Geometria",
@@ -4074,8 +4074,12 @@
       "output_labels": {
         "Geometry": "Geometria"
       },
-      "properties": {},
-      "property_labels": {}
+      "properties": {
+        "include_flat": "Ogranicza też płaskość (oś najdłuższa do najkrótszej). Domyślnie wyłączone, bo powierzchnie tworzą płaskie splaty."
+      },
+      "property_labels": {
+        "include_flat": "Uwzględnij płaskie"
+      }
     },
     "separate_colour": {
       "label": "Rozdziel kolor",

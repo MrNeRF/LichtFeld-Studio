@@ -4056,12 +4056,12 @@
     },
     "scale_clamp": {
       "label": "Limitar proporciones",
-      "description": "Corrige Gaussians con forma de aguja o disco que producen estelas lejos de la ruta de captura.",
-      "help": "Úsalo tras entrenar si aparecen trazos finos fuera de la ruta de cámara.\nEmpieza con Proporción máx. 8; valores menores hacen splats más redondos y suaves.\nSolo cambia la forma; posición, color y cantidad permanecen iguales.",
+      "description": "Acorta los Gaussians con forma de aguja que producen estelas lejos de la ruta de captura.",
+      "help": "Úsalo si aparecen trazos finos fuera de la ruta de cámara.\nEmpieza con Proporción máx. 16; valores menores acortan más agujas.\nLos splats planos de superficies no cambian salvo que actives «Incluir planos».",
       "inputs": {
         "Geometry": "Geometría que quieres editar. Conecta una fuente; sin conexión no se proporciona geometría.",
         "Selection": "Dónde aplicas la edición, 0–1: 0 sin cambios, 1 efecto completo. Sin conexión afecta a todo.",
-        "Max Aspect": "Máxima relación entre el eje más largo y el más corto. 1 hace redondos los splats; 8 es un buen inicio."
+        "Max Aspect": "Máxima relación entre los ejes largo y medio. 16 es un buen inicio; valores menores acortan más agujas."
       },
       "input_labels": {
         "Geometry": "Geometría",
@@ -4074,8 +4074,12 @@
       "output_labels": {
         "Geometry": "Geometría"
       },
-      "properties": {},
-      "property_labels": {}
+      "properties": {
+        "include_flat": "Limita también el aplanamiento (eje largo frente al corto). Está desactivado porque las superficies usan splats planos."
+      },
+      "property_labels": {
+        "include_flat": "Incluir planos"
+      }
     },
     "separate_colour": {
       "label": "Separar color",

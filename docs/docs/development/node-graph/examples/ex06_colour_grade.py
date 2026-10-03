@@ -1,4 +1,4 @@
-"""Grade the whole capture: auto levels, a touch of contrast, warmer light.
+"""Grade the whole capture: deeper blacks, more contrast and saturation, warmer light.
 
 Captures come out flat and slightly cool. A lift of the black point, more
 contrast and saturation and a warm white balance give the photographic look. The affine part of the grade is applied

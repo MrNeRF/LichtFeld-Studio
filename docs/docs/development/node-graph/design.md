@@ -286,9 +286,12 @@ Splat
 - **Set Scale** (selection, scale vector, activated units).
 - **Set SH Degree** (0..3; truncates or zero-pads canonical shN).
 - **Sharpen** (selection, amount 0..0.95, keep coverage).
-- **Scale Clamp** (selection, max aspect = largest/smallest scale axis).
-  Log-scales clamp to the min/max midpoint ± half the log aspect limit, then
-  blend by selection. Fully selected splats satisfy the requested axis ratio.
+- **Scale Clamp** (selection, max aspect = largest/middle scale axis, default
+  16; `include_flat` property off by default). In log space it shortens only the
+  largest axis to the middle axis plus the aspect limit, then blends by
+  selection; the middle and smallest axes stay unchanged. This removes needles
+  without thickening the flat discs used for trained surfaces. Include Flat
+  restores the largest/smallest midpoint clamp for pancake-shaped splats.
 
 Colour
 - **Colour Correct** (selection, exposure, black point, white point, midpoint,
@@ -467,4 +470,3 @@ Subsequent reads return request/evaluation/install/discard counters, per-node
 run counts, canvas CPU work (input/layout plus deferred RmlUi drawing), viewer
 frame CPU/present time, idle/busy viewport-frame samples, and request-to-install
 latency. These are CPU wall-clock measurements, not GPU timestamp queries.
-

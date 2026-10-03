@@ -140,9 +140,17 @@ namespace lfs::nodes::builtin {
                 context.set_output("Geometry", std::move(geometry));
                 return;
             }
-            const float limit = std::log(input_float(context, "Max Aspect", 8));
-            const auto centre = (splats.scaling.max(1, true) + splats.scaling.min(1, true)) * 0.5f;
-            const auto clamped = splats.scaling.maximum(centre - limit * 0.5f).minimum(centre + limit * 0.5f);
+            const float limit = std::log(input_float(context, "Max Aspect", 16));
+            const auto largest = splats.scaling.max(1, true);
+            const auto smallest = splats.scaling.min(1, true);
+            Tensor clamped;
+            if (property_bool(context, "include_flat", false)) {
+                const auto centre = (largest + smallest) * 0.5f;
+                clamped = splats.scaling.maximum(centre - limit * 0.5f).minimum(centre + limit * 0.5f);
+            } else {
+                const auto middle = splats.scaling.sum(1, true) - largest - smallest;
+                clamped = splats.scaling.minimum(middle + limit);
+            }
             splats.scaling = blend(splats.scaling, clamped, weight);
         }
         context.set_output("Geometry", std::move(geometry));
@@ -320,8 +328,9 @@ namespace lfs::nodes::builtin {
                            geometry_inputs({in("Selection", f, 1.0f, true)
                                                 .range(0, 1)
                                                 .step_size(0.01),
-                                            in("Max Aspect", f, 8.0f).minimum(1).step_size(0.1)}),
-                           {out("Geometry", geo)}, evaluate_scale_clamp));
+                                            in("Max Aspect", f, 16.0f).minimum(1).step_size(0.1)}),
+                           {out("Geometry", geo)}, evaluate_scale_clamp,
+                           {prop("include_flat", PropertyKind::Bool, false)}));
         register_type(registry,
                       type("lfs.colour_correct", "Colour",
                            geometry_inputs({in("Selection", f, 1.0f, true)

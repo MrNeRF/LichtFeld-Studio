@@ -95,7 +95,7 @@ Select a node in the editor for its controls and How to use guidance.
 
 ## Splat
 
-- [Scale Clamp](lfs.scale_clamp.md) — Fixes needle- and pancake-shaped Gaussians that show up as streaks when you move away from the capture path.
+- [Scale Clamp](lfs.scale_clamp.md) — Shortens needle-shaped Gaussians that show up as streaks when you move away from the capture path.
 
 - [Set Colour](lfs.set_colour.md) — Replaces selected splats' base colour with the colour you provide.
 
