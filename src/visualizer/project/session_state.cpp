@@ -3073,7 +3073,7 @@ namespace lfs::vis::project {
             }
             if (auto* rendering =
                     viewer.getRenderingManager())
-                rendering->markDirty(DirtyFlag::ALL);
+                rendering->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
 
             LegacyLayoutState layout{.show_sequencer = gui_manager->isSequencerVisible()};
             if (!has_screen) {
@@ -3546,7 +3546,7 @@ namespace lfs::vis::project {
                         ->getSequencerUIState()
                         .show_camera_path);
             }
-            rendering->markDirty(DirtyFlag::ALL);
+            rendering->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
 
         std::optional<ToolType> builtin_tool_type(
@@ -3596,7 +3596,7 @@ namespace lfs::vis::project {
                 viewer.getEditorContext()
                     .armToolRestoreGuard();
                 gui_manager->setSequencerVisible(sequencer_visible);
-                rendering->markDirty(DirtyFlag::ALL);
+                rendering->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
             };
 
             const auto tools =
@@ -4048,7 +4048,7 @@ namespace lfs::vis::project {
         }
         if (auto* rendering =
                 viewer.getRenderingManager()) {
-            rendering->markDirty(DirtyFlag::ALL);
+            rendering->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
     }
 

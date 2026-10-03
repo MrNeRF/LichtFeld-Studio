@@ -544,3 +544,21 @@ if __name__ == "__main__":
     for contract in contracts:
         contract()
         print(f"PASS {contract.__name__}")
+
+
+def test_locale_strings_use_real_line_breaks():
+    """A JSON "\\\\n" decodes to a backslash and an n, which dialogs print literally."""
+    def strings(node, key=""):
+        if isinstance(node, dict):
+            for child_key, child in node.items():
+                yield from strings(child, f"{key}.{child_key}" if key else child_key)
+        elif isinstance(node, str):
+            yield key, node
+
+    escaped = [
+        f"{path.name}:{key}"
+        for path in sorted(LOCALES.glob("*.json"))
+        for key, text in strings(json.loads(path.read_text(encoding="utf-8")))
+        if "\\n" in text
+    ]
+    assert not escaped, escaped

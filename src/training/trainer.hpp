@@ -112,8 +112,8 @@ namespace lfs::training {
             bool invert_masks = false;
             float mask_threshold = 0.0f;
             bool undistort_prepared = false;
-            lfs::core::Tensor gt_image;
-            lfs::core::Tensor mask;
+            int eval_space = 0;
+            EvaluationViewInputs inputs;
             std::uint64_t last_used = 0;
         };
 
@@ -308,7 +308,7 @@ namespace lfs::training {
         std::shared_ptr<lfs::io::PipelinedImageLoader> getActiveImageLoader() const;
         GTLoadConfigSnapshot getGTLoadConfigSnapshot() const;
         std::expected<CameraMetricsSnapshot, std::string> computeCameraMetrics(
-            const lfs::core::Camera& camera,
+            lfs::core::Camera& camera,
             bool include_ssim,
             CameraMetricsAppearanceConfig appearance);
 

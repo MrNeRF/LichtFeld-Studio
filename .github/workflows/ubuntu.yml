@@ -179,6 +179,11 @@ jobs:
         run: |
           uv run --python 3.12 --no-project --with numpy --with pillow --with pytest python -m pytest -q tests/python/test_scene_reconstruction_benchmark.py
 
+      - name: Build and run frame-demand CPU tests
+        run: |
+          cmake --build build --target lichtfeld_frame_tests -j $(nproc)
+          ctest --test-dir build --output-on-failure -R '^lichtfeld_frame_tests$'
+
       - name: Install Python test dependencies
         run: |
           build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m ensurepip --user
@@ -197,6 +202,48 @@ jobs:
           ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
           LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
             build/vcpkg_installed/x64-linux/tools/python3/python3.12 -X faulthandler -m pytest tests/python -m 'not gpu and not slow and not integration' -q
+
+  idle-e2e:
+    if: vars.LFS_GPU_RUNNER == 'true'
+    runs-on: [self-hosted, linux, gpu]
+    timeout-minutes: 30
+    env:
+      DISPLAY: :92
+      LFS_MCP_PORT: 45692
+      LFS_RENDER_IDLE_MANIFEST: ${{ vars.LFS_RENDER_IDLE_MANIFEST }}
+      LFS_EXECUTABLE: ${{ github.workspace }}/build/LichtFeld-Studio
+      LFS_TEST_BUILD_DIR: ${{ github.workspace }}/build
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          clean: false
+      - name: Build the GUI executable
+        run: cmake --build build --target LichtFeld-Studio -j6
+      - name: Start Xvfb when needed
+        run: |
+          if ! xdpyinfo -display :92 >/dev/null 2>&1; then
+            Xvfb :92 -screen 0 1920x1080x24 -nolisten tcp &
+            echo $! > "$RUNNER_TEMP/render-on-demand-xvfb.pid"
+            for _ in $(seq 1 50); do
+              xdpyinfo -display :92 >/dev/null 2>&1 && break
+              sleep 0.2
+            done
+          fi
+      - name: Run render-on-demand GPU idle test
+        env:
+          LFS_RENDER_IDLE_SHOTS: ${{ runner.temp }}/render-on-demand-shots
+        run: |
+          test -n "$LFS_RENDER_IDLE_MANIFEST"
+          build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m pytest \
+            tests/python/test_render_on_demand_idle.py -m 'gpu and integration' -q
+      - name: Stop Xvfb started by this job
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/render-on-demand-xvfb.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/render-on-demand-xvfb.pid")" || true
+            rm -f "$RUNNER_TEMP/render-on-demand-xvfb.pid"
+          fi
 
   # .clang-tidy is for local/IDE use only here; CI needs compile_commands.json in a later phase.
   error-debt-gate:

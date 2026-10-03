@@ -4463,7 +4463,7 @@ namespace lfs::python {
                     lfs::vis::op::operators().dispatchModalEvent(event);
                 }
                 if (auto* const rm = lfs::vis::services().renderingOrNull()) {
-                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                 }
             },
             nb::arg("enabled"),
@@ -4484,7 +4484,7 @@ namespace lfs::python {
                     lfs::vis::op::operators().dispatchModalEvent(event);
                 }
                 if (auto* const rm = lfs::vis::services().renderingOrNull()) {
-                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
                 }
             },
             nb::arg("enabled"),

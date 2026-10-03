@@ -130,7 +130,7 @@ def test_details_model_hides_metrics_without_samples_and_formats_embedded_datase
 
 def test_context_actions_open_inspector_and_file_operations():
     actions = {row["action"] for row in operation_actions(_entry())}
-    assert actions == {"inspector", "export_as", "update_thumbnail", "rename"}
+    assert actions == {"inspector", "export_as", "update_thumbnail", "rename", "clean", "compact_content"}
 
 
 def test_thumbnail_source_options_only_offer_sources_available_for_target(tmp_path):
@@ -200,14 +200,16 @@ def _contents(details, plan=None, **kwargs):
     from pathlib import Path
     from lfs_plugins.project_inspector import contents_rows
     translations = json.loads((Path(__file__).parents[2] / 'src/visualizer/gui/resources/locales/en.json').read_text())
+    translations['project_cleanup.title'] = translations['project_cleanup']['title']
     return contents_rows(_entry(), details, plan, tr=lambda key: translations[key],
                          format_size=lambda size: f'{size} B', format_time=lambda timestamp: '2026-08-27' if timestamp else '', **kwargs)
 
 
-def test_empty_contents_has_only_the_two_add_rows():
+def test_empty_contents_offers_add_rows_and_project_cleanup():
     rows = _contents(_contents_details())
     assert [(r['id'], r['label'], r['action']) for r in rows] == [
-        ('thumbnail', 'Add thumbnail', 'thumbnail'), ('license', 'Add license', 'license')]
+        ('thumbnail', 'Add thumbnail', 'thumbnail'), ('license', 'Add license', 'license'),
+        ('clean', 'Clean project…', 'clean')]
     assert not any(r['removable'] for r in rows)
 
 

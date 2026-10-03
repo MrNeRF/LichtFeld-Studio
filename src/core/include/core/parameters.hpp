@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/training_backend.hpp"
@@ -51,6 +52,31 @@ namespace lfs::core {
             SegmentAndIgnore, // 3-band mask (0-255): value<128 ignore, 128<=value<=250 segment, value>250 keep
             AlphaConsistent   // Enforce exact alpha values from mask
         };
+
+        enum class EvalSpace {
+            Distorted,
+            Undistorted,
+        };
+
+        [[nodiscard]] inline constexpr std::string_view eval_space_name(
+            const EvalSpace space) noexcept {
+            switch (space) {
+            case EvalSpace::Distorted:
+                return "distorted";
+            case EvalSpace::Undistorted:
+                return "undistorted";
+            }
+            return "distorted";
+        }
+
+        [[nodiscard]] inline constexpr std::optional<EvalSpace> eval_space_from_string(
+            const std::string_view value) noexcept {
+            if (value == "distorted")
+                return EvalSpace::Distorted;
+            if (value == "undistorted")
+                return EvalSpace::Undistorted;
+            return std::nullopt;
+        }
 
         enum class DensifyErrorMap {
             Ssim,   // full SSIM (luminance × contrast × structure)
@@ -199,6 +225,7 @@ namespace lfs::core {
             bool bg_modulation = false;                        // Enable sinusoidal background modulation
             bool enable_eval = false;                          // Only evaluate when explicitly enabled
             bool eval_all = false;                             // Train on every image and evaluate all of them
+            EvalSpace eval_space = EvalSpace::Distorted;       // Reference image space used for evaluation
             bool enable_save_eval_images = true;               // Save during evaluation images
             bool headless = false;                             // Disable visualization during training
             bool auto_train = false;                           // Start training immediately on startup
@@ -387,8 +414,7 @@ namespace lfs::core {
             bool invert_masks = false;
             float mask_threshold = 0.5f;
 
-            // PRMS-authoritative pending import option (ownership matrix).
-            // DatasetConfig::to_json omits it; project PRMS round-trips it.
+            // Dataset import option; persisted in training configs and project PRMS.
             std::string centralize_dataset = "off";
 
             nlohmann::json to_json() const;
@@ -466,6 +492,7 @@ namespace lfs::core {
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;
             std::vector<bool> add_splat_freeze;
+            bool add_splats_applied = false;
             float freeze_lr_scale = 0.0f;
             bool exclude_frozen_add_splats_from_export = false;
             bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
@@ -616,6 +643,9 @@ namespace lfs::core {
         LFS_CORE_API std::expected<OptimizationParameters, std::string> read_optim_params_from_json(
             const std::filesystem::path& path,
             ExplicitTrainingOverrides& captured_overrides);
+        LFS_CORE_API std::expected<TrainingParameters, lfs::Error> read_training_parameters_from_json(
+            const std::filesystem::path& path,
+            const TrainingParameters& defaults = {});
 
         // Save training parameters to JSON
         LFS_CORE_API std::expected<void, std::string> save_training_parameters_to_json(

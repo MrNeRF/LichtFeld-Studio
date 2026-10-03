@@ -577,6 +577,9 @@ namespace lfs::core::internal {
         }
         const uint64_t prior = std::max(recorder->submitted_value, recorder->gpu_wait);
         recorder->gpu_wait = 0;
+        // The shared timeline also retires other recorders' buffers. Submit all
+        // older reservations before publishing a newer external-wait signal.
+        flush_through_locked(std::numeric_limits<uint64_t>::max());
         const uint64_t signal = context_.reserve_timeline_value();
         context_.submit_external_after(semaphore, value, prior, signal);
         recorder->submitted_value = signal;

@@ -13,6 +13,8 @@ namespace lfs::core::nn {
     struct PoolReduceParams {
         int y0, y1, x0, x1;
         float inverse_count;
+        const Tensor* weights = nullptr;
+        int weights_width = 0, weights_y0 = 0, weights_x0 = 0;
     };
 
     // Optional per-model execution binding. The model owns all buffers and views.

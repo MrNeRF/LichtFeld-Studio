@@ -165,6 +165,7 @@ namespace lfs::core {
                                        const LabelUpdateProgram& program, ExecContext context) = 0;
             virtual void ppisp_apply(StorageRef input, StorageRef output, int width, int height, const PpispParams& params, ExecContext context) = 0;
             virtual void environment_composite(StorageRef rgb, StorageRef alpha, StorageRef environment, StorageRef output, const EnvironmentCompositeParams& params, ExecContext context) = 0;
+            virtual Tensor image_warp(const Tensor& input, const UndistortParams& params, int mode, bool inverse, Tensor* validity, ExecContext context);
             virtual Tensor image_undistort(const Tensor& input, const UndistortParams& params, bool mask, ExecContext context) = 0;
             virtual Tensor image_resize_prior(const Tensor& input, int height, int width, bool normal, ExecContext context) = 0;
             virtual void affine_splat_geometry(StorageRef, StorageRef, StorageRef, StorageRef, const splat_transform::LinearTransform&, size_t, ExecContext) = 0;
@@ -439,7 +440,7 @@ namespace lfs::core {
             bool has_nan(StorageRef input, size_t count, ExecContext context) override;
             bool has_inf(StorageRef input, size_t count, ExecContext context) override;
             bool arg_extreme(StorageRef, StorageRef, StorageRef, const ArgExtremeProgram&,
-                             ExecContext) override { return false; }
+                             ExecContext) override;
             void cumsum(StorageRef data, const StridedLayout& layout, int dim,
                         ExecContext context) override;
             void sort_1d(StorageRef values, StorageRef indices, size_t count,

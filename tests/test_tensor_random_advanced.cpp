@@ -3,6 +3,8 @@
 
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
+#include <chrono>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <map>
 #include <set>
@@ -618,5 +620,53 @@ TEST_F(TensorRandomAdvancedTest, MultinomialVeryLargeWeights) {
     for (int64_t v : values) {
         EXPECT_GE(v, 0);
         EXPECT_LT(v, 4);
+    }
+}
+
+TEST_F(TensorRandomAdvancedCudaTest, MultinomialReplacementReusesWeightScan) {
+    const auto measure = [](size_t count) {
+        const Tensor weights = Tensor::ones({count}, Device::GPU);
+        (void)Tensor::multinomial(weights, 4096, true).cpu();
+        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        Tensor samples;
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < 3; ++i)
+            samples = Tensor::multinomial(weights, 4096, true);
+        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 3;
+        for (const int64_t index : samples.cpu().to_vector_int64()) {
+            EXPECT_GE(index, 0);
+            EXPECT_LT(index, static_cast<int64_t>(count));
+        }
+        return ms;
+    };
+    const double small_ms = measure(1024);
+    const double large_ms = measure(1 << 20);
+    std::cout << "multinomial 4096 draws: 1024 weights " << small_ms
+              << " ms; 1048576 weights " << large_ms << " ms\n";
+    // Allow ample device and host overhead; rescanning a million weights for
+    // every draw exceeds this bound.
+    EXPECT_LT(large_ms, small_ms * 32);
+}
+
+TEST_F(TensorRandomAdvancedTest, MultinomialReplacementSkipsZeroWeightRuns) {
+    for (const float scale : {1.0e-30f, 1.0f, 1.0e37f}) {
+        SCOPED_TRACE(scale);
+        std::vector<float> weights(2051, 0.0f);
+        weights[1] = scale;
+        weights[1023] = 2 * scale;
+        weights[1024] = 3 * scale;
+        weights[2049] = 4 * scale;
+        const Tensor gpu = Tensor::from_vector(weights, {weights.size()}, Device::GPU);
+        const auto samples = Tensor::multinomial(gpu, 4096, true).cpu().to_vector_int64();
+        std::map<int64_t, size_t> counts;
+        for (const int64_t index : samples) {
+            ASSERT_TRUE(index == 1 || index == 1023 || index == 1024 || index == 2049) << index;
+            ++counts[index];
+        }
+        EXPECT_NEAR(counts[1], 409.6, 100.0);
+        EXPECT_NEAR(counts[1023], 819.2, 150.0);
+        EXPECT_NEAR(counts[1024], 1228.8, 150.0);
+        EXPECT_NEAR(counts[2049], 1638.4, 150.0);
     }
 }

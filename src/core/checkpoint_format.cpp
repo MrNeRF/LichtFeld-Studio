@@ -324,6 +324,7 @@ namespace lfs::core {
         }
         if (params_json.contains("add_splat_paths")) {
             base_params.add_splat_paths = utf8_to_paths(params_json["add_splat_paths"]);
+            base_params.add_splats_applied = true;
         }
         if (params_json.contains("add_splat_freeze")) {
             base_params.add_splat_freeze = params_json["add_splat_freeze"].get<std::vector<bool>>();

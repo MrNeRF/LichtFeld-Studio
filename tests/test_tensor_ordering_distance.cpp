@@ -2,6 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor/backend/facade_trace.hpp"
+#include "core/tensor/backend/gpu_backend_ops.hpp"
+#include "core/tensor_backend.hpp"
+#include <array>
+#include <chrono>
+#include <limits>
 
 #include <gtest/gtest.h>
 
@@ -106,4 +112,102 @@ TEST(TensorDistanceTest, CdistL1AndL2HaveExactValues) {
     EXPECT_NEAR(l2[1], 2.0f, 1e-5f);
     EXPECT_NEAR(l2[2], std::sqrt(8.0f), 1e-5f);
     EXPECT_NEAR(l2[3], std::sqrt(41.0f), 1e-5f);
+}
+
+TEST(TensorOrderingTest, ArgExtremeKernelMatchesCpu) {
+    struct Case {
+        std::vector<size_t> shape;
+        int axis;
+    };
+    const std::vector<Case> cases = {
+        {{1, 1000003}, 1},
+        {{3000, 700}, 1},
+        {{5, 10000, 3}, 1},
+        {{10000, 4}, 0},
+        {{37}, 0},
+        {{4, 1, 7}, 1},
+        {{3, 4097}, 1}};
+    for (const auto& [shape, axis] : cases) {
+        SCOPED_TRACE(TensorShape(shape).str());
+        size_t count = 1;
+        for (const size_t extent : shape)
+            count *= extent;
+        std::vector<float> data(count);
+        for (size_t i = 0; i < count; ++i) {
+            data[i] = static_cast<float>(static_cast<int>(i * 7919 % 101) - 50);
+            if (i % 7 == 0)
+                data[i] = i % 2 ? -0.0f : 0.0f;
+            if (i % 997 == 0)
+                data[i] = std::numeric_limits<float>::quiet_NaN();
+            if (i % 991 == 0)
+                data[i] = i % 2 ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
+        }
+        const Tensor cpu = Tensor::from_vector(data, TensorShape(shape), Device::CPU);
+        const Tensor gpu = cpu.to(Device::GPU);
+        for (const bool maximum : {false, true}) {
+            for (const bool keepdim : {false, true}) {
+                const auto [expected_values, expected_indices] = maximum ? cpu.max_with_indices(axis, keepdim)
+                                                                         : cpu.min_with_indices(axis, keepdim);
+                internal::facade_trace_enable_for_testing(true);
+                const auto before = internal::facade_trace_snapshot_for_testing();
+                const auto [values, indices] = maximum ? gpu.max_with_indices(axis, keepdim)
+                                                       : gpu.min_with_indices(axis, keepdim);
+                const auto after = internal::facade_trace_snapshot_for_testing();
+                internal::facade_trace_enable_for_testing(false);
+                const size_t entry = static_cast<size_t>(internal::FacadeEntry::arg_extreme);
+                EXPECT_EQ(after[entry] - before[entry], 1u);
+                EXPECT_EQ(indices.shape(), expected_indices.shape());
+                EXPECT_EQ(indices.cpu().to_vector_int64(), expected_indices.to_vector_int64());
+                const auto found = values.cpu().to_vector();
+                const auto expected = expected_values.to_vector();
+                ASSERT_EQ(found.size(), expected.size());
+                for (size_t i = 0; i < found.size(); ++i) {
+                    if (std::isnan(expected[i]))
+                        ASSERT_TRUE(std::isnan(found[i])) << i;
+                    else {
+                        ASSERT_EQ(found[i], expected[i]) << i;
+                        if (found[i] == 0.0f)
+                            EXPECT_EQ(std::signbit(found[i]), std::signbit(expected[i]));
+                    }
+                }
+            }
+        }
+    }
+    // Offset and transposed views must materialize before kernel dispatch.
+    const Tensor view = Tensor::from_vector(std::vector<float>{9, 2, 2, -0.0f, 0.0f, 3, 1, 8, 8, 4, 5, 6},
+                                            {4, 3}, Device::GPU)
+                            .slice(0, 1, 4)
+                            .transpose(0, 1);
+    EXPECT_EQ(view.argmax(std::array{1}).cpu().to_vector_int64(), view.cpu().argmax(std::array{1}).to_vector_int64());
+    EXPECT_EQ(view.argmin(std::array{0}).cpu().to_vector_int64(), view.cpu().argmin(std::array{0}).to_vector_int64());
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const Tensor ties = Tensor::from_vector(std::vector<float>{-0.f, 0.f, -0.f, 0.f,
+                                                               nan, 1.f, nan, nan,
+                                                               nan, 1.f, 2.f, 3.f,
+                                                               1.f, 3.f, 3.f, 1.f},
+                                            {4, 4}, Device::GPU);
+    const auto [max_values, max_indices] = ties.max_with_indices(1);
+    const auto [min_values, min_indices] = ties.min_with_indices(1);
+    EXPECT_EQ(max_indices.cpu().to_vector_int64(), (std::vector<int64_t>{0, 2, 0, 1}));
+    EXPECT_EQ(min_indices.cpu().to_vector_int64(), (std::vector<int64_t>{0, 2, 0, 0}));
+    EXPECT_TRUE(std::signbit(max_values.cpu().to_vector()[0]));
+    EXPECT_TRUE(std::signbit(min_values.cpu().to_vector()[0]));
+    EXPECT_EQ(ties.argmax().cpu().to_vector_int64(), (std::vector<int64_t>{4}));
+    EXPECT_EQ(ties.argmin().cpu().to_vector_int64(), (std::vector<int64_t>{4}));
+}
+
+TEST(TensorOrderingTest, DISABLED_ArgExtremeTiming) {
+    for (const auto& shape : std::vector<std::vector<size_t>>{{65536, 112}, {1, 4194304}, {65536, 448}}) {
+        const Tensor x = Tensor::rand(TensorShape(shape), Device::GPU);
+        auto& backend = internal::backend_ops_for(x);
+        for (int i = 0; i < 3; ++i)
+            (void)x.max_with_indices(1);
+        backend.synchronize_device();
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < 20; ++i)
+            (void)x.max_with_indices(1);
+        backend.synchronize_device();
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 20;
+        std::cout << "arg_extreme " << TensorShape(shape).str() << " " << ms << " ms\n";
+    }
 }

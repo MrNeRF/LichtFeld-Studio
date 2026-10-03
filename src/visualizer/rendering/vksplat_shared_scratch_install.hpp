@@ -24,26 +24,27 @@ namespace lfs::vis {
     inline constexpr double kInteractiveViewerBudgetMs = 500.0;
     inline constexpr std::chrono::milliseconds kCameraSettle{150};
 
+    // While the camera moves during training, training runs one step after every
+    // viewer frame: frames keep a steady cadence and training keeps progressing.
+    inline constexpr std::uint32_t kTrainingFramesPerNavigationRender = 1;
+
     // Training steps the viewer owes after a navigation frame so that training
     // keeps at least kNavigationTrainingShare of the GPU: k*T / (k*T + V) >= s.
     [[nodiscard]] inline std::uint32_t trainingTurnsPerViewerFrame(const double viewer_turn_ms,
-                                                                   const double training_step_ms,
-                                                                   const std::uint32_t minimum) {
+                                                                   const double training_step_ms) {
         if (!(viewer_turn_ms > 0.0) || !(training_step_ms > 0.0)) {
-            return minimum;
+            return kTrainingFramesPerNavigationRender;
         }
         const double share = kNavigationTrainingShare / (1.0 - kNavigationTrainingShare);
         const double turns = std::ceil(viewer_turn_ms * share / training_step_ms);
         return std::clamp<std::uint32_t>(
-            static_cast<std::uint32_t>(std::min(turns, 64.0)), minimum, 64u);
+            static_cast<std::uint32_t>(std::min(turns, 64.0)), kTrainingFramesPerNavigationRender, 64u);
     }
 
-    // Idle rest interval keeping training near kIdlePreviewTrainingShare while
-    // allowing full-quality previews at up to roughly one every 9 viewer turns.
     // A submit-to-submit clock must also include the viewer turn itself.
-    [[nodiscard]] inline double idlePreviewIntervalSec(const double setting_sec, const double viewer_turn_ms) {
+    [[nodiscard]] inline double idlePreviewIntervalSec(const double viewer_turn_ms) {
         const double share = (1.0 - kIdlePreviewTrainingShare) / kIdlePreviewTrainingShare;
-        return std::max(setting_sec, viewer_turn_ms * 1e-3 / share);
+        return std::max(0.0, viewer_turn_ms * 1e-3 / share);
     }
 
     [[nodiscard]] inline bool navigationRendersOnlyAtRest(const double viewer_turn_ms) {
@@ -65,10 +66,6 @@ namespace lfs::vis {
         }
         return true;
     }
-
-    // While the camera moves during training, training runs one step after every
-    // viewer frame: frames keep a steady cadence and training keeps progressing.
-    inline constexpr std::uint32_t kTrainingFramesPerNavigationRender = 1;
 
     // A navigation frame waits this long for training's step to leave the shared
     // scratch; presenting the previous splat image would put it under overlays

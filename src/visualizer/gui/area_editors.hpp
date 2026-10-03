@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_input.hpp"
 #include "gui/panel_registry.hpp"
@@ -66,7 +67,7 @@ namespace lfs::vis::gui {
         bool live = true; // false: reuse cached panel textures when possible
     };
 
-    class AreaEditor {
+    class LFS_VIS_API AreaEditor {
     public:
         virtual ~AreaEditor() = default;
 
@@ -94,7 +95,7 @@ namespace lfs::vis::gui {
     // The 3D viewport's header: the View menu, display mode, depth, overlays
     // and projection. Edits go straight to the area's View3DSpace; commands
     // that need the scene (framing, dataset cameras) go to `command`.
-    class View3DEditor final : public AreaEditor {
+    class LFS_VIS_API View3DEditor final : public AreaEditor {
     public:
         using Command = std::function<void(screen::AreaId, std::string_view)>;
 
@@ -111,7 +112,7 @@ namespace lfs::vis::gui {
         Command command_;
     };
 
-    class PropertiesEditor final : public AreaEditor {
+    class LFS_VIS_API PropertiesEditor final : public AreaEditor {
     public:
         void header(const AreaFrame& area, const screen::Screen& screen,
                     std::vector<HeaderItem>& items) const override;
@@ -136,13 +137,13 @@ namespace lfs::vis::gui {
         float content_height_ = 0.0f;
     };
 
-    class ScenePanelEditor final : public AreaEditor {
+    class LFS_VIS_API ScenePanelEditor final : public AreaEditor {
     public:
         void draw(const AreaDrawContext& ctx) override;
         [[nodiscard]] std::optional<PanelSpace> panelSpace() const override { return PanelSpace::SceneHeader; }
     };
 
-    class ConsoleEditor final : public AreaEditor {
+    class LFS_VIS_API ConsoleEditor final : public AreaEditor {
     public:
         void draw(const AreaDrawContext& ctx) override;
     };
@@ -177,7 +178,7 @@ namespace lfs::vis::gui {
 
     // Any registered panel shown as an editor of its own (the sequencer,
     // histogram, asset browser and plugin panels).
-    class PanelEditor final : public AreaEditor {
+    class LFS_VIS_API PanelEditor final : public AreaEditor {
     public:
         void header(const AreaFrame& area, const screen::Screen& screen,
                     std::vector<HeaderItem>& items) const override;

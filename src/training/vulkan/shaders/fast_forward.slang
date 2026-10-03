@@ -44,14 +44,14 @@ Projected project(FastPush p, uint i, out uint touched) {
     float3 jw1 = jy * v1.xyz - jy * clamp(y, p.clipTop, p.clipBottom) * v2.xyz;
     float3 c0 = mul(jw0, cov), c1 = mul(jw1, cov);
     float a = dot(c0, jw0), b = dot(c0, jw1), c = dot(c1, jw1);
-    float rawDet = p.mip != 0 ? max(a * c - b * b, 0.0f) : 0;
-    float blur = p.mip != 0 ? 0.1f : 0.3f;
+    float rawDet = (p.mip & 1u) != 0 ? max(a * c - b * b, 0.0f) : 0;
+    float blur = ((p.mip & 1u) != 0 ? 0.1f : 0.3f) * asfloat(p.mip & ~1u);
     a += blur;
     c += blur;
     float det = a * c - b * b;
     if (det < 1e-6f)
         return o;
-    if (p.mip != 0)
+    if ((p.mip & 1u) != 0)
         opacity *= sqrt(rawDet / det);
     if (opacity < 1.0f / 255)
         return o;

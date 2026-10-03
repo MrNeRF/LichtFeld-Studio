@@ -10,6 +10,11 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolate_project_operations_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("LFS_HOME", str(tmp_path / "home"))
+
+
 def _symlink_or_skip(link: Path, target: Path) -> None:
     try:
         link.symlink_to(target)
@@ -498,11 +503,6 @@ def test_operation_guard_rejects_replaced_identity_and_commit(native_io, tmp_pat
     assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
 
 
-@pytest.mark.xfail(
-    os.name == "nt",
-    reason="Native closed-file mutations do not yet accept CJK paths on Windows",
-    strict=True,
-)
 def test_closed_file_mutation_accepts_unicode_path(native_io, tmp_path):
     path = tmp_path / "项目.licht"
     shutil.copy2(_fixture(), path)

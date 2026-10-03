@@ -158,7 +158,7 @@
     <div class="ep-section">
       <span class="ep-section-title">{{progress_title}}</span>
     </div>
-    <div class="ep-progress-wrap">
+    <div class="ep-progress-wrap is-exporting">
       <progress id="export-progress" class="ep-progress" max="1" data-attr-value="progress_value" />
       <span class="progress__text">{{progress_pct}}</span>
     </div>

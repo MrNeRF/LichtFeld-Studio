@@ -729,10 +729,10 @@ namespace lfs::core {
         // the edges — no host sync, no deferred retention.
         void free_routed(void* ptr, const AllocationInfo& info) {
             for (cudaStream_t extra : info.extra_streams) {
-                // nullptr is the legacy default stream: a non-blocking home does not
-                // order against it, so it is bridged like any other user. Bridging a
-                // destroyed capture stream can SIGSEGV inside the driver — callers
-                // should rehome first, but free must stay best-effort.
+                // The legacy stream is bridged too: a non-blocking home stream has
+                // no implicit ordering against it. Bridging a destroyed capture
+                // stream can SIGSEGV inside the driver; callers should rehome
+                // first, but free must stay best-effort.
                 if (extra == info.home_stream || is_stream_retired(extra))
                     continue;
                 bridgeStreams(extra, info.home_stream);

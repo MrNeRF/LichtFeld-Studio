@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -43,15 +44,25 @@ namespace {
 
     class GateStream {
     public:
-        GateStream() {
+        GateStream() : owns_stream_(true) {
             EXPECT_EQ(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking), cudaSuccess);
+            EXPECT_EQ(cudaEventCreateWithFlags(&gate_, cudaEventDisableTiming), cudaSuccess);
+            EXPECT_EQ(cudaStreamCreateWithFlags(&gate_holder_, cudaStreamNonBlocking), cudaSuccess);
+        }
+
+        // Gates an existing stream (nullptr = legacy default stream) without owning it.
+        explicit GateStream(cudaStream_t stream) : stream_(stream), owns_stream_(false) {
             EXPECT_EQ(cudaEventCreateWithFlags(&gate_, cudaEventDisableTiming), cudaSuccess);
             EXPECT_EQ(cudaStreamCreateWithFlags(&gate_holder_, cudaStreamNonBlocking), cudaSuccess);
         }
 
         ~GateStream() {
             release();
-            destroyStreamSafely(stream_);
+            if (owns_stream_) {
+                destroyStreamSafely(stream_);
+            } else {
+                cudaStreamSynchronize(gate_holder_);
+            }
             cudaStreamDestroy(gate_holder_);
             cudaEventDestroy(gate_);
         }
@@ -82,6 +93,7 @@ namespace {
         cudaStream_t stream_ = nullptr;
         cudaStream_t gate_holder_ = nullptr;
         cudaEvent_t gate_ = nullptr;
+        bool owns_stream_ = true;
         std::atomic<bool> released_{false};
     };
 
@@ -252,6 +264,91 @@ TEST_F(TensorMultiStreamTest, RecordStreamBridgesReaderIntoFree) {
     }
     cudaFree(staging);
     destroyStreamSafely(owner);
+}
+
+// A non-blocking home stream never synchronizes with the legacy stream
+// implicitly, so only the free-time bridge orders the recycled block after a
+// pending legacy-stream reader. Catches a free path that skips null extras.
+TEST_F(TensorMultiStreamTest, RecordStreamBridgesLegacyStreamReaderIntoFree) {
+    GateStream reader(nullptr);
+    cudaStream_t owner;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&owner, cudaStreamNonBlocking), cudaSuccess);
+
+    auto& pool = CudaMemoryPool::instance();
+
+    void* block = pool.allocate(SLAB_BYTES, owner);
+    ASSERT_NE(block, nullptr);
+    ASSERT_EQ(cudaMemsetAsync(block, 0xCC, SLAB_BYTES, owner), cudaSuccess);
+    ASSERT_EQ(cudaStreamSynchronize(owner), cudaSuccess);
+
+    void* staging = nullptr;
+    ASSERT_EQ(cudaMalloc(&staging, SLAB_BYTES), cudaSuccess);
+
+    reader.close();
+    ASSERT_EQ(cudaMemcpyAsync(staging, block, SLAB_BYTES, cudaMemcpyDeviceToDevice, nullptr), cudaSuccess);
+    pool.record_stream(block, nullptr);
+    pool.deallocate(block, owner);
+
+    void* reused = pool.allocate(SLAB_BYTES, owner);
+    ASSERT_EQ(reused, block);
+    ASSERT_EQ(cudaMemsetAsync(reused, 0xDD, SLAB_BYTES, owner), cudaSuccess);
+    for (int i = 0; i < 100 && cudaStreamQuery(owner) == cudaErrorNotReady; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_EQ(cudaStreamQuery(owner), cudaErrorNotReady)
+        << "home stream reused the block before the legacy-stream reader finished";
+
+    reader.release();
+    ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
+    ASSERT_EQ(cudaStreamSynchronize(owner), cudaSuccess);
+
+    std::vector<unsigned char> readback(SLAB_BYTES, 0);
+    ASSERT_EQ(cudaMemcpy(readback.data(), staging, SLAB_BYTES, cudaMemcpyDeviceToHost), cudaSuccess);
+    for (size_t i = 0; i < SLAB_BYTES; i += 4096) {
+        ASSERT_EQ(readback[i], 0xCC) << "legacy-stream reader saw overwrite from recycled block at offset " << i;
+    }
+
+    pool.deallocate(reused, owner);
+    cudaFree(staging);
+    destroyStreamSafely(owner);
+}
+
+// Catches a dependency wait that treats the legacy stream as "nothing to wait
+// for": the non-blocking consumer would read before the gated producer wrote.
+TEST_F(TensorMultiStreamTest, WaitForCUDAStreamOrdersLegacyStreamProducer) {
+    GateStream producer(nullptr);
+    cudaStream_t consumer;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&consumer, cudaStreamNonBlocking), cudaSuccess);
+
+    void* buffer = nullptr;
+    void* staging = nullptr;
+    ASSERT_EQ(cudaMalloc(&buffer, SLAB_BYTES), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&staging, SLAB_BYTES), cudaSuccess);
+    ASSERT_EQ(cudaMemset(buffer, 0x00, SLAB_BYTES), cudaSuccess);
+
+    producer.close();
+    ASSERT_EQ(cudaMemsetAsync(buffer, 0xAB, SLAB_BYTES, nullptr), cudaSuccess);
+    waitForCUDAStream(consumer, nullptr);
+    ASSERT_EQ(cudaMemcpyAsync(staging, buffer, SLAB_BYTES, cudaMemcpyDeviceToDevice, consumer), cudaSuccess);
+    for (int i = 0; i < 100 && cudaStreamQuery(consumer) == cudaErrorNotReady; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_EQ(cudaStreamQuery(consumer), cudaErrorNotReady)
+        << "consumer ran before the legacy-stream producer finished";
+
+    producer.release();
+    ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
+    ASSERT_EQ(cudaStreamSynchronize(consumer), cudaSuccess);
+
+    std::vector<unsigned char> readback(SLAB_BYTES, 0);
+    ASSERT_EQ(cudaMemcpy(readback.data(), staging, SLAB_BYTES, cudaMemcpyDeviceToHost), cudaSuccess);
+    for (size_t i = 0; i < SLAB_BYTES; i += 4096) {
+        ASSERT_EQ(readback[i], 0xAB) << "consumer read stale data at offset " << i;
+    }
+
+    cudaFree(staging);
+    cudaFree(buffer);
+    ASSERT_EQ(cudaStreamDestroy(consumer), cudaSuccess);
 }
 
 TEST_F(TensorMultiStreamTest, PinnedBlockReusedOnlyAfterAllStreamsDone) {

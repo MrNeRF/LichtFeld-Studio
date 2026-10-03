@@ -84,6 +84,31 @@ namespace {
                       undistort_mask(host.slice(0, 0, 1).squeeze(0), p, nullptr), 1.5e-4f);
             }
     }
+    TEST_P(TensorImageOps, AreaWarpPriorsAndSourceValidity) {
+        auto p = camera(20, 16);
+        p.dst_width = 10;
+        p.dst_height = 8;
+        p.dst_fx *= 0.5f;
+        p.dst_fy *= 0.5f;
+        p.dst_cx *= 0.5f;
+        p.dst_cy *= 0.5f;
+        const auto host = picture(3, 16, 20).clamp(0.0f, 1.0f);
+        const auto input = onDevice(host);
+        close(undistort_image(input, p, nullptr), undistort_image(host, p, nullptr), 2e-4f);
+        close(undistort_depth_area(input.slice(0, 0, 1).squeeze(0), p, nullptr),
+              undistort_depth_area(host.slice(0, 0, 1).squeeze(0), p, nullptr), 2e-4f);
+        close(undistort_normal_area(input, p, nullptr), undistort_normal_area(host, p, nullptr), 2e-4f);
+        const auto small = picture(3, 8, 10).clamp(0.0f, 1.0f);
+        Tensor validity, reference_validity;
+        close(distort_image_to_source(onDevice(small), p, validity, nullptr),
+              distort_image_to_source(small, p, reference_validity, nullptr), 2e-4f);
+        close(validity.to(DataType::Float32), reference_validity.to(DataType::Float32), 0.0f);
+        close(distort_depth_to_source_area(onDevice(small.slice(0, 0, 1).squeeze(0)), p, nullptr),
+              distort_depth_to_source_area(small.slice(0, 0, 1).squeeze(0), p, nullptr), 2e-4f);
+        close(distort_normal_to_source_area(onDevice(small), p, nullptr),
+              distort_normal_to_source_area(small, p, nullptr), 2e-4f);
+    }
+
     TEST_P(TensorImageOps, ResizeDepthAndNormalInvalidSamplesStridesAndOffsets) {
         auto storage = picture(4, 7, 23);
         storage.ptr<float>()[23 * 7 + 23 * 2 + 4] = std::numeric_limits<float>::quiet_NaN();

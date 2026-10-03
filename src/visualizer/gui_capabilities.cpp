@@ -207,7 +207,7 @@ namespace lfs::vis::cap {
 
             scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
             if (rendering_manager)
-                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
             sync_crop_volume_render_settings(rendering_manager, *node, target_shape);
 
             vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
@@ -242,7 +242,7 @@ namespace lfs::vis::cap {
             scene.removeNode(remove_name, false);
             scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
             if (rendering_manager)
-                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
             if (const auto* const updated_keep = scene.getNodeById(keep_id))
                 sync_crop_volume_render_settings(rendering_manager, *updated_keep, keep_shape);
@@ -1164,7 +1164,7 @@ namespace lfs::vis::cap {
 
             scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
             if (rendering_manager)
-                rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+                rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
             return {};
         }
 
@@ -1203,7 +1203,7 @@ namespace lfs::vis::cap {
 
         scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         if (rendering_manager)
-            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         return {};
     }
 
@@ -1425,7 +1425,7 @@ namespace lfs::vis::cap {
             scene_manager.setNodeTransform(cropbox_node->name, composeTransform(updated_components));
 
         if (rendering_manager && (cropbox_changed || transform_changed))
-            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
         bool visibility_changed = false;
         if (update.has_show && cropbox_node->visible != update.show) {
@@ -1763,7 +1763,7 @@ namespace lfs::vis::cap {
             scene_manager.setNodeTransform(ellipsoid_node->name, composeTransform(updated_components));
 
         if (rendering_manager && (ellipsoid_changed || transform_changed))
-            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
         bool visibility_changed = false;
         if (update.has_show && ellipsoid_node->visible != update.show) {

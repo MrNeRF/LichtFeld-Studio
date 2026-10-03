@@ -78,6 +78,7 @@ namespace lfs::core::internal {
         void update_labels(StorageRef, StorageRef, const LabelUpdateProgram&, ExecContext) override;
         void ppisp_apply(StorageRef input, StorageRef output, int width, int height, const PpispParams& params, ExecContext context) override;
         void environment_composite(StorageRef rgb, StorageRef alpha, StorageRef environment, StorageRef output, const EnvironmentCompositeParams& params, ExecContext context) override;
+        Tensor image_warp(const Tensor& input, const UndistortParams& params, int mode, bool inverse, Tensor* validity, ExecContext context) override;
         Tensor image_undistort(const Tensor& input, const UndistortParams& params, bool mask, ExecContext context) override;
         Tensor image_resize_prior(const Tensor& input, int height, int width, bool normal, ExecContext context) override;
         void histogram_u8(StorageRef, StorageRef, size_t, ExecContext) override;

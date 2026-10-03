@@ -183,6 +183,8 @@ namespace lfs::training {
         staged.selection = std::move(*selection);
         staged.parameters =
             std::move(captured_parameters);
+        staged.sfm_observation_cameras =
+            lfs::io::project::capture_sfm_observation_cameras(scene);
         output = std::move(staged);
         return metrics;
     }
@@ -257,6 +259,8 @@ namespace lfs::training {
         staged.selection = std::move(*selection);
         staged.parameters =
             std::move(state.parameters);
+        staged.sfm_observation_cameras =
+            std::move(state.sfm_observation_cameras);
         staged.document_context = std::move(context);
         output = std::move(staged);
         return {};

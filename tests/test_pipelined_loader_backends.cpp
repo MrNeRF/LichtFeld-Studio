@@ -215,9 +215,15 @@ namespace {
         const auto camera = distorted_camera();
         undistorted.undistort = &camera;
         undistorted.params.undistort = &camera;
-        expect_close(load(undistorted).image,
-                     undistort_image(host(planar(rgb8_, 3, UINT8_SCALE), chw), camera, nullptr),
-                     1.5e-4f);
+        // Warped RGB is bounded and quantized to the lossless 16-bit cache grid.
+        const auto warped = undistort_image(host(planar(rgb8_, 3, UINT8_SCALE), chw), camera, nullptr)
+                                .clamp(0.0f, 1.0f)
+                                .mul(65535.0f)
+                                .add(0.5f)
+                                .to(DataType::Int32)
+                                .to(DataType::Float32)
+                                .mul(UINT16_SCALE);
+        expect_close(load(undistorted).image, warped, 1.5e-4f);
     }
 
     TEST_P(PipelinedLoaderBackends, MasksMatchHostReference) {

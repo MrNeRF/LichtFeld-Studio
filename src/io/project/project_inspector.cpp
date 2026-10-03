@@ -515,6 +515,7 @@ namespace lfs::io::project {
         bool needs_full_read(const ChunkInfo& row) noexcept {
             return (row.flags & TENSOR_PAYLOAD) != 0 ||
                    row.key.fourcc == FOURCC_CKPT ||
+                   row.key.fourcc == FOURCC_SFMO ||
                    row.key.fourcc == FOURCC_DSRC ||
                    row.key.fourcc == FOURCC_SPLT ||
                    row.key.fourcc == FOURCC_PCLD ||

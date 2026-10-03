@@ -248,6 +248,7 @@ add_library(lfs_io STATIC
         project/project_chapters.cpp
         project/session_chapters.cpp
         project/project_document.cpp
+        project/sfm_observation_chapter.cpp
         project/project_preview.cpp
         project/project_recovery.cpp
         project/project_inspector.cpp

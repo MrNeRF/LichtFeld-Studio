@@ -41,7 +41,7 @@ namespace lfs::python {
 
         void notify_screen_changed(vis::VisualizerImpl* impl) {
             if (auto* rendering = impl->getRenderingManager())
-                rendering->markDirty(vis::DirtyFlag::ALL);
+                rendering->markDirty(vis::DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
 
         vis::screen::AreaId area_id(const int id) {

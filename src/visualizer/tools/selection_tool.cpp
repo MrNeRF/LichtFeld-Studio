@@ -401,7 +401,7 @@ namespace lfs::vis::tools {
         settings.depth_filter_enabled = false;
         rm->updateSettings(settings);
         rm->clearSelectionPreviews();
-        rm->markDirty(DirtyFlag::SELECTION);
+        rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
 
     void SelectionTool::onSelectionModeChanged() {

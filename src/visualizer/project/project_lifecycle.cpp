@@ -5,6 +5,7 @@
 
 #include "project_lifecycle.hpp"
 #include "io/project_operations.hpp"
+#include "io/sfm_observation_chapter.hpp"
 
 #include "core/assert.hpp"
 #include "core/checkpoint_format.hpp"
@@ -6360,6 +6361,11 @@ namespace lfs::vis::project {
             !sameBytes(old_scene_bytes, new_scene_bytes)) {
             document_->edit_scene_graph() =
                 std::move(*captured_scene);
+        }
+        if (auto synced = lfs::io::project::sync_sfm_observations(
+                *document_, lfs::io::project::capture_sfm_observation_cameras(scene));
+            !synced) {
+            return synced;
         }
         // Entering Edit Mode clears the SCNG training binding. Existing CKPT
         // chapters remain live historical data (not resumable without a

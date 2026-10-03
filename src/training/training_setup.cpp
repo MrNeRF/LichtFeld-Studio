@@ -24,8 +24,10 @@
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "normal_auto_generate.hpp"
+#include "strategies/strategy_utils.hpp"
 #include "trainer.hpp"
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -217,7 +219,7 @@ namespace lfs::training {
             const lfs::core::param::TrainingParameters& params,
             lfs::core::SplatData& model,
             const glm::vec3& dataset_origin) {
-            if (params.add_splat_paths.empty()) {
+            if (params.add_splat_paths.empty() || params.add_splats_applied) {
                 return {};
             }
 
@@ -704,13 +706,42 @@ namespace lfs::training {
         }
     } // namespace
 
-    lfs::Status export_final_splats(
-        const Trainer& trainer,
-        const lfs::core::param::TrainingParameters& params) {
+    lfs::Result<std::optional<lfs::core::SplatData>> exclude_frozen_rows(const lfs::core::SplatData& model) {
+        if (!model.has_frozen_ranges())
+            return std::optional<lfs::core::SplatData>{};
+        const auto rows = static_cast<size_t>(model.size());
+        auto keep = make_frozen_mask(model, rows, model.means().device()).logical_not();
+        assert(keep.ndim() == 1 && keep.numel() == rows);
+        if (model.deleted_mask_matches_size())
+            keep = keep.logical_and(model.deleted().logical_not());
+        auto kept = lfs::core::extract_by_mask(model, keep);
+        if (kept.size() == 0) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "Final export failed: every row is a frozen added splat.",
+                .detail = "--exclude-export leaves no rows to export",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+        return std::optional<lfs::core::SplatData>{std::move(kept)};
+    }
+
+    lfs::Status export_final_splats(const Trainer& trainer,
+                                    const lfs::core::param::TrainingParameters& params) {
         if (params.export_formats.empty()) {
             return {};
         }
-        const auto& model = trainer.get_strategy().get_model();
+        const auto& trained = trainer.get_strategy().get_model();
+        std::optional<lfs::core::SplatData> without_frozen;
+        if (params.exclude_frozen_add_splats_from_export ||
+            trainer.getParams().exclude_frozen_add_splats_from_export) {
+            auto kept = exclude_frozen_rows(trained);
+            if (!kept)
+                return lfs::Status::failure(std::move(kept).error());
+            without_frozen = std::move(*kept);
+        }
+        const auto& model = without_frozen ? *without_frozen : trained;
         const std::filesystem::path out_dir = params.dataset.output_path;
         const std::string stem = params.dataset.output_name.empty()
                                      ? std::format("splat_{}", trainer.get_current_iteration())

@@ -3,7 +3,9 @@
 
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
+#include "core/tensor_serialization.hpp"
 #include "cuda_backend_test.hpp"
+#include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "licht_test_support.hpp"
 #include "training/dataset.hpp"
@@ -13,8 +15,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <iterator>
 #include <map>
+#include <sstream>
 #include <tuple>
 #include <vector>
 
@@ -177,6 +185,54 @@ TEST_F(PipelinedImageLoaderTest, OriginalJpegUsesDirectDecodeWithoutColdReencodi
     }
 }
 
+TEST_F(PipelinedImageLoaderTest, UndistortedTrainingImageIsIdenticalForImmediateColdAndHit) {
+    const auto [width, height, channels] = lfs::core::get_image_info(image_path_);
+    ASSERT_GT(width, 0);
+    ASSERT_GT(height, 0);
+    ASSERT_GE(channels, 3);
+    const float focal = 0.9765625f * static_cast<float>(width);
+    const auto undistort = lfs::core::compute_undistort_params(
+        focal, focal, 0.5f * width, 0.5f * height, width, height,
+        Tensor::from_vector({0.10f, -0.33f, 0.85f}, {3}, Device::CPU),
+        Tensor::from_vector({0.001f, -0.001f}, {2}, Device::CPU),
+        CameraModelType::PINHOLE, 0.0f);
+
+    LoadParams params;
+    params.resize_factor = 1;
+    params.max_width = 128;
+    params.output_uint8 = true;
+    params.undistort = &undistort;
+
+    PipelinedImageLoader loader(config());
+    const auto immediate = loader.load_image_immediate(image_path_, params);
+    ASSERT_TRUE(immediate.is_valid());
+
+    ImageRequest request;
+    request.sequence_id = 1;
+    request.path = image_path_;
+    request.params = params;
+    request.undistort = &undistort;
+    loader.prefetch({request});
+    const auto cold = loader.get();
+    ASSERT_TRUE(cold.error.empty()) << cold.error;
+
+    request.sequence_id = 2;
+    loader.prefetch({request});
+    const auto hit = loader.get();
+    ASSERT_TRUE(hit.error.empty()) << hit.error;
+
+    const auto expect_identical = [](const Tensor& lhs, const Tensor& rhs) {
+        ASSERT_EQ(lhs.shape(), rhs.shape());
+        ASSERT_EQ(lhs.dtype(), rhs.dtype());
+        const auto lhs_cpu = lhs.cpu().contiguous();
+        const auto rhs_cpu = rhs.cpu().contiguous();
+        ASSERT_EQ(lhs_cpu.bytes(), rhs_cpu.bytes());
+        EXPECT_EQ(std::memcmp(lhs_cpu.data_ptr(), rhs_cpu.data_ptr(), lhs_cpu.bytes()), 0);
+    };
+    expect_identical(immediate, cold.tensor);
+    expect_identical(cold.tensor, hit.tensor);
+}
+
 // Fails if a release frees nothing, spills a newer image before the oldest, or
 // loses pixels on the way through the spill.
 TEST_F(PipelinedImageLoaderTest, ReleaseHostCacheSpillsLeastRecentImagesFirst) {
@@ -269,6 +325,140 @@ TEST_F(PipelinedImageLoaderTest, PngMaxWidthUsesOneDecode) {
     ASSERT_TRUE(tensor.is_valid());
     ASSERT_EQ(tensor.shape().rank(), 3U);
     EXPECT_LE(std::max(tensor.shape()[1], tensor.shape()[2]), 16U);
+}
+
+TEST_F(PipelinedImageLoaderTest, ImmediateCacheHitDoesNotRepeatResize) {
+    PipelinedImageLoader loader(config());
+    auto input = request(0, 0, false);
+    input.params.resize_factor = 2;
+    input.params.output_uint8 = true;
+
+    loader.prefetch({input});
+    const auto cold = loader.get();
+    ASSERT_TRUE(cold.error.empty()) << cold.error;
+    ASSERT_TRUE(cold.tensor.is_valid());
+    ASSERT_EQ(loader.get_stats().jpeg_cache_entries, 1U);
+
+    input.sequence_id = 1;
+    loader.prefetch({input});
+    const auto hot = loader.get();
+    ASSERT_TRUE(hot.error.empty()) << hot.error;
+
+    const auto immediate = loader.load_image_immediate(input.path, input.params);
+    ASSERT_TRUE(immediate.is_valid());
+    EXPECT_EQ(hot.tensor.shape(), cold.tensor.shape());
+    EXPECT_EQ(immediate.shape(), hot.tensor.shape());
+    EXPECT_EQ(immediate.to(DataType::Float32).cpu().to_vector(),
+              hot.tensor.to(DataType::Float32).cpu().to_vector());
+}
+
+TEST_F(PipelinedImageLoaderTest, ImmediateCacheHitDoesNotRepeatUndistortion) {
+    const lfs::test::licht::TemporaryDirectory temp("lfs-immediate-undistort");
+    constexpr int width = 128;
+    constexpr int height = 96;
+    std::vector<uint8_t> pixels(width * height * 3);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const size_t offset = static_cast<size_t>(y * width + x) * 3;
+            pixels[offset] = static_cast<uint8_t>((x * 255) / (width - 1));
+            pixels[offset + 1] = static_cast<uint8_t>((y * 255) / (height - 1));
+            pixels[offset + 2] = static_cast<uint8_t>((x + y) & 0xff);
+        }
+    }
+    const auto image_path = temp.path / "distorted.png";
+    ASSERT_TRUE(save_png(image_path, pixels.data(), width, height, 3, 8, 1));
+
+    UndistortParams undistort{};
+    undistort.src_width = undistort.dst_width = width;
+    undistort.src_height = undistort.dst_height = height;
+    undistort.src_fx = undistort.dst_fx = 100.0f;
+    undistort.src_fy = undistort.dst_fy = 100.0f;
+    undistort.src_cx = undistort.dst_cx = width / 2.0f;
+    undistort.src_cy = undistort.dst_cy = height / 2.0f;
+    undistort.model_type = CameraModelType::PINHOLE;
+    undistort.distortion[0] = 0.08f;
+    undistort.distortion[1] = -0.02f;
+    undistort.distortion[3] = 0.001f;
+    undistort.distortion[4] = -0.0015f;
+    undistort.num_distortion = 5;
+
+    PipelinedImageLoader loader(config());
+    ImageRequest request{};
+    request.sequence_id = 0;
+    request.path = image_path;
+    request.params.resize_factor = 1;
+    request.params.output_uint8 = true;
+    request.params.undistort = &undistort;
+    request.undistort = &undistort;
+
+    loader.prefetch({request});
+    const auto cold = loader.get();
+    ASSERT_TRUE(cold.error.empty()) << cold.error;
+    ASSERT_EQ(loader.get_stats().jpeg_cache_entries, 1U);
+
+    request.sequence_id = 1;
+    loader.prefetch({request});
+    const auto hot = loader.get();
+    ASSERT_TRUE(hot.error.empty()) << hot.error;
+
+    const auto immediate = loader.load_image_immediate(image_path, request.params);
+    ASSERT_TRUE(immediate.is_valid());
+    EXPECT_EQ(hot.tensor.shape(), cold.tensor.shape());
+    EXPECT_EQ(immediate.shape(), hot.tensor.shape());
+    EXPECT_EQ(immediate.to(DataType::Float32).cpu().to_vector(),
+              hot.tensor.to(DataType::Float32).cpu().to_vector());
+}
+
+// The single-path prefetch overload must carry the undistortion like a full request; otherwise the
+// cold path caches distorted pixels under the undistorted key and every later hit returns them.
+TEST_F(PipelinedImageLoaderTest, PathPrefetchUndistortsLikeFullRequest) {
+    const lfs::test::licht::TemporaryDirectory temp("lfs-path-prefetch-undistort");
+    constexpr int width = 128;
+    constexpr int height = 96;
+    std::vector<uint8_t> pixels(width * height * 3);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const size_t offset = static_cast<size_t>(y * width + x) * 3;
+            pixels[offset] = static_cast<uint8_t>((x * 255) / (width - 1));
+            pixels[offset + 1] = static_cast<uint8_t>((y * 255) / (height - 1));
+            pixels[offset + 2] = static_cast<uint8_t>((x + y) & 0xff);
+        }
+    }
+    const auto image_path = temp.path / "distorted.png";
+    ASSERT_TRUE(save_png(image_path, pixels.data(), width, height, 3, 8, 1));
+
+    UndistortParams undistort{};
+    undistort.src_width = undistort.dst_width = width;
+    undistort.src_height = undistort.dst_height = height;
+    undistort.src_fx = undistort.dst_fx = 100.0f;
+    undistort.src_fy = undistort.dst_fy = 100.0f;
+    undistort.src_cx = undistort.dst_cx = width / 2.0f;
+    undistort.src_cy = undistort.dst_cy = height / 2.0f;
+    undistort.model_type = CameraModelType::PINHOLE;
+    undistort.distortion[0] = 0.08f;
+    undistort.num_distortion = 1;
+
+    LoadParams params;
+    params.resize_factor = 1;
+    params.output_uint8 = true;
+    params.undistort = &undistort;
+
+    PipelinedImageLoader path_loader(config());
+    path_loader.prefetch(0, image_path, params);
+    const auto from_path = path_loader.get();
+    ASSERT_TRUE(from_path.error.empty()) << from_path.error;
+
+    PipelinedImageLoader request_loader(config());
+    ImageRequest request{};
+    request.path = image_path;
+    request.params = params;
+    request.undistort = &undistort;
+    request_loader.prefetch({request});
+    const auto from_request = request_loader.get();
+    ASSERT_TRUE(from_request.error.empty()) << from_request.error;
+
+    EXPECT_EQ(from_path.tensor.to(DataType::Float32).cpu().to_vector(),
+              from_request.tensor.to(DataType::Float32).cpu().to_vector());
 }
 
 TEST_F(PipelinedImageLoaderTest, ResizeAndMaxWidthKeepImageAndMaskAligned) {

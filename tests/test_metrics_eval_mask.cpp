@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/parameters.hpp"
@@ -33,6 +34,7 @@ using lfs::core::CameraModelType;
 using lfs::core::DataType;
 using lfs::core::Device;
 using lfs::core::Tensor;
+using lfs::core::UndistortParams;
 using lfs::core::param::MaskMode;
 using lfs::training::classify_keep_mask_for_metrics;
 using lfs::training::load_alpha_masked_metrics_inputs;
@@ -232,6 +234,52 @@ TEST_F(MetricsEvalMask, RgbaAlphaThroughEvalAndInteractiveLoaders) {
                 "load_alpha_masked_metrics_inputs");
 }
 
+TEST_F(MetricsEvalMask, KeepsSourceMaskAndTargetWhenUndistortionIsDisabled) {
+    UniqueTempDir tmp("lfs_eval_mask_source_space");
+    const auto image_path = tmp.path() / "rgba.png";
+    write_rgba_png(image_path, {kBandBytes.begin(), kBandBytes.end()}, kBandH, kBandW);
+    auto cam = make_camera(image_path, {}, kBandW, kBandH);
+    cam->set_has_alpha(true);
+
+    UndistortParams params{};
+    params.src_fx = params.src_fy = 20.0f;
+    params.src_cx = static_cast<float>(kBandW) * 0.5f;
+    params.src_cy = static_cast<float>(kBandH) * 0.5f;
+    params.dst_fx = params.src_fx;
+    params.dst_fy = params.src_fy;
+    params.dst_cx = params.src_cx + 1.0f;
+    params.dst_cy = params.src_cy;
+    params.src_width = params.dst_width = kBandW;
+    params.src_height = params.dst_height = kBandH;
+    params.model_type = CameraModelType::PINHOLE;
+    cam->adopt_undistortion(params);
+    cam->prepare_undistortion();
+
+    auto cfg = sai_config();
+    cfg.apply_undistortion = false;
+    cfg.replace_gt_image = false;
+    auto gt = Tensor::zeros({3, kBandH, kBandW}, Device::CUDA, DataType::UInt8);
+    const auto mask = load_eval_mask(cam.get(), gt, true, cfg);
+    expect_keep(mask, {kExpectedKeep.begin(), kExpectedKeep.end()}, "source-space alpha mask");
+    EXPECT_FLOAT_EQ(gt.to(DataType::Float32).sum().item<float>(), 0.0f);
+}
+
+TEST_F(MetricsEvalMask, ErosionRemovesIncompleteMetricWindows) {
+    std::vector<float> values(49, 1.0f);
+    values[3 * 7 + 3] = 0;
+    auto mask = Tensor::from_vector(values, lfs::core::TensorShape({7, 7}), Device::CUDA)
+                    .to(DataType::UInt8);
+    const auto eroded = lfs::training::erode_metrics_mask(mask, 1);
+    const auto cpu = eroded.cpu().contiguous();
+    const uint8_t* const actual = cpu.ptr<uint8_t>();
+    EXPECT_EQ(actual[1 * 7 + 1], 1);
+    EXPECT_EQ(actual[1 * 7 + 5], 1);
+    EXPECT_EQ(actual[3 * 7 + 2], 0);
+    EXPECT_EQ(actual[3 * 7 + 3], 0);
+    EXPECT_EQ(actual[3 * 7 + 4], 0);
+    EXPECT_EQ(actual[0 * 7 + 3], 0);
+}
+
 TEST_F(MetricsEvalMask, DefaultThresholdDoesNotPromoteSegmentBand) {
     ensure_image_loader();
     UniqueTempDir tmp("lfs_eval_mask_threshold");
@@ -378,6 +426,46 @@ TEST_F(MetricsEvalMask, UndistortClassifiesFloatKeepBand) {
     const auto alpha_bytes = mask_bytes(alpha->mask);
     EXPECT_EQ(*std::max_element(alpha_bytes.begin(), alpha_bytes.end()), 0)
         << "alpha 200 must stay not-keep after undistort";
+}
+
+TEST_F(MetricsEvalMask, UndistortedBinaryAlphaThresholdsFinalAreaValues) {
+    UniqueTempDir tmp("lfs_eval_mask_area_threshold");
+    constexpr int width = 32;
+    constexpr int height = 32;
+    std::vector<uint8_t> alpha(static_cast<size_t>(width * height), 176);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            if ((x + 2 * y) % 4 == 0)
+                alpha[static_cast<size_t>(y) * width + x] = 255;
+        }
+    }
+    const auto image_path = tmp.path() / "rgba.png";
+    write_rgba_png(image_path, alpha, height, width);
+    auto camera = make_camera(
+        image_path, {}, width, height,
+        Tensor::from_vector({-0.1f, 0.02f}, {2}, Device::CPU));
+    camera->set_has_alpha(true);
+    camera->prepare_undistortion();
+
+    auto config = sai_config();
+    config.mask_mode = MaskMode::Segment;
+    config.mask_threshold = 0.7f;
+    auto loaded = load_alpha_masked_metrics_inputs(*camera, config);
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+
+    std::vector<float> normalized(alpha.size());
+    std::transform(alpha.begin(), alpha.end(), normalized.begin(),
+                   [](const uint8_t value) { return static_cast<float>(value) / 255.0f; });
+    const auto scaled = lfs::core::prepare_undistort_params(
+        camera->undistort_params(), width, height,
+        config.resize_factor, config.max_width);
+    const auto expected = lfs::core::undistort_mask_area(
+                              Tensor::from_vector(normalized, {height, width}, Device::CUDA),
+                              scaled, nullptr)
+                              .ge(config.mask_threshold)
+                              .to(DataType::UInt8)
+                              .contiguous();
+    EXPECT_EQ(mask_bytes(loaded->mask), mask_bytes(expected));
 }
 
 TEST_F(MetricsEvalMask, SegmentModeStillUsesBinaryThreshold) {

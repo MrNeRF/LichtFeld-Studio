@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/failure_report.hpp"
+#include "core/logger.hpp"
 #include "core/nn/models/lpips.hpp"
 #include "core/nn/nn_kernels.hpp"
 #include "core/parameters.hpp"
@@ -34,6 +36,150 @@ namespace {
     }
     const lfs::gpu_ops::LpipsOps& ops() {
         return *lfs::training::training_ops(GpuBackend::CUDA).lpips;
+    }
+
+    TEST_F(LpipsOpsTest, RejectsOperandDtypesBeforeLaunching) {
+        auto weight = pattern({64, 8, 3, 3}, 1, DataType::Float32);
+        auto taps = Tensor::zeros({9, 64, 8}, Device::GPU, DataType::Float16);
+        EXPECT_THROW(ops().weight_taps(weight, taps), std::runtime_error);
+
+        auto rgb = pattern({1, 3, 4, 4}, 2, DataType::Float32);
+        auto rgb_weight = pattern({64, 3, 3, 3}, 3), bias = pattern({64}, 4);
+        auto rgb_output = Tensor::zeros({1, 64, 4, 4}, Device::GPU, DataType::Float32);
+        EXPECT_THROW(ops().rgb_conv(rgb, rgb_weight, bias, rgb_output, {}), std::runtime_error);
+
+        auto input = pattern({1, 8, 4, 4}, 5, DataType::Float32);
+        // Retain enough backing storage to make the old float32 write safe while
+        // testing rejection of a float16 output view.
+        auto backing = Tensor::zeros({2, 64, 4, 4}, Device::GPU, DataType::Float16);
+        auto output = backing.slice(0, 0, 1);
+        Tensor absent;
+        lfs::gpu_ops::ConvParams params;
+        params.pad_h = params.pad_w = 1;
+        reset_failure_report_dedup_for_testing();
+        std::string report;
+        const auto handler = Logger::get().add_log_handler(
+            [&](LogLevel level, const SourceSite&, std::string_view message) {
+                if (level == LogLevel::Error)
+                    report += message;
+            });
+        EXPECT_THROW(ops().convolution(input, weight, absent, absent, output, absent, params), std::runtime_error);
+        Logger::get().remove_log_handler(handler);
+        EXPECT_NE(report.find("LFS FAILURE REPORT"), std::string::npos);
+        EXPECT_NE(report.find("Family: tensor contract violation"), std::string::npos);
+        EXPECT_NE(report.find("Detection site:"), std::string::npos);
+        EXPECT_NE(report.find("lpips_cuda.cpp"), std::string::npos);
+        EXPECT_NE(report.find("output"), std::string::npos);
+        EXPECT_NE(report.find("dtype=float16"), std::string::npos);
+        EXPECT_NE(report.find("shape=[1, 64, 4, 4]"), std::string::npos);
+        EXPECT_NE(report.find("Host stack trace:"), std::string::npos);
+        EXPECT_NE(report.find("convolution"), std::string::npos);
+        EXPECT_NE(report.find("RejectsOperandDtypesBeforeLaunching"), std::string::npos);
+
+        auto features = Tensor::zeros({1, 8, 4, 4}, Device::GPU, DataType::Float32);
+        auto linear = pattern({1, 8, 1, 1}, 6);
+        auto score = Tensor::zeros({1}, Device::GPU);
+        EXPECT_THROW(ops().pool_reduce(features, features, linear, score, absent, absent,
+                                       {0, 4, 0, 4, 1.f / 16.f}),
+                     std::runtime_error);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    }
+
+    TEST_F(LpipsOpsTest, WeightTapsRejectsInvalidOperands) {
+        auto weight = pattern({64, 8, 3, 3}, 1);
+        auto taps = Tensor::zeros({9, 64, 8}, Device::GPU, DataType::Float16);
+        for (const auto& invalid : {Tensor{}, weight.cpu(), weight.transpose(2, 3),
+                                    weight.reshape({64, 8, 9}), pattern({64, 8, 1, 1}, 1)}) {
+            EXPECT_THROW(ops().weight_taps(invalid, taps), std::runtime_error);
+        }
+        for (auto invalid : {taps.to(DataType::Float32), taps.cpu(), taps.transpose(0, 1),
+                             taps.slice(0, 0, 8)}) {
+            EXPECT_THROW(ops().weight_taps(weight, invalid), std::runtime_error);
+        }
+        if (gpu_backend_available(GpuBackend::Vulkan)) {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            auto foreign = Tensor::zeros(weight.shape(), Device::GPU, DataType::Float16);
+            EXPECT_THROW(ops().weight_taps(foreign, taps), std::runtime_error);
+        }
+    }
+
+    TEST_F(LpipsOpsTest, RgbConvolutionRejectsInvalidOperands) {
+        auto input = pattern({1, 3, 4, 4}, 1, DataType::Float32);
+        auto weight = pattern({64, 3, 3, 3}, 2), bias = pattern({64}, 3);
+        auto output = Tensor::zeros({1, 64, 4, 4}, Device::GPU, DataType::Float16);
+        for (const auto& invalid : {input.to(DataType::Float16), input.cpu(), input.transpose(2, 3),
+                                    input.reshape({1, 4, 3, 4})}) {
+            EXPECT_THROW(ops().rgb_conv(invalid, weight, bias, output, {}), std::runtime_error);
+        }
+        for (const auto& invalid : {weight.to(DataType::Float32), weight.cpu(), weight.transpose(2, 3),
+                                    weight.reshape({64, 3, 1, 9})}) {
+            EXPECT_THROW(ops().rgb_conv(input, invalid, bias, output, {}), std::runtime_error);
+        }
+        for (const auto& invalid : {bias.to(DataType::Float32), bias.cpu(), bias.slice(0, 0, 63)}) {
+            EXPECT_THROW(ops().rgb_conv(input, weight, invalid, output, {}), std::runtime_error);
+        }
+        for (auto invalid : {output.cpu(), output.transpose(2, 3), output.reshape({1, 32, 8, 4})}) {
+            EXPECT_THROW(ops().rgb_conv(input, weight, bias, invalid, {}), std::runtime_error);
+        }
+    }
+
+    TEST_F(LpipsOpsTest, ConvolutionRejectsInvalidOperands) {
+        auto input = pattern({1, 8, 4, 4}, 1), weight = pattern({64, 8, 3, 3}, 2), bias = pattern({64}, 3);
+        auto output = Tensor::zeros({1, 64, 4, 4}, Device::GPU, DataType::Float16);
+        auto taps = Tensor::zeros({9, 64, 8}, Device::GPU, DataType::Float16);
+        Tensor absent;
+        lfs::gpu_ops::ConvParams params;
+        params.pad_h = params.pad_w = 1;
+        for (const auto& invalid : {input.to(DataType::Int32), input.cpu(), input.transpose(2, 3),
+                                    input.reshape({8, 4, 4})}) {
+            EXPECT_THROW(ops().convolution(invalid, weight, absent, bias, output, absent, params), std::runtime_error);
+        }
+        for (const auto& invalid : {weight.to(DataType::Float32), weight.cpu(), weight.transpose(2, 3),
+                                    weight.reshape({64, 4, 3, 6})}) {
+            EXPECT_THROW(ops().convolution(input, invalid, absent, bias, output, absent, params), std::runtime_error);
+        }
+        for (const auto& invalid : {bias.to(DataType::Float32), bias.cpu(), bias.slice(0, 0, 63)}) {
+            EXPECT_THROW(ops().convolution(input, weight, absent, invalid, output, absent, params), std::runtime_error);
+        }
+        for (auto invalid : {output.to(DataType::Float32), output.cpu(), output.transpose(2, 3),
+                             output.reshape({1, 64, 2, 8})}) {
+            EXPECT_THROW(ops().convolution(input, weight, absent, bias, invalid, absent, params), std::runtime_error);
+        }
+        for (auto invalid : {taps.to(DataType::Float32), taps.cpu(), taps.transpose(0, 1), taps.slice(0, 0, 8)}) {
+            EXPECT_THROW(ops().convolution(input, weight, invalid, bias, output, absent, params), std::runtime_error);
+            EXPECT_THROW(ops().convolution(input, weight, absent, bias, output, invalid, params), std::runtime_error);
+        }
+    }
+
+    TEST_F(LpipsOpsTest, PoolReduceRejectsInvalidOperands) {
+        auto x = pattern({1, 8, 4, 4}, 1), y = pattern({1, 8, 4, 4}, 2), weight = pattern({1, 8, 1, 1}, 3);
+        auto score = Tensor::zeros({1}, Device::GPU);
+        auto px = Tensor::zeros({1, 8, 2, 2}, Device::GPU, DataType::Float16), py = px.clone();
+        const lfs::gpu_ops::PoolReduceParams params{0, 4, 0, 4, 1.f / 16.f};
+        for (const auto& invalid : {x.to(DataType::Float32), x.cpu(), x.transpose(2, 3), x.reshape({8, 4, 4})}) {
+            EXPECT_THROW(ops().pool_reduce(invalid, y, weight, score, px, py, params), std::runtime_error);
+            EXPECT_THROW(ops().pool_reduce(x, invalid, weight, score, px, py, params), std::runtime_error);
+        }
+        for (const auto& invalid : {weight.to(DataType::Float32), weight.cpu(), weight.slice(1, 0, 7)}) {
+            EXPECT_THROW(ops().pool_reduce(x, y, invalid, score, px, py, params), std::runtime_error);
+        }
+        for (auto invalid : {Tensor{}, score.to(DataType::Float16), score.cpu()}) {
+            EXPECT_THROW(ops().pool_reduce(x, y, weight, invalid, px, py, params), std::runtime_error);
+        }
+        for (auto invalid : {px.to(DataType::Float32), px.cpu(), px.transpose(2, 3), px.slice(1, 0, 7)}) {
+            EXPECT_THROW(ops().pool_reduce(x, y, weight, score, invalid, py, params), std::runtime_error);
+            EXPECT_THROW(ops().pool_reduce(x, y, weight, score, px, invalid, params), std::runtime_error);
+        }
+    }
+
+    TEST_F(LpipsOpsTest, Float32ConvolutionMatchesConstantReference) {
+        auto input = Tensor::ones({1, 8, 4, 4}, Device::GPU);
+        auto weight = Tensor::ones({2, 8, 3, 3}, Device::GPU);
+        auto output = Tensor::zeros({1, 2, 2, 2}, Device::GPU);
+        Tensor absent;
+        ops().convolution(input, weight, absent, absent, output, absent, {});
+        for (const auto value : output.cpu().to_vector())
+            EXPECT_EQ(value, 72.f);
     }
 
     TEST_F(LpipsOpsTest, WeightTapsMatchLauncher) {
@@ -103,7 +249,7 @@ namespace {
             ops().pool_reduce(x, y, w, actual, pool ? px : absent, pool ? py : absent, p);
             kernels::lpips_pool_reduce(x.data_ptr(), y.data_ptr(), w.data_ptr(), expected.ptr<float>(),
                                        pool ? ex.data_ptr() : nullptr, pool ? ey.data_ptr() : nullptr,
-                                       1, 64, 2, 8, p.y0, p.y1, p.x0, p.x1, p.inverse_count, getCurrentCUDAStream());
+                                       1, 64, 2, 8, p.y0, p.y1, p.x0, p.x1, p.inverse_count, nullptr, 0, 0, 0, getCurrentCUDAStream());
             same(actual, expected);
             if (pool) {
                 same(px, ex);

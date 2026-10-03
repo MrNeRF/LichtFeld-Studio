@@ -257,6 +257,7 @@ namespace lfs::vis {
         dataset_config_ = lfs::core::param::DatasetConfig{};
         dataset_config_.centralize_dataset = "off";
         dataset_config_.loading_params = lfs::core::param::LoadingParams{};
+        server_config_ = lfs::core::param::ServerConfig{};
         export_formats_.clear();
         dirty_.store(false, std::memory_order_release);
     }
@@ -303,6 +304,7 @@ namespace lfs::vis {
 
         // Apply CLI overrides to dataset config
         const auto& ds = params.dataset;
+        server_config_ = params.server;
         if (ds.resize_factor > 0)
             dataset_config_.resize_factor = ds.resize_factor;
         if (ds.max_width >= 0)
@@ -380,6 +382,7 @@ namespace lfs::vis {
         }
 
         dataset_config_ = params.dataset;
+        server_config_ = params.server;
         export_formats_ = params.export_formats;
         dirty_.store(false, std::memory_order_release);
 
@@ -434,6 +437,7 @@ namespace lfs::vis {
         params.dataset = dataset_config_;
         params.dataset.data_path = data_path;
         params.dataset.output_path = output_path;
+        params.server = server_config_;
         params.export_formats = export_formats_;
         return params;
     }

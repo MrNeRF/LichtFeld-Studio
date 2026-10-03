@@ -19,6 +19,8 @@ namespace lfs::training {
         bool invert_masks = false;
         float mask_threshold = 0.5f;
         lfs::core::param::MaskMode mask_mode = lfs::core::param::MaskMode::None;
+        bool apply_undistortion = true;
+        bool replace_gt_image = true;
     };
 
     struct LoadedMetricsMask {
@@ -36,6 +38,9 @@ namespace lfs::training {
             .mask_mode = params.optimization.mask_mode,
         };
     }
+
+    [[nodiscard]] lfs::core::Tensor erode_metrics_mask(
+        const lfs::core::Tensor& mask, int radius);
 
     /// Classify a decoded mask to a UInt8 {0,1} keep mask.
     /// UInt8/Bool carry authored 0..255 samples (keep = value > 250).

@@ -438,7 +438,8 @@ namespace lfs::io {
         void write_derived_cache(NvCodecImageLoader& nvcodec,
                                  const lfs::core::Tensor& tensor,
                                  const std::string& cache_key,
-                                 void* cuda_stream);
+                                 void* cuda_stream,
+                                 const LoadParams& params);
 
         enum class SidecarCacheFormat : uint8_t {
             Depth,

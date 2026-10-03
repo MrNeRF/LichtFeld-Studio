@@ -1008,6 +1008,26 @@ namespace {
         EXPECT_EQ(ranges[1].count, 1u);
     }
 
+    // Catches a final export that keeps frozen --add-splat rows or resurrects soft-deleted rows.
+    TEST(SplatDataFrozenRangesTest, ExportExclusionKeepsOnlyTrainedLiveRows) {
+        auto model = make_checkpoint_test_splat(6, lfs::core::Device::GPU);
+        model->set_frozen_ranges({{2, 2}});
+        model->soft_delete(lfs::core::Tensor::from_vector(std::vector<bool>{true, false, false, false, false, false},
+                                                          {6}, lfs::core::Device::GPU));
+
+        const auto kept = lfs::training::exclude_frozen_rows(*model);
+        ASSERT_TRUE(kept) << lfs::format_for_developer(kept.error());
+        ASSERT_TRUE(kept->has_value());
+        const auto means = (*kept)->means().cpu().to_vector();
+        ASSERT_EQ(means.size(), 9u);
+        EXPECT_EQ((std::vector<float>{means[0], means[3], means[6]}), (std::vector<float>{1.0f, 4.0f, 5.0f}));
+
+        model->set_frozen_ranges({});
+        const auto unfrozen = lfs::training::exclude_frozen_rows(*model);
+        ASSERT_TRUE(unfrozen);
+        EXPECT_FALSE(unfrozen->has_value());
+    }
+
     TEST(SplatDataFrozenRangesTest, Version3StreamLoadsWithEmptyRanges) {
         auto model = make_checkpoint_test_splat(4);
         std::stringstream v4_stream;
@@ -1116,7 +1136,7 @@ namespace {
                         scene.addCamera(name, group, std::move(camera));
                         scene.setCameraTrainingEnabled(name, filter != 0 || uid != excluded_uid);
                     }
-                    scene.addSplat("Model", make_checkpoint_test_splat(4, Device::CUDA));
+                    scene.addSplat("Model", make_checkpoint_test_splat(4, Device::GPU));
                     scene.setTrainingModelNode("Model");
                     lfs::training::Trainer trainer(scene);
                     const auto initialized = trainer.initialize(params);
@@ -1124,8 +1144,8 @@ namespace {
                     auto& grid = TrainerBilateralGridTestAccess::grid(trainer);
                     EXPECT_EQ(grid.num_images(), 20);
 
-                    const auto rgb = Tensor::full({3, 4, 4}, 0.4f, Device::CUDA);
-                    const auto grad = Tensor::full({3, 4, 4}, 0.01f, Device::CUDA);
+                    const auto rgb = Tensor::full({3, 4, 4}, 0.4f, Device::GPU);
+                    const auto grad = Tensor::full({3, 4, 4}, 0.01f, Device::GPU);
                     for (const auto& camera : scene.getActiveCameras()) {
                         const int uid = camera->uid();
                         EXPECT_TRUE(grid.apply(rgb, uid).is_valid());
@@ -1317,6 +1337,7 @@ namespace {
         EXPECT_EQ(*loaded->import_cameras_path, *params.import_cameras_path);
         EXPECT_EQ(loaded->add_splat_paths, params.add_splat_paths);
         EXPECT_EQ(loaded->add_splat_freeze, params.add_splat_freeze);
+        EXPECT_TRUE(loaded->add_splats_applied);
 
         auto target_model = make_checkpoint_test_splat(1);
         lfs::training::MCMC target_strategy(*target_model);
@@ -1329,6 +1350,7 @@ namespace {
         EXPECT_EQ(*resumed_params.import_cameras_path, *params.import_cameras_path);
         EXPECT_EQ(resumed_params.add_splat_paths, params.add_splat_paths);
         EXPECT_EQ(resumed_params.add_splat_freeze, params.add_splat_freeze);
+        EXPECT_TRUE(resumed_params.add_splats_applied);
 
         std::filesystem::remove_all(temp_dir, ec);
     }

@@ -4,6 +4,7 @@
 
 #include "io/cache_image_loader.hpp"
 #if LFS_HAS_CUDA
+#include "cuda/image_format_kernels.cuh"
 #include "image_execution_cuda.hpp"
 #endif
 #include "core/host_metrics.hpp"
@@ -12,6 +13,7 @@
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_image.hpp"
 #if LFS_HAS_CUDA
 #include "core/shared_image_ops.hpp"
 #include "io/nvcodec_image_loader.hpp"
@@ -19,7 +21,10 @@
 #endif
 
 #include <algorithm>
+#include <bit>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 
 namespace lfs::io {
 
@@ -139,9 +144,49 @@ namespace lfs::io {
         const std::filesystem::path& path,
         const LoadParams& params,
         const bool include_output_format) const {
+        if (params.undistort) {
+            constexpr std::uint64_t offset = 14695981039346656037ULL;
+            constexpr std::uint64_t prime = 1099511628211ULL;
+            std::uint64_t hash = offset;
+            const auto mix = [&](const std::uint64_t value) {
+                for (int byte = 0; byte < 8; ++byte) {
+                    hash ^= (value >> (byte * 8)) & 0xffULL;
+                    hash *= prime;
+                }
+            };
+            const auto mix_float = [&](const float value) {
+                mix(std::bit_cast<std::uint32_t>(value));
+            };
+            const auto& undistort = *params.undistort;
+            const auto grid = lfs::core::compute_undistort_grid(
+                undistort, params.resize_factor, params.max_width);
+            mix(4);
+            mix(static_cast<std::uint64_t>(params.resize_factor));
+            mix(static_cast<std::uint64_t>(params.max_width));
+            mix(params.output_uint8 ? 8 : 16);
+            mix(static_cast<std::uint64_t>(undistort.src_width));
+            mix(static_cast<std::uint64_t>(undistort.src_height));
+            mix(static_cast<std::uint64_t>(grid.width));
+            mix(static_cast<std::uint64_t>(grid.height));
+            mix(static_cast<std::uint64_t>(undistort.model_type));
+            mix(static_cast<std::uint64_t>(undistort.num_distortion));
+            mix_float(undistort.src_fx);
+            mix_float(undistort.src_fy);
+            mix_float(undistort.src_cx);
+            mix_float(undistort.src_cy);
+            mix_float(undistort.dst_fx * grid.scale_x);
+            mix_float(undistort.dst_fy * grid.scale_y);
+            mix_float(undistort.dst_cx * grid.scale_x);
+            mix_float(undistort.dst_cy * grid.scale_y);
+            for (int i = 0; i < undistort.num_distortion; ++i)
+                mix_float(undistort.distortion[i]);
+            std::ostringstream key;
+            key << lfs::core::path_to_utf8(path) << ":udr4_" << std::hex << hash;
+            if (include_output_format)
+                key << (params.output_uint8 ? "_u8" : "_f32");
+            return key.str();
+        }
         auto key = std::format("{}:rf{}_mw{}", lfs::core::path_to_utf8(path), params.resize_factor, params.max_width);
-        if (params.undistort)
-            key += "_ud";
         if (include_output_format)
             key += params.output_uint8 ? "_u8" : "_f32";
         return key;
@@ -149,6 +194,29 @@ namespace lfs::io {
 
     namespace {
 
+#if LFS_HAS_CUDA
+        lfs::core::Tensor quantize_rgb_to_u16_grid(
+            const lfs::core::Tensor& tensor, const cudaStream_t stream) {
+            const size_t channels = tensor.shape()[0];
+            const size_t height = tensor.shape()[1];
+            const size_t width = tensor.shape()[2];
+            auto hwc = tensor.permute({1, 2, 0}).contiguous();
+            auto quantized = lfs::core::Tensor::empty(
+                {height, width, channels}, lfs::core::Device::CUDA,
+                lfs::core::DataType::Float16);
+            auto restored = lfs::core::Tensor::empty(
+                {height, width, channels}, lfs::core::Device::CUDA,
+                lfs::core::DataType::Float32);
+            cuda::launch_float32_hwc_to_uint16_hwc(
+                hwc.ptr<float>(), reinterpret_cast<uint16_t*>(quantized.data_ptr()),
+                height, width, channels, stream);
+            cuda::launch_uint16_hwc_to_float32_hwc(
+                reinterpret_cast<const uint16_t*>(quantized.data_ptr()), restored.ptr<float>(),
+                height, width, channels, stream);
+            return restored.permute({2, 0, 1}).contiguous();
+        }
+
+#endif
         lfs::core::Tensor preprocess_loaded_rgb_image(
             unsigned char* data,
             const int width,
@@ -441,36 +509,60 @@ namespace lfs::io {
         }
 
         const bool is_jpeg = jpeg_bytes.size() >= 2 && jpeg_bytes[0] == 0xFF && jpeg_bytes[1] == 0xD8;
+        const bool is_jpeg2k = jpeg_bytes.size() >= 2 && jpeg_bytes[0] == 0xFF && jpeg_bytes[1] == 0x4F;
 
-        if (is_jpeg) {
+        if (is_jpeg || is_jpeg2k) {
             try {
                 auto& nvcodec = get_nvcodec_loader();
 
                 if (from_cache) {
+                    if (is_jpeg2k) {
+                        auto tensor = nvcodec.decode_jpeg2k_16bit_from_memory_gpu(
+                            jpeg_bytes, params.cuda_stream);
+                        tensor = tensor.permute({2, 0, 1}).contiguous();
+                        if (params.output_uint8) {
+                            auto uint8_tensor = Tensor::empty(
+                                tensor.shape(), Device::CUDA, DataType::UInt8);
+                            lfs::io::cuda::launch_float32_chw_to_uint8_chw(
+                                tensor.ptr<float>(), uint8_tensor.ptr<uint8_t>(),
+                                tensor.shape()[1], tensor.shape()[2], tensor.shape()[0],
+                                static_cast<cudaStream_t>(params.cuda_stream));
+                            return uint8_tensor;
+                        }
+                        return tensor;
+                    }
                     return nvcodec.load_image_from_memory_gpu(
                         jpeg_bytes, 1, 0, params.cuda_stream, DecodeFormat::RGB, params.output_uint8);
                 }
 
                 const bool needs_resize = (params.resize_factor > 1 || params.max_width > 0);
                 auto tensor = nvcodec.load_image_from_memory_gpu(
-                    jpeg_bytes, params.resize_factor, params.max_width, params.cuda_stream,
+                    jpeg_bytes,
+                    params.undistort ? 1 : params.resize_factor,
+                    params.undistort ? 0 : params.max_width,
+                    params.cuda_stream,
                     DecodeFormat::RGB, params.output_uint8);
 
                 if (params.undistort) {
-                    const bool restore_uint8 = params.output_uint8 && tensor.dtype() == DataType::UInt8;
-                    if (restore_uint8) {
+                    const bool restore_uint8 = params.output_uint8;
+                    if (tensor.dtype() == DataType::UInt8) {
                         tensor = tensor.to(DataType::Float32) / 255.0f;
                     }
-                    const auto scaled = lfs::core::scale_undistort_params(
+                    tensor = tensor.clamp(0.0f, 1.0f).contiguous();
+                    const auto scaled = lfs::core::prepare_undistort_params(
                         *params.undistort,
                         static_cast<int>(tensor.shape()[2]),
                         static_cast<int>(tensor.shape()[1]),
+                        params.resize_factor,
                         params.max_width);
                     tensor = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->undistort(tensor, scaled, false);
                     if (restore_uint8) {
                         auto uint8_tensor = Tensor::empty(tensor.shape(), Device::GPU, DataType::UInt8);
                         lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(tensor, uint8_tensor, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW, tensor.shape()[1], tensor.shape()[2], tensor.shape()[0], {});
                         tensor = std::move(uint8_tensor);
+                    } else {
+                        tensor = quantize_rgb_to_u16_grid(
+                            tensor, static_cast<cudaStream_t>(params.cuda_stream));
                     }
                 }
 
@@ -486,25 +578,36 @@ namespace lfs::io {
 
                     if (should_cache) {
                         std::vector<uint8_t> cache_bytes;
-                        if (needs_resize || params.undistort) {
-                            // Re-encode resized image
+                        if (params.undistort) {
                             try {
-                                cache_bytes = nvcodec.encode_to_jpeg(tensor, CACHE_JPEG_QUALITY, params.cuda_stream);
+                                const auto encode_tensor = tensor.dtype() == DataType::UInt8
+                                                               ? tensor.to(DataType::Float32) / 255.0f
+                                                               : tensor;
+                                cache_bytes = nvcodec.encode_to_jpeg2k(
+                                    encode_tensor, params.cuda_stream);
+                            } catch (const std::exception& enc_err) {
+                                LOG_DEBUG("[CacheLoader] JPEG 2000 encode failed: {}", enc_err.what());
+                            } catch (...) {
+                                LOG_DEBUG("[CacheLoader] JPEG 2000 encode failed with unknown error");
+                            }
+                        } else if (needs_resize) {
+                            try {
+                                cache_bytes = nvcodec.encode_to_jpeg(
+                                    tensor, CACHE_JPEG_QUALITY, params.cuda_stream);
                             } catch (const std::exception& enc_err) {
                                 LOG_DEBUG("[CacheLoader] JPEG re-encode failed: {}, using original bytes", enc_err.what());
-                                cache_bytes = jpeg_bytes; // Fall back to original
+                                cache_bytes = jpeg_bytes;
                             } catch (...) {
                                 LOG_DEBUG("[CacheLoader] JPEG re-encode failed with unknown error, using original bytes");
-                                cache_bytes = jpeg_bytes; // Fall back to original
+                                cache_bytes = jpeg_bytes;
                             }
                         } else {
-                            // No resize - cache original bytes directly
                             cache_bytes = jpeg_bytes;
                         }
 
                         const std::size_t cache_size = cache_bytes.size();
                         std::lock_guard lock(jpeg_blob_mutex_);
-                        if (has_sufficient_memory(cache_size)) {
+                        if (cache_size > 0 && has_sufficient_memory(cache_size)) {
                             evict_jpeg_blobs_if_needed(cache_size);
                             jpeg_blob_cache_[cache_key] = CachedJpegBlob{
                                 .compressed_data = std::move(cache_bytes),

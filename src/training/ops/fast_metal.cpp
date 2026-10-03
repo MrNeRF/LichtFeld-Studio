@@ -205,7 +205,9 @@ namespace lfs::training {
             uint64_t means, scales, rotations, opacities, sh0, shN, sh_bounds, view, camera;
             uint64_t mean_box, conic_opacity, color_depth, tile_info, n_touched, normals, max_screen_share;
             uint32_t n, grid_w, grid_h, depth_bits;
-            uint32_t mip_filter, unused0, unused1, unused2;
+            uint32_t mip_filter;
+            float dilation_scale;
+            uint32_t unused1, unused2;
             float fx, fy, cx, cy;
             float clip_left, clip_right, clip_top, clip_bottom;
             float near_plane, far_plane;
@@ -381,7 +383,7 @@ namespace lfs::training {
                     .grid_h = f.grid_h,
                     .depth_bits = key_depth_bits,
                     .mip_filter = f.mip_filter ? 1u : 0u,
-                    .unused0 = 0,
+                    .dilation_scale = params.dilation_scale,
                     .unused1 = 0,
                     .unused2 = 0,
                     .fx = f.fx,
@@ -706,7 +708,7 @@ namespace lfs::training {
                     .width = f.width,
                     .height = f.height,
                     .grid_w = f.grid_w,
-                    .unused0 = 0,
+                    .dilation_scale = params.dilation_scale,
                     .unused1 = 0,
                     .unused2 = 0,
                 };

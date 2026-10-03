@@ -103,6 +103,10 @@ namespace lfs::core::tensor_ops {
                                                  size_t inner_size, ReduceOp op,
                                                  cudaStream_t stream);
 
+    LFS_LOCAL_SYMBOL void launch_arg_extreme(const float* input, float* values, int64_t* indices,
+                                             size_t outer, size_t reduce, size_t inner, bool maximum,
+                                             cudaStream_t stream);
+
     // Host heuristic: true → prefer strided_fast over permute+contiguous.
     [[nodiscard]] LFS_LOCAL_SYMBOL bool should_prefer_strided_over_transpose(
         size_t outer_size, size_t reduce_size, size_t inner_size) noexcept;

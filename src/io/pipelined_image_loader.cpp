@@ -15,6 +15,7 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <cerrno>
 #include <charconv>
@@ -45,6 +46,49 @@
 namespace lfs::io {
 
     namespace {
+        std::uint64_t undistort_cache_hash(
+            const LoadParams& load_params, const bool use_16bit_color,
+            const std::uint64_t domain) {
+            constexpr std::uint64_t offset = 14695981039346656037ULL;
+            constexpr std::uint64_t prime = 1099511628211ULL;
+            std::uint64_t hash = offset;
+            const auto mix = [&](const std::uint64_t value) {
+                for (int byte = 0; byte < 8; ++byte) {
+                    hash ^= (value >> (byte * 8)) & 0xffULL;
+                    hash *= prime;
+                }
+            };
+            const auto mix_float = [&](const float value) {
+                mix(std::bit_cast<std::uint32_t>(value));
+            };
+            mix(4);
+            mix(domain);
+            mix(static_cast<std::uint64_t>(load_params.resize_factor));
+            mix(static_cast<std::uint64_t>(load_params.max_width));
+            mix(load_params.output_uint8 ? 8 : 16);
+            mix(use_16bit_color ? 1 : 0);
+            const auto& params = *load_params.undistort;
+            const auto grid = lfs::core::compute_undistort_grid(
+                params, load_params.resize_factor, load_params.max_width);
+            mix(static_cast<std::uint64_t>(params.src_width));
+            mix(static_cast<std::uint64_t>(params.src_height));
+            mix(static_cast<std::uint64_t>(grid.width));
+            mix(static_cast<std::uint64_t>(grid.height));
+            mix(static_cast<std::uint64_t>(params.model_type));
+            mix(static_cast<std::uint64_t>(params.num_distortion));
+            mix_float(params.src_fx);
+            mix_float(params.src_fy);
+            mix_float(params.src_cx);
+            mix_float(params.src_cy);
+            mix_float(params.dst_fx * grid.scale_x);
+            mix_float(params.dst_fy * grid.scale_y);
+            mix_float(params.dst_cx * grid.scale_x);
+            mix_float(params.dst_cy * grid.scale_y);
+            for (int i = 0; i < params.num_distortion; ++i)
+                mix_float(params.distortion[i]);
+            return hash;
+        }
+
         constexpr double HOST_FREE_RAM_EVICTION_RATIO = 0.10;
         constexpr double HOST_FREE_RAM_RELIEF_HYSTERESIS_RATIO = 0.05;
         constexpr std::chrono::milliseconds HOST_MEMORY_CHECK_INTERVAL{500};
@@ -357,6 +401,7 @@ namespace lfs::io {
         request.loader_generation = loader_generation_.load(std::memory_order_relaxed);
         request.path = path;
         request.params = params;
+        request.undistort = params.undistort;
         {
             std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
             if (!running_.load(std::memory_order_acquire)) {
@@ -656,9 +701,13 @@ namespace lfs::io {
     }
 
     std::string PipelinedImageLoader::make_cache_key(const std::filesystem::path& path, const LoadParams& params) const {
+        if (params.undistort) {
+            std::ostringstream key;
+            key << lfs::core::path_to_utf8(path) << ":udr4_" << std::hex
+                << undistort_cache_hash(params, config_.use_16bit_color, 0x726762ULL);
+            return key.str();
+        }
         auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
-        if (params.undistort)
-            key += "_ud";
         if (config_.use_16bit_color)
             key += "_16b";
         return key;
@@ -667,11 +716,15 @@ namespace lfs::io {
     std::string PipelinedImageLoader::make_mask_cache_key(
         const std::filesystem::path& path,
         const LoadParams& params) const {
+        if (params.undistort) {
+            std::ostringstream key;
+            key << lfs::core::path_to_utf8(path) << ":udm4_" << std::hex
+                << undistort_cache_hash(params, config_.use_16bit_color, 0x6d61736bULL);
+            return key.str();
+        }
         auto key = lfs::core::path_to_utf8(path) +
                    ":mask_rf" + std::to_string(params.resize_factor) +
                    "_mw" + std::to_string(params.max_width);
-        if (params.undistort)
-            key += "_ud";
         return key;
     }
 
@@ -705,6 +758,8 @@ namespace lfs::io {
         const PrefetchedImage& item,
         const int src_w,
         const int src_h) const {
+        if (item.undistort)
+            return {src_w, src_h};
         if (!item.is_mask && item.aux_target_width > 0 && item.aux_target_height > 0)
             return {item.aux_target_width, item.aux_target_height};
         int target_w = src_w;
@@ -1276,7 +1331,7 @@ namespace lfs::io {
             << ":th" << item.aux_target_height;
         if (item.undistort) {
             const auto& u = *item.undistort;
-            key << ":ud"
+            key << ":ud4"
                 << ":src" << u.src_width << "x" << u.src_height
                 << ":dst" << u.dst_width << "x" << u.dst_height
                 << ":model" << static_cast<int>(u.model_type)

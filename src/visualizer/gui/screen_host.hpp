@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "gui/area_editors.hpp"
 #include "gui/gui_input.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
@@ -63,7 +64,7 @@ namespace lfs::vis::gui {
     // Hosts the screen in the window's work area: lays the areas out, draws
     // their headers, frames and gesture previews, runs the area gestures and
     // lets each area's editor draw its content.
-    class ScreenHost {
+    class LFS_VIS_API ScreenHost {
     public:
         struct Services {
             screen::ScreenService* screens = nullptr;

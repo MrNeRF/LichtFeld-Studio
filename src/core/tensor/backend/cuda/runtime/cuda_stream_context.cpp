@@ -27,7 +27,7 @@ namespace lfs::core {
     void waitForCUDAStream(cudaStream_t execution_stream, cudaStream_t dependency_stream) {
         unretire_stream(execution_stream);
         unretire_stream(dependency_stream);
-        if (dependency_stream == nullptr || dependency_stream == execution_stream) {
+        if (dependency_stream == execution_stream) {
             return;
         }
 

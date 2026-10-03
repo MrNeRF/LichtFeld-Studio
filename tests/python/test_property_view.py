@@ -482,6 +482,14 @@ EXPECTED_SELECT_ROWS = {
             (3, "training.options.normal_loss_space.world"),
         ),
     ),
+    "eval_space": (
+        "training_params.eval_space",
+        "training.tooltip.eval_space",
+        (
+            (0, "training.options.eval_space.distorted"),
+            (1, "training.options.eval_space.undistorted"),
+        ),
+    ),
 }
 
 EXPECTED_ADVANCED_IDS = (
@@ -538,13 +546,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 62
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 62
+    assert len(property_view.MIGRATED_PROP_IDS) == 63
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 63
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 85  # Backend alone has a bespoke selector.
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 86  # Backend alone has a bespoke selector.
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -1185,6 +1193,10 @@ def test_training_rml_mounts_every_run_with_writable_records():
     assert 'data-event-change="pv_change(row.id, ev.value)"' in rml
     assert 'data-event-blur="pv_blur(row.id, row.text)"' in rml
     assert 'data-event-escapecancel="pv_escape(row.id)"' in rml
+    assert (
+        'data-for="row : pv_dataset_eval_space_rows" data-if="dep_undistort"'
+        in rml
+    )
     assert re.search(r'(?<!data-attr-)data-tooltip="row\.tooltip_key"', rml) is None
 
     assert 'data-if="row.id == \'iterations\'"' in rml

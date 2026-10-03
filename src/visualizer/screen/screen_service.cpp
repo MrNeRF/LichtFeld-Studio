@@ -71,11 +71,17 @@ namespace lfs::vis::screen {
         if (splitViewEnabled(space->settings.split_view_mode)) {
             for (const auto id : screen_.areas()) {
                 if (id.value != view) {
-                    if (auto* other = dynamic_cast<View3DSpace*>(screen_.area(id)->space(editors::kView3D)))
+                    if (auto* other = dynamic_cast<View3DSpace*>(screen_.area(id)->space(editors::kView3D));
+                        other && splitViewEnabled(other->settings.split_view_mode)) {
                         other->settings.split_view_mode = SplitViewMode::Disabled;
+                        if (view_settings_changed_)
+                            view_settings_changed_(id.value);
+                    }
                 }
             }
         }
+        if (view_settings_changed_)
+            view_settings_changed_(view);
         return true;
     }
 

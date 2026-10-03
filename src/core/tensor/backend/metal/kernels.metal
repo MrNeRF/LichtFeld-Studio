@@ -2849,18 +2849,21 @@ static float2 distort_fisheye(float x, float y, constant float* dist, int n) {
 }
 
 static float2 distort_thin_prism_fisheye(float x, float y, constant float* dist, int n) {
-    if (sqrt(x * x + y * y) < 1e-8f)
+    const float r = sqrt(x * x + y * y);
+    if (r < 1e-8f)
         return float2(x, y);
-    const float2 fisheye = distort_fisheye(x, y, dist, n);
-    float xd = fisheye.x, yd = fisheye.y;
+    const float scale = atan(r) / r;
+    const float uu = x * scale, vv = y * scale;
+    const float u2 = uu * uu, uv = uu * vv, v2 = vv * vv;
+    const float r2 = u2 + v2, r4 = r2 * r2, r6 = r4 * r2, r8 = r4 * r4;
+    const float k1 = n > 0 ? dist[0] : 0.0f, k2 = n > 1 ? dist[1] : 0.0f;
+    const float k3 = n > 2 ? dist[2] : 0.0f, k4 = n > 3 ? dist[3] : 0.0f;
     const float p1 = n > 4 ? dist[4] : 0.0f, p2 = n > 5 ? dist[5] : 0.0f;
-    const float r2 = xd * xd + yd * yd;
-    xd += 2.0f * p1 * xd * yd + p2 * (r2 + 2.0f * xd * xd);
-    yd += p1 * (r2 + 2.0f * yd * yd) + 2.0f * p2 * xd * yd;
-    const float s1 = n > 6 ? dist[6] : 0.0f, s2 = n > 7 ? dist[7] : 0.0f, s3 = n > 8 ? dist[8] : 0.0f,
-                s4 = n > 9 ? dist[9] : 0.0f;
-    const float r2d = xd * xd + yd * yd, r4d = r2d * r2d;
-    return float2(xd + (s1 * r2d + s2 * r4d), yd + (s3 * r2d + s4 * r4d));
+    const float sx1 = n > 6 ? dist[6] : 0.0f, sx2 = n > 7 ? dist[7] : 0.0f;
+    const float sy1 = n > 8 ? dist[8] : 0.0f, sy2 = n > 9 ? dist[9] : 0.0f;
+    const float radial = k1 * r2 + k2 * r4 + k3 * r6 + k4 * r8;
+    return float2(uu + uu * radial + 2.0f * p1 * uv + p2 * (r2 + 2.0f * u2) + sx1 * r2 + sx2 * r4,
+                  vv + vv * radial + 2.0f * p2 * uv + p1 * (r2 + 2.0f * v2) + sy1 * r2 + sy2 * r4);
 }
 
 static float resample_tap(constant ResampleParams& p, int base, int x, int y) {

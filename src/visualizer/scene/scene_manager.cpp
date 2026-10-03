@@ -1323,7 +1323,7 @@ namespace lfs::vis {
                         if (installed) {
                             scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                             if (auto* rendering = services().renderingOrNull()) {
-                                rendering->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
+                                rendering->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
                             }
                         }
                     } catch (const std::exception& e) {
@@ -1971,7 +1971,7 @@ namespace lfs::vis {
         selection_.clearNodeSelection();
         python::invalidate_poll_caches(1);
         if (auto* rm = services().renderingOrNull())
-            rm->markDirty(DirtyFlag::SELECTION);
+            rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         LOG_TRACE("Cleared node selection");
     }
 
@@ -2805,7 +2805,7 @@ namespace lfs::vis {
     void SceneManager::syncCropBoxToRenderSettings() {
         // Scene graph is single source of truth - just trigger re-render
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         }
     }
 
@@ -3942,7 +3942,7 @@ namespace lfs::vis {
             if (!pointcloud_node_names.empty()) {
                 scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                 if (services().renderingOrNull()) {
-                    services().renderingOrNull()->markDirty(DirtyFlag::SPLATS);
+                    services().renderingOrNull()->markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
                 }
             }
             return;
@@ -4100,7 +4100,7 @@ namespace lfs::vis {
             if (!pointcloud_node_names.empty()) {
                 scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                 if (services().renderingOrNull()) {
-                    services().renderingOrNull()->markDirty(DirtyFlag::SPLATS);
+                    services().renderingOrNull()->markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
                 }
             }
             return;
@@ -4159,7 +4159,7 @@ namespace lfs::vis {
     size_t SceneManager::applyDeleted() {
         const size_t removed = scene_.applyDeleted();
         if (removed > 0 && services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
+            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         }
         return removed;
     }
@@ -6095,7 +6095,7 @@ namespace lfs::vis {
         if (auto* rm = services().renderingOrNull()) {
             rm->clearCursorPreviewState();
             rm->clearPreviewSelection();
-            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION, lfs::vis::FrameReason::SceneChange);
         }
 
         return {};
@@ -6211,7 +6211,7 @@ namespace lfs::vis {
         op::pushSceneSnapshotIfChanged(std::move(entry));
 
         if (auto* rm = services().renderingOrNull())
-            rm->markDirty(DirtyFlag::SELECTION);
+            rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
 
     void SceneManager::deselectAllGaussians() {
@@ -6228,7 +6228,7 @@ namespace lfs::vis {
         op::pushSceneSnapshotIfChanged(std::move(entry));
 
         if (auto* rm = services().renderingOrNull())
-            rm->markDirty(DirtyFlag::SELECTION);
+            rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
 
     void SceneManager::selectAllGaussians() {
@@ -6303,7 +6303,7 @@ namespace lfs::vis {
         }
 
         if (rendering_manager)
-            rendering_manager->markDirty(DirtyFlag::SELECTION);
+            rendering_manager->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
     }
 
     void SceneManager::copySelectionToClipboard() {
@@ -6344,7 +6344,7 @@ namespace lfs::vis {
             addToSelection(name);
 
         if (auto* rm = services().renderingOrNull())
-            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION, lfs::vis::FrameReason::SceneChange);
     }
 
     SelectionResult SceneManager::selectBrush(float x, float y, float radius, const std::string& mode, const int camera_index) {
@@ -6443,7 +6443,7 @@ namespace lfs::vis {
         if (selection_preview_before_) {
             scene_.restoreSelectionState(*selection_preview_before_);
             if (auto* rm = services().renderingOrNull())
-                rm->markDirty(DirtyFlag::SELECTION);
+                rm->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         }
         selection_preview_snapshot_.reset();
         selection_preview_before_.reset();
