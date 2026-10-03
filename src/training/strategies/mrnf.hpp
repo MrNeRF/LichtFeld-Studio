@@ -62,6 +62,7 @@ namespace lfs::training {
     inline constexpr int kExploreSeeds = 20;
     inline constexpr float kSeedOpacity = 0.03f;
     inline constexpr float kBlobSeedOpacity = 0.5f;
+    inline constexpr double kBlobSeedCapacityFraction = 0.01;
     inline constexpr float kFarGrowthCap = 0.3f;
     inline constexpr float kFarDecayScale = 0.25f;
     inline constexpr float kFarMaskOrbits = 2.0f;

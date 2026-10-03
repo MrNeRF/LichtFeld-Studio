@@ -3359,7 +3359,8 @@ namespace lfs::training {
         const auto seeds = _blob_seeder->triangulate();
         _blob_seeder.reset();
         const size_t budget = _params->max_cap > 0
-                                  ? static_cast<size_t>(std::max<int64_t>(0, int64_t{_params->max_cap} - static_cast<int64_t>(active_count())))
+                                  ? std::min(static_cast<size_t>(std::max<int64_t>(0, int64_t{_params->max_cap} - static_cast<int64_t>(active_count()))),
+                                             static_cast<size_t>(kBlobSeedCapacityFraction * _params->max_cap))
                                   : seeds.size();
         const size_t count = std::min(seeds.size(), budget);
         if (count == 0) {
