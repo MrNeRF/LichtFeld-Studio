@@ -4,6 +4,8 @@
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
@@ -14,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -23,7 +26,9 @@
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <sstream>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -783,4 +788,77 @@ TEST(SidecarResumeSampler, DeterministicCameraStreamContinuesAtCheckpointOffset)
         ASSERT_TRUE(actual.has_value());
         EXPECT_EQ(*actual, *expected) << "camera stream diverged at post-resume sample " << i;
     }
+}
+
+// Fails when the immediate CPU decode converts or caches the image on the legacy default stream:
+// the caller's non-blocking stream then reads the image before it is written, or the call waits
+// behind unrelated legacy-stream work (held here by a host callback until the watchdog fires).
+TEST_F(PipelinedImageLoaderTest, ImmediateCpuDecodeStaysOnTheCallerStream) {
+    constexpr int HEIGHT = 48, WIDTH = 64;
+    constexpr size_t PIXELS = static_cast<size_t>(WIDTH) * HEIGHT;
+    std::vector<uint8_t> pixels(PIXELS * 3);
+    std::vector<float> expected(pixels.size());
+    for (size_t i = 0; i < pixels.size(); ++i) {
+        pixels[i] = static_cast<uint8_t>((i * 7 + i / 192) % 256);
+        expected[(i % 3) * PIXELS + i / 3] = pixels[i] * (1.0f / 255.0f);
+    }
+    const lfs::test::licht::TemporaryDirectory temp("lfs-immediate-stream");
+    // The warm-up file primes the decoder, encoder and allocations so the gated call allocates nothing new; its
+    // pixels differ so a reused buffer cannot pass for the checked image.
+    const auto warm = temp.path / "warm.png";
+    const auto png = temp.path / "image.png";
+    std::vector<uint8_t> warm_pixels(pixels.size());
+    std::ranges::transform(pixels, warm_pixels.begin(), [](const uint8_t value) { return static_cast<uint8_t>(~value); });
+    ASSERT_TRUE(save_png(warm, warm_pixels.data(), WIDTH, HEIGHT, 3, 8, 1));
+    ASSERT_TRUE(save_png(png, pixels.data(), WIDTH, HEIGHT, 3, 8, 1));
+
+    cudaStream_t caller = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&caller, cudaStreamNonBlocking), cudaSuccess);
+    std::optional<PipelinedImageLoader> loader;
+    {
+        const CUDAStreamGuard guard(caller);
+        loader.emplace(config());
+        ASSERT_TRUE(loader->load_image_immediate(warm, LoadParams{}).cpu().is_valid());
+    }
+    std::atomic<bool> released{false};
+    ASSERT_EQ(cudaLaunchHostFunc(
+                  cudaStreamLegacy,
+                  [](void* flag) {
+                      while (!static_cast<std::atomic<bool>*>(flag)->load())
+                          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                  },
+                  &released),
+              cudaSuccess);
+    std::thread watchdog([&released] {
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        released = true;
+    });
+
+    std::vector<float> loaded;
+    std::chrono::steady_clock::duration elapsed{};
+    {
+        const CUDAStreamGuard guard(caller);
+        const auto start = std::chrono::steady_clock::now();
+        const auto image = loader->load_image_immediate(png, LoadParams{});
+        elapsed = std::chrono::steady_clock::now() - start;
+        // Read back on the caller stream alone while the legacy stream is still held.
+        EXPECT_EQ(image.dtype(), DataType::Float32);
+        if (image.dtype() == DataType::Float32) {
+            loaded.resize(image.numel());
+            EXPECT_EQ(cudaMemcpyAsync(loaded.data(), image.ptr<float>(), loaded.size() * sizeof(float),
+                                      cudaMemcpyDeviceToHost, caller),
+                      cudaSuccess);
+            EXPECT_EQ(cudaStreamSynchronize(caller), cudaSuccess);
+        }
+        EXPECT_FALSE(released.load()) << "the readback finished after the watchdog released the legacy stream";
+    }
+    released = true;
+    watchdog.join();
+    ASSERT_EQ(cudaStreamSynchronize(cudaStreamLegacy), cudaSuccess);
+    loader.reset();
+    lfs::core::CudaMemoryPool::instance().release_stream(caller);
+    ASSERT_EQ(cudaStreamDestroy(caller), cudaSuccess);
+
+    EXPECT_LT(elapsed, std::chrono::seconds(2));
+    EXPECT_EQ(loaded, expected);
 }
