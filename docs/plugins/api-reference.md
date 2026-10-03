@@ -1680,7 +1680,8 @@ lf.undo.stack() -> dict
 | `lf.ui.get_transform_space()`               | `int`            | Transform space enum index |
 | `lf.ui.set_transform_space(space)`          | `None`           | Set transform space index  |
 | `lf.ui.get_pivot_mode()` / `set_pivot_mode(mode)` | `int`      | Pivot mode enum index      |
-| `lf.ui.get_fps()`                           | `float`          | Current FPS                |
+| `lf.ui.get_fps()`                           | `float`          | Fresh view renders in the trailing second; cached/deferred results excluded |
+| `lf.ui.get_ui_fps()`                        | `float`          | Successful UI presents in the trailing second; idle-clear frame excluded |
 | `lf.ui.get_git_commit()`                    | `str`            | Git commit hash            |
 | `lf.ui.is_key_pressed(key, repeat=False)`    | `bool`           | SDL-backed rising edge for the current UI frame; UI thread only, no repeat events |
 | `lf.ui.is_key_down(key)`                     | `bool`           | Current SDL keyboard level |

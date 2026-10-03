@@ -65,7 +65,7 @@ def test_infinite_css_animations_have_active_state_selectors() -> None:
 def test_viewport_wait_uses_a_runtime_deadline() -> None:
     source = (ROOT / "src/visualizer/window/window_manager.cpp").read_text()
     assert "SDL_WaitEventTimeout(&event, timeout_ms)" in source
-    assert re.search(r"timeout_seconds\s*\?\s*static_cast<int>\(\*timeout_seconds\s*\*\s*1000\.0\)\s*:\s*-1", source)
+    assert re.search(r"timeout_seconds\s*\?\s*static_cast<int>\(std::ceil\(\*timeout_seconds\s*\*\s*1000\.0\)\)\s*:\s*-1", source)
     assert not re.search(r"SDL_WaitEventTimeout\([^,]+,\s*\d+\s*\)", source)
 
 

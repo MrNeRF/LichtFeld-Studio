@@ -2855,6 +2855,7 @@ namespace lfs::vis {
         if (camera_frame)
             camera_animation_cadence_.startFrame(camera_frame_started);
 
+        rendering_manager_->sampleFrameRates(ledger_plan);
         std::optional<std::chrono::steady_clock::time_point>
             project_frame_started;
         if (ledger_plan.render_views != 0 && !viewport_export_locked && !interactive_transition_settling &&

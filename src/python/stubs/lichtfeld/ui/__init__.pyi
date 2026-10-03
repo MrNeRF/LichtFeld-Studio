@@ -2923,11 +2923,13 @@ def is_point_cloud_forced() -> bool:
 
 def get_fps() -> float:
     """
-    Get viewport renders per second over the last second (cached presents excluded)
+    Get viewport renders in the trailing second (cached and deferred results excluded)
     """
 
 def get_ui_fps() -> float:
-    """Get GUI presents per second over the last second"""
+    """
+    Get successful GUI presents in the trailing second (idle-clear frame excluded)
+    """
 
 def get_content_type() -> str:
     """Get content type (empty, splat_files, dataset)"""

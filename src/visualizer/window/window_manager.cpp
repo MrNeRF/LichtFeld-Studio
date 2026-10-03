@@ -937,7 +937,7 @@ namespace lfs::vis {
             timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, 1.0 / 60.0)
                                               : std::optional<double>{1.0 / 60.0};
         const int timeout_ms = drainQueuedEvents() ? 0
-                               : timeout_seconds   ? static_cast<int>(*timeout_seconds * 1000.0)
+                               : timeout_seconds   ? static_cast<int>(std::ceil(*timeout_seconds * 1000.0))
                                                    : -1;
         pumping_events_ = true;
         if (SDL_WaitEventTimeout(&event, timeout_ms)) {

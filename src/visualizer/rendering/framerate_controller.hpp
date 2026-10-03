@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "frame_demand.hpp"
 
 #include <chrono>
 #include <deque>
@@ -35,6 +36,39 @@ namespace lfs::vis {
         FramerateSettings settings_;
         mutable std::mutex mutex_;
         mutable std::deque<Clock::time_point> frames_;
+    };
+
+    struct FrameRates {
+        float ui = 0.0f;
+        float view = 0.0f;
+    };
+
+    // The idle-clear presentation updates the readouts without counting itself
+    // as activity. Keep the deadline until a presentation actually succeeds.
+    class FrameRateTracker {
+    public:
+        using Clock = FramerateController::Clock;
+        FrameRates sample(Clock::time_point now = Clock::now()) const {
+            return {ui_.getAverageFPS(now), view_.getAverageFPS(now)};
+        }
+        void countView(Clock::time_point now = Clock::now()) { view_.beginFrame(now); }
+        void countPresented(const FramePlan& plan, Clock::time_point now = Clock::now()) {
+            auto activity = plan.reasons;
+            activity.reset(static_cast<std::size_t>(FrameReason::FpsIdle));
+            if (activity.any()) {
+                ui_.beginFrame(now);
+                idle_due_ = now + std::chrono::duration_cast<Clock::duration>(
+                                      std::chrono::duration<float>(ui_.getSettings().time_window_seconds));
+            } else if (plan.reasons.test(static_cast<std::size_t>(FrameReason::FpsIdle))) {
+                idle_due_.reset();
+            }
+        }
+        std::optional<Clock::time_point> idleDeadline() const { return idle_due_; }
+        bool idleDue(Clock::time_point now) const { return idle_due_ && now >= *idle_due_; }
+
+    private:
+        FramerateController ui_, view_;
+        std::optional<Clock::time_point> idle_due_;
     };
 
 } // namespace lfs::vis

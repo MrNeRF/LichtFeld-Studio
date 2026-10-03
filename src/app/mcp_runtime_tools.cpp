@@ -777,6 +777,9 @@ namespace lfs::app {
                 if (auto* const rendering = viewer->getRenderingManager()) {
                     const auto snapshot = rendering->frameDemandLedger().snapshot();
                     frames = frame_snapshot_json(snapshot);
+                    const auto rates = rendering->getFrameRates();
+                    frames["ui_fps"] = rates.ui;
+                    frames["viewport_fps"] = rates.view;
                 }
             }
 
@@ -1156,8 +1159,9 @@ namespace lfs::app {
                     ledger.resetCounters();
                 const auto snapshot = ledger.snapshot();
                 auto frames = frame_snapshot_json(snapshot);
-                frames["ui_fps"] = rendering->getPresentedAverageFPS();
-                frames["viewport_fps"] = rendering->getAverageFPS();
+                const auto rates = rendering->getFrameRates();
+                frames["ui_fps"] = rates.ui;
+                frames["viewport_fps"] = rates.view;
                 return json{{"success", true}, {"frames", std::move(frames)}};
             });
 

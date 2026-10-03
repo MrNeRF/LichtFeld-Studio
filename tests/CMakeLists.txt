@@ -315,6 +315,8 @@ add_executable(lichtfeld_frame_tests
     test_framerate_controller.cpp
     ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/framerate_controller.cpp)
 
+target_compile_definitions(lichtfeld_frame_tests PRIVATE LFS_STATIC_BUILD)
+
 target_include_directories(lichtfeld_frame_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/include
     ${CMAKE_SOURCE_DIR}/src/visualizer/rendering

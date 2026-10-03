@@ -1668,7 +1668,7 @@ namespace lfs::vis {
         // The budget helper gives training's rest time. The refresh period also
         // includes the viewer turn itself.
         return static_cast<float>(std::max<double>(
-            framerate_controller_.getSettings().training_frame_refresh_time_sec,
+            FramerateSettings{}.training_frame_refresh_time_sec,
             idlePreviewIntervalSec(viewer_turn_ms) + viewer_turn_ms * 1e-3));
     }
 
@@ -2394,7 +2394,7 @@ namespace lfs::vis {
             viewport_artifact_service_.clearViewportOutput();
             clearVulkanMeshFrame();
             render_lock.reset();
-            return {.matches_viewport_extent = true};
+            return {.matches_viewport_extent = true, .rendered = true};
         }
 
         const DirtyMask split_deferred_dirty = frame_dirty & ~DirtyFlag::SPLIT_POSITION;
