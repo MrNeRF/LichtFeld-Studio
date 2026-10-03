@@ -451,16 +451,17 @@ namespace lfs::vis {
         }
         Frame& acquire(Slot output, const rendering::ViewportRenderRequest& request, uint32_t count, bool points = false) {
             auto& state = target(output);
-            auto& frame = state.frames[state.next++ % 3];
+            // The published image may be cached by the compositor even after
+            // its last GPU consumer completes. Never recycle it until another
+            // frame has been submitted and published successfully.
+            size_t index = state.next++ % state.frames.size();
+            if (state.frames[index].get() == state.latest && state.latest)
+                index = state.next++ % state.frames.size();
+            auto& frame = state.frames[index];
             uint32_t capacity = std::max(state.needed_capacity, static_cast<uint32_t>(std::min<uint64_t>(uint64_t(count) * 16 + 4096, 16u * 1024u * 1024u)));
-            // A failed encode may leave a reservation without a submitted producer.
-            // Such a frame has no readable GPU status and must be recreated.
-            if (frame && !frame->command) {
-                if (state.latest == frame.get())
-                    state.latest = nullptr;
-                frame.reset();
-            }
-            if (frame) {
+            // A failed encode has no readable status. Replace it transactionally
+            // too, so an admission/allocation failure cannot discard owned slots.
+            if (frame && frame->command) {
                 wait(frame->producer_value);
                 if (frame->command.status == MTLCommandBufferStatusError)
                     throw std::runtime_error(std::format("Metal command failed while acquiring a viewport frame (status={}, producer={}, consumer={}, error_code={}, error={})", long(frame->command.status), frame->producer_value, frame->consumer_serial, long(frame->command.error.code), frame->command.error.localizedDescription.UTF8String ?: "none"));
@@ -476,9 +477,6 @@ namespace lfs::vis {
                 }
                 if (frame->points == points && frame->size == request.frame_view.size && frame->count >= count && frame->capacity >= capacity)
                     return *frame;
-                if (state.latest == frame.get())
-                    state.latest = nullptr;
-                frame.reset();
             }
             // Account for all Metal allocations on the shared device, including
             // resident tensors and Vulkan presentation. Fail before a large growth
@@ -488,8 +486,8 @@ namespace lfs::vis {
                                                            request.frame_view.size.y, count, capacity, points);
             if (!frameFitsWorkingSet(device.currentAllocatedSize, reservation, device.recommendedMaxWorkingSetSize))
                 throw lfs::Exception(nativeError(std::format("Metal viewport reservation exceeds the recommended GPU working set (extent={}x{}, count={}, capacity={}, reservation={}, allocated={}, recommended={})", request.frame_view.size.x, request.frame_view.size.y, count, capacity, reservation, device.currentAllocatedSize, device.recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
-            frame = std::make_unique<Frame>();
-            auto& f = *frame;
+            auto candidate = std::make_unique<Frame>();
+            auto& f = *candidate;
             f.size = request.frame_view.size;
             f.count = count;
             f.capacity = capacity;
@@ -510,6 +508,9 @@ namespace lfs::vis {
             }
             f.color.init(*context, device, f.size.x, f.size.y, MTLPixelFormatRGBA8Unorm, VK_FORMAT_R8G8B8A8_UNORM);
             f.depth.init(*context, device, f.size.x, f.size.y, MTLPixelFormatR32Float, VK_FORMAT_R32_SFLOAT);
+            // Commit only a fully allocated replacement. Exceptions destroy the
+            // unpublished candidate and leave existing slot ownership intact.
+            frame = std::move(candidate);
             return f;
         }
         id<MTLBuffer> readTexture(Frame& f, Image& image, size_t bytes_per_pixel, glm::ivec2 pixel = {-1, -1}) const {
@@ -908,7 +909,9 @@ namespace lfs::vis {
                 if (status.error != RasterError::None)
                     i.target(slot).needed_capacity = static_cast<uint32_t>(status.required_instances);
             }
-            if (i.target(slot).frames[i.target(slot).next % 3].get() == previous)
+            // Overflow fallback may only sample a matching published extent.
+            // acquire() keeps this publication alive throughout the attempt.
+            if (previous && previous->size != request.frame_view.size)
                 previous = nullptr;
             const bool rad = model.lod_tree && model.lod_tree->rad_source.valid() &&
                              (request.lod_gpu_traversal.enabled || model.lod_tree->total_nodes() > size_t(model.size()));

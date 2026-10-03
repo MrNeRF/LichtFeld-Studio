@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/tensor_backend.hpp"
+#include "core/tensor_metal_reader.hpp"
+#include "frame_budget.hpp"
 #include "metal_viewport_renderer.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
@@ -57,6 +59,62 @@ static void transparent_threshold_contract(vis::VulkanContext& context) {
             require(pixel[3] > 0 && pixel[0] > .7f, "FP16 storage erased valid FP32 threshold coverage");
         else
             require(pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 0, "Empty transparent tail retained RGB/alpha");
+    }
+}
+static void failed_reservation_preserves_output_contract(vis::VulkanContext& context) {
+    using core::Device;
+    using core::Tensor;
+    core::SplatData model(0,
+                          Tensor::from_vector(std::vector<float>{0, 0, -3}, {1, 3}, Device::GPU),
+                          Tensor::from_vector(std::vector<float>{1, 0, 0}, {1, 1, 3}, Device::GPU), {},
+                          Tensor::full({1, 3}, -2.f, Device::GPU),
+                          Tensor::from_vector(std::vector<float>{1, 0, 0, 0}, {1, 4}, Device::GPU),
+                          Tensor::full({1, 1}, 4.f, Device::GPU), 1.f);
+    core::MetalTensorReader reader;
+    auto device = reader.device();
+    rendering::ViewportRenderRequest request;
+    request.frame_view.size = {96, 64};
+    request.sh_degree = 0;
+    auto oversized = request;
+    oversized.frame_view.size = {1 << 20, 1 << 20};
+    const auto reservation = rendering::metal::frameReservationBytes(
+        oversized.frame_view.size.x, oversized.frame_view.size.y, 1, 4112, false);
+    // Prove this exercises admission without attempting a giant GPU allocation.
+    require(device.recommendedMaxWorkingSetSize > 0 &&
+                !rendering::metal::frameFitsWorkingSet(device.currentAllocatedSize, reservation,
+                                                       device.recommendedMaxWorkingSetSize),
+            "Reservation failure fixture does not exceed the device working-set budget");
+    for (const bool gut : {false, true}) {
+        vis::MetalViewportRenderer renderer;
+        request.gut = oversized.gut = gut;
+        const auto target = vis::RenderTargetId{51};
+        auto expected = Tensor::empty({64, 96, 4}, Device::CPU);
+        // Populate all three ring slots before repeated rejected replacements.
+        for (int n = 0; n < 3; ++n) {
+            require(renderer.render(context, model, request, target).has_value(), "Reservation fixture render failed");
+            require(renderer.readColor(target, expected, 0, 0).has_value(), "Reservation fixture read failed");
+        }
+        require(expected.ptr<float>()[((32 * 96 + 48) * 4)] > .5f, "Reservation fixture has no visible output");
+        for (int n = 0; n < 9; ++n) {
+            const auto rejected = renderer.render(context, model, oversized, target);
+            require(!rejected && rejected.error().code() == ErrorCode::ResourceExhausted,
+                    "Oversized reservation did not return ResourceExhausted");
+            require(renderer.size(target) == request.frame_view.size,
+                    "Rejected reservation destroyed the last published viewport");
+            auto actual = Tensor::empty({64, 96, 4}, Device::CPU);
+            require(renderer.readColor(target, actual, 0, 0).has_value(), "Rejected reservation lost readable cached color");
+            require(std::memcmp(expected.data_ptr(), actual.data_ptr(), expected.bytes()) == 0,
+                    "Rejected reservation changed cached pixels");
+            const auto depth = renderer.readDepth({.pixel = {48, 32}, .source_size = {96, 64}, .target = target});
+            require(depth && std::isfinite(*depth) && *depth > 0, "Rejected reservation lost cached depth");
+        }
+        require(renderer.render(context, model, request, target).has_value(), "Viewport did not recover after admission failures");
+        require(renderer.readColor(target, expected, 0, 0).has_value(), "Recovered viewport read failed");
+        const auto cold_target = vis::RenderTargetId{52};
+        require(!renderer.render(context, model, oversized, cold_target), "Cold oversized reservation succeeded");
+        require(renderer.size(cold_target) == glm::ivec2(0), "Cold rejection published an incomplete output");
+        require(renderer.render(context, model, request, cold_target).has_value(), "Cold rejection prevented a valid retry");
+        require(renderer.releaseAll().has_value(), "Reservation fixture release failed");
     }
 }
 static void partial_selection_mask_contract(vis::VulkanContext& context) {
@@ -205,6 +263,7 @@ static void run(bool compare_vulkan) {
     core::GpuBackendScope scope(core::GpuBackend::Metal);
     vis::VulkanContext context;
     require(context.initHeadless(), context.lastError().c_str());
+    failed_reservation_preserves_output_contract(context);
     vis::MetalViewportRenderer renderer;
     using core::Device;
     using core::Tensor;
