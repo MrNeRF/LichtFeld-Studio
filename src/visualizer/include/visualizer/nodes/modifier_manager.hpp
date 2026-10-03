@@ -257,6 +257,7 @@ namespace lfs::vis {
     private:
         struct RuntimeState {
             ModifierEvaluation evaluation;
+            bool shown = false; // visible modifiers produced evaluation.geometry
             bool dirty = true;
             std::unordered_map<std::string, core::Tensor> previews;
         };

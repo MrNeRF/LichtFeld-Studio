@@ -19,6 +19,10 @@ namespace lfs::nodes {
         const auto transfer = [&](const Tensor& value) {
             if (!value.is_valid())
                 return value;
+            // Already resident: keep the storage, only finishing deferred work so
+            // cached and published results are complete when their fence passes.
+            if (value.device() == device && gpu_backend_of(value) == backend)
+                return value.is_deferred() ? value.contiguous() : value;
             return backend ? value.to(*backend) : value.to(Device::CPU);
         };
         const auto attributes = [&](AttributeMap& values) {

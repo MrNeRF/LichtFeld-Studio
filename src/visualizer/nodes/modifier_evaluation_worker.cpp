@@ -3,9 +3,12 @@
 #include "modifier_evaluation_worker.hpp"
 
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/services.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_vulkan_interop.hpp"
+#include "io/loader.hpp"
 #include "window/window_manager.hpp"
 
 #include <algorithm>
@@ -82,7 +85,8 @@ namespace lfs::vis {
             return geometry;
         }
 
-        void preparePayload(const ModifierObjectSnapshot& node, ModifierHostResult& result) {
+        void preparePayload(const ModifierObjectSnapshot& node, ModifierHostResult& result,
+                            const core::SplatTensorAllocator& allocator) {
             std::shared_ptr<core::SplatData> splats;
             std::shared_ptr<core::PointCloud> points;
             std::shared_ptr<core::MeshData> mesh;
@@ -157,11 +161,25 @@ namespace lfs::vis {
             result.splats = std::move(splats);
             result.points = std::move(points);
             result.mesh = std::move(mesh);
-            // Published buffers must not alias the worker cache. In particular,
-            // Metal's storage readiness includes readers: reusing displayed
-            // storage as an evaluation input would stall the renderer on it.
-            if (result.splats)
-                result.splats = std::make_shared<core::SplatData>(result.splats->clone());
+            // Splats reach the renderer as its backend requires; moving them into renderer storage
+            // also separates them from the worker cache.
+            if (result.splats) {
+                const auto backend = core::gpu_backend_of(result.splats->means_raw());
+                switch (backend ? core::splat_publication(*backend) : core::SplatPublication::Copied) {
+                case core::SplatPublication::RendererStorage:
+                    if (allocator) {
+                        if (auto moved = lfs::io::migrateSplatTensorsToAllocator(*result.splats, allocator, false); !moved)
+                            throw std::runtime_error(moved.error().format());
+                        break;
+                    }
+                    [[fallthrough]];
+                case core::SplatPublication::Copied:
+                    result.splats = std::make_shared<core::SplatData>(result.splats->clone());
+                    break;
+                case core::SplatPublication::Shared:
+                    break;
+                }
+            }
             if (result.points) {
                 result.points->means = copied(result.points->means);
                 result.points->colors = copied(result.points->colors);
@@ -334,11 +352,11 @@ namespace lfs::vis {
         public:
             SnapshotHost(const ModifierEvaluationRequest& request, const NodeTypeRegistry& registry,
                          std::unordered_map<std::string, EvalCache>& caches,
-                         std::unordered_map<core::Uuid, Geometry>& sources,
+                         std::function<const Geometry&(const ModifierObjectSnapshot&)> source,
                          const std::unordered_map<core::Uuid, ModifierHostResult>& previous,
                          const EvalControl& control,
                          std::function<void(const core::Uuid&, const std::string&, const NodeTree&)> stack_started)
-                : request_(request), registry_(registry), caches_(caches), sources_(sources), previous_(previous), control_(control), stack_started_(std::move(stack_started)) {}
+                : request_(request), registry_(registry), caches_(caches), source_(std::move(source)), previous_(previous), control_(control), stack_started_(std::move(stack_started)) {}
 
             std::uint64_t generation() const override { return request_.generation; }
             std::span<const EvaluationCamera> cameras() const override { return request_.cameras; }
@@ -359,7 +377,7 @@ namespace lfs::vis {
                         throw NodeError(result.evaluation.errors.begin()->second);
                     throw NodeError("Object Info target modifier evaluation failed");
                 }
-                auto geometry = result.evaluation.geometry;
+                auto geometry = result.enabled ? result.evaluation.geometry : source_(*target);
                 if (space == TransformSpace::Relative)
                     geometry = transform_geometry(std::move(geometry), glm::inverse(current_world_) * target->world);
                 return geometry;
@@ -389,7 +407,12 @@ namespace lfs::vis {
                 auto& result = results[object.uuid];
                 result.uuid = object.uuid;
                 const auto start = std::chrono::steady_clock::now();
-                Geometry geometry = sources_.at(object.uuid);
+                // An object without visible modifiers displays its stored payload; it
+                // needs no evaluation copy unless it is baked or read by Object Info.
+                const bool active = std::ranges::any_of(object.stack.modifiers, [](const Modifier& modifier) {
+                    return modifier.enabled && modifier.show_viewport;
+                });
+                Geometry geometry = active || request_.bake ? source_(object) : Geometry{};
                 std::uint64_t input_generation = request_.source_generation;
                 for (const auto& modifier : object.stack.modifiers) {
                     if (control_.cancelled())
@@ -473,7 +496,7 @@ namespace lfs::vis {
                                                   [this](const std::string_view uuid) { return resolveTree(uuid); });
                         }
                         if ((result.enabled || request_.bake) && !control_.cancelled())
-                            preparePayload(object, result);
+                            preparePayload(object, result, request_.splat_allocator);
                     }
                 }
                 result.evaluation.total_time_ms =
@@ -503,7 +526,7 @@ namespace lfs::vis {
             const ModifierEvaluationRequest& request_;
             const NodeTypeRegistry& registry_;
             std::unordered_map<std::string, EvalCache>& caches_;
-            std::unordered_map<core::Uuid, Geometry>& sources_;
+            std::function<const Geometry&(const ModifierObjectSnapshot&)> source_;
             const std::unordered_map<core::Uuid, ModifierHostResult>& previous_;
             const EvalControl& control_;
             std::function<void(const core::Uuid&, const std::string&, const NodeTree&)> stack_started_;
@@ -626,7 +649,7 @@ namespace lfs::vis {
         result.requested_at = request.requested_at;
         const auto cancelled = [&] { return request.generation != generation_.load(std::memory_order_acquire); };
         const auto backend = backendOf(request);
-        try {
+        const auto attempt = [&] {
             if (backend && (!queue_ || queue_->backend() != *backend))
                 queue_ = std::make_unique<core::TensorWorkQueue>(*backend);
             std::optional<core::TensorWorkQueue::Scope> scope;
@@ -638,7 +661,8 @@ namespace lfs::vis {
             std::unordered_set<std::string_view> modifier_ids;
             for (const auto& object : request.objects)
                 for (const auto& modifier : object.stack.modifiers)
-                    modifier_ids.insert(modifier.uuid);
+                    if (modifier.enabled && modifier.show_viewport)
+                        modifier_ids.insert(modifier.uuid);
             std::erase_if(caches_, [&](const auto& entry) { return !modifier_ids.contains(entry.first); });
             // Keep the previous immutable captures alive until their replacement
             // uploads are resolved, including meshes unchanged by a scene edit.
@@ -649,28 +673,29 @@ namespace lfs::vis {
                 previous_hosts_.clear();
                 source_generation_ = request.source_generation;
             }
-            for (const auto& object : request.objects) {
-                if (cancelled())
-                    break;
-                if (!sources_.contains(object.uuid)) {
-                    auto geometry = source_devices_.convert(storedGeometry(object), backend ? core::Device::GPU : core::Device::CPU);
-                    // Resolve cached textures by the source identity before
-                    // separating already-GPU geometry from renderer storage.
-                    if (object.mesh && object.mesh->vertices.device() == core::Device::GPU)
-                        geometry.mesh->mesh = copyMesh(*geometry.mesh->mesh);
-                    sources_[object.uuid] = std::move(geometry);
-                    if (object.mesh)
-                        source_meshes_[object.uuid] = object.mesh;
+            // Sources are copied only for objects this request evaluates or reads.
+            std::unordered_set<core::Uuid> used_sources;
+            const auto source = [&](const ModifierObjectSnapshot& object) -> const Geometry& {
+                used_sources.insert(object.uuid);
+                if (const auto found = sources_.find(object.uuid); found != sources_.end())
+                    return found->second;
+                auto geometry = source_devices_.convert(storedGeometry(object), backend ? core::Device::GPU : core::Device::CPU);
+                // Resolve cached textures by the source identity before
+                // separating already-GPU geometry from renderer storage.
+                if (object.mesh && object.mesh->vertices.device() == core::Device::GPU)
+                    geometry.mesh->mesh = copyMesh(*geometry.mesh->mesh);
+                if (object.mesh)
+                    source_meshes_[object.uuid] = object.mesh;
+                // Finish the short source copy before encoding any expensive nodes,
+                // so the renderer's imported source buffers cannot inherit their
+                // readiness dependency. All waits are on this worker's own marker.
+                if (backend) {
+                    core::TensorFence copied_inputs(*backend);
+                    queue_->record(copied_inputs);
+                    copied_inputs.wait();
                 }
-            }
-            // Finish the short source-copy phase before encoding any expensive
-            // nodes, so the renderer's imported source buffers cannot inherit their
-            // readiness dependency. All waits are on this worker's own marker.
-            if (backend) {
-                core::TensorFence copied_inputs(*backend);
-                queue_->record(copied_inputs);
-                copied_inputs.wait();
-            }
+                return sources_.emplace(object.uuid, std::move(geometry)).first->second;
+            };
             const lfs::nodes::EvalControl control{
                 .cancelled = cancelled,
                 .started = [&](const lfs::nodes::Node& node) {
@@ -684,8 +709,9 @@ namespace lfs::vis {
                     progress_.finished_nodes[name] = status;
                     progress_.pending_nodes.erase(name);
                     progress_.completed = progress_.finished_nodes.size();
-                    progress_.node.clear(); }};
-            SnapshotHost host(request, registry_, caches_, sources_, previous_hosts_, control,
+                    progress_.node.clear(); },
+                .propagate_out_of_memory = true};
+            SnapshotHost host(request, registry_, caches_, source, previous_hosts_, control,
                               [&](const core::Uuid& uuid, const std::string& modifier, const lfs::nodes::NodeTree& tree) {
                                   std::unordered_map<std::string, std::vector<std::string>> parents;
                                   for (const auto& link : tree.links)
@@ -726,10 +752,37 @@ namespace lfs::vis {
                 queue_->record(*result.ready);
                 result.ready->wait();
             }
-            if (!cancelled())
+            if (!cancelled()) {
                 for (const auto& [uuid, host_result] : result.hosts)
                     if (host_result.evaluation.ok)
                         previous_hosts_[uuid] = host_result;
+                // Drop copies no evaluation reads any more, e.g. after the last modifier
+                // of an object is removed or hidden. A bake covers one object only.
+                if (!request.bake) {
+                    std::erase_if(sources_, [&](const auto& entry) { return !used_sources.contains(entry.first); });
+                    std::erase_if(source_meshes_, [&](const auto& entry) { return !used_sources.contains(entry.first); });
+                    if (source_meshes_.empty())
+                        source_devices_.clear();
+                    std::erase_if(previous_hosts_, [&](const auto& entry) { return !std::ranges::contains(request.targets, entry.first); });
+                }
+            }
+        };
+        try {
+            try {
+                attempt();
+            } catch (const core::MemoryAllocationError& error) {
+                // Cached intermediates and source copies only save time: drop them and retry once.
+                LOG_WARN("Node modifier evaluation ran out of device memory, retrying without cached results: {}",
+                         error.what());
+                caches_.clear();
+                sources_.clear();
+                source_meshes_.clear();
+                source_devices_.clear();
+                previous_hosts_.clear();
+                result.hosts.clear();
+                core::Tensor::trim_memory_pool();
+                attempt();
+            }
         } catch (const std::exception& error) {
             // Worker boundary: preserve the previous payload and report a failed request.
             LOG_ERROR("Node modifier worker failed: {}", error.what());

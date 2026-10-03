@@ -1444,8 +1444,11 @@ namespace lfs::vis {
             scene.markPayloadDiverged(node->id);
             scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         } else if (node->type == core::NodeType::SPLAT) {
-            scene.replaceNodeModel(node->name,
-                                   std::make_unique<core::SplatData>(prepared.splats->readOnlySnapshot()));
+            auto baked = std::make_unique<core::SplatData>(prepared.splats->readOnlySnapshot());
+            // Later edits that rebuild tensors must stay in renderer storage.
+            if (auto allocator = scene_manager_->makeExternalSplatAllocator())
+                baked->set_tensor_allocator(std::move(allocator));
+            scene.replaceNodeModel(node->name, std::move(baked));
         } else if (node->type == core::NodeType::POINTCLOUD) {
             scene.replaceNodePointCloud(
                 node->name, std::move(prepared.points));

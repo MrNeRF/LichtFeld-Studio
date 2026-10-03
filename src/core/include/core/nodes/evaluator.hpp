@@ -76,6 +76,9 @@ namespace lfs::nodes {
         std::function<bool()> cancelled;
         std::function<void(const Node&)> started;
         std::function<void(const std::string&, const NodeEvaluation&)> finished;
+        // Rethrow device out-of-memory instead of reporting it as a node error,
+        // for hosts that can release memory and retry.
+        bool propagate_out_of_memory = false;
     };
 
     struct EvalResult {

@@ -73,6 +73,14 @@ namespace lfs::core {
         std::unique_ptr<Impl> impl_;
     };
 
+    // How the Vulkan renderer receives splats a backend produced: drawn from that storage as is, moved
+    // into renderer storage first, or copied so readers of the displayed storage never hold up the
+    // producer's next use of it.
+    enum class SplatPublication : uint8_t { Shared,
+                                            RendererStorage,
+                                            Copied };
+    [[nodiscard]] LFS_CORE_API SplatPublication splat_publication(GpuBackend backend);
+
     // All operands are contiguous GPU tensors on one backend; output and source
     // have the same shape and Float32 or Float16 dtype. The mask has one Bool per element.
     LFS_CORE_API void where_into(Tensor& output, const Tensor& condition, float value, const Tensor& source);

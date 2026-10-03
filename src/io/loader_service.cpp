@@ -4,6 +4,7 @@
 
 #include "io/loader_service.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
@@ -76,7 +77,8 @@ namespace lfs::io {
     }
 
     Result<void> migrateSplatTensorsToAllocator(lfs::core::SplatData& model,
-                                                const SplatTensorAllocator& allocator) {
+                                                const SplatTensorAllocator& allocator,
+                                                const bool trim_pool) {
         if (!allocator) {
             return {};
         }
@@ -159,7 +161,11 @@ namespace lfs::io {
             if (encode_q16) {
                 (void)model.apply_shN_value_quant();
             }
-            lfs::core::Tensor::trim_memory_pool();
+            if (trim_pool)
+                lfs::core::Tensor::trim_memory_pool();
+        } catch (const lfs::core::MemoryAllocationError&) {
+            // Out of device memory is not corrupt data; callers may free memory and retry.
+            throw;
         } catch (const std::exception& e) {
             return make_error(ErrorCode::CORRUPTED_DATA,
                               std::format("Failed to migrate splat tensors to renderer storage: {}", e.what()));

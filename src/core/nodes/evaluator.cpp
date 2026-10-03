@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/nodes/evaluator.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_execution.hpp"
 
@@ -430,6 +431,12 @@ namespace lfs::nodes {
                 result.errors[exception.node()] = exception.what();
                 result.ok = false;
                 evaluation.ok = false;
+            } catch (const core::MemoryAllocationError& exception) {
+                if (control.propagate_out_of_memory)
+                    throw;
+                result.errors[node.name] = exception.what();
+                result.ok = false;
+                evaluation.ok = false;
             } catch (const std::exception& exception) {
                 // LFS-CENSUS-OK(empty-catch): node exceptions are the user-facing per-node error channel.
                 result.errors[node.name] = exception.what();
@@ -465,6 +472,11 @@ namespace lfs::nodes {
                     }
                 }
             }
+        } catch (const core::MemoryAllocationError& exception) {
+            if (control.propagate_out_of_memory)
+                throw;
+            result.errors["Group Output"] = exception.what();
+            result.ok = false;
         } catch (const std::exception& exception) {
             // LFS-CENSUS-OK(empty-catch): normalize graph-boundary failures into EvalResult.
             result.errors["Group Output"] = exception.what();

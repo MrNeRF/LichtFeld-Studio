@@ -34,6 +34,8 @@ namespace lfs::vis {
         std::unordered_map<std::string, nlohmann::json> trees;
         std::vector<core::Uuid> targets;
         std::shared_ptr<core::TensorCompletion> inputs_ready;
+        // Renderer storage for published splats; CUDA tensors must live there to be drawn.
+        core::SplatTensorAllocator splat_allocator;
         std::chrono::steady_clock::time_point requested_at;
         bool bake = false;
     };
