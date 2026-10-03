@@ -1,6 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-// Actual Metal -> Vulkan texture and timeline transfer using the installed ICD.
+// Vulkan-owned texture export, native writes and Vulkan timeline consumption.
 #import <Metal/Metal.h>
 #include <array>
 #include <cstdio>
@@ -74,17 +74,10 @@ static void run() {
     id<MTLDevice> metal = metal_device.mtlDevice;
     if (!metal)
         throw std::runtime_error("Metal device export failed");
-    auto desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float width:8 height:8 mipmapped:NO];
-    desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    desc.storageMode = MTLStorageModePrivate;
-    auto texture = [metal newTextureWithDescriptor:desc];
-    if (!texture)
-        throw std::runtime_error("Texture allocation failed");
-    VkImportMetalTextureInfoEXT import{VK_STRUCTURE_TYPE_IMPORT_METAL_TEXTURE_INFO_EXT};
-    import.plane = VK_IMAGE_ASPECT_PLANE_0_BIT;
-    import.mtlTexture = texture;
+    VkExportMetalObjectCreateInfoEXT export_texture{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
+    export_texture.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_TEXTURE_BIT_EXT;
     VkImageCreateInfo image_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    image_info.pNext = &import;
+    image_info.pNext = &export_texture;
     image_info.imageType = VK_IMAGE_TYPE_2D;
     image_info.format = VK_FORMAT_R32G32B32A32_SFLOAT;
     image_info.extent = {8, 8, 1};
@@ -92,10 +85,36 @@ static void run() {
     image_info.arrayLayers = 1;
     image_info.samples = VK_SAMPLE_COUNT_1_BIT;
     image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    image_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     VkImage image;
-    check(vkCreateImage(device, &image_info, nullptr, &image), "import Metal texture");
-    // Imported Metal textures already have backing memory; do not allocate/bind a second backing.
+    check(vkCreateImage(device, &image_info, nullptr, &image), "create exportable Vulkan image");
+    VkMemoryRequirements image_requirements;
+    vkGetImageMemoryRequirements(device, image, &image_requirements);
+    VkPhysicalDeviceMemoryProperties image_memory;
+    vkGetPhysicalDeviceMemoryProperties(physical, &image_memory);
+    uint32_t image_index = 0;
+    while (image_index < image_memory.memoryTypeCount &&
+           (!(image_requirements.memoryTypeBits & (1u << image_index)) ||
+            !(image_memory.memoryTypes[image_index].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)))
+        ++image_index;
+    if (image_index == image_memory.memoryTypeCount)
+        throw std::runtime_error("No device-local image backing");
+    VkMemoryAllocateInfo image_allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    image_allocate.allocationSize = image_requirements.size;
+    image_allocate.memoryTypeIndex = image_index;
+    VkDeviceMemory image_storage;
+    check(vkAllocateMemory(device, &image_allocate, nullptr, &image_storage), "allocate image backing");
+    check(vkBindImageMemory(device, image, image_storage, 0), "bind image backing");
+    VkExportMetalTextureInfoEXT exported{VK_STRUCTURE_TYPE_EXPORT_METAL_TEXTURE_INFO_EXT};
+    exported.image = image;
+    exported.plane = VK_IMAGE_ASPECT_COLOR_BIT;
+    exports.pNext = &exported;
+    export_objects(device, &exports);
+    id<MTLTexture> texture = exported.mtlTexture;
+    if (!texture || texture.device.registryID != metal.registryID ||
+        texture.pixelFormat != MTLPixelFormatRGBA32Float || texture.width != 8 || texture.height != 8)
+        throw std::runtime_error("Vulkan-owned Metal texture export mismatch");
     auto event = [metal newSharedEvent];
     VkImportMetalSharedEventInfoEXT import_event{VK_STRUCTURE_TYPE_IMPORT_METAL_SHARED_EVENT_INFO_EXT};
     import_event.mtlSharedEvent = event;
@@ -202,17 +221,18 @@ static void run() {
     void* bytes;
     check(vkMapMemory(device, storage, 0, sizeof(expected), 0, &bytes), "map output");
     if (std::memcmp(bytes, expected.data(), sizeof(expected)))
-        throw std::runtime_error("Native texture data differs after Vulkan import");
+        throw std::runtime_error("Vulkan-owned texture data differs after native Metal writes");
     vkUnmapMemory(device, storage);
     vkDestroyFence(device, fence, nullptr);
     vkDestroyBuffer(device, buffer, nullptr);
     vkFreeMemory(device, storage, nullptr);
     vkDestroyImage(device, image, nullptr);
+    vkFreeMemory(device, image_storage, nullptr);
     vkDestroySemaphore(device, semaphore, nullptr);
     vkDestroyCommandPool(device, pool, nullptr);
     vkDestroyDevice(device, nullptr);
     vkDestroyInstance(instance, nullptr);
-    std::puts("Metal/Vulkan texture and GPU timeline contract passed.");
+    std::puts("Vulkan-owned Metal texture and GPU timeline contract passed.");
 }
 int main() {
     @autoreleasepool {

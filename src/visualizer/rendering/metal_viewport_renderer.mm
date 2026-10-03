@@ -29,6 +29,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <vk_mem_alloc.h>
 #include <vulkan/vulkan_metal.h>
 
 namespace lfs::vis {
@@ -95,6 +96,8 @@ namespace lfs::vis {
         static_assert(sizeof(PointParameters) == 256);
         struct Image {
             VkDevice device = VK_NULL_HANDLE;
+            VmaAllocator allocator = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
             id<MTLTexture> texture;
             VkImage image = VK_NULL_HANDLE;
             VkImageView view = VK_NULL_HANDLE;
@@ -102,22 +105,23 @@ namespace lfs::vis {
                 if (view)
                     vkDestroyImageView(device, view, nullptr);
                 if (image)
-                    vkDestroyImage(device, image, nullptr);
+                    vmaDestroyImage(allocator, image, allocation);
             }
             void init(VulkanContext& context, id<MTLDevice> metal, uint32_t w, uint32_t h,
                       MTLPixelFormat native_format, VkFormat format) {
                 device = context.device();
-                auto descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:native_format width:w height:h mipmapped:NO];
-                descriptor.storageMode = MTLStorageModePrivate;
-                descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget;
-                texture = [metal newTextureWithDescriptor:descriptor];
-                if (!texture)
-                    throw lfs::Exception(nativeError(std::format("Metal viewport texture allocation failed (extent={}x{}, format={}, allocated={}, recommended={})", w, h, uint64_t(native_format), metal.currentAllocatedSize, metal.recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
-                VkImportMetalTextureInfoEXT imported{VK_STRUCTURE_TYPE_IMPORT_METAL_TEXTURE_INFO_EXT};
-                imported.plane = VK_IMAGE_ASPECT_PLANE_0_BIT;
-                imported.mtlTexture = texture;
+                allocator = context.allocator();
+                auto export_objects = reinterpret_cast<PFN_vkExportMetalObjectsEXT>(
+                    vkGetDeviceProcAddr(device, "vkExportMetalObjectsEXT"));
+                if (!allocator || !export_objects)
+                    throw std::runtime_error(std::format("Metal viewport image export is unavailable (allocator_present={}, export_function_present={})", allocator != VK_NULL_HANDLE, export_objects != nullptr));
+                // MoltenVK owns the image and its backing allocation. Importing
+                // an independently allocated texture bypasses that ownership and
+                // can omit residency when the compositor uses argument buffers.
+                VkExportMetalObjectCreateInfoEXT export_texture{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
+                export_texture.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_TEXTURE_BIT_EXT;
                 VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-                info.pNext = &imported;
+                info.pNext = &export_texture;
                 info.imageType = VK_IMAGE_TYPE_2D;
                 info.format = format;
                 info.extent = {w, h, 1};
@@ -125,8 +129,25 @@ namespace lfs::vis {
                 info.arrayLayers = 1;
                 info.samples = VK_SAMPLE_COUNT_1_BIT;
                 info.tiling = VK_IMAGE_TILING_OPTIMAL;
-                info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-                check(vkCreateImage(device, &info, nullptr, &image), "Import native viewport texture");
+                info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+                VmaAllocationCreateInfo memory_info{};
+                memory_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+                const auto allocated = vmaCreateImage(allocator, &info, &memory_info, &image, &allocation, nullptr);
+                if (allocated != VK_SUCCESS) {
+                    const auto code = allocated == VK_ERROR_OUT_OF_HOST_MEMORY || allocated == VK_ERROR_OUT_OF_DEVICE_MEMORY
+                                          ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Internal;
+                    throw lfs::Exception(nativeError(std::format("Vulkan-owned Metal viewport image allocation failed (result={}, extent={}x{}, format={}, allocated={}, recommended={})", int(allocated), w, h, int(format), metal.currentAllocatedSize, metal.recommendedMaxWorkingSetSize), code));
+                }
+                VkExportMetalTextureInfoEXT native_texture{VK_STRUCTURE_TYPE_EXPORT_METAL_TEXTURE_INFO_EXT};
+                native_texture.image = image;
+                native_texture.plane = VK_IMAGE_ASPECT_COLOR_BIT;
+                VkExportMetalObjectsInfoEXT exports{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT};
+                exports.pNext = &native_texture;
+                export_objects(device, &exports);
+                texture = native_texture.mtlTexture;
+                if (!texture || texture.device.registryID != metal.registryID || texture.pixelFormat != native_format)
+                    throw std::runtime_error(std::format("Vulkan viewport texture export does not match Metal rendering (texture_present={}, texture_device={}, render_device={}, texture_format={}, requested_format={}, extent={}x{})", texture != nil, texture.device.registryID, metal.registryID, uint64_t(texture.pixelFormat), uint64_t(native_format), w, h));
                 VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
                 view_info.image = image;
                 view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;

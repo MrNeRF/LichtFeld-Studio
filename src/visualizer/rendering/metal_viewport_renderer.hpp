@@ -15,7 +15,7 @@ namespace lfs::vis {
             [](const lfs::Error& error) { return lfs::format_for_developer(error); });
     }
 
-    // Native rasterization with imported textures for the existing desktop compositor.
+    // Native rasterization into Vulkan-owned textures exported to Metal for the desktop compositor.
     // This boundary contains no Objective-C types, keeping Apple headers out of the
     // cross-platform viewport and Python bindings.
     class LFS_VIS_API MetalViewportRenderer {
