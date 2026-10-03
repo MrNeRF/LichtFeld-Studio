@@ -61,6 +61,45 @@ static void transparent_threshold_contract(vis::VulkanContext& context) {
             require(pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 0, "Empty transparent tail retained RGB/alpha");
     }
 }
+static void multi_view_scratch_memory_contract(vis::VulkanContext& context) {
+    using core::Device;
+    using core::Tensor;
+    constexpr uint32_t count = 50000;
+    std::vector<float> rotations(count * 4, 0.f);
+    for (size_t n = 0; n < count; ++n)
+        rotations[n * 4] = 1.f;
+    // Cull all sources: measure reservation ownership without dense blending cost.
+    core::SplatData model(0, Tensor::full({count, 3}, 3.f, Device::GPU),
+                          Tensor::full({count, 1, 3}, .5f, Device::GPU), {},
+                          Tensor::full({count, 3}, -3.f, Device::GPU),
+                          Tensor::from_vector(rotations, {count, 4}, Device::GPU),
+                          Tensor::full({count, 1}, 4.f, Device::GPU), 1.f);
+    core::MetalTensorReader reader;
+    vis::MetalViewportRenderer renderer;
+    rendering::ViewportRenderRequest request;
+    request.frame_view.size = {64, 64};
+    request.sh_degree = 0;
+    const auto before = reader.device().currentAllocatedSize;
+    // Populate every output-ring slot in four independent views. Raster scratch
+    // must be bounded independently of the number of published output images.
+    for (uint32_t view = 1; view <= 4; ++view)
+        for (int frame = 0; frame < 3; ++frame) {
+            const auto target = vis::RenderTargetId{100 + view};
+            require(renderer.render(context, model, request, target).has_value(), "Multi-view scratch render failed");
+            auto complete = renderer.outputComplete(target);
+            require(complete && *complete, "Multi-view scratch output incomplete");
+        }
+    const auto after = reader.device().currentAllocatedSize;
+    const auto delta = after > before ? after - before : 0;
+    const auto one_reservation = rendering::metal::frameReservationBytes(64, 64, count, count * 16 + 4096, false);
+    // Allow driver allocation granularity and up to three full reservations.
+    // The old per-view triple ring needs twelve and exceeds this generous bound.
+    const uint64_t limit = one_reservation * 3 + 64ull * 1024 * 1024;
+    std::printf("Multi-view scratch allocation: delta=%llu bound=%llu bytes\n",
+                static_cast<unsigned long long>(delta), static_cast<unsigned long long>(limit));
+    require(delta <= limit, "Multi-view raster scratch still grows with every view/output-ring slot");
+    require(renderer.releaseAll().has_value(), "Multi-view scratch release failed");
+}
 static void failed_reservation_preserves_output_contract(vis::VulkanContext& context) {
     using core::Device;
     using core::Tensor;
@@ -223,6 +262,12 @@ static void multi_target_auto_contract(vis::VulkanContext& context, bool compare
             require(frame->size == request.frame_view.size && adapter->hasRenderTarget(ids[index]), "Dynamic target extent/ownership differs");
             snapshots[index] = capture(index);
         }
+        // Queue independent GS/GUT views before any host readback. Shared
+        // temporary buffers must preserve every frame-owned publication.
+        for (size_t index = 0; index < ids.size(); ++index) {
+            const auto frame = adapter->render(context, model, request_for(index), false, ids[index]);
+            require(frame.has_value(), "Queued multi-view native render failed");
+        }
         for (size_t index = 0; index < ids.size(); ++index) {
             const auto current = capture(index);
             require(std::memcmp(current.data_ptr(), snapshots[index].data_ptr(), current.bytes()) == 0,
@@ -263,7 +308,8 @@ static void run(bool compare_vulkan) {
     core::GpuBackendScope scope(core::GpuBackend::Metal);
     vis::VulkanContext context;
     require(context.initHeadless(), context.lastError().c_str());
-    failed_reservation_preserves_output_contract(context);
+    multi_view_scratch_memory_contract(context);
+        failed_reservation_preserves_output_contract(context);
     vis::MetalViewportRenderer renderer;
     using core::Device;
     using core::Tensor;

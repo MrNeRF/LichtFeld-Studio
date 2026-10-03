@@ -31,6 +31,12 @@ namespace lfs::rendering::metal {
                scanReservationBytes(histogram, 4) + 24 * 65536;
     }
 
+    constexpr uint64_t viewportOutputReservationBytes(uint32_t width, uint32_t height, bool points) {
+        const uint64_t pixels = ((uint64_t(width) + 63) / 64 * 64) *
+                                ((uint64_t(height) + 63) / 64 * 64);
+        return pixels * (points ? 12 : 36) + (points ? 8 : 24) * 65536;
+    }
+
     constexpr bool frameFitsWorkingSet(uint64_t allocated, uint64_t reservation, uint64_t recommended) {
         if (!recommended)
             return true; // Driver did not expose a usable recommendation.

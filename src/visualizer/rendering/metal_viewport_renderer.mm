@@ -165,7 +165,7 @@ namespace lfs::vis {
             uint64_t generation = 0, consumer_serial = 0, producer_value = 0;
             std::unique_ptr<RasterFrame> raster;
             std::unique_ptr<GpuProfile> gpu_profile;
-            id<MTLBuffer> projected, gut_geometry, objects, overlay_parameters, overlay_flags, overlay_nodes, selection_colors;
+            id<MTLBuffer> objects, overlay_parameters, overlay_flags, overlay_nodes, selection_colors;
             std::array<id<MTLBuffer>, 4> lod_buffers;
             std::array<id<MTLBuffer>, 3> page_maps;
             bool rad_bootstrap = false;
@@ -197,6 +197,8 @@ namespace lfs::vis {
         core::MetalTensorReader reader;
         SplatPreprocessor preprocessor{reader.device()};
         TileRasterizer rasterizer{reader.device()};
+        std::shared_ptr<RasterScratch> raster_scratch = std::make_shared<RasterScratch>(reader.device());
+        id<MTLBuffer> projected, gut_geometry;
         bool profiling_enabled = false;
         std::function<void()> retry_callback;
         id<MTLComputePipelineState> present;
@@ -264,6 +266,12 @@ namespace lfs::vis {
                     readback.destination = nullptr;
                     readback.target_released = true;
                 }
+            if (targets.empty()) {
+                // Retired frames/commands retain their workspace versions until
+                // completion. A new scene starts with no high-water reservation.
+                raster_scratch = std::make_shared<RasterScratch>(reader.device());
+                projected = gut_geometry = nil;
+            }
             if (permanent)
                 released_targets.insert(id);
         }
@@ -503,8 +511,10 @@ namespace lfs::vis {
             // resident tensors and Vulkan presentation. Fail before a large growth
             // can exhaust unified memory; retain the last completed output.
             const auto device = reader.device();
-            const auto reservation = frameReservationBytes(request.frame_view.size.x,
-                                                           request.frame_view.size.y, count, capacity, points);
+            const auto outputs = viewportOutputReservationBytes(request.frame_view.size.x, request.frame_view.size.y, points);
+            const bool grow_scratch = !points && (!raster_scratch->fits(request.frame_view.size.x, request.frame_view.size.y, count, capacity) ||
+                                                  !projected || projected.length < size_t(count) * sizeof(ProjectedSplat));
+            const auto reservation = grow_scratch ? frameReservationBytes(request.frame_view.size.x, request.frame_view.size.y, count, capacity, false) : outputs;
             if (!frameFitsWorkingSet(device.currentAllocatedSize, reservation, device.recommendedMaxWorkingSetSize))
                 throw lfs::Exception(nativeError(std::format("Metal viewport reservation exceeds the recommended GPU working set (extent={}x{}, count={}, capacity={}, reservation={}, allocated={}, recommended={})", request.frame_view.size.x, request.frame_view.size.y, count, capacity, reservation, device.currentAllocatedSize, device.recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
             auto candidate = std::make_unique<Frame>();
@@ -515,9 +525,10 @@ namespace lfs::vis {
             f.generation = ++generation;
             f.points = points;
             if (!points) {
-                f.raster = std::make_unique<RasterFrame>(device, f.size.x, f.size.y, count, capacity);
-                f.projected = [device newBufferWithLength:std::max<size_t>(16, size_t(count) * sizeof(ProjectedSplat)) options:MTLResourceStorageModePrivate];
-                if (!f.projected)
+                f.raster = std::make_unique<RasterFrame>(device, f.size.x, f.size.y, count, capacity, raster_scratch);
+                if (!projected || projected.length < size_t(count) * sizeof(ProjectedSplat))
+                    projected = [device newBufferWithLength:std::max<size_t>(16, size_t(count) * sizeof(ProjectedSplat)) options:MTLResourceStorageModePrivate];
+                if (!projected)
                     throw lfs::Exception(nativeError(std::format("Metal projected buffer allocation failed (count={}, bytes={})", count, size_t(count) * sizeof(ProjectedSplat)), lfs::ErrorCode::ResourceExhausted));
             } else {
                 auto depth_descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float width:f.size.x height:f.size.y mipmapped:NO];
@@ -538,7 +549,7 @@ namespace lfs::vis {
             wait(f.producer_value);
             if (f.command.status == MTLCommandBufferStatusError)
                 throw std::runtime_error(std::format("Metal command failed before texture readback (status={}, producer={}, extent={}x{}, error_code={}, error={})", long(f.command.status), f.producer_value, f.size.x, f.size.y, long(f.command.error.code), f.command.error.localizedDescription.UTF8String ?: "none"));
-            auto queue = [reader.device() newCommandQueue];
+            auto queue = readback_queue;
             auto command = [queue commandBuffer];
             const bool sample = pixel.x >= 0;
             const size_t width = sample ? 1 : f.size.x, height = sample ? 1 : f.size.y;
@@ -1057,13 +1068,13 @@ namespace lfs::vis {
                     *destinations[n] = {buffer, 0};
                 }
             }
-            if (request.gut && (!f.gut_geometry || f.gut_geometry.length < size_t(draw_count) * sizeof(GutSplat))) {
+            if (request.gut && (!i.gut_geometry || i.gut_geometry.length < size_t(draw_count) * sizeof(GutSplat))) {
                 const size_t bytes = std::max<size_t>(16, size_t(draw_count) * sizeof(GutSplat));
                 const auto device = i.reader.device();
                 if (!frameFitsWorkingSet(device.currentAllocatedSize, bytes, device.recommendedMaxWorkingSetSize))
                     throw lfs::Exception(nativeError(std::format("Metal 3DGUT reservation exceeds the recommended GPU working set (bytes={}, allocated={}, recommended={})", bytes, device.currentAllocatedSize, device.recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
-                f.gut_geometry = [device newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
-                if (!f.gut_geometry)
+                i.gut_geometry = [device newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+                if (!i.gut_geometry)
                     throw lfs::Exception(nativeError(std::format("Metal 3DGUT geometry allocation failed (bytes={}, draw_count={}, allocated={}, recommended={})", bytes, draw_count, device.currentAllocatedSize, device.recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
             }
             const int node_degree = request.scene.node_active_sh_degrees.empty() ? model.get_active_sh_degree() : *std::max_element(request.scene.node_active_sh_degrees.begin(), request.scene.node_active_sh_degrees.end());
@@ -1206,11 +1217,11 @@ namespace lfs::vis {
                 overlay.preview = preview_enabled ? slice(10) : BufferSlice{};
                 overlay.selection_count = selection_enabled ? uint32_t(std::min<size_t>(views[9].bytes, std::numeric_limits<uint32_t>::max())) : 0;
                 overlay.preview_count = preview_enabled ? uint32_t(std::min<size_t>(views[10].bytes, std::numeric_limits<uint32_t>::max())) : 0;
-                i.preprocessor.encode(command, inputs, projection, degree, request.gut ? PrimitiveMode::Gut : PrimitiveMode::Gaussian, {f.projected, 0}, scene, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, lod, profile,
+                i.preprocessor.encode(command, inputs, projection, degree, request.gut ? PrimitiveMode::Gut : PrimitiveMode::Gaussian, {i.projected, 0}, scene, overlay, request.gut ? BufferSlice{i.gut_geometry, 0} : BufferSlice{}, lod, profile,
                                       !request.gut && !spark && !portal_math && !overlay.parameter_count &&
                                           !request.transparent_background && !request.overlay.markers.show_rings);
-                i.rasterizer.encode(command, {f.projected, 0}, draw_count, request.gut ? RasterMode::Gut : RasterMode::Gaussian,
-                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, projection, lod, request.gut && !spark, (request.transparent_background || request.overlay.markers.show_rings) && !request.gut && !spark, profile, request.depth_view);
+                i.rasterizer.encode(command, {i.projected, 0}, draw_count, request.gut ? RasterMode::Gut : RasterMode::Gaussian,
+                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{i.gut_geometry, 0} : BufferSlice{}, projection, lod, request.gut && !spark, (request.transparent_background || request.overlay.markers.show_rings) && !request.gut && !spark, profile, request.depth_view);
                 auto encoder = profiledCompute(command, profile, GpuStage::Present);
                 [encoder setComputePipelineState:i.present];
                 [encoder setTexture:f.raster->color() atIndex:0];

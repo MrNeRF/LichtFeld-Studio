@@ -37,7 +37,7 @@ namespace lfs::rendering::metal {
             uint32_t blocks, shift;
         };
         id<MTLBuffer> allocate(id<MTLDevice> device, size_t bytes,
-                               MTLResourceOptions options = MTLResourceStorageModePrivate) {
+                               MTLResourceOptions options = MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeTracked) {
             bytes = std::max(bytes, sizeof(ProjectedSplat));
             if (bytes > device.maxBufferLength)
                 throw std::length_error(std::format("Metal viewer buffer exceeds device limit (bytes={}, max={})", bytes, device.maxBufferLength));
@@ -76,22 +76,81 @@ namespace lfs::rendering::metal {
         }
     } // namespace
 
-    struct RasterFrame::Impl {
+    struct RasterScratch::Impl {
         id<MTLDevice> device;
-        uint32_t width, height, max_splats, capacity, tiles, columns, sort_blocks;
-        id<MTLBuffer> counts, offsets, status, histogram, histogram_offsets, digit_offsets, ranges, dispatch_args;
+        id<MTLCommandQueue> queue;
+        uint32_t max_splats = 0, capacity = 0, tiles = 0;
+        id<MTLBuffer> counts, offsets, histogram, histogram_offsets, digit_offsets, ranges, dispatch_args;
         id<MTLBuffer> depth_jobs, partial_color, partial_depth, partial_pick;
         uint32_t parallel_instances = 0;
         std::array<id<MTLBuffer>, 2> keys, indices;
-        id<MTLTexture> color, depth, pick;
         ScanStorage count_scan;
+    };
+    RasterScratch::RasterScratch(id<MTLDevice> device) : impl_(std::make_shared<Impl>()) {
+        if (!device)
+            throw std::invalid_argument("Metal raster scratch requires a device");
+        impl_->device = device;
+    }
+    RasterScratch::~RasterScratch() = default;
+    bool RasterScratch::fits(uint32_t width, uint32_t height, uint32_t splats, uint32_t instances) const {
+        return impl_->max_splats >= std::max(1u, splats) && impl_->capacity >= instances &&
+               impl_->tiles >= uint64_t(ceil_div(width, 16)) * ceil_div(height, 16);
+    }
+    void RasterScratch::reserve(uint32_t tiles, uint32_t splats, uint32_t instances) {
+        splats = std::max(1u, splats);
+        if (impl_->max_splats >= splats && impl_->capacity >= instances && impl_->tiles >= tiles)
+            return;
+        // Existing commands retain their encoded buffer versions. Do not mutate
+        // the published reservation until every required allocation succeeds.
+        auto candidate = std::make_shared<Impl>(*impl_);
+        auto& s = *candidate;
+        const auto ensure = [&](id<MTLBuffer> __strong& buffer, size_t bytes) {
+            if (!buffer || buffer.length < bytes)
+                buffer = allocate(s.device, bytes);
+        };
+        if (splats > s.max_splats) {
+            ensure(s.counts, size_t(splats) * 8);
+            ensure(s.offsets, size_t(splats) * 8);
+            s.count_scan = reserve_scan(s.device, splats);
+            s.max_splats = splats;
+        }
+        if (instances > s.capacity) {
+            for (int n = 0; n < 2; ++n) {
+                ensure(s.keys[n], size_t(instances) * 8);
+                ensure(s.indices[n], size_t(instances) * 4);
+            }
+            const auto histogram_size = size_t(ceil_div(instances, 2048)) * 256;
+            ensure(s.histogram, histogram_size * 4);
+            ensure(s.histogram_offsets, histogram_size * 4);
+            ensure(s.digit_offsets, 257 * sizeof(uint32_t));
+            ensure(s.dispatch_args, 21 * sizeof(uint32_t));
+            s.capacity = instances;
+        }
+        if (tiles > s.tiles) {
+            ensure(s.ranges, size_t(tiles) * 8);
+            // Optional parallel jobs include one sentinel per tile. Re-admit
+            // their full allocation for the larger layout on a later dense frame.
+            s.parallel_instances = 0;
+            s.depth_jobs = s.partial_color = s.partial_depth = s.partial_pick = nil;
+            s.tiles = tiles;
+        }
+        impl_ = std::move(candidate);
+    }
+    struct RasterFrame::Impl {
+        id<MTLDevice> device;
+        uint32_t width, height, max_splats, capacity, tiles, columns, sort_blocks;
+        id<MTLBuffer> status;
+        id<MTLTexture> color, depth, pick;
+        std::shared_ptr<RasterScratch> scratch;
+        bool shared_scratch = false;
         std::atomic_bool in_flight{false};
         std::atomic_bool completed{false};
         uint32_t previous_source_count = 0;
     };
     RasterFrame::RasterFrame(id<MTLDevice> device, uint32_t width, uint32_t height,
-                             uint32_t max_splats, uint32_t max_instances) : impl_(std::make_shared<Impl>()) {
-        if (!device || !width || !height || width > 16384 || height > 16384 || !max_instances)
+                             uint32_t max_splats, uint32_t max_instances, std::shared_ptr<RasterScratch> scratch) : impl_(std::make_shared<Impl>()) {
+        if (!device || !width || !height || width > 16384 || height > 16384 || !max_instances ||
+            (scratch && scratch->impl_->device != device))
             throw std::invalid_argument(std::format("Invalid Metal viewer frame reservation (device_present={}, extent={}x{}, max_splats={}, max_instances={})", device != nil, width, height, max_splats, max_instances));
         auto& f = *impl_;
         f.device = device;
@@ -102,21 +161,10 @@ namespace lfs::rendering::metal {
         f.columns = ceil_div(width, 16);
         f.tiles = f.columns * ceil_div(height, 16);
         f.sort_blocks = ceil_div(max_instances, 2048);
-        f.counts = allocate(device, size_t(max_splats) * 8);
-        f.offsets = allocate(device, size_t(max_splats) * 8);
+        f.shared_scratch = bool(scratch);
+        f.scratch = scratch ? std::move(scratch) : std::make_shared<RasterScratch>(device);
+        f.scratch->reserve(f.tiles, max_splats, max_instances);
         f.status = allocate(device, sizeof(RasterStatus), MTLResourceStorageModeShared);
-        // Source/instance sorting and an optional parallel blend dispatch.
-        f.dispatch_args = allocate(device, 21 * sizeof(uint32_t));
-        f.ranges = allocate(device, size_t(f.tiles) * 8);
-        for (int i = 0; i < 2; ++i) {
-            f.keys[i] = allocate(device, size_t(max_instances) * 8);
-            f.indices[i] = allocate(device, size_t(max_instances) * 4);
-        }
-        const uint32_t histogram_size = f.sort_blocks * 256;
-        f.histogram = allocate(device, size_t(histogram_size) * 4);
-        f.histogram_offsets = allocate(device, size_t(histogram_size) * 4);
-        f.digit_offsets = allocate(device, 257 * sizeof(uint32_t));
-        f.count_scan = reserve_scan(device, max_splats);
         f.color = texture(device, width, height, MTLPixelFormatRGBA16Float);
         f.depth = texture(device, width, height, MTLPixelFormatRGBA32Float);
         f.pick = texture(device, width, height, MTLPixelFormatR32Uint);
@@ -268,6 +316,8 @@ namespace lfs::rendering::metal {
     void TileRasterizer::encode(id<MTLCommandBuffer> command, BufferSlice projected, uint32_t count,
                                 RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay, BufferSlice gut, const Projection& projection, const LodSelection& lod, bool omit_saturating_color, bool macro_half_display, GpuProfile* profile, bool exact_median) {
         auto f = frame.impl_;
+        auto scratch = f->scratch->impl_;
+
         // Depth visualization must not select its median using rounded
         // display alpha, including transparent and portal presentation.
         macro_half_display = macro_half_display && !exact_median;
@@ -276,6 +326,10 @@ namespace lfs::rendering::metal {
         if (!command || command.device != impl_->device || f->device != impl_->device ||
             command.status != MTLCommandBufferStatusNotEnqueued || count > f->max_splats || uint32_t(mode) > 3)
             throw std::invalid_argument(std::format("Invalid Metal viewer frame submission (command_present={}, status={}, count={}, max_splats={}, mode={}, same_device={})", command != nil, long(command.status), count, f->max_splats, uint32_t(mode), command.device == impl_->device));
+        if (f->shared_scratch && scratch->queue && scratch->queue != command.commandQueue)
+            throw std::invalid_argument("Shared Metal raster scratch requires one serialized command queue");
+        if (f->shared_scratch && command)
+            scratch->queue = command.commandQueue;
         for (int i = 0; i < 4; ++i)
             if (!std::isfinite(background[i]) || background[i] < 0 || (i == 3 && background[i] > 1))
                 throw std::invalid_argument(std::format("Invalid Metal viewer background (component={}, value={})", i, float(background[i])));
@@ -352,8 +406,8 @@ namespace lfs::rendering::metal {
                     previous.error == RasterError::None &&
                     previous.maximum_tile_instances > kParallelMinTileInstances) {
                     const uint32_t needed = uint32_t(std::min<uint64_t>(f->capacity, previous.required_instances + previous.required_instances / 8));
-                    if (needed > f->parallel_instances) {
-                        const size_t slots = ceil_div(needed, kDepthChunkSize) + size_t(f->tiles);
+                    if (needed > scratch->parallel_instances) {
+                        const size_t slots = ceil_div(needed, kDepthChunkSize) + size_t(scratch->tiles);
                         const size_t rgba_bytes = slots * 256 * 16, pick_bytes = slots * 256 * 4, job_bytes = slots * 8;
                         const uint64_t allocated = impl_->device.currentAllocatedSize, recommended = impl_->device.recommendedMaxWorkingSetSize;
                         if (rgba_bytes <= impl_->device.maxBufferLength && pick_bytes <= impl_->device.maxBufferLength &&
@@ -363,18 +417,18 @@ namespace lfs::rendering::metal {
                             auto depths = [impl_->device newBufferWithLength:rgba_bytes options:MTLResourceStorageModePrivate];
                             auto picks = [impl_->device newBufferWithLength:pick_bytes options:MTLResourceStorageModePrivate];
                             if (jobs && colors && depths && picks) {
-                                f->depth_jobs = jobs;
-                                f->partial_color = colors;
-                                f->partial_depth = depths;
-                                f->partial_pick = picks;
-                                f->parallel_instances = needed;
+                                scratch->depth_jobs = jobs;
+                                scratch->partial_color = colors;
+                                scratch->partial_depth = depths;
+                                scratch->partial_pick = picks;
+                                scratch->parallel_instances = needed;
                             }
                         }
                     }
-                    if (f->parallel_instances) {
+                    if (scratch->parallel_instances) {
                         depth_batches = true;
                         p.unused |= 512u;
-                        p.mask_limits.z = f->parallel_instances;
+                        p.mask_limits.z = scratch->parallel_instances;
                         blend_pipeline = impl_->blendPipeline(uint32_t(mode), p.unused);
                         prefix_pipeline = impl_->blendPipeline(uint32_t(mode), p.unused | 1024u);
                     }
@@ -411,7 +465,7 @@ namespace lfs::rendering::metal {
             [e endEncoding];
         };
         const auto set_projected = [&](id<MTLComputeCommandEncoder> e) {
-            [e setBuffer:count ? projected.buffer : f->counts offset:count ? projected.offset : 0 atIndex:0];
+            [e setBuffer:count ? projected.buffer : scratch->counts offset:count ? projected.offset : 0 atIndex:0];
         };
         const auto encode_sort = [&](uint32_t passes, uint32_t first_shift, bool source_keys = false) {
             for (uint32_t pass = 0; pass < passes; ++pass) {
@@ -421,62 +475,62 @@ namespace lfs::rendering::metal {
                 // GPU-sized scans never read inactive reserved entries, including
                 // when a large frame is followed by a small or fully culled one.
                 auto e = impl_->begin(command, source_keys ? "source_histogram" : "tile_histogram", profile, GpuStage::Sort);
-                [e setBuffer:f->keys[src] offset:0 atIndex:0];
-                [e setBuffer:f->histogram offset:0 atIndex:1];
+                [e setBuffer:scratch->keys[src] offset:0 atIndex:0];
+                [e setBuffer:scratch->histogram offset:0 atIndex:1];
                 [e setBuffer:f->status offset:0 atIndex:2];
                 [e setBytes:&sort length:sizeof(sort) atIndex:3];
-                [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:0 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+                [e dispatchThreadgroupsWithIndirectBuffer:scratch->dispatch_args indirectBufferOffset:0 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
                 [e endEncoding];
                 e = impl_->begin(command, "digit_scan", profile, GpuStage::Sort);
-                [e setBuffer:f->histogram offset:0 atIndex:0];
-                [e setBuffer:f->histogram_offsets offset:0 atIndex:1];
-                [e setBuffer:f->digit_offsets offset:0 atIndex:2];
+                [e setBuffer:scratch->histogram offset:0 atIndex:0];
+                [e setBuffer:scratch->histogram_offsets offset:0 atIndex:1];
+                [e setBuffer:scratch->digit_offsets offset:0 atIndex:2];
                 [e setBuffer:f->status offset:0 atIndex:3];
                 [e dispatchThreadgroups:MTLSizeMake(256, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
                 [e endEncoding];
                 e = impl_->begin(command, "digit_offsets", profile, GpuStage::Sort);
-                [e setBuffer:f->digit_offsets offset:0 atIndex:0];
+                [e setBuffer:scratch->digit_offsets offset:0 atIndex:0];
                 [e dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
                 [e endEncoding];
                 e = impl_->begin(command, source_keys ? "source_scatter" : "tile_scatter", profile, GpuStage::Sort);
-                [e setBuffer:f->keys[src] offset:0 atIndex:0];
-                [e setBuffer:f->indices[src] offset:0 atIndex:1];
-                [e setBuffer:f->keys[dst] offset:0 atIndex:2];
-                [e setBuffer:f->indices[dst] offset:0 atIndex:3];
-                [e setBuffer:f->histogram_offsets offset:0 atIndex:4];
-                [e setBuffer:f->digit_offsets offset:0 atIndex:7];
+                [e setBuffer:scratch->keys[src] offset:0 atIndex:0];
+                [e setBuffer:scratch->indices[src] offset:0 atIndex:1];
+                [e setBuffer:scratch->keys[dst] offset:0 atIndex:2];
+                [e setBuffer:scratch->indices[dst] offset:0 atIndex:3];
+                [e setBuffer:scratch->histogram_offsets offset:0 atIndex:4];
+                [e setBuffer:scratch->digit_offsets offset:0 atIndex:7];
                 [e setBuffer:f->status offset:0 atIndex:5];
                 [e setBytes:&sort length:sizeof(sort) atIndex:6];
-                [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:0 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+                [e dispatchThreadgroupsWithIndirectBuffer:scratch->dispatch_args indirectBufferOffset:0 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
                 [e endEncoding];
             }
         };
         if (source_sorted) {
             auto e = impl_->begin(command, "source_keys", profile, GpuStage::Sort);
             set_projected(e);
-            [e setBuffer:f->keys[1] offset:0 atIndex:1];
-            [e setBuffer:f->indices[1] offset:0 atIndex:2];
-            [e setBuffer:f->offsets offset:0 atIndex:3];
+            [e setBuffer:scratch->keys[1] offset:0 atIndex:1];
+            [e setBuffer:scratch->indices[1] offset:0 atIndex:2];
+            [e setBuffer:scratch->offsets offset:0 atIndex:3];
             [e setBytes:&p length:sizeof(p) atIndex:4];
-            [e setBuffer:f->counts offset:0 atIndex:6];
+            [e setBuffer:scratch->counts offset:0 atIndex:6];
             dispatch(e, count);
             const uint32_t groups = ceil_div(count, 256);
-            impl_->scan(command, f->offsets, f->histogram, groups, f->count_scan, 0, profile);
+            impl_->scan(command, scratch->offsets, scratch->histogram, groups, scratch->count_scan, 0, profile);
             e = impl_->begin(command, "source_compact", profile, GpuStage::Sort);
-            [e setBuffer:f->keys[1] offset:0 atIndex:0];
-            [e setBuffer:f->indices[1] offset:0 atIndex:1];
-            [e setBuffer:f->offsets offset:0 atIndex:2];
-            [e setBuffer:f->histogram offset:0 atIndex:3];
-            [e setBuffer:f->keys[0] offset:0 atIndex:4];
-            [e setBuffer:f->indices[0] offset:0 atIndex:5];
+            [e setBuffer:scratch->keys[1] offset:0 atIndex:0];
+            [e setBuffer:scratch->indices[1] offset:0 atIndex:1];
+            [e setBuffer:scratch->offsets offset:0 atIndex:2];
+            [e setBuffer:scratch->histogram offset:0 atIndex:3];
+            [e setBuffer:scratch->keys[0] offset:0 atIndex:4];
+            [e setBuffer:scratch->indices[0] offset:0 atIndex:5];
             [e setBuffer:f->status offset:0 atIndex:6];
-            [e setBuffer:f->dispatch_args offset:0 atIndex:7];
+            [e setBuffer:scratch->dispatch_args offset:0 atIndex:7];
             [e setBytes:&p length:sizeof(p) atIndex:8];
             dispatch(e, count);
             encode_sort(4, 0, true);
             e = impl_->begin(command, "source_permutation", profile, GpuStage::Sort);
-            [e setBuffer:f->indices[0] offset:0 atIndex:0];
-            [e setBuffer:f->keys[1] offset:0 atIndex:1];
+            [e setBuffer:scratch->indices[0] offset:0 atIndex:0];
+            [e setBuffer:scratch->keys[1] offset:0 atIndex:1];
             [e setBuffer:f->status offset:0 atIndex:2];
             [e setBytes:&p length:sizeof(p) atIndex:3];
             dispatch(e, count);
@@ -484,24 +538,24 @@ namespace lfs::rendering::metal {
         // Source key generation also computes original tile counts while its
         // projected input is read sequentially. Gather only those 8-byte counts;
         // source-sorted counts and their scan reuse the existing two buffers.
-        const auto counts = source_sorted ? f->offsets : f->counts;
-        const auto offsets = source_sorted ? f->counts : f->offsets;
+        const auto counts = source_sorted ? scratch->offsets : scratch->counts;
+        const auto offsets = source_sorted ? scratch->counts : scratch->offsets;
         if (count) {
             auto e = impl_->begin(command, "tile_counts", profile, GpuStage::Instances);
             set_projected(e);
             [e setBuffer:counts offset:0 atIndex:1];
             [e setBytes:&p length:sizeof(p) atIndex:2];
-            [e setBuffer:f->keys[1] offset:0 atIndex:3];
-            [e setBuffer:f->counts offset:0 atIndex:4];
+            [e setBuffer:scratch->keys[1] offset:0 atIndex:3];
+            [e setBuffer:scratch->counts offset:0 atIndex:4];
             dispatch(e, count);
-            impl_->scan(command, counts, offsets, count, f->count_scan, 0, profile);
+            impl_->scan(command, counts, offsets, count, scratch->count_scan, 0, profile);
         }
         auto e = impl_->begin(command, "tile_status", profile, GpuStage::Instances);
         [e setBuffer:counts offset:0 atIndex:0];
         [e setBuffer:offsets offset:0 atIndex:1];
         [e setBuffer:f->status offset:0 atIndex:2];
         [e setBytes:&p length:sizeof(p) atIndex:3];
-        [e setBuffer:f->dispatch_args offset:0 atIndex:4];
+        [e setBuffer:scratch->dispatch_args offset:0 atIndex:4];
         [e dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
         [e endEncoding];
         if (count) {
@@ -509,34 +563,34 @@ namespace lfs::rendering::metal {
             set_projected(e);
             [e setBuffer:offsets offset:0 atIndex:1];
             [e setBuffer:f->status offset:0 atIndex:2];
-            [e setBuffer:f->keys[0] offset:0 atIndex:3];
-            [e setBuffer:f->indices[0] offset:0 atIndex:4];
+            [e setBuffer:scratch->keys[0] offset:0 atIndex:3];
+            [e setBuffer:scratch->indices[0] offset:0 atIndex:4];
             [e setBytes:&p length:sizeof(p) atIndex:5];
-            [e setBuffer:f->keys[1] offset:0 atIndex:6];
+            [e setBuffer:scratch->keys[1] offset:0 atIndex:6];
             dispatch(e, count);
             encode_sort((source_sorted ? 0u : 4u) + (std::bit_width(f->tiles - 1) + 7) / 8,
                         0u, source_sorted);
         }
         auto clear = [command blitCommandEncoder];
-        [clear fillBuffer:f->ranges range:NSMakeRange(0, f->ranges.length) value:0];
+        [clear fillBuffer:scratch->ranges range:NSMakeRange(0, scratch->ranges.length) value:0];
         [clear endEncoding];
         if (count) {
             e = impl_->begin(command, source_sorted ? "source_ranges" : "tile_ranges", profile, GpuStage::Sort);
             const uint32_t sorted = (4 + (std::bit_width(f->tiles - 1) + 7) / 8) % 2;
-            [e setBuffer:f->keys[sorted] offset:0 atIndex:0];
-            [e setBuffer:f->ranges offset:0 atIndex:1];
+            [e setBuffer:scratch->keys[sorted] offset:0 atIndex:0];
+            [e setBuffer:scratch->ranges offset:0 atIndex:1];
             [e setBuffer:f->status offset:0 atIndex:2];
-            [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:3 * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+            [e dispatchThreadgroupsWithIndirectBuffer:scratch->dispatch_args indirectBufferOffset:3 * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [e endEncoding];
         }
 
         if (depth_batches) {
             auto clear_jobs = [command blitCommandEncoder];
-            [clear_jobs fillBuffer:f->depth_jobs range:NSMakeRange(0, f->depth_jobs.length) value:255];
+            [clear_jobs fillBuffer:scratch->depth_jobs range:NSMakeRange(0, scratch->depth_jobs.length) value:255];
             [clear_jobs endEncoding];
             e = impl_->begin(command, "tile_depth_batches", profile, GpuStage::Blend);
-            [e setBuffer:f->ranges offset:0 atIndex:0];
-            [e setBuffer:f->depth_jobs offset:0 atIndex:1];
+            [e setBuffer:scratch->ranges offset:0 atIndex:0];
+            [e setBuffer:scratch->depth_jobs offset:0 atIndex:1];
             [e setBytes:&p length:sizeof(p) atIndex:2];
             [e setBuffer:f->status offset:0 atIndex:3];
             dispatch(e, f->tiles);
@@ -548,19 +602,19 @@ namespace lfs::rendering::metal {
         [e setComputePipelineState:blend_pipeline];
         set_projected(e);
         const uint32_t sorted = (4 + (std::bit_width(f->tiles - 1) + 7) / 8) % 2;
-        [e setBuffer:f->depth_jobs ?: f->counts offset:0 atIndex:13];
-        [e setBuffer:f->partial_color ?: f->counts offset:0 atIndex:14];
-        [e setBuffer:f->partial_depth ?: f->counts offset:0 atIndex:15];
-        [e setBuffer:f->partial_pick ?: f->counts offset:0 atIndex:16];
-        [e setBuffer:gut.buffer ?: f->counts offset:gut.buffer ? gut.offset : 0 atIndex:10];
-        [e setBuffer:f->indices[sorted] offset:0 atIndex:1];
-        [e setBuffer:f->ranges offset:0 atIndex:2];
+        [e setBuffer:scratch->depth_jobs ?: scratch->counts offset:0 atIndex:13];
+        [e setBuffer:scratch->partial_color ?: scratch->counts offset:0 atIndex:14];
+        [e setBuffer:scratch->partial_depth ?: scratch->counts offset:0 atIndex:15];
+        [e setBuffer:scratch->partial_pick ?: scratch->counts offset:0 atIndex:16];
+        [e setBuffer:gut.buffer ?: scratch->counts offset:gut.buffer ? gut.offset : 0 atIndex:10];
+        [e setBuffer:scratch->indices[sorted] offset:0 atIndex:1];
+        [e setBuffer:scratch->ranges offset:0 atIndex:2];
         [e setBuffer:f->status offset:0 atIndex:3];
         [e setBytes:&p length:sizeof(p) atIndex:4];
         const std::array<BufferSlice, 5> overlays = {overlay.parameters, overlay.flags, overlay.selection, overlay.preview, overlay.colors};
         for (NSUInteger j = 0; j < overlays.size(); ++j)
-            [e setBuffer:overlays[j].buffer ?: f->counts offset:overlays[j].buffer ? overlays[j].offset : 0 atIndex:5 + j];
-        [e setBuffer:lod.enabled && logical.buffer ? logical.buffer : f->counts offset:lod.enabled && logical.buffer ? logical.offset : 0 atIndex:11];
+            [e setBuffer:overlays[j].buffer ?: scratch->counts offset:overlays[j].buffer ? overlays[j].offset : 0 atIndex:5 + j];
+        [e setBuffer:lod.enabled && logical.buffer ? logical.buffer : scratch->counts offset:lod.enabled && logical.buffer ? logical.offset : 0 atIndex:11];
         [e setBytes:&logical_count length:sizeof(logical_count) atIndex:12];
         [e setTexture:f->color atIndex:0];
         [e setTexture:f->depth atIndex:1];
@@ -571,20 +625,20 @@ namespace lfs::rendering::metal {
             [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * 8, 1, 1) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
             [e memoryBarrierWithScope:MTLBarrierScopeBuffers];
             [e setComputePipelineState:blend_pipeline];
-            [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:18 * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+            [e dispatchThreadgroupsWithIndirectBuffer:scratch->dispatch_args indirectBufferOffset:18 * sizeof(uint32_t) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
         } else
             [e dispatchThreadgroups:MTLSizeMake(size_t(f->tiles) * (single_simd ? 8 : 4), 1, 1) threadsPerThreadgroup:MTLSizeMake(single_simd ? 32 : 64, 1, 1)];
         [e endEncoding];
         if (depth_batches) {
             e = impl_->begin(command, "tile_depth_compose", profile, GpuStage::Blend);
             set_projected(e);
-            [e setBuffer:f->indices[sorted] offset:0 atIndex:1];
-            [e setBuffer:f->ranges offset:0 atIndex:2];
+            [e setBuffer:scratch->indices[sorted] offset:0 atIndex:1];
+            [e setBuffer:scratch->ranges offset:0 atIndex:2];
             [e setBuffer:f->status offset:0 atIndex:3];
             [e setBytes:&p length:sizeof(p) atIndex:4];
-            [e setBuffer:f->partial_color offset:0 atIndex:14];
-            [e setBuffer:f->partial_depth offset:0 atIndex:15];
-            [e setBuffer:f->partial_pick offset:0 atIndex:16];
+            [e setBuffer:scratch->partial_color offset:0 atIndex:14];
+            [e setBuffer:scratch->partial_depth offset:0 atIndex:15];
+            [e setBuffer:scratch->partial_pick offset:0 atIndex:16];
             [e setTexture:f->color atIndex:0];
             [e setTexture:f->depth atIndex:1];
             [e setTexture:f->pick atIndex:2];

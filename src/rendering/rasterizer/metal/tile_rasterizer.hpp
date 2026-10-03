@@ -18,14 +18,30 @@ namespace lfs::rendering::metal {
     };
     static_assert(sizeof(RasterStatus) == 24);
 
-    // One reservation per in-flight frame. Core scratch and outputs are allocated
+    // Tracked buffers may be shared by frames submitted serially to one command
+    // queue. Outputs/status remain frame-owned; growth retains encoded resources
+    // through command-buffer ownership and commits only a complete replacement.
+    class RasterScratch {
+    public:
+        explicit RasterScratch(id<MTLDevice>);
+        ~RasterScratch();
+        [[nodiscard]] bool fits(uint32_t width, uint32_t height, uint32_t splats, uint32_t instances) const;
+    private:
+        friend class RasterFrame;
+        friend class TileRasterizer;
+        void reserve(uint32_t tiles, uint32_t splats, uint32_t instances);
+        struct Impl;
+        std::shared_ptr<Impl> impl_;
+    };
+
+    // One output/status reservation per in-flight frame. Scratch and outputs are allocated
     // up front. Optional parallel summaries follow already completed dense counts
     // within the device working set; encode never waits for a GPU count readback.
     // Completion releases the reservation even if its public wrapper is destroyed.
     class RasterFrame {
     public:
         RasterFrame(id<MTLDevice> device, uint32_t width, uint32_t height,
-                    uint32_t max_splats, uint32_t max_instances);
+                    uint32_t max_splats, uint32_t max_instances, std::shared_ptr<RasterScratch> scratch = {});
         ~RasterFrame();
         RasterFrame(const RasterFrame&) = delete;
         RasterFrame& operator=(const RasterFrame&) = delete;
