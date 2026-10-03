@@ -396,6 +396,8 @@ namespace lfs::vis {
             bool perf_hud_expanded_ = true;
             bool perf_hud_visible_published_ = false;
             PerfSampler perf_sampler_;
+            std::chrono::steady_clock::time_point last_hud_sample_{};
+            bool last_hud_expanded_ = false;
             std::chrono::steady_clock::time_point ui_toggle_next_allowed_at_{};
             bool ui_toggle_pending_ = false;
             bool ui_visibility_resize_active_ = false;

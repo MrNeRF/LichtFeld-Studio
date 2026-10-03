@@ -293,7 +293,6 @@ class RuntimeState:
     eval_lpips = StateSignal[float | None]("eval_lpips", None)
     scene_generation = StateSignal[int]("scene_generation", 0)
     selection_generation = StateSignal[int]("selection_generation", 0)
-    fps = StateSignal[float]("fps", 0.0)
     mode_text = StateSignal[str]("mode_text", "")
     active_tool = StateSignal[str]("active_tool", "")
     active_submode = StateSignal[str]("active_submode", "")
@@ -375,7 +374,6 @@ class RuntimeState:
         cls.eval_lpips.value = None
         cls.scene_generation.value = 0
         cls.selection_generation.value = 0
-        cls.fps.value = 0.0
         cls.mode_text.value = ""
         cls.active_tool.value = ""
         cls.active_submode.value = ""

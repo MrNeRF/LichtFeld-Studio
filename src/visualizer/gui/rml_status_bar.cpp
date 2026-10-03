@@ -1577,8 +1577,9 @@ namespace lfs::vis::gui {
                                                        : "ui.vram_device_nvml_tooltip"));
         }
 
-        const float scene_fps = rm ? rm->getAverageFPS() : 0.0f;
-        const float presented_fps = rm ? rm->getPresentedAverageFPS() : 0.0f;
+        const auto rates = rm ? rm->guiFrameRates() : FrameRates{};
+        const float scene_fps = rates.view;
+        const float presented_fps = rates.ui;
         setModelString("fps_value", model_.fps_value,
                        std::format("{} {:.0f} · {} {:.0f}", LOC("status_bar.ui"), presented_fps,
                                    LOC("status_bar.view"), scene_fps));
@@ -1738,14 +1739,6 @@ namespace lfs::vis::gui {
         });
     }
 
-    void RmlStatusBar::renderCached(const PanelDrawContext& ctx, const float x, const float y,
-                                    const float w_px, const float h_px,
-                                    const int screen_w, const int screen_h) {
-        // A requested GUI frame must show the current status, including the last
-        // background update. render() retains the texture when values agree.
-        render(ctx, x, y, w_px, h_px, screen_w, screen_h);
-    }
-
     void RmlStatusBar::render(const PanelDrawContext& ctx, const float x, const float y,
                               const float w_px, const float h_px,
                               const int screen_w, const int screen_h) {
@@ -1813,7 +1806,7 @@ namespace lfs::vis::gui {
 
         queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
                                  screen_w, screen_h,
-                                 render_w, render_h, true);
+                                 render_w, render_h, needs_render || direct_cache_.texture == 0);
     }
 
 } // namespace lfs::vis::gui

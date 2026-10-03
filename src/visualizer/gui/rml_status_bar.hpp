@@ -73,8 +73,6 @@ namespace lfs::vis::gui {
         void reloadResources();
         void render(const PanelDrawContext& ctx, float x, float y, float w, float h,
                     int screen_w, int screen_h);
-        void renderCached(const PanelDrawContext& ctx, float x, float y, float w, float h,
-                          int screen_w, int screen_h);
         [[nodiscard]] LFS_VIS_API bool animationFrameDue(
             std::chrono::steady_clock::time_point now) const;
         [[nodiscard]] LFS_VIS_API std::optional<double> secondsUntilAnimationFrame(
@@ -288,7 +286,6 @@ namespace lfs::vis::gui {
         float last_dp_ratio_ = 0.0f;
         uint32_t section_signature_ = 0;
         uint32_t last_section_signature_ = 0;
-        std::uint64_t last_runtime_service_revision_ = 0;
         int last_render_w_ = 0;
         int last_render_h_ = 0;
         int last_document_h_ = 0;

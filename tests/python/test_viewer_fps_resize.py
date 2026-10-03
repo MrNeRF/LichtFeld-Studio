@@ -16,6 +16,53 @@ from test_render_on_demand_idle import _call, _initialize, _ledger, _tool
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 
 
+def _check_hidden_console(endpoint, editor, quiet, capture):
+    # This plugin draw callback runs on every GUI frame without owning
+    # an animation lease. Its stdout must not request the next frame.
+    editor(
+        "print_calls = 0\n"
+        "def print_each_frame(*args):\n"
+        "    global print_calls\n    print_calls += 1\n    print('hidden output')\n"
+        "lf.ui.register_popup_draw_callback(print_each_frame)\nlf.ui.request_redraw()"
+    )
+    try:
+        stopped = quiet()
+        editor("assert print_calls > 0")
+        stopped = quiet()
+        time.sleep(1.2)
+        hidden = _ledger(endpoint)
+        assert hidden["frames_presented"] == stopped["frames_presented"]
+        assert hidden["ui_fps"] == hidden["viewport_fps"] == 0
+        capture("hidden-console-idle")
+    finally:
+        editor("lf.ui.unregister_popup_draw_callback(print_each_frame)")
+    quiet()
+
+
+def _check_hud_reveal(endpoint, editor, quiet, capture):
+    # Start from a rendered, hidden HUD, including when rerunning after failure.
+    editor("lf.ui.request_redraw()")
+    quiet()
+    editor("if lf.ui.is_perf_hud_visible(): lf.ui.toggle_vram_hud()\nlf.ui.request_redraw()")
+    quiet()
+    # A Python callback must reveal the HUD without any unrelated input.
+    before = _ledger(endpoint)
+    editor("import lichtfeld as lf\nimport threading\nthreading.Timer(3, lf.ui.toggle_vram_hud).start()")
+    quiet()
+    time.sleep(3)
+    # The public getter reflects publication by the rendered HUD. Read it
+    # before this editor call can itself cause a subsequent GUI frame.
+    editor("assert lf.ui.is_perf_hud_visible(), 'HUD did not render after toggle'")
+    after = quiet()
+    assert after["frames_presented"] > before["frames_presented"]
+    assert after["views_rendered"] == before["views_rendered"]
+    capture("hud-idle")
+    time.sleep(1.2)
+    assert _ledger(endpoint)["frames_presented"] == after["frames_presented"]
+    editor("lf.ui.toggle_vram_hud()")
+    quiet()
+
+
 def test_fps_resize_scale_and_background_updates(tmp_path):
     executable = os.environ.get("LFS_EXECUTABLE")
     if not executable:
@@ -141,17 +188,8 @@ def test_fps_resize_scale_and_background_updates(tmp_path):
             stopped = quiet()
             time.sleep(1.2)
             assert _ledger(endpoint)["frames_presented"] == stopped["frames_presented"]
-            # A Python callback must reveal the HUD without any unrelated input.
-            before = _ledger(endpoint)
-            editor("import lichtfeld as lf\nlf.ui.toggle_vram_hud()")
-            after = quiet()
-            assert after["frames_presented"] > before["frames_presented"]
-            assert after["views_rendered"] == before["views_rendered"]
-            capture("hud-idle")
-            time.sleep(1.2)
-            assert _ledger(endpoint)["frames_presented"] == after["frames_presented"]
-            editor("lf.ui.toggle_vram_hud()")
-            quiet()
+            _check_hidden_console(endpoint, editor, quiet, capture)
+            _check_hud_reveal(endpoint, editor, quiet, capture)
             # Hover samples UI presents only; no camera or scene input changes.
             for i in range(40):
                 xd("mousemove", 20 + i % 30, 120)
@@ -212,7 +250,13 @@ def test_fps_resize_scale_and_background_updates(tmp_path):
         finally:
             if app.poll() is None:
                 proc = Path(f"/proc/{app.pid}")
-                assert (proc / "exe").resolve() == Path(executable).resolve()
-                assert f"DISPLAY={display}".encode() in (proc / "environ").read_bytes().split(b"\0")
-                os.kill(app.pid, signal.SIGTERM)
-                app.wait(timeout=15)
+                if ((proc / "exe").resolve() == Path(executable).resolve()
+                        and f"DISPLAY={display}".encode() in (proc / "environ").read_bytes().split(b"\0")):
+                    os.kill(app.pid, signal.SIGTERM)
+                    try:
+                        app.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        if ((proc / "exe").resolve() == Path(executable).resolve()
+                                and f"DISPLAY={display}".encode() in (proc / "environ").read_bytes().split(b"\0")):
+                            os.kill(app.pid, signal.SIGKILL)
+                            app.wait(timeout=5)
