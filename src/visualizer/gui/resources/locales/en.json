@@ -1,4 +1,6 @@
 {
+  "node_editor.add_input": "Add input",
+  "node_editor.add_output": "Add output",
   "node_editor.colour_offset_hint": "Drag to tint; double-click to reset to neutral",
   "node_editor.paint": "Paint",
   "node_editor.paint_done": "Finish Painting",
@@ -3570,6 +3572,76 @@
       },
       "properties": {},
       "property_labels": {}
+    },
+    "group": {
+      "label": "Group",
+      "description": "Evaluates a reusable node graph.",
+      "help": "Choose a graph in the sidebar. Inputs and outputs follow that graph's interface.\nEnter the group to edit the shared graph for every instance.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "Referenced graph UUID."
+      },
+      "property_labels": {
+        "tree": "Graph"
+      }
+    },
+    "frame": {
+      "label": "Frame",
+      "description": "Keeps related nodes visually grouped.",
+      "help": "Drop nodes into the frame. Moving the frame moves its members.\nDrag a member outside the frame to remove it.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "Frame heading.",
+        "colour": "Theme colour preset or RGB value.",
+        "note": "Optional text shown under the heading."
+      },
+      "property_labels": {
+        "label": "Label",
+        "colour": "Colour",
+        "note": "Note"
+      }
+    },
+    "reroute": {
+      "label": "Reroute",
+      "description": "Redirects a link without changing its value.",
+      "help": "Connect any socket type; the reroute adopts its upstream type.\nDouble-click a wire to insert a reroute without changing the result.",
+      "inputs": {
+        "Input": "Value to pass through."
+      },
+      "input_labels": {
+        "Input": "Input"
+      },
+      "outputs": {
+        "Output": "Unchanged input value."
+      },
+      "output_labels": {
+        "Output": "Output"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "Note",
+      "description": "Adds an editable text card to the graph.",
+      "help": "Double-click the card or edit its text in the sidebar.\nNotes are layout-only and never affect evaluation.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "Text displayed on the card.",
+        "width": "Card width in canvas units; the height fits the text."
+      },
+      "property_labels": {
+        "text": "Text",
+        "width": "Width"
+      }
     },
     "group_input": {
       "label": "Group Input",

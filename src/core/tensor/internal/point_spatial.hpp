@@ -116,8 +116,9 @@ namespace lfs::core::internal {
                         if (extent == 2 && x >= -1 && x <= 1 && y >= -1 && y <= 1 && z >= -1 && z <= 1)
                             continue;
                         const int tx = cx + x, ty = cy + y, tz = cz + z;
-                        int visited = 0;
-                        for (int j = heads[hash_cell(tx, ty, tz, bucket_mask)]; j >= 0 && visited < 128; j = next[j], ++visited) {
+                        // Hash insertion order is unspecified on the GPU. Inspect
+                        // the whole cell so nearest neighbours do not depend on it.
+                        for (int j = heads[hash_cell(tx, ty, tz, bucket_mask)]; j >= 0; j = next[j]) {
                             const float* q = points + static_cast<size_t>(j) * 3;
                             if (static_cast<size_t>(j) == i || cell(q[0], radius) != tx || cell(q[1], radius) != ty || cell(q[2], radius) != tz)
                                 continue;

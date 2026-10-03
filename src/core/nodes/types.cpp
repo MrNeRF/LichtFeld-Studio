@@ -164,6 +164,8 @@ namespace lfs::nodes {
     }
 
     bool can_convert_socket(std::string_view from, std::string_view to) {
+        if (from == ANY_SOCKET || to == ANY_SOCKET)
+            return true;
         if (from == to)
             return true;
         if (from == GEOMETRY_SOCKET || to == GEOMETRY_SOCKET || from == STRING_SOCKET || to == STRING_SOCKET)

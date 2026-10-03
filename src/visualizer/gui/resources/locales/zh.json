@@ -1,4 +1,6 @@
 {
+  "node_editor.add_input": "添加输入",
+  "node_editor.add_output": "添加输出",
   "node_editor.paint": "绘制",
   "node_editor.paint_done": "结束绘制",
   "node_editor.pick_colour": "拾取颜色",
@@ -3570,6 +3572,76 @@
       },
       "properties": {},
       "property_labels": {}
+    },
+    "group": {
+      "label": "组",
+      "description": "计算可复用的节点图。",
+      "help": "在侧边栏中选择图。输入和输出由该图的接口决定。\n所有实例共享同一张图。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "所引用图的 UUID。"
+      },
+      "property_labels": {
+        "tree": "图"
+      }
+    },
+    "frame": {
+      "label": "框架",
+      "description": "在视觉上组织相关节点。",
+      "help": "将节点拖入框架。移动框架时，其成员会一起移动。\n布局节点不会更改计算结果。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "框架标题。",
+        "colour": "主题颜色预设或 RGB 值。",
+        "note": "标题下方的可选文字。"
+      },
+      "property_labels": {
+        "label": "标签",
+        "colour": "颜色",
+        "note": "备注"
+      }
+    },
+    "reroute": {
+      "label": "转接",
+      "description": "在不改变值的情况下改变连线走向。",
+      "help": "可连接任意插口类型；转接会采用上游类型。\n布局节点不会更改计算结果。",
+      "inputs": {
+        "Input": "要传递的值。"
+      },
+      "input_labels": {
+        "Input": "输入"
+      },
+      "outputs": {
+        "Output": "未更改的输入值。"
+      },
+      "output_labels": {
+        "Output": "输出"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "备注",
+      "description": "向图中添加可编辑的文本卡片。",
+      "help": "双击卡片，或在侧边栏中编辑文字。\n布局节点不会更改计算结果。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "卡片上显示的文字。",
+        "width": "卡片宽度（画布单位）；高度随文字自动调整。"
+      },
+      "property_labels": {
+        "text": "文字",
+        "width": "宽度"
+      }
     },
     "group_input": {
       "label": "组输入",

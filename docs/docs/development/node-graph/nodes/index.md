@@ -43,6 +43,10 @@ Select a node in the editor for its controls and How to use guidance.
 
 - [Transform Geometry](lfs.transform_geometry.md) — Moves, rotates and resizes the whole geometry together.
 
+## Group
+
+- [Group](lfs.group.md) — Evaluates a reusable node graph.
+
 ## Input
 
 - [Boolean](lfs.boolean.md) — Gives you one on/off switch to control several connected settings.
@@ -74,6 +78,14 @@ Select a node in the editor for its controls and How to use guidance.
 - [Value](lfs.value.md) — Gives you one number to share between connected settings.
 
 - [Vector](lfs.vector.md) — Gives you one set of X, Y and Z values to share between nodes.
+
+## Layout
+
+- [Frame](lfs.frame.md) — Keeps related nodes visually grouped.
+
+- [Note](lfs.note.md) — Adds an editable text card to the graph.
+
+- [Reroute](lfs.reroute.md) — Redirects a link without changing its value.
 
 ## Output
 

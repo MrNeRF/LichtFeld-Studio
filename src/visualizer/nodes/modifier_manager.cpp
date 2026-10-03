@@ -191,6 +191,60 @@ namespace lfs::vis {
                 return link.to_node == node && link.to_socket == input;
             });
         }
+
+        lfs::nodes::Value default_for_socket(const std::string_view type) {
+            using namespace lfs::nodes;
+            if (type == GEOMETRY_SOCKET)
+                return Geometry{};
+            if (type == FLOAT_SOCKET)
+                return 0.0f;
+            if (type == INT_SOCKET)
+                return std::int64_t(0);
+            if (type == BOOL_SOCKET)
+                return false;
+            if (type == VECTOR_SOCKET || type == COLOUR_SOCKET)
+                return glm::vec3(0.0f);
+            if (type == STRING_SOCKET)
+                return std::string{};
+            return {};
+        }
+
+        std::string interface_identifier(const lfs::nodes::TreeInterface& interface,
+                                         std::string label) {
+            if (label.empty())
+                label = "Socket";
+            for (auto& character : label)
+                if (character == '\n' || character == '\r')
+                    character = ' ';
+            const auto exists = [&](const std::string_view value) {
+                return std::ranges::any_of(interface.inputs, [&](const auto& item) {
+                           return item.identifier == value;
+                       }) ||
+                       std::ranges::any_of(interface.outputs, [&](const auto& item) {
+                           return item.identifier == value;
+                       });
+            };
+            if (!exists(label))
+                return label;
+            const auto base = label;
+            for (std::size_t suffix = 2;; ++suffix) {
+                label = base + " " + std::to_string(suffix);
+                if (!exists(label))
+                    return label;
+            }
+        }
+
+        void rewrite_group_references(nlohmann::json& tree,
+                                      const std::unordered_map<std::string, std::string>& remap) {
+            for (auto& node : tree["nodes"]) {
+                if (node.value("type_id", "") != "lfs.group")
+                    continue;
+                auto& graph = node["properties"]["tree"];
+                if (graph.is_string())
+                    if (const auto found = remap.find(graph.get<std::string>()); found != remap.end())
+                        graph = found->second;
+            }
+        }
     } // namespace
 
     HsvPickBands centreHsvPickBands(const glm::vec3 rgb, const float saturation_width,
@@ -345,6 +399,737 @@ namespace lfs::vis {
         return result;
     }
 
+    std::expected<std::string, ModifierError>
+    ModifierManager::copyNodes(const std::string_view tree_uuid,
+                               const std::vector<std::string>& names) const {
+        const auto* graph = tree(tree_uuid);
+        if (!graph)
+            return std::unexpected(ModifierError{"Node graph does not exist"});
+        std::unordered_set<std::string> selected(names.begin(), names.end());
+        for (const auto& node : graph->nodes)
+            if ((node.type_id == "lfs.group_input" || node.type_id == "lfs.group_output") &&
+                selected.contains(node.name))
+                selected.erase(node.name);
+        nlohmann::json clipboard{{"format", "lfs.node-clipboard"},
+                                 {"version", 1},
+                                 {"nodes", nlohmann::json::array()},
+                                 {"links", nlohmann::json::array()},
+                                 {"trees", nlohmann::json::object()}};
+        const auto source = graph->to_json();
+        for (const auto& node : source["nodes"])
+            if (selected.contains(node.value("name", "")))
+                clipboard["nodes"].push_back(node);
+        for (const auto& link : source["links"])
+            if (selected.contains(link.value("from_node", "")) &&
+                selected.contains(link.value("to_node", "")))
+                clipboard["links"].push_back(link);
+
+        std::unordered_set<std::string> visited;
+        std::function<void(const nlohmann::json&)> include_groups = [&](const nlohmann::json& nodes) {
+            for (const auto& node : nodes) {
+                if (node.value("type_id", "") != "lfs.group")
+                    continue;
+                const std::string uuid = node.value("properties", nlohmann::json::object())
+                                             .value("tree", "");
+                const auto* referenced = tree(uuid);
+                if (!referenced || !visited.insert(uuid).second)
+                    continue;
+                auto json = referenced->to_json();
+                clipboard["trees"][uuid] = json;
+                include_groups(json["nodes"]);
+            }
+        };
+        include_groups(clipboard["nodes"]);
+        return clipboard.dump();
+    }
+
+    std::expected<PasteNodesResult, ModifierError>
+    ModifierManager::pasteNodes(const std::string_view tree_uuid, const std::string_view text,
+                                const std::optional<std::array<float, 2>> location) {
+        auto* destination = tree(tree_uuid);
+        if (!destination)
+            return std::unexpected(ModifierError{"Node graph does not exist"});
+        nlohmann::json clipboard;
+        try {
+            clipboard = nlohmann::json::parse(text);
+        } catch (const std::exception&) {
+            return std::unexpected(ModifierError{"Clipboard does not contain LichtFeld nodes"});
+        }
+        if (!clipboard.is_object() || clipboard["format"] != "lfs.node-clipboard" ||
+            clipboard["version"] != 1 || !clipboard["nodes"].is_array() ||
+            !clipboard["links"].is_array() || !clipboard["trees"].is_object())
+            return std::unexpected(ModifierError{"Clipboard does not contain LichtFeld nodes"});
+
+        const auto before = toJson(false);
+        std::unordered_map<std::string, std::string> graph_remap;
+        const auto imported = clipboard.value("trees", nlohmann::json::object());
+        for (const auto& [uuid, json] : imported.items()) {
+            const auto* existing = tree(uuid);
+            graph_remap[uuid] = !existing || existing->to_json() == json
+                                    ? uuid
+                                    : core::generate_uuid_v4().to_string();
+        }
+        // A reused parent must also reference the reused version of every child.
+        bool changed;
+        do {
+            changed = false;
+            for (const auto& [uuid, json] : imported.items()) {
+                if (graph_remap[uuid] != uuid)
+                    continue;
+                auto rewritten = json;
+                rewrite_group_references(rewritten, graph_remap);
+                if (rewritten != json) {
+                    graph_remap[uuid] = core::generate_uuid_v4().to_string();
+                    changed = true;
+                }
+            }
+        } while (changed);
+        for (const auto& [uuid, source_json] : imported.items()) {
+            if (tree(uuid) && graph_remap[uuid] == uuid)
+                continue;
+            auto json = source_json;
+            json["uuid"] = graph_remap[uuid];
+            rewrite_group_references(json, graph_remap);
+            auto value = std::make_unique<lfs::nodes::NodeTree>(
+                lfs::nodes::NodeTree::from_json(json, registry_));
+            value->name = uniqueTreeName(value->name);
+            trees_[value->uuid] = std::move(value);
+        }
+
+        auto nodes_json = clipboard["nodes"];
+        nlohmann::json temporary{{"uuid", core::generate_uuid_v4().to_string()},
+                                 {"name", "Clipboard"},
+                                 {"tree_type", destination->tree_type},
+                                 {"nodes", nodes_json},
+                                 {"links", nlohmann::json::array()},
+                                 {"interface", {{"inputs", nlohmann::json::array()},
+                                                {"outputs", nlohmann::json::array()}}}};
+        rewrite_group_references(temporary, graph_remap);
+        auto decoded = lfs::nodes::NodeTree::from_json(temporary, registry_);
+        float centre_x = 0.0f;
+        float centre_y = 0.0f;
+        if (!decoded.nodes.empty()) {
+            float min_x = decoded.nodes.front().location[0];
+            float max_x = min_x;
+            float min_y = decoded.nodes.front().location[1];
+            float max_y = min_y;
+            for (const auto& node : decoded.nodes) {
+                min_x = std::min(min_x, node.location[0]);
+                max_x = std::max(max_x, node.location[0]);
+                min_y = std::min(min_y, node.location[1]);
+                max_y = std::max(max_y, node.location[1]);
+            }
+            centre_x = (min_x + max_x) * 0.5f;
+            centre_y = (min_y + max_y) * 0.5f;
+        }
+        const float offset_x = location ? (*location)[0] - centre_x : 30.0f;
+        const float offset_y = location ? (*location)[1] - centre_y : 30.0f;
+        std::unordered_map<std::string, std::string> node_remap;
+        PasteNodesResult result;
+        for (const auto& source : decoded.nodes) {
+            if (source.type_id == "lfs.group_input" || source.type_id == "lfs.group_output")
+                continue;
+            auto& copy = destination->add_node(source.type_id, source.name);
+            const auto unique = copy.name;
+            copy = source;
+            copy.name = unique;
+            copy.location = {source.location[0] + offset_x, source.location[1] + offset_y};
+            node_remap[source.name] = copy.name;
+            result.nodes.push_back(copy.name);
+        }
+        for (const auto& source : decoded.nodes) {
+            const auto pasted = node_remap.find(source.name);
+            if (pasted == node_remap.end())
+                continue;
+            auto* copy = destination->find_node(pasted->second);
+            const auto frame = source.ui.find("frame");
+            if (!copy || frame == source.ui.end() || !frame->is_string())
+                continue;
+            const auto mapped = node_remap.find(frame->get_ref<const std::string&>());
+            if (mapped == node_remap.end())
+                copy->ui.erase("frame");
+            else
+                copy->ui["frame"] = mapped->second;
+        }
+        const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) {
+            return tree(uuid);
+        };
+        for (const auto& item : clipboard.value("links", nlohmann::json::array())) {
+            lfs::nodes::Link link{node_remap[item.value("from_node", "")],
+                                  item.value("from_socket", ""),
+                                  node_remap[item.value("to_node", "")],
+                                  item.value("to_socket", "")};
+            if (link.from_node.empty() || link.to_node.empty() ||
+                !destination->add_link(std::move(link), nullptr, resolver))
+                ++result.dropped_links;
+        }
+        recordLibraryEdit(before);
+        return result;
+    }
+
+    std::expected<MakeGroupResult, ModifierError>
+    ModifierManager::makeGroup(const std::string_view tree_uuid,
+                               const std::vector<std::string>& names, std::string group_name) {
+        auto* outer = tree(tree_uuid);
+        if (!outer)
+            return std::unexpected(ModifierError{"Node graph does not exist"});
+        std::unordered_set<std::string> selected;
+        for (const auto& name : names)
+            if (const auto* node = outer->find_node(name);
+                node && node->type_id != "lfs.group_input" && node->type_id != "lfs.group_output")
+                selected.insert(name);
+        if (selected.empty())
+            return std::unexpected(ModifierError{"Select at least one node"});
+        if (lfs::nodes::group_selection_would_cycle(*outer, selected))
+            return std::unexpected(ModifierError{
+                "Selection cannot be grouped because dependencies leave and re-enter it"});
+
+        const auto before = toJson(false);
+        const auto original_nodes = outer->nodes;
+        const auto original_links = outer->links;
+        auto nested = std::make_unique<lfs::nodes::NodeTree>(registry_,
+                                                             uniqueTreeName(std::move(group_name)));
+        nested->interface.inputs.clear();
+        nested->interface.outputs.clear();
+        nested->links.clear();
+        const auto input_name = nested->input_node().name;
+        const auto output_name = nested->output_node().name;
+        const lfs::nodes::TreeResolver resolver = [this, nested_ptr = nested.get()](const std::string_view uuid) {
+            return uuid == nested_ptr->uuid ? nested_ptr : tree(uuid);
+        };
+        std::unordered_map<std::string, std::string> node_remap;
+        float centre_x = 0.0f;
+        float centre_y = 0.0f;
+        for (const auto& source : original_nodes) {
+            if (!selected.contains(source.name))
+                continue;
+            auto& copy = nested->add_node(source.type_id, source.name);
+            const auto unique = copy.name;
+            copy = source;
+            copy.name = unique;
+            node_remap[source.name] = unique;
+            centre_x += source.location[0];
+            centre_y += source.location[1];
+        }
+        for (const auto& source : original_nodes) {
+            const auto moved = node_remap.find(source.name);
+            if (moved == node_remap.end())
+                continue;
+            auto* copy = nested->find_node(moved->second);
+            const auto frame = source.ui.find("frame");
+            if (!copy || frame == source.ui.end() || !frame->is_string())
+                continue;
+            const auto mapped = node_remap.find(frame->get_ref<const std::string&>());
+            if (mapped == node_remap.end())
+                copy->ui.erase("frame");
+            else
+                copy->ui["frame"] = mapped->second;
+        }
+        centre_x /= static_cast<float>(selected.size());
+        centre_y /= static_cast<float>(selected.size());
+        for (auto& node : nested->nodes)
+            if (node.type_id != "lfs.group_input" && node.type_id != "lfs.group_output") {
+                node.location[0] -= centre_x;
+                node.location[1] -= centre_y;
+            }
+
+        std::unordered_map<std::string, std::string> incoming_sockets;
+        std::unordered_map<std::string, std::string> outgoing_sockets;
+        for (const auto& link : original_links) {
+            const bool from_inside = selected.contains(link.from_node);
+            const bool to_inside = selected.contains(link.to_node);
+            if (from_inside && to_inside) {
+                nested->add_link({node_remap[link.from_node], link.from_socket,
+                                  node_remap[link.to_node], link.to_socket}, nullptr, resolver);
+                continue;
+            }
+            if (!from_inside && to_inside) {
+                const std::string key = link.from_node + "\n" + link.from_socket;
+                auto socket = incoming_sockets.find(key);
+                if (socket == incoming_sockets.end()) {
+                    const auto* source = outer->find_node(link.from_node);
+                    const auto outputs = source ? lfs::nodes::effective_outputs(*outer, *source, resolver)
+                                                : std::vector<lfs::nodes::SocketDecl>{};
+                    const auto declaration = std::ranges::find(outputs, link.from_socket,
+                                                               &lfs::nodes::SocketDecl::identifier);
+                    if (declaration == outputs.end())
+                        continue;
+                    const auto* target = outer->find_node(link.to_node);
+                    lfs::nodes::Value value = declaration->default_value;
+                    if (target)
+                        if (const auto own = target->input_values.find(link.to_socket);
+                            own != target->input_values.end())
+                            value = own->second;
+                    const auto identifier = interface_identifier(
+                        nested->interface,
+                        declaration->label.empty() ? declaration->identifier : declaration->label);
+                    nested->interface.inputs.push_back(
+                        {identifier, declaration->label.empty() ? declaration->identifier : declaration->label,
+                         declaration->type, value, declaration->min, declaration->max, declaration->step});
+                    socket = incoming_sockets.emplace(key, identifier).first;
+                }
+                nested->add_link({input_name, socket->second, node_remap[link.to_node], link.to_socket},
+                                 nullptr, resolver);
+            } else if (from_inside && !to_inside) {
+                const std::string key = link.from_node + "\n" + link.from_socket;
+                auto socket = outgoing_sockets.find(key);
+                if (socket == outgoing_sockets.end()) {
+                    const auto* source = outer->find_node(link.from_node);
+                    const auto outputs = source ? lfs::nodes::effective_outputs(*outer, *source, resolver)
+                                                : std::vector<lfs::nodes::SocketDecl>{};
+                    const auto declaration = std::ranges::find(outputs, link.from_socket,
+                                                               &lfs::nodes::SocketDecl::identifier);
+                    if (declaration == outputs.end())
+                        continue;
+                    const auto identifier = interface_identifier(
+                        nested->interface,
+                        declaration->label.empty() ? declaration->identifier : declaration->label);
+                    nested->interface.outputs.push_back(
+                        {identifier, declaration->label.empty() ? declaration->identifier : declaration->label,
+                         declaration->type, declaration->default_value, declaration->min,
+                         declaration->max, declaration->step});
+                    socket = outgoing_sockets.emplace(key, identifier).first;
+                    nested->add_link({node_remap[link.from_node], link.from_socket, output_name,
+                                      identifier}, nullptr, resolver);
+                }
+            }
+        }
+        nested->find_node(input_name)->location = {-240.0f, 0.0f};
+        nested->find_node(output_name)->location = {240.0f, 0.0f};
+        const std::string nested_uuid = nested->uuid;
+        const std::string nested_name = nested->name;
+        trees_[nested_uuid] = std::move(nested);
+        for (const auto& name : selected)
+            outer->remove_node(name);
+        auto& group = outer->add_node("lfs.group", nested_name);
+        group.location = {centre_x, centre_y};
+        group.properties["tree"] = nested_uuid;
+        for (const auto& socket : tree(nested_uuid)->interface.inputs)
+            group.input_values[socket.identifier] = socket.default_value;
+        const lfs::nodes::TreeResolver outer_resolver = [this](const std::string_view uuid) {
+            return tree(uuid);
+        };
+        outer->links.clear();
+        std::unordered_set<std::string> linked_inputs;
+        for (const auto& link : original_links) {
+            const bool from_inside = selected.contains(link.from_node);
+            const bool to_inside = selected.contains(link.to_node);
+            if (!from_inside && !to_inside) {
+                outer->add_link(link, nullptr, outer_resolver);
+            } else if (!from_inside && to_inside) {
+                const auto key = link.from_node + "\n" + link.from_socket;
+                if (linked_inputs.insert(key).second)
+                    outer->add_link({link.from_node, link.from_socket, group.name,
+                                     incoming_sockets.at(key)}, nullptr, outer_resolver);
+            } else if (from_inside && !to_inside) {
+                const auto key = link.from_node + "\n" + link.from_socket;
+                outer->add_link({group.name, outgoing_sockets.at(key), link.to_node,
+                                 link.to_socket}, nullptr, outer_resolver);
+            }
+        }
+        const auto result = MakeGroupResult{group.name, nested_uuid};
+        recordLibraryEdit(before);
+        return result;
+    }
+
+    std::expected<std::vector<std::string>, ModifierError>
+    ModifierManager::ungroup(const std::string_view tree_uuid, const std::string_view node_name) {
+        auto* outer = tree(tree_uuid);
+        auto* group = outer ? outer->find_node(node_name) : nullptr;
+        if (!group || group->type_id != "lfs.group")
+            return std::unexpected(ModifierError{"Group node does not exist"});
+        const auto graph_property = group->properties.find("tree");
+        auto* nested = graph_property != group->properties.end() && graph_property->is_string()
+                           ? tree(graph_property->get_ref<const std::string&>())
+                           : nullptr;
+        if (!nested)
+            return std::unexpected(ModifierError{"Missing graph"});
+        const auto before = toJson(false);
+        const auto outer_links = outer->links;
+        const auto group_values = group->input_values;
+        const auto group_location = group->location;
+        std::unordered_map<std::string, lfs::nodes::Link> incoming;
+        for (const auto& link : outer_links) {
+            if (link.to_node == node_name)
+                incoming[link.to_socket] = link;
+        }
+        std::unordered_map<std::string, std::string> remap;
+        std::vector<std::string> created;
+        for (const auto& source : nested->nodes) {
+            if (source.type_id == "lfs.group_input" || source.type_id == "lfs.group_output")
+                continue;
+            auto& copy = outer->add_node(source.type_id, source.name);
+            const auto unique = copy.name;
+            copy = source;
+            copy.name = unique;
+            copy.location = {source.location[0] + group_location[0],
+                             source.location[1] + group_location[1]};
+            remap[source.name] = unique;
+            created.push_back(unique);
+        }
+        for (const auto& source : nested->nodes) {
+            const auto pasted = remap.find(source.name);
+            if (pasted == remap.end())
+                continue;
+            auto* copy = outer->find_node(pasted->second);
+            const auto frame = source.ui.find("frame");
+            if (!copy || frame == source.ui.end() || !frame->is_string())
+                continue;
+            const auto mapped = remap.find(frame->get_ref<const std::string&>());
+            if (mapped == remap.end())
+                copy->ui.erase("frame");
+            else
+                copy->ui["frame"] = mapped->second;
+        }
+        const auto input_node = nested->input_node().name;
+        const auto output_node = nested->output_node().name;
+        const auto nested_links = nested->links;
+        outer->remove_node(node_name);
+        outer->links.clear();
+        const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) {
+            return tree(uuid);
+        };
+        // Rebuild the outer links in their original order. This is observable for
+        // multi-input sockets, so a group output must occupy the same slot that the
+        // group link occupied.
+        for (const auto& link : outer_links) {
+            if (link.to_node == node_name)
+                continue;
+            if (link.from_node != node_name) {
+                outer->add_link(link, nullptr, resolver);
+                continue;
+            }
+            for (const auto& inner : nested_links) {
+                if (inner.to_node != output_node || inner.to_socket != link.from_socket)
+                    continue;
+                if (inner.from_node == input_node) {
+                    if (const auto source = incoming.find(inner.from_socket); source != incoming.end())
+                        outer->add_link({source->second.from_node, source->second.from_socket,
+                                         link.to_node, link.to_socket}, nullptr, resolver);
+                } else {
+                    outer->add_link({remap[inner.from_node], inner.from_socket,
+                                     link.to_node, link.to_socket}, nullptr, resolver);
+                }
+            }
+        }
+        // Links whose target is inside the group have no peers in the outer graph;
+        // preserve their order exactly as stored by the nested graph.
+        for (const auto& link : nested_links) {
+            const bool from_input = link.from_node == input_node;
+            const bool to_output = link.to_node == output_node;
+            if (to_output)
+                continue;
+            if (!from_input) {
+                outer->add_link({remap[link.from_node], link.from_socket, remap[link.to_node],
+                                 link.to_socket}, nullptr, resolver);
+            } else {
+                if (const auto source = incoming.find(link.from_socket); source != incoming.end())
+                    outer->add_link({source->second.from_node, source->second.from_socket,
+                                     remap[link.to_node], link.to_socket}, nullptr, resolver);
+                else if (auto* target = outer->find_node(remap[link.to_node]))
+                    if (const auto value = group_values.find(link.from_socket);
+                        value != group_values.end())
+                        target->input_values[link.to_socket] = value->second;
+            }
+        }
+        recordLibraryEdit(before);
+        return created;
+    }
+
+    ModifierResult ModifierManager::setGroupGraph(const std::string_view tree_uuid,
+                                                  const std::string_view node_name,
+                                                  const std::string_view graph_uuid) {
+        auto* owner = tree(tree_uuid);
+        auto* node = owner ? owner->find_node(node_name) : nullptr;
+        const auto* referenced = tree(graph_uuid);
+        if (!owner || !node || node->type_id != "lfs.group" || !referenced)
+            return std::unexpected(ModifierError{"Group node or graph does not exist"});
+        if (owner->tree_type != referenced->tree_type)
+            return std::unexpected(ModifierError{"Group graph has a different tree type"});
+        const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) {
+            return tree(uuid);
+        };
+        std::string cycle;
+        if (lfs::nodes::group_reference_would_cycle(*owner, referenced->uuid, resolver, &cycle))
+            return std::unexpected(ModifierError{"Group cycle: " + cycle});
+        const auto before = owner->to_json();
+        node->properties["tree"] = referenced->uuid;
+        std::unordered_map<std::string, lfs::nodes::Value> values;
+        for (const auto& socket : referenced->interface.inputs) {
+            const auto existing = node->input_values.find(socket.identifier);
+            values[socket.identifier] = existing == node->input_values.end()
+                                            ? socket.default_value
+                                            : existing->second;
+        }
+        node->input_values = std::move(values);
+        const auto inputs = lfs::nodes::effective_inputs(*owner, *node, resolver);
+        const auto outputs = lfs::nodes::effective_outputs(*owner, *node, resolver);
+        std::erase_if(owner->links, [&](const auto& link) {
+            if (link.from_node == node_name)
+                return std::ranges::find(outputs, link.from_socket,
+                                         &lfs::nodes::SocketDecl::identifier) == outputs.end();
+            if (link.to_node == node_name)
+                return std::ranges::find(inputs, link.to_socket,
+                                         &lfs::nodes::SocketDecl::identifier) == inputs.end();
+            return false;
+        });
+        recordTreeEdit(owner->uuid, before);
+        return {};
+    }
+
+    ModifierResult ModifierManager::makeGroupSingleUser(const std::string_view tree_uuid,
+                                                        const std::string_view node_name) {
+        auto* owner = tree(tree_uuid);
+        auto* node = owner ? owner->find_node(node_name) : nullptr;
+        lfs::nodes::NodeTree* source = nullptr;
+        if (node) {
+            const auto property = node->properties.find("tree");
+            if (property != node->properties.end() && property->is_string())
+                source = tree(property->get_ref<const std::string&>());
+        }
+        if (!source)
+            return std::unexpected(ModifierError{"Group node or graph does not exist"});
+        const auto before = toJson(false);
+        auto json = source->to_json();
+        const auto uuid = core::generate_uuid_v4().to_string();
+        json["uuid"] = uuid;
+        json["name"] = uniqueTreeName(source->name);
+        auto copy = std::make_unique<lfs::nodes::NodeTree>(
+            lfs::nodes::NodeTree::from_json(json, registry_));
+        trees_[uuid] = std::move(copy);
+        node->properties["tree"] = uuid;
+        recordLibraryEdit(before);
+        return {};
+    }
+
+    std::expected<std::string, ModifierError>
+    ModifierManager::interfaceAdd(const std::string_view tree_uuid, const bool output,
+                                  std::string type, std::string label,
+                                  lfs::nodes::Value default_value,
+                                  const std::optional<double> min,
+                                  const std::optional<double> max,
+                                  const std::optional<double> step) {
+        auto* graph = tree(tree_uuid);
+        if (!graph)
+            return std::unexpected(ModifierError{"Node graph does not exist"});
+        static const std::unordered_set<std::string> allowed{
+            std::string(lfs::nodes::GEOMETRY_SOCKET), std::string(lfs::nodes::FLOAT_SOCKET),
+            std::string(lfs::nodes::INT_SOCKET), std::string(lfs::nodes::BOOL_SOCKET),
+            std::string(lfs::nodes::VECTOR_SOCKET), std::string(lfs::nodes::COLOUR_SOCKET),
+            std::string(lfs::nodes::STRING_SOCKET)};
+        if (!allowed.contains(type))
+            return std::unexpected(ModifierError{"Unknown interface socket type"});
+        const auto before = toJson(false);
+        const auto identifier = interface_identifier(graph->interface, label);
+        if (std::holds_alternative<std::monostate>(default_value.data))
+            default_value = default_for_socket(type);
+        lfs::nodes::InterfaceSocket socket{identifier, label.empty() ? identifier : std::move(label),
+                                           std::move(type), std::move(default_value), min, max, step};
+        auto& sockets = output ? graph->interface.outputs : graph->interface.inputs;
+        sockets.push_back(socket);
+        if (!output)
+            for (auto& [_, other] : trees_)
+                for (auto& node : other->nodes)
+                    if (node.type_id == "lfs.group" && node.properties.value("tree", "") == graph->uuid)
+                        node.input_values[identifier] = socket.default_value;
+        recordLibraryEdit(before);
+        return identifier;
+    }
+
+    ModifierResult ModifierManager::interfaceRemove(const std::string_view tree_uuid,
+                                                    const bool output,
+                                                    const std::string_view identifier) {
+        auto* graph = tree(tree_uuid);
+        if (!graph)
+            return std::unexpected(ModifierError{"Node graph does not exist"});
+        auto& sockets = output ? graph->interface.outputs : graph->interface.inputs;
+        const auto found = std::ranges::find(sockets, identifier,
+                                             &lfs::nodes::InterfaceSocket::identifier);
+        if (found == sockets.end())
+            return std::unexpected(ModifierError{"Interface socket does not exist"});
+        const auto before = toJson(false);
+        sockets.erase(found);
+        const auto endpoint = output ? graph->output_node().name : graph->input_node().name;
+        std::erase_if(graph->links, [&](const auto& link) {
+            return output ? link.to_node == endpoint && link.to_socket == identifier
+                          : link.from_node == endpoint && link.from_socket == identifier;
+        });
+        if (!output) {
+            for (auto& [_, stack] : stacks_)
+                for (auto& modifier : stack.modifiers)
+                    if (modifier.tree_uuid == graph->uuid)
+                        modifier.input_overrides.erase(std::string(identifier));
+            for (auto& [_, other] : trees_)
+                for (auto& node : other->nodes)
+                    if (node.type_id == "lfs.group" && node.properties.value("tree", "") == graph->uuid)
+                        node.input_values.erase(std::string(identifier));
+        }
+        for (auto& [_, other] : trees_)
+            std::erase_if(other->links, [&](const auto& link) {
+                const auto* from = other->find_node(link.from_node);
+                const auto* to = other->find_node(link.to_node);
+                return output ? from && from->type_id == "lfs.group" &&
+                                    from->properties.value("tree", "") == graph->uuid &&
+                                    link.from_socket == identifier
+                              : to && to->type_id == "lfs.group" &&
+                                    to->properties.value("tree", "") == graph->uuid &&
+                                    link.to_socket == identifier;
+            });
+        recordLibraryEdit(before);
+        return {};
+    }
+
+    ModifierResult ModifierManager::interfaceUpdate(const std::string_view tree_uuid,
+                                                    const bool output,
+                                                    const std::string_view identifier,
+                                                    const nlohmann::json& changes) {
+        auto* graph = tree(tree_uuid);
+        if (!graph)
+            return std::unexpected(ModifierError{"Node graph does not exist"});
+        auto& sockets = output ? graph->interface.outputs : graph->interface.inputs;
+        const auto found = std::ranges::find(sockets, identifier,
+                                             &lfs::nodes::InterfaceSocket::identifier);
+        if (found == sockets.end())
+            return std::unexpected(ModifierError{"Interface socket does not exist"});
+        const auto before = toJson(false);
+        if (changes.contains("label") && changes["label"].is_string())
+            found->label = changes["label"];
+        if (changes.contains("default"))
+            found->default_value = changes["default"].get<lfs::nodes::Value>();
+        const auto number = [&](const char* key, std::optional<double>& value) {
+            if (!changes.contains(key))
+                return;
+            value = changes[key].is_null() ? std::optional<double>{}
+                                           : std::optional<double>{changes[key].get<double>()};
+        };
+        number("min", found->min);
+        number("max", found->max);
+        number("step", found->step);
+        recordLibraryEdit(before);
+        return {};
+    }
+
+    ModifierResult ModifierManager::interfaceMove(const std::string_view tree_uuid,
+                                                  const bool output,
+                                                  const std::string_view identifier,
+                                                  std::size_t index) {
+        auto* graph = tree(tree_uuid);
+        if (!graph)
+            return std::unexpected(ModifierError{"Node graph does not exist"});
+        auto& sockets = output ? graph->interface.outputs : graph->interface.inputs;
+        const auto found = std::ranges::find(sockets, identifier,
+                                             &lfs::nodes::InterfaceSocket::identifier);
+        if (found == sockets.end())
+            return std::unexpected(ModifierError{"Interface socket does not exist"});
+        const auto before = toJson(false);
+        auto value = std::move(*found);
+        const auto old_index = static_cast<std::size_t>(std::distance(sockets.begin(), found));
+        sockets.erase(sockets.begin() + static_cast<std::ptrdiff_t>(old_index));
+        index = std::min(index, sockets.size());
+        sockets.insert(sockets.begin() + static_cast<std::ptrdiff_t>(index), std::move(value));
+        recordLibraryEdit(before);
+        return {};
+    }
+
+    std::expected<std::string, ModifierError>
+    ModifierManager::frameWrap(const std::string_view tree_uuid,
+                               const std::vector<std::string>& names, std::string label) {
+        auto* graph = tree(tree_uuid);
+        if (!graph)
+            return std::unexpected(ModifierError{"Node graph does not exist"});
+        std::vector<std::string> members;
+        for (const auto& name : names)
+            if (auto* node = graph->find_node(name); node && node->type_id != "lfs.frame")
+                members.push_back(node->name);
+        if (members.empty())
+            return std::unexpected(ModifierError{"Select at least one node"});
+        const auto before = graph->to_json();
+        float x = 0.0f;
+        float y = 0.0f;
+        for (const auto& member : members) {
+            const auto* node = graph->find_node(member);
+            x += node->location[0];
+            y += node->location[1];
+        }
+        auto& frame = graph->add_node("lfs.frame", label.empty() ? "Frame" : label);
+        frame.location = {x / members.size(), y / members.size()};
+        frame.properties["label"] = label.empty() ? frame.name : label;
+        for (const auto& member : members)
+            graph->find_node(member)->ui["frame"] = frame.name;
+        const auto result = frame.name;
+        recordTreeEdit(graph->uuid, before, {}, false);
+        return result;
+    }
+
+    ModifierResult ModifierManager::frameSetMembers(const std::string_view tree_uuid,
+                                                    const std::string_view frame_name,
+                                                    const std::vector<std::string>& names) {
+        auto* graph = tree(tree_uuid);
+        auto* frame = graph ? graph->find_node(frame_name) : nullptr;
+        if (!frame || frame->type_id != "lfs.frame")
+            return std::unexpected(ModifierError{"Frame does not exist"});
+        for (const auto& name : names)
+            if (!graph->find_node(name))
+                return std::unexpected(ModifierError{"Frame member does not exist"});
+        const auto before = graph->to_json();
+        const std::unordered_set<std::string> members(names.begin(), names.end());
+        for (auto& node : graph->nodes) {
+            if (node.ui.value("frame", "") == frame_name)
+                node.ui.erase("frame");
+            if (members.contains(node.name) && node.name != frame_name)
+                node.ui["frame"] = frame_name;
+        }
+        recordTreeEdit(graph->uuid, before, {}, false);
+        return {};
+    }
+
+    std::expected<std::string, ModifierError>
+    ModifierManager::rerouteInsert(const std::string_view tree_uuid,
+                                   const lfs::nodes::Link& link,
+                                   const std::optional<std::array<float, 2>> location) {
+        auto* graph = tree(tree_uuid);
+        if (!graph || std::ranges::find(graph->links, link) == graph->links.end())
+            return std::unexpected(ModifierError{"Link does not exist"});
+        // MCP/UI callers commonly pass a reference into graph->links. Erasing that
+        // vector element would invalidate the reference before the replacement links
+        // are built, so retain an owning copy first.
+        const auto original_link = link;
+        const auto before = graph->to_json();
+        const auto original = std::ranges::find(graph->links, original_link);
+        const auto original_index = static_cast<std::size_t>(std::distance(graph->links.begin(), original));
+        const auto* from = graph->find_node(link.from_node);
+        const auto* to = graph->find_node(link.to_node);
+        const std::array<float, 2> midpoint{
+            from && to ? (from->location[0] + to->location[0]) * 0.5f : 0.0f,
+            from && to ? (from->location[1] + to->location[1]) * 0.5f : 0.0f};
+        auto& reroute = graph->add_node("lfs.reroute");
+        reroute.location = location.value_or(midpoint);
+        graph->remove_link(original_link);
+        const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) {
+            return tree(uuid);
+        };
+        std::string error;
+        if (!graph->add_link({original_link.from_node, original_link.from_socket, reroute.name, "Input"}, &error,
+                             resolver) ||
+            !graph->add_link({reroute.name, "Output", original_link.to_node, original_link.to_socket}, &error,
+                             resolver)) {
+            *graph = lfs::nodes::NodeTree::from_json(before, registry_);
+            return std::unexpected(ModifierError{error});
+        }
+        const lfs::nodes::Link downstream{reroute.name, "Output", original_link.to_node, original_link.to_socket};
+        const auto inserted = std::ranges::find(graph->links, downstream);
+        if (inserted != graph->links.end()) {
+            auto value = std::move(*inserted);
+            graph->links.erase(inserted);
+            graph->links.insert(graph->links.begin() +
+                                    static_cast<std::ptrdiff_t>(std::min(original_index, graph->links.size())),
+                                std::move(value));
+        }
+        const auto result = reroute.name;
+        recordTreeEdit(graph->uuid, before);
+        return result;
+    }
+
     bool ModifierManager::removeTree(std::string_view uuid_or_name) {
         const auto* value = tree(uuid_or_name);
         if (!value)
@@ -462,11 +1247,12 @@ namespace lfs::vis {
         auto* node = graph ? graph->find_node(node_name) : nullptr;
         if (!node)
             return std::unexpected(ModifierError{std::format("Node '{}' does not exist in graph '{}'", node_name, tree_uuid)});
-        const auto type = registry_.find(node->type_id);
-        if (!type)
-            return std::unexpected(ModifierError{std::format("Node type '{}' is not registered", node->type_id)});
-        const auto socket = std::ranges::find(type->inputs, input, &lfs::nodes::SocketDecl::identifier);
-        if (socket == type->inputs.end())
+        const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) {
+            return tree(uuid);
+        };
+        const auto sockets = lfs::nodes::effective_inputs(*graph, *node, resolver);
+        const auto socket = std::ranges::find(sockets, input, &lfs::nodes::SocketDecl::identifier);
+        if (socket == sockets.end())
             return std::unexpected(ModifierError{std::format("Input '{}' does not exist on node '{}' ({})", input, node_name, node->type_id)});
         const auto found = node->input_values.find(std::string(input));
         auto before = found == node->input_values.end() ? socket->default_value : found->second;
@@ -580,6 +1366,9 @@ namespace lfs::vis {
         nlohmann::json result = {{"schema_version", 1}, {"trees", nlohmann::json::array()}, {"stacks", nlohmann::json::object()}};
         for (const auto& [_, value] : trees_)
             result["trees"].push_back(value->to_json());
+        std::sort(result["trees"].begin(), result["trees"].end(), [](const auto& a, const auto& b) {
+            return a.at("uuid").template get<std::string>() < b.at("uuid").template get<std::string>();
+        });
         for (const auto& [uuid, value] : stacks_) {
             if (existing_nodes_only && !scene_manager_->getScene().getNodeByUuid(uuid))
                 continue;
@@ -683,6 +1472,17 @@ namespace lfs::vis {
             }))
             scene_manager_->getScene().clearNodeEvaluatedPayload(node_uuid);
         markDirty(node_uuid);
+    }
+
+    void ModifierManager::recordLibraryEdit(nlohmann::json before, std::string merge_key) {
+        if (restoring_)
+            return;
+        auto after = toJson(false);
+        if (before == after)
+            return;
+        op::undoHistory().push(std::make_unique<ModifierStateUndoEntry>(
+            *this, std::move(before), std::move(after), std::move(merge_key)));
+        markDirty();
     }
 
     std::uint64_t ModifierManager::generation() const {

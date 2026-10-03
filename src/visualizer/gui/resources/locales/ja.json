@@ -1,4 +1,6 @@
 {
+  "node_editor.add_input": "入力を追加",
+  "node_editor.add_output": "出力を追加",
   "node_editor.paint": "ペイント",
   "node_editor.paint_done": "ペイント終了",
   "node_editor.pick_colour": "色を採取",
@@ -3570,6 +3572,76 @@
       },
       "properties": {},
       "property_labels": {}
+    },
+    "group": {
+      "label": "グループ",
+      "description": "再利用可能なノードグラフを評価します。",
+      "help": "サイドバーでグラフを選択します。入出力はそのグラフのインターフェースに従います。\nすべてのインスタンスが同じグラフを共有します。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "参照するグラフの UUID。"
+      },
+      "property_labels": {
+        "tree": "グラフ"
+      }
+    },
+    "frame": {
+      "label": "フレーム",
+      "description": "関連するノードを視覚的にまとめます。",
+      "help": "ノードをフレーム内にドロップします。フレームを移動するとメンバーも移動します。\nレイアウトノードは評価結果を変更しません。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "フレームの見出し。",
+        "colour": "テーマカラーのプリセットまたは RGB 値。",
+        "note": "見出しの下に表示する任意のテキスト。"
+      },
+      "property_labels": {
+        "label": "ラベル",
+        "colour": "カラー",
+        "note": "メモ"
+      }
+    },
+    "reroute": {
+      "label": "リルート",
+      "description": "値を変更せずにリンクを迂回させます。",
+      "help": "任意のソケット型を接続できます。上流の型を自動的に使用します。\nレイアウトノードは評価結果を変更しません。",
+      "inputs": {
+        "Input": "そのまま渡す値。"
+      },
+      "input_labels": {
+        "Input": "入力"
+      },
+      "outputs": {
+        "Output": "変更されていない入力値。"
+      },
+      "output_labels": {
+        "Output": "出力"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "メモ",
+      "description": "編集可能なテキストカードをグラフに追加します。",
+      "help": "カードをダブルクリックするか、サイドバーでテキストを編集します。\nレイアウトノードは評価結果を変更しません。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "カードに表示するテキスト。",
+        "width": "キャンバス単位でのカード幅。高さはテキストに合わせて調整されます。"
+      },
+      "property_labels": {
+        "text": "テキスト",
+        "width": "幅"
+      }
     },
     "group_input": {
       "label": "グループ入力",

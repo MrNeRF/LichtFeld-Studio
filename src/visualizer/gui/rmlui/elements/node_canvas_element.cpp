@@ -23,11 +23,17 @@
 #include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
+#include <RmlUi/Core/Elements/ElementFormControlTextArea.h>
 #include <RmlUi/Core/Input.h>
+#include <RmlUi/Core/Core.h>
+#include <RmlUi/Core/FontEngineInterface.h>
 #include <RmlUi/Core/RenderManager.h>
 #include <SDL3/SDL_scancode.h>
+#include <SDL3/SDL_clipboard.h>
+#include <SDL3/SDL_stdinc.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <format>
 #include <ranges>
@@ -73,6 +79,46 @@ namespace lfs::vis::gui {
         };
 
         std::string px(const float value) { return std::format("{:.1f}px", value); }
+
+        // Measure using the same font and wrapping width as the card, in canvas units.
+        float textHeight(const std::string& text, const float width, const float dp_ratio,
+                         const bool bold = false) {
+            auto* engine = Rml::GetFontEngineInterface();
+            auto face = engine->GetFontFaceHandle("inter", Rml::Style::FontStyle::Normal,
+                                                       bold ? Rml::Style::FontWeight::Bold : Rml::Style::FontWeight::Normal,
+                                                       static_cast<int>(13.0f * dp_ratio));
+            if (!face)
+                face = engine->GetFontFaceHandle("inter", Rml::Style::FontStyle::Normal,
+                                                 Rml::Style::FontWeight::Normal, static_cast<int>(13.0f * dp_ratio));
+            const Rml::String language;
+            const Rml::TextShapingContext shaping{language};
+            int lines = 1;
+            std::size_t start = 0;
+            std::size_t last_space = std::string::npos;
+            for (std::size_t end = 0; end < text.size();) {
+                const auto character_start = end;
+                const auto ch = text[end];
+                if (ch == '\n') {
+                    ++lines;
+                    start = ++end;
+                    last_space = std::string::npos;
+                    continue;
+                }
+                if (ch == ' ' || ch == '\t')
+                    last_space = end;
+                ++end;
+                while (end < text.size() && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80)
+                    ++end;
+                const auto measured = face ? engine->GetStringWidth(face, Rml::StringView(text.data() + start, text.data() + end), shaping)
+                                           : (end - start) * 13.0f * dp_ratio;
+                if (measured > width * dp_ratio) {
+                    ++lines;
+                    start = last_space != std::string::npos && last_space >= start ? last_space + 1 : character_start;
+                    last_space = std::string::npos;
+                }
+            }
+            return lines * 20.0f;
+        }
 
         using node_widgets::escape;
         using node_widgets::valuePayload;
@@ -206,48 +252,22 @@ namespace lfs::vis::gui {
 
         std::vector<lfs::nodes::SocketDecl>
         canvasInputs(const lfs::nodes::NodeTree& tree, const lfs::nodes::Node& node,
-                     const std::shared_ptr<const lfs::nodes::NodeTypeInfo>& type) {
-            if (node.type_id == "lfs.group_input")
-                return {};
-            if (node.type_id != "lfs.group_output")
+                     const std::shared_ptr<const lfs::nodes::NodeTypeInfo>& type,
+                     const lfs::nodes::TreeResolver& resolver) {
+            if (node.type_id != "lfs.group_input" && node.type_id != "lfs.group_output" &&
+                node.type_id != "lfs.group" && node.type_id != "lfs.reroute")
                 return type ? type->inputs : std::vector<lfs::nodes::SocketDecl>{};
-            std::vector<lfs::nodes::SocketDecl> result;
-            result.reserve(tree.interface.outputs.size());
-            for (const auto& socket : tree.interface.outputs) {
-                result.push_back({socket.identifier, socket.label, socket.type, socket.default_value,
-                                  socket.min, socket.max, socket.step});
-                if (type) {
-                    const auto declared = std::ranges::find(type->inputs, socket.identifier, &lfs::nodes::SocketDecl::identifier);
-                    if (declared != type->inputs.end()) {
-                        result.back().label = declared->label;
-                        result.back().description = declared->description;
-                    }
-                }
-            }
-            return result;
+            return lfs::nodes::effective_inputs(tree, node, resolver);
         }
 
         std::vector<lfs::nodes::SocketDecl>
         canvasOutputs(const lfs::nodes::NodeTree& tree, const lfs::nodes::Node& node,
-                      const std::shared_ptr<const lfs::nodes::NodeTypeInfo>& type) {
-            if (node.type_id == "lfs.group_output")
-                return {};
-            if (node.type_id != "lfs.group_input")
+                      const std::shared_ptr<const lfs::nodes::NodeTypeInfo>& type,
+                      const lfs::nodes::TreeResolver& resolver) {
+            if (node.type_id != "lfs.group_input" && node.type_id != "lfs.group_output" &&
+                node.type_id != "lfs.group" && node.type_id != "lfs.reroute")
                 return type ? type->outputs : std::vector<lfs::nodes::SocketDecl>{};
-            std::vector<lfs::nodes::SocketDecl> result;
-            result.reserve(tree.interface.inputs.size());
-            for (const auto& socket : tree.interface.inputs) {
-                result.push_back({socket.identifier, socket.label, socket.type, socket.default_value,
-                                  socket.min, socket.max, socket.step});
-                if (type) {
-                    const auto declared = std::ranges::find(type->outputs, socket.identifier, &lfs::nodes::SocketDecl::identifier);
-                    if (declared != type->outputs.end()) {
-                        result.back().label = declared->label;
-                        result.back().description = declared->description;
-                    }
-                }
-            }
-            return result;
+            return lfs::nodes::effective_outputs(tree, node, resolver);
         }
     } // namespace
 
@@ -326,6 +346,20 @@ namespace lfs::vis::gui {
         result["size"] = {size.x, size.y};
         result["screen_offset"] = {panel_screen_offset_.x, panel_screen_offset_.y};
         result["sidebar_visible"] = sidebar_visible_;
+        result["breadcrumb"] = nlohmann::json::array();
+        if (const auto host = activeHost()) {
+            if (const auto* scene_node = scene_manager_->getScene().getNodeByUuid(*host))
+                result["breadcrumb"].push_back({{"label", scene_node->name}, {"tree", group_path_.empty() ? active_tree_uuid_ : group_path_.front().tree_uuid}});
+        }
+        if (const auto* root = manager_ ? manager_->tree(group_path_.empty() ? active_tree_uuid_ : group_path_.front().tree_uuid) : nullptr)
+            result["breadcrumb"].push_back({{"label", root->name}, {"tree", root->uuid}});
+        for (const auto& entry : group_path_) {
+            const auto* outer = manager_ ? manager_->tree(entry.tree_uuid) : nullptr;
+            const auto* group = outer ? outer->find_node(entry.node) : nullptr;
+            const auto referenced = group ? group->properties.value("tree", std::string{}) : std::string{};
+            const auto* graph = manager_ ? manager_->tree(referenced) : nullptr;
+            result["breadcrumb"].push_back({{"label", graph ? graph->name : entry.node}, {"tree", referenced}, {"instance", entry.node}});
+        }
         result["selected_links"] = nlohmann::json::array();
         if (selected_link_)
             result["selected_links"].push_back({{"from_node", selected_link_->from.node}, {"from_socket", selected_link_->from.identifier}, {"to_node", selected_link_->to.node}, {"to_socket", selected_link_->to.identifier}});
@@ -347,8 +381,43 @@ namespace lfs::vis::gui {
         if (!stack || std::ranges::find(stack->modifiers, uuid, &Modifier::uuid) == stack->modifiers.end())
             return false;
         active_modifier_uuid_ = uuid;
+        group_path_.clear();
         dom_dirty_ = true;
         syncModel();
+        return true;
+    }
+
+    bool NodeCanvasElement::enterGroup(const std::string_view name) {
+        auto* tree = activeTree();
+        auto* node = tree ? tree->find_node(name) : nullptr;
+        if (!node || node->type_id != "lfs.group" || !manager_)
+            return false;
+        const auto uuid = node->properties.value("tree", std::string{});
+        if (uuid.empty() || !manager_->tree(uuid))
+            return false;
+        group_path_.push_back({tree->uuid, node->name});
+        active_tree_uuid_ = uuid;
+        selected_nodes_.clear();
+        selected_link_.reset();
+        interaction_.cancel();
+        frame_pending_ = true;
+        dom_dirty_ = true;
+        geometry_dirty_ = true;
+        return true;
+    }
+
+    bool NodeCanvasElement::exitGroup() {
+        if (group_path_.empty())
+            return false;
+        active_tree_uuid_ = group_path_.back().tree_uuid;
+        const auto instance = group_path_.back().node;
+        group_path_.pop_back();
+        selected_nodes_ = {instance};
+        selected_link_.reset();
+        interaction_.cancel();
+        frame_pending_ = true;
+        dom_dirty_ = true;
+        geometry_dirty_ = true;
         return true;
     }
 
@@ -434,6 +503,13 @@ namespace lfs::vis::gui {
         return const_cast<NodeCanvasElement*>(this)->activeTree();
     }
 
+    std::string NodeCanvasElement::instancePrefix() const {
+        std::string result;
+        for (const auto& entry : group_path_)
+            result += entry.node + "/";
+        return result;
+    }
+
     void NodeCanvasElement::ensureDom() {
         if (nodes_element_)
             return;
@@ -453,6 +529,9 @@ namespace lfs::vis::gui {
         auto notice = document->CreateElement("div");
         notice->SetId("node-canvas-notice");
         notice_element_ = AppendChild(std::move(notice));
+        auto breadcrumb = document->CreateElement("div");
+        breadcrumb->SetId("node-editor-breadcrumb");
+        breadcrumb_element_ = AppendChild(std::move(breadcrumb));
         auto sidebar = document->CreateElement("div");
         sidebar->SetId("node-editor-sidebar");
         sidebar_element_ = AppendChild(std::move(sidebar));
@@ -536,9 +615,11 @@ namespace lfs::vis::gui {
         host_uuid_ = next_host;
 
         const auto previous_tree = active_tree_uuid_;
+        const auto previous_modifier = active_modifier_uuid_;
         if (!host) {
             active_tree_uuid_.clear();
             active_modifier_uuid_.clear();
+            group_path_.clear();
         } else if (auto* stack = manager_->stack(*host); stack && !stack->modifiers.empty()) {
             auto found = std::ranges::find(stack->modifiers, active_modifier_uuid_, &Modifier::uuid);
             if (found == stack->modifiers.end() || !manager_->tree(found->tree_uuid))
@@ -546,10 +627,16 @@ namespace lfs::vis::gui {
                     return manager_->tree(modifier.tree_uuid) != nullptr;
                 });
             active_modifier_uuid_ = found == stack->modifiers.end() ? std::string{} : found->uuid;
-            active_tree_uuid_ = found == stack->modifiers.end() ? std::string{} : found->tree_uuid;
+            const auto root = found == stack->modifiers.end() ? std::string{} : found->tree_uuid;
+            if (previous_modifier != active_modifier_uuid_ || group_path_.empty() || !manager_->tree(active_tree_uuid_)) {
+                active_tree_uuid_ = root;
+                if (previous_modifier != active_modifier_uuid_)
+                    group_path_.clear();
+            }
         } else {
             active_tree_uuid_.clear();
             active_modifier_uuid_.clear();
+            group_path_.clear();
         }
         if (previous_tree != active_tree_uuid_) {
             interaction_.cancel();
@@ -564,12 +651,19 @@ namespace lfs::vis::gui {
             const auto& nodes = interaction_.nodes();
             bool overlap = false;
             for (std::size_t i = 0; i < nodes.size() && !overlap; ++i)
-                for (std::size_t j = i + 1; j < nodes.size() && !overlap; ++j)
+                for (std::size_t j = i + 1; j < nodes.size() && !overlap; ++j) {
+                    const auto* a = activeTree()->find_node(nodes[i].id);
+                    const auto* b = activeTree()->find_node(nodes[j].id);
+                    if (a->type_id == "lfs.frame" || b->type_id == "lfs.frame" ||
+                        a->type_id == "lfs.note" || b->type_id == "lfs.note")
+                        continue;
                     overlap = nodes[i].bounds.intersects(nodes[j].bounds);
+                }
             if (overlap)
                 arrange(false);
         }
         rebuildDom();
+        updateBreadcrumb();
         const auto size = GetBox().GetSize(Rml::BoxArea::Content);
         if (frame_pending_ && size.x > 1.0f &&
             (panel_size_.x == 0.0f || (std::abs(size.x - panel_size_.x) < 2.0f && std::abs(size.y - panel_size_.y) < 2.0f))) {
@@ -614,21 +708,53 @@ namespace lfs::vis::gui {
         }
         for (const auto& node : tree->nodes) {
             const auto type = manager_->registry().find_localized(node.type_id);
-            const auto inputs = canvasInputs(*tree, node, type);
-            const auto outputs = canvasOutputs(*tree, node, type);
+            const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) {
+                return manager_->tree(uuid);
+            };
+            const auto inputs = canvasInputs(*tree, node, type, resolver);
+            const auto outputs = canvasOutputs(*tree, node, type, resolver);
             NodeVisual visual;
             visual.interaction.id = node.name;
+            visual.interaction.frame = node.ui.value("frame", std::string{});
+            visual.type_id = node.type_id;
             visual.title = type ? type->label : node.type_id;
+            if (node.type_id == "lfs.group")
+                if (const auto* graph = manager_->tree(node.properties.value("tree", std::string{})))
+                    visual.title = graph->name;
             visual.category = type ? type->category : "Missing";
             visual.muted = node.muted;
             const std::string error_key = active_modifier_name.empty()
-                                              ? node.name
-                                              : active_modifier_name + "/" + node.name;
+                                              ? instancePrefix() + node.name
+                                              : active_modifier_name + "/" + instancePrefix() + node.name;
             if (const auto error = evaluation.errors.find(error_key); error != evaluation.errors.end())
                 visual.error = error->second;
             else if (const auto error = evaluation.errors.find(node.name); error != evaluation.errors.end())
                 visual.error = error->second;
             const CanvasPoint origin{node.location[0] * dp_ratio_, node.location[1] * dp_ratio_};
+            if (node.type_id == "lfs.reroute") {
+                constexpr float diameter = 18.0f;
+                visual.interaction.bounds = {origin.x - diameter * 0.5f * dp_ratio_,
+                                             origin.y - diameter * 0.5f * dp_ratio_,
+                                             diameter * dp_ratio_, diameter * dp_ratio_};
+                for (const auto& socket : inputs)
+                    visual.interaction.sockets.push_back({.node = node.name, .identifier = socket.identifier, .type = socket.type, .direction = CanvasSocketDirection::Input, .position = origin});
+                for (const auto& socket : outputs)
+                    visual.interaction.sockets.push_back({.node = node.name, .identifier = socket.identifier, .type = socket.type, .direction = CanvasSocketDirection::Output, .position = origin});
+                visuals_.push_back(std::move(visual));
+                continue;
+            }
+            if (node.type_id == "lfs.frame") {
+                visual.interaction.bounds = {origin.x, origin.y, 240.0f * dp_ratio_, 160.0f * dp_ratio_};
+                visuals_.push_back(std::move(visual));
+                continue;
+            }
+            if (node.type_id == "lfs.note") {
+                const float width = std::clamp(node.properties.value("width", 220.0f), 100.0f, 1200.0f);
+                const auto height = textHeight(node.properties.value("text", std::string{}), width - 24.0f, dp_ratio_) + 24.0f;
+                visual.interaction.bounds = {origin.x, origin.y, width * dp_ratio_, height * dp_ratio_};
+                visuals_.push_back(std::move(visual));
+                continue;
+            }
             constexpr float row_height = 22.0f;
             float row_y = std::max(kTitleHeight, 18.0f / interaction_.zoom()) + 6.0f;
             for (const auto& socket : outputs) {
@@ -637,13 +763,13 @@ namespace lfs::vis::gui {
             }
             const bool expanded = node_widgets::settingsExpanded(node);
             const auto settings = std::ranges::count_if(inputs, node_widgets::singleValue) +
-                                  (type ? std::ranges::count_if(type->properties, [](const auto& property) {
-                                      return property.kind != lfs::nodes::PropertyKind::Data;
+                                  (type ? std::ranges::count_if(type->properties, [&](const auto& property) {
+                                      return property.kind != lfs::nodes::PropertyKind::Data && node.type_id != "lfs.group";
                                   })
                                         : 0);
             if (settings > 0)
                 row_y += row_height;
-            if (type && expanded)
+            if (type && expanded && node.type_id != "lfs.group")
                 for (const auto& property : type->properties)
                     if (property.kind != lfs::nodes::PropertyKind::Data)
                         row_y += row_height;
@@ -656,9 +782,48 @@ namespace lfs::vis::gui {
             const float borders = 2.0f * std::max(1.0f, 0.75f / interaction_.zoom());
             visual.interaction.bounds = {origin.x, origin.y, kNodeWidth * dp_ratio_,
                                          (row_y + 6.0f + 20.0f + borders) * dp_ratio_};
-            nodes.push_back(visual.interaction);
             visuals_.push_back(std::move(visual));
         }
+        constexpr float frame_padding = 32.0f;
+        for (auto& visual : visuals_) {
+            if (visual.type_id != "lfs.frame")
+                continue;
+            bool found = false;
+            CanvasRect bounds{};
+            for (const auto& member : visuals_) {
+                const auto* item_node = tree->find_node(member.interaction.id);
+                if (!item_node || item_node->ui.value("frame", std::string{}) != visual.interaction.id)
+                    continue;
+                const auto& item = member.interaction.bounds;
+                if (!found) {
+                    bounds = item;
+                    found = true;
+                } else {
+                    const auto right = std::max(bounds.x + bounds.width, item.x + item.width);
+                    const auto bottom = std::max(bounds.y + bounds.height, item.y + item.height);
+                    bounds.x = std::min(bounds.x, item.x);
+                    bounds.y = std::min(bounds.y, item.y);
+                    bounds.width = right - bounds.x;
+                    bounds.height = bottom - bounds.y;
+                }
+            }
+            if (found) {
+                const auto* frame = tree->find_node(visual.interaction.id);
+                const auto width = bounds.width / dp_ratio_ + frame_padding * 2.0f - 24.0f;
+                const auto note = frame->properties.value("note", std::string{});
+                const float header = 24.0f + textHeight(frame->properties.value("label", frame->name), width, dp_ratio_, true) +
+                                     (note.empty() ? 0.0f : 4.0f + textHeight(note, width, dp_ratio_));
+                visual.interaction.bounds = {bounds.x - frame_padding * dp_ratio_, bounds.y - (frame_padding + header) * dp_ratio_,
+                                             bounds.width + frame_padding * 2.0f * dp_ratio_,
+                                             bounds.height + (frame_padding * 2.0f + header) * dp_ratio_};
+            }
+        }
+        for (const auto& visual : visuals_)
+            if (visual.type_id == "lfs.frame")
+                nodes.push_back(visual.interaction);
+        for (const auto& visual : visuals_)
+            if (visual.type_id != "lfs.frame")
+                nodes.push_back(visual.interaction);
         const auto find_socket = [&](const std::string& node, const std::string& identifier,
                                      const CanvasSocketDirection direction) -> std::optional<CanvasSocket> {
             const auto visual = std::ranges::find_if(visuals_, [&](const NodeVisual& item) {
@@ -704,8 +869,12 @@ namespace lfs::vis::gui {
         if (!preview_selection_opt_out_ && selected_nodes_.size() == 1) {
             const auto* tree = activeTree();
             const auto* node = tree ? tree->find_node(*selected_nodes_.begin()) : nullptr;
-            const auto type = node ? manager_->registry().find(node->type_id) : nullptr;
-            if (type && std::ranges::any_of(type->outputs, [](const auto& socket) {
+            const auto outputs = node ? lfs::nodes::effective_outputs(
+                                            *tree, *node, [this](const std::string_view uuid) {
+                                                return manager_->tree(uuid);
+                                            })
+                                      : std::vector<lfs::nodes::SocketDecl>{};
+            if (std::ranges::any_of(outputs, [](const auto& socket) {
                     return socket.type == lfs::nodes::BOOL_SOCKET ||
                            (socket.identifier == "Selection" && socket.type != lfs::nodes::GEOMETRY_SOCKET);
                 }))
@@ -718,7 +887,7 @@ namespace lfs::vis::gui {
         }
         scene_manager_->setModifierSelectionPreview(
             *host, manager_->selectionPreview(*host, active_modifier_uuid_,
-                                              *selected_nodes_.begin()));
+                                              instancePrefix() + *selected_nodes_.begin()));
     }
 
     void NodeCanvasElement::refreshEvaluation() {
@@ -732,7 +901,7 @@ namespace lfs::vis::gui {
         if (const auto* stack = manager_->stack(*host)) {
             const auto modifier = std::ranges::find(stack->modifiers, active_modifier_uuid_, &Modifier::uuid);
             if (modifier != stack->modifiers.end())
-                prefix = modifier->name + "/";
+                prefix = modifier->name + "/" + instancePrefix();
         }
         for (auto& visual : visuals_) {
             const auto error = result->errors.find(prefix + visual.interaction.id);
@@ -772,9 +941,12 @@ namespace lfs::vis::gui {
             for (const auto& visual : visuals_) {
                 const auto* node = tree->find_node(visual.interaction.id);
                 const auto type = node ? manager_->registry().find_localized(node->type_id) : nullptr;
-                const auto inputs = node ? canvasInputs(*tree, *node, type)
+                const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) {
+                    return manager_->tree(uuid);
+                };
+                const auto inputs = node ? canvasInputs(*tree, *node, type, resolver)
                                          : std::vector<lfs::nodes::SocketDecl>{};
-                const auto outputs = node ? canvasOutputs(*tree, *node, type)
+                const auto outputs = node ? canvasOutputs(*tree, *node, type, resolver)
                                           : std::vector<lfs::nodes::SocketDecl>{};
                 auto*& element = node_elements_[visual.interaction.id];
                 if (!element) {
@@ -784,6 +956,9 @@ namespace lfs::vis::gui {
                     element = nodes_element_->AppendChild(std::move(card));
                 }
                 element->SetClass("node-box", true);
+                element->SetClass("node-frame", node && node->type_id == "lfs.frame");
+                element->SetClass("node-reroute", node && node->type_id == "lfs.reroute");
+                element->SetClass("node-note", node && node->type_id == "lfs.note");
                 element->SetClass("selected", selected_nodes_.contains(visual.interaction.id));
                 element->SetClass("muted", visual.muted);
                 element->SetClass("failed", !visual.error.empty());
@@ -807,7 +982,16 @@ namespace lfs::vis::gui {
                 for (const auto& output : outputs)
                     content_state["outputs"].push_back({output.identifier, output.label, output.type});
                 if (node_content_state_[visual.interaction.id] != content_state) {
-                    std::string title = "<div class=\"node-title\" title=\"" + escape(type ? type->description : "") + "\" style=\"background-color:" +
+                    std::string title;
+                    if (node->type_id == "lfs.reroute")
+                        title = "";
+                    else if (node->type_id == "lfs.frame")
+                        title = "<div class=\"frame-label\">" + escape(node->properties.value("label", node->name)) +
+                                "</div><div class=\"frame-note\">" + escape(node->properties.value("note", std::string{})) + "</div>";
+                    else if (node->type_id == "lfs.note")
+                        title = "<div class=\"note-text\">" + escape(node->properties.value("text", std::string{})) + "</div>";
+                    else {
+                        title = "<div class=\"node-title\" title=\"" + escape(type ? type->description : "") + "\" style=\"background-color:" +
                                         categoryColor(visual.category) + "\">" + node_widgets::categoryIcon(visual.category) +
                                         "<span class=\"node-title-label\">" + escape(visual.title) +
                                         "</span>";
@@ -818,13 +1002,16 @@ namespace lfs::vis::gui {
                                  "\" data-action=\"paint-toggle\" data-node=\"" + escape(node->name) +
                                  "\" title=\"" + escape(LOC("node_editor.paint")) +
                                  "\">" + node_widgets::icon("brush") + "</button>";
+                    if (node->type_id == "lfs.group")
+                        title += "<button class=\"node-title-tool\" data-action=\"group-enter\" data-node=\"" +
+                                 escape(node->name) + "\" title=\"Enter graph\">&#x2192;</button>";
                     title += "</div><div class=\"socket-rows\">";
                     for (const auto& output : outputs)
                         title += "<div class=\"socket-row output\" title=\"" + escape(output.description) + "\"><span class=\"socket-label\">" +
                                  escape(output.label) + "</span></div>";
                     const auto settings = std::ranges::count_if(inputs, node_widgets::singleValue) +
-                                          (type ? std::ranges::count_if(type->properties, [](const auto& property) {
-                                              return property.kind != lfs::nodes::PropertyKind::Data;
+                                          (type ? std::ranges::count_if(type->properties, [&](const auto& property) {
+                                              return property.kind != lfs::nodes::PropertyKind::Data && node->type_id != "lfs.group";
                                           })
                                                 : 0);
                     if (settings > 0)
@@ -834,7 +1021,7 @@ namespace lfs::vis::gui {
                                                                        : "node_editor.settings_count_other"),
                                                      std::make_format_args(settings))) +
                                  "</button>";
-                    if (type)
+                    if (type && node->type_id != "lfs.group")
                         for (const auto& property : type->properties)
                             if (property.kind != lfs::nodes::PropertyKind::Data)
                                 title += "<div class=\"socket-row node-property\" title=\"" +
@@ -856,6 +1043,7 @@ namespace lfs::vis::gui {
                         title += "</div>";
                     }
                     title += "</div><div class=\"node-footer\" data-preserve-content>—</div><div class=\"node-progress\"></div>";
+                    }
                     if (node_markup_[visual.interaction.id] != title) {
                         node_widgets::patchMarkup(*element, title);
                         node_markup_[visual.interaction.id] = std::move(title);
@@ -872,7 +1060,7 @@ namespace lfs::vis::gui {
                     row->SetProperty("display", expanded ? "flex" : "none");
                 rows.clear();
                 element->QuerySelectorAll(rows, ".socket-input");
-                for (std::size_t index = 0; index < inputs.size(); ++index) {
+                for (std::size_t index = 0; index < inputs.size() && index < rows.size(); ++index) {
                     auto* row = rows[index];
                     row->SetProperty("display", node_widgets::inputVisible(*tree, *node, inputs[index]) ? "block" : "none");
                     row->SetClass("linked", node_widgets::linked(*tree, *node, inputs[index]));
@@ -887,21 +1075,47 @@ namespace lfs::vis::gui {
         updateSelectedClasses();
         updateNodePositions();
         updateSidebar();
+        updateBreadcrumb();
+    }
+
+    void NodeCanvasElement::updateBreadcrumb() {
+        if (!breadcrumb_element_)
+            return;
+        std::string html;
+        const auto host = activeHost();
+        const auto* scene_node = host && scene_manager_ ? scene_manager_->getScene().getNodeByUuid(*host) : nullptr;
+        if (scene_node)
+            html = "<button data-action=\"breadcrumb-root\">" + escape(scene_node->name) + "</button>";
+        const auto* root = manager_ ? manager_->tree(group_path_.empty() ? active_tree_uuid_ : group_path_.front().tree_uuid) : nullptr;
+        if (root)
+            html += "<span>&gt;</span><button data-action=\"breadcrumb-root\">" + escape(root->name) + "</button>";
+        for (std::size_t index = 0; index < group_path_.size(); ++index) {
+            const auto& entry = group_path_[index];
+            const auto* outer = manager_->tree(entry.tree_uuid);
+            const auto* group = outer ? outer->find_node(entry.node) : nullptr;
+            const auto* graph = group ? manager_->tree(group->properties.value("tree", std::string{})) : nullptr;
+            html += "<span>&gt;</span><button data-action=\"breadcrumb\" data-index=\"" +
+                    std::to_string(index) + "\">" + escape(graph ? graph->name : entry.node) + "</button>";
+        }
+        breadcrumb_element_->SetInnerRML(html);
+        breadcrumb_element_->SetProperty("display", group_path_.empty() ? "none" : "flex");
     }
 
     void NodeCanvasElement::updateSelectedClasses() {
+        geometry_nodes_.clear();
         for (const auto& [name, element] : node_elements_)
             element->SetClass("selected", selected_nodes_.contains(name));
         int layer = 0;
         for (const auto& node : interaction_.nodes()) {
             if (const auto found = node_elements_.find(node.id); found != node_elements_.end()) {
                 auto* card = found->second;
-                if (card->GetAttribute<int>("data-layer", -1) != layer) {
-                    card->SetAttribute("data-layer", layer);
-                    card->SetProperty("z-index", std::to_string(layer));
+                const auto* model = activeTree() ? activeTree()->find_node(node.id) : nullptr;
+                const int node_layer = model && model->type_id == "lfs.frame" ? -1 : layer++;
+                if (card->GetAttribute<int>("data-layer", -2) != node_layer) {
+                    card->SetAttribute("data-layer", node_layer);
+                    card->SetProperty("z-index", std::to_string(node_layer));
                 }
             }
-            ++layer;
         }
     }
 
@@ -1016,6 +1230,89 @@ namespace lfs::vis::gui {
                             "\" data-action=\"paint-toggle\" data-node=\"" + escape(node->name) +
                             "\">" + escape(LOC(manager_->paintModeActive() ? "node_editor.paint_done" : "node_editor.paint")) +
                             "</button>";
+                if (node->type_id == "lfs.group") {
+                    const auto current = node->properties.value("tree", std::string{});
+                    html += "<div class=\"sidebar-heading\">Graph</div><select data-action=\"group-graph\" data-node=\"" + escape(node->name) + "\">";
+                    for (const auto* candidate : manager_->trees()) {
+                        if (candidate->tree_type != tree->tree_type)
+                            continue;
+                        std::string cycle;
+                        const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) { return manager_->tree(uuid); };
+                        if (candidate->uuid != current && lfs::nodes::group_reference_would_cycle(*tree, candidate->uuid, resolver, &cycle))
+                            continue;
+                        html += "<option value=\"" + escape(candidate->uuid) + "\"" +
+                                (candidate->uuid == current ? " selected" : "") + ">" + escape(candidate->name) + "</option>";
+                    }
+                    html += "</select><button class=\"btn sidebar-button\" data-action=\"group-enter\" data-node=\"" +
+                            escape(node->name) + "\">Edit graph</button><button class=\"btn sidebar-button\" data-action=\"group-single-user\" data-node=\"" +
+                            escape(node->name) + "\">Make single-user</button>";
+                }
+                const lfs::nodes::NodeTree* interface_tree = tree;
+                if (node->type_id == "lfs.group")
+                    interface_tree = manager_->tree(node->properties.value("tree", std::string{}));
+                if (interface_tree && (node->type_id == "lfs.group" || node->type_id == "lfs.group_input" || node->type_id == "lfs.group_output")) {
+                    html += "<div class=\"sidebar-heading interface-heading\">Interface</div>";
+                    const auto append_side = [&](const bool output, const auto& sockets) {
+                        html += "<div class=\"interface-side\"><div class=\"target-type\">" + std::string(output ? "Outputs" : "Inputs") + "</div>";
+                        for (std::size_t index = 0; index < sockets.size(); ++index) {
+                            const auto& socket = sockets[index];
+                            auto type_label = socket.type.substr(4);
+                            type_label[0] = static_cast<char>(std::toupper(type_label[0]));
+                            html += "<div class=\"interface-row\"><input type=\"text\" data-action=\"interface-label\" data-side=\"" +
+                                    std::string(output ? "output" : "input") + "\" data-socket=\"" + escape(socket.identifier) +
+                                    "\" value=\"" + escape(socket.label) + "\"/><span class=\"interface-type\">" + escape(type_label) +
+                                    "</span><button class=\"btn\" data-action=\"interface-up\" data-side=\"" + std::string(output ? "output" : "input") +
+                                    "\" data-socket=\"" + escape(socket.identifier) + "\"" + (index == 0 ? " disabled" : "") + ">" + node_widgets::icon("dropdown-arrow") + "</button>" +
+                                    "<button class=\"btn\" data-action=\"interface-down\" data-side=\"" + std::string(output ? "output" : "input") +
+                                    "\" data-socket=\"" + escape(socket.identifier) + "\"" + (index + 1 == sockets.size() ? " disabled" : "") + ">" + node_widgets::icon("dropdown-arrow") + "</button>" +
+                                    "<button class=\"btn\" data-action=\"interface-remove\" data-side=\"" + std::string(output ? "output" : "input") +
+                                    "\" data-socket=\"" + escape(socket.identifier) + "\">" + node_widgets::icon("scene/x") + "</button></div>";
+                            const auto attributes = " data-side=\"" + std::string(output ? "output" : "input") +
+                                                    "\" data-socket=\"" + escape(socket.identifier) + "\"";
+                            html += "<div class=\"interface-details\">";
+                            if (socket.type == lfs::nodes::FLOAT_SOCKET) {
+                                const auto value = socket.default_value.template get_if<float>();
+                                html += "<label>Default<input type=\"number\" data-action=\"interface-default\"" + attributes +
+                                        " value=\"" + std::format("{}", value ? *value : 0.0f) + "\"/></label>";
+                            } else if (socket.type == lfs::nodes::INT_SOCKET) {
+                                const auto value = socket.default_value.template get_if<std::int64_t>();
+                                html += "<label>Default<input type=\"number\" data-action=\"interface-default\"" + attributes +
+                                        " value=\"" + std::to_string(value ? *value : 0) + "\"/></label>";
+                            } else if (socket.type == lfs::nodes::BOOL_SOCKET) {
+                                const auto value = socket.default_value.template get_if<bool>();
+                                html += "<label>Default<input type=\"checkbox\" data-action=\"interface-default\"" + attributes +
+                                        (value && *value ? " checked" : "") + "/></label>";
+                            } else if (socket.type == lfs::nodes::STRING_SOCKET) {
+                                const auto value = socket.default_value.template get_if<std::string>();
+                                html += "<label>Default<input type=\"text\" data-action=\"interface-default\"" + attributes +
+                                        " value=\"" + escape(value ? *value : std::string{}) + "\"/></label>";
+                            } else if (socket.type == lfs::nodes::VECTOR_SOCKET) {
+                                const auto value = socket.default_value.template get_if<glm::vec3>();
+                                html += "<label>Default<input type=\"text\" data-action=\"interface-default\"" + attributes +
+                                        " value=\"" + (value ? std::format("{},{},{}", value->x, value->y, value->z) : "0,0,0") + "\"/></label>";
+                            } else if (socket.type == lfs::nodes::COLOUR_SOCKET) {
+                                const auto value = socket.default_value.template get_if<glm::vec4>();
+                                html += "<label>Default<input type=\"text\" data-action=\"interface-default\"" + attributes +
+                                        " value=\"" + (value ? std::format("{},{},{},{}", value->x, value->y, value->z, value->w) : "0,0,0,1") + "\"/></label>";
+                            }
+                            if (socket.type == lfs::nodes::FLOAT_SOCKET || socket.type == lfs::nodes::INT_SOCKET) {
+                                const auto constraint = [&](const char* field, const std::optional<double> value) {
+                                    html += "<label>" + std::string(field) + "<input type=\"number\" data-action=\"interface-constraint\" data-field=\"" +
+                                            field + "\"" + attributes + " value=\"" +
+                                            (value ? std::format("{}", *value) : std::string{}) + "\"/></label>";
+                                };
+                                constraint("min", socket.min);
+                                constraint("max", socket.max);
+                                constraint("step", socket.step);
+                            }
+                            html += "</div>";
+                        }
+                        html += "<div class=\"interface-add\"><select data-role=\"interface-type\"><option value=\"lfs.geometry\">Geometry</option><option value=\"lfs.float\">Float</option><option value=\"lfs.int\">Int</option><option value=\"lfs.bool\">Bool</option><option value=\"lfs.vector\">Vector</option><option value=\"lfs.colour\">Colour</option><option value=\"lfs.string\">String</option></select><button class=\"btn\" data-action=\"interface-add\" data-side=\"" +
+                                std::string(output ? "output" : "input") + "\">" + escape(LOC(output ? "node_editor.add_output" : "node_editor.add_input")) + "</button></div></div>";
+                    };
+                    append_side(false, interface_tree->interface.inputs);
+                    append_side(true, interface_tree->interface.outputs);
+                }
                 if (type) {
                     if (!type->help.empty()) {
                         const bool expanded = expanded_help_.try_emplace(type->id, true).first->second;
@@ -1025,7 +1322,7 @@ namespace lfs::vis::gui {
                                 "\"></span> " + escape(LOC("node_editor.how_to_use")) +
                                 "</button><div class=\"node-help-text\">" + escape(type->help) + "</div></div>";
                     }
-                    for (const auto& socket : type->inputs) {
+                    for (const auto& socket : lfs::nodes::effective_inputs(*tree, *node, [this](const std::string_view uuid) { return manager_->tree(uuid); })) {
                         if (socket.hide_value || socket.type == lfs::nodes::GEOMETRY_SOCKET ||
                             node_widgets::linked(*tree, *node, socket))
                             continue;
@@ -1035,6 +1332,8 @@ namespace lfs::vis::gui {
                                 escape(socket.description) + "</div></div>";
                     }
                     for (const auto& property : type->properties) {
+                        if (node->type_id == "lfs.group" && property.identifier == "tree")
+                            continue;
                         if (property.kind == lfs::nodes::PropertyKind::Data) {
                             if (node->type_id == "lfs.stored_selection") {
                                 html += "<button class=\"btn sidebar-button\" data-action=\"capture-selection\" title=\"" + escape(property.description) + "\">" +
@@ -1051,9 +1350,16 @@ namespace lfs::vis::gui {
                             }
                             continue;
                         }
+                        const bool multiline = (node->type_id == "lfs.note" && property.identifier == "text") ||
+                                               (node->type_id == "lfs.frame" && property.identifier == "note");
+                        const auto control = multiline
+                                                 ? "<textarea class=\"node-multiline\" rows=\"4\" data-node=\"" + escape(node->name) +
+                                                       "\" data-property=\"" + escape(property.identifier) + "\">" +
+                                                       escape(node->properties.value(property.identifier, std::string{})) + "</textarea>"
+                                                 : node_widgets::property(*node, property);
                         html += "<div class=\"node-setting-help\" title=\"" + escape(property.description) + "\"><div class=\"setting-row node-setting\"><span class=\"prop-label\">" +
                                 escape(property.label) + "</span><div class=\"node-field-control\">" +
-                                node_widgets::property(*node, property) + "</div></div><div class=\"node-field-help\">" +
+                                control + "</div></div><div class=\"node-field-help\">" +
                                 escape(property.description) + "</div></div>";
                     }
                     if (!type->localization_key.empty())
@@ -1083,6 +1389,36 @@ namespace lfs::vis::gui {
         const float canvas_width = std::max(0.0f, size.x - (sidebar_visible_ ? kSidebarWidth * dp_ratio_ : 0.0f));
         interaction_.setViewport({0.0f, 0.0f, canvas_width, size.y});
         const auto& palette = theme().palette;
+        Rml::Mesh frames;
+        for (const auto& node : interaction_.nodes()) {
+            const auto* model = activeTree() ? activeTree()->find_node(node.id) : nullptr;
+            if (!model || model->type_id != "lfs.frame")
+                continue;
+            const auto origin = interaction_.graphToScreen({node.bounds.x, node.bounds.y});
+            const float right = origin.x + node.bounds.width * interaction_.zoom();
+            const float bottom = origin.y + node.bounds.height * interaction_.zoom();
+            const float radius = 8.0f * dp_ratio_ * interaction_.zoom();
+            const auto preset = model->properties.value("colour", std::string{"neutral"});
+            const auto tint = preset == "green" ? palette.success : preset == "orange" ? palette.warning : palette.info;
+            const auto fill = color(themeColor(tint), 0.10f);
+            quad(frames, origin.x + radius, origin.y, right - radius, bottom, fill);
+            quad(frames, origin.x, origin.y + radius, origin.x + radius, bottom - radius, fill);
+            quad(frames, right - radius, origin.y + radius, right, bottom - radius, fill);
+            // Quarter-circles keep translucent corners from accumulating alpha.
+            for (int corner = 0; corner < 4; ++corner) {
+                const CanvasPoint centre{corner == 0 || corner == 3 ? right - radius : origin.x + radius,
+                                         corner < 2 ? bottom - radius : origin.y + radius};
+                const int base = static_cast<int>(frames.vertices.size());
+                frames.vertices.push_back({{centre.x, centre.y}, fill, {0, 0}});
+                for (int segment = 0; segment <= 8; ++segment) {
+                    const float angle = (corner + segment / 8.0f) * 1.570796327f;
+                    frames.vertices.push_back({{centre.x + std::cos(angle) * radius, centre.y + std::sin(angle) * radius}, fill, {0, 0}});
+                    if (segment)
+                        frames.indices.insert(frames.indices.end(), {base, base + segment, base + segment + 1});
+                }
+            }
+        }
+        frame_geometry_ = renderer->MakeGeometry(std::move(frames));
         const bool view_changed = geometry_pan_ != interaction_.pan() ||
                                   geometry_zoom_ != interaction_.zoom() || geometry_size_ != size ||
                                   geometry_theme_ != theme_signature_;
@@ -1143,11 +1479,15 @@ namespace lfs::vis::gui {
             geometry_snap_ != interaction_.snappedSocket() || geometry_dragging_wire_ != interaction_.draggingWire()) {
             for (const auto& node : interaction_.nodes()) {
                 Rml::Mesh sockets;
+                const auto* model = activeTree() ? activeTree()->find_node(node.id) : nullptr;
+                const bool reroute = model && model->type_id == "lfs.reroute";
                 for (const auto& socket : node.sockets) {
+                    if (reroute && socket.direction == CanvasSocketDirection::Input)
+                        continue;
                     const bool snapped = interaction_.snappedSocket() && *interaction_.snappedSocket() == socket;
                     const bool compatible = !interaction_.draggingWire() || interaction_.canSnapTo(socket);
                     const auto position = (socket.position - CanvasPoint{node.bounds.x, node.bounds.y}) * interaction_.zoom();
-                    const float radius = (snapped ? 6.0f : 4.5f) * dp_ratio_ * interaction_.zoom();
+                    const float radius = (snapped ? 6.0f : reroute ? 4.0f : 4.5f) * dp_ratio_ * interaction_.zoom();
                     const auto shape = [&](const float r, const Rml::ColourbPremultiplied fill) {
                         const float span = socket.multi_input ? 3.0f * dp_ratio_ * interaction_.zoom() : 0.0f;
                         circle(sockets, {position.x, position.y - span}, r, fill);
@@ -1156,6 +1496,8 @@ namespace lfs::vis::gui {
                             quad(sockets, position.x - r, position.y - span, position.x + r, position.y + span, fill);
                         }
                     };
+                    if (reroute && selected_nodes_.contains(node.id))
+                        shape(radius + 3.0f * dp_ratio_ * interaction_.zoom(), color(themeColor(palette.primary)));
                     shape(radius + 1.5f * dp_ratio_ * interaction_.zoom(), color(themeColor(palette.background)));
                     shape(radius, color(socketColor(socket.type), snapped ? 1.0f : compatible ? 0.9f
                                                                                               : 0.2f));
@@ -1198,6 +1540,7 @@ namespace lfs::vis::gui {
             rebuildGeometry();
         const auto offset = GetAbsoluteOffset(Rml::BoxArea::Content);
         grid_geometry_.Render(offset);
+        frame_geometry_.Render(offset);
         wire_geometry_.Render(offset);
         live_wire_geometry_.Render(offset);
     }
@@ -1231,6 +1574,9 @@ namespace lfs::vis::gui {
             return command.kind == CanvasCommandKind::Select || command.kind == CanvasCommandKind::SelectLink;
         });
         const auto before = selection_only ? nlohmann::json{} : tree->to_json();
+        const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) {
+            return manager_->tree(uuid);
+        };
         bool edited = false;
         bool selection_changed = false;
         for (const auto& command : commands) {
@@ -1248,15 +1594,44 @@ namespace lfs::vis::gui {
                 continue;
             }
             if (command.kind == CanvasCommandKind::Move) {
+                std::unordered_set<std::string> moved(command.nodes.begin(), command.nodes.end());
                 for (const auto& name : command.nodes)
+                    if (const auto* frame = tree->find_node(name); frame && frame->type_id == "lfs.frame")
+                        for (const auto& candidate : tree->nodes)
+                            if (candidate.ui.value("frame", std::string{}) == name)
+                                moved.insert(candidate.name);
+                for (const auto& name : moved)
                     if (auto* node = tree->find_node(name)) {
                         node->location[0] += command.delta.x / dp_ratio_;
                         node->location[1] += command.delta.y / dp_ratio_;
                         edited = true;
                     }
+                for (auto& node : tree->nodes) {
+                    if (!moved.contains(node.name) || node.type_id == "lfs.frame")
+                        continue;
+                    if (moved.contains(node.ui.value("frame", std::string{})))
+                        continue;
+                    const auto visual = std::ranges::find_if(visuals_, [&](const NodeVisual& item) {
+                        return item.interaction.id == node.name;
+                    });
+                    if (visual == visuals_.end())
+                        continue;
+                    const CanvasPoint centre{visual->interaction.bounds.x + visual->interaction.bounds.width * 0.5f + command.delta.x,
+                                             visual->interaction.bounds.y + visual->interaction.bounds.height * 0.5f + command.delta.y};
+                    std::string containing;
+                    for (const auto& frame : visuals_)
+                        if (frame.type_id == "lfs.frame" && frame.interaction.id != node.name && frame.interaction.bounds.contains(centre))
+                            containing = frame.interaction.id;
+                    if (containing.empty())
+                        node.ui.erase("frame");
+                    else
+                        node.ui["frame"] = containing;
+                }
             } else if (command.kind == CanvasCommandKind::Connect && command.after) {
                 const auto& link = *command.after;
-                edited |= tree->add_link({link.from.node, link.from.identifier, link.to.node, link.to.identifier});
+                edited |= tree->add_link(
+                    {link.from.node, link.from.identifier, link.to.node, link.to.identifier}, nullptr,
+                    resolver);
             } else if (command.kind == CanvasCommandKind::Disconnect && command.before) {
                 const auto& link = *command.before;
                 edited |= tree->remove_link({link.from.node, link.from.identifier, link.to.node, link.to.identifier});
@@ -1264,7 +1639,9 @@ namespace lfs::vis::gui {
                 const auto& old = *command.before;
                 const auto& next = *command.after;
                 edited |= tree->remove_link({old.from.node, old.from.identifier, old.to.node, old.to.identifier});
-                edited |= tree->add_link({next.from.node, next.from.identifier, next.to.node, next.to.identifier});
+                edited |= tree->add_link(
+                    {next.from.node, next.from.identifier, next.to.node, next.to.identifier}, nullptr,
+                    resolver);
             } else if (command.kind == CanvasCommandKind::DeleteLinks) {
                 for (const auto& link : command.links)
                     edited |= tree->remove_link({link.from.node, link.from.identifier, link.to.node, link.to.identifier});
@@ -1283,8 +1660,10 @@ namespace lfs::vis::gui {
                     continue;
                 const auto old = *command.before;
                 tree->remove_link({old.from.node, old.from.identifier, old.to.node, old.to.identifier});
-                tree->add_link({old.from.node, old.from.identifier, node->name, input->identifier});
-                tree->add_link({node->name, output->identifier, old.to.node, old.to.identifier});
+                tree->add_link({old.from.node, old.from.identifier, node->name, input->identifier},
+                               nullptr, resolver);
+                tree->add_link({node->name, output->identifier, old.to.node, old.to.identifier},
+                               nullptr, resolver);
                 edited = true;
             }
         }
@@ -1357,25 +1736,115 @@ namespace lfs::vis::gui {
         const auto host = activeHost();
         if (!tree || !host || selected_nodes_.empty())
             return;
-        const auto before = tree->to_json();
-        std::unordered_set<std::string> duplicated;
-        const auto original_nodes = tree->nodes;
-        for (const auto& source : original_nodes) {
-            if (!selected_nodes_.contains(source.name) || source.type_id == "lfs.group_input" ||
-                source.type_id == "lfs.group_output")
-                continue;
-            auto& copy = tree->add_node(source.type_id, source.name);
-            copy.location = {source.location[0] + 30.0f, source.location[1] + 30.0f};
-            copy.input_values = source.input_values;
-            copy.properties = source.properties;
-            copy.muted = source.muted;
-            duplicated.insert(copy.name);
+        const std::vector<std::string> names(selected_nodes_.begin(), selected_nodes_.end());
+        const auto clipboard = manager_->copyNodes(tree->uuid, names);
+        if (!clipboard)
+            return;
+        const auto pasted = manager_->pasteNodes(tree->uuid, *clipboard);
+        if (!pasted)
+            return;
+        selected_nodes_ = {pasted->nodes.begin(), pasted->nodes.end()};
+        file_error_ = pasted->dropped_links
+                          ? std::format("{} pasted link(s) were not valid here", pasted->dropped_links)
+                          : std::string{};
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::copySelected() {
+        auto* tree = activeTree();
+        if (!tree || selected_nodes_.empty())
+            return;
+        const std::vector<std::string> names(selected_nodes_.begin(), selected_nodes_.end());
+        const auto clipboard = manager_->copyNodes(tree->uuid, names);
+        if (clipboard)
+            SDL_SetClipboardText(clipboard->c_str());
+    }
+
+    void NodeCanvasElement::cutSelected() {
+        copySelected();
+        removeSelected();
+    }
+
+    void NodeCanvasElement::pasteClipboard() {
+        auto* tree = activeTree();
+        if (!tree)
+            return;
+        char* raw = SDL_GetClipboardText();
+        const std::string clipboard = raw ? raw : "";
+        SDL_free(raw);
+        const auto pointer = interaction_.pointer();
+        std::optional<std::array<float, 2>> location;
+        if (pointer.x >= 0.0f && pointer.y >= 0.0f && pointer.x <= panel_size_.x &&
+            pointer.y <= panel_size_.y) {
+            const auto graph = interaction_.screenToGraph(pointer);
+            location = std::array<float, 2>{graph.x / dp_ratio_, graph.y / dp_ratio_};
         }
-        if (!duplicated.empty()) {
-            selected_nodes_ = std::move(duplicated);
-            manager_->recordTreeEdit(tree->uuid, before);
-            dom_dirty_ = true;
+        const auto pasted = manager_->pasteNodes(tree->uuid, clipboard, location);
+        if (!pasted) {
+            file_error_ = pasted.error().message;
+            return;
         }
+        selected_nodes_ = {pasted->nodes.begin(), pasted->nodes.end()};
+        file_error_ = pasted->dropped_links
+                          ? std::format("{} pasted link(s) were not valid here", pasted->dropped_links)
+                          : std::string{};
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::makeGroupSelected() {
+        auto* tree = activeTree();
+        if (!tree || selected_nodes_.empty())
+            return;
+        const std::vector<std::string> names(selected_nodes_.begin(), selected_nodes_.end());
+        const auto result = manager_->makeGroup(tree->uuid, names);
+        if (!result) {
+            file_error_ = result.error().message;
+            return;
+        }
+        selected_nodes_ = {result->group_node};
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::ungroupSelected() {
+        auto* tree = activeTree();
+        if (!tree || selected_nodes_.size() != 1)
+            return;
+        const auto result = manager_->ungroup(tree->uuid, *selected_nodes_.begin());
+        if (!result) {
+            file_error_ = result.error().message;
+            return;
+        }
+        selected_nodes_ = {result->begin(), result->end()};
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::frameSelected() {
+        auto* tree = activeTree();
+        if (!tree || selected_nodes_.empty())
+            return;
+        const std::vector<std::string> names(selected_nodes_.begin(), selected_nodes_.end());
+        const auto result = manager_->frameWrap(tree->uuid, names);
+        if (!result) {
+            file_error_ = result.error().message;
+            return;
+        }
+        selected_nodes_.insert(*result);
+        dom_dirty_ = true;
+    }
+
+    void NodeCanvasElement::insertReroute(const CanvasLink& link, const CanvasPoint graph_position) {
+        auto* tree = activeTree();
+        if (!tree)
+            return;
+        const auto result = manager_->rerouteInsert(
+            tree->uuid, {link.from.node, link.from.identifier, link.to.node, link.to.identifier},
+            std::array<float, 2>{graph_position.x / dp_ratio_, graph_position.y / dp_ratio_});
+        if (!result) {
+            file_error_ = result.error().message;
+            return;
+        }
+        selected_nodes_ = {*result};
+        dom_dirty_ = true;
     }
 
     void NodeCanvasElement::toggleMuted() {
@@ -1422,11 +1891,22 @@ namespace lfs::vis::gui {
         auto* tree = activeTree();
         if (!tree)
             return false;
-        const auto subset = nodes.value_or(selection_only ? selected_nodes_ : std::unordered_set<std::string>{});
+        auto subset = nodes.value_or(selection_only ? selected_nodes_ : std::unordered_set<std::string>{});
         for (const auto& name : subset)
             if (!tree->find_node(name))
                 return false;
         if (nodes && nodes->empty())
+            return true;
+        if (subset.empty())
+            for (const auto& node : tree->nodes)
+                if (node.type_id != "lfs.note" && node.type_id != "lfs.frame")
+                    subset.insert(node.name);
+        else
+            std::erase_if(subset, [&](const std::string& name) {
+                const auto* node = tree->find_node(name);
+                return node && (node->type_id == "lfs.note" || node->type_id == "lfs.frame");
+            });
+        if (subset.empty())
             return true;
         const auto before = tree->to_json();
         const auto positions = interaction_.arrangedPositions(tree->input_node().name, tree->output_node().name, subset);
@@ -1438,7 +1918,7 @@ namespace lfs::vis::gui {
         manager_->recordTreeEdit(tree->uuid, before);
         rebuildModel();
         updateNodePositions();
-        frame_pending_ = subset.empty();
+        frame_pending_ = !selection_only && !nodes;
         dom_dirty_ = true;
         geometry_dirty_ = true;
         return true;
@@ -1479,7 +1959,7 @@ namespace lfs::vis::gui {
         }
         if (auto* context = GetContext()) {
             const auto* focused = context->GetFocusElement();
-            if (focused && (focused->GetTagName() == "input" || focused->GetTagName() == "select"))
+            if (focused && (focused->GetTagName() == "input" || focused->GetTagName() == "select" || focused->GetTagName() == "textarea"))
                 return false;
         }
         switch (scancode) {
@@ -1497,9 +1977,41 @@ namespace lfs::vis::gui {
             geometry_dirty_ = true;
             return true;
         case SDL_SCANCODE_DELETE:
-        case SDL_SCANCODE_X:
             removeSelected();
             return true;
+        case SDL_SCANCODE_C:
+            if (control) {
+                copySelected();
+                return true;
+            }
+            break;
+        case SDL_SCANCODE_X:
+            if (control)
+                cutSelected();
+            else
+                removeSelected();
+            return true;
+        case SDL_SCANCODE_V:
+            if (control) {
+                pasteClipboard();
+                return true;
+            }
+            break;
+        case SDL_SCANCODE_G:
+            if (control) {
+                if (alt)
+                    ungroupSelected();
+                else
+                    makeGroupSelected();
+                return true;
+            }
+            break;
+        case SDL_SCANCODE_J:
+            if (control) {
+                frameSelected();
+                return true;
+            }
+            break;
         case SDL_SCANCODE_M:
             toggleMuted();
             return true;
@@ -1519,6 +2031,10 @@ namespace lfs::vis::gui {
         case SDL_SCANCODE_HOME:
             frameAll();
             return true;
+        case SDL_SCANCODE_TAB:
+            if (selected_nodes_.size() == 1 && enterGroup(*selected_nodes_.begin()))
+                return true;
+            return exitGroup();
         case SDL_SCANCODE_N:
             setSidebarVisible(!sidebar_visible_);
             return true;
@@ -1593,6 +2109,107 @@ namespace lfs::vis::gui {
             return;
         const std::string action = target->GetAttribute<Rml::String>("data-action", "");
         if ((type == "change" || type == "blur") && target) {
+            if (action == "group-graph" && type == "change" && selected_nodes_.size() == 1) {
+                const auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(target);
+                if (auto* graph = activeTree(); select) {
+                    const auto result = manager_->setGroupGraph(graph->uuid, *selected_nodes_.begin(), select->GetValue());
+                    if (!result)
+                        file_error_ = result.error().message;
+                    dom_dirty_ = true;
+                }
+                event.StopPropagation();
+                return;
+            }
+            if (action == "interface-label" && type == "blur") {
+                auto* interface_tree = activeTree();
+                if (const auto* selected = interface_tree && selected_nodes_.size() == 1 ? interface_tree->find_node(*selected_nodes_.begin()) : nullptr;
+                    selected && selected->type_id == "lfs.group")
+                    interface_tree = manager_->tree(selected->properties.value("tree", std::string{}));
+                const auto* input = dynamic_cast<Rml::ElementFormControlInput*>(target);
+                if (interface_tree && input) {
+                    const auto result = manager_->interfaceUpdate(
+                        interface_tree->uuid, target->GetAttribute<Rml::String>("data-side", "") == "output",
+                        target->GetAttribute<Rml::String>("data-socket", ""), {{"label", input->GetValue()}});
+                    if (!result)
+                        file_error_ = result.error().message;
+                    dom_dirty_ = true;
+                }
+                event.StopPropagation();
+                return;
+            }
+            if ((action == "interface-default" || action == "interface-constraint") &&
+                (type == "change" || type == "blur")) {
+                auto* interface_tree = activeTree();
+                if (const auto* selected = interface_tree && selected_nodes_.size() == 1
+                                               ? interface_tree->find_node(*selected_nodes_.begin())
+                                               : nullptr;
+                    selected && selected->type_id == "lfs.group")
+                    interface_tree = manager_->tree(selected->properties.value("tree", std::string{}));
+                const bool output = target->GetAttribute<Rml::String>("data-side", "") == "output";
+                const auto identifier = target->GetAttribute<Rml::String>("data-socket", "");
+                auto* input = dynamic_cast<Rml::ElementFormControlInput*>(target);
+                if (interface_tree && input) {
+                    const auto& sockets = output ? interface_tree->interface.outputs
+                                                 : interface_tree->interface.inputs;
+                    const auto socket = std::ranges::find(sockets, identifier,
+                                                           &lfs::nodes::InterfaceSocket::identifier);
+                    if (socket != sockets.end()) {
+                        nlohmann::json changes = nlohmann::json::object();
+                        const auto text = input->GetValue();
+                        bool valid = true;
+                        if (action == "interface-constraint") {
+                            const auto field = target->GetAttribute<Rml::String>("data-field", "");
+                            if (text.empty())
+                                changes[field] = nullptr;
+                            else {
+                                char* end = nullptr;
+                                const auto value = std::strtod(text.c_str(), &end);
+                                valid = end && *end == '\0';
+                                if (valid)
+                                    changes[field] = value;
+                            }
+                        } else if (socket->type == lfs::nodes::FLOAT_SOCKET) {
+                            char* end = nullptr;
+                            const auto value = std::strtof(text.c_str(), &end);
+                            valid = end && *end == '\0';
+                            if (valid)
+                                changes["default"] = lfs::nodes::Value(value);
+                        } else if (socket->type == lfs::nodes::INT_SOCKET) {
+                            char* end = nullptr;
+                            const auto value = std::strtoll(text.c_str(), &end, 10);
+                            valid = end && *end == '\0';
+                            if (valid)
+                                changes["default"] = lfs::nodes::Value(static_cast<std::int64_t>(value));
+                        } else if (socket->type == lfs::nodes::BOOL_SOCKET) {
+                            changes["default"] = lfs::nodes::Value(target->HasAttribute("checked"));
+                        } else if (socket->type == lfs::nodes::STRING_SOCKET) {
+                            changes["default"] = lfs::nodes::Value(std::string(text));
+                        } else if (socket->type == lfs::nodes::VECTOR_SOCKET) {
+                            glm::vec3 value{};
+                            valid = std::sscanf(text.c_str(), " %f , %f , %f ", &value.x, &value.y, &value.z) == 3;
+                            if (valid)
+                                changes["default"] = lfs::nodes::Value(value);
+                        } else if (socket->type == lfs::nodes::COLOUR_SOCKET) {
+                            glm::vec4 value{};
+                            valid = std::sscanf(text.c_str(), " %f , %f , %f , %f ",
+                                                &value.x, &value.y, &value.z, &value.w) == 4;
+                            if (valid)
+                                changes["default"] = lfs::nodes::Value(value);
+                        }
+                        if (valid) {
+                            const auto result = manager_->interfaceUpdate(interface_tree->uuid, output,
+                                                                           identifier, changes);
+                            if (!result)
+                                file_error_ = result.error().message;
+                        } else {
+                            file_error_ = "Invalid interface value";
+                        }
+                        dom_dirty_ = true;
+                    }
+                }
+                event.StopPropagation();
+                return;
+            }
             if (action == "node-on" && type == "change") {
                 auto* tree = activeTree();
                 auto* node = tree ? tree->find_node(target->GetAttribute<Rml::String>("data-node", "")) : nullptr;
@@ -1734,6 +2351,75 @@ namespace lfs::vis::gui {
                 event.StopPropagation();
                 return;
             }
+            if (action == "group-enter") {
+                (void)enterGroup(target->GetAttribute<Rml::String>("data-node", ""));
+                event.StopPropagation();
+                return;
+            }
+            if (action == "breadcrumb-root") {
+                while (exitGroup()) {}
+                event.StopPropagation();
+                return;
+            }
+            if (action == "breadcrumb") {
+                const auto index = target->GetAttribute<int>("data-index", -1);
+                while (index >= 0 && group_path_.size() > static_cast<std::size_t>(index + 1))
+                    (void)exitGroup();
+                event.StopPropagation();
+                return;
+            }
+            if (action == "group-single-user") {
+                if (auto* graph = activeTree()) {
+                    const auto result = manager_->makeGroupSingleUser(
+                        graph->uuid, target->GetAttribute<Rml::String>("data-node", ""));
+                    if (!result)
+                        file_error_ = result.error().message;
+                    dom_dirty_ = true;
+                }
+                event.StopPropagation();
+                return;
+            }
+            if (action == "interface-add" || action == "interface-remove" ||
+                action == "interface-up" || action == "interface-down") {
+                auto* interface_tree = activeTree();
+                if (const auto* selected = interface_tree && selected_nodes_.size() == 1 ? interface_tree->find_node(*selected_nodes_.begin()) : nullptr;
+                    selected && selected->type_id == "lfs.group")
+                    interface_tree = manager_->tree(selected->properties.value("tree", std::string{}));
+                const bool output = target->GetAttribute<Rml::String>("data-side", "") == "output";
+                if (interface_tree) {
+                    if (action == "interface-add") {
+                        const auto* select = target->GetParentNode()
+                                                 ? dynamic_cast<Rml::ElementFormControlSelect*>(target->GetParentNode()->QuerySelector("select"))
+                                                 : nullptr;
+                        const auto result = manager_->interfaceAdd(interface_tree->uuid, output,
+                                                                   select ? select->GetValue() : "lfs.float",
+                                                                   output ? "Output" : "Input");
+                        if (!result)
+                            file_error_ = result.error().message;
+                    } else {
+                        const std::string identifier = target->GetAttribute<Rml::String>("data-socket", "");
+                        if (action == "interface-remove") {
+                            const auto result = manager_->interfaceRemove(interface_tree->uuid, output, identifier);
+                            if (!result)
+                                file_error_ = result.error().message;
+                        } else {
+                            const auto& sockets = output ? interface_tree->interface.outputs : interface_tree->interface.inputs;
+                            const auto found = std::ranges::find(sockets, identifier, &lfs::nodes::InterfaceSocket::identifier);
+                            if (found != sockets.end()) {
+                                const auto current = static_cast<std::size_t>(std::distance(sockets.begin(), found));
+                                const auto next = action == "interface-up" ? current - std::min<std::size_t>(1, current)
+                                                                             : std::min(current + 1, sockets.size() - 1);
+                                const auto result = manager_->interfaceMove(interface_tree->uuid, output, identifier, next);
+                                if (!result)
+                                    file_error_ = result.error().message;
+                            }
+                        }
+                    }
+                    dom_dirty_ = true;
+                }
+                event.StopPropagation();
+                return;
+            }
             if (action == "add-modifier") {
                 openModifierLibrary(event.GetParameter("mouse_x", 0.0f), event.GetParameter("mouse_y", 0.0f));
                 event.StopPropagation();
@@ -1791,6 +2477,20 @@ namespace lfs::vis::gui {
                 return;
             }
         }
+        if (type == "dblclick" && target) {
+            for (auto* element = target; element && element != this; element = element->GetParentNode()) {
+                const auto name = element->GetAttribute<Rml::String>("data-node", "");
+                if (!name.empty() && enterGroup(name)) {
+                    event.StopPropagation();
+                    return;
+                }
+            }
+            if (const auto link = interaction_.highlightedLink()) {
+                insertReroute(*link, interaction_.screenToGraph(localPointer(event)));
+                event.StopPropagation();
+                return;
+            }
+        }
         if (!editableMode())
             return;
         if (type == "mousedown") {
@@ -1842,6 +2542,14 @@ namespace lfs::vis::gui {
                 scancode = SDL_SCANCODE_DELETE;
             else if (key == Rml::Input::KI_X)
                 scancode = SDL_SCANCODE_X;
+            else if (key == Rml::Input::KI_C)
+                scancode = SDL_SCANCODE_C;
+            else if (key == Rml::Input::KI_V)
+                scancode = SDL_SCANCODE_V;
+            else if (key == Rml::Input::KI_G)
+                scancode = SDL_SCANCODE_G;
+            else if (key == Rml::Input::KI_J)
+                scancode = SDL_SCANCODE_J;
             else if (key == Rml::Input::KI_M)
                 scancode = SDL_SCANCODE_M;
             else if (key == Rml::Input::KI_D)
@@ -1854,8 +2562,11 @@ namespace lfs::vis::gui {
                 scancode = SDL_SCANCODE_N;
             else if (key == Rml::Input::KI_L)
                 scancode = SDL_SCANCODE_L;
+            else if (key == Rml::Input::KI_TAB)
+                scancode = SDL_SCANCODE_TAB;
             if (handleKey(scancode, event.GetParameter<int>("shift_key", 0) != 0,
-                          event.GetParameter<int>("ctrl_key", 0) != 0,
+                          event.GetParameter<int>("ctrl_key", 0) != 0 ||
+                              event.GetParameter<int>("meta_key", 0) != 0,
                           event.GetParameter<int>("alt_key", 0) != 0))
                 event.StopPropagation();
         }

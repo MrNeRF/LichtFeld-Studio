@@ -233,7 +233,9 @@ namespace lfs::vis {
 
         void selectionPreviews(const NodeTree& tree, const EvalCache& cache,
                                const std::string& modifier, ModifierHostResult& result,
-                               const std::function<bool()>& cancelled) {
+                               const std::function<bool()>& cancelled,
+                               const TreeResolver& resolver,
+                               const std::string& name_space = {}) {
             const auto displayed = fieldContext(result.evaluation.geometry);
             if (!displayed)
                 return;
@@ -242,36 +244,35 @@ namespace lfs::vis {
             for (const auto& node : tree.nodes) {
                 if (cancelled())
                     return;
-                const auto type = tree.registry().find(node.type_id);
-                if (!type)
-                    continue;
-                std::string source = node.name;
+                std::string source = name_space + node.name;
                 std::string socket;
-                const auto output = std::ranges::find(type->outputs, "Selection", &SocketDecl::identifier);
+                const auto outputs = effective_outputs(tree, node, resolver);
+                const auto inputs = effective_inputs(tree, node, resolver);
+                const auto output = std::ranges::find(outputs, "Selection", &SocketDecl::identifier);
                 const CachedNodeOutput* consumer = nullptr;
-                if (output != type->outputs.end() && output->type != GEOMETRY_SOCKET) {
+                if (output != outputs.end() && output->type != GEOMETRY_SOCKET) {
                     socket = output->identifier;
                     const auto link = std::ranges::find_if(tree.links, [&](const Link& item) {
                         return item.from_node == node.name && item.from_socket == output->identifier;
                     });
                     if (link == tree.links.end())
                         continue;
-                    const auto cached_consumer = cache.nodes.find(link->to_node);
+                    const auto cached_consumer = cache.nodes.find(name_space + link->to_node);
                     if (cached_consumer == cache.nodes.end())
                         continue;
                     consumer = &cached_consumer->second;
                 } else {
-                    const auto input = std::ranges::find(type->inputs, "Selection", &SocketDecl::identifier);
-                    if (input == type->inputs.end())
+                    const auto input = std::ranges::find(inputs, "Selection", &SocketDecl::identifier);
+                    if (input == inputs.end())
                         continue;
                     const auto link = std::ranges::find_if(tree.links, [&](const Link& item) {
                         return item.to_node == node.name && item.to_socket == input->identifier;
                     });
                     if (link == tree.links.end())
                         continue;
-                    source = link->from_node;
+                    source = name_space + link->from_node;
                     socket = link->from_socket;
-                    const auto cached_consumer = cache.nodes.find(node.name);
+                    const auto cached_consumer = cache.nodes.find(name_space + node.name);
                     if (cached_consumer == cache.nodes.end())
                         continue;
                     consumer = &cached_consumer->second;
@@ -309,11 +310,22 @@ namespace lfs::vis {
                         continue;
                     }
                 }
-                if (auto status = result.evaluation.nodes.find(modifier + "/" + node.name);
+                if (auto status = result.evaluation.nodes.find(modifier + "/" + name_space + node.name);
                     status != result.evaluation.nodes.end())
                     status->second.selected_share = found->second.second;
                 if (sameElements(*context, *displayed))
-                    result.previews[modifier + "/" + node.name] = found->second.first;
+                    result.previews[modifier + "/" + name_space + node.name] = found->second.first;
+            }
+            for (const auto& node : tree.nodes) {
+                if (node.type_id != "lfs.group")
+                    continue;
+                const auto property = node.properties.find("tree");
+                const auto* nested = property != node.properties.end() && property->is_string()
+                                         ? resolver(property->get_ref<const std::string&>())
+                                         : nullptr;
+                if (nested)
+                    selectionPreviews(*nested, cache, modifier, result, cancelled, resolver,
+                                      name_space + node.name + "/");
             }
         }
 
@@ -397,9 +409,18 @@ namespace lfs::vis {
                     std::unordered_set<std::string_view> node_names;
                     for (const auto& node : tree.nodes)
                         node_names.insert(node.name);
-                    std::erase_if(cache.nodes, [&](const auto& entry) { return !node_names.contains(entry.first); });
+                    std::erase_if(cache.nodes, [&](const auto& entry) {
+                        const auto slash = entry.first.find('/');
+                        return !node_names.contains(std::string_view(entry.first).substr(0, slash));
+                    });
                     auto evaluated = lfs::nodes::evaluate(tree,
-                                                          {.geometry = geometry, .interface_overrides = modifier.input_overrides, .geometry_generation = input_generation}, this, &cache, control_);
+                                                          {.geometry = geometry,
+                                                           .interface_overrides = modifier.input_overrides,
+                                                           .geometry_generation = input_generation,
+                                                           .tree_resolver = [this](const std::string_view uuid) {
+                                                               return resolveTree(uuid);
+                                                           }},
+                                                          this, &cache, control_);
                     result.evaluation.time_ms.insert(evaluated.time_ms.begin(), evaluated.time_ms.end());
                     for (auto& [name, status] : evaluated.nodes)
                         result.evaluation.nodes[modifier.uuid + "/" + name] = std::move(status);
@@ -443,7 +464,8 @@ namespace lfs::vis {
                             const auto source = request_.trees.find(modifier.tree_uuid);
                             if (source != request_.trees.end())
                                 selectionPreviews(NodeTree::from_json(source->second, registry_), caches_[modifier.uuid],
-                                                  modifier.uuid, result, control_.cancelled);
+                                                  modifier.uuid, result, control_.cancelled,
+                                                  [this](const std::string_view uuid) { return resolveTree(uuid); });
                         }
                         if ((result.enabled || request_.bake) && !control_.cancelled())
                             preparePayload(object, result);
@@ -460,6 +482,19 @@ namespace lfs::vis {
             std::unordered_map<core::Uuid, ModifierHostResult> results;
 
         private:
+            const NodeTree* resolveTree(const std::string_view uuid) {
+                const std::string key(uuid);
+                if (const auto found = resolved_trees_.find(key); found != resolved_trees_.end())
+                    return found->second.get();
+                const auto source = request_.trees.find(key);
+                if (source == request_.trees.end())
+                    return nullptr;
+                auto value = std::make_unique<NodeTree>(NodeTree::from_json(source->second, registry_));
+                const auto* result = value.get();
+                resolved_trees_.emplace(key, std::move(value));
+                return result;
+            }
+
             const ModifierEvaluationRequest& request_;
             const NodeTypeRegistry& registry_;
             std::unordered_map<std::string, EvalCache>& caches_;
@@ -469,6 +504,7 @@ namespace lfs::vis {
             std::function<void(const core::Uuid&, const std::string&, const NodeTree&)> stack_started_;
             std::unordered_set<core::Uuid> active_;
             std::vector<ModifierObjectSnapshot> active_path_;
+            std::unordered_map<std::string, std::unique_ptr<NodeTree>> resolved_trees_;
             glm::mat4 current_world_{1.0f};
         };
     } // namespace
@@ -658,6 +694,10 @@ namespace lfs::vis {
                                           for (const auto& parent : parents[name])
                                               work.push_back(parent);
                                   }
+                                  std::erase_if(pending, [&](const auto& name) {
+                                      const auto* node = tree.find_node(name);
+                                      return node && (node->type_id == "lfs.reroute" || node->type_id == "lfs.frame" || node->type_id == "lfs.note");
+                                  });
                                   std::lock_guard lock(mutex_);
                                   progress_.host = uuid;
                                   progress_.modifier = modifier;

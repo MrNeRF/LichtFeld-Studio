@@ -2,6 +2,18 @@
     background-color: @{background};
     color: @{text};
 }
+#node-editor-breadcrumb {
+    background-color: @{alpha(surface,0.94)};
+    color: @{text_dim};
+    box-shadow: 0 2dp 5dp @{alpha(background,0.35)};
+}
+#node-editor-breadcrumb button {
+    background-color: transparent;
+    color: @{text};
+}
+#node-editor-breadcrumb button:hover {
+    color: @{primary};
+}
 .node-box {
     background-color: @{surface};
     border-color: @{border};
@@ -14,6 +26,30 @@
 .node-box.failed {
     border-color: @{error};
     box-shadow: 0 0 0 1dp @{alpha(error,0.5)};
+}
+.node-box.node-frame {
+    background-color: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+.frame-note {
+    color: @{text_dim};
+}
+.node-box.node-reroute {
+    background-color: transparent;
+    box-shadow: none;
+}
+.interface-type {
+    background-color: @{alpha(text,0.07)};
+    color: @{text_dim};
+}
+.interface-row button img {
+    image-color: @{text};
+}
+.node-box.node-note {
+    background-color: @{alpha(warning,0.14)};
+    border-color: @{alpha(warning,0.22)};
+    box-shadow: 0 2dp 5dp @{alpha(background,0.22)};
 }
 .node-title, .socket-row, .socket-input {
     color: @{text};

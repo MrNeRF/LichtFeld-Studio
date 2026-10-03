@@ -210,7 +210,7 @@ namespace {
         register_builtin_nodes(nodes);
         ASSERT_EQ(trees.list().size(), 1u);
         EXPECT_EQ(trees.list()[0].id, "lfs.geometry");
-        EXPECT_EQ(sockets.list().size(), 7u);
+        EXPECT_EQ(sockets.list().size(), 8u);
         EXPECT_GE(nodes.list().size(), 45u);
         EXPECT_FALSE(nodes.find("lfs.object_info"));
         EXPECT_TRUE(nodes.find("lfs.mesh_to_splats"));
@@ -848,7 +848,8 @@ namespace {
 
         for (const auto& builtin : registry_.list()) {
             if (!builtin->id.starts_with("lfs.") || builtin->id == "lfs.group_input" ||
-                builtin->id == "lfs.group_output")
+                builtin->id == "lfs.group_output" || builtin->id == "lfs.group" ||
+                builtin->category == "Layout")
                 continue;
             SCOPED_TRACE(builtin->id);
             ASSERT_TRUE(builtin->evaluate);
@@ -1455,6 +1456,19 @@ namespace {
         ASSERT_TRUE(result.ok);
         EXPECT_NEAR((result.geometry.splats->sh0.slice(1, 0, 1) * 0.28209479177387814f + 0.5f).min().item<float>(), 1, 1e-5f);
         EXPECT_NEAR((result.geometry.splats->sh0.slice(1, 2, 3) * 0.28209479177387814f + 0.5f).max().item<float>(), 0, 1e-5f);
+    }
+
+    TEST_P(NodesCore, DenseCellNeighbourSpacingIsIndependentOfHashInsertionOrder) {
+        std::vector<float> positions;
+        for (int index = 0; index < 256; ++index)
+            positions.insert(positions.end(), {index / 512.0f, 0.0f, 0.0f});
+        const auto points = tensor(positions, {256, 3});
+        const auto expected = lfs::core::point_neighbor_spacing(points.to(Device::CPU), 1.0f).to_vector();
+        for (int repeat = 0; repeat < 5; ++repeat) {
+            const auto actual = lfs::core::point_neighbor_spacing(points, 1.0f).to_vector();
+            ASSERT_EQ(actual.size(), expected.size());
+            EXPECT_EQ(std::memcmp(actual.data(), expected.data(), actual.size() * sizeof(float)), 0);
+        }
     }
 
     TEST_P(NodesCore, PointsToSplatsAutoRadiusUsesThreeNearestNeighbours) {
@@ -2071,6 +2085,198 @@ namespace {
                 result.geometry.splats->scaling.sum().item<float>();
             });
         }
+    }
+
+    TEST_P(NodesCore, NestedGroupsEvaluateGeometryBitwise) {
+        NodeTree inner(registry_, "Inner");
+        NodeTree middle(registry_, "Middle");
+        NodeTree outer(registry_, "Outer");
+        const TreeResolver resolver = [&](std::string_view uuid) -> const NodeTree* {
+            for (const auto* tree : {&inner, &middle, &outer})
+                if (tree->uuid == uuid)
+                    return tree;
+            return nullptr;
+        };
+        for (const auto pair : {std::pair{&middle, &inner}, {&outer, &middle}}) {
+            auto& owner = *pair.first;
+            owner.add_node("lfs.group", "Instance").properties["tree"] = pair.second->uuid;
+            ASSERT_TRUE(owner.add_link({owner.input_node().name, "Geometry", "Instance", "Geometry"}, nullptr, resolver));
+            ASSERT_TRUE(owner.add_link({"Instance", "Geometry", owner.output_node().name, "Geometry"}, nullptr, resolver));
+        }
+        const auto geometry = splats();
+        const auto result = evaluate(outer, {.geometry = geometry, .device = device(), .tree_resolver = resolver});
+        ASSERT_TRUE(result.ok);
+        const auto actual = result.geometry.splats->shN.to_vector();
+        const auto expected = geometry.splats->shN.to_vector();
+        ASSERT_EQ(actual.size(), expected.size());
+        EXPECT_EQ(std::memcmp(actual.data(), expected.data(), actual.size() * sizeof(float)), 0);
+        EXPECT_TRUE(result.nodes.contains("Instance/Instance/" + inner.output_node().name));
+    }
+
+    TEST(NodesGraphEditing, ForcedJsonGroupCycleReportsNamedNodeError) {
+        NodeTypeRegistry registry;
+        register_builtin_nodes(registry);
+        NodeTree a(registry, "A"), b(registry, "B");
+        a.add_node("lfs.group", "Into B").properties["tree"] = b.uuid;
+        b.add_node("lfs.group", "Into A").properties["tree"] = a.uuid;
+        // JSON can come from outside the validated assignment path.
+        auto json = a.to_json();
+        json["links"] = nlohmann::json::array({{{"from_node", "Into B"}, {"from_socket", "Geometry"},
+                                               {"to_node", a.output_node().name}, {"to_socket", "Geometry"}}});
+        a = NodeTree::from_json(json, registry);
+        const TreeResolver resolver = [&](std::string_view uuid) -> const NodeTree* {
+            return uuid == a.uuid ? &a : uuid == b.uuid ? &b : nullptr;
+        };
+        const auto result = evaluate(a, {.tree_resolver = resolver});
+        ASSERT_FALSE(result.ok);
+        ASSERT_TRUE(result.errors.contains("Into B"));
+        EXPECT_NE(result.errors.at("Into B").find("Group cycle"), std::string::npos);
+        EXPECT_NE(result.errors.at("Into B").find("A"), std::string::npos);
+        EXPECT_NE(result.errors.at("Into B").find("B"), std::string::npos);
+    }
+
+    TEST_P(NodesCore, MissingGroupReportsNodeErrorWithoutMutatingOtherBranches) {
+        NodeTree tree(registry_);
+        tree.add_node("lfs.group", "Missing").properties["tree"] = "deleted";
+        const auto unchanged = tree.to_json();
+        auto result = evaluate(tree, {.geometry = splats(), .device = device()});
+        EXPECT_TRUE(result.ok); // Unreachable missing instances do not affect the output.
+        EXPECT_EQ(tree.to_json(), unchanged);
+        tree.links.push_back({"Missing", "Geometry", tree.output_node().name, "Geometry"});
+        result = evaluate(tree, {.geometry = splats(), .device = device()});
+        EXPECT_FALSE(result.ok);
+        EXPECT_EQ(result.errors.at("Missing"), "Missing graph");
+        EXPECT_TRUE(result.nodes.contains(tree.input_node().name));
+    }
+
+    TEST_P(NodesCore, ReroutePassesGeometryAndLazyFieldsBitwise) {
+        NodeTree tree(registry_);
+        tree.add_node("lfs.reroute", "Geometry Route");
+        tree.add_node("lfs.reroute", "Field Route");
+        tree.add_node("lfs.position", "Position");
+        tree.add_node("lfs.set_position", "Set Position");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Geometry Route", "Input"}));
+        ASSERT_TRUE(tree.add_link({"Geometry Route", "Output", "Set Position", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Position", "Position", "Field Route", "Input"}));
+        ASSERT_TRUE(tree.add_link({"Field Route", "Output", "Set Position", "Position"}));
+        ASSERT_TRUE(tree.add_link({"Set Position", "Geometry", tree.output_node().name, "Geometry"}));
+        const auto input = splats();
+        const auto result = evaluate(tree, {.geometry = input, .device = device()});
+        ASSERT_TRUE(result.ok);
+        for (const auto pair : {std::pair{input.splats->means, result.geometry.splats->means},
+                                {input.splats->shN, result.geometry.splats->shN}}) {
+            const auto a = pair.first.to_vector(), b = pair.second.to_vector();
+            ASSERT_EQ(a.size(), b.size());
+            EXPECT_EQ(std::memcmp(a.data(), b.data(), a.size() * sizeof(float)), 0);
+        }
+    }
+
+    TEST(NodesGraphEditing, RerouteResolvesUpstreamTypeAndRejectsFloatToGeometry) {
+        NodeTypeRegistry registry;
+        register_builtin_nodes(registry);
+        NodeTree tree(registry);
+        tree.add_node("lfs.value", "Value");
+        tree.add_node("lfs.reroute", "First");
+        tree.add_node("lfs.reroute", "Second");
+        EXPECT_EQ(effective_outputs(tree, *tree.find_node("First")).front().type, ANY_SOCKET);
+        ASSERT_TRUE(tree.add_link({"Value", "Value", "First", "Input"}));
+        ASSERT_TRUE(tree.add_link({"First", "Output", "Second", "Input"}));
+        EXPECT_EQ(effective_outputs(tree, *tree.find_node("Second")).front().type, FLOAT_SOCKET);
+        std::string error;
+        EXPECT_FALSE(tree.add_link({"Second", "Output", tree.output_node().name, "Geometry"}, &error));
+        EXPECT_FALSE(error.empty());
+    }
+
+    TEST_P(NodesCore, LayoutCardsHaveNoEvaluationStatusOrTime) {
+        NodeTree tree(registry_);
+        tree.add_node("lfs.frame", "Frame");
+        tree.add_node("lfs.note", "Note");
+        tree.add_node("lfs.reroute", "Route");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Route", "Input"}));
+        ASSERT_TRUE(tree.add_link({"Route", "Output", tree.output_node().name, "Geometry"}));
+        const auto result = evaluate(tree, {.geometry = splats(), .device = device()});
+        ASSERT_TRUE(result.ok);
+        for (const auto* name : {"Frame", "Note", "Route"}) {
+            EXPECT_FALSE(result.nodes.contains(name));
+            EXPECT_FALSE(result.time_ms.contains(name));
+            EXPECT_FALSE(result.errors.contains(name));
+        }
+    }
+
+    TEST(NodesGraphEditing, GroupInterfaceDefaultsAndNumericLimitsReachEffectiveInputs) {
+        NodeTypeRegistry registry;
+        register_builtin_nodes(registry);
+        NodeTree inner(registry), outer(registry);
+        inner.interface.inputs.push_back({"Amount", "Strength", std::string(FLOAT_SOCKET), 0.25f, 0.0, 1.0, 0.1});
+        inner.interface.outputs.push_back({"Value", "Value", std::string(FLOAT_SOCKET), 0.0f});
+        ASSERT_TRUE(inner.add_link({inner.input_node().name, "Amount", inner.output_node().name, "Value"}));
+        outer.add_node("lfs.group", "Group").properties["tree"] = inner.uuid;
+        outer.interface.outputs.push_back({"Value", "Value", std::string(FLOAT_SOCKET), 0.0f});
+        const TreeResolver resolver = [&](std::string_view uuid) -> const NodeTree* { return uuid == inner.uuid ? &inner : nullptr; };
+        ASSERT_TRUE(outer.add_link({"Group", "Value", outer.output_node().name, "Value"}, nullptr, resolver));
+        const auto inputs = effective_inputs(outer, *outer.find_node("Group"), resolver);
+        EXPECT_EQ(inputs.back().label, "Strength");
+        EXPECT_EQ(inputs.back().min, 0.0);
+        EXPECT_EQ(inputs.back().max, 1.0);
+        EXPECT_EQ(inputs.back().step, 0.1);
+        auto result = evaluate(outer, {.tree_resolver = resolver});
+        ASSERT_TRUE(result.ok);
+        EXPECT_EQ(*result.output_values.at("Value").get_if<float>(), 0.25f);
+        outer.find_node("Group")->input_values["Amount"] = 9.0f;
+        result = evaluate(outer, {.tree_resolver = resolver});
+        ASSERT_TRUE(result.ok);
+        EXPECT_EQ(*result.output_values.at("Value").get_if<float>(), 1.0f);
+        outer.find_node("Group")->input_values["Amount"] = -9.0f;
+        result = evaluate(outer, {.tree_resolver = resolver});
+        EXPECT_EQ(*result.output_values.at("Value").get_if<float>(), 0.0f);
+    }
+
+    TEST(NodesGraphEditing, GroupsReroutesMissingGraphsAndCycles) {
+        NodeTypeRegistry registry;
+        register_builtin_nodes(registry);
+        NodeTree inner(registry, "Inner");
+        NodeTree outer(registry, "Outer");
+        ASSERT_TRUE(outer.remove_link({outer.input_node().name, "Geometry",
+                                       outer.output_node().name, "Geometry"}));
+        auto& group = outer.add_node("lfs.group", "Instance");
+        group.properties["tree"] = inner.uuid;
+        const TreeResolver resolver = [&](const std::string_view uuid) -> const NodeTree* {
+            if (uuid == inner.uuid)
+                return &inner;
+            if (uuid == outer.uuid)
+                return &outer;
+            return nullptr;
+        };
+        ASSERT_TRUE(outer.add_link({outer.input_node().name, "Geometry", group.name, "Geometry"},
+                                   nullptr, resolver));
+        ASSERT_TRUE(outer.add_link({group.name, "Geometry", outer.output_node().name, "Geometry"},
+                                   nullptr, resolver));
+        auto result = lfs::nodes::evaluate(outer, {.tree_resolver = resolver});
+        EXPECT_TRUE(result.ok);
+
+        const auto second = outer.links.back();
+        ASSERT_TRUE(outer.remove_link(second));
+        auto& reroute = outer.add_node("lfs.reroute", "Route");
+        ASSERT_TRUE(outer.add_link({group.name, "Geometry", reroute.name, "Input"}, nullptr,
+                                   resolver));
+        ASSERT_TRUE(outer.add_link({reroute.name, "Output", outer.output_node().name, "Geometry"},
+                                   nullptr, resolver));
+        EXPECT_EQ(effective_outputs(outer, reroute, resolver).front().type, GEOMETRY_SOCKET);
+        EXPECT_TRUE(lfs::nodes::evaluate(outer, {.tree_resolver = resolver}).ok);
+
+        group.properties["tree"] = "missing";
+        result = lfs::nodes::evaluate(outer, {.tree_resolver = resolver});
+        EXPECT_FALSE(result.ok);
+        EXPECT_NE(result.errors.at(group.name).find("Missing graph"), std::string::npos);
+
+        group.properties["tree"] = inner.uuid;
+        auto& back = inner.add_node("lfs.group", "Back");
+        back.properties["tree"] = outer.uuid;
+        std::string cycle;
+        EXPECT_TRUE(group_reference_would_cycle(outer, inner.uuid, resolver, &cycle));
+        result = lfs::nodes::evaluate(outer, {.tree_resolver = resolver});
+        EXPECT_FALSE(result.ok);
+        EXPECT_NE(result.errors.at(group.name).find("Group cycle"), std::string::npos);
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, NodesCoreScale, testing::ValuesIn(test_targets()),

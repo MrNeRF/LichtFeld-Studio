@@ -9,11 +9,16 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <functional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lfs::nodes {
+
+    class NodeTree;
+    using TreeResolver = std::function<const NodeTree*(std::string_view uuid)>;
 
     struct Node {
         std::string name;
@@ -64,9 +69,9 @@ namespace lfs::nodes {
         [[nodiscard]] const Node* find_node(std::string_view name) const;
         Node& add_node(std::string type_id, std::string name = {});
         bool remove_node(std::string_view name);
-        bool add_link(Link link, std::string* error = nullptr);
+        bool add_link(Link link, std::string* error = nullptr, const TreeResolver& resolver = {});
         bool remove_link(const Link& link);
-        [[nodiscard]] std::vector<ValidationIssue> validate() const;
+        [[nodiscard]] std::vector<ValidationIssue> validate(const TreeResolver& resolver = {}) const;
 
         [[nodiscard]] nlohmann::json to_json() const;
         static NodeTree from_json(const nlohmann::json& json, const NodeTypeRegistry& registry);
@@ -89,6 +94,18 @@ namespace lfs::nodes {
         NodeTree(const NodeTypeRegistry& registry, EmptyTag);
         const NodeTypeRegistry* registry_ = nullptr;
     };
+
+    // The only socket descriptor path for dynamic nodes. Returned declarations own
+    // their strings and remain valid independently of the registry or referenced tree.
+    LFS_CORE_API std::vector<SocketDecl> effective_inputs(const NodeTree& tree, const Node& node,
+                                                          const TreeResolver& resolver = {});
+    LFS_CORE_API std::vector<SocketDecl> effective_outputs(const NodeTree& tree, const Node& node,
+                                                           const TreeResolver& resolver = {});
+    LFS_CORE_API bool group_reference_would_cycle(const NodeTree& owner, std::string_view referenced_uuid,
+                                                  const TreeResolver& resolver,
+                                                  std::string* cycle = nullptr);
+    LFS_CORE_API bool group_selection_would_cycle(
+        const NodeTree& tree, const std::unordered_set<std::string>& selected);
 
     LFS_CORE_API void to_json(nlohmann::json& json, const Value& value);
     LFS_CORE_API void from_json(const nlohmann::json& json, Value& value);

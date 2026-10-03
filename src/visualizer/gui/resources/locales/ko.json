@@ -1,4 +1,6 @@
 {
+  "node_editor.add_input": "입력 추가",
+  "node_editor.add_output": "출력 추가",
   "node_editor.paint": "페인트",
   "node_editor.paint_done": "페인트 끝내기",
   "node_editor.pick_colour": "색상 추출",
@@ -3570,6 +3572,76 @@
       },
       "properties": {},
       "property_labels": {}
+    },
+    "group": {
+      "label": "그룹",
+      "description": "재사용 가능한 노드 그래프를 평가합니다.",
+      "help": "사이드바에서 그래프를 선택하세요. 입력과 출력은 해당 그래프의 인터페이스를 따릅니다.\n모든 인스턴스가 같은 그래프를 공유합니다.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "참조하는 그래프 UUID."
+      },
+      "property_labels": {
+        "tree": "그래프"
+      }
+    },
+    "frame": {
+      "label": "프레임",
+      "description": "관련 노드를 시각적으로 그룹화합니다.",
+      "help": "노드를 프레임 안에 놓으세요. 프레임을 옮기면 멤버도 함께 이동합니다.\n레이아웃 노드는 평가 결과를 변경하지 않습니다.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "프레임 제목.",
+        "colour": "테마 색상 또는 RGB 값.",
+        "note": "제목 아래에 표시할 선택적 텍스트."
+      },
+      "property_labels": {
+        "label": "레이블",
+        "colour": "색상",
+        "note": "메모"
+      }
+    },
+    "reroute": {
+      "label": "경로 변경",
+      "description": "값을 바꾸지 않고 링크의 경로를 변경합니다.",
+      "help": "어떤 소켓 형식이든 연결할 수 있으며 상위 형식을 따릅니다.\n레이아웃 노드는 평가 결과를 변경하지 않습니다.",
+      "inputs": {
+        "Input": "그대로 전달할 값."
+      },
+      "input_labels": {
+        "Input": "입력"
+      },
+      "outputs": {
+        "Output": "변경되지 않은 입력 값."
+      },
+      "output_labels": {
+        "Output": "출력"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "메모",
+      "description": "편집 가능한 텍스트 카드를 그래프에 추가합니다.",
+      "help": "카드를 두 번 클릭하거나 사이드바에서 텍스트를 편집하세요.\n레이아웃 노드는 평가 결과를 변경하지 않습니다.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "카드에 표시할 텍스트.",
+        "width": "캔버스 단위의 카드 너비입니다. 높이는 텍스트에 맞게 조정됩니다."
+      },
+      "property_labels": {
+        "text": "텍스트",
+        "width": "너비"
+      }
     },
     "group_input": {
       "label": "그룹 입력",

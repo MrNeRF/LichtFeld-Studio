@@ -9,6 +9,7 @@
 #include "visualizer/operation/undo_history.hpp"
 
 #include <future>
+#include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <thread>
@@ -600,6 +601,360 @@ TEST_F(NodesModifierManager, LayoutUndoAndRepeatedReadsNeverEvaluate) {
     manager.tick();
     (void)manager.evaluate(uuid);
     EXPECT_EQ(manager.performance()["evaluations"], 0);
+}
+
+TEST_F(NodesModifierManager, ClipboardGroupsInterfaceAndLayoutRoundTrip) {
+    lfs::vis::SceneManager scene;
+    scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+    const auto id = scene.getScene().addSplat("Host", model(4));
+    const auto host = scene.getScene().getNodeUuid(id);
+    auto& manager = scene.modifierManager();
+    auto& tree = colour_tree(manager);
+    auto& hsv = tree.add_node("lfs.hsv_range", "HSV");
+    ASSERT_TRUE(tree.add_link({hsv.name, "Selection", "Correct", "Selection"}));
+    auto& modifier = manager.addModifier(host, tree.uuid);
+
+    const auto baseline = manager.evaluate(host);
+    ASSERT_TRUE(baseline.ok);
+    ASSERT_TRUE(baseline.geometry.splats);
+    const auto baseline_colours = baseline.geometry.splats->sh0.to_vector();
+
+    const auto clipboard = manager.copyNodes(tree.uuid, {"HSV", "Correct"});
+    ASSERT_TRUE(clipboard.has_value());
+    const auto encoded = nlohmann::json::parse(*clipboard);
+    EXPECT_EQ(encoded["format"], "lfs.node-clipboard");
+    EXPECT_EQ(encoded["links"].size(), 1u);
+    const auto pasted = manager.pasteNodes(tree.uuid, *clipboard, std::array<float, 2>{500, 200});
+    ASSERT_TRUE(pasted.has_value());
+    EXPECT_EQ(pasted->nodes.size(), 2u);
+    EXPECT_EQ(pasted->dropped_links, 0u);
+    EXPECT_TRUE(std::ranges::any_of(tree.links, [&](const auto& link) {
+        return std::ranges::find(pasted->nodes, link.from_node) != pasted->nodes.end() &&
+               std::ranges::find(pasted->nodes, link.to_node) != pasted->nodes.end();
+    }));
+
+    const auto grouped = manager.makeGroup(tree.uuid, {"Correct"}, "Grade");
+    ASSERT_TRUE(grouped.has_value());
+    EXPECT_NE(manager.tree(grouped->graph), nullptr);
+    const auto grouped_result = manager.evaluate(host);
+    ASSERT_TRUE(grouped_result.ok);
+    ASSERT_TRUE(grouped_result.geometry.splats);
+    EXPECT_EQ(grouped_result.geometry.splats->sh0.to_vector(), baseline_colours);
+    auto* grade_graph = manager.tree(grouped->graph);
+    ASSERT_NE(grade_graph, nullptr);
+    const auto nested_group = manager.makeGroup(grade_graph->uuid, {"Correct"}, "Nested Grade");
+    ASSERT_TRUE(nested_group.has_value());
+    const auto inlined = manager.ungroup(tree.uuid, grouped->group_node);
+    ASSERT_TRUE(inlined.has_value());
+    const auto inlined_result = manager.evaluate(host);
+    ASSERT_TRUE(inlined_result.ok);
+    EXPECT_EQ(inlined_result.geometry.splats->sh0.to_vector(), baseline_colours);
+
+    const auto amount = manager.interfaceAdd(tree.uuid, false, "lfs.float", "Amount", 0.5f,
+                                             0.0, 1.0, 0.1);
+    ASSERT_TRUE(amount.has_value());
+    modifier.input_overrides[*amount] = 0.75f;
+    ASSERT_TRUE(manager.interfaceUpdate(tree.uuid, false, *amount, {{"label", "Strength"}}));
+    EXPECT_TRUE(modifier.input_overrides.contains(*amount));
+    ASSERT_TRUE(manager.interfaceMove(tree.uuid, false, *amount, 0));
+    EXPECT_EQ(tree.interface.inputs.front().identifier, *amount);
+    ASSERT_TRUE(manager.interfaceRemove(tree.uuid, false, *amount));
+    EXPECT_FALSE(modifier.input_overrides.contains(*amount));
+
+    const auto frame = manager.frameWrap(tree.uuid, {"HSV"}, "Mask");
+    ASSERT_TRUE(frame.has_value());
+    EXPECT_EQ(tree.find_node("HSV")->ui.value("frame", ""), *frame);
+    ASSERT_TRUE(manager.frameSetMembers(tree.uuid, *frame, pasted->nodes));
+    EXPECT_FALSE(tree.find_node("HSV")->ui.contains("frame"));
+    for (const auto& name : pasted->nodes)
+        EXPECT_EQ(tree.find_node(name)->ui.value("frame", ""), *frame);
+
+    const auto geometry_link = std::ranges::find_if(tree.links, [&](const auto& link) {
+        return link.from_node == tree.input_node().name && link.from_socket == "Geometry";
+    });
+    ASSERT_NE(geometry_link, tree.links.end());
+    const auto route = manager.rerouteInsert(tree.uuid, *geometry_link);
+    ASSERT_TRUE(route.has_value());
+    EXPECT_EQ(lfs::nodes::effective_outputs(tree, *tree.find_node(*route),
+                                            [&](std::string_view uuid) { return manager.tree(uuid); })
+                  .front()
+                  .type,
+              lfs::nodes::GEOMETRY_SOCKET);
+    EXPECT_TRUE(manager.evaluate(host).ok);
+    const auto saved_nested = manager.toJson(false);
+    ASSERT_TRUE(manager.restoreJson(saved_nested));
+    const auto restored_nested = manager.evaluate(host);
+    ASSERT_TRUE(restored_nested.ok);
+    ASSERT_TRUE(restored_nested.geometry.splats);
+    EXPECT_EQ(restored_nested.geometry.splats->sh0.to_vector(), baseline_colours);
+}
+
+TEST_F(NodesModifierManager, ClipboardPreservesInternalLinksDropsExternalAndRenamesCollisions) {
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    auto& tree = colour_tree(manager);
+    tree.add_node("lfs.hsv_range", "Mask");
+    ASSERT_TRUE(tree.add_link({"Mask", "Selection", "Correct", "Selection"}));
+    const auto copy = manager.copyNodes(tree.uuid, {"Mask", "Correct", tree.input_node().name});
+    ASSERT_TRUE(copy);
+    const auto payload = nlohmann::json::parse(*copy);
+    EXPECT_EQ(payload["nodes"].size(), 2u);
+    EXPECT_EQ(payload["links"].size(), 1u);
+    const auto paste = manager.pasteNodes(tree.uuid, *copy);
+    ASSERT_TRUE(paste);
+    ASSERT_EQ(paste->nodes.size(), 2u);
+    EXPECT_NE(paste->nodes[0], "Mask");
+    EXPECT_NE(paste->nodes[1], "Correct");
+    const std::unordered_set<std::string> pasted(paste->nodes.begin(), paste->nodes.end());
+    EXPECT_EQ(std::ranges::count_if(tree.links, [&](const auto& link) {
+        return pasted.contains(link.from_node) && pasted.contains(link.to_node);
+    }), 1);
+    EXPECT_EQ(std::ranges::count_if(tree.links, [&](const auto& link) {
+        return pasted.contains(link.from_node) != pasted.contains(link.to_node);
+    }), 0);
+}
+
+TEST_F(NodesModifierManager, ClipboardReusesIdenticalGroupTreeAndImportsConflictingUuid) {
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    auto& tree = colour_tree(manager);
+    const auto grouped = manager.makeGroup(tree.uuid, {"Correct"}, "Grade");
+    ASSERT_TRUE(grouped);
+    const auto copied = manager.copyNodes(tree.uuid, {grouped->group_node});
+    ASSERT_TRUE(copied);
+    const auto count = manager.trees().size();
+    const auto same = manager.pasteNodes(tree.uuid, *copied);
+    ASSERT_TRUE(same);
+    EXPECT_EQ(manager.trees().size(), count);
+    EXPECT_EQ(tree.find_node(same->nodes.front())->properties["tree"], grouped->graph);
+    manager.tree(grouped->graph)->find_node("Correct")->input_values["Exposure"] = 3.0f;
+    const auto different = manager.pasteNodes(tree.uuid, *copied);
+    ASSERT_TRUE(different);
+    const auto imported = tree.find_node(different->nodes.front())->properties["tree"].get<std::string>();
+    EXPECT_NE(imported, grouped->graph);
+    ASSERT_NE(manager.tree(imported), nullptr);
+    EXPECT_EQ(*manager.tree(imported)->find_node("Correct")->input_values.at("Exposure").get_if<float>(), 1.0f);
+    EXPECT_EQ(manager.trees().size(), count + 1);
+}
+
+TEST_F(NodesModifierManager, ClipboardRemapsReusedParentWhenNestedTreeConflicts) {
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    auto& tree = colour_tree(manager);
+    const auto inner = manager.makeGroup(tree.uuid, {"Correct"}, "Inner");
+    ASSERT_TRUE(inner);
+    const auto outer = manager.makeGroup(tree.uuid, {inner->group_node}, "Outer");
+    ASSERT_TRUE(outer);
+    const auto copied = manager.copyNodes(tree.uuid, {outer->group_node});
+    ASSERT_TRUE(copied);
+    manager.tree(inner->graph)->find_node("Correct")->input_values["Exposure"] = 4.0f;
+    const auto pasted = manager.pasteNodes(tree.uuid, *copied);
+    ASSERT_TRUE(pasted);
+    const auto parent = tree.find_node(pasted->nodes.front())->properties["tree"].get<std::string>();
+    EXPECT_NE(parent, outer->graph);
+    const auto child = manager.tree(parent)->find_node(inner->group_node)->properties["tree"].get<std::string>();
+    EXPECT_NE(child, inner->graph);
+    EXPECT_EQ(*manager.tree(child)->find_node("Correct")->input_values.at("Exposure").get_if<float>(), 1.0f);
+}
+
+TEST_F(NodesModifierManager, NonClipboardTextDoesNotMutateLibraryOrUndoHistory) {
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    const auto id = manager.newTree("Clipboard").uuid;
+    const auto before = manager.toJson(false);
+    lfs::vis::op::undoHistory().clear();
+    for (const auto* text : {"ordinary text", "{}", "[]", "null", R"({"format":17})",
+                             R"({"format":"lfs.node-clipboard","version":"one"})"}) {
+        const auto result = manager.pasteNodes(id, text);
+        ASSERT_FALSE(result);
+        EXPECT_NE(result.error().message.find("Clipboard"), std::string::npos);
+        EXPECT_EQ(manager.toJson(false), before);
+        EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+    }
+}
+
+TEST_F(NodesModifierManager, MakeGroupAndUngroupPreservePositionDerivedFieldBitwise) {
+    using namespace lfs::nodes;
+    using lfs::core::Tensor;
+    using lfs::core::Device;
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    auto& tree = colour_tree(manager);
+    tree.add_node("lfs.position", "Position");
+    tree.add_node("lfs.separate_xyz", "Axes");
+    tree.add_node("lfs.compare", "Mask").properties["operation"] = "greater_than";
+    ASSERT_TRUE(tree.add_link({"Position", "Position", "Axes", "Vector"}));
+    ASSERT_TRUE(tree.add_link({"Axes", "X", "Mask", "A"}));
+    ASSERT_TRUE(tree.add_link({"Mask", "Result", "Correct", "Selection"}));
+    auto geometry = geometry_from_splat_data(*model(3));
+    geometry.splats->means = Tensor::from_vector({-1.f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f}, {3, 3}, Device::GPU);
+    const TreeResolver resolver = [&](std::string_view id) { return manager.tree(id); };
+    const auto baseline = evaluate(tree, {.geometry = geometry, .tree_resolver = resolver});
+    ASSERT_TRUE(baseline.ok);
+    ASSERT_NE(baseline.geometry.splats->sh0.to_vector(), geometry.splats->sh0.to_vector());
+    const auto check = [&](const EvalResult& result) {
+        ASSERT_TRUE(result.ok);
+        const auto& a = *baseline.geometry.splats;
+        const auto& b = *result.geometry.splats;
+        for (const auto pair : {std::pair{a.means, b.means}, {a.sh0, b.sh0}, {a.shN, b.shN},
+                                {a.scaling, b.scaling}, {a.rotation, b.rotation}, {a.opacity, b.opacity}}) {
+            const auto expected = pair.first.to_vector();
+            const auto actual = pair.second.to_vector();
+            ASSERT_EQ(actual.size(), expected.size());
+            EXPECT_EQ(std::memcmp(actual.data(), expected.data(), actual.size() * sizeof(float)), 0);
+        }
+    };
+    const auto grouped = manager.makeGroup(tree.uuid, {"Correct"}, "Field Grade");
+    ASSERT_TRUE(grouped);
+    check(evaluate(tree, {.geometry = geometry, .tree_resolver = resolver}));
+    ASSERT_TRUE(manager.ungroup(tree.uuid, grouped->group_node));
+    check(evaluate(tree, {.geometry = geometry, .tree_resolver = resolver}));
+}
+
+TEST_F(NodesModifierManager, MakeGroupAndUngroupPreserveMultiInputLinkOrder) {
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    auto& tree = manager.newTree("Test Graph");
+    for (const auto* name : {"A", "B", "C"})
+        tree.add_node("lfs.transform_geometry", name);
+    tree.add_node("lfs.join_geometry", "Join");
+    for (const auto* name : {"B", "A", "C"})
+        ASSERT_TRUE(tree.add_link({name, "Geometry", "Join", "Geometry"}));
+    const auto links = tree.links;
+    const auto grouped = manager.makeGroup(tree.uuid, {"Join"});
+    ASSERT_TRUE(grouped);
+    ASSERT_TRUE(manager.ungroup(tree.uuid, grouped->group_node));
+    EXPECT_EQ(tree.links, links);
+}
+
+TEST_F(NodesModifierManager, NonConvexGroupSelectionIsRejectedTransactionally) {
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    auto& tree = manager.newTree("Test Graph");
+    for (const auto* name : {"A", "B", "C"})
+        tree.add_node("lfs.math", name);
+    ASSERT_TRUE(tree.add_link({"A", "Value", "B", "A"}));
+    ASSERT_TRUE(tree.add_link({"B", "Value", "C", "A"}));
+    const auto before = manager.toJson(false);
+    lfs::vis::op::undoHistory().clear();
+    const auto result = manager.makeGroup(tree.uuid, {"A", "C"});
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().message.find("leave and re-enter"), std::string::npos);
+    EXPECT_EQ(manager.toJson(false), before);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+}
+
+TEST_F(NodesModifierManager, MakeGroupAndUngroupEachCreateOneUndoStep) {
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    const auto id = colour_tree(manager).uuid;
+    auto& history = lfs::vis::op::undoHistory();
+    history.clear();
+    const auto before = manager.toJson(false);
+    const auto grouped = manager.makeGroup(id, {"Correct"});
+    ASSERT_TRUE(grouped);
+    EXPECT_EQ(history.undoCount(), 1u);
+    const auto after = manager.toJson(false);
+    ASSERT_TRUE(history.undo().success);
+    EXPECT_EQ(manager.toJson(false), before);
+    ASSERT_TRUE(history.redo().success);
+    EXPECT_EQ(manager.toJson(false), after);
+    history.clear();
+    ASSERT_TRUE(manager.ungroup(id, grouped->group_node));
+    EXPECT_EQ(history.undoCount(), 1u);
+    ASSERT_TRUE(history.undo().success);
+    EXPECT_EQ(manager.toJson(false), after);
+}
+
+TEST_F(NodesModifierManager, SetGroupGraphRejectsDirectAndTransitiveCycles) {
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    auto& a = manager.newTree("A");
+    auto& b = manager.newTree("B");
+    a.add_node("lfs.group", "Group");
+    b.add_node("lfs.group", "Group");
+    EXPECT_FALSE(manager.setGroupGraph(a.uuid, "Group", a.uuid));
+    ASSERT_TRUE(manager.setGroupGraph(a.uuid, "Group", b.uuid));
+    const auto before = manager.toJson(false);
+    const auto result = manager.setGroupGraph(b.uuid, "Group", a.uuid);
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().message.find("Group cycle"), std::string::npos);
+    EXPECT_EQ(manager.toJson(false), before);
+}
+
+TEST_F(NodesModifierManager, InterfaceRenameAndMoveRetainOverrideByStableIdentifier) {
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    const auto host = scene.getScene().getNodeUuid(scene.getScene().addSplat("Host", model()));
+    const auto tree = manager.newTree("Interface").uuid;
+    const auto id = manager.interfaceAdd(tree, false, "lfs.float", "Strength", 0.5f, 0.0, 1.0, 0.01);
+    ASSERT_TRUE(id);
+    auto& modifier = manager.addModifier(host, tree);
+    modifier.input_overrides[*id] = 0.8f;
+    ASSERT_TRUE(manager.interfaceUpdate(tree, false, *id, {{"label", "Amount"}}));
+    ASSERT_TRUE(manager.interfaceMove(tree, false, *id, 0));
+    EXPECT_EQ(manager.tree(tree)->interface.inputs.front().identifier, *id);
+    EXPECT_EQ(manager.tree(tree)->interface.inputs.front().label, "Amount");
+    EXPECT_EQ(*modifier.input_overrides.at(*id).get_if<float>(), 0.8f);
+}
+
+TEST_F(NodesModifierManager, InterfaceRemovalPrunesLinksAndOverridesInSameUndoStep) {
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    const auto host = scene.getScene().getNodeUuid(scene.getScene().addSplat("Host", model()));
+    auto& inner = manager.newTree("Inner");
+    const auto id = manager.interfaceAdd(inner.uuid, false, "lfs.float", "Strength", 0.5f);
+    ASSERT_TRUE(id);
+    inner.add_node("lfs.math", "Math");
+    ASSERT_TRUE(inner.add_link({inner.input_node().name, *id, "Math", "A"}));
+    auto& outer = manager.newTree("Outer");
+    outer.add_node("lfs.group", "Group");
+    outer.add_node("lfs.value", "Value");
+    ASSERT_TRUE(manager.setGroupGraph(outer.uuid, "Group", inner.uuid));
+    ASSERT_TRUE(outer.add_link({"Value", "Value", "Group", *id}, nullptr,
+                               [&](std::string_view uuid) { return manager.tree(uuid); }));
+    auto& modifier = manager.addModifier(host, inner.uuid);
+    modifier.input_overrides[*id] = 0.8f;
+    auto& history = lfs::vis::op::undoHistory();
+    history.clear();
+    const auto before = manager.toJson(false);
+    ASSERT_TRUE(manager.interfaceRemove(inner.uuid, false, *id));
+    EXPECT_EQ(history.undoCount(), 1u);
+    EXPECT_EQ(inner.links.size(), 1u);
+    EXPECT_EQ(outer.links.size(), 1u);
+    EXPECT_TRUE(modifier.input_overrides.empty());
+    ASSERT_TRUE(history.undo().success);
+    EXPECT_EQ(manager.toJson(false), before);
+}
+
+TEST_F(NodesModifierManager, ClipboardIncludesLayoutAndRemapsFrameMembership) {
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    auto& tree = manager.newTree("Test Graph");
+    tree.add_node("lfs.note", "Note").properties["text"] = "Two lines\nStay readable";
+    tree.add_node("lfs.reroute", "Route");
+    const auto frame = manager.frameWrap(tree.uuid, {"Note", "Route"}, "Notes");
+    ASSERT_TRUE(frame);
+    const auto copy = manager.copyNodes(tree.uuid, {"Note", "Route", *frame});
+    ASSERT_TRUE(copy);
+    const auto paste = manager.pasteNodes(tree.uuid, *copy);
+    ASSERT_TRUE(paste);
+    EXPECT_EQ(paste->nodes.size(), 3u);
+    const auto* note = tree.find_node("Note 2");
+    ASSERT_NE(note, nullptr);
+    EXPECT_EQ(note->properties["text"], "Two lines\nStay readable");
+    EXPECT_EQ(note->ui["frame"], "Notes 2");
+}
+
+TEST_F(NodesModifierManager, DeletingFrameKeepsMembersAndClearsMembership) {
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    auto& tree = colour_tree(manager);
+    const auto frame = manager.frameWrap(tree.uuid, {"Correct"});
+    ASSERT_TRUE(frame);
+    ASSERT_TRUE(tree.remove_node(*frame));
+    ASSERT_NE(tree.find_node("Correct"), nullptr);
+    EXPECT_FALSE(tree.find_node("Correct")->ui.contains("frame"));
 }
 
 TEST_F(NodesModifierManager, ValueChangeRequestsOnceAndKeepsUpstreamCached) {

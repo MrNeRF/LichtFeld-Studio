@@ -47,6 +47,11 @@ namespace lfs::nodes {
         // Explicit CPU execution remains available for tests/offline callers.
         // Unspecified chooses GPU whenever the selected backend is available.
         std::optional<core::Device> device;
+        TreeResolver tree_resolver;
+        // Internal recursion/cache context is public so headless callers can forward
+        // EvalInputs without a second evaluator API. Ordinary callers leave it empty.
+        std::vector<std::pair<std::string, std::string>> group_stack;
+        std::string cache_namespace;
     };
 
     struct NodeEvaluation {
@@ -68,6 +73,7 @@ namespace lfs::nodes {
         std::unordered_map<std::string, std::string> errors;
         std::unordered_map<std::string, double> time_ms;
         std::unordered_map<std::string, NodeEvaluation> nodes;
+        std::unordered_map<std::string, Value> output_values;
         bool cancelled = false;
     };
 

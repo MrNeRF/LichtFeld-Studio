@@ -53,7 +53,7 @@ namespace lfs::vis::gui {
         if (const auto found = progress_nodes_.find(std::string(name)); found != progress_nodes_.end())
             status = &found->second;
         else if (result) {
-            const auto found = result->nodes.find(active_modifier_uuid_ + "/" + std::string(name));
+            const auto found = result->nodes.find(active_modifier_uuid_ + "/" + instancePrefix() + std::string(name));
             if (found != result->nodes.end())
                 status = &found->second;
         }

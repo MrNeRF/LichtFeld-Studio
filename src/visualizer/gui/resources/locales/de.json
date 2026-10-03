@@ -1,4 +1,6 @@
 {
+  "node_editor.add_input": "Eingang hinzufügen",
+  "node_editor.add_output": "Ausgang hinzufügen",
   "node_editor.paint": "Malen",
   "node_editor.paint_done": "Malen beenden",
   "node_editor.pick_colour": "Farbe aufnehmen",
@@ -3570,6 +3572,76 @@
       },
       "properties": {},
       "property_labels": {}
+    },
+    "group": {
+      "label": "Gruppe",
+      "description": "Wertet einen wiederverwendbaren Knotengraphen aus.",
+      "help": "Wähle einen Graphen in der Seitenleiste. Ein- und Ausgänge folgen seiner Schnittstelle.\nAlle Instanzen verwenden denselben Graphen.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "UUID des referenzierten Graphen."
+      },
+      "property_labels": {
+        "tree": "Graph"
+      }
+    },
+    "frame": {
+      "label": "Rahmen",
+      "description": "Gruppiert zusammengehörige Knoten visuell.",
+      "help": "Lege Knoten in den Rahmen. Beim Verschieben folgen seine Mitglieder.\nLayout-Knoten ändern das Ergebnis nicht.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "Rahmenüberschrift.",
+        "colour": "Designfarbe oder RGB-Wert.",
+        "note": "Optionaler Text unter der Überschrift."
+      },
+      "property_labels": {
+        "label": "Beschriftung",
+        "colour": "Farbe",
+        "note": "Notiz"
+      }
+    },
+    "reroute": {
+      "label": "Umleitung",
+      "description": "Leitet eine Verbindung um, ohne ihren Wert zu ändern.",
+      "help": "Verbinde einen beliebigen Sockeltyp; die Umleitung übernimmt den Typ des Eingangs.\nLayout-Knoten ändern das Ergebnis nicht.",
+      "inputs": {
+        "Input": "Durchzuleitender Wert."
+      },
+      "input_labels": {
+        "Input": "Eingang"
+      },
+      "outputs": {
+        "Output": "Unveränderter Eingangswert."
+      },
+      "output_labels": {
+        "Output": "Ausgang"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "Notiz",
+      "description": "Fügt dem Graphen eine bearbeitbare Textkarte hinzu.",
+      "help": "Doppelklicke auf die Karte oder bearbeite den Text in der Seitenleiste.\nLayout-Knoten ändern das Ergebnis nicht.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "Auf der Karte angezeigter Text.",
+        "width": "Kartenbreite in Arbeitsflächeneinheiten; die Höhe passt sich dem Text an."
+      },
+      "property_labels": {
+        "text": "Text",
+        "width": "Breite"
+      }
     },
     "group_input": {
       "label": "Gruppeneingang",

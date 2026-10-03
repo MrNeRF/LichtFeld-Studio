@@ -13,10 +13,73 @@
 namespace lfs::nodes {
     namespace {
 
-        const SocketDecl* socket(const NodeTypeInfo& type, std::string_view identifier, bool output) {
-            const auto& sockets = output ? type.outputs : type.inputs;
-            const auto found = std::ranges::find(sockets, identifier, &SocketDecl::identifier);
-            return found == sockets.end() ? nullptr : &*found;
+        SocketDecl interface_decl(const InterfaceSocket& socket) {
+            SocketDecl result{socket.identifier, socket.label, socket.type, socket.default_value};
+            result.min = socket.min;
+            result.max = socket.max;
+            result.step = socket.step;
+            // Interface values may carry lazy fields across a group boundary. Geometry
+            // and strings are concrete values; numeric/vector values are field-capable.
+            result.field = socket.type != GEOMETRY_SOCKET && socket.type != STRING_SOCKET;
+            return result;
+        }
+
+        std::vector<SocketDecl> effective_sockets_impl(const NodeTree& tree, const Node& node,
+                                                       const bool output, const TreeResolver& resolver,
+                                                       std::unordered_set<std::string>& visiting) {
+            if (node.type_id == "lfs.group_input") {
+                if (!output)
+                    return {};
+                std::vector<SocketDecl> result;
+                result.reserve(tree.interface.inputs.size());
+                for (const auto& item : tree.interface.inputs)
+                    result.push_back(interface_decl(item));
+                return result;
+            }
+            if (node.type_id == "lfs.group_output") {
+                if (output)
+                    return {};
+                std::vector<SocketDecl> result;
+                result.reserve(tree.interface.outputs.size());
+                for (const auto& item : tree.interface.outputs)
+                    result.push_back(interface_decl(item));
+                return result;
+            }
+            if (node.type_id == "lfs.group") {
+                const auto graph = node.properties.find("tree");
+                if (!resolver || graph == node.properties.end() || !graph->is_string())
+                    return {};
+                const NodeTree* referenced = resolver(graph->get_ref<const std::string&>());
+                if (!referenced || referenced->tree_type != tree.tree_type)
+                    return {};
+                const auto& sockets = output ? referenced->interface.outputs : referenced->interface.inputs;
+                std::vector<SocketDecl> result;
+                result.reserve(sockets.size());
+                for (const auto& item : sockets)
+                    result.push_back(interface_decl(item));
+                return result;
+            }
+            if (node.type_id == "lfs.reroute") {
+                std::string type(ANY_SOCKET);
+                if (visiting.insert(node.name).second) {
+                    const auto incoming = std::ranges::find(tree.links, node.name, &Link::to_node);
+                    if (incoming != tree.links.end() && incoming->to_socket == "Input") {
+                        if (const auto* upstream = tree.find_node(incoming->from_node)) {
+                            const auto outputs = effective_sockets_impl(tree, *upstream, true, resolver, visiting);
+                            const auto found = std::ranges::find(outputs, incoming->from_socket,
+                                                                 &SocketDecl::identifier);
+                            if (found != outputs.end())
+                                type = found->type;
+                        }
+                    }
+                    visiting.erase(node.name);
+                }
+                SocketDecl result{output ? "Output" : "Input", "", type, {}};
+                result.field = type != GEOMETRY_SOCKET && type != STRING_SOCKET;
+                return {std::move(result)};
+            }
+            const auto type = tree.registry().find(node.type_id);
+            return type ? (output ? type->outputs : type->inputs) : std::vector<SocketDecl>{};
         }
 
         std::string unique_name(const std::vector<Node>& nodes, std::string base) {
@@ -53,6 +116,89 @@ namespace lfs::nodes {
         }
 
     } // namespace
+
+    std::vector<SocketDecl> effective_inputs(const NodeTree& tree, const Node& node,
+                                             const TreeResolver& resolver) {
+        std::unordered_set<std::string> visiting;
+        return effective_sockets_impl(tree, node, false, resolver, visiting);
+    }
+
+    std::vector<SocketDecl> effective_outputs(const NodeTree& tree, const Node& node,
+                                              const TreeResolver& resolver) {
+        std::unordered_set<std::string> visiting;
+        return effective_sockets_impl(tree, node, true, resolver, visiting);
+    }
+
+    bool group_reference_would_cycle(const NodeTree& owner, const std::string_view referenced_uuid,
+                                     const TreeResolver& resolver, std::string* cycle) {
+        if (!resolver || referenced_uuid.empty())
+            return false;
+        std::vector<const NodeTree*> path{&owner};
+        std::unordered_set<std::string> active{owner.uuid};
+        std::function<bool(const NodeTree*)> visit = [&](const NodeTree* tree) {
+            if (!tree)
+                return false;
+            if (tree->uuid == owner.uuid) {
+                path.push_back(tree);
+                return true;
+            }
+            if (!active.insert(tree->uuid).second)
+                return false;
+            path.push_back(tree);
+            for (const auto& node : tree->nodes) {
+                if (node.type_id != "lfs.group")
+                    continue;
+                const auto property = node.properties.find("tree");
+                if (property != node.properties.end() && property->is_string() &&
+                    visit(resolver(property->get_ref<const std::string&>())))
+                    return true;
+            }
+            path.pop_back();
+            active.erase(tree->uuid);
+            return false;
+        };
+        if (!visit(resolver(referenced_uuid)))
+            return false;
+        if (cycle) {
+            cycle->clear();
+            for (const auto* tree : path) {
+                if (!cycle->empty())
+                    *cycle += " → ";
+                *cycle += tree->name;
+            }
+        }
+        return true;
+    }
+
+    bool group_selection_would_cycle(const NodeTree& tree,
+                                     const std::unordered_set<std::string>& selected) {
+        constexpr std::string_view GROUP = "\x1fgroup";
+        std::unordered_map<std::string, std::vector<std::string>> edges;
+        for (const auto& link : tree.links) {
+            const std::string from = selected.contains(link.from_node) ? std::string(GROUP) : link.from_node;
+            const std::string to = selected.contains(link.to_node) ? std::string(GROUP) : link.to_node;
+            if (from != to)
+                edges[from].push_back(to);
+        }
+        std::unordered_map<std::string, int> state;
+        std::function<bool(const std::string&)> visit = [&](const std::string& node) {
+            if (state[node] == 1)
+                return true;
+            if (state[node] == 2)
+                return false;
+            state[node] = 1;
+            if (const auto found = edges.find(node); found != edges.end())
+                for (const auto& target : found->second)
+                    if (visit(target))
+                        return true;
+            state[node] = 2;
+            return false;
+        };
+        for (const auto& [node, _] : edges)
+            if (visit(node))
+                return true;
+        return false;
+    }
 
     void to_json(nlohmann::json& json, const Value& value) {
         json = nlohmann::json::object();
@@ -147,6 +293,10 @@ namespace lfs::nodes {
         if (found == nodes.end() || found->type_id == "lfs.group_input" ||
             found->type_id == "lfs.group_output")
             return false;
+        if (found->type_id == "lfs.frame")
+            for (auto& node : nodes)
+                if (node.ui.value("frame", "") == node_name)
+                    node.ui.erase("frame");
         links.erase(std::remove_if(links.begin(), links.end(),
                                    [&](const Link& link) {
                                        return link.from_node == node_name || link.to_node == node_name;
@@ -156,7 +306,7 @@ namespace lfs::nodes {
         return true;
     }
 
-    bool NodeTree::add_link(Link link, std::string* error) {
+    bool NodeTree::add_link(Link link, std::string* error, const TreeResolver& resolver) {
         const Node* from = find_node(link.from_node);
         const Node* to = find_node(link.to_node);
         if (!from || !to) {
@@ -164,58 +314,39 @@ namespace lfs::nodes {
                 *error = "Link endpoint does not exist";
             return false;
         }
-        const auto from_type = registry_->find(from->type_id);
-        const auto to_type = registry_->find(to->type_id);
         const std::vector<Link> previous_links = links;
-        if (from_type && to_type) {
-            const auto* output = socket(*from_type, link.from_socket, true);
-            const auto* input = socket(*to_type, link.to_socket, false);
-            std::optional<SocketDecl> interface_output;
-            std::optional<SocketDecl> interface_input;
-            if (!output && from->type_id == "lfs.group_input") {
-                const auto found =
-                    std::ranges::find(interface.inputs, link.from_socket, &InterfaceSocket::identifier);
-                if (found != interface.inputs.end()) {
-                    interface_output =
-                        SocketDecl{found->identifier, found->label, found->type, found->default_value};
-                    output = &*interface_output;
-                }
-            }
-            if (!input && to->type_id == "lfs.group_output") {
-                const auto found =
-                    std::ranges::find(interface.outputs, link.to_socket, &InterfaceSocket::identifier);
-                if (found != interface.outputs.end()) {
-                    interface_input =
-                        SocketDecl{found->identifier, found->label, found->type, found->default_value};
-                    input = &*interface_input;
-                }
-            }
-            if (!output || !input) {
-                if (error)
-                    *error = "Link socket does not exist";
-                return false;
-            }
-            if (!can_convert_socket(output->type, input->type)) {
-                if (error)
-                    *error = "Link socket types are incompatible";
-                return false;
-            }
-            if (!input->multi_input) {
+        const auto outputs = effective_outputs(*this, *from, resolver);
+        const auto inputs = effective_inputs(*this, *to, resolver);
+        const auto output = std::ranges::find(outputs, link.from_socket, &SocketDecl::identifier);
+        const auto input = std::ranges::find(inputs, link.to_socket, &SocketDecl::identifier);
+        if (output == outputs.end() || input == inputs.end()) {
+            if (error)
+                *error = "Link socket does not exist";
+            return false;
+        }
+        if (!can_convert_socket(output->type, input->type)) {
+            if (error)
+                *error = "Link socket types are incompatible";
+            return false;
+        }
+        if (!input->multi_input) {
                 links.erase(std::remove_if(links.begin(), links.end(),
                                            [&](const Link& old) {
                                                return old.to_node == link.to_node &&
                                                       old.to_socket == link.to_socket;
                                            }),
                             links.end());
-            }
         }
         links.push_back(std::move(link));
-        if (std::ranges::any_of(validate(), [](const ValidationIssue& issue) {
-                return issue.message == "Node graph contains a cycle";
-            })) {
+        const auto issues = validate(resolver);
+        const auto invalid = std::ranges::find_if(issues, [](const ValidationIssue& issue) {
+            return issue.message == "Node graph contains a cycle" ||
+                   issue.message == "Link socket types are incompatible";
+        });
+        if (invalid != issues.end()) {
             links = previous_links;
             if (error)
-                *error = "Node graph contains a cycle";
+                *error = invalid->message;
             return false;
         }
         return true;
@@ -229,7 +360,7 @@ namespace lfs::nodes {
         return true;
     }
 
-    std::vector<ValidationIssue> NodeTree::validate() const {
+    std::vector<ValidationIssue> NodeTree::validate(const TreeResolver& resolver) const {
         std::vector<ValidationIssue> issues;
         const auto input_count = std::ranges::count(nodes, std::string("lfs.group_input"), &Node::type_id);
         const auto output_count = std::ranges::count(nodes, std::string("lfs.group_output"), &Node::type_id);
@@ -244,33 +375,15 @@ namespace lfs::nodes {
                 issues.push_back({to ? to->name : std::string{}, "Link endpoint does not exist"});
                 continue;
             }
-            adjacency[from->name].push_back(to->name);
-            const auto from_type = registry_->find(from->type_id);
-            const auto to_type = registry_->find(to->type_id);
-            if (from_type && to_type) {
-                const auto* output = socket(*from_type, link.from_socket, true);
-                const auto* input = socket(*to_type, link.to_socket, false);
-                std::optional<SocketDecl> interface_output;
-                std::optional<SocketDecl> interface_input;
-                if (!output && from->type_id == "lfs.group_input") {
-                    const auto found =
-                        std::ranges::find(interface.inputs, link.from_socket, &InterfaceSocket::identifier);
-                    if (found != interface.inputs.end()) {
-                        interface_output =
-                            SocketDecl{found->identifier, found->label, found->type, found->default_value};
-                        output = &*interface_output;
-                    }
-                }
-                if (!input && to->type_id == "lfs.group_output") {
-                    const auto found =
-                        std::ranges::find(interface.outputs, link.to_socket, &InterfaceSocket::identifier);
-                    if (found != interface.outputs.end()) {
-                        interface_input =
-                            SocketDecl{found->identifier, found->label, found->type, found->default_value};
-                        input = &*interface_input;
-                    }
-                }
-                if (!output || !input)
+            if (from->type_id != "lfs.frame" && from->type_id != "lfs.note" &&
+                to->type_id != "lfs.frame" && to->type_id != "lfs.note")
+                adjacency[from->name].push_back(to->name);
+            const auto outputs = effective_outputs(*this, *from, resolver);
+            const auto inputs = effective_inputs(*this, *to, resolver);
+            const auto output = std::ranges::find(outputs, link.from_socket, &SocketDecl::identifier);
+            const auto input = std::ranges::find(inputs, link.to_socket, &SocketDecl::identifier);
+            {
+                if (output == outputs.end() || input == inputs.end())
                     issues.push_back({to->name, "Link socket does not exist"});
                 else if (!can_convert_socket(output->type, input->type))
                     issues.push_back({to->name, "Link socket types are incompatible"});
@@ -297,6 +410,20 @@ namespace lfs::nodes {
                 issues.push_back({node.name, "Node graph contains a cycle"});
                 break;
             }
+        }
+        for (const auto& node : nodes) {
+            if (node.type_id != "lfs.group")
+                continue;
+            const auto graph = node.properties.find("tree");
+            if (graph == node.properties.end() || !graph->is_string() || !resolver ||
+                !resolver(graph->get_ref<const std::string&>())) {
+                issues.push_back({node.name, "Missing graph"});
+                continue;
+            }
+            std::string cycle;
+            if (group_reference_would_cycle(*this, graph->get_ref<const std::string&>(), resolver,
+                                            &cycle))
+                issues.push_back({node.name, "Group cycle: " + cycle});
         }
         return issues;
     }
@@ -373,15 +500,17 @@ namespace lfs::nodes {
                     if (node.version < type->version && type->upgrade)
                         node.properties = type->upgrade(std::move(node.properties), node.version);
                     node.version = type->version;
-                    std::unordered_map<std::string, Value> inputs;
-                    for (const auto& declaration : type->inputs) {
-                        if (const auto value = node.input_values.find(declaration.identifier);
-                            value != node.input_values.end())
-                            inputs.emplace(declaration.identifier, value->second);
-                        else
-                            inputs.emplace(declaration.identifier, declaration.default_value);
+                    if (node.type_id != "lfs.group" && node.type_id != "lfs.reroute") {
+                        std::unordered_map<std::string, Value> inputs;
+                        for (const auto& declaration : type->inputs) {
+                            if (const auto value = node.input_values.find(declaration.identifier);
+                                value != node.input_values.end())
+                                inputs.emplace(declaration.identifier, value->second);
+                            else
+                                inputs.emplace(declaration.identifier, declaration.default_value);
+                        }
+                        node.input_values = std::move(inputs);
                     }
-                    node.input_values = std::move(inputs);
                     apply_defaults(node, *type);
                 } else {
                     node.preserved = item;

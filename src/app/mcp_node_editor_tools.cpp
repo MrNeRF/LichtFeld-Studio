@@ -135,6 +135,12 @@ namespace lfs::app {
                 canvas->setView({pan[0].get<float>(), pan[1].get<float>()}, zoom);
             } else if (operation == "preview_selection") {
                 canvas->setPreviewSelection(args.at("enabled").get<bool>());
+            } else if (operation == "enter_group") {
+                if (!canvas->enterGroup(args.at("node").get<std::string>()))
+                    return failure("node must identify a group with an available graph in the shown graph", "node");
+            } else if (operation == "exit_group") {
+                if (!canvas->exitGroup())
+                    return failure("The editor is already at the modifier graph", "editor");
             } else if (operation == "select") {
                 const auto nodes = args.value("nodes", std::unordered_set<std::string>{});
                 std::optional<lfs::nodes::Link> link;
@@ -164,7 +170,7 @@ namespace lfs::app {
         auto* impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
         if (!impl)
             return;
-        for (const std::string operation : {"open", "close", "show", "select", "arrange", "frame", "view", "preview_selection"}) {
+        for (const std::string operation : {"open", "close", "show", "select", "arrange", "frame", "view", "preview_selection", "enter_group", "exit_group"}) {
             json properties = json::object();
             std::vector<std::string> required;
             if (operation == "show") {
@@ -180,6 +186,9 @@ namespace lfs::app {
             } else if (operation == "preview_selection") {
                 properties = {{"enabled", boolSchema()}};
                 required = {"enabled"};
+            } else if (operation == "enter_group") {
+                properties = {{"node", stringSchema()}};
+                required = {"node"};
             }
             add(registry, impl, "nodes.editor_" + operation, operation + " the Node Editor; returns the resulting editor state", properties, required,
                 [operation](auto& viewer, const json& args) { return editView(viewer, args, operation); });

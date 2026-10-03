@@ -41,6 +41,7 @@ namespace lfs::nodes {
     }
 
     SocketTypeRegistry::SocketTypeRegistry() {
+        register_type({std::string(ANY_SOCKET), "Any", {0.58f, 0.62f, 0.68f, 1.0f}});
         register_type({std::string(GEOMETRY_SOCKET), "Geometry", {0.34f, 0.64f, 0.93f, 1.0f}});
         register_type({std::string(FLOAT_SOCKET), "Float", {0.90f, 0.58f, 0.29f, 1.0f}});
         register_type({std::string(INT_SOCKET), "Integer", {0.38f, 0.62f, 0.80f, 1.0f}});

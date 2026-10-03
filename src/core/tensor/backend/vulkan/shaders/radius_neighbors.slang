@@ -121,8 +121,8 @@ float querySpacing(Parameters p, uint i) {
                     if (extent == 2 && abs(x) <= 1 && abs(y) <= 1 && abs(z) <= 1)
                         continue;
                     const int3 target = center + int3(x, y, z);
-                    int visited = 0;
-                    for (int j = heads[hashCell(target, p.bucketMask)]; j >= 0 && visited < 128; j = next[j], ++visited) {
+                    // Every candidate participates, independent of atomic insertion order.
+                    for (int j = heads[hashCell(target, p.bucketMask)]; j >= 0; j = next[j]) {
                         const float3 other = position(p, uint(j));
                         if (uint(j) == i || !all(cell(other, p.radius) == target))
                             continue;

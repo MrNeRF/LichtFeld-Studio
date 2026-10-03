@@ -9,6 +9,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <expected>
 #include <glm/glm.hpp>
 #include <memory>
@@ -66,6 +67,16 @@ namespace lfs::vis {
 
     struct ModifierError {
         std::string message;
+    };
+
+    struct PasteNodesResult {
+        std::vector<std::string> nodes;
+        std::size_t dropped_links = 0;
+    };
+
+    struct MakeGroupResult {
+        std::string group_node;
+        std::string graph;
     };
 
     using ModifierResult = std::expected<void, ModifierError>;
@@ -126,6 +137,42 @@ namespace lfs::vis {
         [[nodiscard]] std::vector<lfs::nodes::NodeTree*> trees();
         bool removeTree(std::string_view uuid_or_name);
         [[nodiscard]] std::string uniqueTreeName(std::string name, std::string_view except_uuid = {}) const;
+        [[nodiscard]] std::expected<std::string, ModifierError>
+        copyNodes(std::string_view tree_uuid, const std::vector<std::string>& nodes) const;
+        [[nodiscard]] std::expected<PasteNodesResult, ModifierError>
+        pasteNodes(std::string_view tree_uuid, std::string_view clipboard,
+                   std::optional<std::array<float, 2>> location = std::nullopt);
+        [[nodiscard]] std::expected<MakeGroupResult, ModifierError>
+        makeGroup(std::string_view tree_uuid, const std::vector<std::string>& nodes,
+                  std::string name = "Group");
+        [[nodiscard]] std::expected<std::vector<std::string>, ModifierError>
+        ungroup(std::string_view tree_uuid, std::string_view node);
+        [[nodiscard]] ModifierResult setGroupGraph(std::string_view tree_uuid,
+                                                   std::string_view node,
+                                                   std::string_view graph);
+        [[nodiscard]] ModifierResult makeGroupSingleUser(std::string_view tree_uuid,
+                                                         std::string_view node);
+        [[nodiscard]] std::expected<std::string, ModifierError>
+        interfaceAdd(std::string_view tree_uuid, bool output, std::string type,
+                     std::string label, lfs::nodes::Value default_value = {},
+                     std::optional<double> min = {}, std::optional<double> max = {},
+                     std::optional<double> step = {});
+        [[nodiscard]] ModifierResult interfaceRemove(std::string_view tree_uuid, bool output,
+                                                     std::string_view identifier);
+        [[nodiscard]] ModifierResult interfaceUpdate(std::string_view tree_uuid, bool output,
+                                                     std::string_view identifier,
+                                                     const nlohmann::json& changes);
+        [[nodiscard]] ModifierResult interfaceMove(std::string_view tree_uuid, bool output,
+                                                   std::string_view identifier, std::size_t index);
+        [[nodiscard]] std::expected<std::string, ModifierError>
+        frameWrap(std::string_view tree_uuid, const std::vector<std::string>& nodes,
+                  std::string label = "Frame");
+        [[nodiscard]] ModifierResult frameSetMembers(std::string_view tree_uuid,
+                                                     std::string_view frame,
+                                                     const std::vector<std::string>& nodes);
+        [[nodiscard]] std::expected<std::string, ModifierError>
+        rerouteInsert(std::string_view tree_uuid, const lfs::nodes::Link& link,
+                      std::optional<std::array<float, 2>> location = std::nullopt);
         [[nodiscard]] ModifierResult setNodeInput(std::string_view tree_uuid, std::string_view node_name,
                                                   std::string_view input, lfs::nodes::Value value);
 
@@ -165,6 +212,7 @@ namespace lfs::vis {
                             std::string merge_key = {}, bool reevaluate = true);
         void recordStackEdit(const core::Uuid& node_uuid, nlohmann::json before,
                              std::string merge_key = {});
+        void recordLibraryEdit(nlohmann::json before, std::string merge_key = {});
 
         std::uint64_t generation() const;
 

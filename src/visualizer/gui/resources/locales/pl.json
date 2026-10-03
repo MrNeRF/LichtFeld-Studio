@@ -1,4 +1,6 @@
 {
+  "node_editor.add_input": "Dodaj wejście",
+  "node_editor.add_output": "Dodaj wyjście",
   "node_editor.paint": "Maluj",
   "node_editor.paint_done": "Zakończ malowanie",
   "node_editor.pick_colour": "Pobierz kolor",
@@ -3570,6 +3572,76 @@
       },
       "properties": {},
       "property_labels": {}
+    },
+    "group": {
+      "label": "Grupa",
+      "description": "Oblicza wielokrotnego użytku graf węzłów.",
+      "help": "Wybierz graf na pasku bocznym. Wejścia i wyjścia odpowiadają jego interfejsowi.\nWszystkie instancje współdzielą ten sam graf.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "UUID używanego grafu."
+      },
+      "property_labels": {
+        "tree": "Graf"
+      }
+    },
+    "frame": {
+      "label": "Ramka",
+      "description": "Wizualnie grupuje powiązane węzły.",
+      "help": "Upuść węzły w ramce. Przesunięcie ramki przesuwa jej elementy.\nWęzły układu nie zmieniają wyniku obliczeń.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "Nagłówek ramki.",
+        "colour": "Kolor motywu lub wartość RGB.",
+        "note": "Opcjonalny tekst pod nagłówkiem."
+      },
+      "property_labels": {
+        "label": "Etykieta",
+        "colour": "Kolor",
+        "note": "Notatka"
+      }
+    },
+    "reroute": {
+      "label": "Przekierowanie",
+      "description": "Przekierowuje łącze bez zmiany jego wartości.",
+      "help": "Połącz dowolny typ gniazda; przekierowanie przyjmuje typ źródłowy.\nWęzły układu nie zmieniają wyniku obliczeń.",
+      "inputs": {
+        "Input": "Wartość do przekazania."
+      },
+      "input_labels": {
+        "Input": "Wejście"
+      },
+      "outputs": {
+        "Output": "Niezmieniona wartość wejściowa."
+      },
+      "output_labels": {
+        "Output": "Wyjście"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "Notatka",
+      "description": "Dodaje do grafu edytowalną kartę tekstową.",
+      "help": "Kliknij kartę dwukrotnie lub edytuj tekst na pasku bocznym.\nWęzły układu nie zmieniają wyniku obliczeń.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "Tekst wyświetlany na karcie.",
+        "width": "Szerokość karty; wysokość dopasowuje się do tekstu."
+      },
+      "property_labels": {
+        "text": "Tekst",
+        "width": "Szerokość"
+      }
     },
     "group_input": {
       "label": "Wejście grupy",

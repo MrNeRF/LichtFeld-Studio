@@ -31,6 +31,31 @@ body {
     height: 100%;
     pointer-events: none;
 }
+#node-editor-breadcrumb {
+    z-index: 3;
+    position: absolute;
+    left: 10dp;
+    top: 10dp;
+    height: 28dp;
+    padding: 3dp 6dp;
+    display: none;
+    align-items: center;
+    gap: 4dp;
+    border-radius: 6dp;
+    font-size: 12dp;
+}
+#node-editor-breadcrumb button {
+    height: 22dp;
+    padding: 0 5dp;
+    border-width: 0;
+    decorator: none;
+}
+#node-editor-breadcrumb span {
+    height: 22dp;
+    line-height: 22dp;
+    padding: 0 2dp;
+    opacity: 0.6;
+}
 .node-box {
     z-index: 0;
     position: absolute;
@@ -39,6 +64,33 @@ body {
     border-radius: 6dp;
     overflow: visible;
     pointer-events: auto;
+}
+.node-box.node-frame {
+    z-index: -1;
+    padding: 12dp;
+    pointer-events: auto;
+}
+.frame-label {
+    font-size: 13dp;
+    font-weight: bold;
+    white-space: pre-wrap;
+}
+.frame-note, .note-text {
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 20dp;
+}
+.frame-note {
+    margin-top: 4dp;
+}
+.node-box.node-reroute {
+    border-width: 0;
+    border-radius: 9dp;
+    overflow: visible;
+}
+.node-box.node-note {
+    padding: 12dp;
+    overflow: hidden;
 }
 .node-box.muted > .node-title, .node-box.muted > .socket-rows, .node-box.muted > .node-footer {
     opacity: 0.58;
@@ -322,6 +374,84 @@ body {
     margin-top: 8dp;
     font-size: 12dp;
     white-space: nowrap;
+}
+.node-multiline {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 64dp;
+}
+.interface-heading {
+    margin-top: 14dp;
+}
+.interface-side {
+    margin-top: 8dp;
+}
+.interface-row, .interface-add {
+    display: flex;
+    align-items: center;
+    gap: 3dp;
+    margin-top: 4dp;
+}
+.interface-row input {
+    flex: 1;
+    min-width: 0;
+    height: 22dp;
+}
+.interface-row button, .interface-add button {
+    height: 24dp;
+}
+.interface-row button {
+    width: 22dp;
+    min-width: 22dp;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.interface-row button img {
+    width: 12dp;
+    height: 12dp;
+}
+.interface-row button[data-action="interface-up"] img {
+    transform: rotate(180deg);
+}
+.interface-type {
+    width: 62dp;
+    min-width: 62dp;
+    font-size: 11dp;
+    text-align: center;
+    white-space: nowrap;
+    border-radius: 4dp;
+    padding: 3dp 0;
+}
+.interface-add button {
+    min-width: 95dp;
+    padding: 0 8dp;
+    white-space: nowrap;
+}
+.interface-details {
+    display: flex;
+    gap: 4dp;
+    margin: 3dp 0 7dp;
+}
+.interface-details label {
+    flex: 1;
+    min-width: 0;
+    font-size: 9dp;
+}
+.interface-details input {
+    box-sizing: border-box;
+    width: 100%;
+    height: 20dp;
+    margin-top: 2dp;
+    font-size: 10dp;
+}
+.interface-details input[type="checkbox"] {
+    width: 18dp;
+}
+.interface-add select {
+    flex: 1;
+    height: 24dp;
 }
 .modifier-row {
     box-sizing: border-box;

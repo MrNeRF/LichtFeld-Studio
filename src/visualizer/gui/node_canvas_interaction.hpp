@@ -54,6 +54,7 @@ namespace lfs::vis::gui {
         std::string id;
         CanvasRect bounds;
         std::vector<CanvasSocket> sockets;
+        std::string frame;
         bool operator==(const CanvasNode&) const = default;
     };
 
@@ -161,6 +162,7 @@ namespace lfs::vis::gui {
         std::vector<CanvasNode> nodes_;
         std::vector<CanvasLink> links_;
         std::unordered_set<std::string> selected_nodes_;
+        std::unordered_set<std::string> moving_nodes_;
         Mode mode_ = Mode::Idle;
         CanvasPoint pan_;
         float zoom_ = 1.0f;

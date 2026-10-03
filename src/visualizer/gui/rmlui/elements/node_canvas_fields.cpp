@@ -14,6 +14,7 @@
 #include <RmlUi/Core/ElementText.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
+#include <RmlUi/Core/Elements/ElementFormControlTextArea.h>
 #include <RmlUi/Core/Event.h>
 #include <RmlUi/Core/Input.h>
 #include <algorithm>
@@ -316,13 +317,20 @@ namespace lfs::vis::gui {
             const auto before = tree->to_json();
             const auto* input = dynamic_cast<Rml::ElementFormControlInput*>(target);
             const auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(target);
-            const std::string text = input ? input->GetValue() : select ? select->GetValue()
-                                                                        : "";
+            const auto* textarea = dynamic_cast<Rml::ElementFormControlTextArea*>(target);
+            const std::string text = input ? input->GetValue()
+                                     : select ? select->GetValue()
+                                     : textarea ? textarea->GetValue()
+                                                : "";
             char* parse_end = nullptr;
             if (!input_id.empty()) {
-                const auto socket = std::ranges::find(descriptor->inputs, input_id,
+                const lfs::nodes::TreeResolver resolver = [this](const std::string_view uuid) {
+                    return manager_->tree(uuid);
+                };
+                const auto inputs = lfs::nodes::effective_inputs(*tree, *node, resolver);
+                const auto socket = std::ranges::find(inputs, input_id,
                                                       &lfs::nodes::SocketDecl::identifier);
-                if (socket != descriptor->inputs.end()) {
+                if (socket != inputs.end()) {
                     if ((target->GetTagName() == "color-picker" || target->GetTagName() == "colour-offset") && event) {
                         const bool signed_picker = target->GetTagName() == "color-picker" && target->GetAttribute<int>("data-offset", 0);
                         const auto channel = [&](const char* name) {

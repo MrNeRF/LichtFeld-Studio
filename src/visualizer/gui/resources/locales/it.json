@@ -1,4 +1,6 @@
 {
+  "node_editor.add_input": "Aggiungi ingresso",
+  "node_editor.add_output": "Aggiungi uscita",
   "node_editor.paint": "Dipingi",
   "node_editor.paint_done": "Termina pittura",
   "node_editor.pick_colour": "Preleva colore",
@@ -3234,7 +3236,7 @@
         "Softness": "Morbidezza"
       },
       "outputs": {
-        "Selection": "Intensità della selezione: 0 non selezionato, 1 completamente selezionato; i valori intermedi creano transizioni morbide."
+        "Selection": "Intensità della selezione: 0 escluso, 1 selezionato; i valori intermedi creano transizioni morbide."
       },
       "output_labels": {
         "Selection": "Selezione"
@@ -3570,6 +3572,76 @@
       },
       "properties": {},
       "property_labels": {}
+    },
+    "group": {
+      "label": "Gruppo",
+      "description": "Valuta un grafo di nodi riutilizzabile.",
+      "help": "Scegli un grafo nella barra laterale. Ingressi e uscite seguono la sua interfaccia.\nTutte le istanze condividono lo stesso grafo.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "UUID del grafo referenziato."
+      },
+      "property_labels": {
+        "tree": "Grafo"
+      }
+    },
+    "frame": {
+      "label": "Cornice",
+      "description": "Raggruppa visivamente i nodi correlati.",
+      "help": "Rilascia i nodi nella cornice. Spostando la cornice si spostano i suoi membri.\nI nodi di impaginazione non cambiano il risultato.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "Titolo della cornice.",
+        "colour": "Colore del tema o valore RGB.",
+        "note": "Testo facoltativo sotto il titolo."
+      },
+      "property_labels": {
+        "label": "Etichetta",
+        "colour": "Colore",
+        "note": "Nota"
+      }
+    },
+    "reroute": {
+      "label": "Deviazione",
+      "description": "Reindirizza un collegamento senza modificarne il valore.",
+      "help": "Collega qualsiasi tipo di presa; la deviazione adotta il tipo a monte.\nI nodi di impaginazione non cambiano il risultato.",
+      "inputs": {
+        "Input": "Valore da trasmettere."
+      },
+      "input_labels": {
+        "Input": "Ingresso"
+      },
+      "outputs": {
+        "Output": "Valore di ingresso invariato."
+      },
+      "output_labels": {
+        "Output": "Uscita"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "Nota",
+      "description": "Aggiunge al grafo una scheda di testo modificabile.",
+      "help": "Fai doppio clic sulla scheda o modifica il testo nella barra laterale.\nI nodi di impaginazione non cambiano il risultato.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "Testo visualizzato sulla scheda.",
+        "width": "Larghezza della scheda; l’altezza si adatta al testo."
+      },
+      "property_labels": {
+        "text": "Testo",
+        "width": "Larghezza"
+      }
     },
     "group_input": {
       "label": "Ingresso gruppo",

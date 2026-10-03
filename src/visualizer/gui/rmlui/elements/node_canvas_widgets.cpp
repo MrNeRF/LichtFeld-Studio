@@ -48,6 +48,21 @@ namespace lfs::vis::gui::node_widgets {
         card.SetProperty("font-size", px(std::max(12.0f * zoom, minimum_font) * dp_ratio));
         card.SetProperty("border-radius", px(6.0f * scale));
         card.SetProperty("border-width", px(std::max(zoom, 0.75f) * dp_ratio));
+        if (card.IsClassSet("node-frame") || card.IsClassSet("node-note")) {
+            card.SetProperty("padding", px(12.0f * scale));
+            card.SetProperty("font-size", px(13.0f * scale));
+            card.SetProperty("border-width", "0px");
+            apply(".frame-label", "font-size", 13.0f);
+            apply(".frame-label", "line-height", 20.0f);
+            apply(".frame-note, .note-text", "font-size", 13.0f);
+            apply(".frame-note, .note-text", "line-height", 20.0f);
+            apply(".frame-note", "margin-top", 4.0f);
+            return;
+        }
+        if (card.IsClassSet("node-reroute")) {
+            card.SetProperty("border-width", "0px");
+            return;
+        }
         card.SetClass("lod-values", zoom < 0.75f);
         card.SetClass("lod-compact", zoom < 0.45f);
         // Only value editors disappear with LOD. Below editing zoom, body text

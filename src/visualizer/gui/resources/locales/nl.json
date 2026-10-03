@@ -1,4 +1,6 @@
 {
+  "node_editor.add_input": "Invoer toevoegen",
+  "node_editor.add_output": "Uitvoer toevoegen",
   "node_editor.paint": "Schilderen",
   "node_editor.paint_done": "Schilderen voltooien",
   "node_editor.pick_colour": "Kleur kiezen",
@@ -3570,6 +3572,76 @@
       },
       "properties": {},
       "property_labels": {}
+    },
+    "group": {
+      "label": "Groep",
+      "description": "Evalueert een herbruikbare nodegraph.",
+      "help": "Kies een graph in de zijbalk. In- en uitgangen volgen de interface van die graph.\nAlle instanties delen dezelfde graph.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "UUID van de gebruikte graph."
+      },
+      "property_labels": {
+        "tree": "Graph"
+      }
+    },
+    "frame": {
+      "label": "Kader",
+      "description": "Groepeert verwante nodes visueel.",
+      "help": "Plaats nodes in het kader. Als je het kader verplaatst, bewegen de leden mee.\nLay-outnodes veranderen het resultaat niet.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "Koptekst van het kader.",
+        "colour": "Themakleur of RGB-waarde.",
+        "note": "Optionele tekst onder de koptekst."
+      },
+      "property_labels": {
+        "label": "Label",
+        "colour": "Kleur",
+        "note": "Notitie"
+      }
+    },
+    "reroute": {
+      "label": "Omleiding",
+      "description": "Leidt een verbinding om zonder de waarde te wijzigen.",
+      "help": "Verbind elk sockettype; de omleiding neemt het bovenliggende type over.\nLay-outnodes veranderen het resultaat niet.",
+      "inputs": {
+        "Input": "Door te geven waarde."
+      },
+      "input_labels": {
+        "Input": "Ingang"
+      },
+      "outputs": {
+        "Output": "Ongewijzigde ingangswaarde."
+      },
+      "output_labels": {
+        "Output": "Uitgang"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "Notitie",
+      "description": "Voegt een bewerkbare tekstkaart toe aan de graph.",
+      "help": "Dubbelklik op de kaart of bewerk de tekst in de zijbalk.\nLay-outnodes veranderen het resultaat niet.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "Tekst op de kaart.",
+        "width": "Kaartbreedte in canvaseenheden; de hoogte past zich aan de tekst aan."
+      },
+      "property_labels": {
+        "text": "Tekst",
+        "width": "Breedte"
+      }
     },
     "group_input": {
       "label": "Groepsingang",

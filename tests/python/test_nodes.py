@@ -50,6 +50,34 @@ def test_types_and_tree_json_round_trip(lf):
     assert payload["interface"]["inputs"][1]["max"] == 1.0
 
 
+def test_group_interface_copy_paste_and_ungroup_python_api(lf, numpy):
+    tree = lf.nodes.new_tree("Python graph editing")
+    node = tree.add_node("lfs.colour_correct", "Grade")
+    node.set_input("Exposure", 0.5)
+    _insert_between(tree, node, "Geometry")
+    geometry = _geometry(lf, numpy)
+    expected = numpy.asarray(lf.nodes.evaluate_tree(tree, geometry).splats.sh0.tolist())
+    group = tree.make_group([node], "Reusable Grade")
+    assert group.graph.name == "Reusable Grade"
+    strength = group.graph.interface.add_input("float", "Strength", 0.25, min=0.0, max=1.0, step=0.1)
+    output = group.graph.interface.add_output("float", "Amount", 0.0)
+    group.graph.interface.move("input", strength, 0)
+    payload = json.loads(group.graph.to_json())
+    assert payload["interface"]["inputs"][0]["identifier"] == strength
+    assert payload["interface"]["inputs"][0]["min"] == 0.0
+    group.graph.interface.remove("input", strength)
+    group.graph.interface.remove("output", output)
+    copied = tree.copy([group])
+    assert json.loads(copied)["trees"][group.graph.uuid]["name"] == "Reusable Grade"
+    pasted = tree.paste(copied, (20.0, 30.0))
+    assert len(pasted) == 1
+    assert pasted[0].name != group.name
+    assert pasted[0].graph.uuid == group.graph.uuid
+    numpy.testing.assert_array_equal(expected, lf.nodes.evaluate_tree(tree, geometry).splats.sh0.tolist())
+    tree.ungroup(group)
+    numpy.testing.assert_array_equal(expected, lf.nodes.evaluate_tree(tree, geometry).splats.sh0.tolist())
+
+
 def test_builtin_help_contract(lf):
     root = Path(__file__).resolve().parents[2]
     english = json.loads((root / "src/visualizer/gui/resources/locales/en.json").read_text())["nodes"]

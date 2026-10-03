@@ -1,4 +1,6 @@
 {
+  "node_editor.add_input": "Añadir entrada",
+  "node_editor.add_output": "Añadir salida",
   "node_editor.paint": "Pintar",
   "node_editor.paint_done": "Terminar de pintar",
   "node_editor.pick_colour": "Tomar color",
@@ -3234,7 +3236,7 @@
         "Softness": "Suavidad"
       },
       "outputs": {
-        "Selection": "Intensidad de selección: 0 no seleccionado, 1 totalmente seleccionado; los valores intermedios crean transiciones suaves."
+        "Selection": "Intensidad de selección: 0 excluido, 1 seleccionado; los valores intermedios crean transiciones suaves."
       },
       "output_labels": {
         "Selection": "Selección"
@@ -3570,6 +3572,76 @@
       },
       "properties": {},
       "property_labels": {}
+    },
+    "group": {
+      "label": "Grupo",
+      "description": "Evalúa un grafo de nodos reutilizable.",
+      "help": "Elige un grafo en la barra lateral. Las entradas y salidas siguen su interfaz.\nTodas las instancias comparten el mismo grafo.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "UUID del grafo referenciado."
+      },
+      "property_labels": {
+        "tree": "Grafo"
+      }
+    },
+    "frame": {
+      "label": "Marco",
+      "description": "Agrupa visualmente nodos relacionados.",
+      "help": "Suelta nodos en el marco. Al moverlo se mueven sus miembros.\nLos nodos de diseño no cambian el resultado.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "Encabezado del marco.",
+        "colour": "Color del tema o valor RGB.",
+        "note": "Texto opcional bajo el encabezado."
+      },
+      "property_labels": {
+        "label": "Etiqueta",
+        "colour": "Color",
+        "note": "Nota"
+      }
+    },
+    "reroute": {
+      "label": "Desvío",
+      "description": "Redirige un enlace sin cambiar su valor.",
+      "help": "Conecta cualquier tipo de socket; el desvío adopta el tipo de origen.\nLos nodos de diseño no cambian el resultado.",
+      "inputs": {
+        "Input": "Valor que se transmite."
+      },
+      "input_labels": {
+        "Input": "Entrada"
+      },
+      "outputs": {
+        "Output": "Valor de entrada sin cambios."
+      },
+      "output_labels": {
+        "Output": "Salida"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "Nota",
+      "description": "Añade una tarjeta de texto editable al grafo.",
+      "help": "Haz doble clic en la tarjeta o edita el texto en la barra lateral.\nLos nodos de diseño no cambian el resultado.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "Texto mostrado en la tarjeta.",
+        "width": "Ancho de la tarjeta; la altura se adapta al texto."
+      },
+      "property_labels": {
+        "text": "Texto",
+        "width": "Ancho"
+      }
     },
     "group_input": {
       "label": "Entrada del grupo",

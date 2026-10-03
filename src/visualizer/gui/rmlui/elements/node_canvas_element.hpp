@@ -19,6 +19,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace lfs::nodes {
     class NodeTree;
@@ -35,7 +36,7 @@ namespace lfs::vis {
 namespace lfs::vis::gui {
     class GlobalContextMenu;
 
-    class NodeCanvasElement final : public Rml::Element, private Rml::EventListener {
+    class LFS_VIS_API NodeCanvasElement final : public Rml::Element, private Rml::EventListener {
     public:
         explicit NodeCanvasElement(const Rml::String& tag);
         ~NodeCanvasElement() override;
@@ -62,6 +63,8 @@ namespace lfs::vis::gui {
         [[nodiscard]] nlohmann::json viewState();
         void refresh() { syncModel(); }
         bool showModifier(std::string_view uuid);
+        bool enterGroup(std::string_view node);
+        bool exitGroup();
         bool selectNodes(const std::unordered_set<std::string>& nodes, const std::optional<lfs::nodes::Link>& link);
 
     protected:
@@ -77,6 +80,7 @@ namespace lfs::vis::gui {
             CanvasNode interaction;
             std::string title;
             std::string category;
+            std::string type_id;
             std::string error;
             bool muted = false;
         };
@@ -115,7 +119,15 @@ namespace lfs::vis::gui {
         void addNode(std::string_view type_id, CanvasPoint graph_position);
         void addModifier();
         void removeSelected();
+        void copySelected();
+        void cutSelected();
+        void pasteClipboard();
         void duplicateSelected();
+        void makeGroupSelected();
+        void ungroupSelected();
+        void frameSelected();
+        void insertReroute(const CanvasLink& link, CanvasPoint graph_position);
+        void updateBreadcrumb();
         void toggleMuted();
         void frameAll();
         void focusCanvas();
@@ -126,6 +138,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::array<float, 4> socketColor(std::string_view type) const;
         [[nodiscard]] std::string categoryColor(std::string_view category) const;
         [[nodiscard]] std::optional<core::Uuid> activeHost() const;
+        [[nodiscard]] std::string instancePrefix() const;
 
         SceneManager* scene_manager_ = nullptr;
         ModifierManager* manager_ = nullptr;
@@ -135,6 +148,7 @@ namespace lfs::vis::gui {
         Rml::Element* viewport_element_ = nullptr;
         Rml::Element* sidebar_element_ = nullptr;
         Rml::Element* notice_element_ = nullptr;
+        Rml::Element* breadcrumb_element_ = nullptr;
         Rml::Element* add_menu_ = nullptr;
         CanvasPoint add_position_;
         std::string first_add_type_;
@@ -159,6 +173,11 @@ namespace lfs::vis::gui {
         std::optional<CanvasLink> selected_link_;
         NodeCanvasInteraction interaction_;
         std::string active_tree_uuid_;
+        struct GroupPathEntry {
+            std::string tree_uuid;
+            std::string node;
+        };
+        std::vector<GroupPathEntry> group_path_;
         std::string active_modifier_uuid_;
         std::string host_uuid_;
         std::uint64_t last_generation_ = 0;
@@ -189,6 +208,7 @@ namespace lfs::vis::gui {
         std::chrono::steady_clock::time_point field_repeat_at_;
         std::optional<nlohmann::json> field_before_;
         Rml::Geometry grid_geometry_;
+        Rml::Geometry frame_geometry_;
         Rml::Geometry wire_geometry_;
         Rml::Geometry live_wire_geometry_;
         Rml::Geometry overlay_geometry_;

@@ -343,6 +343,10 @@ namespace lfs::vis::gui {
             move_start_nodes_ = nodes_;
             move_start_paths_ = wirePaths();
             move_start_links_ = links_;
+            moving_nodes_ = selected_nodes_;
+            for (const auto& item : nodes_)
+                if (!item.frame.empty() && selected_nodes_.contains(item.frame))
+                    moving_nodes_.insert(item.id);
             mode_ = Mode::MoveNodes;
             return {{.kind = CanvasCommandKind::Select,
                      .nodes = std::vector<std::string>(selected_nodes_.begin(), selected_nodes_.end()),
@@ -390,16 +394,16 @@ namespace lfs::vis::gui {
         } else if (mode_ == Mode::MoveNodes) {
             const CanvasPoint graph_delta = (delta - pan_delta) * (1.0f / zoom_);
             for (auto& node : nodes_)
-                if (selected_nodes_.contains(node.id)) {
+                if (moving_nodes_.contains(node.id)) {
                     node.bounds.x += graph_delta.x;
                     node.bounds.y += graph_delta.y;
                     for (auto& socket : node.sockets)
                         socket.position = socket.position + graph_delta;
                 }
             for (auto& link : links_) {
-                if (selected_nodes_.contains(link.from.node))
+                if (moving_nodes_.contains(link.from.node))
                     link.from.position = link.from.position + graph_delta;
-                if (selected_nodes_.contains(link.to.node))
+                if (moving_nodes_.contains(link.to.node))
                     link.to.position = link.to.position + graph_delta;
             }
             if (selected_nodes_.size() == 1) {
@@ -466,8 +470,8 @@ namespace lfs::vis::gui {
                                     .before = highlighted_link_});
             } else if (std::abs(graph_delta.x) > 0.001f || std::abs(graph_delta.y) > 0.001f) {
                 commands.push_back({.kind = CanvasCommandKind::Move,
-                                    .nodes = std::vector<std::string>(selected_nodes_.begin(),
-                                                                      selected_nodes_.end()),
+                                    .nodes = std::vector<std::string>(moving_nodes_.begin(),
+                                                                      moving_nodes_.end()),
                                     .delta = graph_delta});
             }
         }

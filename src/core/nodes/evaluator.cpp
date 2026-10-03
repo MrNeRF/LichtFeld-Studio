@@ -131,11 +131,26 @@ namespace lfs::nodes {
         auto& devices = cache ? cache->devices : local_devices;
         EvalResult result;
         result.geometry = inputs.geometry;
+        if (const auto cycle = std::ranges::find(inputs.group_stack, tree.uuid, &std::pair<std::string, std::string>::first);
+            cycle != inputs.group_stack.end()) {
+            std::string message = "Group cycle: ";
+            for (auto item = cycle; item != inputs.group_stack.end(); ++item) {
+                if (!message.ends_with(": "))
+                    message += " → ";
+                message += item->second;
+            }
+            message += " → " + tree.name;
+            result.ok = false;
+            result.errors["Group Output"] = std::move(message);
+            return result;
+        }
         FieldMemo memo;
         std::unordered_map<std::string, CachedNodeOutput> transient;
         std::unordered_set<std::string> active;
         auto& output_cache = cache ? cache->nodes : transient;
         const auto report = [&](const std::string& name, const CachedNodeOutput& output, const bool cached) {
+            if (const auto* node = tree.find_node(name); node && node->type_id == "lfs.reroute")
+                return;
             NodeEvaluation status{.time_ms = output.time_ms, .cached = cached};
             for (const auto& [_, value] : output.outputs) {
                 if (const auto* geometry = value.get_if<Geometry>()) {
@@ -189,6 +204,12 @@ namespace lfs::nodes {
                 hash_combine(key, host ? host->generation() : 0);
             }
             hash_combine(key, std::hash<std::string>{}(node.properties.dump()));
+            if (node.type_id == "lfs.group" && inputs.tree_resolver) {
+                const auto graph = node.properties.find("tree");
+                if (graph != node.properties.end() && graph->is_string())
+                    if (const auto* nested = inputs.tree_resolver(graph->get_ref<const std::string&>()))
+                        hash_combine(key, std::hash<std::string>{}(nested->to_json().dump()));
+            }
             hash_combine(key, std::hash<std::uint64_t>{}(inputs.geometry_generation));
             hash_combine(key, static_cast<size_t>(device));
             hash_combine(key, static_cast<size_t>(backend));
@@ -208,7 +229,9 @@ namespace lfs::nodes {
             context.host_ = host;
             std::optional<Geometry> geometry_input;
             bool upstream_ok = true;
-            for (const auto& declaration : type->inputs) {
+            const auto input_declarations = effective_inputs(tree, node, inputs.tree_resolver);
+            const auto output_declarations = effective_outputs(tree, node, inputs.tree_resolver);
+            for (const auto& declaration : input_declarations) {
                 std::vector<Value> resolved;
                 for (const auto& link : tree.links) {
                     if (link.to_node != node.name || link.to_socket != declaration.identifier)
@@ -227,24 +250,12 @@ namespace lfs::nodes {
                         upstream_ok = false;
                         continue;
                     }
-                    const auto upstream_type = tree.registry().find(upstream_node->type_id);
-                    if (!upstream_type) {
-                        upstream_ok = false;
-                        continue;
-                    }
-                    const SocketDecl* output = find_socket(*upstream_type, link.from_socket, true);
-                    std::optional<SocketDecl> interface_output;
-                    if (!output && upstream_node->type_id == "lfs.group_input") {
-                        const auto found = std::ranges::find(tree.interface.inputs, link.from_socket,
-                                                             &InterfaceSocket::identifier);
-                        if (found != tree.interface.inputs.end()) {
-                            interface_output = SocketDecl{found->identifier, found->label, found->type,
-                                                          found->default_value};
-                            output = &*interface_output;
-                        }
-                    }
+                    const auto upstream_outputs = effective_outputs(tree, *upstream_node,
+                                                                    inputs.tree_resolver);
+                    const auto output = std::ranges::find(upstream_outputs, link.from_socket,
+                                                          &SocketDecl::identifier);
                     auto value = upstream.outputs.find(link.from_socket);
-                    if (!output || value == upstream.outputs.end()) {
+                    if (output == upstream_outputs.end() || value == upstream.outputs.end()) {
                         upstream_ok = false;
                         continue;
                     }
@@ -276,11 +287,13 @@ namespace lfs::nodes {
                 return evaluation;
             }
 
-            if (const auto found = output_cache.find(node.name);
+            const std::string cache_name = inputs.cache_namespace + node.name;
+            if (const auto found = output_cache.find(cache_name);
                 found != output_cache.end() && found->second.key == key) {
                 evaluation.outputs = found->second.outputs;
                 evaluation.ok = true;
-                result.time_ms[node.name] = found->second.time_ms;
+                if (node.type_id != "lfs.reroute")
+                    result.time_ms[node.name] = found->second.time_ms;
                 report(node.name, found->second, true);
                 active.erase(node.name);
                 completed[node.name] = evaluation;
@@ -292,7 +305,7 @@ namespace lfs::nodes {
                 result.cancelled = true;
                 return {};
             }
-            if (control.started)
+            if (control.started && node.type_id != "lfs.reroute")
                 control.started(node);
             try {
                 if (type->uses_host && !host && !node.muted)
@@ -308,7 +321,7 @@ namespace lfs::nodes {
                                 std::format("Invalid value for property '{}'", property.identifier));
                     }
                 }
-                for (const auto& declaration : type->inputs)
+                for (const auto& declaration : input_declarations)
                     for (auto& value : context.inputs_[declaration.identifier]) {
                         value = prepare_input(value, declaration);
                         if (auto* geometry = value.get_if<Geometry>()) {
@@ -327,13 +340,67 @@ namespace lfs::nodes {
                         else
                             context.outputs_[declaration.identifier] = declaration.default_value;
                     }
+                } else if (node.type_id == "lfs.group_output") {
+                    for (const auto& output : tree.interface.outputs)
+                        context.outputs_[output.identifier] = context.input(output.identifier);
+                } else if (node.type_id == "lfs.reroute") {
+                    context.outputs_["Output"] = context.input("Input");
+                } else if (node.type_id == "lfs.group") {
+                    const auto graph = node.properties.find("tree");
+                    const NodeTree* nested = graph != node.properties.end() && graph->is_string() &&
+                                                     inputs.tree_resolver
+                                                 ? inputs.tree_resolver(graph->get_ref<const std::string&>())
+                                                 : nullptr;
+                    if (!nested)
+                        throw NodeError("Missing graph");
+                    if (nested->tree_type != tree.tree_type)
+                        throw NodeError("Group graph has a different tree type");
+                    std::string cycle;
+                    if (group_reference_would_cycle(tree, nested->uuid, inputs.tree_resolver,
+                                                    &cycle))
+                        throw NodeError("Group cycle: " + cycle);
+                    EvalInputs nested_inputs;
+                    nested_inputs.geometry = inputs.geometry;
+                    nested_inputs.geometry_generation = inputs.geometry_generation;
+                    nested_inputs.device = inputs.device;
+                    nested_inputs.tree_resolver = inputs.tree_resolver;
+                    nested_inputs.group_stack = inputs.group_stack;
+                    nested_inputs.group_stack.emplace_back(tree.uuid, tree.name);
+                    nested_inputs.cache_namespace = inputs.cache_namespace + node.name + "/";
+                    for (const auto& declaration : input_declarations)
+                        nested_inputs.interface_overrides[declaration.identifier] =
+                            context.input(declaration.identifier);
+                    if (const auto geometry = std::ranges::find(input_declarations,
+                                                                std::string(GEOMETRY_SOCKET),
+                                                                &SocketDecl::type);
+                        geometry != input_declarations.end())
+                        if (const auto* value = context.input(geometry->identifier).get_if<Geometry>())
+                            nested_inputs.geometry = *value;
+                    auto nested_result = evaluate(*nested, std::move(nested_inputs), host, cache);
+                    for (const auto& [inner, status] : nested_result.nodes)
+                        result.nodes[node.name + "/" + inner] = status;
+                    for (const auto& [inner, time] : nested_result.time_ms)
+                        result.time_ms[node.name + "/" + inner] = time;
+                    for (const auto& [inner, message] : nested_result.errors)
+                        result.errors[node.name + "/" + inner] = message;
+                    if (!nested_result.ok) {
+                        if (nested_result.errors.empty())
+                            throw NodeError("Group Output: Evaluation failed");
+                        const auto& error = *nested_result.errors.begin();
+                        throw NodeError(error.first + ": " + error.second);
+                    }
+                    for (const auto& output : output_declarations) {
+                        const auto value = nested_result.output_values.find(output.identifier);
+                        context.outputs_[output.identifier] =
+                            value == nested_result.output_values.end() ? output.default_value : value->second;
+                    }
                 } else if (node.muted) {
-                    for (const auto& output : type->outputs) {
+                    for (const auto& output : output_declarations) {
                         const auto same_type =
-                            std::ranges::find_if(type->inputs, [&](const SocketDecl& input) {
+                            std::ranges::find_if(input_declarations, [&](const SocketDecl& input) {
                                 return input.type == output.type;
                             });
-                        if (same_type != type->inputs.end())
+                        if (same_type != input_declarations.end())
                             context.outputs_[output.identifier] = context.input(same_type->identifier);
                         else
                             context.outputs_[output.identifier] = output.default_value;
@@ -343,7 +410,7 @@ namespace lfs::nodes {
                 } else {
                     throw NodeError(std::format("Node type '{}' has no evaluator", type->id));
                 }
-                for (const auto& output : type->outputs) {
+                for (const auto& output : output_declarations) {
                     if (!context.outputs_.contains(output.identifier))
                         context.outputs_[output.identifier] = output.default_value;
                     if (auto* geometry = context.outputs_[output.identifier].get_if<Geometry>())
@@ -363,11 +430,12 @@ namespace lfs::nodes {
             }
             const auto stop = std::chrono::steady_clock::now();
             const double elapsed = std::chrono::duration<double, std::milli>(stop - start).count();
-            result.time_ms[node.name] = elapsed;
+            if (node.type_id != "lfs.reroute")
+                result.time_ms[node.name] = elapsed;
             if (evaluation.ok) {
-                output_cache[node.name] = CachedNodeOutput{key, evaluation.outputs, elapsed,
-                                                           std::move(geometry_input)};
-                report(node.name, output_cache.at(node.name), false);
+                output_cache[cache_name] = CachedNodeOutput{key, evaluation.outputs, elapsed,
+                                                            std::move(geometry_input)};
+                report(node.name, output_cache.at(cache_name), false);
             }
             active.erase(node.name);
             completed[node.name] = evaluation;
@@ -378,6 +446,7 @@ namespace lfs::nodes {
             const Node& output = tree.output_node();
             Evaluation evaluated = run(output);
             if (evaluated.ok) {
+                result.output_values = evaluated.outputs;
                 auto geometry = evaluated.outputs.find("Geometry");
                 if (geometry != evaluated.outputs.end()) {
                     if (const auto* value = geometry->second.get_if<Geometry>())

@@ -230,6 +230,24 @@ namespace lfs::app {
                     if (!tree)
                         return std::unexpected("Unknown graph UUID; read lichtfeld://nodes/trees");
                     result = tree->to_json();
+                    const lfs::nodes::TreeResolver resolver = [&](const std::string_view uuid) {
+                        return manager.tree(uuid);
+                    };
+                    for (auto& item : result["nodes"])
+                        if (const auto* node = tree->find_node(item.value("name", ""))) {
+                            item["resolved_inputs"] = nlohmann::json::array();
+                            item["resolved_outputs"] = nlohmann::json::array();
+                            for (const auto& value : lfs::nodes::effective_inputs(*tree, *node, resolver))
+                                item["resolved_inputs"].push_back(node_mcp::socket(value));
+                            for (const auto& value : lfs::nodes::effective_outputs(*tree, *node, resolver))
+                                item["resolved_outputs"].push_back(node_mcp::socket(value));
+                            if (node->type_id == "lfs.frame") {
+                                item["members"] = nlohmann::json::array();
+                                for (const auto& candidate : tree->nodes)
+                                    if (candidate.ui.value("frame", "") == node->name)
+                                        item["members"].push_back(candidate.name);
+                            }
+                        }
                 } else if (uri == "lichtfeld://nodes/stacks")
                     result = node_mcp::stacks(scene);
                 else if (uri.starts_with("lichtfeld://nodes/stacks/")) {

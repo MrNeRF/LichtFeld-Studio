@@ -169,6 +169,142 @@ namespace {
         std::string tree_;
     };
 
+    TEST_F(NodeCanvasWidgets, ShiftDuplicateUsesClipboardPathAndKeepsInternalLinks) {
+        attachGraph();
+        auto& manager = scene_.modifierManager();
+        auto* tree = manager.tree(tree_);
+        ASSERT_TRUE(tree->add_link({"Value", "Value", "Correct", "Exposure"}));
+        manager.markDirty();
+        context_->Update();
+        auto* canvas = static_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        ASSERT_TRUE(canvas->selectNodes({"Value", "Correct"}, std::nullopt));
+        ASSERT_TRUE(canvas->handleKey(SDL_SCANCODE_D, true, false, false));
+        context_->Update();
+        const auto selection = canvas->viewState()["selected_nodes"].get<std::unordered_set<std::string>>();
+        ASSERT_EQ(selection.size(), 2u);
+        EXPECT_EQ(std::ranges::count_if(tree->links, [&](const auto& link) {
+            return selection.contains(link.from_node) && selection.contains(link.to_node);
+        }), 1);
+    }
+
+    TEST_F(NodeCanvasWidgets, ControlJWrapsSelectionInOneUndoStep) {
+        attachGraph();
+        auto* canvas = static_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        ASSERT_TRUE(canvas->selectNodes({"Value", "Correct"}, std::nullopt));
+        lfs::vis::op::undoHistory().clear();
+        ASSERT_TRUE(canvas->handleKey(SDL_SCANCODE_J, false, true, false));
+        auto* tree = scene_.modifierManager().tree(tree_);
+        const auto frame = tree->find_node("Correct")->ui.value("frame", std::string{});
+        EXPECT_FALSE(frame.empty());
+        EXPECT_EQ(tree->find_node("Value")->ui["frame"], frame);
+        EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+    }
+
+    TEST_F(NodeCanvasWidgets, DroppingInsideFrameJoinsAndDraggingOutsideLeaves) {
+        attachGraph();
+        auto& manager = scene_.modifierManager();
+        manager.tree(tree_)->add_node("lfs.frame", "Frame").location = {100, 400};
+        manager.markDirty();
+        context_->Update();
+        pointer("mousedown", 80, 580);
+        pointer("mousemove", 340, 880);
+        pointer("mouseup", 340, 880);
+        EXPECT_EQ(manager.tree(tree_)->find_node("Value")->ui.value("frame", ""), "Frame");
+        pointer("mousedown", 340, 880);
+        pointer("mousemove", 900, 300);
+        pointer("mouseup", 900, 300);
+        EXPECT_FALSE(manager.tree(tree_)->find_node("Value")->ui.contains("frame"));
+    }
+
+    TEST_F(NodeCanvasWidgets, FrameDragMovesMembersLiveAndKeepsMembership) {
+        attachGraph();
+        auto& manager = scene_.modifierManager();
+        ASSERT_TRUE(manager.frameWrap(tree_, {"Value"}, "Frame"));
+        context_->Update();
+        auto* canvas = static_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        auto* frame = canvas->QuerySelector(".node-frame");
+        auto* member = canvas->QuerySelector(".node-box[data-node=Value]");
+        ASSERT_NE(frame, nullptr);
+        ASSERT_NE(member, nullptr);
+        const auto origin = frame->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto member_before = member->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto location = manager.tree(tree_)->find_node("Value")->location;
+        pointer("mousedown", origin.x + 70, origin.y + 22);
+        pointer("mousemove", origin.x + 270, origin.y + 102);
+        EXPECT_FLOAT_EQ(member->GetAbsoluteOffset(Rml::BoxArea::Border).x, member_before.x + 200);
+        EXPECT_FLOAT_EQ(member->GetAbsoluteOffset(Rml::BoxArea::Border).y, member_before.y + 80);
+        pointer("mouseup", origin.x + 270, origin.y + 102);
+        EXPECT_FLOAT_EQ(manager.tree(tree_)->find_node("Value")->location[0], location[0] + 100);
+        EXPECT_FLOAT_EQ(manager.tree(tree_)->find_node("Value")->location[1], location[1] + 40);
+        EXPECT_EQ(manager.tree(tree_)->find_node("Value")->ui["frame"], "Frame");
+    }
+
+    TEST_F(NodeCanvasWidgets, FrameHeaderAndWrappedNoteStayAboveMembersAtEveryZoom) {
+        attachGraph();
+        auto& manager = scene_.modifierManager();
+        ASSERT_TRUE(manager.frameWrap(tree_, {"Value"}, "Selection Grade"));
+        manager.tree(tree_)->find_node("Selection Grade")->properties["note"] =
+            "Keep the selection outside the reusable grade. This description wraps across multiple lines.";
+        manager.markDirty();
+        auto* canvas = static_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        for (const auto zoom : {1.0f, 0.5f, 1.5f}) {
+            canvas->setView({}, zoom);
+            context_->Update();
+            context_->Update();
+            auto* label = canvas->QuerySelector(".frame-label");
+            auto* note = canvas->QuerySelector(".frame-note");
+            auto* member = canvas->QuerySelector(".node-box[data-node=Value]");
+            ASSERT_NE(label, nullptr);
+            ASSERT_NE(note, nullptr);
+            EXPECT_GE(label->GetComputedValues().font_size(), 13.0f * 2.0f * zoom - 1);
+            EXPECT_LT(note->GetAbsoluteOffset().y + note->GetBox().GetSize().y,
+                      member->GetAbsoluteOffset(Rml::BoxArea::Border).y);
+        }
+    }
+
+    TEST_F(NodeCanvasWidgets, NoteHeightFitsWrappedTextAndWidthPropertyAtEveryZoom) {
+        attachGraph();
+        auto& manager = scene_.modifierManager();
+        auto& note = manager.tree(tree_)->add_node("lfs.note", "Note");
+        note.location = {300, 500};
+        note.properties["text"] = "Colour grade\nThis longer explanation must wrap without losing its second or final line.\nFinal line.";
+        note.properties["width"] = 180.0f;
+        manager.markDirty();
+        auto* canvas = static_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        for (const auto zoom : {1.0f, 0.5f, 1.5f}) {
+            canvas->setView({}, zoom);
+            context_->Update();
+            context_->Update();
+            auto* card = canvas->QuerySelector(".node-note");
+            auto* text = card->QuerySelector(".note-text");
+            EXPECT_FLOAT_EQ(card->GetBox().GetSize(Rml::BoxArea::Border).x, 180.0f * 2 * zoom);
+            EXPECT_LE(text->GetAbsoluteOffset().y + text->GetBox().GetSize().y,
+                      card->GetAbsoluteOffset(Rml::BoxArea::Border).y + card->GetBox().GetSize(Rml::BoxArea::Border).y - 10 * zoom);
+        }
+    }
+
+    TEST_F(NodeCanvasWidgets, GroupSidebarHidesUuidAndShowsFullTypeAndAddLabels) {
+        attachGraph();
+        auto& manager = scene_.modifierManager();
+        const auto group = manager.makeGroup(tree_, {"Correct"}, "Grade");
+        ASSERT_TRUE(group);
+        auto* canvas = static_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        context_->Update();
+        ASSERT_TRUE(canvas->selectNodes({group->group_node}, std::nullopt));
+        context_->Update();
+        auto* sidebar = canvas->QuerySelector("#node-editor-sidebar");
+        EXPECT_EQ(sidebar->QuerySelector("[data-property=tree]"), nullptr);
+        EXPECT_EQ(sidebar->QuerySelector(".interface-type")->GetInnerRML(), "Geometry");
+        EXPECT_EQ(sidebar->QuerySelector("button[data-action=interface-add]")->GetInnerRML(), "Add input");
+        ASSERT_TRUE(canvas->enterGroup(group->group_node));
+        context_->Update();
+        const auto breadcrumb = canvas->viewState()["breadcrumb"];
+        ASSERT_EQ(breadcrumb.size(), 3u);
+        EXPECT_EQ(breadcrumb[1]["label"], "Interaction");
+        const auto markup = canvas->QuerySelector("#node-editor-breadcrumb")->GetInnerRML();
+        EXPECT_EQ(markup.find("\xE2\x96\xB8"), std::string::npos);
+    }
+
     TEST_F(NodeCanvasWidgets, CardContentsRemainVisibleAndContrastingAcrossThemesAndZoom) {
         attachGraph();
         auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));

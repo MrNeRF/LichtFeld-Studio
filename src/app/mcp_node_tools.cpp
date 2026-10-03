@@ -4,6 +4,8 @@
 #include "core/logger.hpp"
 #include "mcp_node_utils.hpp"
 
+#include <SDL3/SDL_clipboard.h>
+
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -52,12 +54,13 @@ namespace lfs::app {
             if (!node)
                 return failure("Unknown node name; read lichtfeld://nodes/trees/" + graph->uuid, "node");
             if (operation == "set_input") {
-                const auto type = manager.registry().find(node->type_id);
-                if (!type)
-                    return failure("Node type is not registered", "node");
-                const auto input = std::ranges::find(type->inputs, args.value("input", ""), &lfs::nodes::SocketDecl::identifier);
-                if (input == type->inputs.end())
-                    return failure("Unknown input identifier; read lichtfeld://nodes/types", "input");
+                const lfs::nodes::TreeResolver resolver = [&](const std::string_view uuid) {
+                    return manager.tree(uuid);
+                };
+                const auto inputs = lfs::nodes::effective_inputs(*graph, *node, resolver);
+                const auto input = std::ranges::find(inputs, args.value("input", ""), &lfs::nodes::SocketDecl::identifier);
+                if (input == inputs.end())
+                    return failure("Unknown input identifier; read the graph resource for resolved sockets", "input");
                 auto converted = value(args.at("value"), *input);
                 if (!converted)
                     return failure(converted.error().message, "value");
@@ -86,6 +89,13 @@ namespace lfs::app {
                 const auto valid = property(args.at("value"), *prop);
                 if (!valid)
                     return failure(valid.error().message, "value");
+                if (node->type_id == "lfs.group" && prop->identifier == "tree") {
+                    const auto result = manager.setGroupGraph(graph->uuid, node->name,
+                                                              args.at("value").get<std::string>());
+                    if (!result)
+                        return failure(result.error().message, "value");
+                    return treeState(*graph);
+                }
                 node->properties[prop->identifier] = args.at("value");
             }
             manager.recordTreeEdit(graph->uuid, before);
@@ -103,7 +113,9 @@ namespace lfs::app {
             if (remove) {
                 if (!graph->remove_link(link))
                     return failure("Link does not exist; read the graph's links", "from_socket");
-            } else if (!graph->add_link(link, &error)) {
+            } else if (!graph->add_link(link, &error, [&](const std::string_view uuid) {
+                           return manager.tree(uuid);
+                       })) {
                 const auto typeOf = [&](const std::string& name, const std::string& id, bool output) {
                     const auto* node = graph->find_node(name);
                     const auto type = node ? manager.registry().find(node->type_id) : nullptr;
@@ -304,6 +316,173 @@ namespace lfs::app {
         }
         for (const bool remove : {false, true})
             add(registry, impl, remove ? "nodes.unlink" : "nodes.link", remove ? "Remove an exact graph link" : "Connect compatible sockets; supports multi-input sockets", {{"tree", stringSchema()}, {"from_node", stringSchema()}, {"from_socket", stringSchema()}, {"to_node", stringSchema()}, {"to_socket", stringSchema()}}, {"tree", "from_node", "from_socket", "to_node", "to_socket"}, [remove](auto& viewer, const json& args) { return editLink(viewer, args, remove); }, false, remove);
+
+        add(registry, impl, "nodes.copy", "Serialize nodes and their internal links to the portable LichtFeld node clipboard format",
+            {{"tree", stringSchema()}, {"nodes", {{"type", "array"}, {"items", stringSchema()}}}},
+            {"tree", "nodes"}, [](auto& viewer, const json& args) {
+                auto& manager = viewer.getSceneManager()->modifierManager();
+                const auto result = manager.copyNodes(args.at("tree").get<std::string>(), args.at("nodes").get<std::vector<std::string>>());
+                if (!result)
+                    return failure(result.error().message, "nodes");
+                SDL_SetClipboardText(result->c_str());
+                return json{{"success", true}, {"clipboard", *result}};
+            }, true);
+        add(registry, impl, "nodes.paste", "Paste a portable LichtFeld node clipboard into a graph as one undo step",
+            {{"tree", stringSchema()}, {"clipboard", stringSchema()}, {"location", pointSchema()}},
+            {"tree", "clipboard"}, [](auto& viewer, const json& args) {
+                auto& manager = viewer.getSceneManager()->modifierManager();
+                std::optional<std::array<float, 2>> location;
+                if (args.contains("location")) {
+                    if (!finitePoint(args["location"]))
+                        return failure("location must contain two finite coordinates", "location");
+                    location = args["location"].get<std::array<float, 2>>();
+                }
+                const auto result = manager.pasteNodes(args.at("tree").get<std::string>(), args.at("clipboard").get<std::string>(), location);
+                if (!result)
+                    return failure(result.error().message, "clipboard");
+                return json{{"success", true}, {"nodes", result->nodes}, {"dropped_links", result->dropped_links}};
+            });
+        add(registry, impl, "nodes.group_make", "Move selected nodes into a reusable graph and replace them with one Group node",
+            {{"tree", stringSchema()}, {"nodes", {{"type", "array"}, {"items", stringSchema()}}}, {"name", stringSchema()}},
+            {"tree", "nodes"}, [](auto& viewer, const json& args) {
+                auto& manager = viewer.getSceneManager()->modifierManager();
+                const auto result = manager.makeGroup(args.at("tree").get<std::string>(), args.at("nodes").get<std::vector<std::string>>(), args.value("name", "Group"));
+                if (!result)
+                    return failure(result.error().message, "nodes");
+                return json{{"success", true}, {"group_node", result->group_node}, {"graph", result->graph}};
+            });
+        add(registry, impl, "nodes.group_ungroup", "Inline one Group node while keeping its referenced graph",
+            {{"tree", stringSchema()}, {"node", stringSchema()}}, {"tree", "node"},
+            [](auto& viewer, const json& args) {
+                auto& manager = viewer.getSceneManager()->modifierManager();
+                const auto result = manager.ungroup(args.at("tree").get<std::string>(), args.at("node").get<std::string>());
+                if (!result)
+                    return failure(result.error().message, "node");
+                return json{{"success", true}, {"nodes", *result}};
+            });
+        add(registry, impl, "nodes.group_set_graph", "Assign a same-type acyclic graph to a Group node",
+            {{"tree", stringSchema()}, {"node", stringSchema()}, {"graph", stringSchema()}},
+            {"tree", "node", "graph"}, [](auto& viewer, const json& args) {
+                auto& manager = viewer.getSceneManager()->modifierManager();
+                const auto result = manager.setGroupGraph(args.at("tree").get<std::string>(), args.at("node").get<std::string>(), args.at("graph").get<std::string>());
+                if (!result)
+                    return failure(result.error().message, "graph");
+                return treeState(*manager.tree(args.at("tree").get<std::string>()));
+            });
+        add(registry, impl, "nodes.group_make_single_user", "Copy a Group node's graph and assign the copy only to that node",
+            {{"tree", stringSchema()}, {"node", stringSchema()}}, {"tree", "node"},
+            [](auto& viewer, const json& args) {
+                auto& manager = viewer.getSceneManager()->modifierManager();
+                const auto result = manager.makeGroupSingleUser(args.at("tree").get<std::string>(), args.at("node").get<std::string>());
+                if (!result)
+                    return failure(result.error().message, "node");
+                return treeState(*manager.tree(args.at("tree").get<std::string>()));
+            });
+
+        const auto interface_properties = json{{"tree", stringSchema()},
+                                               {"side", {{"type", "string"}, {"enum", {"input", "output"}}}},
+                                               {"identifier", stringSchema()}, {"type", stringSchema()},
+                                               {"label", stringSchema()}, {"default", json::object()},
+                                               {"min", {{"type", {"number", "null"}}}},
+                                               {"max", {{"type", {"number", "null"}}}},
+                                               {"step", {{"type", {"number", "null"}}}},
+                                               {"index", {{"type", "integer"}, {"minimum", 0}}}};
+        add(registry, impl, "nodes.interface_add", "Add one stable-identifier graph interface socket",
+            interface_properties, {"tree", "side", "type", "label"},
+            [](auto& viewer, const json& args) {
+                auto& manager = viewer.getSceneManager()->modifierManager();
+                std::string type = args.at("type");
+                if (!type.starts_with("lfs."))
+                    type = "lfs." + type;
+                lfs::nodes::Value initial;
+                if (args.contains("default")) {
+                    const auto converted = value(args["default"], {.identifier = "default", .type = type});
+                    if (!converted)
+                        return failure(converted.error().message, "default");
+                    initial = *converted;
+                }
+                const auto number = [&](const char* key) -> std::optional<double> {
+                    return args.contains(key) && args[key].is_number()
+                               ? std::optional<double>{args[key].get<double>()}
+                               : std::nullopt;
+                };
+                const auto result = manager.interfaceAdd(args.at("tree").get<std::string>(), args.at("side") == "output",
+                                                         type, args.at("label").get<std::string>(), initial,
+                                                         number("min"), number("max"), number("step"));
+                if (!result)
+                    return failure(result.error().message, "type");
+                return json{{"success", true}, {"identifier", *result}};
+            });
+        for (const std::string operation : {"remove", "update", "move"})
+            add(registry, impl, "nodes.interface_" + operation, operation + " one graph interface socket",
+                interface_properties,
+                operation == "move" ? std::vector<std::string>{"tree", "side", "identifier", "index"}
+                                    : std::vector<std::string>{"tree", "side", "identifier"},
+                [operation](auto& viewer, const json& args) {
+                    auto& manager = viewer.getSceneManager()->modifierManager();
+                    const bool output = args.at("side") == "output";
+                    vis::ModifierResult result;
+                    if (operation == "remove")
+                        result = manager.interfaceRemove(args.at("tree").get<std::string>(), output, args.at("identifier").get<std::string>());
+                    else if (operation == "move")
+                        result = manager.interfaceMove(args.at("tree").get<std::string>(), output, args.at("identifier").get<std::string>(), args.at("index").get<std::size_t>());
+                    else {
+                        auto* graph = manager.tree(args.at("tree").get<std::string>());
+                        if (!graph)
+                            return failure("Node graph does not exist", "tree");
+                        auto& sockets = output ? graph->interface.outputs : graph->interface.inputs;
+                        const auto socket = std::ranges::find(sockets, args.at("identifier").get<std::string>(), &lfs::nodes::InterfaceSocket::identifier);
+                        if (socket == sockets.end())
+                            return failure("Interface socket does not exist", "identifier");
+                        json changes;
+                        for (const auto* key : {"label", "min", "max", "step"})
+                            if (args.contains(key))
+                                changes[key] = args[key];
+                        if (args.contains("default")) {
+                            const auto converted = value(args["default"], {.identifier = socket->identifier, .type = socket->type, .min = socket->min, .max = socket->max});
+                            if (!converted)
+                                return failure(converted.error().message, "default");
+                            changes["default"] = *converted;
+                        }
+                        result = manager.interfaceUpdate(args.at("tree").get<std::string>(), output, args.at("identifier").get<std::string>(), changes);
+                    }
+                    if (!result)
+                        return failure(result.error().message, "identifier");
+                    return treeState(*manager.tree(args.at("tree").get<std::string>()));
+                }, false, operation == "remove");
+
+        add(registry, impl, "nodes.frame_wrap", "Wrap nodes in a new explicit-membership Frame",
+            {{"tree", stringSchema()}, {"nodes", {{"type", "array"}, {"items", stringSchema()}}}, {"label", stringSchema()}},
+            {"tree", "nodes"}, [](auto& viewer, const json& args) {
+                auto& manager = viewer.getSceneManager()->modifierManager();
+                const auto result = manager.frameWrap(args.at("tree").get<std::string>(), args.at("nodes").get<std::vector<std::string>>(), args.value("label", "Frame"));
+                if (!result)
+                    return failure(result.error().message, "nodes");
+                return json{{"success", true}, {"frame", *result}};
+            });
+        add(registry, impl, "nodes.frame_set_members", "Replace a Frame's explicit member list",
+            {{"tree", stringSchema()}, {"frame", stringSchema()}, {"nodes", {{"type", "array"}, {"items", stringSchema()}}}},
+            {"tree", "frame", "nodes"}, [](auto& viewer, const json& args) {
+                auto& manager = viewer.getSceneManager()->modifierManager();
+                const auto result = manager.frameSetMembers(args.at("tree").get<std::string>(), args.at("frame").get<std::string>(), args.at("nodes").get<std::vector<std::string>>());
+                if (!result)
+                    return failure(result.error().message, "nodes");
+                return treeState(*manager.tree(args.at("tree").get<std::string>()));
+            });
+        add(registry, impl, "nodes.reroute_insert", "Split an exact link with a typed pass-through Reroute",
+            {{"tree", stringSchema()}, {"link", {{"type", "object"}}}, {"location", pointSchema()}},
+            {"tree", "link"}, [](auto& viewer, const json& args) {
+                auto& manager = viewer.getSceneManager()->modifierManager();
+                const auto& item = args.at("link");
+                const lfs::nodes::Link link{item.value("from_node", ""), item.value("from_socket", ""), item.value("to_node", ""), item.value("to_socket", "")};
+                std::optional<std::array<float, 2>> location;
+                if (args.contains("location"))
+                    location = args["location"].get<std::array<float, 2>>();
+                const auto result = manager.rerouteInsert(args.at("tree").get<std::string>(), link, location);
+                if (!result)
+                    return failure(result.error().message, "link");
+                return json{{"success", true}, {"node", *result}};
+            });
         for (const std::string operation : {"add", "remove", "move", "set", "apply", "capture_selection"}) {
             json properties = {{"target", stringSchema()}};
             std::vector<std::string> required = {"target"};

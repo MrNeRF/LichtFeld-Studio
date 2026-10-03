@@ -1,4 +1,6 @@
 {
+  "node_editor.add_input": "Ajouter une entrée",
+  "node_editor.add_output": "Ajouter une sortie",
   "node_editor.paint": "Peindre",
   "node_editor.paint_done": "Terminer la peinture",
   "node_editor.pick_colour": "Prélever la couleur",
@@ -3570,6 +3572,76 @@
       },
       "properties": {},
       "property_labels": {}
+    },
+    "group": {
+      "label": "Groupe",
+      "description": "Évalue un graphe de nœuds réutilisable.",
+      "help": "Choisissez un graphe dans la barre latérale. Les entrées et sorties suivent son interface.\nToutes les instances partagent le même graphe.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "UUID du graphe référencé."
+      },
+      "property_labels": {
+        "tree": "Graphe"
+      }
+    },
+    "frame": {
+      "label": "Cadre",
+      "description": "Regroupe visuellement les nœuds associés.",
+      "help": "Déposez des nœuds dans le cadre. Déplacer le cadre déplace ses membres.\nLes nœuds de mise en page ne changent pas le résultat.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "Titre du cadre.",
+        "colour": "Couleur du thème ou valeur RVB.",
+        "note": "Texte facultatif sous le titre."
+      },
+      "property_labels": {
+        "label": "Libellé",
+        "colour": "Couleur",
+        "note": "Note"
+      }
+    },
+    "reroute": {
+      "label": "Renvoi",
+      "description": "Redirige un lien sans modifier sa valeur.",
+      "help": "Connectez n'importe quel type de prise ; le renvoi adopte le type en amont.\nLes nœuds de mise en page ne changent pas le résultat.",
+      "inputs": {
+        "Input": "Valeur à transmettre."
+      },
+      "input_labels": {
+        "Input": "Entrée"
+      },
+      "outputs": {
+        "Output": "Valeur d'entrée inchangée."
+      },
+      "output_labels": {
+        "Output": "Sortie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "Note",
+      "description": "Ajoute une carte de texte modifiable au graphe.",
+      "help": "Double-cliquez sur la carte ou modifiez son texte dans la barre latérale.\nLes nœuds de mise en page ne changent pas le résultat.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "Texte affiché sur la carte.",
+        "width": "Largeur de la carte ; la hauteur s’adapte au texte."
+      },
+      "property_labels": {
+        "text": "Texte",
+        "width": "Largeur"
+      }
     },
     "group_input": {
       "label": "Entrée du groupe",

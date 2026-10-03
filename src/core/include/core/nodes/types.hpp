@@ -22,6 +22,8 @@
 
 namespace lfs::nodes {
 
+    inline constexpr std::string_view ANY_SOCKET = "lfs.any";
+
     using AttributeMap = std::unordered_map<std::string, core::Tensor>;
 
     enum class Domain { Splat,

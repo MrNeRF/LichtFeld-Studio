@@ -123,7 +123,7 @@ namespace lfs::vis {
             EXPECT_TRUE(descriptor["annotations"].contains("destructiveHint"));
             EXPECT_TRUE(descriptor["annotations"].contains("idempotentHint"));
         }
-        EXPECT_EQ(count, 33u);
+        EXPECT_EQ(count, 48u);
     }
 
     TEST_F(McpNodeToolsTest, HostOnlyReferenceMatchesDescriptorText) {
@@ -225,6 +225,63 @@ namespace lfs::vis {
         EXPECT_TRUE(resource("stacks/" + target_)["modifiers"].empty());
         ASSERT_TRUE(op::undoHistory().undo().success);
         EXPECT_EQ(resource("stacks/" + target_)["modifiers"].size(), 1u);
+    }
+
+    TEST_F(McpNodeToolsTest, GraphEditingToolsArePortableAndUndoable) {
+        const auto id = graph();
+        call("node_add", {{"tree", id}, {"type_id", "lfs.colour_correct"}, {"name", "Correct"}});
+        call("unlink", {{"tree", id}, {"from_node", "Group Input"}, {"from_socket", "Geometry"},
+                        {"to_node", "Group Output"}, {"to_socket", "Geometry"}});
+        call("link", {{"tree", id}, {"from_node", "Group Input"}, {"from_socket", "Geometry"},
+                      {"to_node", "Correct"}, {"to_socket", "Geometry"}});
+        call("link", {{"tree", id}, {"from_node", "Correct"}, {"from_socket", "Geometry"},
+                      {"to_node", "Group Output"}, {"to_socket", "Geometry"}});
+
+        const auto copied = call("copy", {{"tree", id}, {"nodes", {"Correct"}}})["clipboard"];
+        op::undoHistory().clear();
+        const auto pasted = call("paste", {{"tree", id}, {"clipboard", copied}, {"location", {400, 200}}});
+        ASSERT_EQ(pasted["nodes"].size(), 1u);
+        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(resource("trees/" + id)["nodes"].size(), 3u);
+        ASSERT_TRUE(op::undoHistory().redo().success);
+
+        const auto grouped = call("group_make", {{"tree", id}, {"nodes", {"Correct"}}, {"name", "Grade"}});
+        const auto group_node = grouped["group_node"];
+        const auto group_graph = grouped["graph"];
+        EXPECT_FALSE(resource("trees/" + group_graph.get<std::string>())["interface"].empty());
+        call("interface_add", {{"tree", group_graph}, {"side", "input"}, {"type", "float"}, {"label", "Strength"}});
+        auto group_state = resource("trees/" + group_graph.get<std::string>());
+        const auto identifier = group_state["interface"]["inputs"].back()["identifier"];
+        call("interface_update", {{"tree", group_graph}, {"side", "input"}, {"identifier", identifier}, {"label", "Amount"}});
+        call("interface_move", {{"tree", group_graph}, {"side", "input"}, {"identifier", identifier}, {"index", 0}});
+        call("node_set_input", {{"tree", id}, {"node", group_node}, {"input", identifier}, {"value", 0.25}});
+        const auto owner_state = resource("trees/" + id);
+        const auto group_state_node = std::ranges::find_if(owner_state["nodes"], [&](const auto& node) {
+            return node["name"] == group_node;
+        });
+        ASSERT_NE(group_state_node, owner_state["nodes"].end());
+        EXPECT_FLOAT_EQ((*group_state_node)["input_values"][identifier]["value"].get<float>(), 0.25f);
+
+        const auto modifier = call("modifier_add", {{"target", target_}, {"tree", id}})["modifier"];
+        call("editor_open");
+        call("editor_show", {{"target", target_}, {"modifier", modifier}});
+        const auto entered = call("editor_enter_group", {{"node", group_node}});
+        EXPECT_EQ(entered["tree"], group_graph);
+        EXPECT_EQ(entered["breadcrumb"].size(), 3u);
+        EXPECT_EQ(call("editor_exit_group")["tree"], id);
+
+        call("frame_wrap", {{"tree", id}, {"nodes", pasted["nodes"]}, {"label", "Copies"}});
+        const auto tree_state = resource("trees/" + id);
+        const auto link = *std::ranges::find_if(tree_state["links"], [](const auto& item) {
+            return item["from_node"] == "Group Input";
+        });
+        call("reroute_insert", {{"tree", id}, {"link", link}, {"location", {100, 50}}});
+        EXPECT_TRUE(std::ranges::any_of(resource("trees/" + id)["nodes"], [](const auto& node) {
+            return node["type_id"] == "lfs.reroute";
+        }));
+        call("group_ungroup", {{"tree", id}, {"node", group_node}});
+        call("interface_remove", {{"tree", group_graph}, {"side", "input"}, {"identifier", identifier}});
     }
 
     TEST_F(McpNodeToolsTest, EditorCommandsAndReopenRetainGraph) {
