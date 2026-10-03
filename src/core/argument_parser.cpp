@@ -42,7 +42,7 @@ namespace lfs::core::args {
 
         // Registry ranges are UI-clamp semantics; CLI acceptance is intentionally wider.
         constexpr std::array OPTIMIZATION_CLI_BINDINGS{
-            OptimizationCliBinding{"--iter", "iterations", Integer},
+            OptimizationCliBinding{"--iter", "iterations", Integer, false, "; cannot be combined with --steps-scaler"},
             OptimizationCliBinding{"--strategy", "strategy", String, false, "; legacy aliases: mnrf, lfs"},
             OptimizationCliBinding{"--sh-degree", "sh_degree", Integer},
             OptimizationCliBinding{"--sh-degree-interval", "sh_degree_interval", Integer},
@@ -51,7 +51,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--min-opacity", "min_opacity", Float},
             OptimizationCliBinding{"--cropbox-lr-scale", "cropbox_lr_scale", Float},
             OptimizationCliBinding{"--cropbox-loss-weight", "cropbox_loss_weight", Float},
-            OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float},
+            OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float, false, "; cannot be combined with --iter"},
             OptimizationCliBinding{"--no-error-map", "use_error_map", Bool, true},
             OptimizationCliBinding{"--densify-error-map", "densify_error_map", Enum, false,
                                    "; values: ssim, ssim_cs"},
@@ -96,6 +96,10 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--gut", "gut", Bool},
             OptimizationCliBinding{"--eval", "enable_eval", Bool},
             OptimizationCliBinding{"--eval-all", "eval_all", Bool},
+            OptimizationCliBinding{"--eval-space", "eval_space", Enum},
+            OptimizationCliBinding{"--eval-mask", "eval_mask", String, false,
+                                   "; format: mesh:<file>"},
+            OptimizationCliBinding{"--eval-mask-invert", "eval_mask_invert", Bool},
             OptimizationCliBinding{"--far-scene-min-fraction", "far_scene_min_fraction", Float},
             OptimizationCliBinding{"--growth-ratio-pow", "growth_ratio_pow", Float},
             OptimizationCliBinding{"--fill-pacing-iter", "fill_pacing_iter", Integer},
@@ -215,6 +219,44 @@ namespace {
         std::ranges::sort(steps);
         steps.erase(std::unique(steps.begin(), steps.end()), steps.end());
         return steps;
+    }
+
+    lfs::Result<std::string> parse_eval_mask(const std::string_view spec) {
+        const auto separator = spec.find(':');
+        const auto source = separator == std::string_view::npos
+                                ? spec
+                                : spec.substr(0, separator);
+        if (source != "mesh") {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Core,
+                .user_message = std::format(
+                    "Invalid --eval-mask source '{}'. Expected mesh:<file>", source),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+        if (separator == std::string_view::npos || separator + 1 == spec.size()) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Core,
+                .user_message = "Invalid --eval-mask. Expected mesh:<file>",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+        const auto path = lfs::core::param::normalize_eval_mask_path(
+            spec.substr(separator + 1));
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(
+                lfs::core::utf8_to_path(path), error)) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Core,
+                .user_message = std::format(
+                    "Evaluation mesh file does not exist: {}", path),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+        return path;
     }
 
     std::optional<lfs::core::param::BackgroundMode> parse_bg_mode(const std::string& mode) {
@@ -747,6 +789,14 @@ namespace {
             ::args::Group output_group(parser, "OUTPUT OPTIONS:");
             ::args::Flag enable_eval(output_group, "eval", lfs::core::args::optimization_cli_help("--eval"), {"eval"});
             ::args::Flag eval_all(output_group, "eval_all", lfs::core::args::optimization_cli_help("--eval-all"), {"eval-all"});
+            ::args::MapFlag<std::string, lfs::core::param::EvalSpace> eval_space(
+                output_group, "eval_space", lfs::core::args::optimization_cli_help("--eval-space"),
+                {"eval-space"},
+                std::unordered_map<std::string, lfs::core::param::EvalSpace>{
+                    {"distorted", lfs::core::param::EvalSpace::Distorted},
+                    {"undistorted", lfs::core::param::EvalSpace::Undistorted}});
+            ::args::ValueFlag<std::string> eval_mask(output_group, "mesh:<file>", lfs::core::args::optimization_cli_help("--eval-mask"), {"eval-mask"});
+            ::args::Flag eval_mask_invert(output_group, "eval_mask_invert", lfs::core::args::optimization_cli_help("--eval-mask-invert"), {"eval-mask-invert"});
             ::args::Flag no_download(output_group, "no_download", "Do not download optional model weights", {"no-download"});
             ::args::ValueFlagList<std::string> eval_steps(output_group, "eval_steps", "Evaluation iterations as a comma list, e.g. 1000,7000,30000 (replaces the default 7000,30000; the final iteration is always evaluated)", {"eval-steps"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
@@ -827,6 +877,34 @@ namespace {
                 return std::make_tuple(ParseResult::Help, std::function<void()>{});
             } catch (const ::args::ParseError& e) {
                 return std::unexpected(std::format("Parse error: {}\n{}", e.what(), parser.Help()));
+            }
+
+            const auto cli_option_present = [&args](const std::initializer_list<std::string_view> names) {
+                for (size_t i = 1; i < args.size(); ++i) {
+                    const std::string_view arg = args[i];
+                    for (const std::string_view name : names) {
+                        if (arg == name) {
+                            return true;
+                        }
+                        if (name.starts_with("--") &&
+                            arg.size() > name.size() &&
+                            arg.starts_with(name) &&
+                            arg[name.size()] == '=') {
+                            return true;
+                        }
+                        const bool short_option_with_joined_value =
+                            name.size() == 2 && name[1] != '-' &&
+                            arg.size() > name.size() && arg.starts_with(name);
+                        if (short_option_with_joined_value) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
+
+            if (cli_option_present({"-i", "--iter"}) && cli_option_present({"--steps-scaler"})) {
+                return std::unexpected("--iter and --steps-scaler are mutually exclusive: --iter sets the iteration count exactly, --steps-scaler rescales the default schedule");
             }
 
             // Initialize logger (CLI args override environment variable)
@@ -1253,30 +1331,20 @@ namespace {
                 return std::unexpected("ERROR: --bg-image-path is required when --bg-mode image");
             }
 
-            const auto cli_option_present = [&args](const std::initializer_list<std::string_view> names) {
-                for (size_t i = 1; i < args.size(); ++i) {
-                    const std::string_view arg = args[i];
-                    for (const std::string_view name : names) {
-                        if (arg == name) {
-                            return true;
-                        }
-                        if (name.starts_with("--") &&
-                            arg.size() > name.size() &&
-                            arg.starts_with(name) &&
-                            arg[name.size()] == '=') {
-                            return true;
-                        }
-                    }
-                }
-                return false;
-            };
-
             std::optional<std::vector<size_t>> eval_steps_val;
             if (cli_option_present({"--eval-steps"})) {
                 auto steps = parse_eval_steps(::args::get(eval_steps));
                 if (!steps)
                     return std::unexpected(std::string(steps.error().user_message()));
                 eval_steps_val = std::move(*steps);
+            }
+
+            std::optional<std::string> eval_mask_val;
+            if (cli_option_present({"--eval-mask"})) {
+                auto parsed = parse_eval_mask(::args::get(eval_mask));
+                if (!parsed)
+                    return std::unexpected(std::string(parsed.error().user_message()));
+                eval_mask_val = std::move(*parsed);
             }
 
             // Create lambda to apply command line overrides after JSON loading
@@ -1342,6 +1410,9 @@ namespace {
                                         ppisp_sidecar_path_val = cli_option_present({"--ppisp-sidecar"}) ? std::optional<std::string>(::args::get(ppisp_sidecar_path)) : std::optional<std::string>(),
                                         enable_eval_flag = bool(enable_eval),
                                         eval_all_flag = bool(eval_all),
+                                        eval_space_val = cli_option_present({"--eval-space"}) ? std::optional<lfs::core::param::EvalSpace>(::args::get(eval_space)) : std::optional<lfs::core::param::EvalSpace>(),
+                                        eval_mask_val = std::move(eval_mask_val),
+                                        eval_mask_invert_flag = bool(eval_mask_invert),
                                         no_download_flag = bool(no_download),
                                         headless_flag = bool(headless),
                                         auto_train_flag = bool(auto_train),
@@ -1427,10 +1498,21 @@ namespace {
                         target = true;
                 };
 
+                if (steps_scaler_val) {
+                    opt.steps_scaler = *steps_scaler_val;
+                    opt.image_count_scaler = 1.f;
+                }
+                opt.apply_step_scaling();
+
                 // Apply all overrides
                 setVal(iterations_val, opt.iterations);
                 params.cli_iterations_set =
                     iterations_val.has_value();
+                params.cli_step_values_set = iterations_val.has_value() ||
+                                             sh_degree_interval_val.has_value() ||
+                                             morton_reorder_interval_val.has_value() ||
+                                             fill_pacing_iter_val.has_value() ||
+                                             (eval_steps_val && !eval_steps_val->empty());
                 note_opt("iterations", iterations_val.has_value());
                 setVal(resize_factor_val, ds.resize_factor);
                 note_ds("resize_factor", resize_factor_explicit);
@@ -1447,7 +1529,6 @@ namespace {
                 setFlag(tcp_connection_flag, svs.tcp_connection);
                 setVal(images_folder_val, ds.images);
                 setVal(test_every_val, ds.test_every);
-                setVal(steps_scaler_val, opt.steps_scaler);
                 setVal(sh_degree_interval_val, opt.sh_degree_interval);
                 if (morton_reorder_interval_val) {
                     opt.morton_reorder_interval = static_cast<size_t>(*morton_reorder_interval_val);
@@ -1501,6 +1582,9 @@ namespace {
                 setFlag(enable_eval_flag, opt.enable_eval);
                 setFlag(eval_all_flag, opt.eval_all);
                 setFlag(eval_all_flag, opt.enable_eval);
+                setVal(eval_space_val, opt.eval_space);
+                setVal(eval_mask_val, opt.eval_mask);
+                setFlag(eval_mask_invert_flag, opt.eval_mask_invert);
                 setFlag(no_download_flag, params.no_download);
                 setFlag(headless_flag, opt.headless);
                 setFlag(auto_train_flag, opt.auto_train);
@@ -1599,6 +1683,7 @@ namespace {
                 note_opt("max_cap", max_cap_val.has_value());
                 note_opt("steps_scaler", steps_scaler_val.has_value());
                 note_opt("sh_degree_interval", sh_degree_interval_val.has_value());
+                note_opt("morton_reorder_interval", morton_reorder_interval_val.has_value());
                 note_opt("sh_degree", sh_degree_val.has_value());
                 note_opt("min_opacity", min_opacity_val.has_value());
                 note_opt("cropbox_lr_scale", cropbox_lr_scale_val.has_value());
@@ -1623,6 +1708,9 @@ namespace {
                 note_opt("ppisp_sidecar_path", ppisp_sidecar_path_val.has_value());
                 note_opt("enable_eval", enable_eval_flag || eval_all_flag);
                 note_opt("eval_all", eval_all_flag);
+                note_opt("eval_space", eval_space_val.has_value());
+                note_opt("eval_mask", eval_mask_val.has_value());
+                note_opt("eval_mask_invert", eval_mask_invert_flag);
                 note_opt("headless", headless_flag);
                 note_opt("auto_train", auto_train_flag);
                 note_opt("no_splash", no_splash_flag);
@@ -1703,11 +1791,6 @@ namespace {
         } catch (const std::exception& e) {
             return std::unexpected(std::format("Unexpected error during argument parsing: {}", e.what()));
         }
-    }
-
-    void apply_step_scaling(lfs::core::param::TrainingParameters& params) {
-        auto& opt = params.optimization;
-        opt.apply_step_scaling();
     }
 
     void apply_ppisp_defaults(lfs::core::param::TrainingParameters& params) {
@@ -1792,9 +1875,17 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
     };
     if (flag_given("--eval-steps") && !params->optimization.enable_eval)
         return std::unexpected("--eval-steps needs --eval or --eval-all; without them no evaluation runs");
+    if (flag_given("--eval-space") && !params->optimization.undistort) {
+        return std::unexpected(
+            "--eval-space needs --undistort; without it both spaces are identical");
+    }
+    if ((flag_given("--eval-mask") || flag_given("--eval-mask-invert")) &&
+        !params->optimization.enable_eval)
+        return std::unexpected("--eval-mask and --eval-mask-invert need --eval or --eval-all; without them no evaluation runs");
+    if (flag_given("--eval-mask-invert") && !flag_given("--eval-mask"))
+        return std::unexpected("--eval-mask-invert needs --eval-mask");
     if (params->optimization.eval_all && flag_given("--test-every"))
         return std::unexpected("--test-every selects held-out images; --eval-all trains on every image and evaluates all of them");
-    apply_step_scaling(*params);
     apply_ppisp_defaults(*params);
 
     if (auto error = params->validate(); !error.empty())

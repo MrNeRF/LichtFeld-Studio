@@ -112,7 +112,7 @@ namespace lfs::vis::gui {
         LFS_VIS_API Rml::Context* getContext(const std::string& name);
         LFS_VIS_API void destroyContext(const std::string& name);
 
-        void ensureCjkFontsLoaded();
+        LFS_VIS_API void ensureCjkFontsLoaded();
         // Registers the system color emoji font as a fallback face once text
         // above U+FFFF has been shown; the file is read off the UI thread.
         void serviceEmojiFont();

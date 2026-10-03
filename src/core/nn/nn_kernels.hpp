@@ -57,10 +57,13 @@ namespace lfs::core::nn::kernels {
     // LPIPS block tail: channel-normalised, lin-weighted squared distance of two
     // fp16 NCHW feature maps accumulated into *result (caller zeroes it), with
     // an optional fused 2x2 stride-2 max pool of both maps into pooled_x/y.
+    // Optional per-position weights (row stride weights_width) are addressed at
+    // (row + weights_y0, col + weights_x0).
     void lpips_pool_reduce(const void* x, const void* y, const void* lin_weight, float* result,
                            void* pooled_x, void* pooled_y, int n, int channels, int h, int w,
                            int interior_y0, int interior_y1, int interior_x0, int interior_x1,
-                           float inv_count, cudaStream_t stream);
+                           float inv_count, const float* weights, int weights_width,
+                           int weights_y0, int weights_x0, cudaStream_t stream);
 
     void layer_norm(const void* x, const void* weight, const void* bias, void* y,
                     int rows, int cols, float eps, DataType dtype, cudaStream_t stream);

@@ -37,6 +37,7 @@ namespace lfs::vis {
 
     // Forward declarations
     class VisualizerImpl;
+    class ParameterManager;
     class VulkanExternalTensorStorage;
     class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
     class VisualizerImplResetTest_NewProjectWhileCompletionPendingStillErrors_Test;
@@ -66,6 +67,7 @@ namespace lfs::vis {
         void setTrainerFromCheckpoint(std::unique_ptr<lfs::training::Trainer> trainer, int checkpoint_iteration);
         [[nodiscard]] bool clearTrainer();
         bool hasTrainer() const;
+        [[nodiscard]] bool isDatasetEditable() const;
 
         // Link to viewer for notifications
         void setViewer(VisualizerImpl* viewer) { viewer_ = viewer; }
@@ -207,8 +209,10 @@ namespace lfs::vis {
         // Pending parameters (editable in Ready state, applied on start)
         lfs::core::param::OptimizationParameters& getEditableOptParams() { return pending_opt_params_; }
         const lfs::core::param::OptimizationParameters& getEditableOptParams() const { return pending_opt_params_; }
-        lfs::core::param::DatasetConfig& getEditableDatasetParams() { return pending_dataset_params_; }
-        const lfs::core::param::DatasetConfig& getEditableDatasetParams() const { return pending_dataset_params_; }
+        lfs::core::param::DatasetConfig& getEditableDatasetParams();
+        const lfs::core::param::DatasetConfig& getEditableDatasetParams() const;
+        [[nodiscard]] lfs::core::param::TrainingParameters getEditableTrainingParams(
+            const ParameterManager& parameter_manager) const;
         void applyPendingParams();
 
     private:
@@ -240,6 +244,7 @@ namespace lfs::vis {
         void launchTrainingThread();
         void completionReaperLoop(std::stop_token stop_token);
         void finishTrainingThreadJoin();
+        void dispatchTrainingPaused(int iteration);
         void dispatchTrainingCompleted(TrainingCompletionData completion);
 
         // State management

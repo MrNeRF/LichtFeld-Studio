@@ -38,6 +38,11 @@ namespace lfs::training::kernels {
      */
     __device__ inline void quat_to_rotmat(const float* q, float* R) {
         float w = q[0], x = q[1], y = q[2], z = q[3];
+        const float inverse_norm = fminf(rsqrtf(w * w + x * x + y * y + z * z), 1e12f);
+        w *= inverse_norm;
+        x *= inverse_norm;
+        y *= inverse_norm;
+        z *= inverse_norm;
 
         // R = [[1-2(y²+z²), 2(xy-wz), 2(xz+wy)],
         //      [2(xy+wz), 1-2(x²+z²), 2(yz-wx)],

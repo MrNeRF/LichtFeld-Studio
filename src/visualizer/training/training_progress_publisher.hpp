@@ -39,6 +39,14 @@ namespace lfs::vis {
             publishIfDueLocked(now);
         }
 
+        void publishFinal(int iteration) {
+            std::lock_guard lock(mutex_);
+            auto& store = app_store();
+            lfs::core::reactive::BatchUpdate batch(store.store());
+            store.iteration.set(iteration);
+            pending_.reset();
+        }
+
         [[nodiscard]] std::optional<double> secondsUntilDue(const Clock::time_point now) const {
             std::lock_guard lock(mutex_);
             if (!pending_) {

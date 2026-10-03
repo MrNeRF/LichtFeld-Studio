@@ -73,8 +73,14 @@ namespace lfs::training {
         const std::filesystem::path& destination = {},
         std::optional<std::filesystem::path> source_path = std::nullopt);
 
+    /// Rows of model without its frozen --add-splat ranges and soft-deleted rows;
+    /// nullopt when model has no frozen ranges.
+    [[nodiscard]] lfs::Result<std::optional<lfs::core::SplatData>> exclude_frozen_rows(
+        const lfs::core::SplatData& model);
+
     /// Write `--export` formats next to project.licht after a terminal project
-    /// save. No-op when `params.export_formats` is empty.
+    /// save. No-op when `params.export_formats` is empty. Frozen --add-splat rows
+    /// are left out when --exclude-export was given or restored from the checkpoint.
     [[nodiscard]] lfs::Status export_final_splats(
         const Trainer& trainer,
         const lfs::core::param::TrainingParameters& params);

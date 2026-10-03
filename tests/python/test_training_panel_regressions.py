@@ -107,6 +107,8 @@ class _ParamsStub:
         self.sh_degree_interval = 1000
         self.ppisp_controller_activation_step = 5678
         self.enable_eval = False
+        self.eval_mask = ""
+        self.eval_mask_invert = False
         self.save_steps = [7000]
         self.eval_steps = []
         self.bg_color = (0.0, 0.0, 0.0)
@@ -979,6 +981,40 @@ def test_browse_background_image_uses_current_image_dialog(training_panel_module
     assert panel._handle.dirty_all_count == 1
 
 
+# Catches a cleared path leaving inversion active or a browse action ignoring its start directory.
+def test_eval_mesh_browser_sets_path_and_clear_resets_invert(
+    training_panel_module, monkeypatch
+):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    params = _ParamsStub()
+    params.eval_mask = "/tmp/current/mask.obj"
+    params.eval_mask_invert = True
+    calls = []
+
+    def open_mesh_file_dialog(start_dir):
+        calls.append(start_dir)
+        return "/tmp/new/mask.ply"
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(
+            optimization_params=lambda: params,
+            ui=SimpleNamespace(open_mesh_file_dialog=open_mesh_file_dialog),
+        ),
+    )
+
+    panel._on_action(None, None, ["browse_eval_mask"])
+    assert calls == ["/tmp/current"]
+    assert params.eval_mask == "/tmp/new/mask.ply"
+
+    panel._on_action(None, None, ["clear_eval_mask"])
+    assert params.eval_mask == ""
+    assert params.eval_mask_invert is False
+    assert panel._handle.dirty_all_count == 2
+
+
 def test_training_panel_no_longer_uses_removed_image_dialog_alias():
     project_root = Path(__file__).parent.parent.parent
     training_panel = project_root / "src" / "python" / "lfs_plugins" / "training_panel.py"
@@ -1724,7 +1760,9 @@ def test_save_modified_pc_unbound_writes_dataset_ply(training_panel_module, monk
 
     training_panel_module.TrainingPanel()._save_modified_pc()
 
-    assert ply_calls == [(pc, "/data/scene_a/sparse/0/points3D.ply")]
+    assert [(cloud, Path(path)) for cloud, path in ply_calls] == [
+        (pc, Path("/data/scene_a/sparse/0/points3D.ply"))
+    ]
     assert scene.is_point_cloud_modified is False
 
 

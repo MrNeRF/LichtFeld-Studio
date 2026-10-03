@@ -170,8 +170,8 @@ class MyPanel(lf.ui.Panel):
     template = ""
     style = ""
     height_mode = lf.ui.PanelHeightMode.FILL
-    update_policy = "interval"
-    update_interval_ms = 100
+    update_policy = "dirty"
+    update_interval_ms = None
 
     @classmethod
     def poll(cls, context) -> bool:
@@ -194,8 +194,8 @@ class MyPanel(lf.ui.Panel):
 | `template` | `str \| os.PathLike[str]` | `""` | Optional retained RML template. Use an absolute path for plugin-local files. |
 | `style` | `str` | `""` | Optional inline RCSS appended to the retained document. This is RCSS text, not a file path. |
 | `height_mode` | `lf.ui.PanelHeightMode` | `lf.ui.PanelHeightMode.FILL` | `FILL` or `CONTENT` for retained panels. |
-| `update_policy` | `str` | `"interval"` | Set to `"dirty"` or `"reactive"` for retained panels that update from explicit invalidation. |
-| `update_interval_ms` | `int` | `100` | Fallback cadence for retained/hybrid `on_update()` work. Use this for animation-like UI; prefer `update_policy = "dirty"` for normal data panels. |
+| `update_policy` | `str` | `"dirty"` | Use `"interval"` only when a panel needs periodic updates. |
+| `update_interval_ms` | `int \| None` | `None` | Required with `update_policy = "interval"`; otherwise leave unset. |
 
 The panel API is strict in v1: use the enum values above, not string literals.
 

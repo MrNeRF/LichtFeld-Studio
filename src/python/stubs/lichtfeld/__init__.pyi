@@ -1975,6 +1975,11 @@ class MaskMode(enum.Enum):
 
     ALPHA_CONSISTENT = 4
 
+class EvalSpace(enum.Enum):
+    DISTORTED = 0
+
+    UNDISTORTED = 1
+
 class DensifyErrorMap(enum.Enum):
     SSIM = 0
 
@@ -2149,6 +2154,20 @@ class OptimizationParams:
 
     @eval_all.setter
     def eval_all(self, arg: bool, /) -> None: ...
+
+    @property
+    def eval_mask(self) -> str:
+        """Absolute mesh path used to select evaluated pixels"""
+
+    @eval_mask.setter
+    def eval_mask(self, arg: str, /) -> None: ...
+
+    @property
+    def eval_mask_invert(self) -> bool:
+        """Evaluate pixels outside the mesh coverage"""
+
+    @eval_mask_invert.setter
+    def eval_mask_invert(self, arg: bool, /) -> None: ...
 
     @property
     def background_improvements(self) -> bool:
@@ -2481,10 +2500,17 @@ class OptimizationParams:
 
     @property
     def undistort(self) -> bool:
-        """Undistort images on-the-fly before training"""
+        """Remove lens distortion before training: each image and its mask, depth and normal map are resampled once from full resolution into a distortion-free pinhole camera, which training then uses. Alternative to --gut for distorted or non-pinhole cameras"""
 
     @undistort.setter
     def undistort(self, arg: bool, /) -> None: ...
+
+    @property
+    def eval_space(self) -> EvalSpace:
+        """Reference images for evaluation with --undistort: distorted = the original images, with the render warped into the original lens; undistorted = the undistorted training images"""
+
+    @eval_space.setter
+    def eval_space(self, arg: EvalSpace, /) -> None: ...
 
     @property
     def save_steps(self) -> list[int]:

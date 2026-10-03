@@ -523,6 +523,13 @@ namespace lfs::core {
         }
         [[nodiscard]] uint64_t selectionGeneration() const noexcept { return selection_generation_; }
 
+        // Install before publishing a live scene to workers. Detached and restore
+        // staging scenes have no consumer and must not invalidate the live view.
+        using RenderInvalidationCallback = void (*)();
+        void setRenderInvalidationCallback(RenderInvalidationCallback callback) noexcept {
+            render_invalidation_callback_ = callback;
+        }
+
         enum class MergeStorageMode {
             Clone,
             BorrowSingleIdentity,
@@ -686,11 +693,11 @@ namespace lfs::core {
             cached_transform_indices_.reset();
             cached_visible_selection_indices_.reset();
             invalidateVisibleSelectionMaskCache();
-            render_generation_.fetch_add(1, std::memory_order_acq_rel);
+            publishRenderInvalidation();
         }
         void invalidateTransformCache() {
             transform_cache_valid_.store(false, std::memory_order_release);
-            render_generation_.fetch_add(1, std::memory_order_acq_rel);
+            publishRenderInvalidation();
         }
         void markDirty() { invalidateCache(); }
         void markTransformDirty(NodeId node);
@@ -795,6 +802,12 @@ namespace lfs::core {
         mutable uint64_t consolidated_generation_ = 0;
         bool preserve_source_models_ = false;
         mutable std::atomic<uint64_t> render_generation_{0};
+        RenderInvalidationCallback render_invalidation_callback_ = nullptr;
+        void publishRenderInvalidation() {
+            render_generation_.fetch_add(1, std::memory_order_acq_rel);
+            if (render_invalidation_callback_)
+                render_invalidation_callback_();
+        }
         mutable uint64_t selection_generation_ = 0;
 
         mutable std::shared_mutex selection_mutex_;

@@ -13,6 +13,7 @@
 #include "io/scene_chapter_adapter.hpp"
 #include "io/selection_chapter.hpp"
 #include "io/session_chapters.hpp"
+#include "io/sfm_observation_chapter.hpp"
 #include "training_snapshot_service.hpp"
 
 #include <filesystem>
@@ -66,6 +67,7 @@ namespace lfs::training {
         lfs::io::project::SceneGraphChapter scene_graph;
         lfs::io::project::SelectionChapter selection;
         lfs::io::project::ParameterManagerSnapshot parameters;
+        lfs::io::project::SfmObservationCameras sfm_observation_cameras;
         std::optional<ProjectSnapshotDocumentContext>
             document_context;
     };
@@ -82,6 +84,8 @@ namespace lfs::training {
             selection;
         lfs::io::project::ParameterManagerSnapshot
             parameters;
+        lfs::io::project::SfmObservationCameras
+            sfm_observation_cameras;
     };
 
     [[nodiscard]] lfs::Result<TrainingSnapshotCpuStateMetrics>

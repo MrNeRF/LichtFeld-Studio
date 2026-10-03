@@ -551,7 +551,7 @@ namespace lfs::python {
         const auto* tm = get_trainer_manager();
         if (!tm)
             return false;
-        return tm->getState() == lfs::vis::TrainingState::Ready && tm->getCurrentIteration() == 0;
+        return tm->hasTrainer() && tm->isDatasetEditable();
     }
 
     core::param::DatasetConfig& PyDatasetConfig::params() {
@@ -796,6 +796,10 @@ namespace lfs::python {
             .value("SEGMENT_AND_IGNORE", MaskMode::SegmentAndIgnore)
             .value("ALPHA_CONSISTENT", MaskMode::AlphaConsistent);
 
+        nb::enum_<EvalSpace>(m, "EvalSpace")
+            .value("DISTORTED", EvalSpace::Distorted)
+            .value("UNDISTORTED", EvalSpace::Undistorted);
+
         nb::enum_<DensifyErrorMap>(m, "DensifyErrorMap")
             .value("SSIM", DensifyErrorMap::Ssim)
             .value("SSIM_CS", DensifyErrorMap::SsimCs);
@@ -918,6 +922,19 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().eval_all; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_all = v; }); },
                 "Train on every image and evaluate all of them; no image is held out")
+            .def_prop_rw(
+                "eval_mask",
+                [](PyOptimizationParams& self) { return self.params().eval_mask; },
+                [](PyOptimizationParams&, const std::string& v) {
+                    modify_params([value = lfs::core::param::normalize_eval_mask_path(v)](
+                                      auto& p) { p.eval_mask = value; });
+                },
+                "Absolute mesh path used to select evaluated pixels")
+            .def_prop_rw(
+                "eval_mask_invert",
+                [](PyOptimizationParams& self) { return self.params().eval_mask_invert; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_mask_invert = v; }); },
+                "Evaluate pixels outside the mesh coverage")
             .def_prop_rw(
                 "background_improvements",
                 [](PyOptimizationParams& self) { return self.params().background_improvements; },
@@ -1191,7 +1208,17 @@ namespace lfs::python {
                 "undistort",
                 [](PyOptimizationParams& self) { return self.params().undistort; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.undistort = v; }); },
-                "Undistort images on-the-fly before training")
+                "Remove lens distortion before training: each image and its mask, depth and "
+                "normal map are resampled once from full resolution into a distortion-free "
+                "pinhole camera, which training then uses. Alternative to --gut for distorted "
+                "or non-pinhole cameras")
+            .def_prop_rw(
+                "eval_space",
+                [](PyOptimizationParams& self) { return self.params().eval_space; },
+                [](PyOptimizationParams&, EvalSpace v) { modify_params([v](auto& p) { p.eval_space = v; }); },
+                "Reference images for evaluation with --undistort: distorted = the original "
+                "images, with the render warped into the original lens; undistorted = the "
+                "undistorted training images")
             .def_prop_ro(
                 "save_steps",
                 [](PyOptimizationParams& self) -> std::vector<size_t> {

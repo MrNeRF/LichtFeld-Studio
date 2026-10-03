@@ -21,6 +21,7 @@
   "enable_save_eval_images": true,
   "enable_sparsity": false,
   "eval_all": false,
+  "eval_space": "distorted",
   "eval_steps": [
     7000,
     30000
@@ -36,6 +37,8 @@
   "growth_ratio_rank": false,
   "gut": false,
   "headless": false,
+  "image_count_scaler": 1.0,
+  "image_count_scaler_total": 1.0,
   "init_extent": 3.0,
   "init_num_pts": 100000,
   "init_opacity": 0.10000000149011612,

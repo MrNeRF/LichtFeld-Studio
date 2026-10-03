@@ -921,20 +921,24 @@ namespace lfs::vis {
         flushPendingTitlebarDoubleClick();
     }
 
-    void WindowManager::waitEvents(double timeout_seconds) {
+    void WindowManager::waitEvents(std::optional<double> timeout_seconds) {
         frame_input_.beginFrame();
         SDL_Event event;
         if (vulkan_context_ &&
             vulkan_context_->hasPendingSwapchainResize()) {
             const double resize_wait = vulkan_context_->secondsUntilPendingSwapchainResizeReady();
-            timeout_seconds = std::min(timeout_seconds,
-                                       resize_wait > 0.0
-                                           ? std::max(kPendingResizeMinWaitSeconds, resize_wait)
-                                           : 0.0);
+            const double resize_deadline = resize_wait > 0.0
+                                               ? std::max(kPendingResizeMinWaitSeconds, resize_wait)
+                                               : 0.0;
+            timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, resize_deadline)
+                                              : std::optional<double>{resize_deadline};
         }
         if (isManualResizeActive())
-            timeout_seconds = std::min(timeout_seconds, 1.0 / 60.0);
-        const int timeout_ms = drainQueuedEvents() ? 0 : static_cast<int>(timeout_seconds * 1000.0);
+            timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, 1.0 / 60.0)
+                                              : std::optional<double>{1.0 / 60.0};
+        const int timeout_ms = drainQueuedEvents() ? 0
+                               : timeout_seconds   ? static_cast<int>(*timeout_seconds * 1000.0)
+                                                   : -1;
         pumping_events_ = true;
         if (SDL_WaitEventTimeout(&event, timeout_ms)) {
             do {

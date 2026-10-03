@@ -2448,6 +2448,16 @@ namespace lfs::io::project {
             auto has_image =
                 optional<bool>(value, "has_image", "SCNG", field);
             auto split = required<std::string>(value, "split", "SCNG", field);
+            std::uint64_t sfm_observation_count = 0;
+            if (const auto found = value.find("sfm_observations"); found != value.end()) {
+                if (!found->is_number_unsigned()) {
+                    return fail<CameraRecord>(
+                        lfs::ErrorCode::DataLoss, "A scene camera record is invalid.",
+                        std::format("SCNG.{}.sfm_observations must be an unsigned integer", field),
+                        "SCNG", field);
+                }
+                sfm_observation_count = found->get<std::uint64_t>();
+            }
             if (!rotation) {
                 return std::move(rotation).error();
             }
@@ -2502,11 +2512,12 @@ namespace lfs::io::project {
                 .has_alpha = *has_alpha,
                 .has_image = has_image->value_or(true),
                 .split = std::move(*split),
+                .sfm_observation_count = sfm_observation_count,
             };
         }
 
         Json camera_json(const CameraRecord& value) {
-            return Json{
+            auto json = Json{
                 {"uid", value.uid},
                 {"camera_id", value.camera_id},
                 {"rotation", json_array(value.rotation)},
@@ -2531,6 +2542,9 @@ namespace lfs::io::project {
                 {"has_image", value.has_image},
                 {"split", value.split},
             };
+            if (value.sfm_observation_count > 0)
+                json["sfm_observations"] = value.sfm_observation_count;
+            return json;
         }
 
         lfs::Result<SceneNodeRecord> parse_scene_node(
@@ -3293,6 +3307,7 @@ namespace lfs::io::project {
                 "PRMS", "presets");
         }
         cached_snapshot_ = ParameterManagerSnapshot{
+            .cli_step_locked_strategy = std::nullopt,
             .active_strategy = *active,
             .mcmc_session = std::move(mcmc_session->parameters),
             .mrnf_session = std::move(mrnf_session->parameters),

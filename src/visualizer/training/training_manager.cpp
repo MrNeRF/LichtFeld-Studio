@@ -773,6 +773,8 @@ namespace lfs::vis {
             const auto& params = trainer->getParams();
             pending_opt_params_ = params.optimization;
             pending_dataset_params_ = params.dataset;
+            if (auto* const param_mgr = services().paramsOrNull())
+                param_mgr->getDatasetConfig() = params.dataset;
             // A new training run has no resumable elapsed-time authority.
             clearRestoredProjectMetrics();
             accumulated_training_time_ =
@@ -1390,7 +1392,6 @@ namespace lfs::vis {
                         if (!state_machine_.transitionTo(TrainingState::Paused)) {
                             LOG_WARN("Failed to transition to Paused after initialization pause request");
                         }
-                        state::TrainingPaused{.iteration = getCurrentIteration()}.emit();
                     }
                 }
             } catch (const std::exception& error) {
@@ -1447,8 +1448,7 @@ namespace lfs::vis {
                 LOG_WARN("Failed to transition to Paused");
             }
 
-            state::TrainingPaused{.iteration = getCurrentIteration()}.emit();
-            LOG_INFO("Training paused at iteration {}", getCurrentIteration());
+            LOG_INFO("Training pause requested at iteration {}", getCurrentIteration());
         }
     }
 
@@ -1769,6 +1769,23 @@ namespace lfs::vis {
             return;
         }
         emit_completion();
+    }
+
+    void TrainerManager::dispatchTrainingPaused(const int iteration) {
+        auto emit_paused = [iteration] {
+            state::TrainingPaused{.iteration = iteration}.emit();
+        };
+
+        if (viewer_) {
+            if (!viewer_->postWork({
+                    .run = std::move(emit_paused),
+                    .cancel = [] {},
+                })) {
+                LOG_WARN("Training pause event dropped during viewer shutdown");
+            }
+            return;
+        }
+        emit_paused();
     }
 
     int TrainerManager::getCurrentIteration() const {
@@ -2368,6 +2385,9 @@ namespace lfs::vis {
                 applyPendingParams();
             }
         });
+        trainer_->setOnPaused([this](const int iteration) {
+            dispatchTrainingPaused(iteration);
+        });
 
         lfs::core::run_guarded<void>(
             lfs::core::TaskContext{
@@ -2516,6 +2536,36 @@ namespace lfs::vis {
         return trainer_->computeCameraMetrics(*cam, include_ssim, appearance);
     }
 
+    lfs::core::param::DatasetConfig& TrainerManager::getEditableDatasetParams() {
+        if (auto* const param_mgr = services().paramsOrNull())
+            return param_mgr->getDatasetConfig();
+        return pending_dataset_params_;
+    }
+
+    const lfs::core::param::DatasetConfig& TrainerManager::getEditableDatasetParams() const {
+        if (const auto* const param_mgr = services().paramsOrNull())
+            return param_mgr->getDatasetConfig();
+        return pending_dataset_params_;
+    }
+
+    bool TrainerManager::isDatasetEditable() const {
+        return !hasTrainer() || (getState() == TrainingState::Ready && getCurrentIteration() == 0);
+    }
+
+    lfs::core::param::TrainingParameters TrainerManager::getEditableTrainingParams(
+        const ParameterManager& parameter_manager) const {
+        const auto& configured_dataset = parameter_manager.getDatasetConfig();
+        auto params = parameter_manager.createForDataset(
+            configured_dataset.data_path,
+            configured_dataset.output_path);
+        if (hasTrainer() && trainer_->isInitialized() && !isDatasetEditable()) {
+            params.dataset = trainer_->getParams().dataset;
+        } else if (services().paramsOrNull() || hasTrainer() || !pending_dataset_params_.data_path.empty()) {
+            params.dataset = getEditableDatasetParams();
+        }
+        return params;
+    }
+
     void TrainerManager::applyPendingParams() {
         if (!trainer_)
             return;
@@ -2533,14 +2583,17 @@ namespace lfs::vis {
 
         const auto previous_params = trainer_->getParams();
         auto params = previous_params;
-        params.dataset = pending_dataset_params_;
 
-        // Use ParameterManager in GUI mode, fallback to pending_opt_params_ for headless
+        // Export and training use the same shared editable configuration.
         if (auto* const param_mgr = services().paramsOrNull()) {
-            params.optimization = param_mgr->copyActiveParams();
+            const auto editable_params = getEditableTrainingParams(*param_mgr);
+            params.dataset = editable_params.dataset;
+            params.optimization = editable_params.optimization;
+            params.server = editable_params.server;
             LOG_DEBUG("Applied params: strategy={}, iter={}, max_cap={}",
                       params.optimization.strategy, params.optimization.iterations, params.optimization.max_cap);
         } else {
+            params.dataset = pending_dataset_params_;
             params.optimization = pending_opt_params_;
         }
 

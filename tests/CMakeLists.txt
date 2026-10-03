@@ -222,6 +222,7 @@ set(LICHT_FORMAT_NON_WINDOWS_FILES
     ${CMAKE_SOURCE_DIR}/src/io/project/project_document.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/selection_chapter.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/session_chapters.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/sfm_observation_chapter.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/splat_chapter.cpp
     ${CMAKE_SOURCE_DIR}/src/visualizer/gui/layout_state.cpp
 )
@@ -307,6 +308,30 @@ set_tests_properties(lichtfeld_format_tests PROPERTIES
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     LABELS "fast;format"
     TIMEOUT 300
+)
+
+add_executable(lichtfeld_frame_tests test_frame_demand_ledger.cpp)
+target_include_directories(lichtfeld_frame_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/visualizer/rendering
+    ${CMAKE_SOURCE_DIR}/src/visualizer
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/tests
+)
+target_link_libraries(lichtfeld_frame_tests PRIVATE GTest::gtest_main Threads::Threads)
+set_target_properties(lichtfeld_frame_tests PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(lichtfeld_frame_tests)
+endif()
+add_test(NAME lichtfeld_frame_tests
+    COMMAND $<TARGET_FILE:lichtfeld_frame_tests> --gtest_color=no
+)
+set_tests_properties(lichtfeld_frame_tests PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "fast;frame"
+    TIMEOUT 30
 )
 
 if(NOT BUILD_TESTS)
@@ -419,6 +444,7 @@ set(TEST_FILES
     test_mcmc.cpp
     test_expression_templates.cpp
     test_lfs_scheduler.cpp
+    test_uncapped_compaction.cpp
     test_mrnf_strategy.cpp
     test_compact_splats_peak.cpp
     test_adam_capacity_invariant.cpp
@@ -456,6 +482,7 @@ set(TEST_FILES
     test_mask_loss.cpp
     test_mask_preprocess_fusion.cpp
     test_roi_weight_map.cpp
+    test_mesh_mask_kernels.cpp
     test_roi_weighted_losses.cpp
     test_checkpoint_resume.cpp
     test_component_config_serialization.cpp

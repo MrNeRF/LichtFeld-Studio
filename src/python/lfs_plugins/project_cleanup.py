@@ -25,8 +25,13 @@ def _error_message(reason):
 
 
 class ProjectCleanup:
-    def __init__(self):
-        self.path = ""
+    def __init__(self, path="", run_closed=None, on_complete=None):
+        self.path = str(path)
+        self.run_closed = run_closed
+        self.on_complete = on_complete
+        self.closed_file = bool(path)
+        self.cancel_requested = threading.Event()
+        self.write_state = {"running": False, "error": ""}
         self.plan = None
         self.finished = False
         self.cleaning = False
@@ -45,6 +50,13 @@ class ProjectCleanup:
     def start(self):
         try:
             state = lf.project_poll_write()
+            if self.closed_file:
+                active_path = str(state.get("path") or "")
+                if active_path and Path(active_path).resolve() == Path(self.path).resolve():
+                    self.closed_file = False
+                else:
+                    self.inspect()
+                    return
             if state.get("running"):
                 raise RuntimeError(lf.ui.tr("project_cleanup.wait"))
             if lf.is_training_active():
@@ -77,9 +89,17 @@ class ProjectCleanup:
 
     def current(self):
         state = lf.project_poll_write()
+        if self.closed_file:
+            active_path = str(state.get("path") or "")
+            if active_path and Path(active_path).resolve() == Path(self.path).resolve():
+                raise RuntimeError(lf.ui.tr("project_cleanup.changed"))
+            return self.write_state
         if str(state.get("path") or "") != self.path or lf.is_training_active():
             raise RuntimeError(lf.ui.tr("project_cleanup.changed"))
         return state
+
+    def changed(self):
+        return self.current().get("running") or (not self.closed_file and lf.project_is_dirty())
 
     def saved(self):
         try:
@@ -113,7 +133,7 @@ class ProjectCleanup:
         try:
             if self.finished:
                 return
-            if self.current().get("running") or lf.project_is_dirty():
+            if self.changed():
                 raise RuntimeError(lf.ui.tr("project_cleanup.changed"))
             self.plan = plan
             old_checkpoints = sum(not checkpoint.scng_bound for checkpoint in plan.retained_checkpoints)
@@ -130,7 +150,7 @@ class ProjectCleanup:
             self.finished = True
             return
         try:
-            if self.current().get("running") or lf.project_is_dirty():
+            if self.changed():
                 raise RuntimeError(lf.ui.tr("project_cleanup.changed"))
             if button == lf.ui.tr("project_cleanup.copy"):
                 source = Path(self.path)
@@ -141,7 +161,21 @@ class ProjectCleanup:
                 if Path(self.destination).exists():
                     raise RuntimeError(lf.ui.tr("project_cleanup.new_destination"))
             self.before_bytes = self.plan.physical_size
-            lf.project_clean(self.destination, str(self.plan.input_commit_uuid))
+            expected_commit_uuid = str(self.plan.input_commit_uuid)
+            if self.closed_file:
+                self.write_state = {"running": True, "error": ""}
+
+                def operation(progress, cancel):
+                    return lf.io.clean_project_file(self.path, self.destination,
+                        expected_commit_uuid, progress,
+                        lambda: self.cancel_requested.is_set() or cancel())
+
+                def complete(error):
+                    self.write_state = {"running": False, "error": str(error) if error else ""}
+
+                self.run_closed(operation, complete, expected_commit_uuid=expected_commit_uuid)
+            else:
+                lf.project_clean(self.destination, expected_commit_uuid)
             self.cleaning = True
             # The modal also prevents edits while the durable snapshot is cleaned.
             lf.ui.form_dialog(self.key, lf.ui.tr("project_cleanup.title"), self.body(lf.ui.tr("project_cleanup.working")),
@@ -156,7 +190,10 @@ class ProjectCleanup:
 
     def cancel(self, *_args):
         if self.cleaning:
-            lf.project_cancel_cleanup()
+            if self.closed_file:
+                self.cancel_requested.set()
+            else:
+                lf.project_cancel_cleanup()
             # Dismissing the old modal must not unlock editing while the worker
             # is still finishing or rolling back its atomic write.
             lf.ui.form_dialog(self.key, lf.ui.tr("project_cleanup.title"), self.body(lf.ui.tr("project_cleanup.canceling")),
@@ -166,7 +203,7 @@ class ProjectCleanup:
 
     def poll(self):
         try:
-            state = lf.project_poll_write()
+            state = self.write_state if self.closed_file else lf.project_poll_write()
             if state.get("running"):
                 self.schedule(self.poll)
                 return
@@ -177,6 +214,8 @@ class ProjectCleanup:
                 output = self.destination or self.path
                 freed = max(0, self.before_bytes - Path(output).stat().st_size)
                 message = lf.ui.tr("project_cleanup.done").format(size=_size(freed), path=output)
+                if self.on_complete is not None:
+                    self.on_complete()
             self.finished = True
             if not lf.ui.form_dialog_update(self.key, [{"label": lf.ui.tr("common.ok")}], self.body(message)):
                 lf.ui.message_dialog(lf.ui.tr("project_cleanup.title"), message)
@@ -185,9 +224,9 @@ class ProjectCleanup:
             self.error(exc)
 
 
-def open_project_cleanup():
+def open_project_cleanup(path="", run_closed=None, on_complete=None):
     global _active
     if _active is not None and not _active.finished:
         return
-    _active = ProjectCleanup()
+    _active = ProjectCleanup(path, run_closed, on_complete)
     _active.start()
