@@ -2818,7 +2818,7 @@ TEST_F(MRNFStrategyTest, ChunkedChildPlacementMatchesSingleChunk) {
     }
 }
 
-TEST(MRNFStrategyTest, LongAxisSplitPlacementIgnoresQuaternionMagnitudeOnRealRows) {
+TEST_F(MRNFStrategyTest, LongAxisSplitPlacementIgnoresQuaternionMagnitudeOnRealRows) {
     const auto* path = std::getenv("LFS_SPLIT_TEST_MODEL");
     if (!path)
         GTEST_SKIP() << "set LFS_SPLIT_TEST_MODEL to a trained splat model";
