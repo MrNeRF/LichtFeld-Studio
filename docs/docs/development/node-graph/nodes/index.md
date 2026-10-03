@@ -13,7 +13,7 @@ Select a node in the editor for its controls and How to use guidance.
 
 ## Colour
 
-- [Colour Correct](lfs.colour_correct.md) — Adjusts brightness, contrast and colour balance while keeping your scene's detail.
+- [Colour Correct](lfs.colour_correct.md) — Grades colour: exposure, levels, contrast, saturation, hue, white balance and shadow/midtone/highlight tints.
 
 - [Invert Colour](lfs.invert_colour.md) — Reverses colours so dark areas become light and colours turn into their opposites.
 
@@ -101,7 +101,7 @@ Select a node in the editor for its controls and How to use guidance.
 
 - [Set Opacity](lfs.set_opacity.md) — Changes how transparent selected splats appear.
 
-- [Set SH Degree](lfs.set_sh_degree.md) — Limits how much a splat's colour can vary with the viewing direction.
+- [Set SH Degree](lfs.set_sh_degree.md) — Limits how much a splat's colour can vary with the viewing direction; lower degrees make files much smaller.
 
 - [Set Scale](lfs.set_scale.md) — Sets the size of selected splats along each of their three local axes.
 
@@ -119,7 +119,7 @@ Select a node in the editor for its controls and How to use guidance.
 
 - [Map Range](lfs.map_range.md) — Converts a value from one range to another, e.g. height 0–2 m into a fade from 1 to 0.
 
-- [Math](lfs.math.md) — Calculates new values to control edits, selections and fades.
+- [Math](lfs.math.md) — Adds, multiplies, compares or rounds numbers — for example to scale opacity with height.
 
 - [Mix Colour](lfs.mix_colour.md) — Blends two colours or combines them with a chosen colour operation.
 
@@ -127,4 +127,4 @@ Select a node in the editor for its controls and How to use guidance.
 
 - [Separate XYZ](lfs.separate_xyz.md) — Splits a position or direction into its X, Y and Z values.
 
-- [Vector Math](lfs.vector_math.md) — Calculates positions, directions and distances from three-part values.
+- [Vector Math](lfs.vector_math.md) — Adds, subtracts and measures positions and directions — for example the distance from a point.

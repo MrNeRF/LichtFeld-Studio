@@ -89,7 +89,16 @@ def generate(descriptors=None, destination=DESTINATION, check=False):
         descriptors = lf.nodes.node_types()
     descriptors = [node for node in descriptors if node["id"].startswith("lfs.")]
     pages = {node["id"] + ".md": render_node(node) for node in descriptors}
-    pages["index.md"] = render_index(descriptors)
+    # Outside the application host-only types such as Object Info are not
+    # registered; keep their existing pages listed in the index.
+    known = {node["id"] for node in descriptors}
+    indexed = list(descriptors)
+    for page in destination.glob("lfs.*.md"):
+        if page.stem not in known:
+            lines = page.read_text(encoding="utf-8").splitlines()
+            indexed.append(dict(id=page.stem, label=lines[1][2:], description=lines[3],
+                                category=lines[5].split(" · ", 1)[1]))
+    pages["index.md"] = render_index(indexed)
     stale = []
     for name, text in pages.items():
         path = destination / name

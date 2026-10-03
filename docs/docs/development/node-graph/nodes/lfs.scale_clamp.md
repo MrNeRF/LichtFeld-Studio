@@ -17,7 +17,7 @@ Only the shape changes; position, colour and count stay the same.
 | --- | --- | --- | --- | --- | --- |
 | Geometry | `Geometry` | lfs.geometry | — | — | Geometry you want to edit. Connect a source; an unconnected input supplies no geometry. |
 | Selection | `Selection` | lfs.float | 1 | min 0; max 1; step 0.01; accepts per-element values | Where you apply the edit, 0–1: 0 leaves it unchanged, 1 applies it fully. Unconnected means everything. |
-| Max Aspect | `Max Aspect` | lfs.float | 10 | min 1; step 0.1 | Largest allowed ratio between a splat's longest and shortest axis. 1 makes every splat round; 8 is a good start. |
+| Max Aspect | `Max Aspect` | lfs.float | 8 | min 1; step 0.1 | Largest allowed ratio between a splat's longest and shortest axis. 1 makes every splat round; 8 is a good start. |
 
 ## Outputs
 
