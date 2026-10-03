@@ -91,6 +91,43 @@ namespace {
         vkDestroySemaphore(device, semaphore, nullptr);
     }
 
+    TEST_F(TensorVulkanBufferQuery, ExternalWaitSubmitsOlderRecorderBeforeAdvancingTimeline) {
+        GpuBackendScope backend(GpuBackend::Vulkan);
+        const auto context = internal::acquire_vulkan_context();
+        VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        type.initialValue = 1;
+        VkSemaphoreCreateInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        info.pNext = &type;
+        VkSemaphore semaphore = VK_NULL_HANDLE;
+        ASSERT_EQ(vkCreateSemaphore(context->device(), &info, nullptr, &semaphore), VK_SUCCESS);
+        {
+            TensorWorkQueue producer(GpuBackend::Vulkan);
+            TensorWorkQueue consumer(GpuBackend::Vulkan);
+            consumer.set_consumer_timeline(context->device(), {semaphore, 1, {}});
+            Tensor pending;
+            {
+                const TensorWorkQueue::Scope scope(producer);
+                pending = Tensor::full({4096}, 7.f, Device::GPU);
+            }
+            ASSERT_FALSE(producer.ready());
+            // The external wait gets a newer value on the same retirement
+            // timeline, even though it does not read the producer's storage.
+            consumer.wait_timeline(1);
+            const auto timeline = context->timeline();
+            const auto value = context->submitted_timeline();
+            VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+            wait.semaphoreCount = 1;
+            wait.pSemaphores = &timeline;
+            wait.pValues = &value;
+            ASSERT_EQ(vkWaitSemaphores(context->device(), &wait, 5'000'000'000), VK_SUCCESS);
+            EXPECT_TRUE(producer.ready());
+            producer.wait();
+            EXPECT_EQ(pending.cpu().to_vector(), std::vector<float>(4096, 7.f));
+        }
+        vkDestroySemaphore(context->device(), semaphore, nullptr);
+    }
+
     TEST_F(TensorVulkanBufferQuery, PendingValueIsSignalledAfterSynchronize) {
         GpuBackendScope scope(GpuBackend::Vulkan);
         const Tensor source = Tensor::full({256}, 1.25f, Device::GPU);

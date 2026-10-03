@@ -2721,6 +2721,9 @@ namespace lfs::vis {
         if (enable_shader_atomic_float) {
             appendUniqueExtension(extensions, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         }
+        if (extensionAvailable(available_extensions, VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME)) {
+            appendUniqueExtension(extensions, VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME);
+        }
 #ifdef __APPLE__
         // Metal tensors import into the device without copies.
         metal_objects_enabled_ = extensionAvailable(available_extensions, lfs::core::kVulkanMetalObjectsExtension);
@@ -2924,8 +2927,7 @@ namespace lfs::vis {
         features11.storageBuffer16BitAccess = supported_features11.storageBuffer16BitAccess;
         features11.uniformAndStorageBuffer16BitAccess =
             supported_features11.uniformAndStorageBuffer16BitAccess;
-        features11.pNext = enabled_chain_head;
-        features12.pNext = &features11;
+        features12.pNext = enabled_chain_head;
 
         uint32_t queue_family_count = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queue_family_count, nullptr);
