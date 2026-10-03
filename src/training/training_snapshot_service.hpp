@@ -30,8 +30,15 @@ namespace lfs::training {
     class ADMMSparsityOptimizer;
 
     struct TrainingSnapshotServiceConfig {
+#if defined(__APPLE__)
+        // Smaller bands release host slots sooner on unified memory while
+        // retaining the same 256 MiB ring and four bounded drain workers.
+        std::size_t ring_slots = 16;
+        std::size_t band_bytes = 16ull * 1024 * 1024;
+#else
         std::size_t ring_slots = 4;
         std::size_t band_bytes = 64ull * 1024 * 1024;
+#endif
         std::size_t calibration_bytes = 32ull * 1024 * 1024;
         int calibration_iterations = 4;
     };
