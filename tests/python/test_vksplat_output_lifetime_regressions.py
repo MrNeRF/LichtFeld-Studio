@@ -44,7 +44,7 @@ def test_point_cloud_vulkan_viewport_capture_uses_readback():
     assert "VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL" in source
     assert "PointCloudVulkanRenderer::readOutputImage" in source
 
-    lazy_capture_start = manager.index("point_cloud_vulkan_renderer_->readOutputImage")
+    lazy_capture_start = manager.index("point_scene_renderer_->readOutputImage")
     lazy_capture_body = manager[lazy_capture_start - 500:lazy_capture_start + 500]
     assert "Failed to capture point-cloud Vulkan viewport image" in lazy_capture_body
     assert "[]() -> std::shared_ptr<lfs::core::Tensor> { return {}; }" not in lazy_capture_body
