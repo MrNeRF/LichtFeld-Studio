@@ -481,7 +481,7 @@ namespace lfs::vis::screen {
     TEST_F(ScreenTest, LoadRejectsDuplicateSingleInstanceEditors) {
         auto json = Screen::makeDefault(registry).save();
         for (auto& area : json["areas"]) {
-            if (area["editor"] == editors::kProperties)
+            if (area["editor"].get<std::string>() == editors::kProperties)
                 area["editor"] = std::string(editors::kScene);
         }
         EXPECT_FALSE(Screen::load(json, registry));
