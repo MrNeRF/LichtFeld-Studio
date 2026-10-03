@@ -9,12 +9,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <limits>
 #include <numbers>
 #include <optional>
 #include <random>
+#include <string_view>
 
 namespace {
 
@@ -2043,7 +2045,9 @@ namespace {
             action();
             const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
             std::cout << "[NodesSpatialPerformance " << GetParam().name << "] " << label << " " << elapsed << " ms\n";
-            EXPECT_LT(elapsed, 2000.0) << label;
+            // Shared CI runners have no stable GPU time; budgets are opt-in like LFS_DECIMATE_PERF.
+            if (const char* perf = std::getenv("LFS_NODES_PERF"); perf && std::string_view(perf) == "1")
+                EXPECT_LT(elapsed, 2000.0) << label;
         };
         measure("Remove Floaters relative 1M", [&] {
             const auto result = single("lfs.remove_floaters", geometry, [](Node& node) { node.input_values["Min Neighbours"] = int64_t(3); });
