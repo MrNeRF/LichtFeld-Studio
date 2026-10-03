@@ -85,6 +85,7 @@ set(CORE_SOURCES
         cuda_version.cpp
         image_io.cpp
         image_codecs.cpp
+        image_exr.cpp
         mapped_file.cpp
         optimization_properties.cpp
         parameters.cpp
@@ -155,7 +156,7 @@ target_link_libraries(lfs_core
         PNG::PNG
         TIFF::TIFF
         WebP::webp
-        unofficial::tinyexr::tinyexr
+        OpenEXR::OpenEXRCore
         OpenMeshCore
 )
 # OpenMP for tensor multi-threaded operations
