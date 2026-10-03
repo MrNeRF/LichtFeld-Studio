@@ -1227,7 +1227,7 @@ namespace lfs::vis {
                                       !request.gut && !spark && !portal_math && !overlay.parameter_count &&
                                           !request.transparent_background && !request.overlay.markers.show_rings);
                 i.rasterizer.encode(command, {i.projected, 0}, draw_count, request.gut ? RasterMode::Gut : RasterMode::Gaussian,
-                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{i.gut_geometry, 0} : BufferSlice{}, projection, lod, request.gut && !spark, (request.transparent_background || request.overlay.markers.show_rings) && !request.gut && !spark, profile, request.depth_view);
+                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{i.gut_geometry, 0} : BufferSlice{}, projection, lod, request.gut && !spark, request.overlay.markers.show_rings && !request.transparent_background && !request.gut && !spark, profile, request.depth_view);
                 auto encoder = profiledCompute(command, profile, GpuStage::Present);
                 [encoder setComputePipelineState:i.present];
                 [encoder setTexture:f.raster->color() atIndex:0];

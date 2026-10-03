@@ -32,6 +32,19 @@ import utils;
 #define LFS_HIGS_LEAN_STAGING 0
 #endif
 
+#ifndef LFS_HIGS_PRECISE_ALPHA
+#define LFS_HIGS_PRECISE_ALPHA 0
+#endif
+
+#if LFS_HIGS_PRECISE_ALPHA
+// Half T near one loses weak coverage on subtraction. Store its complement
+// with a negative marker above T=0.75; keep ordinary T near saturation. The
+// 2^-14 bias avoids negative zero and makes an empty partial decode exactly.
+half encode_partial_transmittance(float t) {
+    return half(t > 0.75f ? -(1.0f - t) - 0.00006103515625f : t);
+}
+#endif
+
 #define RASTER_THREAD_COUNT 320u
 #define MINI_BATCHES (RASTER_BATCH_SIZE / SUBGROUP_SIZE)
 static const uint PIXELS_PER_THREAD = HIGS_TILE_SIZE / SUBGROUP_SIZE;
@@ -444,7 +457,11 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             const uint pixel_linear = lane_id + p * SUBGROUP_SIZE;
             const uint partial_idx =
                 (pool_batch_idx * HIGS_MACRO_TILE_SIZE_TILES + local_tile_idx) * HIGS_TILE_SIZE + pixel_linear;
+#if LFS_HIGS_PRECISE_ALPHA
+            macro_batch_pixel_state[partial_idx] = half4(half3(pixel_state[p].rgb), encode_partial_transmittance(pixel_state[p].a));
+#else
             macro_batch_pixel_state[partial_idx] = half4(pixel_state[p]);
+#endif
         }
 
       #else // !LFS_HIGS_FP32: half2-packed blend core

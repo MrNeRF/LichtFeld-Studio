@@ -1191,8 +1191,9 @@ struct Uniforms {
     float rasterization_scale;
 }
 
-// mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1), and
-// full-frame binning for banded exports (bit 2).
+// mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1),
+// full-frame binning for banded exports (bit 2), and accurate transparent
+// partial alpha in the Mac test reference only (bit 3).
 #ifndef LFS_BANDED_EXPORT_RENDER
 #define LFS_BANDED_EXPORT_RENDER 0
 #endif

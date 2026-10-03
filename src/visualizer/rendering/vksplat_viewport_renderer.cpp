@@ -804,6 +804,12 @@ namespace lfs::vis {
                  (root / "generated/macro_raster_overlays_fp32.spv").string()},
                 {"macro_raster_overlays_fp32_lean",
                  (root / "generated/macro_raster_overlays_fp32_lean.spv").string()},
+#if defined(LFS_VULKAN_MACOS_REFERENCE)
+                {"macro_raster_fp32_precise_alpha", (root / "generated/macro_raster_fp32_precise_alpha.spv").string()},
+                {"macro_raster_fp32_lean_precise_alpha", (root / "generated/macro_raster_fp32_lean_precise_alpha.spv").string()},
+                {"macro_raster_overlays_fp32_precise_alpha", (root / "generated/macro_raster_overlays_fp32_precise_alpha.spv").string()},
+                {"macro_raster_overlays_fp32_lean_precise_alpha", (root / "generated/macro_raster_overlays_fp32_lean_precise_alpha.spv").string()},
+#endif
                 {"macro_compose", (root / "generated/macro_compose.spv").string()},
                 {"macro_compose_overlays", (root / "generated/macro_compose_overlays.spv").string()},
             };
@@ -8571,6 +8577,13 @@ namespace lfs::vis {
                 uniforms.grid_height = _CEIL_DIV(uniforms.camera_height, TILE_HEIGHT);
             }
         }
+#if defined(LFS_VULKAN_MACOS_REFERENCE)
+        // Straight transparent RGB amplifies half footprint/coverage errors.
+        // This test reference uses FP32 geometry and accurate partial T; its
+        // timings must be labeled separately from the production FP16 profile.
+        if (higs_active && request.transparent_background)
+            uniforms.mip_filter |= 8u;
+#endif
         renderer_.setBandedExport((uniforms.mip_filter & 4u) != 0u);
         // Capture forces the non-batched per-pixel rasterizer (full pixel_depth
         // coverage); the batched compose only writes a subset of pixels.

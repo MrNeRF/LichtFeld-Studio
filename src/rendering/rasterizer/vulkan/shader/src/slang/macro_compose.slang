@@ -307,7 +307,11 @@ bool depth_intersects_pixels(Splat_2D_AlphaBlend g, uint2 origin, uint2 maximum,
         const uint partial_idx =
             ((batch_idx - uniforms.wave_base) * HIGS_MACRO_TILE_SIZE_TILES + local_tile_idx) * HIGS_TILE_SIZE +
             thread_rank;
-        const float4 partial_state = float4(macro_batch_pixel_state[partial_idx]);
+        float4 partial_state = float4(macro_batch_pixel_state[partial_idx]);
+#if defined(LFS_VULKAN_MACOS_REFERENCE)
+        if ((uniforms.mip_filter & 8u) != 0u && partial_state.a < 0.0f)
+            partial_state.a = clamp(1.0f + partial_state.a + 0.00006103515625f, 0.0f, 1.0f);
+#endif
 
         if (!exact_depth && median_depth >= FAR_DEPTH &&
             curr_pixel_state.a > 0.5f && curr_pixel_state.a * partial_state.a <= 0.5f) {
@@ -328,7 +332,11 @@ bool depth_intersects_pixels(Splat_2D_AlphaBlend g, uint2 origin, uint2 maximum,
         }
     }
 
-    exact_depth_transmittance[pix_id] = exact_depth ? depth_transmittance : 0.0f;
-    final_pixel_state[pix_id] = curr_pixel_state;
-    final_pixel_depth[pix_id] = median_depth;
+    // Out-of-output lanes still participate in depth wave broadcasts, but
+    // crop-leading unsigned coordinates must never alias a valid output pixel.
+    if (is_inside) {
+        exact_depth_transmittance[pix_id] = exact_depth ? depth_transmittance : 0.0f;
+        final_pixel_state[pix_id] = curr_pixel_state;
+        final_pixel_depth[pix_id] = median_depth;
+    }
 }

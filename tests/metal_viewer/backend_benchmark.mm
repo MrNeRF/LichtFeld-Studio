@@ -42,7 +42,7 @@ namespace {
         float exposure = 1.f;
         std::string output, images, overlay, input, camera, fixture_format;
         core::GpuBackend tensor_backend = core::GpuBackend::Metal;
-        bool gut_tail_fixture = false, transparent_diagnostics = false, scalar_depth_reference = false, depth_boundary = false, depth_diagnostics = false, profile_gpu = false, deterministic_reference = false, frustum = false, verify_parity = false, saturation = false, input_fixture = false, transparent = false, depth_gray = false;
+        bool gs_tail_fixture = false, gut_tail_fixture = false, transparent_diagnostics = false, scalar_depth_reference = false, depth_boundary = false, depth_diagnostics = false, profile_gpu = false, deterministic_reference = false, frustum = false, verify_parity = false, saturation = false, input_fixture = false, transparent = false, depth_gray = false;
         bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, unaligned_subregion = false, near = false, portal = false, portal_tone = false, lod = false, lod_logical = false, lod_weights = false, lod_debug = false, spark = false, gpu_lod = false, gpu_lod_budget = false;
     };
     Options options(int argc, char** argv) {
@@ -85,6 +85,10 @@ namespace {
             }
             if (arg == "--equirect") {
                 o.equirect = o.gut = true;
+                continue;
+            }
+            if (arg == "--gs-tail-fixture") {
+                o.gs_tail_fixture = o.transparent = true;
                 continue;
             }
             if (arg == "--unaligned-subregion") {
@@ -248,13 +252,15 @@ namespace {
             throw std::runtime_error("--camera requires --input");
         if (!o.input.empty() && (o.lod || o.gpu_lod || o.spark || o.near || o.frustum || o.saturation || !o.overlay.empty()))
             throw std::runtime_error("Synthetic hierarchy/geometry/overlay fixtures cannot be combined with --input");
+        if (o.gs_tail_fixture && (!o.input.empty() || o.gut || o.portal || o.equirect || o.lod || o.near || o.saturation || o.frustum || o.depth_boundary))
+            throw std::invalid_argument("GS tail fixture cannot be combined with another input fixture");
         if (o.gut_tail_fixture && (!o.input.empty() || o.portal || o.equirect || o.lod || o.near || o.saturation || o.frustum || o.depth_boundary))
             throw std::invalid_argument("GUT tail fixture requires the rectilinear studio path without another input fixture");
         if (o.transparent_diagnostics && (o.output.empty() || o.equirect || o.subregion || o.lod || o.gpu_lod || o.depth || o.portal))
             throw std::runtime_error("Transparent diagnostics require an output path and full-frame studio GS/GUT color");
         return o;
     }
-    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr, bool spark = false, bool gpu_lod = false, bool saturation = false, bool gut_tail_fixture = false, const Options* frustum = nullptr, const Options* depth_boundary = nullptr) {
+    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr, bool spark = false, bool gpu_lod = false, bool saturation = false, bool gut_tail_fixture = false, bool gs_tail_fixture = false, const Options* frustum = nullptr, const Options* depth_boundary = nullptr) {
         std::mt19937 random(1939);
         std::uniform_real_distribution<float> unit(0.f, 1.f);
         std::vector<float> means(count * 3), sh0(count * 3), scales(count * 3), rotation(count * 4, 0), opacity(count);
@@ -297,6 +303,45 @@ namespace {
         }
         for (auto& value : rest)
             value = (unit(random) - .5f) * rest_amplitude;
+        if (gs_tail_fixture) {
+            if (count < 4)
+                throw std::invalid_argument("GS tail fixture requires four splats");
+            std::fill(opacity.begin(), opacity.end(), -100.f);
+            std::fill(rest.begin(), rest.end(), 0.f);
+            // Three faint contributors and one near-cutoff dark splat. Half
+            // geometry can admit the dark splat and corrupt straight RGB.
+            const float xyz[4][3] = {
+                {0.2588368654f, -0.3993070871f, 5.259857595f},
+                {-0.4095059484f, 0.4295136482f, 5.442107737f},
+                {-0.09468976408f, 0.4796660691f, 5.875828266f},
+                {-0.0887683928f, 0.4895774275f, 5.870092303f}};
+            const float log_scales[4][3] = {
+                {-3.467769384f, -12.47317505f, -5.381376266f},
+                {-3.346907854f, -1.701302171f, -9.278964996f},
+                {-2.978571415f, -1.413144946f, -8.669392586f},
+                {-2.98494482f, -1.393053055f, -9.797284126f}};
+            const float quat[4][4] = {
+                {0.1017695963f, -0.147622183f, 0.7608609796f, -0.6236515641f},
+                {0.5598921776f, -0.173307538f, -0.7601124048f, -0.2805610001f},
+                {-0.2284586728f, -0.2968583703f, 0.9251844287f, 0.0609555468f},
+                {-0.2340895534f, -0.2948277295f, 0.925495863f, 0.04166710004f}};
+            const float color[4][3] = {
+                {0.7793636342f, 0.9126959873f, 0.5824118386f},
+                {0.07912916994f, 0.06892428641f, 0.f},
+                {0.5407471239f, 0.5631311802f, 0.3664000075f},
+                {0.5280755926f, 0.5329354229f, 0.3393576176f}};
+            const float logits[4] = {-2.09439826f, -2.352076054f, 5.332006931f, 5.052006245f};
+            for (size_t i = 0; i < 4; ++i) {
+                opacity[i] = logits[i];
+                for (size_t c = 0; c < 3; ++c) {
+                    means[3*i+c] = xyz[i][c];
+                    scales[3*i+c] = log_scales[i][c];
+                    sh0[3*i+c] = (color[i][c]-.5f)/.28209479177387814f;
+                }
+                for (size_t c = 0; c < 4; ++c)
+                    rotation[4*i+c] = quat[i][c];
+            }
+        }
         if (gut_tail_fixture) {
             if (count < 4)
                 throw std::invalid_argument("GUT tail fixture requires four splats");
@@ -657,7 +702,7 @@ namespace {
         }
         Json cases = Json::array();
         for (int degree : degrees) {
-            auto generated = imported ? nullptr : std::make_unique<core::SplatData>(scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, nullptr, o.spark, o.gpu_lod, o.saturation, o.gut_tail_fixture, o.frustum ? &o : nullptr, o.depth_boundary ? &o : nullptr));
+            auto generated = imported ? nullptr : std::make_unique<core::SplatData>(scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, nullptr, o.spark, o.gpu_lod, o.saturation, o.gut_tail_fixture, o.gs_tail_fixture, o.frustum ? &o : nullptr, o.depth_boundary ? &o : nullptr));
             auto& model = imported ? *imported : *generated;
             model.set_active_sh_degree(degree);
             vis::MetalViewportRenderer metal;
@@ -699,7 +744,7 @@ namespace {
                 request.frame_view = imported_view;
                 request.scene.model_transforms = &imported_transforms;
             }
-            if (o.gut_tail_fixture) {
+            if (o.gut_tail_fixture || o.gs_tail_fixture) {
                 imported_transforms = {rendering::DATA_TO_VISUALIZER_WORLD_AXES_4};
                 request.scene.model_transforms = &imported_transforms;
             }
@@ -993,6 +1038,51 @@ namespace {
                 auto ref = vulkan.readOutputImageRgba(context, kTarget);
                 if (!ref)
                     throw std::runtime_error(ref.error());
+                if (o.gs_tail_fixture && !o.mip && !o.ortho && !o.subregion && !o.export_scale && o.width == 960 && o.height == 540) {
+                    // Independent FP64 source-covariance/Jacobian oracle.
+                    const auto means = model.means().cpu().to_vector();
+                    const auto scales = model.scaling_raw().cpu().to_vector();
+                    const auto rotations = model.rotation_raw().cpu().to_vector();
+                    const auto opacity = model.opacity_raw().cpu().to_vector();
+                    const auto dc = model.sh0().cpu().to_vector();
+                    const auto k = request.frame_view.getCameraIntrinsics();
+                    double maximum_error = 0;
+                    for (const glm::ivec2 point : {glm::ivec2(460,381), {506,205}}) {
+                        glm::dvec3 rgb(0);
+                        double t = 1;
+                        std::array<size_t, 4> order{0,1,2,3};
+                        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return means[3*a+2] < means[3*b+2]; });
+                        for (const auto i : order) {
+                            const glm::dvec3 mean(means[3*i],means[3*i+1],means[3*i+2]);
+                            auto axes = glm::mat3_cast(glm::normalize(glm::dquat(rotations[4*i],rotations[4*i+1],rotations[4*i+2],rotations[4*i+3])));
+                            for (size_t c = 0; c < 3; ++c)
+                                axes[c] *= std::exp(double(scales[3*i+c]));
+                            const glm::dvec3 jx(k.focal_x/mean.z,0,-k.focal_x*mean.x/(mean.z*mean.z));
+                            const glm::dvec3 jy(0,k.focal_y/mean.z,-k.focal_y*mean.y/(mean.z*mean.z));
+                            glm::dvec3 u,v;
+                            for (size_t c = 0; c < 3; ++c) { u[c]=glm::dot(jx,axes[c]); v[c]=glm::dot(jy,axes[c]); }
+                            const double xx=glm::dot(u,u)+.3, xy=glm::dot(u,v), yy=glm::dot(v,v)+.3;
+                            const glm::dvec2 d(point.x-(k.focal_x*mean.x/mean.z+k.center_x-.5),
+                                               point.y-(k.focal_y*mean.y/mean.z+k.center_y-.5));
+                            const double power=.5*(yy*d.x*d.x-2*xy*d.x*d.y+xx*d.y*d.y)/(xx*yy-xy*xy);
+                            const double alpha=std::min(.999,std::exp(-power)/(1+std::exp(-double(opacity[i]))));
+                            if (alpha < .5/255.) continue;
+                            const glm::dvec3 color = glm::clamp(glm::dvec3(.5+.28209479177387814*dc[3*i],
+                                .5+.28209479177387814*dc[3*i+1],.5+.28209479177387814*dc[3*i+2]),glm::dvec3(0),glm::dvec3(4));
+                            rgb+=color*alpha*t; t*=1-alpha;
+                        }
+                        const auto straight=glm::clamp(rgb/(1-t),glm::dvec3(0),glm::dvec3(1));
+                        const size_t at=(size_t(point.y)*o.width+point.x)*4;
+                        for (const auto* actual : {rgba.ptr<float>(), (*ref)->ptr<float>()}) {
+                            for (size_t c = 0; c < 3; ++c)
+                                maximum_error=std::max(maximum_error,std::abs(double(actual[at+c])-straight[c]));
+                            maximum_error=std::max(maximum_error,std::abs(double(actual[at+3])-(1-t)));
+                        }
+                    }
+                    difference["gs_tail_cpu_oracle_max_error"] = maximum_error;
+                    if (o.verify_parity && maximum_error > 4./255.)
+                        throw std::runtime_error("GS tail differs from independent FP64 covariance alpha/color");
+                }
                 if (o.gut_tail_fixture && !o.ortho && !o.export_scale && o.width == 960 && o.height == 540) {
                     // Independent FP64 ray/ellipsoid oracle. Equal GPU images
                     // are insufficient if both rasterizers dropped a valid tail.
@@ -1232,7 +1322,7 @@ namespace {
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"renderer_identity_verified", true}, {"preferences_isolated", true}, {"metal_renderer", "metal"}, {"vulkan_reference_renderer", "vulkan"}, {"vulkan_reference_profile", "macos-test-only"}, {"vulkan_reference_shader_root", LFS_VULKAN_RASTERIZER_DEV_SPV_DIR}, {"vulkan_reference_raster_batch", RASTER_BATCH_SIZE}, {"vulkan_reference_radix_workgroup", RADIX_WORKGROUP_SIZE}, {"vulkan_production_profile_validated", false}, {"gpu_profiling", o.profile_gpu}, {"deterministic_reference", o.deterministic_reference}, {"tensor_backend", core::gpu_backend_name(o.tensor_backend)}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", imported ? Json(nullptr) : Json(1939)}, {"scene_source", imported ? o.input : "synthetic"}, {"loader", loader_name}, {"generated_input_fixture", o.input_fixture}, {"generated_source_count", o.input_fixture ? Json(o.fixture_count) : Json(nullptr)}, {"fixture_format", o.fixture_format}, {"camera_source", imported ? (o.camera.empty() ? "fitted_bounds" : o.camera) : "synthetic"}, {"camera_pose", camera_pose}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"tone_operator", o.tone}, {"exposure", o.exposure}, {"transparent", o.transparent}, {"transparent_diagnostics", o.transparent_diagnostics}, {"depth_grayscale", o.depth_gray}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"gut_tail_fixture", o.gut_tail_fixture}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"frustum_fixture", o.frustum}, {"subregion", o.subregion}, {"unaligned_subregion", o.unaligned_subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"scalar_depth_reference", o.scalar_depth_reference}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"renderer_identity_verified", true}, {"preferences_isolated", true}, {"metal_renderer", "metal"}, {"vulkan_reference_renderer", "vulkan"}, {"vulkan_reference_profile", "macos-test-only"}, {"vulkan_reference_shader_root", LFS_VULKAN_RASTERIZER_DEV_SPV_DIR}, {"vulkan_reference_raster_batch", RASTER_BATCH_SIZE}, {"vulkan_reference_radix_workgroup", RADIX_WORKGROUP_SIZE}, {"vulkan_production_profile_validated", false}, {"gpu_profiling", o.profile_gpu}, {"deterministic_reference", o.deterministic_reference}, {"tensor_backend", core::gpu_backend_name(o.tensor_backend)}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", imported ? Json(nullptr) : Json(1939)}, {"scene_source", imported ? o.input : "synthetic"}, {"loader", loader_name}, {"generated_input_fixture", o.input_fixture}, {"generated_source_count", o.input_fixture ? Json(o.fixture_count) : Json(nullptr)}, {"fixture_format", o.fixture_format}, {"camera_source", imported ? (o.camera.empty() ? "fitted_bounds" : o.camera) : "synthetic"}, {"camera_pose", camera_pose}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"tone_operator", o.tone}, {"exposure", o.exposure}, {"transparent", o.transparent}, {"vulkan_reference_transparent_profile", o.transparent && !o.gut ? Json("fp32-footprint-blend-coverage-partials") : Json(nullptr)}, {"vulkan_production_transparent_profile_validated", false}, {"transparent_diagnostics", o.transparent_diagnostics}, {"depth_grayscale", o.depth_gray}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"gut_tail_fixture", o.gut_tail_fixture}, {"gs_tail_fixture", o.gs_tail_fixture}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"frustum_fixture", o.frustum}, {"subregion", o.subregion}, {"unaligned_subregion", o.unaligned_subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"scalar_depth_reference", o.scalar_depth_reference}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {

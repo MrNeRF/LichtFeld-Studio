@@ -320,7 +320,11 @@ namespace lfs::rendering::metal {
 
         // Depth visualization must not select its median using rounded
         // display alpha, including transparent and portal presentation.
-        macro_half_display = macro_half_display && !exact_median;
+        // Transparent straight RGB is sensitive to both rounded coverage and
+        // half-rounded footprints at the alpha cutoff. Use the analytic FP32
+        // path; keep opaque marker/display matching on its existing profile.
+        const bool precise_transparent = !macro_half_display && mode == RasterMode::Gaussian && background.w == 0.f && projection.display.z != 1.f;
+        macro_half_display = macro_half_display && !exact_median && !precise_transparent;
         if (macro_half_display && (mode != RasterMode::Gaussian || projection.display.z == 1.f))
             throw std::invalid_argument(std::format("Macro half display requires ordinary 3DGS (mode={}, spark={})", uint32_t(mode), projection.display.z));
         if (!command || command.device != impl_->device || f->device != impl_->device ||
@@ -376,7 +380,7 @@ namespace lfs::rendering::metal {
         check_mask(overlay.selection, selection_count);
         check_mask(overlay.preview, preview_count);
         bool single_simd = mode == RasterMode::Gaussian && projection.display.z != 1.f;
-        RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u) | (macro_half_display ? 64u : 0u) | (single_simd ? 128u : 0u) | (exact_median ? 2048u : 0u) | (background.w == 1.f ? 4096u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
+        RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u) | (macro_half_display ? 64u : 0u) | (single_simd ? 128u : 0u) | (exact_median ? 2048u : 0u) | (background.w == 1.f ? 4096u : 0u) | (precise_transparent ? 16384u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
         // Keep periodic GS arithmetic out of the perspective/orthographic blend
         // specialization. A runtime branch in the contributor loop prevents the
         // compiler from retaining its compact ordinary-GS arithmetic.

@@ -358,6 +358,18 @@ if(TARGET lfs_visualizer AND TARGET lfs_vulkan_rasterizer_macos_reference)
                         LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
                 endforeach()
             endforeach()
+            foreach(_gs_tail_mode IN ITEMS pinhole mip export_scale)
+                set(_gs_tail_args)
+                if(NOT _gs_tail_mode STREQUAL "pinhole")
+                    list(APPEND _gs_tail_args --${_gs_tail_mode})
+                endif()
+                add_test(NAME MacViewerParity_gs_tail_${_gs_tail_mode} COMMAND mac_viewer_backend_benchmark
+                    --gs-tail-fixture --count 4 --width 960 --height 540 --warmup 2 --samples 2
+                    --verify-parity --deterministic-reference ${_gs_tail_args}
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-gs-tail-${_gs_tail_mode}.json")
+                set_tests_properties(MacViewerParity_gs_tail_${_gs_tail_mode} PROPERTIES
+                    LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            endforeach()
             foreach(_tail_mode IN ITEMS pinhole ortho export_scale subregion)
                 set(_tail_args)
                 if(NOT _tail_mode STREQUAL "pinhole")

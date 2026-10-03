@@ -1123,6 +1123,10 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
             create_optional(pipeline_macro_raster_fp32[i], lean ? "macro_raster_fp32_lean" : "macro_raster_fp32");
             create_optional(pipeline_macro_raster_overlays[i], lean ? "macro_raster_overlays_lean" : "macro_raster_overlays");
             create_optional(pipeline_macro_raster_overlays_fp32[i], lean ? "macro_raster_overlays_fp32_lean" : "macro_raster_overlays_fp32");
+#if defined(LFS_VULKAN_MACOS_REFERENCE)
+            create_optional(pipeline_macro_raster_fp32_precise_alpha[i], lean ? "macro_raster_fp32_lean_precise_alpha" : "macro_raster_fp32_precise_alpha");
+            create_optional(pipeline_macro_raster_overlays_fp32_precise_alpha[i], lean ? "macro_raster_overlays_fp32_lean_precise_alpha" : "macro_raster_overlays_fp32_precise_alpha");
+#endif
             create_optional(pipeline_macro_compose[i], "macro_compose");
             create_optional(pipeline_macro_compose_overlays[i], "macro_compose_overlays");
         }
@@ -3111,14 +3115,17 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                          _CEIL_DIV(_CEIL_DIV(alloc_macro_tiles, kCumsumBlock),
                                    kCumsumBlock)));
 
-    // Spark-rad opacity (lod_enabled bit 2) still needs the fp32 blend math;
-    // overlays no longer force fp32 — pick the matching overlay/plain variant.
+    // Production Spark density uses the original FP32 footprint. The Mac test
+    // reference also offers accurate transparent geometry/partial coverage.
     const bool use_fp32 = (uniforms.lod_enabled & 4u) != 0u;
-    auto& raster_pipeline = overlays_active
-                                ? (use_fp32 ? pipeline_macro_raster_overlays_fp32
-                                            : pipeline_macro_raster_overlays)
-                                : (use_fp32 ? pipeline_macro_raster_fp32
-                                            : pipeline_macro_raster);
+    auto* raster_pipeline = overlays_active
+                               ? (use_fp32 ? &pipeline_macro_raster_overlays_fp32 : &pipeline_macro_raster_overlays)
+                               : (use_fp32 ? &pipeline_macro_raster_fp32 : &pipeline_macro_raster);
+#if defined(LFS_VULKAN_MACOS_REFERENCE)
+    if ((uniforms.mip_filter & 8u) != 0u)
+        raster_pipeline = overlays_active ? &pipeline_macro_raster_overlays_fp32_precise_alpha
+                                          : &pipeline_macro_raster_fp32_precise_alpha;
+#endif
     auto& compose_pipeline = overlays_active
                                  ? pipeline_macro_compose_overlays
                                  : pipeline_macro_compose;
@@ -3266,7 +3273,7 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                 indirect::byteOffset(indirect::MacroWaveDispatch::rasterWordOffset(batch_wave)),
                 &wave_uniforms,
                 sizeof(wave_uniforms),
-                raster_pipeline[buffers.is_unsorted_1],
+                (*raster_pipeline)[buffers.is_unsorted_1],
                 raster_bindings);
             executeComputeIndirect(
                 macro_wave_args,

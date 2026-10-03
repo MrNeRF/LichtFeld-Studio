@@ -666,7 +666,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 if(remaining<=.5f)median=means[j].z;
                 median_transmittance=remaining;
             }
-            const bool half_footprint=(!(kRasterFlags&2048u) || separate_median) && ((kRasterMode==0u && (kRasterFlags&(4u|64u))) || (kRasterMode!=3u && !(kRasterFlags&16u) && (kRasterFlags&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u)));
+            const bool half_footprint=!(kRasterFlags&16384u) && (!(kRasterFlags&2048u) || separate_median) && ((kRasterMode==0u && (kRasterFlags&(4u|64u))) || (kRasterMode!=3u && !(kRasterFlags&16u) && (kRasterFlags&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u)));
             // The HiGS profile evaluates the half Cholesky footprint below.
             // Its reference does not evaluate a second full-float conic first.
             const float q = half_footprint ? 0.f : c.x*d.x*d.x + 2*c.y*d.x*d.y + c.z*d.y*d.y;
@@ -748,7 +748,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 const float2 macro_origin=floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
                 // Vulkan's 3DGUT shared-struct path retains full float centers;
                 // only the 3DGS macro-relative path compresses them to half.
-                const float2 overlay_center=(kRasterMode==3u || (kRasterFlags&(16u|2048u)))?means[j].xy:
+                const float2 overlay_center=(kRasterMode==3u || (kRasterFlags&(16u|2048u|16384u)))?means[j].xy:
                     float2(half2((means[j].xy+p.render_origin.xy-macro_origin)/overlay_tile_extent))*overlay_tile_extent+macro_origin-p.render_origin.xy;
                 const uint status=overlay_selection(overlay_params,logical,flags,overlay_center+(p.camera.z==2u?p.panorama.zw:float2(0)),selection,preview,p.mask_limits.xy);
                 const bool selectable=(flags&2u)==0;
