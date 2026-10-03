@@ -300,6 +300,9 @@ namespace lfs::vis {
         // The training preview refreshes on its own cadence, not only when an
         // unrelated redraw happens to notice it is due.
         void pollTrainingRefresh(bool is_training, int current_iteration);
+        void requestViewportResize(ViewId view, glm::ivec2 size);
+        [[nodiscard]] std::uint64_t viewInputFingerprint(const Viewport& viewport,
+                                                         const SceneManager* scene_manager, ViewId view) const;
         [[nodiscard]] double secondsUntilTrainingRefresh() const;
         // Seconds until an over-budget navigation render may run (camera at
         // rest); +inf when no settle is pending.

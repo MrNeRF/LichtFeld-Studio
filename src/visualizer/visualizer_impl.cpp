@@ -155,42 +155,6 @@ namespace lfs::vis {
         constexpr double kResizeSettleMinWaitSeconds = 0.001;
         constexpr double kArenaRetryPollSeconds = 0.004;
 
-        [[nodiscard]] std::uint64_t viewInputFingerprint(const Viewport& viewport,
-                                                         const SceneManager* scene_manager,
-                                                         const RenderingManager* rendering_manager, const ViewId view) {
-            std::uint64_t hash = 1469598103934665603ULL;
-            const auto append = [&hash](const std::uint64_t value) {
-                hash ^= value;
-                hash *= 1099511628211ULL;
-            };
-            for (int column = 0; column < 3; ++column) {
-                for (int row = 0; row < 3; ++row)
-                    append(std::bit_cast<std::uint32_t>(viewport.getRotationMatrix()[column][row]));
-            }
-            const auto translation = viewport.getTranslation();
-            for (int axis = 0; axis < 3; ++axis)
-                append(std::bit_cast<std::uint32_t>(translation[axis]));
-            append(static_cast<std::uint32_t>(viewport.windowSize.x));
-            append(static_cast<std::uint32_t>(viewport.windowSize.y));
-            append(static_cast<std::uint32_t>(viewport.frameBufferSize.x));
-            append(static_cast<std::uint32_t>(viewport.frameBufferSize.y));
-            // These generations cover inputs that do not live on Viewport:
-            // loaded/model data, selection, and render settings (including
-            // depth, split/GT comparison, and overlay toggles).
-            const auto& store = app_store();
-            append(store.scene_generation.get());
-            append(store.selection_generation.get());
-            if (scene_manager) {
-                append(scene_manager->getScene().renderGeneration());
-                append(scene_manager->getScene().selectionGeneration());
-                append(scene_manager->selectionState().generation());
-            }
-            if (rendering_manager) {
-                const auto settings = rendering_manager->settingsForView(view);
-                append(static_cast<std::uint64_t>(settings.split_view_mode));
-            }
-            return hash;
-        }
         constexpr double kTooltipRevealMinWaitSeconds = 0.001;
         constexpr double kScheduledRedrawMinWaitSeconds = 0.001;
         constexpr double kGuiScheduledUpdateMinWaitSeconds = 0.001;
@@ -2723,6 +2687,12 @@ namespace lfs::vis {
                 visible_views.push_back(id.value);
         }
         rendering_manager_->retainVisibleViews(visible_views);
+        for (const auto id : visible_views) {
+            if (const auto target = findView(id); target.valid()) {
+                rendering_manager_->requestViewportResize(
+                    id, glm::max(glm::ivec2(glm::round(target.size)), glm::ivec2(1)));
+            }
+        }
 
         if (gui_manager_) {
             rendering_manager_->setCropboxGizmoActive(gui_manager_->gizmo().isCropboxGizmoActive());
@@ -2785,7 +2755,7 @@ namespace lfs::vis {
             const auto target = findView(id);
             if (target.valid() && view.has_rendered_input_fingerprint_ && ledger_plan.present &&
                 !(ledger_plan.render_views & mask) &&
-                (viewInputFingerprint(*target.viewport, scene_manager_.get(), rendering_manager_.get(), id) !=
+                (rendering_manager_->viewInputFingerprint(*target.viewport, scene_manager_.get(), id) !=
                      view.last_rendered_input_fingerprint_ ||
                  !view.rendered_settings ||
                  view.rendered_settings->scene() != rendering_manager_->settingsForView(id).scene() ||
@@ -2889,7 +2859,7 @@ namespace lfs::vis {
                     rendering_manager_->retainVksplatScratch();
                     rendering_manager_->frameDemandLedger().countViewRendered(mask, ledger_plan);
                     view.last_rendered_input_fingerprint_ =
-                        viewInputFingerprint(camera, scene_manager_.get(), rendering_manager_.get(), id);
+                        rendering_manager_->viewInputFingerprint(camera, scene_manager_.get(), id);
                     view.has_rendered_input_fingerprint_ = true;
                 }
                 if (gui_manager_ && id == screen_service_.activeView()) {

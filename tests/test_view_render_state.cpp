@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/screen_host.hpp"
 #include "input/input_controller.hpp"
 #include "input/key_codes.hpp"
 #include "ipc/view_context.hpp"
@@ -9,7 +10,9 @@
 #include "operation/undo_history.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "scene/scene_manager.hpp"
 #include "screen/screen_service.hpp"
+#include "visualizer/app_store.hpp"
 #include <array>
 #include <gtest/gtest.h>
 
@@ -33,6 +36,81 @@ namespace lfs::vis {
                 rendering.renderVulkanFrame({.view = id, .viewport = camera, .settings = settings, .logical_screen_size = {640, 480}});
             }
         };
+
+        TEST_F(ViewRenderStateTest, QuadLayoutRequestsTheRetainedViewsNewExtentOnce) {
+            gui::ScreenHost host(source);
+            host.layout({0.0f, 0.0f, 1920.0f, 1080.0f}, 1.0f);
+            const auto request_sizes = [&] {
+                std::vector<ViewId> visible;
+                for (const auto id : source.screen().views())
+                    visible.push_back(id.value);
+                rendering.retainVisibleViews(visible);
+                for (const auto id : visible) {
+                    const auto rect = host.viewContent(screen::AreaId{id});
+                    ASSERT_TRUE(rect.has_value());
+                    rendering.requestViewportResize(id, {static_cast<int>(rect->w), static_cast<int>(rect->h)});
+                }
+            };
+            auto& ledger = rendering.frameDemandLedger();
+            request_sizes();
+            static_cast<void>(ledger.plan(FrameClock::now()));
+            clearDirty();
+            const auto old_extent = rendering.viewState(first).requested_viewport_size_;
+
+            // The command's frame can render before ScreenHost commits the layout.
+            ASSERT_TRUE(source.screen().toggleQuadView(screen::AreaId{first}, 500.0f));
+            rendering.requestViewportResize(first, old_extent);
+            static_cast<void>(ledger.plan(FrameClock::now()));
+            host.refreshLayout();
+            request_sizes();
+            const auto plan = ledger.plan(FrameClock::now());
+            EXPECT_NE(rendering.viewState(first).requested_viewport_size_, old_extent);
+            EXPECT_NE(plan.render_views & rendering.viewMask(first), 0u);
+            EXPECT_EQ(plan.render_views & rendering.viewMask(second), 0u);
+            EXPECT_TRUE(plan.reasons.test(static_cast<size_t>(FrameReason::ViewportResize)));
+
+            ledger.countViewRendered(plan.render_views, plan);
+            const auto counts = ledger.snapshot().views_rendered;
+            for (int i = 0; i < 4; ++i) {
+                request_sizes();
+                EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+            }
+            EXPECT_EQ(ledger.snapshot().views_rendered, counts);
+        }
+
+        TEST_F(ViewRenderStateTest, PreviewTopologyCacheInvalidationIsNotAnUnrequestedSceneChange) {
+            SceneManager scene;
+            auto& camera = source.view3D(first)->camera;
+            camera.frameBufferSize = {640, 480};
+            const auto before = rendering.viewInputFingerprint(camera, &scene, first);
+            const auto cache_generation = scene.getScene().renderGeneration();
+            // Refinement publishes topology for the next scheduled training preview.
+            scene.getScene().syncTrainingModelTopology(128);
+            ASSERT_NE(scene.getScene().renderGeneration(), cache_generation);
+            EXPECT_EQ(rendering.viewInputFingerprint(camera, &scene, first), before);
+        }
+
+        TEST_F(ViewRenderStateTest, FingerprintStillDetectsCameraAndPublishedSceneAndSelectionChanges) {
+            auto& camera = source.view3D(first)->camera;
+            camera.frameBufferSize = {640, 480};
+            const auto fingerprint = [&] { return rendering.viewInputFingerprint(camera, nullptr, first); };
+            auto before = fingerprint();
+            camera.setViewMatrix(glm::mat3(1.0f), {1.0f, 2.0f, 3.0f});
+            EXPECT_NE(fingerprint(), before);
+            before = fingerprint();
+            ++camera.windowSize.x;
+            EXPECT_NE(fingerprint(), before);
+            before = fingerprint();
+            const auto scene_generation = app_store().scene_generation.get();
+            app_store().scene_generation.set(scene_generation + 1);
+            EXPECT_NE(fingerprint(), before);
+            app_store().scene_generation.set(scene_generation);
+            before = fingerprint();
+            const auto selection_generation = app_store().selection_generation.get();
+            app_store().selection_generation.set(selection_generation + 1);
+            EXPECT_NE(fingerprint(), before);
+            app_store().selection_generation.set(selection_generation);
+        }
 
         TEST_F(ViewRenderStateTest, CameraAndViewSettingsDirtyOnlyTheirView) {
             clearDirty();

@@ -26,6 +26,7 @@
 #include "vksplat_viewport_renderer.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <cmath>
 #include <mutex>
@@ -355,6 +356,51 @@ namespace lfs::vis {
         viewState(view).dirty_mask_.fetch_or(flags, std::memory_order_relaxed);
         if (const auto mask = viewMask(view); flags && mask)
             frame_demand_ledger_.request({.reason = reason, .scope = FrameScope::View, .views = mask, .flags = flags, .detail = std::move(detail)});
+    }
+
+    void RenderingManager::requestViewportResize(const ViewId id, const glm::ivec2 size) {
+        auto& view = viewState(id);
+        if (view.requested_viewport_size_ == size)
+            return;
+        view.requested_viewport_size_ = size;
+        // Layout can finish after the command's redraw used the old extent.
+        markViewDirty(id, DirtyFlag::VIEWPORT | DirtyFlag::CAMERA | DirtyFlag::OVERLAY,
+                      FrameReason::ViewportResize);
+    }
+
+    std::uint64_t RenderingManager::viewInputFingerprint(const Viewport& viewport,
+                                                         const SceneManager* scene_manager, const ViewId view) const {
+        std::uint64_t hash = 1469598103934665603ULL;
+        const auto append = [&hash](const std::uint64_t value) {
+            hash ^= value;
+            hash *= 1099511628211ULL;
+        };
+        for (int column = 0; column < 3; ++column) {
+            for (int row = 0; row < 3; ++row)
+                append(std::bit_cast<std::uint32_t>(viewport.getRotationMatrix()[column][row]));
+        }
+        const auto translation = viewport.getTranslation();
+        for (int axis = 0; axis < 3; ++axis)
+            append(std::bit_cast<std::uint32_t>(translation[axis]));
+        append(static_cast<std::uint32_t>(viewport.windowSize.x));
+        append(static_cast<std::uint32_t>(viewport.windowSize.y));
+        append(static_cast<std::uint32_t>(viewport.frameBufferSize.x));
+        append(static_cast<std::uint32_t>(viewport.frameBufferSize.y));
+        // These generations cover inputs that do not live on Viewport:
+        // loaded/model data, selection, and render settings (including
+        // depth, split/GT comparison, and overlay toggles).
+        const auto& store = app_store();
+        append(store.scene_generation.get());
+        append(store.selection_generation.get());
+        if (scene_manager) {
+            // Cache invalidation also advances between scheduled training previews.
+            // Published scene mutations are covered by scene_generation above.
+            // A cache revision alone does not require an immediate redraw.
+            append(scene_manager->getScene().selectionGeneration());
+            append(scene_manager->selectionState().generation());
+        }
+        append(static_cast<std::uint64_t>(settingsForView(view).split_view_mode));
+        return hash;
     }
 
     void RenderingManager::markCameraPoseChanged(ViewId view) { markViewDirty(view, DirtyFlag::CAMERA, lfs::vis::FrameReason::CameraMotion); }
