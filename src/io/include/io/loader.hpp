@@ -71,6 +71,7 @@ namespace lfs::io {
         bool load_masks = false;
         bool load_depths = false;
         bool load_normals = false;
+        bool mesh_geometry_only = false;
         // When true, a normal map that fails the size contract is ignored (one
         // warning naming the file) so auto-generate can overwrite it. When false,
         // the load fails with NORMAL_SIZE_MISMATCH as before.

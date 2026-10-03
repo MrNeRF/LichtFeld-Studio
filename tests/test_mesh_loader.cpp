@@ -3,6 +3,7 @@
 
 #include "core/mesh_data.hpp"
 #include "io/formats/ply.hpp"
+#include "io/loader.hpp"
 #include "io/loaders/mesh_loader.hpp"
 #include "rendering/mesh2splat.hpp"
 
@@ -96,6 +97,73 @@ TEST_F(MeshLoaderTest, LoadsGeometryNormalsAndBoundedIndices) {
 
 TEST_F(MeshLoaderTest, MissingFileReturnsError) {
     EXPECT_FALSE(loader_.load(temp_dir_ / "missing.obj").has_value());
+}
+
+// Catches changing default GUI imports or retaining render-only data in geometry-only loads.
+TEST_F(MeshLoaderTest, GeometryOnlyBakesNodeTransformAndSkipsRenderAttributes) {
+    const auto gltf_path = temp_dir_ / "transformed.gltf";
+    const auto bin_path = temp_dir_ / "transformed.bin";
+    const std::array<float, 24> attributes{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f};
+    const std::array<uint16_t, 3> triangle{0, 1, 2};
+    {
+        std::ofstream binary(bin_path, std::ios::binary);
+        binary.write(reinterpret_cast<const char*>(attributes.data()), sizeof(attributes));
+        binary.write(reinterpret_cast<const char*>(triangle.data()), sizeof(triangle));
+        ASSERT_TRUE(binary.good());
+    }
+    {
+        std::ofstream gltf(gltf_path);
+        gltf << R"({
+  "asset":{"version":"2.0"},
+  "buffers":[{"uri":"transformed.bin","byteLength":102}],
+  "bufferViews":[
+    {"buffer":0,"byteOffset":0,"byteLength":36},
+    {"buffer":0,"byteOffset":36,"byteLength":36},
+    {"buffer":0,"byteOffset":72,"byteLength":24},
+    {"buffer":0,"byteOffset":96,"byteLength":6}
+  ],
+  "accessors":[
+    {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},
+    {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
+    {"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},
+    {"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"}
+  ],
+  "meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3}]}],
+  "nodes":[{"mesh":0,"translation":[3,4,5]}],
+  "scenes":[{"nodes":[0]}],
+  "scene":0
+})";
+        ASSERT_TRUE(gltf.good());
+    }
+
+    const auto normal_result = loader_.load(gltf_path);
+    ASSERT_TRUE(normal_result.has_value());
+    const auto* normal_mesh = std::get_if<std::shared_ptr<MeshData>>(&normal_result->data);
+    ASSERT_NE(normal_mesh, nullptr);
+    EXPECT_TRUE((*normal_mesh)->has_normals());
+    EXPECT_TRUE((*normal_mesh)->has_texcoords());
+    auto normal_vertices = (*normal_mesh)->vertices.accessor<float, 2>();
+    EXPECT_NEAR(normal_vertices(0, 0), 0.0f, 1e-6f);
+
+    lfs::io::LoadOptions options;
+    options.mesh_geometry_only = true;
+    const auto geometry_result = loader_.load(gltf_path, options);
+    ASSERT_TRUE(geometry_result.has_value());
+    const auto* geometry_mesh = std::get_if<std::shared_ptr<MeshData>>(&geometry_result->data);
+    ASSERT_NE(geometry_mesh, nullptr);
+    ASSERT_EQ((*geometry_mesh)->vertex_count(), 3);
+    EXPECT_EQ((*geometry_mesh)->face_count(), 1);
+    EXPECT_FALSE((*geometry_mesh)->has_normals());
+    EXPECT_FALSE((*geometry_mesh)->has_tangents());
+    EXPECT_FALSE((*geometry_mesh)->has_texcoords());
+    EXPECT_FALSE((*geometry_mesh)->has_colors());
+    EXPECT_TRUE((*geometry_mesh)->texture_images.empty());
+    auto vertices = (*geometry_mesh)->vertices.accessor<float, 2>();
+    EXPECT_NEAR(vertices(0, 0), 3.0f, 1e-6f);
+    EXPECT_NEAR(vertices(0, 1), 4.0f, 1e-6f);
+    EXPECT_NEAR(vertices(0, 2), 5.0f, 1e-6f);
+    EXPECT_NEAR(vertices(1, 0), 4.0f, 1e-6f);
+    EXPECT_NEAR(vertices(2, 1), 5.0f, 1e-6f);
 }
 
 TEST_F(MeshLoaderTest, MeshToSplatPreservesCoordinatesThroughPlyExport) {

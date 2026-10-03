@@ -410,6 +410,17 @@ namespace lfs::core {
             return std::max(0, total_iterations - tail_iters);
         }
 
+        std::string normalize_eval_mask_path(const std::string_view path) {
+            if (path.empty())
+                return {};
+            std::error_code error;
+            auto absolute = std::filesystem::absolute(utf8_to_path(std::string(path)), error);
+            if (error)
+                return std::string(path);
+            auto canonical = std::filesystem::weakly_canonical(absolute, error);
+            return path_to_utf8((error ? absolute : canonical).lexically_normal());
+        }
+
         nlohmann::json OptimizationParameters::to_json() const {
             nlohmann::json opt_json;
             write_registered_optimization_properties(opt_json, *this);
@@ -427,6 +438,8 @@ namespace lfs::core {
             opt_json["bg_color"] = {bg_color[0], bg_color[1], bg_color[2]};
             if (!bg_image_path.empty())
                 opt_json["bg_image_path"] = path_to_utf8(bg_image_path);
+            if (!eval_mask.empty())
+                opt_json["eval_mask"] = normalize_eval_mask_path(eval_mask);
             if (!explore_starvation_weighting)
                 opt_json["explore_starvation_weighting"] = false;
 
@@ -448,6 +461,18 @@ namespace lfs::core {
 
             if (!is_valid_strategy_name(strategy))
                 return std::format("strategy must be one of mcmc, mrnf, or igs+ (got '{}')", strategy);
+            if (eval_mask_invert && eval_mask.empty())
+                return "eval_mask_invert requires eval_mask";
+            if (!eval_mask.empty() && !enable_eval)
+                return "eval_mask requires evaluation to be enabled";
+            if (!eval_mask.empty()) {
+                const auto path = utf8_to_path(eval_mask);
+                if (!path.is_absolute())
+                    return "eval_mask must be an absolute path";
+                std::error_code error;
+                if (!std::filesystem::is_regular_file(path, error))
+                    return std::format("eval_mask file does not exist: {}", eval_mask);
+            }
             if (iterations == 0 || iterations > MAX_ITERATION_VALUE)
                 return std::format("iterations must be within [1, {}] (got {})", MAX_ITERATION_VALUE, iterations);
             if (refine_every == 0 || refine_every > MAX_ITERATION_VALUE)
@@ -842,6 +867,7 @@ namespace lfs::core {
                 }
             }
             apply_optimization_json_overlay(params, json, false);
+            params.eval_mask = normalize_eval_mask_path(params.eval_mask);
             // Legacy GUI saves recorded the image factor in steps_scaler.
             if (!stored_image_count_scaler(json, params.steps_scaler))
                 params.image_count_scaler = params.steps_scaler > 0.f ? params.steps_scaler : 1.f;

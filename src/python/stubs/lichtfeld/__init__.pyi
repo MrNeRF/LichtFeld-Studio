@@ -2156,6 +2156,20 @@ class OptimizationParams:
     def eval_all(self, arg: bool, /) -> None: ...
 
     @property
+    def eval_mask(self) -> str:
+        """Absolute mesh path used to select evaluated pixels"""
+
+    @eval_mask.setter
+    def eval_mask(self, arg: str, /) -> None: ...
+
+    @property
+    def eval_mask_invert(self) -> bool:
+        """Evaluate pixels outside the mesh coverage"""
+
+    @eval_mask_invert.setter
+    def eval_mask_invert(self, arg: bool, /) -> None: ...
+
+    @property
     def background_improvements(self) -> bool:
         """
         Improve distant background reconstruction (MRNF): far-field seeding and splits, decay relief, growth cap, per-splat position steps, visibility-ratio growth ranking, paced capacity fill

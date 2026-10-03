@@ -182,7 +182,11 @@ jobs:
             build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m pytest tests/python -m 'not gpu and not slow and not integration' -q
 
   idle-e2e:
-    if: vars.LFS_GPU_RUNNER == 'true'
+    name: GPU idle E2E (optional)
+    # Opt-in upstream check: skipping is expected without LFS_GPU_RUNNER=true.
+    # Requires a self-hosted Linux GPU runner, a configured build tree and
+    # LFS_RENDER_IDLE_MANIFEST. Fork pushes must not schedule this job.
+    if: github.repository == 'MrNeRF/LichtFeld-Studio' && vars.LFS_GPU_RUNNER == 'true'
     runs-on: [self-hosted, linux, gpu]
     timeout-minutes: 30
     env:

@@ -443,6 +443,10 @@ EXPECTED_CHECKBOX_ROWS = {
         "training_params.eval_all",
         "training.tooltip.eval_all",
     ),
+    "eval_mask_invert": (
+        "training_params.eval_mask_invert",
+        "training.tooltip.eval_mask_invert",
+    ),
     "background_improvements": (
         "training_params.background_improvements",
         "training.tooltip.background_improvements",
@@ -548,13 +552,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 63
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 63
+    assert len(property_view.MIGRATED_PROP_IDS) == 64
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 64
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 87
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 88
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -581,6 +585,7 @@ def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
         "headless",
         "prune_ratio",
         "steps_scaler",
+        "eval_mask",
     }
 
     future_group = {

@@ -224,6 +224,8 @@ namespace lfs::core {
             bool enable_eval = false;                          // Only evaluate when explicitly enabled
             bool eval_all = false;                             // Train on every image and evaluate all of them
             EvalSpace eval_space = EvalSpace::Distorted;       // Reference image space used for evaluation
+            std::string eval_mask = "";                        // Absolute evaluation mesh path; empty disables
+            bool eval_mask_invert = false;                     // Evaluate pixels outside the mesh coverage
             bool enable_save_eval_images = true;               // Save during evaluation images
             bool headless = false;                             // Disable visualization during training
             bool auto_train = false;                           // Start training immediately on startup
@@ -372,6 +374,9 @@ namespace lfs::core {
             static OptimizationParameters igs_plus_defaults();
             static OptimizationParameters defaults_for_strategy(std::string_view strategy);
         };
+
+        [[nodiscard]] LFS_CORE_API std::string normalize_eval_mask_path(
+            std::string_view path);
 
         struct LFS_CORE_API LoadingParams {
             bool use_cpu_memory = true;

@@ -5,7 +5,7 @@
 #include "eval_mask.hpp"
 
 #include "core/cuda/undistort/undistort.hpp"
-#include "core/image_io.hpp"
+#include "io/cache_image_loader.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "training/kernels/mask_preprocess.hpp"
 
@@ -29,38 +29,21 @@ namespace lfs::training {
             const MetricsMaskLoadConfig& config) {
             try {
                 const bool undistort = camera.is_undistort_prepared() && config.apply_undistortion;
-                auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
+                const auto rgba = lfs::io::load_rgba_image_cpu_decoded(
                     camera.image_path(),
                     undistort ? 1 : config.resize_factor,
                     undistort ? 0 : config.max_width);
-
-                if (!img_data || channels != 4) {
-                    if (img_data) {
-                        lfs::core::free_image(img_data);
-                    }
-                    return std::unexpected("failed to decode RGBA image");
-                }
-
-                const auto H = static_cast<size_t>(height);
-                const auto W = static_cast<size_t>(width);
-
-                auto cpu_tensor = lfs::core::Tensor::from_blob(
-                    img_data, lfs::core::TensorShape({H, W, 4}),
-                    lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-                auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
-                lfs::core::free_image(img_data);
-
-                auto rgb = lfs::core::Tensor::zeros(
+                const auto H = rgba.shape()[1];
+                const auto W = rgba.shape()[2];
+                const auto rgb_float = rgba.slice(0, 0, 3).contiguous();
+                auto mask = rgba.slice(0, 3, 4).squeeze(0).contiguous();
+                auto rgb = lfs::core::Tensor::empty(
                     lfs::core::TensorShape({3, H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-                auto mask = lfs::core::Tensor::zeros(
-                    lfs::core::TensorShape({H, W}),
-                    lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-                lfs::io::cuda::launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
-                    gpu_uint8.ptr<uint8_t>(), rgb.ptr<uint8_t>(), mask.ptr<float>(),
-                    H, W, nullptr);
-                gpu_uint8 = lfs::core::Tensor();
+                rgb_float.sync_to_stream(nullptr);
+                mask.sync_to_stream(nullptr);
+                lfs::io::cuda::launch_float32_chw_to_uint8_chw(
+                    rgb_float.ptr<float>(), rgb.ptr<uint8_t>(), H, W, 3, nullptr);
 
                 const bool sai = is_segment_and_ignore(config.mask_mode);
                 if (config.invert_masks) {

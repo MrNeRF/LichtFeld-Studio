@@ -3075,6 +3075,18 @@ namespace lfs::training {
             evaluator_ = std::make_unique<lfs::training::MetricsEvaluator>(params_);
             if (lpips_weights_path_)
                 evaluator_->set_lpips_weights_path(*lpips_weights_path_);
+            if (!params_.optimization.eval_mask.empty()) {
+                const glm::vec3 origin = scene_ ? scene_->getTrainingDataOrigin() : glm::vec3{0.0f};
+                auto mesh = lfs::training::load_evaluation_mesh(
+                    lfs::core::utf8_to_path(params_.optimization.eval_mask), {origin.x, origin.y, origin.z},
+                    params_.optimization.eval_mask_invert);
+                if (!mesh)
+                    return std::unexpected(std::format("Failed to load evaluation mesh '{}': {}",
+                                                       params_.optimization.eval_mask, mesh.error().detail()));
+                LOG_INFO("Evaluation mask: {} triangles from {}{}", mesh->indices.shape()[0],
+                         params_.optimization.eval_mask, params_.optimization.eval_mask_invert ? " (inverted)" : "");
+                evaluator_->set_eval_mesh(std::move(*mesh));
+            }
             if (params_.optimization.ppisp_active() && ppisp_ && ppisp_->isFinalized()) {
                 evaluator_->set_appearance([this](const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) {
                     return applyPPISPForEval(rgb, cam);
@@ -3359,7 +3371,8 @@ namespace lfs::training {
                     .raw_image = std::move(raw_image)};
             },
             cached_inputs.gt_image.is_valid() ? &cached_inputs : nullptr,
-            image_loader.get());
+            image_loader.get(),
+            evaluator_ ? evaluator_->eval_mesh() : nullptr);
         if (!prepared)
             return std::unexpected(std::string(prepared.error().detail()));
 

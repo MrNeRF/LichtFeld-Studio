@@ -2732,6 +2732,17 @@ namespace lfs::vis {
             rendering_manager_->pollParkedArenaRetry();
         }
         const FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
+        const std::uint64_t current_view_fingerprint =
+            viewInputFingerprint(viewport_, scene_manager_.get(), rendering_manager_.get());
+        // Reactive state updates can change view inputs without publishing a
+        // render event. Reconcile those inputs before planning the frame, while
+        // preserving existing surgical invalidations and deliberate deferrals.
+        if (has_rendered_view_fingerprint_ &&
+            current_view_fingerprint != last_rendered_view_fingerprint_ &&
+            rendering_manager_->pendingDirtyMask() == 0 &&
+            !frame_demand.viewport_export_locked && !frame_demand.viewport_resize_deferring) {
+            rendering_manager_->markDirty(DirtyFlag::ALL, FrameReason::SceneChange, "view_inputs_changed");
+        }
         auto ledger_plan = rendering_manager_->frameDemandLedger().plan(
             std::chrono::steady_clock::now());
         if (!ledger_plan.present && frame_demand.shouldRenderFrame()) {
@@ -2763,10 +2774,9 @@ namespace lfs::vis {
         }
         if (ledger_plan.render_views == 0 && rendering_manager_)
             rendering_manager_->releaseIdleVksplatScratch(is_training);
-        const std::uint64_t current_view_fingerprint =
-            viewInputFingerprint(viewport_, scene_manager_.get(), rendering_manager_.get());
         if (has_rendered_view_fingerprint_ && ledger_plan.present &&
             ledger_plan.render_views == 0 &&
+            !frame_demand.viewport_export_locked && !frame_demand.viewport_resize_deferring &&
             current_view_fingerprint != last_rendered_view_fingerprint_) {
             rendering_manager_->frameDemandLedger().countStaleView();
             LOG_ERROR("stale view: view inputs changed without a view render");

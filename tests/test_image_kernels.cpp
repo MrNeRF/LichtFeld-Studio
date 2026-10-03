@@ -198,6 +198,43 @@ TEST_F(ImageKernelsTest, LanczosRgbAndGrayscaleUseBoundedCoefficientBuffers) {
     EXPECT_TRUE(grayscale_output.isfinite().all().item<bool>());
 }
 
+// Catches an interleaved kernel that strides the input by a fixed 3 channels: for
+// 1, 2 and 4 channels it would read neighbouring pixels instead of its own plane.
+TEST_F(ImageKernelsTest, LanczosInterleavedChannelsMatchPerPlaneGrayscale) {
+    constexpr int SOURCE_WIDTH = 19;
+    constexpr int SOURCE_HEIGHT = 13;
+    constexpr int OUTPUT_WIDTH = 7;
+    constexpr int OUTPUT_HEIGHT = 5;
+    for (int channels = 1; channels <= 4; ++channels) {
+        SCOPED_TRACE(channels);
+        std::vector<float> source(static_cast<size_t>(SOURCE_WIDTH) * SOURCE_HEIGHT * channels);
+        for (size_t index = 0; index < source.size(); ++index)
+            source[index] = static_cast<float>((index * 37 + channels * 11) % 997) / 996.0f;
+        const auto hwc = Tensor::from_blob(
+                             source.data(), TensorShape({SOURCE_HEIGHT, SOURCE_WIDTH, static_cast<size_t>(channels)}),
+                             Device::CPU, DataType::Float32)
+                             .to(Device::CUDA);
+
+        const auto interleaved = lanczos_resize(hwc, OUTPUT_HEIGHT, OUTPUT_WIDTH, 2, nullptr);
+        ASSERT_TRUE(interleaved.is_valid());
+        ASSERT_EQ(interleaved.shape(), TensorShape({static_cast<size_t>(channels), OUTPUT_HEIGHT, OUTPUT_WIDTH}));
+        const auto got = interleaved.cpu().to_vector();
+
+        for (int channel = 0; channel < channels; ++channel) {
+            std::vector<float> plane_values(static_cast<size_t>(SOURCE_WIDTH) * SOURCE_HEIGHT);
+            for (size_t pixel = 0; pixel < plane_values.size(); ++pixel)
+                plane_values[pixel] = source[pixel * channels + channel];
+            const auto plane = Tensor::from_blob(plane_values.data(), TensorShape({SOURCE_HEIGHT, SOURCE_WIDTH}),
+                                                 Device::CPU, DataType::Float32)
+                                   .to(Device::CUDA);
+            const auto expected = lanczos_resize_grayscale(plane, OUTPUT_HEIGHT, OUTPUT_WIDTH, 2, nullptr).cpu().to_vector();
+            const size_t offset = static_cast<size_t>(channel) * OUTPUT_WIDTH * OUTPUT_HEIGHT;
+            for (size_t index = 0; index < expected.size(); ++index)
+                EXPECT_NEAR(got[offset + index], expected[index], 1e-6f) << "channel=" << channel << " index=" << index;
+        }
+    }
+}
+
 TEST_F(ImageKernelsTest, LanczosRejectsNonPositiveOutputExtentBeforeAllocation) {
     const auto input = Tensor::zeros({2, 2, 3}, Device::CUDA, DataType::UInt8);
     EXPECT_FALSE(lanczos_resize(input, 0, 2, 2, nullptr).is_valid());

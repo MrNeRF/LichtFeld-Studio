@@ -110,6 +110,7 @@ set(TRAINING_NEW_SOURCES
     control/command_api.cpp
     metrics/eval_mask.cpp
     metrics/eval_mask_kernels.cu
+    metrics/mesh_mask_kernels.cu
     metrics/metrics.cpp
         checkpoint.cpp
         project_snapshot_chapters.cpp
