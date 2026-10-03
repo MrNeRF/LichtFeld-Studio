@@ -7266,9 +7266,7 @@ namespace lfs::vis::gui {
                             // Temporal waits at its first compute and fragment consumers.
                             view.viewport_interop_.recordFrameBarriers(frame.command_buffer,
                                                                        *vulkan_context);
-                            const auto completion =
-                                view.viewport_interop_.frameCompletion();
-                            if (completion.semaphore != VK_NULL_HANDLE && completion.value != 0) {
+                            for (const auto completion : view.viewport_interop_.frameCompletions()) {
                                 LOG_TIMER_THRESHOLD("gui_render.vksplat_completion_wait_submit", 0.25);
                                 const VkPipelineStageFlags wait_stage =
                                     temporal_pre_render
@@ -7278,7 +7276,7 @@ namespace lfs::vis::gui {
                                 if (!vulkan_context->addFrameTimelineWait(completion.semaphore,
                                                                           completion.value,
                                                                           wait_stage)) {
-                                    LOG_ERROR("Unable to wait on VkSplat frame completion timeline: {}",
+                                    LOG_ERROR("Unable to wait on scene frame completion timeline: {}",
                                               vulkan_context->lastError());
                                     render_scope_ready = false;
                                 }

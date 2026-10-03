@@ -2735,6 +2735,7 @@ namespace lfs::vis {
                                 : vulkan_frame.image_generation,
                             vulkan_frame.completion_semaphore, vulkan_frame.completion_value);
                     }
+                    interop.addFrameCompletions(vulkan_frame.additional_completions);
                     if (vulkan_frame.split_right_image) {
                         interop.setSplitRightImage(vulkan_frame.split_right_image,
                                                    vulkan_frame.split_right_size,

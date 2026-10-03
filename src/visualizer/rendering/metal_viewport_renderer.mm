@@ -869,18 +869,19 @@ namespace lfs::vis {
                     if (completed.status == MTLCommandBufferStatusError && completion_event.signaledValue < completion_value)
                         completion_event.signaledValue = completion_value;
                 }];
+                const auto completion_retry = i.retry_callback;
+                if (completion_retry) {
+                    [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+                        if (completed.status == MTLCommandBufferStatusError)
+                            completion_retry();
+                    }];
+                }
             });
             f.producer_value = serial;
             i.serial = serial;
             f.consumer_serial = context.lastFrameSubmitSerial() + (context.hasActiveFrame() ? 1 : 0);
             i.target(slot).latest = &f;
-            // Preserve the existing synchronous point-cloud presentation contract.
-            // The Gaussian path continues to expose its asynchronous GPU timeline.
-            i.wait(serial);
-            [f.command waitUntilCompleted];
-            if (f.command.status != MTLCommandBufferStatusCompleted)
-                throw std::runtime_error(std::format("Metal point raster failed (command_status={}, error={})", long(f.command.status), f.command.error.localizedDescription.UTF8String ?: "none"));
-            return PointSceneRenderer::RenderResult{.image = sceneImageHandle(f.color.image), .image_view = sceneImageViewHandle(f.color.view), .image_layout = sceneImageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL), .generation = f.generation, .depth_image = sceneImageHandle(f.depth.image), .depth_image_view = sceneImageViewHandle(f.depth.view), .depth_image_layout = sceneImageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL), .depth_generation = f.generation, .size = f.size, .flip_y = false, .viewer_backend = rendering::ViewerBackend::Metal};
+            return PointSceneRenderer::RenderResult{.image = sceneImageHandle(f.color.image), .image_view = sceneImageViewHandle(f.color.view), .image_layout = sceneImageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL), .generation = f.generation, .depth_image = sceneImageHandle(f.depth.image), .depth_image_view = sceneImageViewHandle(f.depth.view), .depth_image_layout = sceneImageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL), .depth_generation = f.generation, .size = f.size, .flip_y = false, .completion_semaphore = sceneTimelineHandle(i.completion), .completion_value = serial, .viewer_backend = rendering::ViewerBackend::Metal};
         } catch (const std::exception& e) { return nativeError(e); }
     }
     bool MetalViewportRenderer::supports(const core::SplatData& model, const rendering::ViewportRenderRequest& r) {

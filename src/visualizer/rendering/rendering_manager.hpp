@@ -121,6 +121,8 @@ namespace lfs::vis {
             std::uint64_t external_image_generation = 0;
             VkSemaphore completion_semaphore = VK_NULL_HANDLE;
             std::uint64_t completion_value = 0;
+            // Mixed panels may come from independent native command queues.
+            std::vector<ViewportInteropService::FrameCompletion> additional_completions;
             // Bumps only when the underlying image content changes (fresh render).
             // Cache-HIT frames keep the previous value so downstream consumers
             // (e.g. CUDA→Vulkan interop upload) can skip work by generation.

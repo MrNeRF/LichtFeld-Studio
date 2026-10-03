@@ -148,6 +148,7 @@ namespace lfs::vis {
         };
         class MetalPointSceneRenderer final : public PointSceneRenderer {
             std::unique_ptr<MetalViewportRenderer> native_;
+            std::shared_ptr<std::atomic_bool> retry_ = std::make_shared<std::atomic_bool>(false);
             struct PointUpload {
                 core::Tensor source_positions, source_colors, positions, colors;
                 uint64_t positions_revision = 0, colors_revision = 0;
@@ -160,8 +161,14 @@ namespace lfs::vis {
                 if (!t.valid() || released_.contains(t))
                     return std::unexpected(std::format("Invalid or released Metal point target (target={})", t.value));
                 try {
-                    if (!native_)
+                    if (!native_) {
                         native_ = std::make_unique<MetalViewportRenderer>();
+                        const auto retry = retry_;
+                        native_->setRetryCallback([retry] {
+                            retry->store(true, std::memory_order_release);
+                            lfs::python::request_redraw();
+                        });
+                    }
                     auto request = r;
                     std::vector<core::Tensor> staged;
                     staged.reserve(6);
@@ -199,11 +206,19 @@ namespace lfs::vis {
                     stage(request.selection_mask);
                     stage(request.preview_selection_mask);
                     auto result = legacyMetalResult(native_->renderPoints(c, request, t));
+                    if (result && r.synchronize_output) {
+                        const auto complete = legacyMetalResult(native_->outputComplete(t));
+                        if (!complete)
+                            return std::unexpected(complete.error());
+                        if (!*complete)
+                            return std::unexpected("Metal point import output did not complete");
+                    }
                     if (result)
                         outputs_.insert(t);
                     return result;
                 } catch (const std::exception& e) { return std::unexpected(e.what()); }
             }
+            bool takeRefinementRequest() override { return retry_->exchange(false, std::memory_order_acq_rel); }
             auto readOutputImage(VulkanContext&, RenderTargetId t) -> std::expected<std::shared_ptr<core::Tensor>, std::string> override {
                 if (!hasRenderTarget(t))
                     return std::unexpected(std::format("Metal point output is unavailable (target={})", t.value));

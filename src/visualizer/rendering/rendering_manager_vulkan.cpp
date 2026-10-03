@@ -1535,6 +1535,8 @@ namespace lfs::vis {
     void RenderingManager::pollParkedArenaRetry() {
         if (vksplat_viewport_renderer_ && vksplat_viewport_renderer_->takeRefinementRequest())
             markDirty(DirtyFlag::CAMERA);
+        if (point_cloud_vulkan_renderer_ && point_cloud_vulkan_renderer_->takeRefinementRequest())
+            markDirty(DirtyFlag::CAMERA);
         if (vksplat_viewport_renderer_ && !vksplat_viewport_renderer_->pollArenaHandoff())
             return;
         std::lock_guard lock(views_mutex_);
@@ -1771,6 +1773,7 @@ namespace lfs::vis {
                         .external_image_layout = view_state.vulkan_external_viewport_image_layout_,
                         .external_image_generation =
                             view_state.vulkan_external_viewport_image_generation_,
+                        .additional_completions = {view_state.viewport_interop_.frameCompletions().begin(), view_state.viewport_interop_.frameCompletions().end()},
                         .image_generation = view_state.vulkan_viewport_image_generation_,
                         .size = view_state.vulkan_viewport_image_size_,
                         .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
@@ -1780,6 +1783,7 @@ namespace lfs::vis {
             }
             if (!view_state.vulkan_viewport_image_) {
                 return {.image = {},
+                        .additional_completions = {view_state.viewport_interop_.frameCompletions().begin(), view_state.viewport_interop_.frameCompletions().end()},
                         .image_generation = view_state.split_view_image_generation_,
                         .size = view_state.vulkan_viewport_image_size_,
                         .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
@@ -1788,6 +1792,7 @@ namespace lfs::vis {
                             view_state.vulkan_viewport_coordinate_size_ == current_size};
             }
             return {.image = view_state.vulkan_viewport_image_,
+                    .additional_completions = {view_state.viewport_interop_.frameCompletions().begin(), view_state.viewport_interop_.frameCompletions().end()},
                     .image_generation = view_state.vulkan_viewport_image_generation_,
                     .size = view_state.vulkan_viewport_image_size_,
                     .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
@@ -2594,6 +2599,7 @@ namespace lfs::vis {
             glm::ivec2 alloc_size{0, 0};
         };
 
+        std::vector<ViewportInteropService::FrameCompletion> point_completions;
         const auto render_native_point_cloud =
             [&](const lfs::rendering::PointCloudRenderRequest& pc_request,
                 const RenderTargetId target)
@@ -2709,6 +2715,7 @@ namespace lfs::vis {
             vk_req.size = pc_request.frame_view.size;
             vk_req.background_color = pc_request.frame_view.background_color;
             vk_req.transparent_background = pc_request.transparent_background;
+            vk_req.synchronize_output = context.preparing_import;
             vk_req.orthographic = pc_request.frame_view.orthographic;
             vk_req.ortho_scale = pc_request.frame_view.ortho_scale;
             vk_req.focal_y = focal_y;
@@ -2723,6 +2730,15 @@ namespace lfs::vis {
             auto rendered = point_cloud_vulkan_renderer_->render(*context.vulkan_context, vk_req, target);
             if (!rendered) {
                 return fail(rendered.error());
+            }
+            const auto semaphore = vulkanSceneTimeline(rendered->completion_semaphore);
+            if (semaphore != VK_NULL_HANDLE && rendered->completion_value != 0) {
+                const auto existing = std::find_if(point_completions.begin(), point_completions.end(),
+                    [&](const auto& completion) { return completion.semaphore == semaphore; });
+                if (existing == point_completions.end())
+                    point_completions.push_back({semaphore, rendered->completion_value});
+                else
+                    existing->value = std::max(existing->value, rendered->completion_value);
             }
             return *rendered;
         };
@@ -4021,6 +4037,8 @@ namespace lfs::vis {
                     .external_image_layout = view_state.vulkan_external_viewport_image_layout_,
                     .external_image_generation =
                         view_state.vulkan_external_viewport_image_generation_,
+                    .completion_semaphore = vulkanSceneTimeline(render_result->completion_semaphore),
+                    .completion_value = render_result->completion_value,
                     .size = view_state.vulkan_viewport_image_size_,
                     .flip_y = view_state.vulkan_viewport_image_flip_y_,
                     .matches_viewport_extent = true};
@@ -4831,6 +4849,7 @@ namespace lfs::vis {
             if (split_uses_external_image) {
                 result.completion_semaphore = latest_vksplat_completion_semaphore;
                 result.completion_value = latest_vksplat_completion_value;
+                result.additional_completions = point_completions;
             }
             result.size = view_state.vulkan_viewport_image_size_;
             result.flip_y = view_state.vulkan_viewport_image_flip_y_;

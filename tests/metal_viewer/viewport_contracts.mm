@@ -7,12 +7,15 @@
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
 #include "vksplat_viewport_renderer.hpp"
+#include "viewport_interop_service.hpp"
+#include "vulkan_scene_output.hpp"
 #include <Python.h>
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <future>
 #include <stdexcept>
 #include <unistd.h>
 
@@ -584,6 +587,33 @@ static void run(bool compare_vulkan) {
     require(renderer.readColor(vis::RenderTargetId{1}, point_pixels, 0, 0).has_value(), "Point readback failed");
     require(point_pixels.ptr<float>()[center + 1] > .9f && point_pixels.ptr<float>()[center] < .1f,
             "Point depth test did not keep nearest color");
+    // Hold a real tensor producer on the GPU. Rendering a warmed point target
+    // must return a GPU dependency without waiting for that producer on the CPU.
+    for (int n = 0; n < 3; ++n) {
+        require(renderer.renderPoints(context, points, vis::RenderTargetId{1}).has_value(), "Point async warmup failed");
+        require(renderer.readColor(vis::RenderTargetId{1}, point_pixels, 0, 0).has_value(), "Point async warmup read failed");
+    }
+    core::MetalTensorReader writer;
+    auto gate = [writer.device() newSharedEvent];
+    require(gate != nil, "Point async gate allocation failed");
+    std::array<Tensor*, 1> outputs{&positions};
+    const auto blocked_write = writer.submitWrites({}, outputs,
+        [&](id<MTLCommandBuffer> command, auto, auto) { [command encodeWaitForEvent:gate value:1]; });
+    auto pending_points = std::async(std::launch::async, [&] {
+        return renderer.renderPoints(context, points, vis::RenderTargetId{1});
+    });
+    const bool returned_without_producer = pending_points.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    // Always release the producer and drain the result before asserting, including
+    // on the old blocking implementation. Never leave an intentionally hung queue.
+    gate.signaledValue = 1;
+    const auto async_points = pending_points.get();
+    [blocked_write waitUntilCompleted];
+    require(async_points.has_value(), "Point async submission failed");
+    require(returned_without_producer, "Point rendering blocked the CPU on an unfinished tensor producer");
+    require(vis::vulkanSceneTimeline(async_points->completion_semaphore) != VK_NULL_HANDLE && async_points->completion_value != 0,
+            "Point async output did not publish a GPU completion dependency");
+    require(renderer.readColor(vis::RenderTargetId{1}, point_pixels, 0, 0).has_value(), "Point async output read failed");
+    require(point_pixels.ptr<float>()[center + 1] > .9f, "Point async dependency lost the nearest color");
     const auto point_depth = renderer.readDepth({.pixel = {48, 32}, .source_size = {96, 64}, .target = vis::RenderTargetId{1}});
     require(point_depth.has_value() && std::abs(*point_depth - 3.f) < 1e-4f, "Point linear depth differs");
     if (compare_vulkan) {
@@ -617,8 +647,32 @@ static void run(bool compare_vulkan) {
     auto imported_points = points;
     imported_points.positions = &imported_positions;
     imported_points.colors = &imported_colors;
+    imported_points.synchronize_output = true;
     const auto imported_frame = point_auto->render(context, imported_points, vis::RenderTargetId{902});
     require(imported_frame.has_value(), "COLMAP CPU byte-color point rendering failed");
+    // Independent native renderers own separate producer timelines. Deduplicate
+    // values only within one semaphore; never discard a mixed panel's producer.
+    vis::ViewportInteropService interop;
+    const auto first_semaphore = vis::vulkanSceneTimeline(async_points->completion_semaphore);
+    const auto second_semaphore = vis::vulkanSceneTimeline(imported_frame->completion_semaphore);
+    require(first_semaphore != second_semaphore && second_semaphore != VK_NULL_HANDLE,
+            "Independent point renderers shared a completion timeline");
+    interop.setSceneImage({}, points.size, false, 1, first_semaphore, async_points->completion_value);
+    const std::array<vis::ViewportInteropService::FrameCompletion, 4> completions{{
+        {second_semaphore, imported_frame->completion_value},
+        {first_semaphore, async_points->completion_value + 1},
+        {first_semaphore, async_points->completion_value},
+        {VK_NULL_HANDLE, 0}}};
+    // The incremented value is metadata only; this fixture never submits it.
+    interop.addFrameCompletions(completions);
+    const auto merged_completions = interop.frameCompletions();
+    require(merged_completions.size() == 2 && merged_completions[0].semaphore == first_semaphore &&
+                merged_completions[0].value == async_points->completion_value + 1 &&
+                merged_completions[1].semaphore == second_semaphore &&
+                merged_completions[1].value == imported_frame->completion_value,
+            "Mixed panel completion dependencies were lost or not deduplicated");
+    interop.setSceneImage({}, points.size, false, 2);
+    require(interop.frameCompletions().empty(), "A replaced output retained stale completion dependencies");
     const auto imported_pixels = point_auto->readOutputImage(context, vis::RenderTargetId{902});
     require(imported_pixels && std::memcmp((*imported_pixels)->data_ptr(), point_pixels.data_ptr(), point_pixels.bytes()) == 0,
             "COLMAP byte colors differ from normalized native point colors");

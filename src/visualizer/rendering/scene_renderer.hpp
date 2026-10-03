@@ -149,6 +149,8 @@ namespace lfs::vis {
             std::uint64_t depth_generation = 0;
             glm::ivec2 size{0, 0};
             bool flip_y = false;
+            SceneTimelineHandle completion_semaphore;
+            std::uint64_t completion_value = 0;
             rendering::ViewerBackend viewer_backend = rendering::ViewerBackend::Vulkan;
         };
 
@@ -207,6 +209,9 @@ namespace lfs::vis {
             glm::ivec2 size{0, 0};
             glm::vec3 background_color{0.0f};
             bool transparent_background = false;
+            // Import readiness requires a completed output; interactive frames
+            // expose their dependency and leave the wait on the GPU.
+            bool synchronize_output = false;
             bool orthographic = false;
             float ortho_scale = 1.0f;
             float focal_y = 1.0f;
@@ -220,6 +225,7 @@ namespace lfs::vis {
         };
 
         virtual ~PointSceneRenderer() = default;
+        virtual bool takeRefinementRequest() { return false; }
         virtual std::expected<RenderResult, std::string> render(VulkanContext&, const RenderRequest&, RenderTargetId) = 0;
         virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImage(VulkanContext&, RenderTargetId) = 0;
         virtual bool hasRenderTarget(RenderTargetId) const = 0;
