@@ -790,10 +790,17 @@ namespace lfs::training {
                 slots.resize(config.ring_slots);
                 for (size_t i = 0; i < slots.size(); ++i)
                     slots[i].pinned = ring->slot_bytes(i).data();
-                drain_thread = std::jthread(
-                    [this](std::stop_token stop) {
+                // Slots own disjoint staging ranges. A single CPU copy worker
+                // can hold every slot busy while the GPU is already finished,
+                // extending the optimizer pause to pageable-copy throughput.
+                // Keep the workers persistent and bounded with the ring.
+                const auto worker_count = std::min<std::size_t>(slots.size(), 4);
+                drain_threads.reserve(worker_count);
+                for (std::size_t i = 0; i < worker_count; ++i) {
+                    drain_threads.emplace_back([this](std::stop_token stop) {
                         drain_loop(stop);
                     });
+                }
             }
         }
 
@@ -1246,11 +1253,14 @@ namespace lfs::training {
         }
 
         void shutdown() {
-            if (drain_thread.joinable()) {
-                drain_thread.request_stop();
-                ring_condition.notify_all();
-                drain_thread.join();
+            for (auto& worker : drain_threads)
+                worker.request_stop();
+            ring_condition.notify_all();
+            for (auto& worker : drain_threads) {
+                if (worker.joinable())
+                    worker.join();
             }
+            drain_threads.clear();
             if (d2h_queue) {
                 try {
                     d2h_queue->wait();
@@ -1273,7 +1283,7 @@ namespace lfs::training {
         std::mutex ring_mutex;
         std::condition_variable ring_condition;
         std::deque<std::size_t> drain_queue;
-        std::jthread drain_thread;
+        std::vector<std::jthread> drain_threads;
         double measured_bandwidth = 0.0;
 
         mutable std::mutex metrics_mutex;

@@ -673,6 +673,76 @@ namespace {
     }
 
     TEST_F(TrainingSnapshotServiceTest,
+           RepeatedCapturesReuseOddRingAndKeepIndependentBytes) {
+        lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(true);
+        struct QuantGuard {
+            ~QuantGuard() {
+                lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+            }
+        } quant_guard;
+        const ScopedEnvironmentVariable available_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
+            std::to_string(64ull * 1024 * MIB));
+        constexpr std::size_t count = 4099;
+        auto params = make_snapshot_test_params(count, 3);
+        auto model = make_snapshot_test_splat(count, 3);
+        ASSERT_TRUE(lfs::training::sh_value::apply_shN_value_quant(*model));
+        lfs::training::MCMC strategy(*model);
+        strategy.initialize(params.optimization);
+        auto* moments = strategy.get_optimizer().get_state_mutable(lfs::training::ParamType::Means);
+        ASSERT_NE(moments, nullptr);
+        ASSERT_TRUE(moments->is_joint());
+        // A non-power-of-two ring and bands crossing tensor/header/SH block
+        // boundaries exercise independent worker completion and slot reuse.
+        lfs::training::TrainingSnapshotService service({
+            .ring_slots = 3,
+            .band_bytes = 4096,
+            .calibration_bytes = 64,
+            .calibration_iterations = 4,
+        });
+        lfs::training::TrainingSnapshotCaptureRequest request{
+            .iteration = 100,
+            .strategy = strategy,
+            .params = params,
+        };
+        ASSERT_TRUE(service.initialize(request));
+        std::vector<lfs::training::CapturedTrainingSnapshot> retained;
+        std::vector<std::string> references;
+        for (int generation = 0; generation < 5; ++generation) {
+            request.iteration = 100 + generation;
+            model->means().fill_(float(generation) + .25f);
+            moments->joint_bounds.fill_(float(generation) + .5f);
+            lfs::core::TensorExecutionTarget::current().wait();
+            std::ostringstream reference(std::ios::binary | std::ios::out);
+            ASSERT_TRUE(lfs::training::serialize_checkpoint(
+                reference, request.iteration, strategy, params,
+                nullptr, nullptr, nullptr, nullptr));
+            references.push_back(reference.str());
+            auto prepared = service.prepare(request);
+            ASSERT_TRUE(prepared.has_value()) << lfs::format_for_developer(prepared.error());
+            auto pending = service.capture(std::move(*prepared), request);
+            ASSERT_TRUE(pending.has_value()) << lfs::format_for_developer(pending.error());
+            // These writes happen after the optimizer pause, before the host
+            // workers necessarily finished draining all retained ring slots.
+            model->means().fill_(-42.f);
+            moments->joint_bounds.fill_(-7.5f);
+            lfs::core::TensorExecutionTarget::current().wait();
+            auto captured = pending->wait();
+            ASSERT_TRUE(captured.has_value()) << lfs::format_for_developer(captured.error());
+            EXPECT_TRUE(captured->metrics.consistency_proven);
+            EXPECT_EQ(captured->iteration, request.iteration);
+            retained.push_back(std::move(*captured));
+            for (std::size_t i = 0; i < retained.size(); ++i) {
+                ASSERT_EQ(retained[i].checkpoint_bytes->size(), references[i].size());
+                EXPECT_EQ(std::memcmp(retained[i].checkpoint_bytes->data(),
+                                      references[i].data(), references[i].size()), 0);
+                if (i)
+                    EXPECT_NE(retained[i].snapshot_uuid, retained[i-1].snapshot_uuid);
+            }
+        }
+    }
+
+    TEST_F(TrainingSnapshotServiceTest,
            Q16Sh3ChunkedCaptureMatchesHostSerializeBitIdentical) {
         lfs::training::sh_value::
             set_sh_value_quant_enabled_for_testing(true);
