@@ -9,7 +9,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor_image.hpp"
 
-namespace lfs::core {
+namespace lfs::core::cuda {
     LFS_CORE_API Tensor undistort_image(const Tensor& src, const UndistortParams& params,
                                         cudaStream_t stream);
 
@@ -33,4 +33,4 @@ namespace lfs::core {
 
     LFS_CORE_API Tensor undistort_mask(const Tensor& src, const UndistortParams& params, cudaStream_t stream);
 
-} // namespace lfs::core
+} // namespace lfs::core::cuda

@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "metrics.hpp"
-#include "core/cuda/undistort/undistort.hpp"
 #include "core/events.hpp"
 #include "core/gpu_device_runtime.hpp"
 #include "core/image_io.hpp"
@@ -13,6 +12,7 @@
 #include "core/shared_image_ops.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_image.hpp"
 #include "core/tensor_upload.hpp"
 #include "eval_mask.hpp"
 #include "io/pipelined_image_loader.hpp"
@@ -397,10 +397,10 @@ namespace lfs::training {
     } // namespace
 
     lfs::core::Tensor ssim_evaluation_mask(const lfs::core::Tensor& mask, const bool complete_windows_only,
-                                           const std::string_view camera_name, const cudaStream_t stream) {
+                                          const std::string_view camera_name) {
         if (!complete_windows_only || !mask.is_valid())
             return mask;
-        auto complete_windows = lfs::training::erode_metrics_mask(mask, 5, stream);
+        auto complete_windows = lfs::training::erode_metrics_mask(mask, 5);
         if (complete_windows.to(lfs::core::DataType::Float32).sum().item<float>() > 0.0f)
             return complete_windows;
         LOG_WARN("Eval: camera '{}' has no complete SSIM window inside the evaluated pixels; SSIM includes partial windows",
@@ -454,7 +454,6 @@ namespace lfs::training {
                 load_params.resize_factor = params.dataset.resize_factor;
                 load_params.max_width = params.dataset.max_width;
                 load_params.output_uint8 = !params.dataset.loading_params.use_16bit_color;
-                load_params.cuda_stream = nullptr;
                 load_params.undistort = &camera.undistort_params();
                 inputs.gt_image = image_loader->load_image_immediate(
                     camera.image_path(), load_params);
@@ -1213,7 +1212,7 @@ namespace lfs::training {
                 psnr = _psnr_metric->compute(r_output.image, gt_image, mask);
                 ssim = _ssim_metric->compute(
                     r_output.image, gt_image,
-                    ssim_evaluation_mask(mask, erode_ssim_mask, cam->image_name(), r_output.image.stream()));
+                    ssim_evaluation_mask(mask, erode_ssim_mask, cam->image_name()));
             } catch (const std::exception& e) {
                 LOG_WARN("Eval: skipping camera '{}' (metric computation failed: {})", cam->image_name(), e.what());
                 view.skipped_reason = std::string("metric computation failed: ") + e.what();

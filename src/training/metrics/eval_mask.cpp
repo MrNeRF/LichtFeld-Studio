@@ -4,10 +4,10 @@
 
 #include "eval_mask.hpp"
 
-#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/nn/ops.hpp"
 #include "core/shared_image_ops.hpp"
+#include "core/tensor_image.hpp"
 #include "lfs/training/ops/masks.hpp"
 #include "lfs/training/ops/registry.hpp"
 
@@ -184,7 +184,7 @@ namespace lfs::training {
         return load_rgba_metrics_inputs(camera, config);
     }
 
-    lfs::core::Tensor erode_metrics_mask(const lfs::core::Tensor& mask, const int radius, cudaStream_t) {
+    lfs::core::Tensor erode_metrics_mask(const lfs::core::Tensor& mask, const int radius) {
         const int side = 2 * radius + 1;
         const auto input = mask.to(lfs::core::DataType::Float32).unsqueeze(0).unsqueeze(0);
         const auto weight = lfs::core::Tensor::ones({1, 1, size_t(side), size_t(side)}, mask.device());

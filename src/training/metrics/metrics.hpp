@@ -185,8 +185,7 @@ namespace lfs::training {
 
     // SSIM counts only complete windows inside the mask; a mask without any keeps partial windows.
     [[nodiscard]] lfs::core::Tensor ssim_evaluation_mask(
-        const lfs::core::Tensor& mask, bool complete_windows_only, std::string_view camera_name,
-        cudaStream_t stream);
+        const lfs::core::Tensor& mask, bool complete_windows_only, std::string_view camera_name);
 
     [[nodiscard]] lfs::Result<PreparedEvaluationView> prepare_evaluation_view(
         lfs::core::Camera& camera,

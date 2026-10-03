@@ -7,9 +7,7 @@
 #include "core/camera.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
-#include "eval_mask_kernels.cuh"
 
-#include "core/cuda_types.hpp"
 #include <expected>
 #include <string>
 
@@ -40,6 +38,9 @@ namespace lfs::training {
             .mask_mode = params.optimization.mask_mode,
         };
     }
+
+    [[nodiscard]] lfs::core::Tensor erode_metrics_mask(
+        const lfs::core::Tensor& mask, int radius);
 
     /// Classify a decoded mask to a UInt8 {0,1} keep mask.
     /// UInt8/Bool carry authored 0..255 samples (keep = value > 250).

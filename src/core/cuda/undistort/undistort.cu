@@ -4,7 +4,7 @@
 
 #include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "undistort.hpp"
 
 #include <algorithm>
@@ -18,7 +18,7 @@
 #include <nvtx3/nvToolsExt.h>
 #include <stdexcept>
 
-namespace lfs::core {
+namespace lfs::core::cuda {
 
     namespace {
 
@@ -743,8 +743,6 @@ namespace lfs::core {
 
     Tensor undistort_image(
         const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
-        if (gpu_backend_of(src) != GpuBackend::CUDA)
-            return internal::warp_image_tensor(src, params, 0, false, nullptr);
         const GpuBackendScope backend_scope(GpuBackend::CUDA);
         assert(src.is_valid());
         assert(src.ndim() == 3);
@@ -784,8 +782,6 @@ namespace lfs::core {
     Tensor distort_image_to_source(
         const Tensor& src, const UndistortParams& params,
         Tensor& validity_mask, cudaStream_t stream) {
-        if (gpu_backend_of(src) != GpuBackend::CUDA)
-            return internal::warp_image_tensor(src, params, 0, true, &validity_mask);
         const GpuBackendScope backend_scope(GpuBackend::CUDA);
         assert(src.is_valid());
         assert(src.ndim() == 3);
@@ -825,8 +821,6 @@ namespace lfs::core {
         Tensor launch_undistort_area(
             const Tensor& src, const UndistortParams& params,
             const AreaFilterMode mode, cudaStream_t stream) {
-            if (gpu_backend_of(src) != GpuBackend::CUDA)
-                return internal::warp_image_tensor(src, params, static_cast<int>(mode) + 1, false, nullptr);
             const GpuBackendScope backend_scope(GpuBackend::CUDA);
             assert(src.is_valid());
             assert(src.device() == Device::GPU);
@@ -884,8 +878,6 @@ namespace lfs::core {
         Tensor launch_distort_area_to_source(
             const Tensor& src, const UndistortParams& params,
             const AreaFilterMode mode, cudaStream_t stream) {
-            if (gpu_backend_of(src) != GpuBackend::CUDA)
-                return internal::warp_image_tensor(src, params, static_cast<int>(mode) + 1, true, nullptr);
             const GpuBackendScope backend_scope(GpuBackend::CUDA);
             assert(src.is_valid());
             assert(src.device() == Device::GPU);
@@ -943,4 +935,4 @@ namespace lfs::core {
         return undistort_mask_area(src, params, stream);
     }
 
-} // namespace lfs::core
+} // namespace lfs::core::cuda

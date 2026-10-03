@@ -50,6 +50,29 @@ namespace lfs::core {
         const UndistortParams& params, float image_x, float image_y,
         float& normalized_x, float& normalized_y);
 
+    LFS_CORE_API Tensor undistort_image(const Tensor& src, const UndistortParams& params,
+                                        void* stream);
+
+    LFS_CORE_API Tensor distort_image_to_source(const Tensor& src, const UndistortParams& params,
+                                                Tensor& validity_mask, void* stream);
+
+    LFS_CORE_API Tensor undistort_mask_area(const Tensor& src, const UndistortParams& params, void* stream);
+
+    LFS_CORE_API Tensor undistort_depth_area(const Tensor& src, const UndistortParams& params, void* stream);
+
+    LFS_CORE_API Tensor undistort_normal_area(const Tensor& src, const UndistortParams& params, void* stream);
+
+    LFS_CORE_API Tensor distort_mask_to_source_area(const Tensor& src, const UndistortParams& params,
+                                                    void* stream);
+
+    LFS_CORE_API Tensor distort_depth_to_source_area(const Tensor& src, const UndistortParams& params,
+                                                     void* stream);
+
+    LFS_CORE_API Tensor distort_normal_to_source_area(const Tensor& src, const UndistortParams& params,
+                                                      void* stream);
+
+    LFS_CORE_API Tensor undistort_mask(const Tensor& src, const UndistortParams& params, void* stream);
+
     namespace internal {
         LFS_CORE_API Tensor warp_image_tensor(const Tensor& input, const UndistortParams& params, int mode, bool inverse, Tensor* validity);
         LFS_CORE_API Tensor undistort_image_tensor(const Tensor& input, const UndistortParams& params, bool mask);

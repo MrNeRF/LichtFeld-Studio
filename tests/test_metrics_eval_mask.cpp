@@ -269,7 +269,7 @@ TEST_F(MetricsEvalMask, ErosionRemovesIncompleteMetricWindows) {
     values[3 * 7 + 3] = 0;
     auto mask = Tensor::from_vector(values, lfs::core::TensorShape({7, 7}), Device::CUDA)
                     .to(DataType::UInt8);
-    const auto eroded = lfs::training::erode_metrics_mask(mask, 1, nullptr);
+    const auto eroded = lfs::training::erode_metrics_mask(mask, 1);
     const auto cpu = eroded.cpu().contiguous();
     const uint8_t* const actual = cpu.ptr<uint8_t>();
     EXPECT_EQ(actual[1 * 7 + 1], 1);
