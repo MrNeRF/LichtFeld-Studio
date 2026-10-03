@@ -377,7 +377,8 @@ namespace lfs::training::kernels::blob_seeding {
         const int* counts = host.ptr<int>();
         const size_t emitted = static_cast<size_t>(std::min(counts[0], capacity));
         ViewPeaks result;
-        result.peaks = peaks.slice(0, 0, emitted).clone();
+        if (emitted > 0)
+            result.peaks = peaks.slice(0, 0, emitted).clone();
         result.bitmap = std::move(bitmap);
         result.density = {static_cast<float>(static_cast<unsigned int>(counts[1])) / static_cast<float>(n),
                           static_cast<float>(static_cast<unsigned int>(counts[2])) / static_cast<float>(n)};

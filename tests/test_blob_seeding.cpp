@@ -194,3 +194,12 @@ TEST(BlobSeeding, IgnoresViewsWithoutPinholeImages) {
     seeder.capture(*distorted.camera, image.cuda());
     EXPECT_EQ(seeder.captured_views(), 0u);
 }
+
+// Fails if a view without any contrast peak throws instead of contributing an empty peak list.
+TEST(BlobSeeding, ViewWithoutPeaksYieldsEmptyPeakList) {
+    namespace bs = lfs::training::kernels::blob_seeding;
+    const auto peaks = bs::detect_peaks(grey_image().cuda(), 0);
+    EXPECT_EQ(peaks.peaks.numel(), 0u);
+    EXPECT_FLOAT_EQ(peaks.density[0], 0.0f);
+    EXPECT_FLOAT_EQ(peaks.density[1], 0.0f);
+}
