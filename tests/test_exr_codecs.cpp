@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/image_codecs.hpp"
+#include "core/image_exr.hpp"
 #include <Imath/half.h>
 #include <OpenEXR/ImfChannelList.h>
 #include <OpenEXR/ImfDeepScanLineOutputFile.h>
@@ -68,10 +69,10 @@ namespace {
     };
 
     struct Fixture {
-        static constexpr int width = 19, height = 291;
+        const int width, height;
         std::filesystem::path path;
         int source_channels = 3;
-        Fixture() {
+        explicit Fixture(int w = 19, int h = 291) : width(w), height(h) {
             static std::atomic_uint64_t sequence{0};
             path = std::filesystem::temp_directory_path() /
                    ("lfs_exr_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "_" +
@@ -169,8 +170,11 @@ namespace {
         codec::Image image;
         std::string error;
         ASSERT_TRUE(codec::decode(fixture.path, image, error)) << error;
-        EXPECT_EQ(image.width, Fixture::width);
-        EXPECT_EQ(image.height, Fixture::height);
+        codec::Image parallel;
+        ASSERT_TRUE(codec::decode_exr(fixture.path, parallel, error, 4)) << error;
+        EXPECT_EQ(parallel.data, image.data);
+        EXPECT_EQ(image.width, fixture.width);
+        EXPECT_EQ(image.height, fixture.height);
         EXPECT_EQ(image.channels, 4);
         EXPECT_EQ(image.sample_type, codec::SampleType::Float32);
         const auto expected = fixture.reference(tiled, grayscale);
@@ -221,6 +225,20 @@ namespace {
         }
     }
 
+    TEST(ExrCodecRegression, AutomaticLargeImageMatchesSequential) {
+        for (const bool tiled : {false, true}) {
+            Fixture f(1025, 1025);
+            f.write(exr::ZIP_COMPRESSION, tiled, exr::HALF, false, false, {-7, 13});
+            codec::Image sequential, automatic;
+            std::string error;
+            ASSERT_TRUE(codec::decode_exr(f.path, sequential, error, 1)) << error;
+            ASSERT_TRUE(codec::decode(f.path, automatic, error)) << error;
+            EXPECT_EQ(automatic.data, sequential.data);
+            EXPECT_EQ(automatic.width, f.width);
+            EXPECT_EQ(automatic.height, f.height);
+        }
+    }
+
     TEST(ExrCodecRegression, AllHalfValuesMatchImathConversion) {
         // Core-only builds use OpenEXR's built-in half conversion instead of Imath.
         // Cover every half bit pattern, including signed zero and subnormals.
@@ -245,6 +263,9 @@ namespace {
         std::string error;
         ASSERT_TRUE(codec::decode(f.path, image, error)) << error;
         ASSERT_EQ(image.data.size(), values.size() * 4 * sizeof(float));
+        codec::Image parallel;
+        ASSERT_TRUE(codec::decode_exr(f.path, parallel, error, 4)) << error;
+        EXPECT_EQ(parallel.data, image.data);
         const auto* pixels = reinterpret_cast<const float*>(image.data.data());
         for (size_t i = 0; i < values.size(); ++i) {
             const float expected = static_cast<float>(values[i]);
@@ -287,11 +308,59 @@ namespace {
             uint32_t size = 0;
             for (int i = 0; i < 4; ++i)
                 size |= uint32_t(static_cast<unsigned char>(bytes.at(pos++))) << (8 * i);
-            if (std::strcmp(bytes.data() + name, attribute) == 0)
+            if (attribute && std::strcmp(bytes.data() + name, attribute) == 0)
                 return pos;
             pos += size;
         }
+        if (!attribute)
+            return pos + 1;
         throw std::runtime_error("fixture attribute not found");
+    }
+
+    TEST(ExrCodecRegression, ParallelPayloadFailurePreservesOutputAndDiagnostics) {
+        for (const auto compression : {exr::ZIP_COMPRESSION, exr::DWAB_COMPRESSION, exr::HTJ2K256_COMPRESSION}) {
+            Fixture good, damaged;
+            good.write(compression, false, exr::HALF);
+            damaged.write(compression, false, exr::HALF);
+            auto bytes = read_bytes(damaged.path);
+            // Damage compressed pixels, retaining a valid header,
+            // offset table and chunk extents so the worker's decompressor sees it.
+            const size_t table = attribute_offset(bytes, nullptr);
+            const size_t index = compression == exr::ZIP_COMPRESSION ? 5 : 0;
+            uint64_t offset = 0;
+            for (int i = 0; i < 8; ++i)
+                offset |= uint64_t(static_cast<unsigned char>(bytes.at(table + index * 8 + i))) << (8 * i);
+            uint32_t packed = 0;
+            for (int i = 0; i < 4; ++i)
+                packed |= uint32_t(static_cast<unsigned char>(bytes.at(size_t(offset) + 4 + i))) << (8 * i);
+            ASSERT_LE(offset + 8 + packed, bytes.size());
+            std::fill_n(bytes.begin() + static_cast<std::ptrdiff_t>(offset + 8), packed, std::bit_cast<char>(uint8_t{0xff}));
+            write_bytes(damaged.path, bytes);
+            std::vector<std::future<void>> jobs;
+            for (int i = 0; i < 8; ++i) {
+                jobs.push_back(std::async(std::launch::async, [&, i] {
+                    codec::Image image;
+                    image.width = 7;
+                    image.data = {42};
+                    std::string error = "stale diagnostic";
+                    const bool corrupt = (i % 2) == 0;
+                    const bool success = codec::decode_exr(corrupt ? damaged.path : good.path, image, error, 4);
+                    EXPECT_EQ(success, !corrupt);
+                    if (corrupt) {
+                        EXPECT_EQ(image.width, 7);
+                        EXPECT_EQ(image.data, std::vector<uint8_t>{42});
+                        EXPECT_NE(error.find(':', 5), std::string::npos) << error;
+                    } else {
+                        EXPECT_TRUE(error.empty()) << error;
+                        EXPECT_EQ(image.width, good.width);
+                    }
+                }));
+            }
+            for (auto& job : jobs)
+                job.get();
+            // A failed decode must release its reservations for subsequent work.
+            expect_reference(good, false);
+        }
     }
 
     TEST(ExrCodecRegression, OversizedDamagedDataWindowFailsBeforeImageAllocation) {
@@ -348,7 +417,7 @@ namespace {
     }
     TEST(ExrCodecRegression, MultipartUsesFirstPart) {
         Fixture f;
-        exr::Header headers[] = {exr::Header(Fixture::width, Fixture::height), exr::Header(Fixture::width, Fixture::height)};
+        exr::Header headers[] = {exr::Header(f.width, f.height), exr::Header(f.width, f.height)};
         for (int part = 0; part < 2; ++part) {
             headers[part].setName("part" + std::to_string(part));
             headers[part].setType(exr::SCANLINEIMAGE);
@@ -359,13 +428,13 @@ namespace {
             OutputStream stream(f.path);
             exr::MultiPartOutputFile file(stream, headers, 2);
             for (int part = 0; part < 2; ++part) {
-                std::vector<float> values(Fixture::width * Fixture::height, part + 0.5f);
+                std::vector<float> values(f.width * f.height, part + 0.5f);
                 exr::FrameBuffer fb;
                 for (const char* name : {"R", "G", "B"})
                     fb.insert(name, exr::Slice::Make(exr::FLOAT, values.data(), headers[part].dataWindow()));
                 exr::OutputPart output(file, part);
                 output.setFrameBuffer(fb);
-                output.writePixels(Fixture::height);
+                output.writePixels(f.height);
             }
         }
         expect_reference(f, false);
@@ -423,8 +492,8 @@ namespace {
         codec::Probe info;
         std::string error;
         ASSERT_TRUE(codec::probe(f.path, info, error)) << error;
-        EXPECT_EQ(info.width, Fixture::width);
-        EXPECT_EQ(info.height, Fixture::height);
+        EXPECT_EQ(info.width, f.width);
+        EXPECT_EQ(info.height, f.height);
         codec::Image image;
         EXPECT_FALSE(codec::decode(f.path, image, error));
         EXPECT_FALSE(error.empty());
@@ -451,7 +520,7 @@ namespace {
             jobs.push_back(std::async(std::launch::async, [&] {
                 codec::Image image;
                 std::string error;
-                if (!codec::decode(f.path, image, error))
+                if (!codec::decode_exr(f.path, image, error, 4))
                     throw std::runtime_error(error);
                 return image.data;
             }));
