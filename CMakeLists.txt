@@ -705,6 +705,10 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_runtime_tools.cpp
     src/app/mcp_sequencer_tools.cpp
     src/app/mcp_screen_tools.cpp
+    src/app/mcp_node_tools.cpp
+    src/app/mcp_node_resources.cpp
+    src/app/mcp_node_editor_tools.cpp
+    src/app/mcp_pointer_tool.cpp
     src/app/mcp_ui_registry_tools.cpp
     src/app/converter.cpp
     src/app/converter_output_paths.cpp

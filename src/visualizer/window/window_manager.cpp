@@ -253,10 +253,10 @@ namespace lfs::vis {
             return haystack && needle && std::strstr(haystack, needle) != nullptr;
         }
 
-        glm::ivec2 globalMousePosition() {
+        glm::ivec2 globalMousePosition(SDL_Window* window) {
             float global_x = 0.0f;
             float global_y = 0.0f;
-            SDL_GetGlobalMouseState(&global_x, &global_y);
+            input::globalMouseState(window, &global_x, &global_y);
             return {
                 static_cast<int>(std::lround(global_x)),
                 static_cast<int>(std::lround(global_y)),
@@ -291,7 +291,7 @@ namespace lfs::vis {
             if (!getX11WindowHandle(window, display, xwindow))
                 return false;
 
-            const glm::ivec2 global_mouse = globalMousePosition();
+            const glm::ivec2 global_mouse = globalMousePosition(window);
 
             const Atom moveresize = XInternAtom(display, "_NET_WM_MOVERESIZE", False);
             if (moveresize == None)
@@ -900,6 +900,8 @@ namespace lfs::vis {
 
     void WindowManager::dispatchQueuedEvent(const SDL_Event& event) {
         const SDL_WindowID id = window_ ? SDL_GetWindowID(window_) : 0;
+        if (!input::prepareInjectedPointerEvent(event))
+            return;
         if (auto* gui = services().guiOrNull())
             gui->prepareInput();
         if (!shouldSuppressGuiRoutingForResize(event, id))
@@ -929,6 +931,7 @@ namespace lfs::vis {
     }
 
     void WindowManager::pollEvents() {
+        input::finishInjectedPointerFrame();
         frame_input_.beginFrame();
         SDL_Event event;
         // Drain previously queued events before pumping new native events.
@@ -947,6 +950,7 @@ namespace lfs::vis {
     }
 
     void WindowManager::waitEvents(double timeout_seconds) {
+        input::finishInjectedPointerFrame();
         frame_input_.beginFrame();
         SDL_Event event;
         if (vulkan_context_ &&
@@ -1491,7 +1495,7 @@ namespace lfs::vis {
 
         float mouse_x = 0.0f;
         float mouse_y = 0.0f;
-        SDL_GetMouseState(&mouse_x, &mouse_y);
+        input::mouseStateInWindowCoordinates(window_, &mouse_x, &mouse_y);
         setResizeCursorForEdge(resizeEdgeAt(static_cast<int>(std::round(mouse_x)),
                                             static_cast<int>(std::round(mouse_y))));
     }
@@ -1514,7 +1518,7 @@ namespace lfs::vis {
             return;
 
         manual_resize_edge_ = edge;
-        manual_resize_start_global_ = globalMousePosition();
+        manual_resize_start_global_ = globalMousePosition(window_);
         SDL_GetWindowPosition(window_, &manual_resize_start_pos_.x, &manual_resize_start_pos_.y);
         SDL_GetWindowSize(window_, &manual_resize_start_size_.x, &manual_resize_start_size_.y);
         saveBorderlessRestoreGeometry();
@@ -1529,7 +1533,7 @@ namespace lfs::vis {
         const auto has_edge = [this](const ResizeEdge flag) {
             return (static_cast<unsigned>(manual_resize_edge_) & static_cast<unsigned>(flag)) != 0;
         };
-        const glm::ivec2 current_global = globalMousePosition();
+        const glm::ivec2 current_global = globalMousePosition(window_);
         const glm::ivec2 delta = current_global - manual_resize_start_global_;
 
         int next_x = manual_resize_start_pos_.x;
@@ -1614,6 +1618,7 @@ namespace lfs::vis {
         frame_input_.mouse_released[2] = false;
         frame_input_.mouse_wheel = 0.0f;
         frame_input_.mouse_wheel_x = 0.0f;
+        frame_input_.pinch_scale = 1.0f;
         frame_input_.mouse_button_events.clear();
         frame_input_.mouse_moved = false;
     }
@@ -1622,7 +1627,7 @@ namespace lfs::vis {
         if (!window_ || is_fullscreen_)
             return;
 
-        titlebar_drag_start_global_ = globalMousePosition();
+        titlebar_drag_start_global_ = globalMousePosition(window_);
         titlebar_drag_start_local_ = glm::ivec2(local_x, local_y);
         titlebar_drag_started_maximized_ = isMaximized();
 
@@ -1673,7 +1678,7 @@ namespace lfs::vis {
         if (!titlebar_drag_active_ && !isManualResizeActive())
             return;
 
-        const SDL_MouseButtonFlags buttons = SDL_GetGlobalMouseState(nullptr, nullptr);
+        const SDL_MouseButtonFlags buttons = input::globalMouseState(window_, nullptr, nullptr);
         if ((buttons & SDL_BUTTON_LMASK) != 0)
             return;
 
@@ -1841,7 +1846,7 @@ namespace lfs::vis {
         if (!window_ || !isMaximized())
             return;
 
-        const glm::ivec2 current_global = globalMousePosition();
+        const glm::ivec2 current_global = globalMousePosition(window_);
 
         const float anchor_ratio_x = window_size_.x > 0
                                          ? std::clamp(static_cast<float>(titlebar_drag_start_local_.x) /
@@ -1887,7 +1892,7 @@ namespace lfs::vis {
         if (!window_)
             return;
 
-        const glm::ivec2 current_global = globalMousePosition();
+        const glm::ivec2 current_global = globalMousePosition(window_);
 
         SDL_SetWindowPosition(window_,
                               current_global.x - titlebar_drag_window_offset_.x,
@@ -1899,7 +1904,7 @@ namespace lfs::vis {
         if (!window_ || !titlebar_drag_active_)
             return false;
 
-        const glm::ivec2 current_global = globalMousePosition();
+        const glm::ivec2 current_global = globalMousePosition(window_);
 
         constexpr int kPointerDragThresholdPx = 4;
         const glm::ivec2 pointer_delta = glm::abs(current_global - titlebar_drag_start_global_);
@@ -1911,7 +1916,7 @@ namespace lfs::vis {
         if (!window_)
             return false;
 
-        const glm::ivec2 global_mouse = globalMousePosition();
+        const glm::ivec2 global_mouse = globalMousePosition(window_);
         const SDL_Point global_point{global_mouse.x, global_mouse.y};
 
         SDL_DisplayID display_id = SDL_GetDisplayForPoint(&global_point);

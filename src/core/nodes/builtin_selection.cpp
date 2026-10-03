@@ -1,0 +1,377 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "builtin_common.hpp"
+#include "core/tensor_fused.hpp"
+#include "core/tensor_spatial.hpp"
+namespace lfs::nodes::builtin {
+
+    void evaluate_box(NodeContext& context, bool ellipsoid) {
+        const auto centre = input_vector(context, "Centre");
+        const auto extent = input_vector(context, ellipsoid ? "Radii" : "Size");
+        const auto inverse = glm::transpose(glm::mat3(rotation_matrix(input_vector(context, "Rotation"))));
+        const float falloff = input_float(context, "Falloff");
+        context.set_output(
+            "Selection",
+            operation(
+                FLOAT_SOCKET, {position_field()},
+                [centre, extent, inverse, falloff, ellipsoid](const std::vector<Tensor>& values) {
+                    const auto device = values[0].device();
+                    const auto local =
+                        (values[0] - vector_tensor(centre, device)).matmul(matrix_tensor(inverse, device));
+                    Tensor distance;
+                    if (ellipsoid) {
+                        const auto scaled = local / vector_tensor(glm::max(extent, glm::vec3(1e-8f)), device);
+                        distance = (scaled * scaled).sum(1).sqrt() - 1;
+                    } else {
+                        distance = (local.abs() - vector_tensor(extent * 0.5f, device)).max(1);
+                    }
+                    return falloff <= 0 ? distance.le(0).to(DataType::Float32)
+                                        : ((distance.maximum(0) / falloff).neg() + 1).clamp(0, 1);
+                }));
+    }
+
+    void evaluate_colour_key(NodeContext& context) {
+        const auto target = input_vector(context, "Colour");
+        const auto tolerance = input_float(context, "Tolerance");
+        const auto softness = input_float(context, "Softness");
+        context.set_output(
+            "Selection",
+            operation(FLOAT_SOCKET, {colour_field()},
+                      [target, tolerance, softness](const std::vector<Tensor>& values) {
+                          const auto difference = values[0] - vector_tensor(target, values[0].device());
+                          const auto distance = (difference * difference).sum(1).sqrt();
+                          return softness <= 0
+                                     ? distance.le(tolerance).to(DataType::Float32)
+                                     : ((distance.neg() + tolerance + softness) / softness).clamp(0, 1);
+                      }));
+    }
+
+    void evaluate_hsv_range(NodeContext& context) {
+        const float hue = input_float(context, "Hue");
+        const float range = input_float(context, "Hue Range");
+        const float hue_softness = input_float(context, "Hue Softness");
+        const float saturation_min = input_float(context, "Saturation Min");
+        const float saturation_max = input_float(context, "Saturation Max");
+        const float value_min = input_float(context, "Value Min");
+        const float value_max = input_float(context, "Value Max");
+        const float softness = input_float(context, "Softness");
+        context.set_output(
+            "Selection", operation(FLOAT_SOCKET, {colour_field()}, [=](const std::vector<Tensor>& values) {
+                const auto hsv = rgb_to_hsv(values[0]);
+                const auto difference = (channel(hsv, 0) - hue).abs();
+                const auto distance = difference.minimum(difference.neg() + 1);
+                const auto hue_weight =
+                    hue_softness <= 0 ? distance.le(range).to(DataType::Float32)
+                                      : ((distance.neg() + range + hue_softness) / hue_softness).clamp(0, 1);
+                const auto band = [softness](const Tensor& value, float low, float high) {
+                    if (softness <= 0)
+                        return value.ge(low).logical_and(value.le(high)).to(DataType::Float32);
+                    return ((value - low) / softness)
+                        .clamp(0, 1)
+                        .minimum(((value.neg() + high) / softness).clamp(0, 1));
+                };
+                return hue_weight * band(channel(hsv, 1), saturation_min, saturation_max) *
+                       band(channel(hsv, 2), value_min, value_max);
+            }));
+    }
+
+    // Counts the 27 cells surrounding each point. Cells start at radius; large bounds
+    // grow that size until the dense grid fits 128^3 cells. This intentionally
+    // overestimates Euclidean neighbours, especially after budget-driven coarsening.
+    Tensor voxel_neighbour_counts(const Tensor& positions, float radius) {
+        const auto count = positions.shape()[0];
+        if (!count || radius <= 0)
+            return Tensor::zeros({count}, positions.device());
+        const auto minimum = positions.min(0);
+        const auto extent = positions.max(0) - minimum;
+        std::array<float, 3> lengths;
+        for (int axis = 0; axis < 3; ++axis)
+            lengths[axis] = extent.slice(0, axis, axis + 1).item<float>();
+        double cell = radius;
+        std::array<std::size_t, 3> dimensions;
+        constexpr std::size_t budget = 128 * 128 * 128;
+        for (;;) {
+            double cells = 1;
+            for (int axis = 0; axis < 3; ++axis) {
+                dimensions[axis] = static_cast<std::size_t>(std::min(
+                    std::ceil(static_cast<double>(lengths[axis]) / cell) + 3, static_cast<double>(budget)));
+                cells *= dimensions[axis];
+            }
+            if (cells <= budget)
+                break;
+            cell *= std::max(1.1, std::cbrt(cells / budget));
+        }
+        const auto coordinates =
+            ((positions - minimum) / static_cast<float>(cell)).floor().to(DataType::Int32) + 1;
+        const auto x = channel(coordinates, 0);
+        const auto y = channel(coordinates, 1);
+        const auto z = channel(coordinates, 2);
+        const int stride_y = static_cast<int>(dimensions[0]);
+        const int stride_z = static_cast<int>(dimensions[0] * dimensions[1]);
+        const auto indices = (x + y * stride_y + z * stride_z).to(DataType::Int32);
+        auto grid = Tensor::zeros({dimensions[0] * dimensions[1] * dimensions[2]}, positions.device());
+        grid.index_add_(0, indices, Tensor::ones({count}, positions.device()));
+        auto result = Tensor::full({count}, -1.0f, positions.device());
+        for (int dz = -1; dz <= 1; ++dz)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx)
+                    result =
+                        result +
+                        grid.gather(0, (indices + dx + dy * stride_y + dz * stride_z).to(DataType::Int32));
+        return result;
+    }
+
+    Tensor has_neighbour(const Tensor& positions, float radius) {
+        const auto count = positions.shape()[0];
+        return core::radius_neighbors(positions, Tensor::full_bool({count}, true, positions.device()), radius, true);
+    }
+
+    namespace {
+        template <typename Evaluate>
+        Tensor evaluate_relative_radius(const Tensor& positions, const Tensor& activated_scale,
+                                        float radius_multiple, Evaluate evaluate) {
+            const auto count = positions.shape()[0];
+            auto result = Tensor::zeros({count}, positions.device());
+            if (!count || radius_multiple <= 0)
+                return result;
+
+            const auto radii = activated_scale.max(1) * radius_multiple;
+            const float minimum = radii.min().item<float>();
+            const float maximum = radii.max().item<float>();
+            if (!std::isnormal(minimum) || !std::isfinite(maximum))
+                return result;
+
+            constexpr int max_levels = 8;
+            const int octaves = std::max(1, static_cast<int>(std::ceil(std::log2(maximum / minimum))));
+            const int octave_span = std::max(1, (octaves + max_levels - 1) / max_levels);
+            const auto levels = ((radii / minimum).log2().floor() / static_cast<float>(octave_span))
+                                    .floor()
+                                    .clamp(0, max_levels - 1);
+            const int level_count = std::min(max_levels, octaves / octave_span + 1);
+            for (int level = 0; level < level_count; ++level) {
+                const auto level_mask = levels.eq(static_cast<float>(level));
+                const float level_radius = Tensor::where(level_mask, radii, Tensor::zeros_like(radii))
+                                               .max()
+                                               .item<float>();
+                if (level_radius <= 0)
+                    continue;
+                result = Tensor::where(level_mask, evaluate(level_radius, level_mask).to(DataType::Float32), result);
+            }
+            return result;
+        }
+    } // namespace
+
+    Tensor relative_neighbour_counts(const Tensor& positions, const Tensor& activated_scale,
+                                     float radius_multiple) {
+        return evaluate_relative_radius(positions, activated_scale, radius_multiple, [&](float radius, const Tensor&) {
+            return voxel_neighbour_counts(positions, radius);
+        });
+    }
+
+    Tensor has_relative_neighbour(const Tensor& positions, const Tensor& activated_scale,
+                                  float radius_multiple) {
+        const auto references = Tensor::full_bool({positions.shape()[0]}, true, positions.device());
+        return evaluate_relative_radius(positions, activated_scale, radius_multiple, [&](float radius, const Tensor& queries) {
+                   return core::radius_neighbors(positions, references, radius, true, &queries);
+               })
+            .gt(0);
+    }
+
+    const core::fused::Kernel& ray_parity_kernel() {
+        static const auto kernel = [] {
+            namespace f = core::fused;
+            f::Builder builder(2);
+            const auto points = builder.input(DataType::Float32, 2);
+            const auto vertices = builder.input(DataType::Float32, 2);
+            const auto edge1 = builder.input(DataType::Float32, 2);
+            const auto edge2 = builder.input(DataType::Float32, 2);
+            const auto point = builder.iota(0);
+            const auto triangle = builder.iota(1);
+            const auto component = [&](const f::Input& input, int axis) {
+                return input.gather({triangle, builder.constant(axis)});
+            };
+            const auto ax = component(vertices, 0);
+            const auto ay = component(vertices, 1);
+            const auto az = component(vertices, 2);
+            const auto e1x = component(edge1, 0);
+            const auto e1y = component(edge1, 1);
+            const auto e1z = component(edge1, 2);
+            const auto e2x = component(edge2, 0);
+            const auto e2y = component(edge2, 1);
+            const auto e2z = component(edge2, 2);
+            // Non-axis-aligned direction avoids the shared edges of axis-aligned boxes.
+            const auto px = 0.37139067f * e2z - 0.52911311f * e2y;
+            const auto py = 0.52911311f * e2x - e2z;
+            const auto pz = e2y - 0.37139067f * e2x;
+            const auto determinant = e1x * px + e1y * py + e1z * pz;
+            const auto inverse = 1.0f / determinant;
+            const auto tx = points.gather({point, builder.constant(0)}) - ax;
+            const auto ty = points.gather({point, builder.constant(1)}) - ay;
+            const auto tz = points.gather({point, builder.constant(2)}) - az;
+            const auto u = (tx * px + ty * py + tz * pz) * inverse;
+            const auto qx = ty * e1z - tz * e1y;
+            const auto qy = tz * e1x - tx * e1z;
+            const auto qz = tx * e1y - ty * e1x;
+            const auto v = (qx + 0.37139067f * qy + 0.52911311f * qz) * inverse;
+            const auto distance = (e2x * qx + e2y * qy + e2z * qz) * inverse;
+            const auto hit = (f::abs(determinant) > 1e-8f) && (u >= 0.0f) && (u <= 1.0f) && (v >= 0.0f) &&
+                             (u + v <= 1.0f) && (distance > 1e-7f);
+            builder.output(builder.fold(f::Fold::Count, hit, 1), DataType::Int32);
+            return f::Kernel(builder);
+        }();
+        return kernel;
+    }
+
+    Tensor ray_hits(const Tensor& points, const Tensor& a, const Tensor& edge1, const Tensor& edge2) {
+        if (points.device() == Device::GPU)
+            return ray_parity_kernel()({points.shape()[0], a.shape()[0]}, {points, a, edge1, edge2})[0];
+        // CPU tensors use the same broadcast equations through public tensor ops;
+        // fused::Kernel requires at least one GPU input.
+        const auto e1x = channel(edge1, 0).unsqueeze(0);
+        const auto e1y = channel(edge1, 1).unsqueeze(0);
+        const auto e1z = channel(edge1, 2).unsqueeze(0);
+        const auto e2x = channel(edge2, 0).unsqueeze(0);
+        const auto e2y = channel(edge2, 1).unsqueeze(0);
+        const auto e2z = channel(edge2, 2).unsqueeze(0);
+        const auto px = e2z * 0.37139067f - e2y * 0.52911311f;
+        const auto py = e2x * 0.52911311f - e2z;
+        const auto pz = e2y - e2x * 0.37139067f;
+        const auto determinant = e1x * px + e1y * py + e1z * pz;
+        const auto tx = channel(points, 0).unsqueeze(1) - channel(a, 0).unsqueeze(0);
+        const auto ty = channel(points, 1).unsqueeze(1) - channel(a, 1).unsqueeze(0);
+        const auto tz = channel(points, 2).unsqueeze(1) - channel(a, 2).unsqueeze(0);
+        const auto u = (tx * px + ty * py + tz * pz) / determinant;
+        const auto qx = ty * e1z - tz * e1y;
+        const auto qy = tz * e1x - tx * e1z;
+        const auto qz = tx * e1y - ty * e1x;
+        const auto v = (qx + qy * 0.37139067f + qz * 0.52911311f) / determinant;
+        const auto distance = (e2x * qx + e2y * qy + e2z * qz) / determinant;
+        const auto hit = determinant.abs()
+                             .gt(1e-8f)
+                             .logical_and(u.ge(0))
+                             .logical_and(u.le(1))
+                             .logical_and(v.ge(0))
+                             .logical_and((u + v).le(1))
+                             .logical_and(distance.gt(1e-7f));
+        return hit.to(DataType::Float32).sum(1).to(DataType::Int32);
+    }
+
+    void evaluate_inside_mesh(NodeContext& context) {
+        const auto geometry = geometry_input(context, "Mesh");
+        if (!geometry.mesh || !geometry.mesh->mesh)
+            throw NodeError("Inside Mesh requires mesh geometry");
+        const auto mesh = geometry.mesh->mesh;
+        context.set_output(
+            "Selection",
+            operation(BOOL_SOCKET, {position_field()}, [mesh](const std::vector<Tensor>& values) {
+                const auto& positions = values[0];
+                const auto count = positions.shape()[0];
+                const auto device = positions.device();
+                auto result = Tensor::zeros({count}, device);
+                const auto triangles = mesh->indices.shape()[0];
+                if (!triangles || !count)
+                    return result.ne(0);
+                const auto vertices = mesh->vertices.to(device);
+                const auto indices = mesh->indices.to(device).to(DataType::Int32);
+                const auto minimum = vertices.min(0);
+                const auto maximum = vertices.max(0);
+                const auto in_bounds = positions.ge(minimum)
+                                           .logical_and(positions.le(maximum))
+                                           .to(DataType::Float32)
+                                           .sum(1)
+                                           .eq(3);
+                const auto eligible = in_bounds.nonzero().reshape({-1}).to(DataType::Int32);
+                if (!eligible.numel())
+                    return result.ne(0);
+                const auto candidates = positions.index_select(0, eligible);
+                const auto a = vertices.index_select(0, channel(indices, 0));
+                const auto edge1 = vertices.index_select(0, channel(indices, 1)) - a;
+                const auto edge2 = vertices.index_select(0, channel(indices, 2)) - a;
+                auto parity = Tensor::zeros({eligible.numel()}, device, DataType::Int32);
+                // Broadcast points against triangles in bounded tiles; fused reduction
+                // never materialises the point-by-triangle intermediates.
+                constexpr std::size_t pair_budget = 8 * 1024 * 1024;
+                for (std::size_t face = 0; face < triangles; face += 4096) {
+                    const auto faces = std::min<std::size_t>(4096, triangles - face);
+                    const auto points_per_chunk = std::max<std::size_t>(1, pair_budget / faces);
+                    for (std::size_t point = 0; point < eligible.numel(); point += points_per_chunk) {
+                        const auto points = std::min(points_per_chunk, eligible.numel() - point);
+                        auto hits = ray_hits(
+                            candidates.slice(0, point, point + points), a.slice(0, face, face + faces),
+                            edge1.slice(0, face, face + faces), edge2.slice(0, face, face + faces));
+                        auto destination = parity.slice(0, point, point + points);
+                        destination.copy_from(destination + hits);
+                    }
+                }
+                const auto hits = parity.to(DataType::Float32);
+                result.index_add_(0, eligible, hits - (hits / 2).floor() * 2);
+                return result.ne(0);
+            }));
+    }
+
+    void evaluate_neighbour_count(NodeContext& context) {
+        const auto radius = input_float(context, "Radius", 1);
+        const bool relative = property_bool(context, "relative_to_size", false);
+        const auto inputs = relative ? std::vector<Field>{position_field(), scale_field()}
+                                     : std::vector<Field>{position_field()};
+        context.set_output("Count", operation(INT_SOCKET, inputs, [radius, relative](const auto& values) {
+                               return (relative ? relative_neighbour_counts(values[0], values[1], radius)
+                                                : voxel_neighbour_counts(values[0], radius))
+                                   .to(DataType::Int32);
+                           }));
+    }
+    void register_selection(NodeTypeRegistry& registry) {
+        const auto geo = std::string(GEOMETRY_SOCKET);
+        const auto f = std::string(FLOAT_SOCKET);
+        const auto i = std::string(INT_SOCKET);
+        const auto b = std::string(BOOL_SOCKET);
+        const auto v = std::string(VECTOR_SOCKET);
+        const auto c = std::string(COLOUR_SOCKET);
+        register_type(registry, type("lfs.box_selection", "Box Selection", "Selection",
+                                     "Select elements inside an oriented box with optional falloff.",
+                                     {in("Centre", v, glm::vec3(0)).step_size(0.01),
+                                      in("Size", v, glm::vec3(1)).minimum(0).step_size(0.01),
+                                      in("Rotation", v, glm::vec3(0)).step_size(1),
+                                      in("Falloff", f, 0.0f).minimum(0).step_size(0.01)},
+                                     {out("Selection", f)}, [](NodeContext& x) {
+                                         evaluate_box(x, false);
+                                     }));
+        register_type(registry, type("lfs.ellipsoid_selection", "Ellipsoid Selection", "Selection",
+                                     "Select elements inside an oriented ellipsoid with optional falloff.",
+                                     {in("Centre", v, glm::vec3(0)).step_size(0.01),
+                                      in("Radii", v, glm::vec3(1)).minimum(0).step_size(0.01),
+                                      in("Rotation", v, glm::vec3(0)).step_size(1),
+                                      in("Falloff", f, 0.0f).minimum(0).step_size(0.01)},
+                                     {out("Selection", f)}, [](NodeContext& x) {
+                                         evaluate_box(x, true);
+                                     }));
+        register_type(registry,
+                      type("lfs.colour_key", "Colour Key", "Selection",
+                           "Select elements by distance from a linear RGB colour.",
+                           {in("Colour", c, glm::vec3(0)).step_size(0.01),
+                            in("Tolerance", f, 0.1f).minimum(0).step_size(0.01),
+                            in("Softness", f, 0.0f).minimum(0).step_size(0.01)},
+                           {out("Selection", f)}, evaluate_colour_key));
+        register_type(registry,
+                      type("lfs.hsv_range", "HSV Range", "Selection",
+                           "Select elements within a circular hue range and saturation and value bands.",
+                           {in("Hue", f, 0.0f).range(0, 1).step_size(0.01),
+                            in("Hue Range", f, 0.1f).range(0, 1).step_size(0.01),
+                            in("Hue Softness", f, 0.0f).minimum(0).step_size(0.01),
+                            in("Saturation Min", f, 0.0f).range(0, 1).step_size(0.01),
+                            in("Saturation Max", f, 1.0f).range(0, 1).step_size(0.01),
+                            in("Value Min", f, 0.0f).range(0, 1).step_size(0.01),
+                            in("Value Max", f, 1.0f).range(0, 1).step_size(0.01),
+                            in("Softness", f, 0.0f).minimum(0).step_size(0.01)},
+                           {out("Selection", f)}, evaluate_hsv_range));
+        register_type(registry, type("lfs.inside_mesh", "Inside Mesh", "Selection",
+                                     "Select elements inside a closed mesh using ray parity.",
+                                     {in("Mesh", geo)}, {out("Selection", b)}, evaluate_inside_mesh));
+        register_type(registry, type("lfs.neighbour_count", "Neighbour Count", "Selection",
+                                     "Estimate neighbour counts using the surrounding voxel cells.",
+                                     {in("Radius", f, 1.0f).minimum(0).step_size(0.01)},
+                                     {out("Count", i)}, evaluate_neighbour_count,
+                                     {prop("relative_to_size", PropertyKind::Bool, false)}));
+    }
+
+} // namespace lfs::nodes::builtin

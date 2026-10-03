@@ -6,6 +6,7 @@
 #include "app/mcp_gui_tools.hpp"
 #include "app/mcp_app_utils.hpp"
 #include "app/mcp_event_handlers.hpp"
+#include "app/mcp_node_tools.hpp"
 #include "app/mcp_operator_tools.hpp"
 #include "app/mcp_runtime_tools.hpp"
 #include "app/mcp_screen_tools.hpp"
@@ -2270,6 +2271,7 @@ namespace lfs::app {
         register_generic_gui_runtime_tools(registry, viewer);
         register_generic_gui_ui_tools(registry, viewer);
         register_gui_screen_tools(registry, viewer);
+        register_gui_node_tools(registry, viewer);
 
         auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
         assert(viewer_impl);
@@ -5716,6 +5718,7 @@ namespace lfs::app {
         register_generic_gui_runtime_resources(registry, viewer);
         register_generic_gui_ui_resources(registry, viewer);
         register_gui_screen_resources(registry, viewer);
+        register_gui_node_resources(registry, viewer);
 
         registry.register_resource(
             McpResource{

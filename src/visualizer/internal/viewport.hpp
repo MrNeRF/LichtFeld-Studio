@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "input/navigation_gestures.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
 #include "visualizer/preferences.hpp"
@@ -171,8 +172,7 @@ class Viewport {
             // zoomSpeed is a 0..100 level (default 11) mapped linearly to the
             // fraction of the camera-to-pivot distance covered per scroll unit;
             // level 100 matches the previous fastest setting (full distance).
-            constexpr float kZoomFractionPerLevel = 0.01f;
-            dolly(delta * zoomSpeed * kZoomFractionPerLevel, carry_pivot);
+            dolly(lfs::vis::input::wheelZoomFraction(delta, zoomSpeed), carry_pivot);
         }
 
         // Moves toward the pivot by `fraction` of the camera-to-pivot distance;

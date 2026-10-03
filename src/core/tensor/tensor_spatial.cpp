@@ -14,7 +14,8 @@
 namespace lfs::core {
     using namespace internal;
 
-    Tensor radius_neighbors(const Tensor& points, const Tensor& references, const float radius) {
+    Tensor radius_neighbors(const Tensor& points, const Tensor& references, const float radius,
+                            const bool exclude_self, const Tensor* queries) {
         LFS_ASSERT_MSG(points.is_valid() && references.is_valid(), "radius_neighbors requires valid tensors");
         LFS_ASSERT_MSG(points.ndim() == 2 && points.size(1) == 3 && points.dtype() == DataType::Float32,
                        "radius_neighbors requires Float32 [N,3] points");
@@ -24,6 +25,13 @@ namespace lfs::core {
         LFS_ASSERT_MSG(std::isnormal(radius) && radius > 0.0f, "radius_neighbors radius must be positive, finite and normal");
         LFS_ASSERT_MSG(points.device() == references.device(), "radius_neighbors requires the same device");
         internal::require_same_gpu_backend(points, references, "radius_neighbors");
+        if (queries) {
+            LFS_ASSERT_MSG(queries->is_valid() && queries->ndim() == 1 && queries->numel() == points.size(0) &&
+                               (queries->dtype() == DataType::Bool || queries->dtype() == DataType::UInt8) &&
+                               queries->device() == points.device(),
+                           "radius_neighbors requires a Bool or UInt8 [N] query mask on the same device");
+            internal::require_same_gpu_backend(points, *queries, "radius_neighbors");
+        }
         const size_t count = points.size(0);
         LFS_ASSERT_MSG(count <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
                        "radius_neighbors point count exceeds int32");
@@ -33,22 +41,31 @@ namespace lfs::core {
         }
         const auto positions = points.contiguous();
         const auto mask = references.contiguous();
+        const auto query_mask = queries ? queries->contiguous() : Tensor{};
         const size_t buckets = std::bit_ceil(count);
         const auto bucket_mask = static_cast<uint32_t>(buckets - 1);
         if (points.device() == Device::GPU) {
             auto heads = internal::allocate_like(points, TensorShape{buckets}, DataType::Int32, -1.0f);
             auto next = internal::allocate_like(points, TensorShape{count}, DataType::Int32);
             pin_operands({&positions, &mask, &heads, &next});
-            const auto stream = prepare_inputs_for_stream({&positions, &mask, &heads, &next}, output.stream());
+            if (queries) {
+                pin_operands({&query_mask});
+            }
+            const auto stream = queries
+                                    ? prepare_inputs_for_stream({&positions, &mask, &heads, &next, &query_mask}, output.stream())
+                                    : prepare_inputs_for_stream({&positions, &mask, &heads, &next}, output.stream());
             internal::backend_ops_for(positions).radius_neighbors(
                 internal::storage_ref(positions), internal::storage_ref(mask),
                 internal::storage_ref(heads), internal::storage_ref(next), internal::storage_ref(output),
-                count, buckets, radius, internal::ExecContext{stream});
+                count, buckets, radius, exclude_self,
+                queries ? std::optional{internal::storage_ref(query_mask)} : std::nullopt,
+                internal::ExecContext{stream});
             return output;
         }
 
         const auto* xyz = positions.ptr<float>();
         const auto* selected = static_cast<const uint8_t*>(mask.data_ptr());
+        const auto* queried = queries ? static_cast<const uint8_t*>(query_mask.data_ptr()) : nullptr;
         auto* result = output.ptr<bool>();
         std::vector<int32_t> heads(buckets, -1), next(count, -1);
         for (size_t i = 0; i < count; ++i) {
@@ -61,7 +78,7 @@ namespace lfs::core {
             heads[bucket] = static_cast<int32_t>(i);
         }
         for (size_t i = 0; i < count; ++i)
-            result[i] = internal::pointHasNeighbor(xyz, selected, heads.data(), next.data(), i, bucket_mask, radius);
+            result[i] = (!queried || queried[i]) && internal::pointHasNeighbor(xyz, selected, heads.data(), next.data(), i, bucket_mask, radius, exclude_self);
         return output;
     }
 } // namespace lfs::core

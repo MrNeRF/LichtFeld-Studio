@@ -2093,8 +2093,8 @@ namespace lfs::vis {
                 }
                 return;
             }
-            model = scene_manager->getModelForRendering();
             scene_state = scene_manager->buildRenderState();
+            model = scene_state.combined_model;
         };
         if (!render_lock_contended) {
             sample_model_under_lock();

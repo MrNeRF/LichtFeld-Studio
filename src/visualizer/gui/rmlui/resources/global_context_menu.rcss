@@ -74,3 +74,9 @@ body {
 .context-menu-label {
     white-space: normal;
 }
+
+.context-menu-search {
+    width: 220dp;
+    height: 28dp;
+    margin: 4dp;
+}

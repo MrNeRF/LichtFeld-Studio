@@ -486,8 +486,8 @@ namespace lfs::app {
                                 {"settings", vis::screen::viewSettingsToJson(space->settings)}};
                 });
             });
+        register_pointer_tool(registry, viewer);
     }
-
     void register_gui_screen_resources(ResourceRegistry& registry, vis::Visualizer* viewer) {
         auto* const impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
         if (!impl)

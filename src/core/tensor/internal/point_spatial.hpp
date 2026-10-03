@@ -37,21 +37,31 @@ namespace lfs::core::internal {
 
     LFS_POINT_HD inline bool pointHasNeighbor(const float* points, const uint8_t* references,
                                               const int32_t* heads, const int32_t* next, size_t i,
-                                              uint32_t bucket_mask, float radius) {
+                                              uint32_t bucket_mask, float radius, bool exclude_self) {
         const float* p = points + i * 3;
         if (!finite_point(p)) {
             return false;
         }
-        if (references[i]) {
+        if (references[i] && !exclude_self) {
             return true;
         }
         const int x = cell(p[0], radius), y = cell(p[1], radius), z = cell(p[2], radius);
+        // Most neighbours share the query cell. Check it before adjacent
+        // buckets, which may contain long lists of more distant candidates.
+        const auto center = hash_cell(x, y, z, bucket_mask);
+        for (int32_t j = heads[center]; j >= 0; j = next[j])
+            if ((!exclude_self || static_cast<size_t>(j) != i) &&
+                within(p, points + static_cast<size_t>(j) * 3, radius))
+                return true;
         for (int dz = -1; dz <= 1; ++dz) {
             for (int dy = -1; dy <= 1; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
+                    if (dx == 0 && dy == 0 && dz == 0)
+                        continue;
                     const auto bucket = hash_cell(x + dx, y + dy, z + dz, bucket_mask);
                     for (int32_t j = heads[bucket]; j >= 0; j = next[j]) {
-                        if (within(p, points + static_cast<size_t>(j) * 3, radius)) {
+                        if ((!exclude_self || static_cast<size_t>(j) != i) &&
+                            within(p, points + static_cast<size_t>(j) * 3, radius)) {
                             return true;
                         }
                     }

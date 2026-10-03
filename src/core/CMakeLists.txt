@@ -263,6 +263,19 @@ set(CORE_SOURCES
         tensor_debug.cpp
         training_snapshot.cpp
         mesh_data.cpp
+        nodes/types.cpp
+        nodes/registry.cpp
+        nodes/tree.cpp
+        nodes/evaluator.cpp
+        nodes/builtin.cpp
+        nodes/builtin_common.cpp
+        nodes/builtin_input.cpp
+        nodes/builtin_utilities.cpp
+        nodes/builtin_selection.cpp
+        nodes/builtin_geometry.cpp
+        nodes/builtin_splat.cpp
+        nodes/builtin_cleanup.cpp
+        nodes/builtin_conversion.cpp
         system_info.cpp
         user_paths.cpp
         legacy_settings_migration.cpp

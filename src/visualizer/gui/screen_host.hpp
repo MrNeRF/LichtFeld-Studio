@@ -68,6 +68,7 @@ namespace lfs::vis::gui {
         struct Services {
             screen::ScreenService* screens = nullptr;
             RmlUIManager* rml = nullptr;
+            SceneManager* scene_manager = nullptr;
             GlobalContextMenu* context_menu = nullptr;
             std::function<bool(float, float)> pointer_available;
             // The screen's structure changed (areas, editors, active view).
@@ -83,6 +84,7 @@ namespace lfs::vis::gui {
         void init(Services services);
         void shutdown();
         void reloadResources();
+        NodeCanvasElement* nodeCanvas() { return node_editor_ ? node_editor_->canvas() : nullptr; }
 
         // Lays the screen out inside `work` (window pixels) for this frame.
         void layout(const screen::Rect& work, float ui_scale);
@@ -137,6 +139,7 @@ namespace lfs::vis::gui {
         // Area commands shared by headers, menus, shortcuts and scripts.
         bool toggleMaximized(screen::AreaId id);
         bool toggleMaximizedAt(float x, float y);
+        bool toggleEditor(std::string_view editor);
         screen::AreaId splitArea(screen::AreaId id, screen::SplitAxis axis);
         bool closeArea(screen::AreaId id);
         bool setEditor(screen::AreaId id, std::string_view editor);
@@ -173,6 +176,7 @@ namespace lfs::vis::gui {
         PropertiesEditor properties_;
         ScenePanelEditor scene_;
         ConsoleEditor console_;
+        std::unique_ptr<NodeEditor> node_editor_;
         PanelEditor panel_;
 
         // Panel editors shown last frame, to tell whether the panel's enabled

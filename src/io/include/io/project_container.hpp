@@ -95,6 +95,7 @@ namespace lfs::io::project {
     inline constexpr Fourcc FOURCC_VIEW = make_fourcc('V', 'I', 'E', 'W');
     inline constexpr Fourcc FOURCC_EDTR = make_fourcc('E', 'D', 'T', 'R');
     inline constexpr Fourcc FOURCC_SEQR = make_fourcc('S', 'E', 'Q', 'R');
+    inline constexpr Fourcc FOURCC_NODE = make_fourcc('N', 'O', 'D', 'E');
     inline constexpr Fourcc FOURCC_METR = make_fourcc('M', 'E', 'T', 'R');
     inline constexpr Fourcc FOURCC_THMB = make_fourcc('T', 'H', 'M', 'B');
     inline constexpr Fourcc FOURCC_DSRC = make_fourcc('D', 'S', 'R', 'C');

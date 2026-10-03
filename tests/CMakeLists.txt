@@ -70,6 +70,8 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         # CUDA builds run these in lichtfeld_tests.
         list(APPEND LICHTFELD_VISUALIZER_TEST_SOURCES
             test_gpu_memory_query.cpp
+            test_node_canvas_widgets.cpp
+            test_rml_static_style_boundaries.cpp
             test_viewer_gpu_memory.cpp)
     endif()
     add_executable(lichtfeld_visualizer_tests EXCLUDE_FROM_ALL
@@ -479,6 +481,12 @@ if(NOT LFS_HAS_CUDA)
         test_tensor_vulkan_random.cpp
         test_tensor_vulkan_buffer.cpp
         test_tensor_backend_semantics.cpp
+        test_nodes_core.cpp
+        test_nodes_scene.cpp
+        test_nodes_modifier_manager.cpp
+        test_node_canvas_interaction.cpp
+        test_mcp_node_tools.cpp
+        test_mcp_screen_tools.cpp
         test_tensor_metal.cpp
         test_camera_priors_portable.cpp
         test_pipelined_loader_backends.cpp
@@ -524,13 +532,23 @@ if(NOT LFS_HAS_CUDA)
         ${CMAKE_BINARY_DIR}/include
         ${CMAKE_SOURCE_DIR}/tests
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/visualizer
         ${CMAKE_SOURCE_DIR}/src/training
         ${CMAKE_SOURCE_DIR}/src/app/include
     )
     lfs_tensor_private_access(${TEST_SOURCES})
+    target_sources(lichtfeld_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/app/mcp_node_tools.cpp
+        ${CMAKE_SOURCE_DIR}/src/app/mcp_node_resources.cpp
+        ${CMAKE_SOURCE_DIR}/src/app/mcp_node_editor_tools.cpp
+        ${CMAKE_SOURCE_DIR}/src/app/mcp_screen_tools.cpp
+        ${CMAKE_SOURCE_DIR}/src/app/mcp_pointer_tool.cpp)
+    target_link_libraries(lichtfeld_tests PRIVATE lfs_mcp)
     target_link_libraries(lichtfeld_tests PRIVATE
         lfs_rendering_tensor
         lfs_core
+        lfs_io
+        lfs_visualizer
         GTest::gtest
         Vulkan::Vulkan
     )
@@ -568,6 +586,10 @@ message(STATUS "Tests: LibTorch ${Torch_VERSION} found for tensor comparison tes
 
 set(TEST_FILES
     licht_test_support.cpp
+    test_nodes_core.cpp
+    test_nodes_scene.cpp
+    test_nodes_modifier_manager.cpp
+    test_node_canvas_interaction.cpp
     test_assert_hardening.cpp
     test_cuda_error.cpp
     test_exportable_storage.cpp
@@ -760,6 +782,7 @@ set(TEST_FILES
     test_mcp_shared_scene_tools.cpp
     test_mcp_sequencer_tools.cpp
     test_mcp_screen_tools.cpp
+    test_mcp_node_tools.cpp
     test_mcp_render_capture_utils.cpp
     test_tcp_publisher.cpp
     test_view_info_json.cpp
@@ -866,6 +889,7 @@ set(TEST_FILES
     test_rml_drag_payload.cpp
     test_context_menu_placement.cpp
     test_rml_static_style_boundaries.cpp
+    test_node_canvas_widgets.cpp
     test_sequencer_regressions.cpp
     test_tensor_storage_version.cpp
     test_tensor_backend_selection.cpp
@@ -1019,6 +1043,9 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/python/lfs/rml_im_mode_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_screen_tools.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/mcp_node_tools.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/mcp_node_resources.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/mcp_node_editor_tools.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_operator_schema.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_output_paths.cpp

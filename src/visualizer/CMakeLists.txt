@@ -27,6 +27,11 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         core/parameter_manager.cpp
         core/services.cpp
 
+        # Geometry node modifiers
+        nodes/modifier_manager.cpp
+        nodes/modifier_manager_evaluation.cpp
+        nodes/modifier_evaluation_worker.cpp
+
         # Project session chapters
         project/session_state.cpp
         project/project_lifecycle.cpp
@@ -106,6 +111,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/layout_state.cpp
         gui/screen_host.cpp
         gui/area_editors.cpp
+        gui/node_canvas_interaction.cpp
+        gui/node_canvas_layout.cpp
         gui/async_task_manager.cpp
         gui/gallery_scene_publication.cpp
         gui/bounds_gizmo.cpp
@@ -164,6 +171,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         input/input_controller.cpp
         input/input_router.cpp
         input/input_bindings.cpp
+        input/injected_pointer.cpp
         input/sdl_key_mapping.cpp
 
         # Training integration
@@ -235,6 +243,12 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/color_picker_element.cpp
         gui/rmlui/elements/crf_curve_element.cpp
         gui/rmlui/elements/loss_graph_element.cpp
+        gui/rmlui/elements/node_canvas_element.cpp
+        gui/rmlui/elements/node_canvas_widgets.cpp
+        gui/rmlui/elements/node_canvas_fields.cpp
+        gui/rmlui/elements/node_canvas_dom.cpp
+        gui/rmlui/elements/node_canvas_status.cpp
+        gui/rmlui/elements/node_canvas_menu.cpp
         gui/rmlui/elements/vram_timeline_element.cpp
         gui/rmlui/elements/python_editor_element.cpp
         gui/rmlui/elements/scene_graph_element.cpp

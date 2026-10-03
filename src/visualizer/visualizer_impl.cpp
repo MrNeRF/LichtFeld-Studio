@@ -54,6 +54,7 @@
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
 #include "visualizer_impl.hpp"
 #include "window/vulkan_context.hpp"
 #include <SDL3/SDL_events.h>
@@ -2809,6 +2810,11 @@ namespace lfs::vis {
                 std::launch::async, [] { preloadVkSplatSpirvFiles(); });
         }
         update_work_processed_ = false;
+
+        if (scene_manager_ && presented_gui_frame)
+            scene_manager_->modifierManager().recordViewerFrame(
+                std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - now).count(),
+                project_frame_started.has_value());
 
         // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
         // The demand walk is the expensive part of the frame loop (notably the

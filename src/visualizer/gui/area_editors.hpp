@@ -18,11 +18,20 @@
 #include <utility>
 #include <vector>
 
+namespace lfs::vis {
+    class SceneManager;
+}
+
 // The GUI half of the editor types (the model half is screen/editor_type):
 // how each editor draws its header controls and its content into an area.
 // One instance per editor type serves every area showing it; per-area state
 // lives in the area's SpaceData.
 namespace lfs::vis::gui {
+
+    class GlobalContextMenu;
+    class NodeCanvasElement;
+    class RmlPanelHost;
+    class RmlUIManager;
 
     struct AreaFrame {
         screen::AreaId id;
@@ -136,6 +145,34 @@ namespace lfs::vis::gui {
     class ConsoleEditor final : public AreaEditor {
     public:
         void draw(const AreaDrawContext& ctx) override;
+    };
+
+    class NodeEditor final : public AreaEditor {
+    public:
+        NodeEditor(RmlUIManager& rml, SceneManager& scene_manager, GlobalContextMenu* context_menu);
+        ~NodeEditor() override;
+        NodeCanvasElement* canvas() {
+            bindCanvas();
+            return canvas_;
+        }
+
+        void header(const AreaFrame& area, const screen::Screen& screen,
+                    std::vector<HeaderItem>& items) const override;
+        void headerAction(const AreaFrame& area, screen::Screen& screen, std::string_view action,
+                          float x, float y) override;
+        void draw(const AreaDrawContext& ctx) override;
+        [[nodiscard]] bool needsAnimationFrame() const override;
+
+    private:
+        void bindCanvas();
+
+        SceneManager* scene_manager_ = nullptr;
+        GlobalContextMenu* context_menu_ = nullptr;
+        std::unique_ptr<RmlPanelHost> host_;
+        NodeCanvasElement* canvas_ = nullptr;
+        bool sidebar_visible_ = true;
+        bool preview_selection_ = true;
+        std::uint64_t area_id_ = 0;
     };
 
     // Any registered panel shown as an editor of its own (the sequencer,

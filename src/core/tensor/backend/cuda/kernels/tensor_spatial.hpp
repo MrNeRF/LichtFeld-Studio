@@ -9,5 +9,6 @@
 namespace lfs::core::tensor_ops {
     void launch_radius_neighbors(const float* points, const uint8_t* references,
                                  int32_t* heads, int32_t* next, bool* output,
-                                 size_t count, size_t buckets, float radius, cudaStream_t stream);
+                                 size_t count, size_t buckets, float radius, bool exclude_self,
+                                 const uint8_t* queries, cudaStream_t stream);
 }

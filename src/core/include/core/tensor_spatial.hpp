@@ -120,10 +120,14 @@ namespace lfs::core {
 
     // For each Float32 [N,3] point, return whether a reference point is within
     // the inclusive radius. references is a Bool or UInt8 [N] mask; nonzero
-    // entries participate, including the point itself. Nonfinite points never
+    // entries participate, including the point itself unless exclude_self is set.
+    // Distinct points at identical positions still match. Nonfinite points never
     // match. Inputs share a device/backend; the Bool [N] result preserves it.
     // Radius must be positive, finite and normal (GPU subnormal arithmetic can
     // flush to zero). Scratch space is O(N), independent
     // of scene extent. Dense neighborhoods can still require quadratic work.
-    LFS_CORE_API Tensor radius_neighbors(const Tensor& points, const Tensor& references, float radius);
+    // An optional Bool/UInt8 [N] query mask skips unused queries (false output)
+    // without removing those points from the reference set.
+    LFS_CORE_API Tensor radius_neighbors(const Tensor& points, const Tensor& references, float radius,
+                                         bool exclude_self = false, const Tensor* queries = nullptr);
 } // namespace lfs::core

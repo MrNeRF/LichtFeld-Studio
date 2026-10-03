@@ -617,6 +617,7 @@ namespace lfs::vis::gui {
         chapter(pj::FOURCC_VIEW, document.view());
         chapter(pj::FOURCC_EDTR, document.editor());
         chapter(pj::FOURCC_SEQR, document.sequencer());
+        chapter(pj::FOURCC_NODE, document.nodes());
         chapter(pj::FOURCC_METR, document.metrics());
         for (const auto& [id, file] : embedded_files) {
             const auto bytes = std::filesystem::file_size(file);

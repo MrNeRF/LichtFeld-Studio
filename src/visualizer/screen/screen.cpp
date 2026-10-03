@@ -516,6 +516,13 @@ namespace lfs::vis::screen {
             .icon = "editor-console",
             .placement = {.anchor = EditorPlacement::Anchor::ActiveView, .side = Side::Right, .fraction = 0.4f},
         });
+        registry.add(EditorType{
+            .id = std::string(editors::kNodeEditor),
+            .label = "Node Editor",
+            .label_key = "editor.node_editor",
+            .icon = "layout-grid",
+            .placement = {.anchor = EditorPlacement::Anchor::ActiveView, .side = Side::Bottom, .fraction = 0.38f},
+        });
     }
 
 } // namespace lfs::vis::screen

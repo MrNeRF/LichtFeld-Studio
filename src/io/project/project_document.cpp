@@ -171,7 +171,7 @@ namespace lfs::io::project {
                    fourcc == FOURCC_REFS || fourcc == FOURCC_SPLT ||
                    fourcc == FOURCC_PCLD || fourcc == FOURCC_MESH ||
                    fourcc == FOURCC_GUIL || fourcc == FOURCC_VIEW ||
-                   fourcc == FOURCC_EDTR || fourcc == FOURCC_SEQR ||
+                   fourcc == FOURCC_EDTR || fourcc == FOURCC_SEQR || fourcc == FOURCC_NODE ||
                    fourcc == FOURCC_METR;
         }
 
@@ -185,7 +185,7 @@ namespace lfs::io::project {
                    fourcc == FOURCC_SCNG || fourcc == FOURCC_SELM ||
                    fourcc == FOURCC_REFS || fourcc == FOURCC_GUIL ||
                    fourcc == FOURCC_VIEW || fourcc == FOURCC_EDTR ||
-                   fourcc == FOURCC_SEQR || fourcc == FOURCC_METR;
+                   fourcc == FOURCC_SEQR || fourcc == FOURCC_NODE || fourcc == FOURCC_METR;
         }
 
         bool has_unknown_json_root(const Fourcc fourcc,
@@ -221,6 +221,8 @@ namespace lfs::io::project {
             } else if (fourcc == FOURCC_SEQR) {
                 known = {"version", "timeline", "ply_sequences", "playhead",
                          "loop_mode", "playback_speed", "preferences"};
+            } else if (fourcc == FOURCC_NODE) {
+                known = {"schema_version", "trees", "stacks"};
             } else {
                 return false;
             }
@@ -906,6 +908,7 @@ namespace lfs::io::project {
         ViewSessionChapter view;
         EditorSessionChapter editor;
         SequencerSessionChapter sequencer;
+        NodesSessionChapter nodes;
         MetricsChapter metrics;
 
         std::unordered_map<lfs::core::Uuid, SplatChapterPayload> splats;
@@ -1085,6 +1088,9 @@ namespace lfs::io::project {
                 return valid;
             }
             if (auto valid = sequencer.validate(); !valid) {
+                return valid;
+            }
+            if (auto valid = this->nodes.validate(); !valid) {
                 return valid;
             }
             if (auto valid = metrics.validate(); !valid) {
@@ -1997,6 +2003,7 @@ namespace lfs::io::project {
         bool have_view = false;
         bool have_editor = false;
         bool have_sequencer = false;
+        bool have_nodes = false;
         bool have_metrics = false;
         double chapter_read_ms = 0.0;
         const auto chapter_scan_started =
@@ -2298,6 +2305,24 @@ namespace lfs::io::project {
                     impl->missing_retained_json_capability = true;
                 }
                 have_sequencer = true;
+            } else if (row.key.fourcc == FOURCC_NODE) {
+                if (have_nodes) {
+                    return fail<ProjectDocument>(
+                        lfs::ErrorCode::DataLoss,
+                        "The project contains duplicate NODE chapters.",
+                        "Only one NODE instance is allowed", "NODE");
+                }
+                auto chapter = NodesSessionChapter::from_bytes(*bytes);
+                if (!chapter) {
+                    return std::move(chapter).error();
+                }
+                impl->nodes = std::move(*chapter);
+                if (has_unknown_json_root(FOURCC_NODE, impl->nodes.dom()) &&
+                    !shared_reader->commit().required_writer_capabilities.contains(
+                        RETAINED_JSON_FIELDS)) {
+                    impl->missing_retained_json_capability = true;
+                }
+                have_nodes = true;
             } else if (row.key.fourcc == FOURCC_METR) {
                 if (have_metrics) {
                     return fail<ProjectDocument>(
@@ -2479,6 +2504,7 @@ namespace lfs::io::project {
                 "VIEW",
                 "EDTR",
                 "SEQR",
+                "NODE",
                 "METR",
             };
             for (const auto& [uuid, ignored] : impl_->splats) {
@@ -2649,6 +2675,15 @@ namespace lfs::io::project {
     ProjectDocument::edit_sequencer() noexcept {
         impl_->mark(FOURCC_SEQR);
         return impl_->sequencer;
+    }
+
+    const NodesSessionChapter& ProjectDocument::nodes() const noexcept {
+        return impl_->nodes;
+    }
+
+    NodesSessionChapter& ProjectDocument::edit_nodes() noexcept {
+        impl_->mark(FOURCC_NODE);
+        return impl_->nodes;
     }
 
     const MetricsChapter& ProjectDocument::metrics() const noexcept {
@@ -3877,7 +3912,8 @@ namespace lfs::io::project {
             has_unknown_json_root(FOURCC_GUIL, impl_->gui_layout.dom()) ||
             has_unknown_json_root(FOURCC_VIEW, impl_->view.dom()) ||
             has_unknown_json_root(FOURCC_EDTR, impl_->editor.dom()) ||
-            has_unknown_json_root(FOURCC_SEQR, impl_->sequencer.dom());
+            has_unknown_json_root(FOURCC_SEQR, impl_->sequencer.dom()) ||
+            has_unknown_json_root(FOURCC_NODE, impl_->nodes.dom());
         if (retains_unknown_json) {
             commit.extra_writer_capabilities.set(
                 RETAINED_JSON_FIELDS);
@@ -3953,6 +3989,7 @@ namespace lfs::io::project {
         const ChunkKey view_key = impl_->key(FOURCC_VIEW);
         const ChunkKey editor_key = impl_->key(FOURCC_EDTR);
         const ChunkKey sequencer_key = impl_->key(FOURCC_SEQR);
+        const ChunkKey nodes_key = impl_->key(FOURCC_NODE);
         const ChunkKey metrics_key = impl_->key(FOURCC_METR);
 
         if (impl_->dirty_or_new(references_key)) {
@@ -3990,6 +4027,9 @@ namespace lfs::io::project {
         if (impl_->dirty_or_new(sequencer_key)) {
             add_encoded(sequencer_key, impl_->sequencer.to_bytes(),
                         json_options());
+        }
+        if (impl_->dirty_or_new(nodes_key)) {
+            add_encoded(nodes_key, impl_->nodes.to_bytes(), json_options());
         }
         if (impl_->dirty_or_new(metrics_key)) {
             auto bytes = impl_->metrics.to_bytes();
@@ -4104,6 +4144,7 @@ namespace lfs::io::project {
             view_key,
             editor_key,
             sequencer_key,
+            nodes_key,
             metrics_key,
         };
         for (const auto& [uuid, ignored] : impl_->splats) {
@@ -5389,6 +5430,7 @@ namespace lfs::io::project {
                 .editor = impl_->editor,
                 .view = impl_->view,
                 .sequencer = impl_->sequencer,
+                .nodes = impl_->nodes,
                 .metrics = impl_->metrics,
             };
 

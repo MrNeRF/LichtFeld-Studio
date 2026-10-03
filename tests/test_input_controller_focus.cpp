@@ -1680,7 +1680,7 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 32"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": 33"), std::string::npos); // PROFILE_VERSION
         EXPECT_NE(contents.find("Gallery Primary Action"), std::string::npos);
         EXPECT_NE(contents.find("Copy Gallery Link"), std::string::npos);
         EXPECT_NE(contents.find("Refresh Assets"), std::string::npos);
@@ -1748,7 +1748,7 @@ namespace lfs::vis {
         const auto version_key = contents.find("\"version\":");
         ASSERT_NE(version_key, std::string::npos);
         EXPECT_EQ(contents.find("\"version\":", version_key + 1), std::string::npos);
-        EXPECT_NE(contents.find("\"version\": 32"), std::string::npos);
+        EXPECT_NE(contents.find("\"version\": 33"), std::string::npos);
         EXPECT_NE(contents.find("Toggle MCP Server"), std::string::npos);
         EXPECT_NE(contents.find("Window size"), std::string::npos);
         EXPECT_NE(contents.find("Window drag"), std::string::npos);

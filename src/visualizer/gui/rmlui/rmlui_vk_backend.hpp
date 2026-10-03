@@ -53,7 +53,8 @@
 class RenderInterface_VK : public Rml::RenderInterface {
 public:
     static constexpr uint32_t kSwapchainBackBufferCount = 3;
-    static constexpr VkDeviceSize kVideoMemoryForAllocation = 4 * 1024 * 1024; // [bytes]
+    // Retained panel geometry plus three in-flight generations of canvas meshes.
+    static constexpr VkDeviceSize kVideoMemoryForAllocation = 16 * 1024 * 1024; // [bytes]
 
     RenderInterface_VK();
     ~RenderInterface_VK();

@@ -1065,6 +1065,7 @@ apply_registered_chrome:
                             masked_resize_input.mouse_button_events.clear();
                             masked_resize_input.mouse_wheel = 0.0f;
                             masked_resize_input.mouse_wheel_x = 0.0f;
+                            masked_resize_input.pinch_scale = 1.0f;
                             panel_input = &masked_resize_input;
                         }
                         const auto result = snap.panel->renderDirect({

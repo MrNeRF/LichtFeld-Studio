@@ -2127,10 +2127,13 @@ struct RadiusParams {
     device int* heads;
     device int* next;
     device uchar* output;
+    device const uchar* queries;
     uint count;
     uint bucket_mask;
     float radius;
-    uint padding;
+    uint exclude_self;
+    uint query_begin;
+    uint query_end;
 };
 
 static float3 radius_point(constant RadiusParams& params, uint i) {
@@ -2156,8 +2159,15 @@ static bool within_radius(float3 a, float3 b, float radius) {
 }
 
 kernel void radius_neighbors(constant RadiusParams& params [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    i += params.query_begin;
+    if (i >= params.query_end)
+        return;
     if (i >= params.count)
         return;
+    if (kOp == 1 && params.queries && params.queries[i] == 0) {
+        params.output[i] = 0;
+        return;
+    }
     const float3 point = radius_point(params, i);
     const bool finite = all(isfinite(point));
     if (kOp == 0) {
@@ -2167,14 +2177,19 @@ kernel void radius_neighbors(constant RadiusParams& params [[buffer(0)]], uint i
         }
         return;
     }
-    bool found = finite && params.references[i] != 0;
+    bool found = finite && params.exclude_self == 0 && params.references[i] != 0;
     const int3 center = radius_cell(point, params.radius);
+    for (int j = finite ? params.heads[radius_bucket(center, params.bucket_mask)] : -1; j >= 0 && !found; j = params.next[j])
+        found = (params.exclude_self == 0 || uint(j) != i) && within_radius(point, radius_point(params, uint(j)), params.radius);
     for (int z = -1; finite && !found && z <= 1; ++z) {
         for (int y = -1; !found && y <= 1; ++y) {
             for (int x = -1; !found && x <= 1; ++x) {
+                if (x == 0 && y == 0 && z == 0)
+                    continue;
                 for (int j = params.heads[radius_bucket(center + int3(x, y, z), params.bucket_mask)]; j >= 0 && !found;
                      j = params.next[j])
-                    found = within_radius(point, radius_point(params, uint(j)), params.radius);
+                    found = (params.exclude_self == 0 || uint(j) != i) &&
+                            within_radius(point, radius_point(params, uint(j)), params.radius);
             }
         }
     }

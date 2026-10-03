@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/global_context_menu.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "gui/context_menu_placement.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -18,9 +19,11 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Input.h>
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <format>
 
 namespace lfs::vis::gui {
@@ -66,6 +69,9 @@ namespace lfs::vis::gui {
         }
         ctor.RegisterArray<std::vector<ContextMenuItem>>();
         ctor.Bind("items", &items_);
+        ctor.Bind("searchable", &searchable_);
+        search_label_ = LOC("scene.search");
+        ctor.Bind("search_label", &search_label_);
         menu_model_ = ctor.GetModelHandle();
 
         try {
@@ -87,6 +93,8 @@ namespace lfs::vis::gui {
 
             el_backdrop_->AddEventListener(Rml::EventId::Click, &listener_);
             el_ctx_menu_->AddEventListener(Rml::EventId::Click, &listener_);
+            if (auto* search = doc_->GetElementById("ctx-search"))
+                search->AddEventListener("input", &listener_);
         } catch (const std::exception& e) {
             LOG_ERROR("GlobalContextMenu: resource not found: {}", e.what());
         }
@@ -142,6 +150,8 @@ namespace lfs::vis::gui {
 
             el_backdrop_->AddEventListener(Rml::EventId::Click, &listener_);
             el_ctx_menu_->AddEventListener(Rml::EventId::Click, &listener_);
+            if (auto* search = doc_->GetElementById("ctx-search"))
+                search->AddEventListener("input", &listener_);
         } catch (const std::exception& e) {
             LOG_ERROR("GlobalContextMenu: resource not found during reload: {}", e.what());
             return;
@@ -174,17 +184,24 @@ namespace lfs::vis::gui {
         return true;
     }
 
-    void GlobalContextMenu::request(std::vector<ContextMenuItem> items, float screen_x, float screen_y,
-                                    ActionCallback callback) {
+    void GlobalContextMenu::request(std::vector<ContextMenuItem> items, float screen_x,
+                                    float screen_y, ActionCallback callback,
+                                    const bool searchable) {
         pending_items_ = std::move(items);
+        searchable_ = searchable;
         callback_ = std::move(callback);
         pending_x_ = screen_x;
         pending_y_ = screen_y;
         pending_open_ = true;
         initContext();
         if (ctx_ && el_ctx_menu_ && el_backdrop_) {
-            items_ = pending_items_;
+            all_items_ = pending_items_;
+            items_ = all_items_;
             menu_model_.DirtyVariable("items");
+            menu_model_.DirtyVariable("searchable");
+            if (auto* search = dynamic_cast<Rml::ElementFormControlInput*>(
+                    doc_->GetElementById("ctx-search")))
+                search->SetValue("");
             el_ctx_menu_->SetClass("visible", true);
             el_backdrop_->SetProperty("display", "block");
             open_ = true;
@@ -414,6 +431,11 @@ namespace lfs::vis::gui {
     void GlobalContextMenu::EventListener::ProcessEvent(Rml::Event& event) {
         assert(owner);
         auto* target = event.GetTargetElement();
+        if (target && target->GetId() == "ctx-search") {
+            if (const auto* input = dynamic_cast<Rml::ElementFormControlInput*>(target))
+                owner->filterItems(input->GetValue());
+            return;
+        }
         while (target && target != owner->el_ctx_menu_ && target->GetId() != "backdrop" &&
                !target->HasAttribute("data-ctx-action"))
             target = target->GetParentNode();
@@ -437,6 +459,44 @@ namespace lfs::vis::gui {
                 owner->result_ = action;
             }
         }
+    }
+
+    void GlobalContextMenu::filterItems(const std::string_view query) {
+        const auto lowercase = [](std::string value) {
+            std::ranges::transform(value, value.begin(), [](const unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+            return value;
+        };
+        const std::string needle = lowercase(std::string(query));
+        if (needle.empty()) {
+            items_ = all_items_;
+        } else {
+            items_.clear();
+            const ContextMenuItem* category = nullptr;
+            bool category_added = false;
+            for (const auto& item : all_items_) {
+                if (item.is_label) {
+                    category = &item;
+                    category_added = false;
+                    continue;
+                }
+                const bool matches_label = lowercase(item.label).contains(needle);
+                const bool matches_category =
+                    category && lowercase(category->label).contains(needle);
+                if (!matches_label && !matches_category)
+                    continue;
+                if (category && !category_added) {
+                    items_.push_back(*category);
+                    category_added = true;
+                }
+                items_.push_back(item);
+            }
+        }
+        menu_model_.DirtyVariable("items");
+        if (ctx_)
+            ctx_->Update();
+        render_needed_ = true;
     }
 
 } // namespace lfs::vis::gui

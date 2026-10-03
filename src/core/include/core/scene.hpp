@@ -158,6 +158,9 @@ namespace lfs::core {
         std::unique_ptr<lfs::core::SplatData> model;
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
         std::shared_ptr<lfs::core::MeshData> mesh;
+        std::shared_ptr<lfs::core::SplatData> evaluated_model;
+        std::shared_ptr<lfs::core::PointCloud> evaluated_point_cloud;
+        std::shared_ptr<lfs::core::MeshData> evaluated_mesh;
         std::unique_ptr<CropBoxData> cropbox;
         std::unique_ptr<EllipsoidData> ellipsoid;
         std::unique_ptr<KeyframeData> keyframe;
@@ -298,6 +301,10 @@ namespace lfs::core {
             NodeId id,
             bool keep_children = false);
         void replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model);
+        void replaceNodePointCloud(const std::string& name,
+                                   std::shared_ptr<lfs::core::PointCloud> point_cloud);
+        void replaceNodeMesh(const std::string& name,
+                             std::shared_ptr<lfs::core::MeshData> mesh);
         // Swap a node's model in place, returning the previous model so the caller can
         // recycle its (e.g. Vulkan-external) backing storage. Cheap: no disk/parse/upload,
         // just a pointer swap + MODEL_CHANGED. Used by the PLY-sequence streaming player.
@@ -367,6 +374,19 @@ namespace lfs::core {
         [[nodiscard]] NodeId getNodeIdByUuid(const Uuid& uuid) const;
         [[nodiscard]] Uuid getNodeUuid(NodeId id) const;
         void markPayloadDiverged(NodeId id);
+
+        void setNodeEvaluatedPayload(NodeId id, std::shared_ptr<lfs::core::SplatData> model,
+                                     std::shared_ptr<lfs::core::PointCloud> point_cloud = {},
+                                     std::shared_ptr<lfs::core::MeshData> mesh = {});
+        void setNodeEvaluatedPayload(const Uuid& uuid, std::shared_ptr<lfs::core::SplatData> model,
+                                     std::shared_ptr<lfs::core::PointCloud> point_cloud = {},
+                                     std::shared_ptr<lfs::core::MeshData> mesh = {});
+        void clearNodeEvaluatedPayload(NodeId id);
+        void clearNodeEvaluatedPayload(const Uuid& uuid);
+        [[nodiscard]] bool hasEvaluatedPayload(NodeId id) const;
+        [[nodiscard]] const lfs::core::SplatData* effectiveModel(const SceneNode& node) const;
+        [[nodiscard]] const lfs::core::PointCloud* effectivePointCloud(const SceneNode& node) const;
+        [[nodiscard]] const lfs::core::MeshData* effectiveMesh(const SceneNode& node) const;
 
         [[nodiscard]] bool isNodeEffectivelyVisible(NodeId id) const;
         [[nodiscard]] glm::vec3 getNodeBoundsCenter(NodeId id) const;

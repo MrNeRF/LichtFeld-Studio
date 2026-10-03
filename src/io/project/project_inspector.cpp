@@ -42,7 +42,8 @@ namespace lfs::io::project {
             const bool is_content = kind == FOURCC_SCNG || kind == FOURCC_REFS ||
                                     kind == FOURCC_DSRC || kind == FOURCC_SPLT ||
                                     kind == FOURCC_CKPT || kind == FOURCC_SELM;
-            if (!is_content && kind != FOURCC_VIEW && kind != FOURCC_SEQR) {
+            if (!is_content && kind != FOURCC_VIEW && kind != FOURCC_SEQR &&
+                kind != FOURCC_NODE) {
                 continue;
             }
             Evidence bytes{};

@@ -18,6 +18,7 @@
 #include "input/input_router.hpp"
 #include "input/input_types.hpp"
 #include "input/key_codes.hpp"
+#include "input/navigation_gestures.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "io/loader.hpp"
@@ -55,19 +56,7 @@ namespace lfs::vis {
         constexpr double kCameraContextMenuDragThreshold = 4.0;
         constexpr double kCameraFrustumClickThreshold = 5.0;
         constexpr int kDepthWindowModifiers = input::KEYMOD_SHIFT | input::KEYMOD_ALT;
-        // SDL reports trackpad scrolling in fractional lines of about 10 px
-        // (macOS's default line height, SDL's Wayland scaling).
-        constexpr float kTrackpadPixelsPerScrollLine = 10.0f;
-        // At the default trackpad zoom speed a pinch zooms about the square of
-        // the finger scale, and Ctrl+swipe zooms 2x per ~14 scroll lines.
-        constexpr float kPinchZoomExponent = 2.0f;
-        constexpr float kTrackpadZoomPerLine = 0.05f;
         namespace string_keys = lichtfeld::Strings;
-
-        // Trackpad speed levels are 1..100; 50 is 1x and every 25 levels doubles.
-        [[nodiscard]] float trackpadSpeedFactor(const float level) {
-            return std::exp2((level - 50.0f) / 25.0f);
-        }
 
         // Scroll-stepped adjustments follow the delta: whole wheel notches keep
         // their exact step while fractional trackpad deltas stay smooth.
@@ -681,7 +670,7 @@ namespace lfs::vis {
     }
 
     bool InputController::isMouseButtonPressed(int app_button) const {
-        SDL_MouseButtonFlags buttons = SDL_GetMouseState(nullptr, nullptr);
+        const SDL_MouseButtonFlags buttons = input::mouseButtons();
         switch (app_button) {
         case static_cast<int>(input::AppMouseButton::LEFT): return (buttons & SDL_BUTTON_LMASK) != 0;
         case static_cast<int>(input::AppMouseButton::RIGHT): return (buttons & SDL_BUTTON_RMASK) != 0;
@@ -1419,7 +1408,7 @@ namespace lfs::vis {
         const int hover_modifiers = getModifierKeys();
         const bool depth_window_modifiers =
             (hover_modifiers & kDepthWindowModifiers) == kDepthWindowModifiers;
-        const bool no_mouse_buttons = SDL_GetMouseState(nullptr, nullptr) == 0;
+        const bool no_mouse_buttons = input::mouseButtons() == 0;
         if (no_mouse_buttons && !isNearSplitter(x, y) &&
             applyDepthWindowHoverCursor(x, y, depth_window_modifiers)) {
             hovered_camera_id_ = -1;
@@ -1650,9 +1639,7 @@ namespace lfs::vis {
         Swipe swipe = Swipe::None;
         const bool chord = !held_keys_.empty() &&
                            scroll_action != bindings_.getActionForScroll(tool_mode, mods);
-        const bool trackpad_swipe =
-            trackpad_.device == NavigationDevice::Trackpad ||
-            (trackpad_.device == NavigationDevice::Automatic && trackpad_touches_ >= 2);
+        const bool trackpad_swipe = input::trackpadSwipe(trackpad_, trackpad_touches_);
         if (trackpad_swipe && !chord) {
             if (mods == input::MODIFIER_NONE)
                 swipe = trackpad_.swipe_pans ? Swipe::Pan : Swipe::Orbit;
@@ -1704,7 +1691,7 @@ namespace lfs::vis {
             // Move like a middle/right drag. SDL deltas already follow the OS
             // natural-scrolling setting, so (-x, y) is where the content goes.
             const glm::vec2 drag = glm::vec2(static_cast<float>(-xoff), static_cast<float>(yoff)) *
-                                   kTrackpadPixelsPerScrollLine * trackpadSpeedFactor(trackpad_.swipe_speed) *
+                                   input::swipePixels(trackpad_.swipe_speed) *
                                    input::windowPixelScale(window_);
             // A concurrent mouse drag owns the camera's drag state.
             if (drag_mode_ != DragMode::None || glm::length(drag) < 0.01f)
@@ -1728,7 +1715,7 @@ namespace lfs::vis {
             target_viewport.camera.rotate_roll(delta);
         } else if (swipe == Swipe::Zoom) {
             zoomViewportBy(target_viewport,
-                           std::exp(delta * kTrackpadZoomPerLine * trackpadSpeedFactor(trackpad_.zoom_speed)));
+                           input::swipeZoomFactor(delta, trackpad_.zoom_speed));
         } else if (scroll_action == input::Action::CAMERA_ZOOM) {
             zoomViewport(target_viewport, delta);
         } else {
@@ -1761,7 +1748,7 @@ namespace lfs::vis {
         target_viewport.camera.finishGlide();
 
         zoomViewportBy(target_viewport,
-                       std::pow(scale, kPinchZoomExponent * trackpadSpeedFactor(trackpad_.zoom_speed)));
+                       input::pinchZoomFactor(scale, trackpad_.zoom_speed));
         onCameraMovementStart();
         publishCameraMove(&target_viewport);
     }
@@ -1896,7 +1883,7 @@ namespace lfs::vis {
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
         if (op::operators().activeModalId() !=
                 op::to_string(op::BuiltinOp::DepthWindowDrag) &&
-            SDL_GetMouseState(nullptr, nullptr) == 0 &&
+            input::mouseButtons() == 0 &&
             !isNearSplitter(mx, my) &&
             !applyDepthWindowHoverCursor(
                 mx, my, (mods & kDepthWindowModifiers) == kDepthWindowModifiers)) {
@@ -1989,6 +1976,11 @@ namespace lfs::vis {
             case input::Action::TOGGLE_MAXIMIZE_AREA:
                 if (gui)
                     (void)gui->screenHost().toggleMaximizedAt(static_cast<float>(mx), static_cast<float>(my));
+                return;
+
+            case input::Action::TOGGLE_NODE_EDITOR:
+                if (gui)
+                    (void)gui->screenHost().toggleEditor(screen::editors::kNodeEditor);
                 return;
 
             case input::Action::TOGGLE_SPLIT_VIEW:
@@ -2367,7 +2359,8 @@ namespace lfs::vis {
         maybeInitializeDepthViewRange();
 
         if (input_router_) {
-            const bool any_mouse_buttons_pressed = SDL_GetMouseState(nullptr, nullptr) != 0;
+            const bool any_mouse_buttons_pressed =
+                input::mouseButtons() != 0;
             input_router_->syncPressedMouseButtons(any_mouse_buttons_pressed);
         }
 

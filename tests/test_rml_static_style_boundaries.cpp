@@ -69,6 +69,23 @@ TEST(RmlStaticStyleBoundaries, ImportDialogsShareOneStaticStylesheet) {
     EXPECT_TRUE(containsPath(resume_stylesheets, import_dialog_rcss));
 }
 
+TEST(RmlStaticStyleBoundaries, NodeEditorUsesDensityIndependentSharedControls) {
+    const auto resource_dir = rmlResourceDir();
+    const auto styles = readText(resource_dir / "node_editor.rcss");
+    const auto theme = readText(resource_dir / "node_editor.theme.rcss");
+    const auto document = readText(resource_dir / "node_editor.rml");
+    EXPECT_EQ(styles.find("px"), std::string::npos);
+    EXPECT_EQ(theme.find("px"), std::string::npos);
+    EXPECT_EQ(styles.find("font-size: inherit"), std::string::npos);
+    EXPECT_NE(styles.find("font-size: 12dp"), std::string::npos);
+    EXPECT_NE(styles.find(".node-scrub"), std::string::npos);
+    EXPECT_NE(styles.find(".lod-values"), std::string::npos);
+    EXPECT_NE(styles.find(".lod-labels"), std::string::npos);
+    EXPECT_NE(theme.find("@{background}"), std::string::npos);
+    EXPECT_NE(theme.find("@{text}"), std::string::npos);
+    EXPECT_NE(document.find("components.rcss"), std::string::npos);
+}
+
 TEST(RmlStaticStyleBoundaries, ImmediateModeStaticStylesStayInRcss) {
     const std::string source = readText(projectRoot() / "src/python/lfs/rml_im_mode_layout.cpp");
     const std::string rcss = readText(rmlResourceDir() / "im_mode_panel.rcss");

@@ -1877,7 +1877,7 @@ namespace lfs::vis::project {
         [[nodiscard]] bool isSessionSoftDirtyChapter(
             const std::string_view fourcc) {
             return fourcc == "GUIL" || fourcc == "VIEW" ||
-                   fourcc == "EDTR" || fourcc == "SEQR" ||
+                   fourcc == "EDTR" || fourcc == "SEQR" || fourcc == "NODE" ||
                    fourcc == "METR";
         }
 
@@ -6950,6 +6950,11 @@ namespace lfs::vis::project {
                 document_->edit_sequencer() =
                     std::move(session->sequencer);
             }
+            if (!sameBytes(
+                    document_->nodes().to_bytes(),
+                    session->nodes.to_bytes())) {
+                document_->edit_nodes() = std::move(session->nodes);
+            }
             auto current_metrics =
                 document_->metrics().to_bytes();
             auto captured_metrics =
@@ -7779,6 +7784,7 @@ namespace lfs::vis::project {
                     .view = candidate->view(),
                     .sequencer =
                         candidate->sequencer(),
+                    .nodes = candidate->nodes(),
                     .metrics = candidate->metrics(),
                 },
                 &candidate->references(),

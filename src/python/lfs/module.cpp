@@ -28,6 +28,7 @@
 #include "py_mesh.hpp"
 #include "py_mesh2splat.hpp"
 #include "py_nn.hpp"
+#include "py_nodes.hpp"
 #include "py_operator.hpp"
 #include "py_packages.hpp"
 #include "py_params.hpp"
@@ -384,7 +385,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -3225,6 +3226,9 @@ NB_MODULE(lichtfeld, m) {
     // Register Tensor class
     lfs::python::register_tensor(m);
 
+    auto nodes_module = m.def_submodule("nodes", "Geometry node trees and modifiers");
+    lfs::python::register_nodes(nodes_module);
+
     auto nn_module = m.def_submodule("nn", "Neural network inference");
     lfs::python::register_nn(nn_module);
 
@@ -3825,6 +3829,12 @@ Example:
         lfs::vis::op::OperatorRegistry::instance().invalidatePollCache(dep);
         lfs::vis::gui::PanelRegistry::instance().invalidate_poll_cache(dep);
     });
+
+    try {
+        nb::module_::import_("lfs_plugins.node_posterize");
+    } catch (const nb::python_error& error) {
+        LOG_WARN("Could not register the built-in Posterize node: {}", error.what());
+    }
 
     // Module metadata
     m.attr("__version__") = GIT_TAGGED_VERSION;

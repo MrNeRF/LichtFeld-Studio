@@ -7,12 +7,14 @@
 #include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rmlui/elements/chromaticity_element.hpp"
 #include "gui/rmlui/elements/color_picker_element.hpp"
 #include "gui/rmlui/elements/crf_curve_element.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
+#include "gui/rmlui/elements/node_canvas_element.hpp"
 #include "gui/rmlui/elements/python_editor_element.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
@@ -23,6 +25,8 @@
 #include "gui/rmlui/rmlui_system_interface.hpp"
 #include "internal/resource_paths.hpp"
 #include "python/python_runtime.hpp"
+#include "scene/scene_manager.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
 
 #include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "window/vulkan_context.hpp"
@@ -235,6 +239,7 @@ namespace lfs::vis::gui {
         static Rml::ElementInstancerGeneric<ColorPickerElement> color_picker_instancer;
         static Rml::ElementInstancerGeneric<CRFCurveElement> crf_curve_instancer;
         static Rml::ElementInstancerGeneric<LossGraphElement> loss_graph_instancer;
+        static Rml::ElementInstancerGeneric<NodeCanvasElement> node_canvas_instancer;
         static Rml::ElementInstancerGeneric<VramTimelineElement> vram_timeline_instancer;
         static Rml::ElementInstancerGeneric<PythonEditorElement> python_editor_instancer;
         static Rml::ElementInstancerGeneric<SceneGraphElement> scene_graph_instancer;
@@ -243,6 +248,7 @@ namespace lfs::vis::gui {
         Rml::Factory::RegisterElementInstancer("color-picker", &color_picker_instancer);
         Rml::Factory::RegisterElementInstancer("crf-curve", &crf_curve_instancer);
         Rml::Factory::RegisterElementInstancer("loss-graph", &loss_graph_instancer);
+        Rml::Factory::RegisterElementInstancer("node-canvas", &node_canvas_instancer);
         Rml::Factory::RegisterElementInstancer("vram-timeline", &vram_timeline_instancer);
         Rml::Factory::RegisterElementInstancer("python-editor-view", &python_editor_instancer);
         Rml::Factory::RegisterElementInstancer("scene-graph", &scene_graph_instancer);
@@ -817,13 +823,18 @@ namespace lfs::vis::gui {
     }
 
     bool RmlUIManager::focusContext(Rml::Context* context, const bool activate) {
+        // A focus callback may outlive its element's document during a panel
+        // rebuild. Detached elements have no context and cannot own keyboard input.
+        const auto identity = context_ids_.find(context);
+        if (identity == context_ids_.end() || !contextById(identity->second))
+            return false;
         const auto current = input_handlers_.find(keyboard_context_);
         if (!activate && context != keyboard_context_ && current != input_handlers_.end() &&
             current->second.enabled && current->second.exclusive &&
             (current->second.persistent || current->second.frame == input_frame_))
             return false;
         InputCallbackScope callback_scope(dispatching_input_);
-        const auto id = context_ids_.at(context);
+        const auto id = identity->second;
         keyboard_context_ = context;
         std::vector<uint64_t> others;
         for (const auto& [other, _] : input_handlers_)
@@ -1064,7 +1075,8 @@ namespace lfs::vis::gui {
         const bool key = event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP;
         const bool text = event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_TEXT_EDITING;
         const bool pointer = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP ||
-                             event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_WHEEL;
+                             event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_WHEEL ||
+                             event.type == SDL_EVENT_PINCH_UPDATE;
         if (!key && !text && !pointer) {
             if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
                 key_owners_.clear();
@@ -1091,6 +1103,10 @@ namespace lfs::vis::gui {
             if (event.type == SDL_EVENT_MOUSE_MOTION) {
                 single.mouse_x = event.motion.x;
                 single.mouse_y = event.motion.y;
+            } else if (event.type == SDL_EVENT_PINCH_UPDATE) {
+                const auto pointer = input::wheelPointerInPixels(window_);
+                single.mouse_x = pointer.x;
+                single.mouse_y = pointer.y;
             } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
                 single.mouse_x = event.wheel.mouse_x;
                 single.mouse_y = event.wheel.mouse_y;
@@ -1102,7 +1118,7 @@ namespace lfs::vis::gui {
                 }
             }
         }
-        if (pointer && window_) {
+        if (pointer && window_ && event.type != SDL_EVENT_PINCH_UPDATE) {
             const auto scale = input::windowPixelScale(window_);
             single.mouse_x *= scale.x;
             single.mouse_y *= scale.y;
@@ -1128,6 +1144,7 @@ namespace lfs::vis::gui {
                 std::copy(std::begin(input_mouse_down_), std::end(input_mouse_down_), input.mouse_down);
                 input.mouse_wheel = single.mouse_wheel;
                 input.mouse_wheel_x = single.mouse_wheel_x;
+                input.pinch_scale = single.pinch_scale;
                 // Occlusion decides ownership at the press. Accepted gestures keep
                 // their motion and release; blocked gestures never gain a release.
                 auto& registered = it->second;
@@ -1155,6 +1172,7 @@ namespace lfs::vis::gui {
                     if (!pointer_owned)
                         input.mouse_x = input.mouse_y = -1e9f;
                     input.mouse_wheel = input.mouse_wheel_x = 0;
+                    input.pinch_scale = 1.0f;
                 }
             }
             const auto mods = key ? event.key.mod : SDL_GetModState();
@@ -1187,6 +1205,7 @@ namespace lfs::vis::gui {
             std::fill(std::begin(remaining.mouse_clicked), std::end(remaining.mouse_clicked), false);
             std::fill(std::begin(remaining.mouse_released), std::end(remaining.mouse_released), false);
             remaining.mouse_wheel = remaining.mouse_wheel_x = 0;
+            remaining.pinch_scale = 1.0f;
         };
         if (pointer) {
             auto& contexts = pointer_contexts_;
@@ -1456,6 +1475,10 @@ namespace lfs::vis::gui {
             if (!command.context)
                 continue;
 
+            const auto canvas_start = command.context_name == "node_editor"
+                                          ? std::optional{std::chrono::steady_clock::now()}
+                                          : std::nullopt;
+
             const std::string timer_name = std::string("gui_render.rmlui_record.") +
                                            (foreground ? "foreground.context." : "background.context.") +
                                            command.context_name;
@@ -1670,6 +1693,10 @@ namespace lfs::vis::gui {
                 command.context->Render();
             }
             vulkan_render_interface_->ResetContextRenderState();
+            if (canvas_start)
+                if (auto* scene = services().sceneOrNull())
+                    scene->modifierManager().recordCanvasFrame(
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - *canvas_start).count());
         }
 
         queue.clear();

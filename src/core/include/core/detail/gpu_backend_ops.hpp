@@ -148,7 +148,8 @@ namespace lfs::core {
                                ExecContext context) = 0;
             virtual void radius_neighbors(StorageRef points, StorageRef references,
                                           StorageRef heads, StorageRef next, StorageRef output,
-                                          size_t count, size_t buckets, float radius, ExecContext context) = 0;
+                                          size_t count, size_t buckets, float radius, bool exclude_self,
+                                          std::optional<StorageRef> queries, ExecContext context) = 0;
             virtual void project_points(StorageRef points, StorageRef output, size_t count,
                                         const PointProjection& projection,
                                         const StorageRef* transforms, size_t transform_count,
@@ -465,7 +466,8 @@ namespace lfs::core {
                        ExecContext context) override;
             void radius_neighbors(StorageRef points, StorageRef references,
                                   StorageRef heads, StorageRef next, StorageRef output,
-                                  size_t count, size_t buckets, float radius, ExecContext context) override;
+                                  size_t count, size_t buckets, float radius, bool exclude_self,
+                                  std::optional<StorageRef> queries, ExecContext context) override;
             void project_points(StorageRef points, StorageRef output, size_t count,
                                 const PointProjection& projection,
                                 const StorageRef* transforms, size_t transform_count,

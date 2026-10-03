@@ -385,12 +385,21 @@ Rml::CompiledGeometryHandle RenderInterface_VK::CompileGeometry(Rml::Span<const 
 
     bool status = m_memory_pool.Alloc_VertexBuffer((uint32_t)vertices.size(), sizeof(Rml::Vertex), reinterpret_cast<void**>(&pCopyDataToBuffer),
                                                    &p_geometry_handle->m_p_vertex, &p_geometry_handle->m_p_vertex_allocation);
+    if (!status) {
+        delete p_geometry_handle;
+        return 0;
+    }
     RMLUI_VK_ASSERTMSG(status, "failed to AllocVertexBuffer");
 
     memcpy(pCopyDataToBuffer, pData, sizeof(Rml::Vertex) * vertices.size());
 
     status = m_memory_pool.Alloc_IndexBuffer((uint32_t)indices.size(), sizeof(int), reinterpret_cast<void**>(&pCopyDataToBuffer),
                                              &p_geometry_handle->m_p_index, &p_geometry_handle->m_p_index_allocation);
+    if (!status) {
+        m_memory_pool.Free_Allocation(p_geometry_handle->m_p_vertex_allocation);
+        delete p_geometry_handle;
+        return 0;
+    }
     RMLUI_VK_ASSERTMSG(status, "failed to AllocIndexBuffer");
 
     memcpy(pCopyDataToBuffer, indices.data(), sizeof(int) * indices.size());
@@ -452,6 +461,8 @@ void RenderInterface_VK::RenderGeometry(Rml::CompiledGeometryHandle geometry, Rm
     // per-draw transform data alive until the owning frame slot's fence has completed.
     bool status = m_memory_pool.Alloc_GeneralBuffer(sizeof(m_user_data_for_vertex_shader), reinterpret_cast<void**>(&p_data),
                                                     &shader_buffer, &shader_allocation);
+    if (!status)
+        return;
     RMLUI_VK_ASSERTMSG(status, "failed to allocate VkDescriptorBufferInfo for uniform data to shaders");
     m_transient_shader_allocations_by_frame[ActiveResourceSlot()].push_back(shader_allocation);
 
@@ -3434,6 +3445,13 @@ bool RenderInterface_VK::MemoryPool::Alloc_GeneralBuffer(VkDeviceSize size, void
     info.alignment = m_device_min_uniform_alignment;
 
     auto status = vmaVirtualAllocate(m_p_block, &info, p_alloc, &offset_memory);
+
+    if (status != VK_SUCCESS) {
+        Rml::Log::Message(Rml::Log::LT_ERROR, "UI geometry pool exhausted allocating %llu bytes", static_cast<unsigned long long>(size));
+        *p_data = nullptr;
+        *p_alloc = nullptr;
+        return false;
+    }
 
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaVirtualAllocate");
 

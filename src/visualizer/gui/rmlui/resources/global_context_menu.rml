@@ -5,6 +5,7 @@
 <body id="body" data-model="global_context_menu">
   <div id="backdrop"></div>
   <div id="ctx-menu" class="context-menu">
+    <input id="ctx-search" class="context-menu-search" type="text" data-if="searchable" data-attr-placeholder="search_label"/>
     <div data-for="item : items">
       <div class="context-menu-separator" data-if="item.separator_before"></div>
       <div class="context-menu-label" data-if="item.is_label">{{ item.label }}</div>

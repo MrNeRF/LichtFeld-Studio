@@ -229,6 +229,11 @@ namespace lfs::core {
         // capacity hook, LOD tree, frozen ranges, and layout generation.
         [[nodiscard]] SplatData clone() const;
 
+        // Capture metadata and retain tensor storage without submitting GPU work.
+        // The snapshot and its shared tensors are read-only worker inputs; callers
+        // order their producer completion before accessing them on another queue.
+        [[nodiscard]] SplatData readOnlySnapshot() const;
+
         // Deep-copy tensor state onto an already-created CUDA stream. Device
         // copies remain ordered on `stream`; callers synchronize before using
         // the returned snapshot from another thread. CPU tensors are copied

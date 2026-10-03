@@ -116,6 +116,8 @@ namespace lfs::vis {
         // Trackpad navigation reads two-finger swipes over the viewport as
         // orbit/pan/zoom. Mouse drags and pinch zoom work in both modes.
         [[nodiscard]] const TrackpadPreferenceState& trackpadPreferences() const { return trackpad_; }
+        [[nodiscard]] int trackpadTouchCount() const { return trackpad_touches_; }
+        [[nodiscard]] float wheelZoomSpeed() const { return viewport().camera.getZoomSpeed(); }
         void setTrackpadPreferences(const TrackpadPreferenceState& state) { trackpad_ = state; }
         void restoreProjectNavigation(
             CameraNavigationMode mode,

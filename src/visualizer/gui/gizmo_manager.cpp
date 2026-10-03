@@ -15,6 +15,7 @@
 #include "gui/translation_gizmo.hpp"
 #include "gui/ui_widgets.hpp"
 #include "input/input_controller.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_id.hpp"
@@ -3105,7 +3106,7 @@ namespace lfs::vis::gui {
                     active_viewport.camera.startRotateAroundCenter(capture_mouse_pos, time);
                     if (SDL_Window* const window = viewer_->getWindow()) {
                         float fx, fy;
-                        SDL_GetMouseState(&fx, &fy);
+                        input::mouseStateInWindowCoordinates(window, &fx, &fy);
                         gizmo_drag_start_cursor_ = {fx, fy};
                         SDL_SetWindowRelativeMouseMode(window, true);
                     }

@@ -713,6 +713,24 @@ namespace lfs::core {
 
     SplatData::~SplatData() = default;
 
+    SplatData SplatData::readOnlySnapshot() const {
+        SplatData copy;
+        copy._max_sh_degree = _max_sh_degree;
+        copy._active_sh_degree = _active_sh_degree;
+        copy._scene_scale = _scene_scale;
+        copy._means = _means;
+        copy._sh0 = _sh0;
+        copy._shN = _shN;
+        copy._shN_value_bounds = _shN_value_bounds;
+        copy._scaling = _scaling;
+        copy._rotation = _rotation;
+        copy._opacity = _opacity;
+        copy._deleted = _deleted;
+        copy._deleted_count.store(_deleted_count.load(std::memory_order_relaxed),
+                                  std::memory_order_relaxed);
+        return copy;
+    }
+
     SplatData SplatData::clone() const {
         // Tensor::clone() copies neither the name nor the row capacity.
         const auto cloned = [](const Tensor& src, const char* name = nullptr) {

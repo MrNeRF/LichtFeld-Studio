@@ -3594,6 +3594,7 @@ namespace lfs::vis::gui {
                 value = false;
             input.mouse_wheel = 0.0f;
             input.mouse_wheel_x = 0.0f;
+            input.pinch_scale = 1.0f;
             input.mouse_button_events.clear();
             return input;
         }
@@ -4644,6 +4645,7 @@ namespace lfs::vis::gui {
         screen_host_.init({
             .screens = &viewer_->screens(),
             .rml = &rmlui_manager_,
+            .scene_manager = viewer_->getSceneManager(),
             .context_menu = global_context_menu_.get(),
             .pointer_available = [this](const float x, const float y) {
                 if (PanelRegistry::instance().isPositionOverFloatingPanel(x, y))

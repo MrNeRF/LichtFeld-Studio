@@ -1354,7 +1354,7 @@ namespace lfs::vis::gui {
             }
             if (input.mouse_clicked[1])
                 had_input = true;
-            if (input.mouse_wheel != 0.0f) {
+            if (input.mouse_wheel != 0.0f || input.mouse_wheel_x != 0.0f) {
                 if (manual_dropdown_box) {
                     const float max_scroll = std::max(
                         0.0f,
@@ -1371,13 +1371,23 @@ namespace lfs::vis::gui {
                 deliver_button_down(0);
             if (!replayed_button_events && input.mouse_clicked[1])
                 deliver_button_down(1);
-            if (input.mouse_wheel != 0.0f) {
+            if (input.mouse_wheel != 0.0f || input.mouse_wheel_x != 0.0f) {
                 rml_context_->ProcessMouseWheel(
                     Rml::Vector2f(-input.mouse_wheel_x, -input.mouse_wheel), mods);
                 // Re-resolve hover against the new scroll offset so row text
                 // doesn't render against a stale layout for one frame.
                 rml_context_->ProcessMouseMove(rml_mx, rml_my, mods);
                 had_input = true;
+            }
+            if (input.pinch_scale != 1.0f) {
+                if (auto* target = rml_context_->GetHoverElement()) {
+                    Rml::Dictionary parameters;
+                    parameters["scale"] = input.pinch_scale;
+                    parameters["mouse_x"] = local_x;
+                    parameters["mouse_y"] = local_y;
+                    target->DispatchEvent("pinch", parameters);
+                    had_input = true;
+                }
             }
             if (input.mouse_clicked[0])
                 sync_text_focus();
@@ -1414,7 +1424,9 @@ namespace lfs::vis::gui {
 
         updateResizeCursorOverride(hovered);
 
-        if (hovered) {
+        // Dragging over a titled element must not trigger a tooltip layout pass.
+        // Restart the hover delay only after all buttons have been released.
+        if (hovered && !input.mouse_down[0] && !input.mouse_down[1] && !input.mouse_down[2]) {
             if (auto* const hover = rml_context_->GetHoverElement())
                 tooltip_.setHover(resolveRmlTooltip(hover), hover);
             else

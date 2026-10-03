@@ -1,7 +1,7 @@
 #include "../../../../include/core/rounded_math.slangh"
 
 static const uint LFS_LOCAL_SIZE_X = 256;
-static const uint LFS_PUSH_CONSTANT_SIZE = 56;
+static const uint LFS_PUSH_CONSTANT_SIZE = 72;
 
 [SpecializationConstant]
 const uint kMode = 0;
@@ -13,10 +13,13 @@ struct Parameters
     uint64_t heads;
     uint64_t next;
     uint64_t output;
+    uint64_t queries;
     uint count;
     uint bucketMask;
     float radius;
-    uint padding;
+    uint excludeSelf;
+    uint queryBegin;
+    uint queryEnd;
 };
 
 #include "byte_read.slangh"
@@ -53,22 +56,26 @@ bool within(float3 a, float3 b, float radius)
 
 bool query(Parameters p, uint i)
 {
+    if (p.queries != 0 && loadByte(p.queries, i) == 0u) return false;
     const float3 point = position(p, i);
     if (!all(isfinite(point))) return false;
-    if (loadByte(p.references, i) != 0u) return true;
+    if (p.excludeSelf == 0u && loadByte(p.references, i) != 0u) return true;
     const int3 center = cell(point, p.radius);
     Ptr<int, Access.Read> heads = (Ptr<int, Access.Read>)p.heads;
     Ptr<int, Access.Read> next = (Ptr<int, Access.Read>)p.next;
+    for (int j = heads[hashCell(center, p.bucketMask)]; j >= 0; j = next[j])
+        if ((p.excludeSelf == 0u || uint(j) != i) && within(point, position(p, uint(j)), p.radius)) return true;
     for (int z = -1; z <= 1; ++z)
     {
         for (int y = -1; y <= 1; ++y)
         {
             for (int x = -1; x <= 1; ++x)
             {
+                if (x == 0 && y == 0 && z == 0) continue;
                 const uint bucket = hashCell(center + int3(x, y, z), p.bucketMask);
                 for (int j = heads[bucket]; j >= 0; j = next[j])
                 {
-                    if (within(point, position(p, uint(j)), p.radius)) return true;
+                    if ((p.excludeSelf == 0u || uint(j) != i) && within(point, position(p, uint(j)), p.radius)) return true;
                 }
             }
         }
@@ -85,7 +92,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters p)
     {
         Ptr<int, Access.ReadWrite> heads = (Ptr<int, Access.ReadWrite>)p.heads;
         Ptr<int, Access.ReadWrite> next = (Ptr<int, Access.ReadWrite>)p.next;
-        for (uint i = dispatchThreadId.x; i < p.count; i += stride)
+        for (uint i = p.queryBegin + dispatchThreadId.x; i < p.queryEnd; i += stride)
         {
             if (loadByte(p.references, i) == 0u) continue;
             const float3 point = position(p, i);
@@ -99,14 +106,14 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters p)
     else
     {
         Ptr<uint, Access.ReadWrite> output = (Ptr<uint, Access.ReadWrite>)p.output;
-        const uint words = (p.count + 3u) / 4u;
-        for (uint word = dispatchThreadId.x; word < words; word += stride)
+        const uint words = (p.queryEnd + 3u) / 4u;
+        for (uint word = p.queryBegin / 4u + dispatchThreadId.x; word < words; word += stride)
         {
             uint packed = 0u;
             for (uint lane = 0; lane < 4; ++lane)
             {
                 const uint i = word * 4u + lane;
-                if (i < p.count && query(p, i)) packed |= 1u << (lane * 8u);
+                if (i < p.queryEnd && query(p, i)) packed |= 1u << (lane * 8u);
             }
             output[word] = packed;
         }

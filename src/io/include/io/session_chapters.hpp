@@ -77,6 +77,7 @@ namespace lfs::io::project {
         Editor,
         View,
         Sequencer,
+        Nodes,
     };
 
     [[nodiscard]] LFS_IO_API JsonChapterDom
@@ -213,6 +214,9 @@ namespace lfs::io::project {
     using SequencerSessionChapter =
         BasicSessionJsonChapter<
             SessionJsonChapterKind::Sequencer>;
+    using NodesSessionChapter =
+        BasicSessionJsonChapter<
+            SessionJsonChapterKind::Nodes>;
 
     struct MetricHistorySample {
         std::int32_t iteration = 0;
@@ -274,6 +278,7 @@ namespace lfs::io::project {
         EditorSessionChapter editor;
         ViewSessionChapter view;
         SequencerSessionChapter sequencer;
+        NodesSessionChapter nodes;
         MetricsChapter metrics;
     };
 

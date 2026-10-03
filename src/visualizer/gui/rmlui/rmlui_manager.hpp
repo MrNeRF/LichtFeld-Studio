@@ -37,6 +37,7 @@ namespace Rml {
 
 namespace lfs::vis {
     class WindowInputDispatchTest;
+    class McpNodeToolsTest;
     class VulkanContext;
 } // namespace lfs::vis
 
@@ -208,6 +209,7 @@ namespace lfs::vis::gui {
 
     private:
         friend class lfs::vis::WindowInputDispatchTest;
+        friend class lfs::vis::McpNodeToolsTest;
         struct VulkanContextCommand {
             Rml::Context* context = nullptr;
             std::string context_name;

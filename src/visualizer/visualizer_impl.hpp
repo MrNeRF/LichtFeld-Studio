@@ -179,6 +179,7 @@ namespace lfs::vis {
             return trainer_manager_.get();
         }
         SceneManager* getSceneManager() override { return scene_manager_.get(); }
+        const SceneManager* getSceneManager() const { return scene_manager_.get(); }
         SDL_Window* getWindow() const { return window_manager_->getWindow(); }
         WindowManager* getWindowManager() { return window_manager_.get(); }
         const WindowManager* getWindowManager() const {

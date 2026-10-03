@@ -25,11 +25,13 @@
 #include "io/video/video_export_options.hpp"
 #include "rendering/render_constants.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "scene/scene_manager.hpp"
 #include "screen/screen.hpp"
 #include "screen/view3d_space.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
 #include "visualizer_impl.hpp"
 
 #include <algorithm>
@@ -336,7 +338,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> required_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return JsonField<Owner>(
                 name,
                 [member](const Owner& source) { return Json(source.*member); },
@@ -354,7 +356,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> optional_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return JsonField<Owner>(
                 name,
                 [member](const Owner& source) { return Json(source.*member); },
@@ -371,7 +373,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> vec3_field(
             const std::string_view name,
-            glm::vec3 Owner::*member) {
+            glm::vec3 Owner::* member) {
             return JsonField<Owner>(
                 name,
                 [member](const Owner& source) { return vec3_json(source.*member); },
@@ -394,7 +396,7 @@ namespace lfs::vis::project {
                   typename AfterAssign = std::nullptr_t>
         JsonField<Owner> enum_field(
             const std::string_view name,
-            Enum Owner::*member,
+            Enum Owner::* member,
             const int minimum,
             const int maximum,
             const std::string_view invalid_detail,
@@ -496,7 +498,7 @@ namespace lfs::vis::project {
         template <typename Owner, std::size_t Size>
         JsonField<Owner> array_field(
             const std::string_view name,
-            std::array<float, Size> Owner::*member) {
+            std::array<float, Size> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -532,7 +534,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> nullable_positive_float_field(
             const std::string_view name,
-            std::optional<float> Owner::*member) {
+            std::optional<float> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -1532,6 +1534,8 @@ namespace lfs::vis::project {
                 chapters.sequencer.validate();
             !valid)
             return std::move(valid).error();
+        if (auto valid = chapters.nodes.validate(); !valid)
+            return std::move(valid).error();
         if (auto valid = chapters.metrics.validate();
             !valid)
             return std::move(valid).error();
@@ -1772,7 +1776,7 @@ namespace lfs::vis::project {
             using Panel = gui::PanelProjectState;
             const auto nullable_float = [](
                                             const std::string_view name,
-                                            float Panel::*member) {
+                                            float Panel::* member) {
                 return custom_field<Panel>(
                     name,
                     [member](const Panel& panel) {
@@ -2830,6 +2834,13 @@ namespace lfs::vis::project {
             result.metrics =
                 trainer_manager
                     ->captureProjectMetrics();
+        }
+        if (const auto* scene_manager = viewer.getSceneManager()) {
+            auto dom = lfs::io::JsonChapterDom::parse(
+                scene_manager->modifierManager().toJson(true).dump(2));
+            if (!dom)
+                return std::move(dom).error();
+            result.nodes = lfs::io::project::NodesSessionChapter(std::move(*dom));
         }
 
         auto prepared =
@@ -4016,6 +4027,20 @@ namespace lfs::vis::project {
         apply_sequencer(
             viewer, *sequencer,
             prepared.ply_sequence_directory);
+        if (auto* scene_manager = viewer.getSceneManager()) {
+            const auto bytes = prepared.chapters.nodes.to_bytes();
+            try {
+                const auto json = Json::parse(
+                    reinterpret_cast<const char*>(bytes.data()),
+                    reinterpret_cast<const char*>(bytes.data()) + bytes.size());
+                if (const auto restored = scene_manager->modifierManager().restoreJson(json);
+                    !restored) {
+                    LOG_WARN("Could not restore NODE chapter: {}", restored.error().message);
+                }
+            } catch (const nlohmann::json::exception& error) {
+                LOG_WARN("Could not parse NODE chapter: {}", error.what());
+            }
+        }
         if (auto* trainer =
                 viewer.getTrainerManager()) {
             trainer->restoreProjectMetrics(

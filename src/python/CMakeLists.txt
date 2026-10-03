@@ -194,6 +194,7 @@ nanobind_add_module(
     lfs/py_keymap.cpp
     lfs/py_tensor.cpp
     lfs/py_nn.cpp
+    lfs/py_nodes.cpp
     lfs/py_splat_data.cpp
     lfs/py_scene.cpp
     lfs/py_scripts.cpp

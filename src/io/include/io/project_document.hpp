@@ -297,6 +297,8 @@ namespace lfs::io::project {
         [[nodiscard]] EditorSessionChapter& edit_editor() noexcept;
         [[nodiscard]] const SequencerSessionChapter& sequencer() const noexcept;
         [[nodiscard]] SequencerSessionChapter& edit_sequencer() noexcept;
+        [[nodiscard]] const NodesSessionChapter& nodes() const noexcept;
+        [[nodiscard]] NodesSessionChapter& edit_nodes() noexcept;
         [[nodiscard]] const MetricsChapter& metrics() const noexcept;
         [[nodiscard]] MetricsChapter& edit_metrics() noexcept;
 

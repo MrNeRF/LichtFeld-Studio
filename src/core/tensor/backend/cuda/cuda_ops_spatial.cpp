@@ -21,11 +21,13 @@ namespace lfs::core::internal {
     void CudaBackendOps::radius_neighbors(const StorageRef points, const StorageRef references,
                                           const StorageRef heads, const StorageRef next, const StorageRef output,
                                           const size_t count, const size_t buckets, const float radius,
+                                          const bool exclude_self, const std::optional<StorageRef> queries,
                                           const ExecContext context) {
         LFS_FACADE_TRACE(radius_neighbors);
         tensor_ops::launch_radius_neighbors(cuda_pointer<const float>(points), cuda_pointer<const uint8_t>(references),
                                             cuda_pointer<int32_t>(heads), cuda_pointer<int32_t>(next), cuda_pointer<bool>(output),
-                                            count, buckets, radius, context.cuda_stream);
+                                            count, buckets, radius, exclude_self,
+                                            queries ? cuda_pointer<const uint8_t>(*queries) : nullptr, context.cuda_stream);
     }
 
     // CUDA builds rasterize point clouds with the renderer's own kernel.

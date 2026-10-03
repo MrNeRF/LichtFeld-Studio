@@ -164,6 +164,7 @@ namespace lfs::vis::input {
         VIEW_FRAME_ALL,
         TOGGLE_QUAD_VIEW,
         TOGGLE_MAXIMIZE_AREA,
+        TOGGLE_NODE_EDITOR,
 
     };
 

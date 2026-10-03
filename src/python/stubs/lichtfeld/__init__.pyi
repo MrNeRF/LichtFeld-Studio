@@ -18,6 +18,7 @@ from . import (
     mcp as mcp,
     mesh as mesh,
     nn as nn,
+    nodes as nodes,
     ops as ops,
     packages as packages,
     pipeline as pipeline,
