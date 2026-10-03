@@ -257,7 +257,8 @@ TEST(ErrorEventBridgeTest, TrainingOomMapsToResourceExhausted) {
 }
 
 // Fails if a training run whose project save ran out of disk space surfaces as GPU OOM instead of being
-// left to the disk-space dialog, or if a real GPU OOM stops reaching the error modal.
+// left to the disk-space dialog (also when only the error text survives), if another ResourceExhausted IO
+// error is mistaken for a full disk, or if a real GPU OOM stops reaching the error modal.
 TEST(ErrorEventBridgeTest, ProjectDiskSpaceFailureIsNotGpuOom) {
     lfs::core::events::state::TrainingCompleted disk{};
     disk.success = false;
@@ -267,14 +268,28 @@ TEST(ErrorEventBridgeTest, ProjectDiskSpaceFailureIsNotGpuOom) {
     disk.error_info = lfs::core::WireError{.code = lfs::to_string(lfs::ErrorCode::ResourceExhausted),
                                            .domain = lfs::to_string(lfs::ErrorDomain::IO),
                                            .message = *disk.error};
-    EXPECT_TRUE(lfs::vis::gui::isProjectDiskSpaceFailure(disk));
+    const auto disk_space = lfs::vis::gui::projectDiskSpaceFailure(disk);
+    ASSERT_TRUE(disk_space.has_value());
+    EXPECT_TRUE(disk_space->is_project_save);
+    EXPECT_EQ(disk_space->error, *disk.error);
     EXPECT_FALSE(lfs::vis::gui::translateTrainingCompleted(disk).has_value());
+
+    auto text_only = disk;
+    text_only.error_info.reset();
+    const auto text_only_disk_space = lfs::vis::gui::projectDiskSpaceFailure(text_only);
+    ASSERT_TRUE(text_only_disk_space.has_value());
+    EXPECT_EQ(text_only_disk_space->error, *disk.error);
+
+    auto host_memory = disk;
+    host_memory.error = "Not enough memory to load the geometry.";
+    host_memory.error_info->message = *host_memory.error;
+    EXPECT_FALSE(lfs::vis::gui::projectDiskSpaceFailure(host_memory).has_value());
 
     auto gpu = disk;
     gpu.error = "out of memory (12.0 GB)";
     gpu.error_info->domain = lfs::to_string(lfs::ErrorDomain::Training);
     gpu.error_info->message = *gpu.error;
-    EXPECT_FALSE(lfs::vis::gui::isProjectDiskSpaceFailure(gpu));
+    EXPECT_FALSE(lfs::vis::gui::projectDiskSpaceFailure(gpu).has_value());
     const auto notification = lfs::vis::gui::translateTrainingCompleted(gpu);
     ASSERT_TRUE(notification.has_value());
     EXPECT_EQ(notification->error.code(), lfs::ErrorCode::ResourceExhausted);

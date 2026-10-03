@@ -45,6 +45,9 @@ namespace lfs::io::project::detail {
     [[nodiscard]] std::uint64_t
     max_materialized_bytes_for(const ChunkInfo& row) noexcept;
 
+    // errno, or the Win32 error code on Windows.
+    [[nodiscard]] bool native_disk_full(std::int64_t error) noexcept;
+
     [[nodiscard]] lfs::Error project_error(
         lfs::ErrorCode code, std::string user_message, std::string detail,
         const std::filesystem::path& path = {}, std::optional<std::uint64_t> offset = std::nullopt,

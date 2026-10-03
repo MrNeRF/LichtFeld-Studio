@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 #include "core/uuid.hpp"
 #include "io/project/crc32c.hpp"
 #include "io/project/project_container_internal.hpp"
@@ -51,6 +52,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#else
+#include <winerror.h>
 #endif
 
 namespace lfs::io::project::detail {
@@ -256,6 +259,24 @@ namespace {
             }
         }
         return found;
+    }
+
+    // Fails if a write that hits a full volume keeps the generic write message, which hides the disk-space
+    // recovery, or if a file-size limit is reported as a full disk.
+    TEST(ProjectContainerFormat, FullVolumeWriteCarriesDiskSpaceMessage) {
+#ifdef _WIN32
+        constexpr std::int64_t disk_full = ERROR_DISK_FULL;
+        constexpr std::int64_t file_too_large = ERROR_FILE_TOO_LARGE;
+#else
+        constexpr std::int64_t disk_full = ENOSPC;
+        constexpr std::int64_t file_too_large = EFBIG;
+#endif
+        const auto full = detail::project_error(lfs::ErrorCode::ResourceExhausted, "The project could not be written.",
+                                                "write failed", "project.licht", 0, "positional_write", disk_full);
+        EXPECT_TRUE(lfs::core::is_disk_space_save_error(full.user_message()));
+        const auto too_large = detail::project_error(lfs::ErrorCode::ResourceExhausted, "The project could not be written.",
+                                                     "write failed", "project.licht", 0, "positional_write", file_too_large);
+        EXPECT_FALSE(lfs::core::is_disk_space_save_error(too_large.user_message()));
     }
 
     TEST(ProjectContainerFormat, Crc32cKnownVector) {

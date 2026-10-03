@@ -12,6 +12,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
@@ -8159,12 +8160,13 @@ namespace lfs::vis::gui {
             };
 
             const bool project_save = e.is_project_save;
-            const auto project_path = project_save ? viewer_->projectGetDisplayInfo().path : std::nullopt;
-            if (project_save && !project_path) {
-                LOG_ERROR("Project save failed without an open project: {}", e.error);
+            const auto open_project_path = project_save && e.path.empty() ? viewer_->projectGetDisplayInfo().path
+                                                                          : std::nullopt;
+            const std::filesystem::path path = open_project_path ? *open_project_path : e.path;
+            if (path.empty()) {
+                LOG_ERROR("Project save failed without a destination: {}", e.error);
                 return;
             }
-            const std::filesystem::path path = project_save ? *project_path : e.path;
             size_t available_bytes = e.available_bytes;
             if (project_save) {
                 std::error_code space_error;
@@ -8203,13 +8205,16 @@ namespace lfs::vis::gui {
 
             req.on_result = [this, path, project_save, iteration = e.iteration](const lfs::core::ModalResult& result) {
                 // A project save that fails for lack of space reopens this dialog through its error.
-                const auto report = [&](const lfs::Result<void>& saved) {
+                const auto save_to = [&](const std::filesystem::path& destination, const bool replace_approved) {
+                    const auto open_path = viewer_->projectGetDisplayInfo().path;
+                    const auto saved = open_path && *open_path == destination ? viewer_->projectSave()
+                                       : replace_approved                     ? viewer_->projectSaveAsExplicit(destination)
+                                                                              : viewer_->projectSaveAs(destination);
                     if (saved)
                         return;
-                    if (saved.error().code() == lfs::ErrorCode::ResourceExhausted &&
-                        saved.error().domain() == lfs::ErrorDomain::IO) {
+                    if (lfs::core::is_disk_space_save_error(saved.error().user_message())) {
                         state::DiskSpaceSaveFailed{.iteration = iteration,
-                                                   .path = {},
+                                                   .path = destination,
                                                    .error = std::string(saved.error().user_message()),
                                                    .required_bytes = 0,
                                                    .available_bytes = 0,
@@ -8222,7 +8227,7 @@ namespace lfs::vis::gui {
                 };
                 if (result.button_label == LOC(DiskSpaceDialog::RETRY)) {
                     if (project_save)
-                        report(viewer_->projectSave());
+                        save_to(path, true); // the failed save already had the user's choice of this path
                     else
                         LOG_INFO("Export disk-space failure: re-export manually from File > Export");
                 } else if (result.button_label == LOC(DiskSpaceDialog::CHANGE_LOCATION)) {
@@ -8230,7 +8235,7 @@ namespace lfs::vis::gui {
                     if (new_location.empty())
                         return;
                     if (project_save)
-                        report(viewer_->projectSaveAs(new_location / path.filename()));
+                        save_to(new_location / path.filename(), false);
                     else
                         LOG_INFO("Re-export manually using File > Export to: {}",
                                  lfs::core::path_to_utf8(new_location));

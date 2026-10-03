@@ -9,6 +9,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 #include "core/source_site.hpp"
 #include "gui/error_surface_types.hpp"
 #include "gui/string_keys.hpp"
@@ -82,15 +83,24 @@ namespace lfs::vis::gui {
         };
     }
 
-    bool isProjectDiskSpaceFailure(const state::TrainingCompleted& e) {
-        return !e.success && !e.user_stopped && e.error_info &&
-               e.error_info->code == lfs::to_string(lfs::ErrorCode::ResourceExhausted) &&
-               e.error_info->domain == lfs::to_string(lfs::ErrorDomain::IO);
+    std::optional<state::DiskSpaceSaveFailed> projectDiskSpaceFailure(const state::TrainingCompleted& e) {
+        if (e.success || e.user_stopped)
+            return std::nullopt;
+        std::string message = e.error_info ? e.error_info->message : e.error.value_or("");
+        if (!lfs::core::is_disk_space_save_error(message))
+            return std::nullopt;
+        return state::DiskSpaceSaveFailed{.iteration = e.iteration,
+                                          .path = {},
+                                          .error = std::move(message),
+                                          .required_bytes = 0,
+                                          .available_bytes = 0,
+                                          .is_disk_space_error = true,
+                                          .is_project_save = true};
     }
 
     std::optional<lfs::ErrorNotification>
     translateTrainingCompleted(const state::TrainingCompleted& e) {
-        if (isProjectDiskSpaceFailure(e)) {
+        if (projectDiskSpaceFailure(e)) {
             return std::nullopt; // the native disk-space modal offers Retry and Change Location
         }
         if (e.user_stopped) {
@@ -218,15 +228,8 @@ namespace lfs::vis::gui {
         };
 
         state::TrainingCompleted::when([publish](const auto& e) {
-            if (isProjectDiskSpaceFailure(e)) {
-                state::DiskSpaceSaveFailed{.iteration = e.iteration,
-                                           .path = {},
-                                           .error = e.error_info->message,
-                                           .required_bytes = 0,
-                                           .available_bytes = 0,
-                                           .is_disk_space_error = true,
-                                           .is_project_save = true}
-                    .emit();
+            if (const auto disk_space = projectDiskSpaceFailure(e)) {
+                disk_space->emit();
                 return;
             }
             publish(translateTrainingCompleted(e));
