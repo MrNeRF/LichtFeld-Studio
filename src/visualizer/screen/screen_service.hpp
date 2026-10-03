@@ -62,11 +62,17 @@ namespace lfs::vis::screen {
         [[nodiscard]] std::optional<ViewSettings> viewSettings(ViewId view) const override;
         bool editViewSettings(ViewId view, const std::function<void(ViewSettings&)>& edit) override;
 
+        void setViewSettingsChangedCallback(std::function<void(ViewId)> callback) {
+            std::lock_guard lock(mutex_);
+            view_settings_changed_ = std::move(callback);
+        }
+
     private:
         std::atomic<std::uint64_t> epoch_{1};
         EditorTypeRegistry editor_types_;
         Screen screen_;
         mutable std::recursive_mutex mutex_;
+        std::function<void(ViewId)> view_settings_changed_;
     };
 
 } // namespace lfs::vis::screen

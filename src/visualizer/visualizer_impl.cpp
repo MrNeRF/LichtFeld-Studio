@@ -273,6 +273,10 @@ namespace lfs::vis {
 
         // Create rendering manager with initial antialiasing setting
         rendering_manager_ = std::make_unique<RenderingManager>(screen_service_);
+        screen_service_.setViewSettingsChangedCallback([this](const ViewId view) {
+            rendering_manager_->markViewDirty(view, DirtyFlag::ALL, FrameReason::SettingsChange);
+        });
+        callback_cleanup_.add([this] { screen_service_.setViewSettingsChangedCallback(nullptr); });
         rendering_manager_->setWakeCallback([this] {
             wakeMainLoop();
         });

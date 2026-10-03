@@ -936,4 +936,24 @@ namespace lfs::vis::screen {
         EXPECT_EQ(source.viewSettings(first.value)->split_view_mode, SplitViewMode::Disabled);
         EXPECT_EQ(source.viewSettings(second.value)->split_view_mode, SplitViewMode::PLYComparison);
     }
+
+    TEST(ViewSettingsOwnershipTest, ComparisonTransferRequestsBothViews) {
+        ScreenService source;
+        const auto first = source.screen().activeView();
+        const auto second = source.screen().split(first, SplitAxis::Columns, 0.5f);
+        ASSERT_TRUE(second.valid());
+        std::vector<ViewId> changed;
+        source.setViewSettingsChangedCallback([&](ViewId view) { changed.push_back(view); });
+        source.editViewSettings(first.value, [](ViewSettings& s) { s.split_view_mode = SplitViewMode::GTComparison; });
+        EXPECT_EQ(changed, std::vector<ViewId>{first.value});
+        changed.clear();
+        source.editViewSettings(second.value, [](ViewSettings& s) { s.split_view_mode = SplitViewMode::PLYComparison; });
+        EXPECT_EQ(changed, (std::vector<ViewId>{first.value, second.value}));
+        changed.clear();
+        source.editViewSettings(second.value, [](ViewSettings& s) { s.focal_length_mm = 55.0f; });
+        EXPECT_EQ(changed, std::vector<ViewId>{second.value});
+        changed.clear();
+        EXPECT_FALSE(source.editViewSettings(kNoView, [](ViewSettings&) {}));
+        EXPECT_TRUE(changed.empty());
+    }
 } // namespace lfs::vis::screen
