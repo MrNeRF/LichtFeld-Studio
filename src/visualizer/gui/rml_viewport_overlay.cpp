@@ -13,6 +13,7 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
+#include "gui/viewport_gizmo_geometry.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
@@ -909,6 +910,12 @@ namespace lfs::vis::gui {
         const float height_dp = vp_size_.y / dp_ratio;
         content->SetClass("viewport-cramped",
                           width_dp < kCrampedViewportWidthDp || height_dp < kCrampedViewportHeightDp);
+        const auto update_gizmo = [&](const char* id, const float width) {
+            if (auto* root = document_->GetElementById(id))
+                root->SetClass("gizmo-cramped", !viewportGizmoFits(width, vp_size_.y, dp_ratio));
+        };
+        update_gizmo("primary-toolbar-root", primary_toolbar_width_);
+        update_gizmo("secondary-toolbar-root", secondary_toolbar_width_);
     }
 
     void RmlViewportOverlay::applySplitDividerOverlay() {

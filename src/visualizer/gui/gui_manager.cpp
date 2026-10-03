@@ -17,6 +17,7 @@
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
 #include "gui/import_error.hpp"
+#include "gui/viewport_gizmo_geometry.hpp"
 #include "preferences.hpp"
 #include "window/vulkan_result.hpp"
 #include <ft2build.h>
@@ -1339,7 +1340,8 @@ namespace lfs::vis::gui {
             const float size,
             const float margin_x,
             const float margin_y) {
-            if (!panel.valid() || size <= 0.0f) {
+            if (!panel.valid() || size <= 0.0f ||
+                !viewportGizmoFits(panel.size.x, panel.size.y, size / kViewportGizmoSize)) {
                 return std::nullopt;
             }
 

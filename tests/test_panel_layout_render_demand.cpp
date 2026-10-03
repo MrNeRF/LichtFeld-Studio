@@ -11,12 +11,23 @@
 #include <visualizer/gui/panel_registry.hpp>
 #include <visualizer/gui/resize_geometry.hpp>
 #include <visualizer/gui/scene_panel_native.hpp>
+#include <visualizer/gui/viewport_gizmo_geometry.hpp>
 
 #include <memory>
 #include <string>
 #include <unordered_map>
 
 namespace {
+
+    TEST(ViewportGizmoGeometryTest, SmallScaledPanelsKeepNavigationClearOfTheToolRail) {
+        using namespace lfs::vis::gui;
+        for (const float scale : {1.0f, 1.5f, 2.0f}) {
+            EXPECT_TRUE(viewportGizmoFits(200.0f * scale, 150.0f * scale, scale));
+            EXPECT_FALSE(viewportGizmoFits(199.0f * scale, 150.0f * scale, scale));
+            EXPECT_FALSE(viewportGizmoFits(200.0f * scale, 149.0f * scale, scale));
+            EXPECT_FALSE(viewportGizmoFits(100.0f * scale, 200.0f * scale, scale));
+        }
+    }
 
     TEST(ResizeGeometryTest, HitZoneStraddlesEdgeAtEveryUiScale) {
         using namespace lfs::vis::gui;

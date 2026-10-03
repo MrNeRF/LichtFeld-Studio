@@ -281,6 +281,10 @@ body {
     z-index: 8;
 }
 
+.gizmo-cramped .viewport-gizmo-controls {
+    display: none;
+}
+
 .viewport-gizmo-control-row {
     display: flex;
     flex-direction: row;

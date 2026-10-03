@@ -14,6 +14,7 @@
 #include "gui/scale_gizmo.hpp"
 #include "gui/translation_gizmo.hpp"
 #include "gui/ui_widgets.hpp"
+#include "gui/viewport_gizmo_geometry.hpp"
 #include "input/input_controller.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
@@ -137,7 +138,8 @@ namespace lfs::vis::gui {
             const float size,
             const float margin_x,
             const float margin_y) {
-            if (!panel.valid() || size <= 0.0f) {
+            if (!panel.valid() || size <= 0.0f ||
+                !viewportGizmoFits(panel.size.x, panel.size.y, viewportGizmoUiScale())) {
                 return std::nullopt;
             }
 
@@ -2971,6 +2973,8 @@ namespace lfs::vis::gui {
         ViewportGizmoPanelTarget* hovered_panel = nullptr;
         if (!ui_wants_mouse) {
             for (auto& panel : panels) {
+                if (!viewportGizmoFits(panel.size.x, panel.size.y, ui_scale))
+                    continue;
                 const float gizmo_x = panel.pos.x + panel.size.x - gizmo_size - gizmo_margin_x;
                 const float gizmo_y = panel.pos.y + gizmo_margin_y;
                 const bool mouse_in_gizmo = mouse_x >= gizmo_x &&
@@ -3206,6 +3210,8 @@ namespace lfs::vis::gui {
         const float gizmo_margin_x = VIEWPORT_GIZMO_MARGIN_X * ui_scale;
         const float gizmo_margin_y = VIEWPORT_GIZMO_MARGIN_Y * ui_scale;
         for (const auto& panel : panels) {
+            if (!viewportGizmoFits(panel.size.x, panel.size.y, ui_scale))
+                continue;
             const float gizmo_x = panel.pos.x + panel.size.x - gizmo_size - gizmo_margin_x;
             const float gizmo_y = panel.pos.y + gizmo_margin_y;
             if (x >= gizmo_x && x <= gizmo_x + gizmo_size &&
