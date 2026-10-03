@@ -2625,6 +2625,21 @@ namespace lfs::vis {
             return;
         }
 
+        // Frames no input asked for (GUI animation, Python redraws, training updates) would run far
+        // above the display rate when presenting does not block. Wakes without input wait for the
+        // next display interval; requests stay queued for this frame.
+        if (last_presented_at_) {
+            const auto ready_at = *last_presented_at_ + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                                            std::chrono::duration<double>(displayFrameInterval()));
+            while (!window_manager_->frameInput().hasUserInput()) {
+                const double remaining =
+                    std::chrono::duration<double>(ready_at - std::chrono::steady_clock::now()).count();
+                if (remaining <= 0.0)
+                    break;
+                window_manager_->waitEvents(remaining);
+            }
+        }
+
         auto now = std::chrono::high_resolution_clock::now();
         float delta_time = std::chrono::duration<float>(now - last_frame_time_).count();
         last_frame_time_ = now;
@@ -2944,6 +2959,8 @@ namespace lfs::vis {
             LOG_TIMER("VisualizerImpl::render.gui_frame_total_with_swapchain_wait");
             window_manager_->updateWindowSize("pre_gui_render");
             presented_gui_frame = gui_manager_->render();
+            if (presented_gui_frame)
+                last_presented_at_ = std::chrono::steady_clock::now();
             window_manager_->refreshResizeCursor();
             // Count only successful presents, including GUI-only frames.
             if (presented_gui_frame && rendering_manager_) {
