@@ -124,14 +124,6 @@ namespace lfs::training {
             return image * expanded;
         }
 
-        struct FreeImageBuffer {
-            void operator()(unsigned char* p) const noexcept {
-                if (p) {
-                    lfs::core::free_image(p);
-                }
-            }
-        };
-
         struct RestoreCameraImageDimensions {
             lfs::core::Camera& camera;
             int width;
@@ -152,30 +144,6 @@ namespace lfs::training {
                     camera.restore_image_dimensions(width, height, size_loaded);
             }
         };
-
-        lfs::core::Tensor load_eval_gt_image_cpu(const lfs::core::Camera& cam,
-                                                 const int resize_factor,
-                                                 const int max_width) {
-            auto [data, width, height, channels] =
-                lfs::core::load_image(cam.image_path(), resize_factor, max_width);
-            std::unique_ptr<unsigned char, FreeImageBuffer> image_data(data);
-            if (!image_data || width <= 0 || height <= 0 || channels <= 0) {
-                throw std::runtime_error("failed to load image");
-            }
-
-            const auto H = static_cast<size_t>(height);
-            const auto W = static_cast<size_t>(width);
-            const auto C = static_cast<size_t>(channels);
-            auto hwc = lfs::core::Tensor::from_blob(
-                image_data.get(),
-                lfs::core::TensorShape({H, W, C}),
-                lfs::core::Device::CPU,
-                lfs::core::DataType::UInt8);
-            auto chw = hwc.permute({2, 0, 1}).contiguous();
-            image_data.reset();
-
-            return chw.to(lfs::core::Device::CUDA);
-        }
 
         std::unique_ptr<lfs::io::PipelinedImageLoader> make_eval_image_loader(
             const lfs::core::param::TrainingParameters& params) {
@@ -418,33 +386,35 @@ namespace lfs::training {
                     inputs.source_height <= 0) {
                     return evaluation_error("cached evaluation inputs are invalid", LFS_SOURCE_SITE_CURRENT());
                 }
-            } else if (undistorted_reference) {
+            } else {
                 if (!image_loader) {
                     fallback_image_loader = make_eval_image_loader(params);
                     image_loader = fallback_image_loader.get();
                 }
-                auto [source_width, source_height, source_channels] =
-                    lfs::core::get_image_info(camera.image_path());
-                if (source_width <= 0 || source_height <= 0 || source_channels <= 0)
-                    return evaluation_error("failed to read evaluation image dimensions", LFS_SOURCE_SITE_CURRENT());
-
                 lfs::io::LoadParams load_params;
                 load_params.resize_factor = params.dataset.resize_factor;
                 load_params.max_width = params.dataset.max_width;
                 load_params.output_uint8 = !params.dataset.loading_params.use_16bit_color;
                 load_params.cuda_stream = lfs::core::getCurrentCUDAStream();
-                load_params.undistort = &camera.undistort_params();
+                if (undistorted_reference)
+                    load_params.undistort = &camera.undistort_params();
                 inputs.gt_image = image_loader->load_image_immediate(
                     camera.image_path(), load_params);
-                inputs.source_width = source_width;
-                inputs.source_height = source_height;
-            } else {
-                inputs.gt_image = load_eval_gt_image_cpu(
-                    camera, params.dataset.resize_factor, params.dataset.max_width);
-                assert(inputs.gt_image.ndim() == 3);
-                assert(inputs.gt_image.shape()[0] == 3);
-                inputs.source_height = static_cast<int>(inputs.gt_image.shape()[1]);
-                inputs.source_width = static_cast<int>(inputs.gt_image.shape()[2]);
+                if (!inputs.gt_image.is_valid() || inputs.gt_image.ndim() != 3 ||
+                    inputs.gt_image.shape()[0] != 3)
+                    return evaluation_error("failed to load evaluation image", LFS_SOURCE_SITE_CURRENT());
+
+                if (undistorted_reference) {
+                    auto [source_width, source_height, source_channels] =
+                        lfs::core::get_image_info(camera.image_path());
+                    if (source_width <= 0 || source_height <= 0 || source_channels <= 0)
+                        return evaluation_error("failed to read evaluation image dimensions", LFS_SOURCE_SITE_CURRENT());
+                    inputs.source_width = source_width;
+                    inputs.source_height = source_height;
+                } else {
+                    inputs.source_height = static_cast<int>(inputs.gt_image.shape()[1]);
+                    inputs.source_width = static_cast<int>(inputs.gt_image.shape()[2]);
+                }
             }
 
             if (params.optimization.undistort && camera.is_undistort_prepared()) {
@@ -1033,8 +1003,7 @@ namespace lfs::training {
         }
 
         std::unique_ptr<lfs::io::PipelinedImageLoader> fallback_image_loader;
-        if (!image_loader && _params.optimization.undistort &&
-            _params.optimization.eval_space == lfs::core::param::EvalSpace::Undistorted) {
+        if (!image_loader) {
             fallback_image_loader = make_eval_image_loader(_params);
             image_loader = fallback_image_loader.get();
         }

@@ -509,23 +509,8 @@ namespace {
         if (used_embedded_thumbnail)
             *used_embedded_thumbnail = decoded_embedded;
 
-        int target_width = source_width;
-        int target_height = source_height;
-        if (res_div == 2 || res_div == 4 || res_div == 8) {
-            target_width = std::max(1, target_width / res_div);
-            target_height = std::max(1, target_height / res_div);
-        } else if (res_div > 1) {
-            LOG_ERROR("load_image: unsupported resize factor {}", res_div);
-        }
-        if (max_width > 0 && (target_width > max_width || target_height > max_width)) {
-            if (target_width > target_height) {
-                target_height = std::max(1, max_width * target_height / target_width);
-                target_width = max_width;
-            } else {
-                target_width = std::max(1, max_width * target_width / target_height);
-                target_height = max_width;
-            }
-        }
+        const auto [target_width, target_height] =
+            lfs::core::resized_image_dimensions(source_width, source_height, res_div, max_width);
         if (target_width == source_width && target_height == source_height)
             return {base, source_width, source_height, 3};
         T* resized = nullptr;
@@ -543,6 +528,28 @@ namespace {
 } // namespace
 
 namespace lfs::core {
+
+    std::pair<int, int> resized_image_dimensions(const int source_width, const int source_height,
+                                                 const int resize_factor, const int max_width) {
+        int target_width = source_width;
+        int target_height = source_height;
+        if (resize_factor == 2 || resize_factor == 4 || resize_factor == 8) {
+            target_width = std::max(1, target_width / resize_factor);
+            target_height = std::max(1, target_height / resize_factor);
+        } else if (resize_factor > 1) {
+            LOG_ERROR("load_image: unsupported resize factor {}", resize_factor);
+        }
+        if (max_width > 0 && (target_width > max_width || target_height > max_width)) {
+            if (target_width > target_height) {
+                target_height = std::max(1, max_width * target_height / target_width);
+                target_width = max_width;
+            } else {
+                target_width = std::max(1, max_width * target_width / target_height);
+                target_height = max_width;
+            }
+        }
+        return {target_width, target_height};
+    }
 
     std::tuple<int, int, int> get_image_info(std::filesystem::path p) {
         image_codecs::Probe probe;
@@ -580,21 +587,7 @@ namespace lfs::core {
                 out[i] = static_cast<unsigned char>(std::lround(std::clamp(reinterpret_cast<const float*>(decoded.data.data())[i], 0.0f, 1.0f) * 255.0f));
         }
 
-        int nw = decoded.width, nh = decoded.height;
-        if (res_div == 2 || res_div == 4 || res_div == 8) {
-            nw = std::max(1, decoded.width / res_div);
-            nh = std::max(1, decoded.height / res_div);
-        }
-        if (max_width > 0 && (nw > max_width || nh > max_width)) {
-            if (nw > nh) {
-                nh = std::max(1, max_width * nh / nw);
-                nw = max_width;
-            } else {
-                nw = std::max(1, max_width * nw / nh);
-                nh = max_width;
-            }
-        }
-
+        const auto [nw, nh] = resized_image_dimensions(decoded.width, decoded.height, res_div, max_width);
         if (nw != decoded.width || nh != decoded.height) {
             unsigned char* resized = nullptr;
             try {

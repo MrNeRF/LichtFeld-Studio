@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
@@ -557,6 +558,58 @@ TEST(MetricsEvaluatorUndistort, UndistortedGroundTruthEqualsTrainingLoaderImage)
     const auto expected_cpu = training_image.cpu().contiguous();
     ASSERT_EQ(actual_cpu.bytes(), expected_cpu.bytes());
     EXPECT_EQ(std::memcmp(actual_cpu.data_ptr(), expected_cpu.data_ptr(), actual_cpu.bytes()), 0);
+
+    std::filesystem::remove_all(tmp);
+}
+
+// Catches the evaluation reference being downscaled by the host bilinear decoder while
+// training images get the GPU Lanczos filter.
+TEST(MetricsEvaluator, DownscaledGroundTruthMatchesGpuLanczos) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_downscaled_eval_gt";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 64;
+    constexpr int kH = 48;
+    constexpr int kMaxWidth = 40;
+    std::vector<uint8_t> pixels(static_cast<size_t>(kW) * kH * 3);
+    for (size_t index = 0; index < pixels.size(); ++index)
+        pixels[index] = static_cast<uint8_t>((index * 73 + index / 11) % 256);
+    const auto image_path = tmp / "gt.png";
+    write_u8_hwc_png(image_path, pixels, kH, kW);
+
+    auto camera = make_eval_camera(image_path, {}, kW, kH);
+    auto params = make_eval_params(tmp / "out");
+    params.dataset.max_width = kMaxWidth;
+
+    const auto render = [](Camera& render_camera, float)
+        -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        const auto height = static_cast<size_t>(render_camera.image_height());
+        const auto width = static_cast<size_t>(render_camera.image_width());
+        lfs::training::RenderOutput output;
+        output.image = Tensor::zeros({size_t{3}, height, width}, Device::CUDA);
+        return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+    };
+    const auto prepared = prepare_evaluation_view(*camera, params, render);
+    ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
+    const auto& gt = prepared->inputs.gt_image;
+    ASSERT_EQ(gt.dtype(), DataType::UInt8);
+    ASSERT_EQ(gt.shape(), lfs::core::TensorShape({3, kH * kMaxWidth / kW, kMaxWidth}));
+
+    const auto expected = lfs::core::lanczos_resize(
+        Tensor::from_blob(pixels.data(), lfs::core::TensorShape({kH, kW, 3}), Device::CPU, DataType::UInt8).to(Device::CUDA),
+        static_cast<int>(gt.shape()[1]), static_cast<int>(gt.shape()[2]), 2, nullptr);
+    const auto expected_values = expected.cpu().to_vector();
+    const auto actual_values = gt.cpu().to_vector_uint8();
+    ASSERT_EQ(expected_values.size(), actual_values.size());
+    for (size_t index = 0; index < expected_values.size(); ++index) {
+        const float expected_u8 = std::clamp(expected_values[index], 0.0f, 1.0f) * 255.0f;
+        EXPECT_NEAR(static_cast<float>(actual_values[index]), expected_u8, 1.0f) << index;
+    }
 
     std::filesystem::remove_all(tmp);
 }
