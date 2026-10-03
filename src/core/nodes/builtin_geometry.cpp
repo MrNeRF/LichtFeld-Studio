@@ -333,34 +333,29 @@ namespace lfs::nodes::builtin {
         const auto geo = std::string(GEOMETRY_SOCKET);
         const auto f = std::string(FLOAT_SOCKET);
         const auto v = std::string(VECTOR_SOCKET);
-        register_type(registry, type("lfs.transform_geometry", "Transform Geometry", "Geometry",
-                                     "Translate, rotate and uniformly scale every geometry component.",
+        register_type(registry, type("lfs.transform_geometry", "Geometry",
                                      geometry_inputs({in("Translation", v, glm::vec3(0)).step_size(0.01),
                                                       in("Rotation", v, glm::vec3(0)).step_size(1),
                                                       in("Scale", f, 1.0f).step_size(0.01)}),
                                      {out("Geometry", geo)}, evaluate_transform));
-        register_type(registry, type("lfs.set_position", "Set Position", "Geometry",
-                                     "Set element positions and add an offset, blended by selection.",
+        register_type(registry, type("lfs.set_position", "Geometry",
                                      geometry_inputs({in("Selection", f, 1.0f, true)
                                                           .range(0, 1)
                                                           .step_size(0.01),
                                                       in("Position", v, glm::vec3(0), true).step_size(0.01),
                                                       in("Offset", v, glm::vec3(0), true).step_size(0.01)}),
                                      {out("Geometry", geo)}, evaluate_set_position));
-        register_type(registry, type("lfs.delete_geometry", "Delete Geometry", "Geometry",
-                                     "Remove selected elements and mesh faces touching selected vertices.",
+        register_type(registry, type("lfs.delete_geometry", "Geometry",
                                      geometry_inputs(
                                          {in("Selection", f, 1.0f, true).range(0, 1).step_size(0.01)}),
                                      {out("Geometry", geo)}, evaluate_delete));
         register_type(registry,
-                      type("lfs.separate_geometry", "Separate Geometry", "Geometry",
-                           "Split geometry into selected and unselected components.",
+                      type("lfs.separate_geometry", "Geometry",
                            geometry_inputs(
                                {in("Selection", f, 1.0f, true).range(0, 1).step_size(0.01)}),
                            {out("Selection", geo), out("Inverted", geo)}, evaluate_separate_geometry));
         register_type(registry,
-                      type("lfs.join_geometry", "Join Geometry", "Geometry",
-                           "Concatenate geometry components and pad missing SH coefficients.",
+                      type("lfs.join_geometry", "Geometry",
                            {in("Geometry", geo, {}, false, true)}, {out("Geometry", geo)}, evaluate_join));
     }
 

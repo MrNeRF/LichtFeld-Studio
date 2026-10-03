@@ -3155,8 +3155,6 @@
   "runtime.import_batch_kept": "나머지 파일은 불러왔으며 장면에서 계속 사용할 수 있습니다.",
   "runtime.import_render_failed": "이 파일을 렌더링할 준비를 하지 못했습니다",
   "nodes.edit_stored_splats_blocked": "저장된 스플랫을 편집하려면 노드 수정자를 적용하거나 숨기세요",
-  "nodes.posterize.label": "포스터라이즈",
-  "nodes.posterize.description": "색상 단계 수를 줄입니다.",
   "editor.node_editor": "노드 편집기",
   "node_editor.toggle": "노드 편집기 전환",
   "node_editor.preview_selection": "Preview Selection",
@@ -3211,5 +3209,1269 @@
   "node_editor.queued": "대기 중",
   "node_editor.no_results": "일치하는 노드가 없습니다",
   "node_editor.optional_selection": "선택 사항: 연결하지 않으면 모두 선택",
-  "node_editor.captured_count": "캡처됨: {}개 선택"
+  "node_editor.captured_count": "캡처됨: {}개 선택",
+  "nodes": {
+    "boolean": {
+      "label": "불리언",
+      "description": "하나의 켜기/끄기 값으로 연결된 여러 설정을 함께 제어합니다.",
+      "help": "여러 옵션을 함께 전환할 때 사용하세요.\n값을 불리언 입력에 연결하세요. 기본값은 꺼짐입니다.",
+      "inputs": {
+        "Value": "공유하는 켜기/끄기 값입니다. 기본값 꺼짐은 거짓 또는 미선택, 켜짐은 참 또는 선택입니다."
+      },
+      "input_labels": {
+        "Value": "값"
+      },
+      "outputs": {
+        "Value": "선택한 요소는 켜짐, 나머지는 꺼짐입니다. 선택이나 불리언 입력에 연결하세요."
+      },
+      "output_labels": {
+        "Value": "값"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "boolean_math": {
+      "label": "불리언 연산",
+      "description": "선택 영역을 결합해 겹치는 부분, 합친 부분 또는 반대 부분을 선택합니다.",
+      "help": "겹치는 부분에는 And, 어느 한쪽에 속한 부분에는 Or를 사용하세요.\nNot은 A를 반전하고 B를 무시합니다.",
+      "inputs": {
+        "A": "첫 번째 켜기/끄기 값 또는 선택입니다. 기본값은 꺼짐이며 켜면 요소를 포함합니다.",
+        "B": "두 번째 켜기/끄기 값 또는 선택입니다. 기본값은 꺼짐이며 켜면 요소를 포함합니다."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Result": "선택한 요소는 켜짐, 나머지는 꺼짐입니다. 선택이나 불리언 입력에 연결하세요."
+      },
+      "output_labels": {
+        "Result": "결과"
+      },
+      "properties": {
+        "operation": "A와 B의 결합 방식입니다. 기본값 And는 겹친 부분을 남기며 Not은 A를 반전하고 B를 무시합니다."
+      },
+      "property_labels": {
+        "operation": "연산"
+      }
+    },
+    "box_selection": {
+      "label": "상자 선택",
+      "description": "상자 안에 있는 장면의 부분을 선택하고 필요에 따라 경계를 부드럽게 만듭니다.",
+      "help": "중심과 크기를 조절해 대상을 둘러싸세요.\n감쇠 0부터 시작하면 경계가 뚜렷해집니다.",
+      "inputs": {
+        "Centre": "로컬 장면 단위의 X, Y, Z 중심입니다. 기본값 (0, 0, 0)은 오브젝트 원점입니다.",
+        "Size": "장면 단위의 전체 너비, 높이와 깊이이며 음수가 아니어야 합니다. 기본값 (1, 1, 1)은 단위 상자입니다.",
+        "Rotation": "X, Y, Z 축 회전이며 도 단위입니다. 기본값 (0, 0, 0)은 방향을 유지합니다.",
+        "Falloff": "상자 바깥의 부드러운 경계 폭이며 장면 단위입니다. 기본값 0은 뚜렷한 경계입니다."
+      },
+      "input_labels": {
+        "Centre": "중심",
+        "Size": "크기",
+        "Rotation": "회전",
+        "Falloff": "감쇠"
+      },
+      "outputs": {
+        "Selection": "선택 강도입니다. 0은 미선택, 1은 완전 선택이며 중간 값은 부드러운 변화를 만듭니다."
+      },
+      "output_labels": {
+        "Selection": "선택"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour": {
+      "label": "색상",
+      "description": "하나의 색상을 연결된 여러 노드에서 공유합니다.",
+      "help": "색상을 고른 뒤 함께 제어할 설정에 색상 출력을 연결하세요.\n기본값은 중간 회색입니다.",
+      "inputs": {
+        "Colour": "RGB 색이며 보통 성분별 0~1입니다. 0은 검정, 1은 흰색, 기본값 (0.5, 0.5, 0.5)은 중간 회색입니다."
+      },
+      "input_labels": {
+        "Colour": "색상"
+      },
+      "outputs": {
+        "Colour": "결과 RGB 색입니다. 성분별 0은 검정, 1은 흰색이며 계산에 따라 이 범위를 넘을 수 있습니다."
+      },
+      "output_labels": {
+        "Colour": "색상"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_attribute": {
+      "label": "색상 속성",
+      "description": "각 스플랫이나 점의 기본색을 읽어 색상에 따른 편집과 선택에 사용합니다.",
+      "help": "색상 분리에 연결하면 각 성분을 확인할 수 있습니다.\n시점에 따른 반사가 아닌 기본색을 읽습니다.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Colour": "결과 RGB 색입니다. 성분별 0은 검정, 1은 흰색이며 계산에 따라 이 범위를 넘을 수 있습니다."
+      },
+      "output_labels": {
+        "Colour": "색상"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_correct": {
+      "label": "색상 보정",
+      "description": "장면의 세부를 유지하면서 밝기, 대비와 색상 균형을 조절합니다.",
+      "help": "노출로 밝기를 맞춘 뒤 대비와 채도를 조절하세요.\n선택을 연결하면 장면의 일부만 보정할 수 있습니다.\n색상 휠을 중앙으로 되돌리면 어두운 영역, 중간톤과 밝은 영역이 중립이 됩니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "편집 강도 0~1입니다. 0은 유지, 1은 완전 적용입니다. 연결하지 않으면 전체에 적용합니다.",
+        "Exposure": "밝기를 노출 단계로 지정합니다. +1은 두 배, −1은 절반입니다. 기본값 0은 밝기를 유지합니다.",
+        "Black Point": "검정으로 바꿀 입력 밝기입니다. 기본값 0은 기존 검정을 유지하며 높이면 그림자가 깊어집니다.",
+        "White Point": "흰색으로 바꿀 입력 밝기입니다. 기본값 1은 기존 흰색을 유지하며 낮추면 밝은 부분이 밝아집니다.",
+        "Midpoint": "중간 회색으로 바꿀 입력 밝기 0.01~0.99입니다. 0.5는 중립이며 낮추면 중간톤이 밝아집니다.",
+        "Contrast": "명암 차이입니다. 1은 유지, 0은 균일한 톤이며 1보다 크면 대비가 커집니다.",
+        "Saturation": "색의 강도입니다. 0은 무채색, 1은 유지이며 1보다 크면 색이 강해집니다.",
+        "Hue Shift": "색상 휠의 회전이며 도 단위입니다. 0은 유지, 180은 반대 색으로 옮깁니다.",
+        "Temperature": "차가움과 따뜻함의 균형 −1~1입니다. 음수는 차갑게, 양수는 따뜻하게 하며 0은 중립입니다.",
+        "Tint": "녹색과 마젠타의 균형 −1~1입니다. 음수는 마젠타, 양수는 녹색을 더하며 0은 중립입니다.",
+        "Shadows": "어두운 영역의 색 보정이며 성분별 −1~1입니다. 0은 중립이며 음수는 해당 색을 줄입니다.",
+        "Midtones": "중간톤의 색 보정이며 성분별 −1~1입니다. 0은 중립이며 양수는 해당 색을 더합니다.",
+        "Highlights": "밝은 영역의 색 보정이며 성분별 −1~1입니다. 0은 중립이며 양수는 해당 색을 더합니다.",
+        "Gamma": "중간톤 밝기이며 0보다 커야 합니다. 1은 중립, 1보다 크면 밝게, 작으면 어둡게 합니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택",
+        "Exposure": "노출",
+        "Black Point": "검정점",
+        "White Point": "흰점",
+        "Midpoint": "중간점",
+        "Contrast": "대비",
+        "Saturation": "채도",
+        "Hue Shift": "색상각 이동",
+        "Temperature": "색온도",
+        "Tint": "색조",
+        "Shadows": "어두운 영역",
+        "Midtones": "중간톤",
+        "Highlights": "밝은 영역",
+        "Gamma": "Gamma"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {
+        "auto_range": "장면에서 검정점과 흰점을 구합니다. 기본값은 꺼짐으로 두 점을 직접 조절합니다."
+      },
+      "property_labels": {
+        "auto_range": "자동 범위"
+      }
+    },
+    "colour_key": {
+      "label": "색상 키",
+      "description": "고른 색상과 비슷한 색을 가진 장면의 부분을 선택합니다.",
+      "help": "색상을 고른 뒤 대상이 포함될 때까지 허용 오차를 높이세요.\n부드러움을 조금 더하면 경계가 자연스러워집니다.",
+      "inputs": {
+        "Colour": "찾을 RGB 색이며 보통 성분별 0~1입니다. 기본값은 검정입니다. 대상 색을 고르세요.",
+        "Tolerance": "색상에서 허용하는 RGB 거리입니다. 0은 정확한 일치, 기본값 0.1은 작은 차이를 허용합니다.",
+        "Softness": "부드러운 전환의 폭입니다. 기본값 0은 뚜렷한 경계이며 높이면 선택 경계가 부드러워집니다."
+      },
+      "input_labels": {
+        "Colour": "색상",
+        "Tolerance": "허용 오차",
+        "Softness": "부드러움"
+      },
+      "outputs": {
+        "Selection": "선택 강도입니다. 0은 미선택, 1은 완전 선택이며 중간 값은 부드러운 변화를 만듭니다."
+      },
+      "output_labels": {
+        "Selection": "선택"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "combine_colour": {
+      "label": "색상 결합",
+      "description": "개별 RGB 또는 HSV 값으로 하나의 색상을 만듭니다.",
+      "help": "세 값을 연결하고 RGB 또는 HSV 모드를 고르세요.\nHSV 모드에서는 R, G, B 입력이 색상각, 채도, 명도를 뜻합니다.",
+      "inputs": {
+        "R": "RGB의 빨강 또는 HSV의 색상각이며 보통 0~1입니다. 기본값 0은 빨강 없음 또는 빨강 색상각입니다.",
+        "G": "RGB의 녹색 또는 HSV의 채도이며 보통 0~1입니다. 기본값 0은 녹색 없음 또는 회색입니다.",
+        "B": "RGB의 파랑 또는 HSV의 명도이며 보통 0~1입니다. 기본값 0은 파랑 없음 또는 검정입니다."
+      },
+      "input_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "outputs": {
+        "Colour": "결과 RGB 색입니다. 성분별 0은 검정, 1은 흰색이며 계산에 따라 이 범위를 넘을 수 있습니다."
+      },
+      "output_labels": {
+        "Colour": "색상"
+      },
+      "properties": {
+        "mode": "색 해석 방식입니다. 기본값 RGB는 빨강, 녹색, 파랑을, HSV는 색상각, 채도, 명도를 사용합니다."
+      },
+      "property_labels": {
+        "mode": "모드"
+      }
+    },
+    "combine_xyz": {
+      "label": "XYZ 결합",
+      "description": "개별 X, Y, Z 값으로 위치나 방향을 만듭니다.",
+      "help": "두 좌표를 유지하면서 한 좌표만 바꿀 때 사용하세요.\n결과를 벡터 입력에 연결하세요.",
+      "inputs": {
+        "X": "필요한 단위의 X 좌표입니다. 기본값 0은 이 축에 기여하지 않습니다.",
+        "Y": "필요한 단위의 Y 좌표입니다. 기본값 0은 이 축에 기여하지 않습니다.",
+        "Z": "필요한 단위의 Z 좌표입니다. 기본값 0은 이 축에 기여하지 않습니다."
+      },
+      "input_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "outputs": {
+        "Vector": "계산 단위의 결과 X, Y, Z 값입니다."
+      },
+      "output_labels": {
+        "Vector": "벡터"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "compare": {
+      "label": "비교",
+      "description": "높이와 지면 위치처럼 두 값을 비교해 장면의 부분을 선택합니다.",
+      "help": "높이를 A, 지면 위치를 B에 연결하고 Less Than을 고르세요.\n엡실론은 Equal과 Not Equal에만 적용됩니다.",
+      "inputs": {
+        "A": "계산 단위의 첫 번째 숫자입니다. 기본값은 0입니다.",
+        "B": "계산 단위의 두 번째 숫자입니다. 기본값은 0입니다.",
+        "Epsilon": "Equal과 Not Equal의 허용 오차이며 A, B와 같은 단위입니다. 0은 정확한 일치, 기본값은 0.001입니다."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Epsilon": "Epsilon"
+      },
+      "outputs": {
+        "Result": "선택한 요소는 켜짐, 나머지는 꺼짐입니다. 선택이나 불리언 입력에 연결하세요."
+      },
+      "output_labels": {
+        "Result": "결과"
+      },
+      "properties": {
+        "operation": "비교 방식입니다. 기본값은 Equal이며 Less Than이나 Greater Than으로 B의 한쪽을 선택합니다."
+      },
+      "property_labels": {
+        "operation": "연산"
+      }
+    },
+    "decimate": {
+      "label": "간추리기",
+      "description": "선택 영역에서 크고 불투명한 스플랫을 우선 남겨 개수를 줄입니다.",
+      "help": "유지 비율 0.5부터 시작하면 선택한 스플랫의 약 절반을 남깁니다.\n선택하지 않은 스플랫은 항상 남습니다. 점수가 같으면 요청한 수보다 많이 남을 수 있습니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "줄일 스플랫입니다. 가중치 0.5 이상이 대상이며 연결하지 않으면 전체가 대상입니다.",
+        "Keep Fraction": "선택한 스플랫의 유지 비율 0.001~1입니다. 0.5는 약 절반, 1은 전부 남깁니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택",
+        "Keep Fraction": "유지 비율"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "delete_geometry": {
+      "label": "지오메트리 삭제",
+      "description": "선택한 스플랫, 점 또는 메시 정점을 장면에서 삭제합니다.",
+      "help": "지오메트리보다 선택을 먼저 연결하세요.\n선택이 연결되지 않으면 전부 삭제합니다. 삭제한 정점에 닿는 메시 면도 사라집니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "삭제할 부분입니다. 가중치 0.5 이상을 삭제합니다. 연결하지 않으면 전부 삭제해 출력이 비게 됩니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "ellipsoid_selection": {
+      "label": "타원체 선택",
+      "description": "구나 늘어난 구 안에 있는 부분을 선택하고 필요에 따라 경계를 부드럽게 만듭니다.",
+      "help": "중심과 반지름을 조절해 대상을 둘러싸세요.\n반지름이 모두 같으면 구가 됩니다. 감쇠 0은 뚜렷한 경계를 만듭니다.",
+      "inputs": {
+        "Centre": "로컬 장면 단위의 X, Y, Z 중심입니다. 기본값 (0, 0, 0)은 오브젝트 원점입니다.",
+        "Radii": "각 축 반지름이며 음수가 아닌 장면 단위입니다. 기본값 (1, 1, 1)은 단위 구입니다.",
+        "Rotation": "X, Y, Z 축 회전이며 도 단위입니다. 기본값 (0, 0, 0)은 방향을 유지합니다.",
+        "Falloff": "타원체 바깥의 부드러운 경계 폭이며 반지름에 대한 비율입니다. 기본값 0은 뚜렷한 경계입니다."
+      },
+      "input_labels": {
+        "Centre": "중심",
+        "Radii": "반지름",
+        "Rotation": "회전",
+        "Falloff": "감쇠"
+      },
+      "outputs": {
+        "Selection": "선택 강도입니다. 0은 미선택, 1은 완전 선택이며 중간 값은 부드러운 변화를 만듭니다."
+      },
+      "output_labels": {
+        "Selection": "선택"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_input": {
+      "label": "그룹 입력",
+      "description": "대상 오브젝트의 지오메트리를 노드 그래프로 가져옵니다.",
+      "help": "지오메트리를 첫 편집 노드에 연결하세요.\n모디파이어가 여러 개면 앞 모디파이어의 결과를 받습니다.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "대상의 지오메트리 또는 앞 모디파이어의 결과입니다. 첫 편집 노드에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_output": {
+      "label": "그룹 출력",
+      "description": "노드 그래프의 최종 지오메트리를 장면으로 돌려보냅니다.",
+      "help": "마지막 편집 노드를 지오메트리에 연결하세요.\n이 노드로 이어지는 경로만 모디파이어 결과에 반영됩니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "hsv_range": {
+      "label": "HSV 범위",
+      "description": "잔디의 녹색처럼 색상 범위로 스플랫을 선택하고 경계를 부드럽게 만듭니다.",
+      "help": "색상각을 고른 뒤 대상 전체가 잡힐 때까지 색상각 범위를 넓히세요.\n채도 최솟값을 높이면 회색을, 명도 최솟값을 높이면 그림자를 제외합니다.\n선택 미리보기를 켜면 뷰포트에서 결과를 확인할 수 있습니다.",
+      "inputs": {
+        "Hue": "색상 범위 중심 0~1입니다. 0 빨강, 0.17 노랑, 0.33 녹색, 0.5 시안, 0.67 파랑, 0.83 마젠타입니다.",
+        "Hue Range": "색상각 양쪽에 포함할 폭이며 휠의 0~0.5바퀴입니다. 0.07은 한 색 계열을 잡습니다.",
+        "Hue Softness": "색상각 범위 바깥을 흐리는 폭이며 휠의 회전 수입니다. 기본값 0은 뚜렷한 경계입니다.",
+        "Saturation Min": "포함할 최소 채도 0~1입니다. 기본값 0은 회색을 포함하며 높이면 회색을 제외합니다.",
+        "Saturation Max": "포함할 최대 채도 0~1입니다. 기본값 1은 완전히 선명한 색까지 포함합니다.",
+        "Value Min": "포함할 최소 명도 0~1입니다. 기본값 0은 검정을 포함하며 높이면 그림자를 제외합니다.",
+        "Value Max": "포함할 최대 명도 0~1입니다. 기본값 1은 흰색을 포함하며 낮추면 밝은 부분을 제외합니다.",
+        "Softness": "부드러운 전환의 폭입니다. 기본값 0은 뚜렷한 경계이며 높이면 선택 경계가 부드러워집니다."
+      },
+      "input_labels": {
+        "Hue": "색상각",
+        "Hue Range": "색상각 범위",
+        "Hue Softness": "색상각 부드러움",
+        "Saturation Min": "채도 최솟값",
+        "Saturation Max": "채도 최댓값",
+        "Value Min": "명도 최솟값",
+        "Value Max": "명도 최댓값",
+        "Softness": "부드러움"
+      },
+      "outputs": {
+        "Selection": "선택 강도입니다. 0은 미선택, 1은 완전 선택이며 중간 값은 부드러운 변화를 만듭니다."
+      },
+      "output_labels": {
+        "Selection": "선택"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "index": {
+      "label": "인덱스",
+      "description": "각 스플랫, 점 또는 메시 정점에 현재 순서에 따른 0부터 시작하는 번호를 제공합니다.",
+      "help": "수치 연산이나 비교와 함께 번호로 요소를 선택하세요.\n지오메트리를 삭제하거나 합치면 번호가 바뀔 수 있습니다.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Index": "0부터 시작하는 현재 순서입니다. 지오메트리를 합치거나 삭제하면 번호가 바뀔 수 있습니다."
+      },
+      "output_labels": {
+        "Index": "인덱스"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "inside_mesh": {
+      "label": "메시 내부",
+      "description": "참조 메시가 둘러싼 장면의 부분을 선택합니다.",
+      "help": "오브젝트 정보에서 닫힌 메시를 메시 입력에 연결하세요.\n구멍이나 자기 교차가 있으면 내부 판정이 모호해질 수 있습니다.",
+      "inputs": {
+        "Mesh": "내부를 정할 닫힌 참조 메시입니다. 오브젝트 정보를 연결하세요. 연결하지 않으면 아무것도 선택하지 않습니다."
+      },
+      "input_labels": {
+        "Mesh": "메시"
+      },
+      "outputs": {
+        "Selection": "선택한 요소는 켜짐, 나머지는 꺼짐입니다. 선택이나 불리언 입력에 연결하세요."
+      },
+      "output_labels": {
+        "Selection": "선택"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "integer": {
+      "label": "정수",
+      "description": "하나의 정수를 연결된 여러 설정에서 공유합니다.",
+      "help": "값을 개수나 정수 설정에 연결하세요.\n0부터 시작하고 단계 버튼으로 하나씩 변경하세요.",
+      "inputs": {
+        "Value": "공유하는 정수입니다. 기본값은 0이며 음수와 양수를 사용할 수 있습니다."
+      },
+      "input_labels": {
+        "Value": "값"
+      },
+      "outputs": {
+        "Value": "계산 단위의 결과 숫자입니다. 호환되는 숫자 입력에 연결하세요."
+      },
+      "output_labels": {
+        "Value": "값"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "invert_colour": {
+      "label": "색상 반전",
+      "description": "어두운 부분을 밝게 바꾸고 색상을 반대 색으로 뒤집습니다.",
+      "help": "선택을 연결하면 장면의 일부만 반전할 수 있습니다.\n이전 처리에서 색 정보가 잘리지 않았다면 두 번 적용해 기본색을 되돌릴 수 있습니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "편집 강도 0~1입니다. 0은 유지, 1은 완전 적용입니다. 연결하지 않으면 전체에 적용합니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "join_geometry": {
+      "label": "지오메트리 합치기",
+      "description": "여러 입력을 하나로 합치고 SH 차수가 다른 스플랫을 가장 높은 차수에 맞춥니다.",
+      "help": "같은 입력에 여러 지오메트리 출력을 연결하세요.\n지오메트리 분리 후 따로 편집한 부분을 다시 합칠 때 사용하세요.\n겹친 사본은 별개의 스플랫, 점 또는 메시 면으로 남습니다.",
+      "inputs": {
+        "Geometry": "합칠 지오메트리입니다. 여러 연결을 받을 수 있으며 연결하지 않으면 결과가 비게 됩니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "map_range": {
+      "label": "범위 변환",
+      "description": "값을 다른 범위로 바꿔 높이 0~2 m를 강도 1~0의 변화 등으로 변환합니다.",
+      "help": "원본 최솟값과 최댓값을 입력 범위에 맞추세요.\n결과 최솟값 1, 최댓값 0으로 변화를 뒤집을 수 있습니다.\n제한을 켜 두면 결과가 출력 범위 안에 머뭅니다.",
+      "inputs": {
+        "Value": "원본 단위로 변환할 숫자입니다. 기본값은 0입니다. 위치나 다른 값을 연결하세요.",
+        "From Min": "원본 범위의 아래 끝이며 값과 같은 단위입니다. 기본값은 0입니다.",
+        "From Max": "원본 범위의 위 끝이며 기본값은 1입니다. 원본 최솟값과 다르게 설정하세요.",
+        "To Min": "원본 최솟값에 대응하는 결과입니다. 기본값은 0이며 여기를 1, 결과 최댓값을 0으로 하면 반전합니다.",
+        "To Max": "원본 최댓값에 대응하는 결과입니다. 기본값은 1이며 여기를 0, 결과 최솟값을 1로 하면 반전합니다."
+      },
+      "input_labels": {
+        "Value": "값",
+        "From Min": "원본 최솟값",
+        "From Max": "원본 최댓값",
+        "To Min": "결과 최솟값",
+        "To Max": "결과 최댓값"
+      },
+      "outputs": {
+        "Result": "계산 단위의 결과 숫자입니다. 호환되는 숫자 입력에 연결하세요."
+      },
+      "output_labels": {
+        "Result": "결과"
+      },
+      "properties": {
+        "clamp": "결과를 출력 범위 안으로 제한합니다. 기본값은 켜짐이며 끄면 범위 밖의 값도 허용합니다."
+      },
+      "property_labels": {
+        "clamp": "제한"
+      }
+    },
+    "math": {
+      "label": "수치 연산",
+      "description": "편집, 선택과 부드러운 변화를 제어할 숫자를 계산합니다.",
+      "help": "연산을 고르고 A와 B에 값을 연결하세요.\n선택 강도를 조절할 때는 Multiply부터 사용하세요.",
+      "inputs": {
+        "A": "계산 단위의 첫 번째 숫자입니다. 기본값은 0입니다.",
+        "B": "계산 단위의 두 번째 숫자입니다. 기본값은 0입니다."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Value": "계산 단위의 결과 숫자입니다. 호환되는 숫자 입력에 연결하세요."
+      },
+      "output_labels": {
+        "Value": "값"
+      },
+      "properties": {
+        "operation": "계산 방식입니다. 기본값은 Add이며 Absolute 같은 연산은 A만 사용합니다."
+      },
+      "property_labels": {
+        "operation": "연산"
+      }
+    },
+    "mesh_to_points": {
+      "label": "메시를 점으로",
+      "description": "메시 정점을 점군으로 바꾸고 정점 색상이 있으면 유지합니다.",
+      "help": "오브젝트 정보에서 메시를 연결하세요.\n표면에 고르게 점을 뿌리는 대신 정점마다 점 하나를 만듭니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "mesh_to_splats": {
+      "label": "메시를 스플랫으로",
+      "description": "메시 표면을 색상이 있는 납작한 스플랫으로 덮습니다.",
+      "help": "기본 밀도는 단위 구에 약 20,000개의 스플랫을 만듭니다.\n더 세밀하게 하려면 밀도를 높이세요. 최대 개수로 총량을 제한합니다.\n정점 색상은 재질 색상과 텍스처보다 우선합니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Density": "장면 면적 단위당 스플랫 수입니다. 기본값 약 1,592는 단위 구에 약 20,000개를 만들며 0은 만들지 않습니다.",
+        "Max Count": "만들 스플랫의 상한 0~2,000,000입니다. 기본값은 2,000,000이며 0은 만들지 않습니다.",
+        "Opacity": "스플랫 불투명도 0~1입니다. 0은 투명, 1은 불투명, 기본값 0.95는 거의 불투명입니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Density": "밀도",
+        "Max Count": "최대 개수",
+        "Opacity": "불투명도"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {
+        "seed": "반복 가능한 무늬를 만드는 정수 시드입니다. 기본값은 0이며 바꾸면 다른 무늬가 됩니다."
+      },
+      "property_labels": {
+        "seed": "시드"
+      }
+    },
+    "mix_colour": {
+      "label": "색상 혼합",
+      "description": "두 색을 섞거나 선택한 색상 연산으로 결합합니다.",
+      "help": "A와 B에 색을 연결하세요. 계수 0.5는 같은 비율로 섞습니다.\nMix부터 시작한 뒤 Multiply나 Add를 사용해 보세요.",
+      "inputs": {
+        "A": "첫 번째 RGB 색이며 보통 성분별 0~1입니다. 기본값은 검정입니다.",
+        "B": "두 번째 RGB 색이며 보통 성분별 0~1입니다. 기본값은 검정입니다.",
+        "Factor": "혼합 강도 0~1입니다. 0은 A 유지, 1은 연산 완전 적용, 0.5는 절반의 강도입니다."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Factor": "계수"
+      },
+      "outputs": {
+        "Colour": "결과 RGB 색입니다. 성분별 0은 검정, 1은 흰색이며 계산에 따라 이 범위를 넘을 수 있습니다."
+      },
+      "output_labels": {
+        "Colour": "색상"
+      },
+      "properties": {
+        "mode": "색 결합 방식입니다. 기본값은 Mix이며 Add, Subtract, Multiply 결과에 계수를 적용합니다."
+      },
+      "property_labels": {
+        "mode": "모드"
+      }
+    },
+    "named_attribute": {
+      "label": "이름 있는 속성",
+      "description": "저장된 값을 이름으로 읽어 편집을 제어하는 데 사용합니다.",
+      "help": "정확한 속성 이름을 입력하고 종류를 고르세요.\n없는 속성에서는 값을 읽을 수 없습니다.",
+      "inputs": {
+        "Name": "저장된 속성의 정확한 이름이며 대소문자를 구분합니다. 기본값은 빈칸으로 사용 전에 입력하세요."
+      },
+      "input_labels": {
+        "Name": "이름"
+      },
+      "outputs": {
+        "Attribute": "해당 속성에서 읽은 값이며 저장된 단위를 유지합니다."
+      },
+      "output_labels": {
+        "Attribute": "속성"
+      },
+      "properties": {
+        "type": "읽을 값의 종류입니다. 기본값 Float는 요소마다 소수 값 하나를 읽습니다."
+      },
+      "property_labels": {
+        "type": "종류"
+      }
+    },
+    "neighbour_count": {
+      "label": "이웃 수",
+      "description": "가까운 스플랫이나 점을 세어 장면의 성긴 부분을 찾습니다.",
+      "help": "개수를 비교에 연결해 이웃이 적은 부분을 선택하세요.\n스플랫은 반지름 3과 크기 기준부터 시작하세요.\n자기 자신은 세지 않습니다.",
+      "inputs": {
+        "Radius": "이웃을 찾을 거리입니다. 기본값 1이며 장면 단위 또는 크기 기준 배율입니다. 0은 세지 않습니다."
+      },
+      "input_labels": {
+        "Radius": "반지름"
+      },
+      "outputs": {
+        "Count": "반지름 안의 이웃 수이며 자기 자신은 제외합니다. 0은 고립을 뜻합니다."
+      },
+      "output_labels": {
+        "Count": "개수"
+      },
+      "properties": {
+        "relative_to_size": "각 스플랫 크기를 반지름 단위로 씁니다. 기본값 꺼짐은 장면 단위를 쓰며 점은 항상 장면 단위입니다."
+      },
+      "property_labels": {
+        "relative_to_size": "크기 기준"
+      }
+    },
+    "opacity": {
+      "label": "불투명도",
+      "description": "각 스플랫의 불투명도를 읽어 희미하거나 짙은 부분을 찾습니다.",
+      "help": "불투명도를 비교에 연결해 희미한 스플랫을 선택하세요.\n0은 투명, 1은 불투명입니다.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Opacity": "렌더링 전 불투명도입니다. 0은 투명, 1은 불투명입니다."
+      },
+      "output_labels": {
+        "Opacity": "불투명도"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "points_to_splats": {
+      "label": "점을 스플랫으로",
+      "description": "점군을 색상이 있는 둥근 스플랫으로 바꿉니다.",
+      "help": "반지름을 0으로 두면 주변 점 간격으로 크기를 추정합니다.\n자동 크기로 틈이 생기면 장면 단위로 양의 반지름을 지정하세요.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Radius": "장면 단위 스플랫 반지름입니다. 기본값 0은 주변 점 간격의 절반을 추정하며 양수는 고정 크기입니다.",
+        "Opacity": "스플랫 불투명도 0~1입니다. 0은 투명, 1은 불투명, 기본값 0.9는 조금 비칩니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Radius": "반지름",
+        "Opacity": "불투명도"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "position": {
+      "label": "위치",
+      "description": "각 스플랫, 점 또는 메시 정점이 오브젝트 안에서 놓인 위치를 읽습니다.",
+      "help": "위치를 XYZ 분리에 연결해 높이나 축 방향 거리로 선택하세요.\n좌표는 오브젝트의 로컬 공간을 사용합니다.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "로컬 장면 단위의 X, Y, Z 위치입니다."
+      },
+      "output_labels": {
+        "Position": "위치"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "posterize": {
+      "label": "포스터화",
+      "description": "장면의 색을 적은 수의 뚜렷한 단계로 줄입니다.",
+      "help": "단계 4부터 시작하면 색상 성분마다 네 단계를 만듭니다.\n선택을 연결하면 효과를 일부에만 적용할 수 있습니다.\n선택한 스플랫은 시점에 따른 색 변화가 사라집니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "편집 강도 0~1입니다. 0은 유지, 1은 완전 적용입니다. 연결하지 않으면 전체에 적용합니다.",
+        "Levels": "RGB 성분별 색 단계 수 2~32입니다. 2는 최솟값과 최댓값만 쓰며 기본값은 4입니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택",
+        "Levels": "단계"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "random_value": {
+      "label": "난수",
+      "description": "각 스플랫이나 점에 재현 가능한 난수를 주어 편집에 변화를 더합니다.",
+      "help": "최솟값과 최댓값으로 필요한 범위를 정하세요.\n시드를 바꾸면 다른 무늬가 됩니다. 지오메트리 순서가 바뀌어도 달라질 수 있습니다.",
+      "inputs": {
+        "Min": "필요한 단위의 난수 하한입니다. 기본값은 0이며 최댓값보다 작아야 합니다.",
+        "Max": "필요한 단위의 난수 상한입니다. 기본값은 1이며 최솟값보다 커야 합니다."
+      },
+      "input_labels": {
+        "Min": "최솟값",
+        "Max": "최댓값"
+      },
+      "outputs": {
+        "Value": "계산 단위의 결과 숫자입니다. 호환되는 숫자 입력에 연결하세요."
+      },
+      "output_labels": {
+        "Value": "값"
+      },
+      "properties": {
+        "seed": "반복 가능한 무늬를 만드는 정수 시드입니다. 기본값은 0이며 바꾸면 다른 무늬가 됩니다."
+      },
+      "property_labels": {
+        "seed": "시드"
+      }
+    },
+    "recolour": {
+      "label": "색상 변경",
+      "description": "선택한 스플랫의 색을 바꾸고 필요에 따라 기존 명암을 유지합니다.",
+      "help": "색을 고르고 가중치 0.3부터 시작해 은은하게 물들이세요.\n명암 유지를 켜 두면 조명의 세부가 남습니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "편집 강도 0~1입니다. 0은 유지, 1은 완전 적용입니다. 연결하지 않으면 전체에 적용합니다.",
+        "Colour": "목표 RGB 색이며 보통 성분별 0~1입니다. 기본값은 파랑이며 명암 유지로 빛과 그림자를 보존합니다.",
+        "Weight": "색 변경 강도 0~1입니다. 0은 원본 유지, 1은 새 색 완전 적용이며 기본값은 1입니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택",
+        "Colour": "색상",
+        "Weight": "가중치"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {
+        "keep_shading": "색을 바꾸면서 기존 명암을 보존합니다. 기본값은 켜짐이며 끄면 균일한 색을 적용합니다.",
+        "fade_view_dependent": "색 변경에 따라 시점 의존 색을 줄입니다. 기본값은 켜짐이며 끄면 원래 변화를 유지합니다."
+      },
+      "property_labels": {
+        "keep_shading": "명암 유지",
+        "fade_view_dependent": "시점 의존 색 줄이기"
+      }
+    },
+    "remove_floaters": {
+      "label": "부유 스플랫 제거",
+      "description": "하늘의 반점이나 지면 아래 안개처럼 빈 공간에 떠 있는 스플랫을 삭제합니다.",
+      "help": "먼저 미리보기를 켜세요. 삭제될 부분만 보여 줍니다.\n격리 반지름 3과 크기 기준은 각 스플랫 크기로 판단해 성긴 배경을 보존합니다.\n선택을 연결하면 지면 아래처럼 정리할 범위를 제한할 수 있습니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "제거를 검사할 부분입니다. 가중치 0.5 이상이 대상이며 연결하지 않으면 모든 스플랫을 검사합니다.",
+        "Min Opacity": "이 불투명도 미만을 제거합니다. 0~1이며 0은 검사 해제, 기본값 0.02는 매우 희미한 스플랫을 제거합니다.",
+        "Max Size": "가장 긴 축이 이 장면 단위 길이를 넘는 스플랫을 제거합니다. 기본값 0은 이 검사를 끕니다.",
+        "Isolation Radius": "이웃을 찾을 거리입니다. 크기 기준에서는 각 스플랫 크기의 배수이며 그 외에는 장면 단위입니다. 0은 검사를 끕니다.",
+        "Min Neighbours": "반지름 안의 이웃이 이 수보다 적은 스플랫을 제거합니다. 1은 완전히 고립된 스플랫만 제거합니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택",
+        "Min Opacity": "최소 불투명도",
+        "Max Size": "최대 크기",
+        "Isolation Radius": "격리 반지름",
+        "Min Neighbours": "최소 이웃 수"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {
+        "preview": "제거될 스플랫만 변경 없이 보여 줍니다. 기본값 꺼짐은 정리된 결과를 보여 줍니다.",
+        "relative_to_size": "각 스플랫 크기를 반지름 단위로 씁니다. 기본값 켜짐은 성긴 부분을 보호하며 끄면 장면 단위를 씁니다."
+      },
+      "property_labels": {
+        "preview": "미리보기",
+        "relative_to_size": "크기 기준"
+      }
+    },
+    "scale": {
+      "label": "크기",
+      "description": "각 스플랫의 세 로컬 축에 따른 크기를 읽습니다.",
+      "help": "크기를 XYZ 분리에 연결해 축별 크기를 비교하세요.\n값은 배율이 아닌 장면 단위입니다.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Scale": "각 스플랫의 세 로컬 축 크기이며 장면 단위입니다."
+      },
+      "output_labels": {
+        "Scale": "크기"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "scale_clamp": {
+      "label": "축 비율 제한",
+      "description": "촬영 경로에서 벗어나면 줄무늬로 보이는 바늘 모양이나 납작한 Gaussian을 바로잡습니다.",
+      "help": "학습 후 카메라 경로 밖에서 가느다란 줄무늬가 보일 때 사용하세요.\n최대 축 비율 8부터 시작하세요. 낮추면 더 둥글지만 부드러워집니다.\n모양만 바뀌며 위치, 색상과 개수는 유지됩니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "편집 강도 0~1입니다. 0은 유지, 1은 완전 적용입니다. 연결하지 않으면 전체에 적용합니다.",
+        "Max Aspect": "가장 긴 축과 가장 짧은 축 비율의 상한입니다. 1은 모든 스플랫을 둥글게 하며 8부터 시작하면 좋습니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택",
+        "Max Aspect": "최대 축 비율"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_colour": {
+      "label": "색상 분리",
+      "description": "색을 RGB 또는 HSV 값으로 나누어 각 성분을 편집하거나 비교합니다.",
+      "help": "색상각, 채도, 명도를 나누려면 HSV를 고르세요.\nHSV 모드에서 R, G, B 출력은 그 순서로 해당 값을 전달합니다.",
+      "inputs": {
+        "Colour": "분리할 RGB 색이며 보통 성분별 0~1입니다. 기본값은 모든 성분이 0인 검정입니다."
+      },
+      "input_labels": {
+        "Colour": "색상"
+      },
+      "outputs": {
+        "R": "RGB의 빨강 성분 또는 HSV의 색상각입니다. 색상각은 휠 한 바퀴를 0~1로 나타냅니다.",
+        "G": "RGB의 녹색 성분 또는 HSV의 채도입니다. HSV에서 0은 회색, 1은 완전한 채도입니다.",
+        "B": "RGB의 파랑 성분 또는 HSV의 명도입니다. HSV에서 0은 검정, 1은 최대 밝기입니다."
+      },
+      "output_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "properties": {
+        "mode": "색 해석 방식입니다. 기본값 RGB는 빨강, 녹색, 파랑을, HSV는 색상각, 채도, 명도를 사용합니다."
+      },
+      "property_labels": {
+        "mode": "모드"
+      }
+    },
+    "separate_geometry": {
+      "label": "지오메트리 분리",
+      "description": "선택한 부분과 나머지를 나누어 각각 편집한 뒤 다시 합칠 수 있게 합니다.",
+      "help": "선택을 연결하고 두 출력을 따로 편집하세요.\n지오메트리 합치기로 두 경로를 다시 합칠 수 있습니다.\n부드러운 선택 가중치는 0.5를 기준으로 둘로 나뉩니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "가중치 0.5 이상은 선택 출력으로, 미만은 반대 출력으로 보냅니다. 연결하지 않으면 전부 선택합니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택"
+      },
+      "outputs": {
+        "Selection": "선택 가중치가 0.5 이상인 지오메트리입니다. 이 경로를 따로 편집하세요.",
+        "Inverted": "선택 가중치가 0.5 미만인 지오메트리로 선택 영역 바깥에 남은 부분입니다."
+      },
+      "output_labels": {
+        "Selection": "선택",
+        "Inverted": "반대"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_xyz": {
+      "label": "XYZ 분리",
+      "description": "위치나 방향을 X, Y, Z 값으로 나눕니다.",
+      "help": "위치를 연결한 뒤 높이 축을 비교나 범위 변환에 보내세요.\n장면에서 어느 축이 위쪽인지 확인하세요.",
+      "inputs": {
+        "Vector": "필요한 단위의 X, Y, Z 값입니다. 기본값 (0, 0, 0)은 모든 축에서 0입니다."
+      },
+      "input_labels": {
+        "Vector": "벡터"
+      },
+      "outputs": {
+        "X": "입력의 X 좌표이며 같은 단위를 씁니다. 0은 YZ 평면 위입니다.",
+        "Y": "입력의 Y 좌표이며 같은 단위를 씁니다. 0은 XZ 평면 위입니다.",
+        "Z": "입력의 Z 좌표이며 같은 단위를 씁니다. 0은 XY 평면 위입니다."
+      },
+      "output_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_colour": {
+      "label": "색상 설정",
+      "description": "선택한 스플랫의 기본색을 지정한 색으로 바꿉니다.",
+      "help": "색을 고르거나 다른 노드의 색을 연결하세요.\n평평하게 칠한 색에는 시점 의존 색 제거를 켜 두세요.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "편집 강도 0~1입니다. 0은 유지, 1은 완전 적용입니다. 연결하지 않으면 전체에 적용합니다.",
+        "Colour": "RGB 색이며 보통 성분별 0~1입니다. 0은 검정, 1은 흰색, 기본값 (0.5, 0.5, 0.5)은 중간 회색입니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택",
+        "Colour": "색상"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {
+        "clear_view_dependent": "선택한 스플랫의 시점 의존 색을 제거합니다. 기본값 켜짐은 균일한 색을 주며 끄면 반사를 유지합니다."
+      },
+      "property_labels": {
+        "clear_view_dependent": "시점 의존 색 제거"
+      }
+    },
+    "set_opacity": {
+      "label": "불투명도 설정",
+      "description": "선택한 스플랫이 비치는 정도를 바꿉니다.",
+      "help": "불투명도 0.5부터 시작해 반투명하게 만드세요.\n선택으로 기존 불투명도와 부드럽게 섞을 수 있습니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "편집 강도 0~1입니다. 0은 유지, 1은 완전 적용입니다. 연결하지 않으면 전체에 적용합니다.",
+        "Opacity": "새 불투명도 0~1입니다. 0은 투명, 1은 불투명이며 기본값 1은 선택한 스플랫을 불투명하게 만듭니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택",
+        "Opacity": "불투명도"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_position": {
+      "label": "위치 설정",
+      "description": "선택한 스플랫, 점 또는 메시 정점을 새 위치로 옮기고 필요에 따라 오프셋을 더합니다.",
+      "help": "위치 노드를 위치 입력에 연결한 뒤 오프셋으로 상대 이동하세요.\n연결하지 않은 위치 입력은 원점을 사용합니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "편집 강도 0~1입니다. 0은 유지, 1은 완전 적용입니다. 연결하지 않으면 전체에 적용합니다.",
+        "Position": "로컬 장면 단위의 새 위치입니다. 기본값은 원점이며 위치를 연결하면 기존 위치를 유지합니다.",
+        "Offset": "로컬 장면 단위로 더할 X, Y, Z 이동량입니다. 기본값 (0, 0, 0)은 이동하지 않습니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택",
+        "Position": "위치",
+        "Offset": "오프셋"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_scale": {
+      "label": "크기 설정",
+      "description": "선택한 스플랫의 세 로컬 축 크기를 설정합니다.",
+      "help": "기존 크기에 배율을 적용하려면 크기를 벡터 연산을 거쳐 연결하세요.\n연결하지 않은 값은 배율이 아닌 장면 단위 크기로 대체합니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "편집 강도 0~1입니다. 0은 유지, 1은 완전 적용입니다. 연결하지 않으면 전체에 적용합니다.",
+        "Scale": "각 로컬 축의 새 크기이며 장면 단위입니다. 기본값 (1, 1, 1)은 단위 크기의 둥근 스플랫입니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택",
+        "Scale": "크기"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_sh_degree": {
+      "label": "SH 차수 설정",
+      "description": "바라보는 방향에 따라 스플랫 색이 변하는 정도를 제한합니다.",
+      "help": "차수 0은 색을 일정하게 만들고 내보낼 파일도 줄입니다.\n차수를 높여도 이미 버린 색상 정보는 복원되지 않습니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Degree": "SH 차수 0~3입니다. 기본값 0은 시점 의존 색을 없애며 높이면 각도별 세부를 표현할 수 있습니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Degree": "차수"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "sharpen": {
+      "label": "선명하게",
+      "description": "선택한 스플랫을 줄여 흐릿한 세부를 더 또렷하게 만듭니다.",
+      "help": "양 0.25부터 시작하고 덮임 유지를 켜 두세요.\n너무 높이면 스플랫 사이에 틈이 보일 수 있습니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Selection": "편집 강도 0~1입니다. 0은 유지, 1은 완전 적용입니다. 연결하지 않으면 전체에 적용합니다.",
+        "Amount": "크기 감소 비율 0~0.95입니다. 0은 유지, 기본값 0.25는 각 축을 25% 줄입니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Selection": "선택",
+        "Amount": "양"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {
+        "keep_coverage": "스플랫을 줄이면서 불투명도를 높여 덮임을 유지합니다. 기본값은 켜짐이며 끄면 더 투명해질 수 있습니다."
+      },
+      "property_labels": {
+        "keep_coverage": "덮임 유지"
+      }
+    },
+    "simplify": {
+      "label": "단순화",
+      "description": "장면의 전체적인 모습을 유지하면서 스플랫을 합쳐 개수를 줄입니다.",
+      "help": "비율 0.5부터 시작해 개수의 절반을 목표로 하세요.\n다른 노드보다 오래 걸릴 수 있습니다. 비율이 낮으면 작은 세부가 사라집니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Ratio": "목표 유지 비율 0.01~1입니다. 기본값 0.5는 절반을 목표로 하며 1은 원래 개수를 유지합니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Ratio": "비율"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "splats_to_points": {
+      "label": "스플랫을 점으로",
+      "description": "스플랫 중심과 기본색을 점군으로 바꿉니다.",
+      "help": "중심점을 내보내거나 장면을 점으로 처리할 때 사용하세요.\n스플랫 크기, 불투명도와 시점에 따른 색 변화는 유지하지 않습니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "stored_selection": {
+      "label": "저장된 선택",
+      "description": "뷰포트에서 캡처한 선택 영역을 다시 사용합니다.",
+      "help": "뷰포트에서 스플랫을 선택한 뒤 선택 캡처를 누르세요.\n요소 개수나 순서를 바꾸면 다시 캡처하세요.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Selection": "선택한 요소는 켜짐, 나머지는 꺼짐입니다. 선택이나 불리언 입력에 연결하세요."
+      },
+      "output_labels": {
+        "Selection": "선택"
+      },
+      "properties": {
+        "data": "캡처한 뷰포트 선택입니다. 선택 캡처를 누르기 전에는 비어 있으며 모디파이어마다 따로 저장합니다.",
+        "size": "선택을 캡처할 당시의 요소 수입니다. 0은 비어 있음을 뜻하며 개수가 바뀌면 다시 캡처하세요.",
+        "invert": "저장된 선택을 반전합니다. 기본값 꺼짐은 선택한 요소를 유지하며 켜면 나머지를 선택합니다."
+      },
+      "property_labels": {
+        "data": "데이터",
+        "size": "크기",
+        "invert": "반전"
+      }
+    },
+    "transform_geometry": {
+      "label": "지오메트리 변환",
+      "description": "전체 지오메트리를 함께 이동, 회전하고 크기를 바꿉니다.",
+      "help": "이동으로 위치를 바꾸고 배율 1로 원래 크기를 유지하세요.\n회전은 오브젝트 원점을 중심으로 도 단위를 사용합니다.",
+      "inputs": {
+        "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
+        "Translation": "장면 단위의 X, Y, Z 이동량입니다. 기본값 (0, 0, 0)은 위치를 유지합니다.",
+        "Rotation": "X, Y, Z 축 회전이며 도 단위입니다. 기본값 (0, 0, 0)은 방향을 유지합니다.",
+        "Scale": "크기 배율입니다. 1은 원래 크기 유지, 0은 원점으로 축소, 음수는 반전입니다."
+      },
+      "input_labels": {
+        "Geometry": "지오메트리",
+        "Translation": "이동",
+        "Rotation": "회전",
+        "Scale": "크기"
+      },
+      "outputs": {
+        "Geometry": "결과 지오메트리입니다. 다른 편집 노드나 그룹 출력에 연결하세요."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "value": {
+      "label": "값",
+      "description": "하나의 숫자를 연결된 여러 설정에서 공유합니다.",
+      "help": "여러 숫자 입력에 값을 연결해 함께 제어하세요.\n0부터 시작하고 숫자를 드래그해 조절하세요.",
+      "inputs": {
+        "Value": "공유하는 숫자입니다. 기본값은 0이며 음수와 양수를 사용할 수 있습니다."
+      },
+      "input_labels": {
+        "Value": "값"
+      },
+      "outputs": {
+        "Value": "계산 단위의 결과 숫자입니다. 호환되는 숫자 입력에 연결하세요."
+      },
+      "output_labels": {
+        "Value": "값"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector": {
+      "label": "벡터",
+      "description": "한 묶음의 X, Y, Z 값을 여러 노드에서 공유합니다.",
+      "help": "공통 위치, 오프셋 또는 방향에 사용하세요.\n기본값은 세 좌표 모두 0입니다.",
+      "inputs": {
+        "Vector": "필요한 단위의 X, Y, Z 값입니다. 기본값 (0, 0, 0)은 모든 축에서 0입니다."
+      },
+      "input_labels": {
+        "Vector": "벡터"
+      },
+      "outputs": {
+        "Vector": "계산 단위의 결과 X, Y, Z 값입니다."
+      },
+      "output_labels": {
+        "Vector": "벡터"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector_math": {
+      "label": "벡터 연산",
+      "description": "세 성분의 값으로 위치, 방향과 거리를 계산합니다.",
+      "help": "Scale로 오프셋 크기를 바꾸거나 Distance로 두 위치를 비교하세요.\nLength, Distance, Dot은 값 출력을, 나머지는 벡터 출력을 사용합니다.",
+      "inputs": {
+        "A": "계산 단위의 첫 번째 세 성분 값입니다. 기본값은 (0, 0, 0)입니다.",
+        "B": "계산 단위의 두 번째 세 성분 값입니다. 기본값은 (0, 0, 0)입니다.",
+        "Scale": "Scale 연산의 배율입니다. 1은 A 유지, 0은 영벡터, −1은 방향 반전입니다."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Scale": "크기"
+      },
+      "outputs": {
+        "Vector": "계산 단위의 결과 X, Y, Z 값입니다.",
+        "Value": "계산 단위의 결과 숫자입니다. 호환되는 숫자 입력에 연결하세요."
+      },
+      "output_labels": {
+        "Vector": "벡터",
+        "Value": "값"
+      },
+      "properties": {
+        "operation": "벡터 계산 방식입니다. 기본값은 Add입니다. Length, Distance, Dot은 벡터 대신 값을 출력합니다."
+      },
+      "property_labels": {
+        "operation": "연산"
+      }
+    },
+    "object_info": {
+      "label": "오브젝트 정보",
+      "description": "다른 장면 오브젝트의 지오메트리를 참조나 추가 부품으로 그래프에 가져옵니다.",
+      "help": "참조 오브젝트의 정확한 이름이나 UUID를 고르세요.\n상대 공간을 사용하면 편집할 오브젝트를 기준으로 배치합니다.\n이 모디파이어에 의존하는 오브젝트를 참조하지 마세요.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "선택한 공간의 참조 오브젝트 지오메트리이며 표시 중인 모디파이어를 포함합니다."
+      },
+      "output_labels": {
+        "Geometry": "지오메트리"
+      },
+      "properties": {
+        "object": "읽을 장면 오브젝트의 정확한 이름이나 UUID입니다. 기본값은 빈칸이며 평가 전에 참조 대상을 고르세요.",
+        "transform_space": "Original은 로컬 좌표를 유지하며 Relative는 수정할 오브젝트의 공간으로 변환합니다."
+      },
+      "property_labels": {
+        "object": "오브젝트",
+        "transform_space": "변환 공간"
+      }
+    }
+  },
+  "node_editor.how_to_use": "사용 방법",
+  "node_editor.learn_more": "자세히 보기"
 }

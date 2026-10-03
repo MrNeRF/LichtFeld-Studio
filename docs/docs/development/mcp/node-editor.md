@@ -16,6 +16,9 @@ the graph and its modifier instances together.
 
 - `lichtfeld://nodes/types`: descriptors, including Python plugins, socket types,
   defaults, field/multi-input flags, ranges/steps, properties and enum items.
+  Built-in labels, one-line descriptions, multiline `help`, and socket/property
+  descriptions follow the active UI language. Identifiers remain unchanged;
+  plugins supply their own text.
 - `lichtfeld://nodes/trees`: project graph library; append `/<uuid>` for full JSON,
   including locations and per-node UI settings.
 - `lichtfeld://nodes/stacks`: target stacks; append `/<scene node uuid>` for

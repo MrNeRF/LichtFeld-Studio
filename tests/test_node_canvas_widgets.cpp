@@ -224,6 +224,111 @@ namespace {
         }
     }
 
+    TEST_F(NodeCanvasWidgets, HelpSurfacesRemainVisibleAndRememberTypePreference) {
+        attachGraph();
+        auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        ASSERT_TRUE(canvas->selectNodes({"Correct"}, std::nullopt));
+        context_->Update();
+        auto* sidebar = canvas->GetElementById("node-editor-sidebar");
+        const auto descriptor = scene_.modifierManager().registry().find("lfs.colour_correct");
+        auto* description = sidebar->QuerySelector(".node-description");
+        auto* help = sidebar->QuerySelector(".node-help");
+        ASSERT_NE(description, nullptr);
+        ASSERT_NE(help, nullptr);
+        EXPECT_EQ(description->GetInnerRML(), descriptor->description);
+        EXPECT_LT(description->GetAbsoluteOffset().y, description->GetParentNode()->QuerySelector(".target-type")->GetAbsoluteOffset().y);
+        EXPECT_TRUE(help->IsClassSet("expanded"));
+        EXPECT_GT(help->QuerySelector(".node-help-text")->GetBox().GetSize().y, 30.0f);
+        help->QuerySelector("button")->DispatchEvent("click", {});
+        context_->Update();
+        EXPECT_FALSE(sidebar->QuerySelector(".node-help")->IsClassSet("expanded"));
+        ASSERT_TRUE(canvas->selectNodes({"Value"}, std::nullopt));
+        context_->Update();
+        EXPECT_TRUE(sidebar->QuerySelector(".node-help")->IsClassSet("expanded"));
+        ASSERT_TRUE(canvas->selectNodes({"Correct"}, std::nullopt));
+        context_->Update();
+        EXPECT_FALSE(sidebar->QuerySelector(".node-help")->IsClassSet("expanded"));
+        auto* input = sidebar->QuerySelector("input[data-input=Exposure]");
+        ASSERT_NE(input, nullptr);
+        const auto socket = std::ranges::find(descriptor->inputs, "Exposure", &lfs::nodes::SocketDecl::identifier);
+        ASSERT_NE(socket, descriptor->inputs.end());
+        EXPECT_EQ(lfs::vis::gui::resolveRmlTooltip(input), socket->description);
+        input->DispatchEvent("focus", {});
+        context_->Update();
+        auto* row = input;
+        while (row && !row->IsClassSet("node-setting-help"))
+            row = row->GetParentNode();
+        ASSERT_NE(row, nullptr);
+        EXPECT_TRUE(row->IsClassSet("show-help"));
+        EXPECT_GT(row->QuerySelector(".node-field-help")->GetBox().GetSize().y, 0.0f);
+        input->DispatchEvent("blur", {});
+        context_->Update();
+        EXPECT_FALSE(row->IsClassSet("show-help"));
+        auto* title = canvas->QuerySelector(".node-box[data-node=Correct] .node-title-label");
+        EXPECT_EQ(lfs::vis::gui::resolveRmlTooltip(title), descriptor->description);
+        auto* output = canvas->QuerySelector(".node-box[data-node=Correct] .socket-row.output .socket-label");
+        EXPECT_EQ(lfs::vis::gui::resolveRmlTooltip(output), descriptor->outputs.front().description);
+    }
+
+    TEST_F(NodeCanvasWidgets, SearchKeyboardHighlightShowsMatchingHelpPreview) {
+        attachGraph();
+        auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        canvas->headerAction("add", 40, 100);
+        context_->Update();
+        auto* search = dynamic_cast<Rml::ElementFormControlInput*>(canvas->GetElementById("node-add-search"));
+        ASSERT_NE(search, nullptr);
+        EXPECT_EQ(context_->GetFocusElement(), search);
+        search->SetValue("Scale Clamp");
+        search->DispatchEvent("change", {});
+        context_->Update();
+        auto* menu = canvas->GetElementById("node-add-menu");
+        EXPECT_TRUE(menu->IsClassSet("has-preview"));
+        auto* preview = menu->GetElementById("node-add-preview");
+        ASSERT_NE(preview, nullptr);
+        EXPECT_GT(preview->GetBox().GetSize().x, 200.0f);
+        EXPECT_GT(preview->GetBox().GetSize().y, 40.0f);
+        EXPECT_EQ(preview->QuerySelector(".node-add-preview-description")->GetInnerRML(),
+                  scene_.modifierManager().registry().find("lfs.scale_clamp")->description);
+        search->SetValue("Colour");
+        search->DispatchEvent("change", {});
+        context_->Update();
+        const auto previous = menu->QuerySelector(".first-hit")->GetAttribute<Rml::String>("data-type", "");
+        ASSERT_TRUE(canvas->handleKey(SDL_SCANCODE_DOWN, false, false, false));
+        context_->Update();
+        const auto next = menu->QuerySelector(".first-hit")->GetAttribute<Rml::String>("data-type", "");
+        EXPECT_NE(previous, next);
+        EXPECT_EQ(preview->QuerySelector(".node-add-preview-description")->GetInnerRML(),
+                  scene_.modifierManager().registry().find(next)->description);
+        EXPECT_TRUE(canvas->handleKey(SDL_SCANCODE_ESCAPE, false, false, false));
+        EXPECT_EQ(canvas->GetElementById("node-add-menu"), nullptr);
+    }
+
+    TEST_F(NodeCanvasWidgets, LanguageChangesOnlyPresentationAndPreviewRespectsOptOut) {
+        attachGraph();
+        auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        auto& registry = scene_.modifierManager().registry();
+        const auto english = registry.find("lfs.colour_correct");
+        const auto before = scene_.modifierManager().tree(tree_)->to_json();
+        ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().setLanguage("de"));
+        context_->Update();
+        const auto german = registry.find_localized("lfs.colour_correct");
+        EXPECT_NE(german->label, english->label);
+        EXPECT_NE(german->help, english->help);
+        EXPECT_EQ(german->inputs[2].identifier, "Exposure");
+        EXPECT_EQ(registry.find("lfs.colour_correct"), english);
+        EXPECT_EQ(scene_.modifierManager().tree(tree_)->to_json(), before);
+        auto& tree = *scene_.modifierManager().tree(tree_);
+        tree.add_node("lfs.hsv_range", "HSV").location = {30, 500};
+        scene_.modifierManager().markDirty();
+        context_->Update();
+        ASSERT_TRUE(canvas->selectNodes({"HSV"}, std::nullopt));
+        EXPECT_TRUE(canvas->previewSelection());
+        canvas->setPreviewSelection(false);
+        ASSERT_TRUE(canvas->selectNodes({"Correct"}, std::nullopt));
+        ASSERT_TRUE(canvas->selectNodes({"HSV"}, std::nullopt));
+        EXPECT_FALSE(canvas->previewSelection());
+    }
+
     TEST_F(NodeCanvasWidgets, KeepingOverviewLabelsDoesNotEnlargeCardsIntoNeighbours) {
         attachGraph();
         auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
@@ -421,6 +526,8 @@ namespace {
         EXPECT_FLOAT_EQ(bounds.x, 176);
         EXPECT_FLOAT_EQ(bounds.y, 176);
         lfs::vis::op::undoHistory().clear();
+        wheel->ScrollIntoView();
+        context_->Update();
         const auto origin = wheel->GetAbsoluteOffset(Rml::BoxArea::Content);
         context_->ProcessMouseMove(static_cast<int>(origin.x + bounds.x * 0.5f),
                                    static_cast<int>(origin.y + bounds.y * 0.5f), 0);

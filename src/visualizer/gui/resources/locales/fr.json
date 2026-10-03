@@ -3155,8 +3155,6 @@
   "runtime.import_batch_kept": "Les autres fichiers ont été chargés et restent disponibles dans la scène.",
   "runtime.import_render_failed": "Impossible de préparer ce fichier pour l’affichage",
   "nodes.edit_stored_splats_blocked": "Appliquez ou masquez les modificateurs de nœuds pour modifier les splats stockés",
-  "nodes.posterize.label": "Postériser",
-  "nodes.posterize.description": "Réduit le nombre de niveaux de couleur.",
   "editor.node_editor": "Éditeur de nœuds",
   "node_editor.toggle": "Afficher l’éditeur de nœuds",
   "node_editor.preview_selection": "Preview Selection",
@@ -3211,5 +3209,1269 @@
   "node_editor.queued": "En attente",
   "node_editor.no_results": "Aucun nœud correspondant",
   "node_editor.optional_selection": "Facultatif : sans connexion, tout est sélectionné",
-  "node_editor.captured_count": "Capture : {} sélectionnés"
+  "node_editor.captured_count": "Capture : {} sélectionnés",
+  "nodes": {
+    "boolean": {
+      "label": "Booléen",
+      "description": "Fournit un interrupteur commun pour plusieurs réglages connectés.",
+      "help": "Utilise-le pour activer plusieurs options ensemble.\nRelie Valeur à une entrée booléenne ; elle est désactivée par défaut.",
+      "inputs": {
+        "Value": "Interrupteur partagé. Désactivé par défaut : faux ou non sélectionné ; activé : vrai ou sélectionné."
+      },
+      "input_labels": {
+        "Value": "Valeur"
+      },
+      "outputs": {
+        "Value": "Activé pour les éléments sélectionnés, désactivé pour les autres. À relier à Sélection ou à une entrée booléenne."
+      },
+      "output_labels": {
+        "Value": "Valeur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "boolean_math": {
+      "label": "Logique booléenne",
+      "description": "Combine tes sélections par intersection, union ou inversion.",
+      "help": "Utilise Et pour leur intersection ou Ou pour inclure les deux.\nNon inverse A et ignore B.",
+      "inputs": {
+        "A": "Première valeur ou sélection booléenne. Désactivée par défaut ; activée inclut l'élément.",
+        "B": "Deuxième valeur ou sélection booléenne. Désactivée par défaut ; activée inclut l'élément."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Result": "Activé pour les éléments sélectionnés, désactivé pour les autres. À relier à Sélection ou à une entrée booléenne."
+      },
+      "output_labels": {
+        "Result": "Résultat"
+      },
+      "properties": {
+        "operation": "Combinaison de A et B. Et, par défaut, garde leur intersection ; Non inverse A et ignore B."
+      },
+      "property_labels": {
+        "operation": "Opération"
+      }
+    },
+    "box_selection": {
+      "label": "Sélection par boîte",
+      "description": "Sélectionne la partie de ta scène dans une boîte, avec des bords éventuellement adoucis.",
+      "help": "Déplace Centre et adapte Taille à ta cible.\nCommence avec Atténuation 0 pour une limite nette.",
+      "inputs": {
+        "Centre": "Centre X, Y et Z en unités locales de scène. La valeur par défaut (0, 0, 0) est l'origine de l'objet.",
+        "Size": "Largeur, hauteur et profondeur totales, positives ou nulles, en unités de scène. (1, 1, 1) donne une boîte unité.",
+        "Rotation": "Rotation autour de X, Y et Z en degrés. Par défaut (0, 0, 0) conserve l'orientation.",
+        "Falloff": "Bord doux hors de la boîte, en unités de scène. 0, par défaut, donne une limite nette."
+      },
+      "input_labels": {
+        "Centre": "Centre",
+        "Size": "Taille",
+        "Rotation": "Rotation",
+        "Falloff": "Atténuation"
+      },
+      "outputs": {
+        "Selection": "Force de sélection : 0 exclu, 1 entièrement sélectionné ; les valeurs intermédiaires donnent un fondu."
+      },
+      "output_labels": {
+        "Selection": "Sélection"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour": {
+      "label": "Couleur",
+      "description": "Fournit une couleur commune aux nœuds connectés.",
+      "help": "Choisis une couleur et relie-la aux réglages à partager.\nLa valeur par défaut est un gris moyen.",
+      "inputs": {
+        "Colour": "Couleur RGB, généralement 0–1 par canal : 0 noir, 1 blanc. Par défaut (0,5, 0,5, 0,5) donne un gris moyen."
+      },
+      "input_labels": {
+        "Colour": "Couleur"
+      },
+      "outputs": {
+        "Colour": "Couleur RGB obtenue : 0 noir, 1 blanc par canal. Certains calculs peuvent dépasser ces bornes."
+      },
+      "output_labels": {
+        "Colour": "Couleur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_attribute": {
+      "label": "Attribut de couleur",
+      "description": "Lit la couleur de base de chaque splat ou point pour tes retouches et sélections.",
+      "help": "Relie Couleur à Séparer la couleur pour examiner les canaux.\nIl s'agit de la couleur de base, pas des reflets dépendant du point de vue.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Colour": "Couleur RGB obtenue : 0 noir, 1 blanc par canal. Certains calculs peuvent dépasser ces bornes."
+      },
+      "output_labels": {
+        "Colour": "Couleur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_correct": {
+      "label": "Correction des couleurs",
+      "description": "Ajuste luminosité, contraste et équilibre des couleurs en conservant les détails de ta scène.",
+      "help": "Commence par Exposition, puis règle Contraste et Saturation.\nConnecte une Sélection pour ne corriger qu'une partie.\nRecentre les roues pour des ombres, tons moyens et hautes lumières neutres.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Zone et force d'effet, 0–1 : 0 inchangé, 1 effet complet. Sans connexion, tout est concerné.",
+        "Exposure": "Luminosité en diaphragmes : +1 double la lumière, −1 la divise par deux. 0, par défaut, ne change rien.",
+        "Black Point": "Luminosité d'entrée rendue noire. 0 conserve les noirs ; augmente pour creuser les ombres.",
+        "White Point": "Luminosité d'entrée rendue blanche. 1 conserve les blancs ; réduis pour éclaircir les hautes lumières.",
+        "Midpoint": "Luminosité d'entrée rendue gris moyen, 0,01–0,99. 0,5 est neutre ; réduire éclaircit les tons moyens.",
+        "Contrast": "Écart clair/sombre. 1 inchangé, 0 ton uniforme ; au-delà de 1, le contraste augmente.",
+        "Saturation": "Intensité des couleurs. 0 les supprime, 1 les conserve ; au-delà de 1, elles sont renforcées.",
+        "Hue Shift": "Rotation du cercle chromatique en degrés. 0 inchangé ; 180 donne les couleurs opposées.",
+        "Temperature": "Équilibre chaud/froid, −1 à 1. Négatif refroidit, positif réchauffe ; 0 est neutre.",
+        "Tint": "Équilibre vert/magenta, −1 à 1. Négatif ajoute du magenta, positif du vert ; 0 est neutre.",
+        "Shadows": "Décalage dans les zones sombres, −1 à 1 par canal. 0 neutre ; négatif retire la couleur.",
+        "Midtones": "Décalage dans les tons moyens, −1 à 1 par canal. 0 neutre ; positif ajoute la couleur.",
+        "Highlights": "Décalage dans les zones claires, −1 à 1 par canal. 0 neutre ; positif ajoute la couleur.",
+        "Gamma": "Luminosité des tons moyens, supérieure à 0. 1 neutre ; au-delà éclaircit, en dessous assombrit."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Exposure": "Exposition",
+        "Black Point": "Point noir",
+        "White Point": "Point blanc",
+        "Midpoint": "Point médian",
+        "Contrast": "Contraste",
+        "Saturation": "Saturation",
+        "Hue Shift": "Décalage de teinte",
+        "Temperature": "Température",
+        "Tint": "Teinte corrective",
+        "Shadows": "Ombres",
+        "Midtones": "Tons moyens",
+        "Highlights": "Hautes lumières",
+        "Gamma": "Gamma"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {
+        "auto_range": "Mesure les points noir et blanc dans la scène. Désactivé par défaut pour te laisser les régler."
+      },
+      "property_labels": {
+        "auto_range": "Plage automatique"
+      }
+    },
+    "colour_key": {
+      "label": "Clé de couleur",
+      "description": "Sélectionne les zones dont les couleurs ressemblent à celle que tu choisis.",
+      "help": "Choisis Couleur puis augmente Tolérance pour englober ta cible.\nAjoute un peu de Douceur pour éviter un bord net.",
+      "inputs": {
+        "Colour": "Couleur RGB recherchée, généralement 0–1 par canal. Noire par défaut ; choisis ta cible ici.",
+        "Tolerance": "Distance RGB admise depuis Couleur. 0 exige la couleur exacte ; 0,1 autorise une légère variation.",
+        "Softness": "Largeur du fondu. 0, par défaut, donne des bords nets ; augmente pour adoucir la sélection."
+      },
+      "input_labels": {
+        "Colour": "Couleur",
+        "Tolerance": "Tolérance",
+        "Softness": "Douceur"
+      },
+      "outputs": {
+        "Selection": "Force de sélection : 0 exclu, 1 entièrement sélectionné ; les valeurs intermédiaires donnent un fondu."
+      },
+      "output_labels": {
+        "Selection": "Sélection"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "combine_colour": {
+      "label": "Composer la couleur",
+      "description": "Compose une couleur à partir de valeurs RGB ou HSV distinctes.",
+      "help": "Connecte trois valeurs et choisis RGB ou HSV.\nEn HSV, R, G et B désignent teinte, saturation et luminosité.",
+      "inputs": {
+        "R": "Rouge en RGB ou teinte en HSV, généralement 0–1. Par défaut 0 : pas de rouge, ou teinte rouge en HSV.",
+        "G": "Vert en RGB ou saturation en HSV, généralement 0–1. Par défaut 0 : pas de vert, ou gris en HSV.",
+        "B": "Bleu en RGB ou luminosité en HSV, généralement 0–1. Par défaut 0 : pas de bleu, ou noir en HSV."
+      },
+      "input_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "outputs": {
+        "Colour": "Couleur RGB obtenue : 0 noir, 1 blanc par canal. Certains calculs peuvent dépasser ces bornes."
+      },
+      "output_labels": {
+        "Colour": "Couleur"
+      },
+      "properties": {
+        "mode": "Interprétation des couleurs. RGB, par défaut : rouge, vert, bleu ; HSV : teinte, saturation, luminosité."
+      },
+      "property_labels": {
+        "mode": "Mode"
+      }
+    },
+    "combine_xyz": {
+      "label": "Composer XYZ",
+      "description": "Compose une position ou une direction à partir des valeurs X, Y et Z.",
+      "help": "Utilise-le pour modifier une coordonnée en conservant les autres.\nRelie le résultat à une entrée Vecteur.",
+      "inputs": {
+        "X": "Coordonnée X dans tes unités. 0, par défaut, ne contribue pas sur cet axe.",
+        "Y": "Coordonnée Y dans tes unités. 0, par défaut, ne contribue pas sur cet axe.",
+        "Z": "Coordonnée Z dans tes unités. 0, par défaut, ne contribue pas sur cet axe."
+      },
+      "input_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "outputs": {
+        "Vector": "Valeurs X, Y et Z obtenues dans les unités de ton calcul."
+      },
+      "output_labels": {
+        "Vector": "Vecteur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "compare": {
+      "label": "Comparer",
+      "description": "Sélectionne des zones en comparant deux valeurs, par exemple la hauteur et le niveau du sol.",
+      "help": "Relie la hauteur à A et le sol à B, puis choisis Inférieur à.\nEpsilon ne concerne que Égal et Différent.",
+      "inputs": {
+        "A": "Premier nombre dans les unités de ton calcul. Valeur par défaut : 0.",
+        "B": "Deuxième nombre dans les unités de ton calcul. Valeur par défaut : 0.",
+        "Epsilon": "Tolérance pour Égal et Différent, dans les unités de A et B. 0 exige l'égalité exacte ; défaut 0,001."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Epsilon": "Epsilon"
+      },
+      "outputs": {
+        "Result": "Activé pour les éléments sélectionnés, désactivé pour les autres. À relier à Sélection ou à une entrée booléenne."
+      },
+      "output_labels": {
+        "Result": "Résultat"
+      },
+      "properties": {
+        "operation": "Comparaison souhaitée. Égal par défaut ; Inférieur à ou Supérieur à choisit un côté de B."
+      },
+      "property_labels": {
+        "operation": "Opération"
+      }
+    },
+    "decimate": {
+      "label": "Réduire par importance",
+      "description": "Réduit le nombre de splats en gardant les plus grands et opaques de ta sélection.",
+      "help": "Commence avec Fraction conservée 0,5 pour en garder environ la moitié.\nLes splats non sélectionnés restent ; les ex æquo peuvent dépasser la cible.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Splats à réduire : poids d'au moins 0,5. Sans connexion, tous les splats sont concernés.",
+        "Keep Fraction": "Part des splats sélectionnés à garder, 0,001–1. 0,5 garde environ la moitié, 1 les garde tous."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Keep Fraction": "Fraction conservée"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "delete_geometry": {
+      "label": "Supprimer la géométrie",
+      "description": "Retire les splats, points ou sommets de maillage sélectionnés de ta scène.",
+      "help": "Connecte une sélection avant de connecter Géométrie.\nSans sélection connectée, tout est supprimé, ainsi que les faces touchant les sommets retirés.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Éléments supprimés : poids d'au moins 0,5. Sans connexion, tout est supprimé et la sortie est vide."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "ellipsoid_selection": {
+      "label": "Sélection par ellipsoïde",
+      "description": "Sélectionne une zone sphérique ou étirée de ta scène, avec des bords éventuellement adoucis.",
+      "help": "Règle Centre et Rayons autour de ta cible.\nDes rayons égaux donnent une sphère ; Atténuation 0 donne un bord net.",
+      "inputs": {
+        "Centre": "Centre X, Y et Z en unités locales de scène. La valeur par défaut (0, 0, 0) est l'origine de l'objet.",
+        "Radii": "Rayons par axe en unités de scène, positifs ou nuls. Par défaut (1, 1, 1) donne une sphère unité.",
+        "Rotation": "Rotation autour de X, Y et Z en degrés. Par défaut (0, 0, 0) conserve l'orientation.",
+        "Falloff": "Bord doux hors de l'ellipsoïde, relatif à ses rayons. 0, par défaut, donne une limite nette."
+      },
+      "input_labels": {
+        "Centre": "Centre",
+        "Radii": "Rayons",
+        "Rotation": "Rotation",
+        "Falloff": "Atténuation"
+      },
+      "outputs": {
+        "Selection": "Force de sélection : 0 exclu, 1 entièrement sélectionné ; les valeurs intermédiaires donnent un fondu."
+      },
+      "output_labels": {
+        "Selection": "Sélection"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_input": {
+      "label": "Entrée du groupe",
+      "description": "Introduit la géométrie de l'objet hôte dans ton graphe de nœuds.",
+      "help": "Relie Géométrie au premier nœud de retouche.\nDans une pile, tu reçois le résultat du modificateur précédent.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Géométrie de l'hôte ou résultat du modificateur précédent. À relier au premier nœud de retouche."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_output": {
+      "label": "Sortie du groupe",
+      "description": "Renvoie la géométrie finale de ton graphe de nœuds dans la scène.",
+      "help": "Relie le dernier nœud de retouche à Géométrie.\nSeule la branche qui atteint ce nœud contribue au résultat.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "hsv_range": {
+      "label": "Plage HSV",
+      "description": "Sélectionne les splats par plage de couleur, comme le vert d'une pelouse, avec des bords doux.",
+      "help": "Choisis la teinte puis élargis Plage de teinte pour englober tout l'objet.\nAugmente Saturation Min pour ignorer les gris et Valeur Min pour ignorer les ombres.\nActive Aperçu de sélection pour voir le résultat dans la vue.",
+      "inputs": {
+        "Hue": "Centre chromatique, 0–1 : 0 rouge, 0,17 jaune, 0,33 vert, 0,5 cyan, 0,67 bleu, 0,83 magenta.",
+        "Hue Range": "Distance admise de chaque côté de Teinte, 0–0,5 du cercle. 0,07 couvre une famille de couleurs.",
+        "Hue Softness": "Fondu hors de la plage de teinte, en tours du cercle chromatique. 0, par défaut, donne une limite nette.",
+        "Saturation Min": "Saturation minimale incluse, 0–1. 0, par défaut, inclut les gris ; augmente pour les exclure.",
+        "Saturation Max": "Saturation maximale incluse, 0–1. 1, par défaut, inclut les couleurs pleinement saturées.",
+        "Value Min": "Luminosité minimale incluse, 0–1. 0 inclut le noir ; augmente pour exclure les ombres.",
+        "Value Max": "Luminosité maximale incluse, 0–1. 1 inclut le blanc ; réduis pour exclure les hautes lumières.",
+        "Softness": "Largeur du fondu. 0, par défaut, donne des bords nets ; augmente pour adoucir la sélection."
+      },
+      "input_labels": {
+        "Hue": "Teinte",
+        "Hue Range": "Plage de teinte",
+        "Hue Softness": "Douceur de teinte",
+        "Saturation Min": "Saturation Min",
+        "Saturation Max": "Saturation Max",
+        "Value Min": "Valeur Min",
+        "Value Max": "Valeur Max",
+        "Softness": "Douceur"
+      },
+      "outputs": {
+        "Selection": "Force de sélection : 0 exclu, 1 entièrement sélectionné ; les valeurs intermédiaires donnent un fondu."
+      },
+      "output_labels": {
+        "Selection": "Sélection"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "index": {
+      "label": "Indice",
+      "description": "Donne la position de chaque splat, point ou sommet dans la liste actuelle, à partir de zéro.",
+      "help": "Utilise Mathématiques ou Comparer pour sélectionner des numéros.\nSupprimer ou joindre de la géométrie peut changer ces numéros.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Index": "Position actuelle dans la liste, à partir de 0. Joindre ou supprimer peut renuméroter les éléments."
+      },
+      "output_labels": {
+        "Index": "Indice"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "inside_mesh": {
+      "label": "Dans le maillage",
+      "description": "Sélectionne la partie de ta scène enfermée dans un maillage de référence.",
+      "help": "Relie un maillage fermé depuis Infos objet à Maillage.\nLes trous et auto-intersections peuvent rendre l'intérieur ambigu.",
+      "inputs": {
+        "Mesh": "Maillage fermé définissant l'intérieur. Connecte Infos objet ; sans connexion, aucune sélection."
+      },
+      "input_labels": {
+        "Mesh": "Maillage"
+      },
+      "outputs": {
+        "Selection": "Activé pour les éléments sélectionnés, désactivé pour les autres. À relier à Sélection ou à une entrée booléenne."
+      },
+      "output_labels": {
+        "Selection": "Sélection"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "integer": {
+      "label": "Entier",
+      "description": "Fournit un nombre entier commun à plusieurs réglages connectés.",
+      "help": "Relie Valeur aux nombres d'éléments ou aux réglages entiers.\nCommence à 0 ; les boutons modifient la valeur par pas de un.",
+      "inputs": {
+        "Value": "Nombre entier partagé. 0 par défaut ; les nombres négatifs et positifs sont permis."
+      },
+      "input_labels": {
+        "Value": "Valeur"
+      },
+      "outputs": {
+        "Value": "Nombre obtenu dans les unités du calcul. À relier à une entrée numérique compatible."
+      },
+      "output_labels": {
+        "Value": "Valeur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "invert_colour": {
+      "label": "Inverser les couleurs",
+      "description": "Inverse les couleurs pour éclaircir les zones sombres et obtenir les couleurs opposées.",
+      "help": "Connecte une Sélection pour ne traiter qu'une partie.\nDeux applications rétablissent la couleur de base, sauf si un écrêtage a perdu des détails.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Zone et force d'effet, 0–1 : 0 inchangé, 1 effet complet. Sans connexion, tout est concerné."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "join_geometry": {
+      "label": "Joindre la géométrie",
+      "description": "Réunit plusieurs entrées ; les degrés SH différents sont complétés jusqu'au plus élevé.",
+      "help": "Connecte plusieurs sorties Géométrie à la même entrée.\nRéunis ainsi des branches après Séparer la géométrie.\nLes copies superposées restent des splats, points ou faces distincts.",
+      "inputs": {
+        "Geometry": "Sources géométriques à réunir. Plusieurs liens sont admis ; sans connexion, le résultat est vide."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "map_range": {
+      "label": "Convertir une plage",
+      "description": "Convertit une plage de valeurs en une autre, par exemple une hauteur 0–2 m en fondu de 1 à 0.",
+      "help": "Règle Min source et Max source sur la plage d'origine.\nMin cible 1 et Max cible 0 donnent un fondu inversé.\nGarde Limiter actif pour rester dans les bornes de sortie.",
+      "inputs": {
+        "Value": "Nombre à convertir en unités source. 0 par défaut ; connecte Position ou une autre valeur.",
+        "From Min": "Borne basse source dans les unités de Valeur. 0 par défaut.",
+        "From Max": "Borne haute source dans les unités de Valeur. 1 par défaut ; garde-la différente de Min source.",
+        "To Min": "Résultat à Min source. 0 par défaut ; mets 1 ici et 0 à Max cible pour inverser le fondu.",
+        "To Max": "Résultat à Max source. 1 par défaut ; mets 0 ici et 1 à Min cible pour inverser le fondu."
+      },
+      "input_labels": {
+        "Value": "Valeur",
+        "From Min": "Min source",
+        "From Max": "Max source",
+        "To Min": "Min cible",
+        "To Max": "Max cible"
+      },
+      "outputs": {
+        "Result": "Nombre obtenu dans les unités du calcul. À relier à une entrée numérique compatible."
+      },
+      "output_labels": {
+        "Result": "Résultat"
+      },
+      "properties": {
+        "clamp": "Garde le résultat dans la plage cible. Activé par défaut ; désactivé permet de dépasser les bornes."
+      },
+      "property_labels": {
+        "clamp": "Limiter"
+      }
+    },
+    "math": {
+      "label": "Mathématiques",
+      "description": "Calcule des valeurs pour contrôler tes retouches, sélections et fondus.",
+      "help": "Choisis une opération puis connecte des valeurs à A et B.\nCommence par Multiplier pour régler la force d'une sélection.",
+      "inputs": {
+        "A": "Premier nombre dans les unités de ton calcul. Valeur par défaut : 0.",
+        "B": "Deuxième nombre dans les unités de ton calcul. Valeur par défaut : 0."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Value": "Nombre obtenu dans les unités du calcul. À relier à une entrée numérique compatible."
+      },
+      "output_labels": {
+        "Value": "Valeur"
+      },
+      "properties": {
+        "operation": "Calcul à effectuer. Ajouter par défaut ; des opérations comme Valeur absolue n'utilisent que A."
+      },
+      "property_labels": {
+        "operation": "Opération"
+      }
+    },
+    "mesh_to_points": {
+      "label": "Maillage en points",
+      "description": "Transforme les sommets du maillage en nuage de points en gardant leurs couleurs disponibles.",
+      "help": "Connecte un maillage depuis Infos objet.\nTu obtiens un point par sommet, pas un échantillonnage uniforme de la surface.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "mesh_to_splats": {
+      "label": "Maillage en splats",
+      "description": "Recouvre une surface de maillage de splats plats et colorés.",
+      "help": "La densité par défaut donne environ 20 000 splats sur une sphère unité.\nAugmente Densité pour les détails ; Nombre max limite le total.\nLes couleurs des sommets priment sur les matériaux et textures.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Density": "Splats par unité carrée de scène. Environ 1 592 par défaut donne 20 000 sur une sphère unité ; 0 n'en crée aucun.",
+        "Max Count": "Nombre maximal de splats, 0–2 000 000. La limite par défaut est 2 000 000 ; 0 n'en crée aucun.",
+        "Opacity": "Opacité des splats, 0–1 : 0 transparent, 1 opaque. 0,95, par défaut, est presque opaque."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Density": "Densité",
+        "Max Count": "Nombre max",
+        "Opacity": "Opacité"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {
+        "seed": "Graine entière pour un motif répétable. 0 par défaut ; change-la pour obtenir un autre motif."
+      },
+      "property_labels": {
+        "seed": "Graine"
+      }
+    },
+    "mix_colour": {
+      "label": "Mélanger les couleurs",
+      "description": "Mélange deux couleurs ou les combine selon l'opération choisie.",
+      "help": "Connecte les couleurs à A et B ; Facteur 0,5 donne un mélange égal.\nCommence par Mélanger avant d'essayer Multiplier ou Ajouter.",
+      "inputs": {
+        "A": "Première couleur RGB, généralement 0–1 par canal. Noire par défaut.",
+        "B": "Deuxième couleur RGB, généralement 0–1 par canal. Noire par défaut.",
+        "Factor": "Force du mélange, 0–1. 0 conserve A, 1 applique toute l'opération ; 0,5 donne une demi-intensité."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Factor": "Facteur"
+      },
+      "outputs": {
+        "Colour": "Couleur RGB obtenue : 0 noir, 1 blanc par canal. Certains calculs peuvent dépasser ces bornes."
+      },
+      "output_labels": {
+        "Colour": "Couleur"
+      },
+      "properties": {
+        "mode": "Combinaison des couleurs. Mélanger par défaut ; Ajouter, Soustraire et Multiplier précèdent Facteur."
+      },
+      "property_labels": {
+        "mode": "Mode"
+      }
+    },
+    "named_attribute": {
+      "label": "Attribut nommé",
+      "description": "Lit une valeur enregistrée par son nom pour contrôler tes retouches.",
+      "help": "Saisis le nom exact de l'attribut et choisis son type.\nUn attribut absent ne peut pas fournir de valeurs.",
+      "inputs": {
+        "Name": "Nom exact de l'attribut, casse comprise. Vide par défaut ; saisis un nom avant d'utiliser la sortie."
+      },
+      "input_labels": {
+        "Name": "Nom"
+      },
+      "outputs": {
+        "Attribute": "Valeurs lues dans l'attribut nommé, dans ses unités enregistrées."
+      },
+      "output_labels": {
+        "Attribute": "Attribut"
+      },
+      "properties": {
+        "type": "Type de valeur à lire. Float, par défaut, lit une valeur décimale par élément."
+      },
+      "property_labels": {
+        "type": "Type"
+      }
+    },
+    "neighbour_count": {
+      "label": "Nombre de voisins",
+      "description": "Compte les splats ou points proches pour trouver les zones peu denses de ta scène.",
+      "help": "Relie Nombre à Comparer pour sélectionner les faibles effectifs.\nPour les splats, commence avec Rayon 3 et Relatif à la taille.\nUn point ne se compte jamais lui-même.",
+      "inputs": {
+        "Radius": "Distance des voisins. Défaut 1 unité de scène, ou multiple de taille avec Relatif à la taille. 0 ne compte rien."
+      },
+      "input_labels": {
+        "Radius": "Rayon"
+      },
+      "outputs": {
+        "Count": "Nombre de voisins dans Rayon, sans compter le point lui-même. 0 signifie isolé."
+      },
+      "output_labels": {
+        "Count": "Nombre"
+      },
+      "properties": {
+        "relative_to_size": "Taille du splat comme unité de rayon. Désactivé par défaut : unités de scène, toujours utilisées pour les points."
+      },
+      "property_labels": {
+        "relative_to_size": "Relatif à la taille"
+      }
+    },
+    "opacity": {
+      "label": "Opacité",
+      "description": "Lit l'opacité de chaque splat pour repérer les zones faibles ou solides.",
+      "help": "Relie Opacité à Comparer pour sélectionner les splats faibles.\nLes valeurs vont de 0 transparent à 1 opaque.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Opacity": "Opacité avant rendu, de 0 transparent à 1 opaque."
+      },
+      "output_labels": {
+        "Opacity": "Opacité"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "points_to_splats": {
+      "label": "Points en splats",
+      "description": "Transforme un nuage de points en splats ronds et colorés.",
+      "help": "Laisse Rayon à 0 pour estimer la taille à partir des voisins.\nFixe un rayon positif en unités de scène si des trous restent.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Radius": "Rayon en unités de scène. 0 estime la moitié de l'espacement voisin ; positif fixe une taille commune.",
+        "Opacity": "Opacité des splats, 0–1 : 0 transparent, 1 opaque. 0,9, par défaut, reste légèrement transparent."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Radius": "Rayon",
+        "Opacity": "Opacité"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "position": {
+      "label": "Position",
+      "description": "Lit la position de chaque splat, point ou sommet dans ton objet.",
+      "help": "Relie Position à Séparer XYZ pour sélectionner par hauteur ou distance sur un axe.\nLes coordonnées sont locales à l'objet.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Position locale X, Y et Z en unités de scène."
+      },
+      "output_labels": {
+        "Position": "Position"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "posterize": {
+      "label": "Postériser",
+      "description": "Réduit les couleurs de ta scène à quelques niveaux uniformes.",
+      "help": "Commence avec Niveaux 4 pour quatre niveaux par canal.\nConnecte une Sélection pour limiter l'effet.\nLes splats sélectionnés perdent les variations de couleur liées au point de vue.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Zone et force d'effet, 0–1 : 0 inchangé, 1 effet complet. Sans connexion, tout est concerné.",
+        "Levels": "Niveaux de couleur par canal RGB, 2–32. 2 donne seulement bas et haut ; 4 par défaut."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Levels": "Niveaux"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "random_value": {
+      "label": "Valeur aléatoire",
+      "description": "Attribue à chaque splat ou point une valeur aléatoire répétable pour varier tes retouches.",
+      "help": "Règle Min et Max sur la plage souhaitée.\nChange Graine pour un autre motif ; réordonner la géométrie peut aussi le modifier.",
+      "inputs": {
+        "Min": "Plus petite valeur aléatoire dans tes unités. 0 par défaut ; garde-la inférieure à Max.",
+        "Max": "Plus grande valeur aléatoire dans tes unités. 1 par défaut ; garde-la supérieure à Min."
+      },
+      "input_labels": {
+        "Min": "Min",
+        "Max": "Max"
+      },
+      "outputs": {
+        "Value": "Nombre obtenu dans les unités du calcul. À relier à une entrée numérique compatible."
+      },
+      "output_labels": {
+        "Value": "Valeur"
+      },
+      "properties": {
+        "seed": "Graine entière pour un motif répétable. 0 par défaut ; change-la pour obtenir un autre motif."
+      },
+      "property_labels": {
+        "seed": "Graine"
+      }
+    },
+    "recolour": {
+      "label": "Recolorer",
+      "description": "Change la couleur des splats sélectionnés en préservant éventuellement ombre et lumière.",
+      "help": "Choisis Couleur et commence avec Poids 0,3 pour une teinte légère.\nGarde Préserver l'ombrage actif pour conserver l'éclairage.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Zone et force d'effet, 0–1 : 0 inchangé, 1 effet complet. Sans connexion, tout est concerné.",
+        "Colour": "Couleur RGB cible, généralement 0–1 par canal. Bleue par défaut. Préserver l'ombrage conserve l'éclairage.",
+        "Weight": "Force de recoloration, 0–1. 0 conserve l'original, 1 applique toute la nouvelle couleur ; défaut 1."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Colour": "Couleur",
+        "Weight": "Poids"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {
+        "keep_shading": "Conserve ombre et lumière en recolorant. Activé par défaut ; désactivé applique une couleur uniforme.",
+        "fade_view_dependent": "Atténue la couleur liée au regard en recolorant. Activé par défaut ; désactivé garde sa variation."
+      },
+      "property_labels": {
+        "keep_shading": "Préserver l'ombrage",
+        "fade_view_dependent": "Atténuer la dépendance au regard"
+      }
+    },
+    "remove_floaters": {
+      "label": "Retirer les splats isolés",
+      "description": "Supprime les splats errants dans le vide, comme des taches dans le ciel ou du voile sous le sol.",
+      "help": "Active d'abord Aperçu : il ne montre que ce qui serait supprimé.\nRayon d'isolement 3 avec Relatif à la taille juge chaque splat à son échelle et préserve les arrière-plans peu denses.\nConnecte une Sélection pour limiter le nettoyage, par exemple sous le sol.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Zone à tester pour suppression : poids d'au moins 0,5. Sans connexion, chaque splat est testé.",
+        "Min Opacity": "Supprime sous cette opacité, 0–1. 0 désactive ; 0,02, par défaut, retire les splats très faibles.",
+        "Max Size": "Supprime si le plus grand axe dépasse cette taille en unités de scène. 0, par défaut, désactive le test.",
+        "Isolation Radius": "Distance des voisins : multiple de taille avec Relatif à la taille, sinon unités de scène. 0 désactive le test.",
+        "Min Neighbours": "Supprime un splat ayant moins de voisins dans le rayon. 1 ne retire que les splats totalement isolés."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Min Opacity": "Opacité min",
+        "Max Size": "Taille max",
+        "Isolation Radius": "Rayon d'isolement",
+        "Min Neighbours": "Voisins min"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {
+        "preview": "Montre seulement les splats à supprimer, inchangés. Désactivé par défaut montre la scène nettoyée.",
+        "relative_to_size": "Taille du splat comme unité de rayon. Activé par défaut protège les zones clairsemées ; désactivé : unités de scène."
+      },
+      "property_labels": {
+        "preview": "Aperçu",
+        "relative_to_size": "Relatif à la taille"
+      }
+    },
+    "scale": {
+      "label": "Échelle",
+      "description": "Lit la taille de chaque splat selon ses trois axes locaux.",
+      "help": "Relie Échelle à Séparer XYZ pour comparer les tailles des axes.\nLes valeurs sont en unités de scène, pas des multiplicateurs.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Scale": "Taille selon les trois axes locaux du splat, en unités de scène."
+      },
+      "output_labels": {
+        "Scale": "Échelle"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "scale_clamp": {
+      "label": "Limiter les proportions",
+      "description": "Corrige les Gaussians en aiguille ou en galette qui créent des traînées loin du trajet de capture.",
+      "help": "Utilise-le après l'entraînement si de fines traînées apparaissent hors du trajet caméra.\nCommence avec Rapport max 8 ; réduire rend les splats plus ronds mais plus doux.\nSeule la forme change ; position, couleur et nombre restent identiques.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Zone et force d'effet, 0–1 : 0 inchangé, 1 effet complet. Sans connexion, tout est concerné.",
+        "Max Aspect": "Rapport maximal entre axes le plus long et le plus court. 1 rend les splats ronds ; 8 est un bon départ."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Max Aspect": "Rapport max"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_colour": {
+      "label": "Séparer la couleur",
+      "description": "Décompose une couleur en valeurs RGB ou HSV pour les modifier ou les comparer séparément.",
+      "help": "Choisis HSV pour isoler teinte, saturation ou luminosité.\nEn HSV, R, G et B portent ces valeurs dans cet ordre.",
+      "inputs": {
+        "Colour": "Couleur à séparer, généralement 0–1 par canal RGB. Noire par défaut, tous les canaux à 0."
+      },
+      "input_labels": {
+        "Colour": "Couleur"
+      },
+      "outputs": {
+        "R": "Rouge en RGB ou teinte en HSV. La teinte parcourt le cercle chromatique de 0 à 1.",
+        "G": "Vert en RGB ou saturation en HSV. En HSV, 0 est gris et 1 pleinement saturé.",
+        "B": "Bleu en RGB ou luminosité en HSV. En HSV, 0 est noir et 1 la pleine luminosité."
+      },
+      "output_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "properties": {
+        "mode": "Interprétation des couleurs. RGB, par défaut : rouge, vert, bleu ; HSV : teinte, saturation, luminosité."
+      },
+      "property_labels": {
+        "mode": "Mode"
+      }
+    },
+    "separate_geometry": {
+      "label": "Séparer la géométrie",
+      "description": "Sépare la sélection du reste pour les modifier différemment puis les réunir.",
+      "help": "Connecte une Sélection et traite les deux sorties séparément.\nRéunis les branches avec Joindre la géométrie.\nLes poids doux deviennent une séparation oui/non au seuil de 0,5.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Poids d'au moins 0,5 vers Sélection ; les autres vers Inversé. Sans connexion, tout est sélectionné."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection"
+      },
+      "outputs": {
+        "Selection": "Géométrie dont le poids de sélection vaut au moins 0,5. Modifie cette branche séparément.",
+        "Inverted": "Géométrie dont le poids de sélection est inférieur à 0,5. C'est la partie hors de ta sélection."
+      },
+      "output_labels": {
+        "Selection": "Sélection",
+        "Inverted": "Inversé"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_xyz": {
+      "label": "Séparer XYZ",
+      "description": "Décompose une position ou une direction en valeurs X, Y et Z.",
+      "help": "Relie Position, puis l'axe de hauteur à Comparer ou Convertir une plage.\nVérifie quel axe pointe vers le haut dans ta scène.",
+      "inputs": {
+        "Vector": "Valeurs X, Y et Z dans tes unités. Par défaut (0, 0, 0) donne zéro sur chaque axe."
+      },
+      "input_labels": {
+        "Vector": "Vecteur"
+      },
+      "outputs": {
+        "X": "Coordonnée X d'entrée, mêmes unités. 0 se trouve dans le plan des deux autres axes.",
+        "Y": "Coordonnée Y d'entrée, mêmes unités. 0 se trouve dans le plan des deux autres axes.",
+        "Z": "Coordonnée Z d'entrée, mêmes unités. 0 se trouve dans le plan des deux autres axes."
+      },
+      "output_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_colour": {
+      "label": "Définir la couleur",
+      "description": "Remplace la couleur de base des splats sélectionnés par celle que tu fournis.",
+      "help": "Choisis Couleur ou connecte les couleurs d'un autre nœud.\nGarde Effacer la dépendance au regard actif pour une couleur peinte uniforme.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Zone et force d'effet, 0–1 : 0 inchangé, 1 effet complet. Sans connexion, tout est concerné.",
+        "Colour": "Couleur RGB, généralement 0–1 par canal : 0 noir, 1 blanc. Par défaut (0,5, 0,5, 0,5) donne un gris moyen."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Colour": "Couleur"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {
+        "clear_view_dependent": "Efface la couleur liée au regard des splats sélectionnés. Activé : couleur uniforme ; désactivé : reflets conservés."
+      },
+      "property_labels": {
+        "clear_view_dependent": "Effacer la dépendance au regard"
+      }
+    },
+    "set_opacity": {
+      "label": "Définir l'opacité",
+      "description": "Change la transparence apparente des splats sélectionnés.",
+      "help": "Commence avec Opacité 0,5 pour des splats translucides.\nUtilise Sélection pour mélanger doucement avec leur opacité d'origine.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Zone et force d'effet, 0–1 : 0 inchangé, 1 effet complet. Sans connexion, tout est concerné.",
+        "Opacity": "Nouvelle opacité, 0–1 : 0 transparent, 1 opaque. Le défaut 1 rend les splats sélectionnés opaques."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Opacity": "Opacité"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_position": {
+      "label": "Définir la position",
+      "description": "Déplace les splats, points ou sommets sélectionnés vers de nouvelles positions avec un décalage.",
+      "help": "Relie Position à Position puis règle Décalage pour un mouvement relatif.\nSans cette connexion, Position vaut l'origine.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Zone et force d'effet, 0–1 : 0 inchangé, 1 effet complet. Sans connexion, tout est concerné.",
+        "Position": "Nouvelle position locale en unités de scène. Origine par défaut ; connecte Position pour garder les positions.",
+        "Offset": "Mouvement local ajouté sur X, Y et Z en unités de scène. (0, 0, 0), par défaut, n'ajoute rien."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Position": "Position",
+        "Offset": "Décalage"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_scale": {
+      "label": "Définir l'échelle",
+      "description": "Définit la taille des splats sélectionnés selon leurs trois axes locaux.",
+      "help": "Passe Échelle par Calcul vectoriel pour multiplier les tailles existantes.\nSans connexion, les valeurs remplacent les tailles en unités de scène.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Zone et force d'effet, 0–1 : 0 inchangé, 1 effet complet. Sans connexion, tout est concerné.",
+        "Scale": "Nouvelle taille par axe local en unités de scène. (1, 1, 1) donne des splats ronds de taille unité."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Scale": "Échelle"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_sh_degree": {
+      "label": "Définir le degré SH",
+      "description": "Limite la variation de couleur d'un splat selon la direction de vue.",
+      "help": "Utilise Degré 0 pour une couleur uniforme et des exports plus petits.\nAugmenter le degré permet plus de détails, sans restaurer les couleurs supprimées.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Degree": "Degré SH, 0–3. 0, par défaut, supprime la couleur liée au regard ; plus haut permet plus de détail angulaire."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Degree": "Degré"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "sharpen": {
+      "label": "Accentuer",
+      "description": "Rétrécit les splats sélectionnés pour rendre les détails flous plus nets.",
+      "help": "Commence avec Quantité 0,25 et garde Préserver la couverture actif.\nDes valeurs fortes peuvent révéler des trous entre les splats.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Selection": "Zone et force d'effet, 0–1 : 0 inchangé, 1 effet complet. Sans connexion, tout est concerné.",
+        "Amount": "Réduction de taille, 0–0,95. 0 sans effet ; 0,25, par défaut, réduit chaque axe de 25 %."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Amount": "Quantité"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {
+        "keep_coverage": "Augmente l'opacité en rétrécissant pour garder la couverture. Activé par défaut ; désactivé peut rendre transparent."
+      },
+      "property_labels": {
+        "keep_coverage": "Préserver la couverture"
+      }
+    },
+    "simplify": {
+      "label": "Simplifier",
+      "description": "Combine des splats pour réduire leur nombre tout en préservant l'aspect global de ta scène.",
+      "help": "Commence avec Rapport 0,5 pour viser la moitié des splats.\nCe nœud peut être plus lent ; des rapports faibles perdent les détails fins.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Ratio": "Part cible de splats, 0,01–1. 0,5, par défaut, vise la moitié ; 1 conserve leur nombre initial."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Ratio": "Rapport"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "splats_to_points": {
+      "label": "Splats en points",
+      "description": "Transforme les centres et couleurs de base des splats en nuage de points.",
+      "help": "Utilise-le pour exporter les centres ou traiter la scène comme des points.\nTaille, opacité et couleur dépendant du regard ne sont pas conservées.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "stored_selection": {
+      "label": "Sélection enregistrée",
+      "description": "Réutilise une sélection capturée dans la vue.",
+      "help": "Sélectionne des splats dans la vue puis clique Capturer la sélection.\nCapture à nouveau après un changement du nombre ou de l'ordre des éléments.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Selection": "Activé pour les éléments sélectionnés, désactivé pour les autres. À relier à Sélection ou à une entrée booléenne."
+      },
+      "output_labels": {
+        "Selection": "Sélection"
+      },
+      "properties": {
+        "data": "Sélection capturée dans la vue. Vide avant Capturer la sélection ; enregistrée séparément par modificateur.",
+        "size": "Nombre d'éléments lors de la capture. 0 signifie vide ; recapture si ce nombre change.",
+        "invert": "Inverse la sélection capturée. Désactivé conserve les éléments sélectionnés ; activé prend le reste."
+      },
+      "property_labels": {
+        "data": "Données",
+        "size": "Taille",
+        "invert": "Inverser"
+      }
+    },
+    "transform_geometry": {
+      "label": "Transformer la géométrie",
+      "description": "Déplace, tourne et redimensionne toute la géométrie ensemble.",
+      "help": "Commence par Translation ou Échelle 1 pour garder la taille.\nLa rotation s'exprime en degrés autour de l'origine de l'objet.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
+        "Translation": "Mouvement X, Y et Z en unités de scène. (0, 0, 0), par défaut, laisse les positions inchangées.",
+        "Rotation": "Rotation autour de X, Y et Z en degrés. Par défaut (0, 0, 0) conserve l'orientation.",
+        "Scale": "Multiplicateur de taille. 1 conserve, 0 réduit à l'origine ; les valeurs négatives créent une symétrie."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Translation": "Translation",
+        "Rotation": "Rotation",
+        "Scale": "Échelle"
+      },
+      "outputs": {
+        "Geometry": "Géométrie obtenue. Relie-la à un autre nœud de retouche ou à Sortie du groupe."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "value": {
+      "label": "Valeur",
+      "description": "Fournit un nombre commun à plusieurs réglages connectés.",
+      "help": "Relie Valeur à plusieurs entrées numériques pour les contrôler ensemble.\nCommence à 0 et fais glisser le nombre pour l'ajuster.",
+      "inputs": {
+        "Value": "Nombre partagé. 0 par défaut ; les valeurs négatives et positives sont admises."
+      },
+      "input_labels": {
+        "Value": "Valeur"
+      },
+      "outputs": {
+        "Value": "Nombre obtenu dans les unités du calcul. À relier à une entrée numérique compatible."
+      },
+      "output_labels": {
+        "Value": "Valeur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector": {
+      "label": "Vecteur",
+      "description": "Fournit un ensemble commun de valeurs X, Y et Z à plusieurs nœuds.",
+      "help": "Utilise-le pour une position, un décalage ou une direction partagés.\nLes trois coordonnées valent 0 par défaut.",
+      "inputs": {
+        "Vector": "Valeurs X, Y et Z dans tes unités. Par défaut (0, 0, 0) donne zéro sur chaque axe."
+      },
+      "input_labels": {
+        "Vector": "Vecteur"
+      },
+      "outputs": {
+        "Vector": "Valeurs X, Y et Z obtenues dans les unités de ton calcul."
+      },
+      "output_labels": {
+        "Vector": "Vecteur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector_math": {
+      "label": "Calcul vectoriel",
+      "description": "Calcule positions, directions et distances à partir de valeurs à trois composantes.",
+      "help": "Utilise Échelle pour un décalage ou Distance entre deux positions.\nLongueur, Distance et Produit scalaire utilisent Valeur ; les autres utilisent Vecteur.",
+      "inputs": {
+        "A": "Première valeur à trois composantes dans tes unités de calcul. Défaut (0, 0, 0).",
+        "B": "Deuxième valeur à trois composantes dans tes unités de calcul. Défaut (0, 0, 0).",
+        "Scale": "Multiplicateur de l'opération Échelle. 1 conserve A, 0 donne zéro, −1 inverse la direction."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Scale": "Échelle"
+      },
+      "outputs": {
+        "Vector": "Valeurs X, Y et Z obtenues dans les unités de ton calcul.",
+        "Value": "Nombre obtenu dans les unités du calcul. À relier à une entrée numérique compatible."
+      },
+      "output_labels": {
+        "Vector": "Vecteur",
+        "Value": "Valeur"
+      },
+      "properties": {
+        "operation": "Calcul vectoriel. Ajouter par défaut ; Longueur, Distance et Produit scalaire donnent Valeur au lieu de Vecteur."
+      },
+      "property_labels": {
+        "operation": "Opération"
+      }
+    },
+    "object_info": {
+      "label": "Infos objet",
+      "description": "Introduit la géométrie d'un autre objet comme référence ou pièce supplémentaire dans ton graphe.",
+      "help": "Choisis le nom exact ou l'UUID de l'objet de référence.\nUtilise l'espace Relatif pour le placer par rapport à l'objet modifié.\nÉvite les références aux objets qui dépendent de ce modificateur.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Géométrie de référence dans l'espace choisi, y compris ses modificateurs visibles."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {
+        "object": "Nom exact ou UUID de l'objet à lire. Vide par défaut ; choisis la référence avant l'évaluation.",
+        "transform_space": "Espace de référence. Original conserve les coordonnées locales ; Relatif les transforme vers l'objet modifié."
+      },
+      "property_labels": {
+        "object": "Objet",
+        "transform_space": "Espace de transformation"
+      }
+    }
+  },
+  "node_editor.how_to_use": "Mode d'emploi",
+  "node_editor.learn_more": "En savoir plus"
 }

@@ -3155,8 +3155,6 @@
   "runtime.import_batch_kept": "The other files were loaded and remain available in the scene.",
   "runtime.import_render_failed": "Could not prepare this file for rendering",
   "nodes.edit_stored_splats_blocked": "Apply or hide the node modifiers to edit the stored splats",
-  "nodes.posterize.label": "Posterize",
-  "nodes.posterize.description": "Reduce the number of colour levels.",
   "editor.node_editor": "Node Editor",
   "node_editor.toggle": "Toggle Node Editor",
   "node_editor.preview_selection": "Preview Selection",
@@ -3211,5 +3209,1269 @@
   "node_editor.queued": "Queued",
   "node_editor.no_results": "No matching nodes",
   "node_editor.optional_selection": "Optional: unconnected selects everything",
-  "node_editor.captured_count": "Captured: {} selected"
+  "node_editor.captured_count": "Captured: {} selected",
+  "nodes": {
+    "boolean": {
+      "label": "Boolean",
+      "description": "Gives you one on/off switch to control several connected settings.",
+      "help": "Use to switch several options together.\nConnect Value to a Boolean input; off is the default.",
+      "inputs": {
+        "Value": "Shared on/off value. Off, the default, means false or unselected; on means true or selected."
+      },
+      "input_labels": {
+        "Value": "Value"
+      },
+      "outputs": {
+        "Value": "On for selected elements, off for unselected elements. Connect to a Selection or Boolean input."
+      },
+      "output_labels": {
+        "Value": "Value"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "boolean_math": {
+      "label": "Boolean Math",
+      "description": "Combines selections so you can keep their overlap, their union or their opposite.",
+      "help": "Use And for overlap or Or to include either selection.\nNot reverses A and ignores B.",
+      "inputs": {
+        "A": "First on/off value or selection. Off by default; on includes the element.",
+        "B": "Second on/off value or selection. Off by default; on includes the element."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Result": "On for selected elements, off for unselected elements. Connect to a Selection or Boolean input."
+      },
+      "output_labels": {
+        "Result": "Result"
+      },
+      "properties": {
+        "operation": "How you combine A and B. And, the default, keeps their overlap; Not reverses A and ignores B."
+      },
+      "property_labels": {
+        "operation": "Operation"
+      }
+    },
+    "box_selection": {
+      "label": "Box Selection",
+      "description": "Selects the part of your scene inside a box, with optional soft edges.",
+      "help": "Move Centre and resize Size to enclose your target.\nStart with Falloff 0 for a sharp boundary.",
+      "inputs": {
+        "Centre": "Centre in local scene units along X, Y and Z. The default (0, 0, 0) is the object's origin.",
+        "Size": "Full width, height and depth in scene units, all non-negative. The default (1, 1, 1) is a unit box.",
+        "Rotation": "Rotation around X, Y and Z in degrees. The default (0, 0, 0) leaves the orientation unchanged.",
+        "Falloff": "Soft edge outside the box, in scene units. 0, the default, gives a sharp boundary."
+      },
+      "input_labels": {
+        "Centre": "Centre",
+        "Size": "Size",
+        "Rotation": "Rotation",
+        "Falloff": "Falloff"
+      },
+      "outputs": {
+        "Selection": "Selection strength: 0 is unselected, 1 fully selected; values between them make soft transitions."
+      },
+      "output_labels": {
+        "Selection": "Selection"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour": {
+      "label": "Colour",
+      "description": "Gives you one colour to share between connected nodes.",
+      "help": "Pick a colour, then connect Colour to the settings you want to share.\nThe default is mid grey.",
+      "inputs": {
+        "Colour": "RGB colour, usually 0–1 per channel: 0 is black, 1 is white. The default (0.5, 0.5, 0.5) is mid grey."
+      },
+      "input_labels": {
+        "Colour": "Colour"
+      },
+      "outputs": {
+        "Colour": "Resulting RGB colour. 0 is black and 1 is white per channel; some calculations can exceed this range."
+      },
+      "output_labels": {
+        "Colour": "Colour"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_attribute": {
+      "label": "Colour Attribute",
+      "description": "Reads the base colour of each splat or point so you can edit or select by colour.",
+      "help": "Connect Colour to Separate Colour to inspect individual channels.\nThis reads base colour, not camera-dependent reflections.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Colour": "Resulting RGB colour. 0 is black and 1 is white per channel; some calculations can exceed this range."
+      },
+      "output_labels": {
+        "Colour": "Colour"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_correct": {
+      "label": "Colour Correct",
+      "description": "Adjusts brightness, contrast and colour balance while keeping your scene's detail.",
+      "help": "Start with Exposure to set brightness, then adjust Contrast and Saturation.\nConnect a Selection to grade only part of your scene.\nReset colour wheels to the centre for neutral shadows, midtones and highlights.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "Where you apply the edit, 0–1: 0 leaves it unchanged, 1 applies it fully. Unconnected means everything.",
+        "Exposure": "Brightness in stops: +1 doubles the light, −1 halves it. 0, the default, leaves brightness unchanged.",
+        "Black Point": "Input brightness mapped to black. 0, the default, keeps existing blacks; raising it deepens shadows.",
+        "White Point": "Input brightness mapped to white. 1, the default, keeps existing whites; lowering it brightens highlights.",
+        "Midpoint": "Input brightness mapped to mid grey, 0.01–0.99. 0.5 is neutral; lower values lighten midtones.",
+        "Contrast": "Difference between light and dark. 1 keeps it unchanged; 0 makes a flat tone; values above 1 increase contrast.",
+        "Saturation": "Colour strength. 0 removes colour, 1 keeps it unchanged, and values above 1 make colours stronger.",
+        "Hue Shift": "Colour-wheel rotation in degrees. 0 keeps colours unchanged; 180 moves each colour to its opposite.",
+        "Temperature": "Warm/cool balance, −1 to 1. Negative values cool the image, positive values warm it; 0 is neutral.",
+        "Tint": "Green/magenta balance, −1 to 1. Negative values add magenta, positive values add green; 0 is neutral.",
+        "Shadows": "Colour offset in dark areas, −1 to 1 per channel. 0 is neutral; negative values remove that colour.",
+        "Midtones": "Colour offset in mid-brightness areas, −1 to 1 per channel. 0 is neutral; positive values add that colour.",
+        "Highlights": "Colour offset in bright areas, −1 to 1 per channel. 0 is neutral; positive values add that colour.",
+        "Gamma": "Midtone brightness, greater than 0. 1 is neutral; values above 1 lighten midtones and values below 1 darken them."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Exposure": "Exposure",
+        "Black Point": "Black Point",
+        "White Point": "White Point",
+        "Midpoint": "Midpoint",
+        "Contrast": "Contrast",
+        "Saturation": "Saturation",
+        "Hue Shift": "Hue Shift",
+        "Temperature": "Temperature",
+        "Tint": "Tint",
+        "Shadows": "Shadows",
+        "Midtones": "Midtones",
+        "Highlights": "Highlights",
+        "Gamma": "Gamma"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {
+        "auto_range": "Measure black and white points from the scene. Off by default, so you control both points yourself."
+      },
+      "property_labels": {
+        "auto_range": "Auto Range"
+      }
+    },
+    "colour_key": {
+      "label": "Colour Key",
+      "description": "Selects parts of your scene whose colours resemble a colour you pick.",
+      "help": "Pick Colour, then raise Tolerance until your target is included.\nAdd a little Softness to avoid a hard edge.",
+      "inputs": {
+        "Colour": "RGB colour to match, usually 0–1 per channel. The default is black; pick your target colour here.",
+        "Tolerance": "Allowed RGB distance from Colour. 0 matches only that colour; 0.1, the default, allows a small variation.",
+        "Softness": "Width of the soft transition. 0, the default, gives hard edges; larger values soften the selection."
+      },
+      "input_labels": {
+        "Colour": "Colour",
+        "Tolerance": "Tolerance",
+        "Softness": "Softness"
+      },
+      "outputs": {
+        "Selection": "Selection strength: 0 is unselected, 1 fully selected; values between them make soft transitions."
+      },
+      "output_labels": {
+        "Selection": "Selection"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "combine_colour": {
+      "label": "Combine Colour",
+      "description": "Builds a colour from separate RGB or HSV values.",
+      "help": "Connect three values and choose RGB or HSV mode.\nIn HSV mode the R, G and B inputs mean hue, saturation and brightness.",
+      "inputs": {
+        "R": "Red in RGB or hue in HSV, normally 0–1. Default 0 gives no red, or a red hue in HSV.",
+        "G": "Green in RGB or saturation in HSV, normally 0–1. Default 0 gives no green, or grey in HSV.",
+        "B": "Blue in RGB or brightness in HSV, normally 0–1. Default 0 gives no blue, or black in HSV."
+      },
+      "input_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "outputs": {
+        "Colour": "Resulting RGB colour. 0 is black and 1 is white per channel; some calculations can exceed this range."
+      },
+      "output_labels": {
+        "Colour": "Colour"
+      },
+      "properties": {
+        "mode": "Colour interpretation. RGB, the default, uses red, green and blue; HSV uses hue, saturation and brightness."
+      },
+      "property_labels": {
+        "mode": "Mode"
+      }
+    },
+    "combine_xyz": {
+      "label": "Combine XYZ",
+      "description": "Builds a position or direction from separate X, Y and Z values.",
+      "help": "Use to change one coordinate while keeping the other two.\nConnect the result to a Vector input.",
+      "inputs": {
+        "X": "X coordinate in the units you need. 0, the default, gives no contribution along this axis.",
+        "Y": "Y coordinate in the units you need. 0, the default, gives no contribution along this axis.",
+        "Z": "Z coordinate in the units you need. 0, the default, gives no contribution along this axis."
+      },
+      "input_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "outputs": {
+        "Vector": "Resulting X, Y and Z values, in the units of your calculation."
+      },
+      "output_labels": {
+        "Vector": "Vector"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "compare": {
+      "label": "Compare",
+      "description": "Selects parts of your scene by comparing two values, such as height and a ground level.",
+      "help": "Connect height to A and your ground level to B, then choose Less Than.\nEpsilon only affects Equal and Not Equal.",
+      "inputs": {
+        "A": "First number in the units of your calculation. 0 is the default.",
+        "B": "Second number in the units of your calculation. 0 is the default.",
+        "Epsilon": "Tolerance for Equal and Not Equal, in the same units as A and B. 0 means exact; the default is 0.001."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Epsilon": "Epsilon"
+      },
+      "outputs": {
+        "Result": "On for selected elements, off for unselected elements. Connect to a Selection or Boolean input."
+      },
+      "output_labels": {
+        "Result": "Result"
+      },
+      "properties": {
+        "operation": "Comparison to make. Equal is the default; choose Less Than or Greater Than to select either side of B."
+      },
+      "property_labels": {
+        "operation": "Operation"
+      }
+    },
+    "decimate": {
+      "label": "Decimate",
+      "description": "Reduces splat count by keeping larger, more opaque splats within your selection.",
+      "help": "Start with Keep Fraction 0.5 to retain about half the selected splats.\nUnselected splats always stay; tied scores can keep more than requested.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "Which splats you reduce: weights of 0.5 or more. Unconnected includes every splat.",
+        "Keep Fraction": "Share of selected splats to keep, 0.001–1. 0.5 keeps about half; 1 keeps all."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Keep Fraction": "Keep Fraction"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "delete_geometry": {
+      "label": "Delete Geometry",
+      "description": "Removes the selected splats, points or mesh vertices from your scene.",
+      "help": "Connect a selection before connecting Geometry.\nAn unconnected Selection removes everything; mesh faces touching removed vertices also go.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "What you remove: weights of 0.5 or more are deleted. Unconnected means everything, so the output is empty."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "ellipsoid_selection": {
+      "label": "Ellipsoid Selection",
+      "description": "Selects the part of your scene inside a sphere or stretched sphere, with optional soft edges.",
+      "help": "Set Centre and Radii to surround your target.\nEqual radii make a sphere; Falloff 0 gives a sharp boundary.",
+      "inputs": {
+        "Centre": "Centre in local scene units along X, Y and Z. The default (0, 0, 0) is the object's origin.",
+        "Radii": "Radius along each axis in scene units, all non-negative. The default (1, 1, 1) makes a unit sphere.",
+        "Rotation": "Rotation around X, Y and Z in degrees. The default (0, 0, 0) leaves the orientation unchanged.",
+        "Falloff": "Soft edge outside the ellipsoid, relative to its radii. 0, the default, gives a sharp boundary."
+      },
+      "input_labels": {
+        "Centre": "Centre",
+        "Radii": "Radii",
+        "Rotation": "Rotation",
+        "Falloff": "Falloff"
+      },
+      "outputs": {
+        "Selection": "Selection strength: 0 is unselected, 1 fully selected; values between them make soft transitions."
+      },
+      "output_labels": {
+        "Selection": "Selection"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_input": {
+      "label": "Group Input",
+      "description": "Brings the host object's geometry into your node graph.",
+      "help": "Connect Geometry to the first editing node.\nIn a modifier stack you receive the previous modifier's result.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Incoming host geometry, or the previous modifier's result. Connect this to your first editing node."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_output": {
+      "label": "Group Output",
+      "description": "Sends your node graph's final geometry back to the scene.",
+      "help": "Connect the last editing node to Geometry.\nOnly the branch reaching this node contributes to the modifier result.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry."
+      },
+      "input_labels": {
+        "Geometry": "Geometry"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "hsv_range": {
+      "label": "HSV Range",
+      "description": "Selects splats by colour range — for example all the greens of a lawn — with soft edges.",
+      "help": "Pick the hue, then widen Hue Range until the whole object is caught.\nRaise Saturation Min to ignore greys; raise Value Min to ignore shadows.\nTurn on Preview Selection to see the result in the viewport.",
+      "inputs": {
+        "Hue": "Centre of the colour range on the colour wheel, 0–1: 0 red, 0.17 yellow, 0.33 green, 0.5 cyan, 0.67 blue, 0.83 magenta.",
+        "Hue Range": "How far either side of Hue still counts, 0–0.5 of the wheel. 0.07 catches one colour family.",
+        "Hue Softness": "Fade outside the hue range, in turns of the colour wheel. 0, the default, gives a sharp hue boundary.",
+        "Saturation Min": "Lowest colour strength included, 0–1. 0, the default, includes greys; raise it to exclude them.",
+        "Saturation Max": "Highest colour strength included, 0–1. 1, the default, includes fully saturated colours.",
+        "Value Min": "Lowest brightness included, 0–1. 0, the default, includes black; raise it to exclude shadows.",
+        "Value Max": "Highest brightness included, 0–1. 1, the default, includes white; lower it to exclude highlights.",
+        "Softness": "Width of the soft transition. 0, the default, gives hard edges; larger values soften the selection."
+      },
+      "input_labels": {
+        "Hue": "Hue",
+        "Hue Range": "Hue Range",
+        "Hue Softness": "Hue Softness",
+        "Saturation Min": "Saturation Min",
+        "Saturation Max": "Saturation Max",
+        "Value Min": "Value Min",
+        "Value Max": "Value Max",
+        "Softness": "Softness"
+      },
+      "outputs": {
+        "Selection": "Selection strength: 0 is unselected, 1 fully selected; values between them make soft transitions."
+      },
+      "output_labels": {
+        "Selection": "Selection"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "index": {
+      "label": "Index",
+      "description": "Gives each splat, point or mesh vertex its position in the current list, starting at zero.",
+      "help": "Use with Math or Compare to select numbered elements.\nDeleting or joining geometry can change these numbers.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Index": "Current list position, starting at 0. Joining or deleting geometry can renumber elements."
+      },
+      "output_labels": {
+        "Index": "Index"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "inside_mesh": {
+      "label": "Inside Mesh",
+      "description": "Selects the part of your scene enclosed by a reference mesh.",
+      "help": "Connect a closed mesh from Object Info to Mesh.\nHoles or self-intersections can make the inside ambiguous.",
+      "inputs": {
+        "Mesh": "Closed reference mesh defining the inside. Connect Object Info; an unconnected input cannot select anything."
+      },
+      "input_labels": {
+        "Mesh": "Mesh"
+      },
+      "outputs": {
+        "Selection": "On for selected elements, off for unselected elements. Connect to a Selection or Boolean input."
+      },
+      "output_labels": {
+        "Selection": "Selection"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "integer": {
+      "label": "Integer",
+      "description": "Gives you one whole number to share between connected settings.",
+      "help": "Connect Value to counts or whole-number settings.\nStart at 0 and use the step buttons to change by one.",
+      "inputs": {
+        "Value": "Shared whole number. 0 is the default; negative and positive numbers are allowed."
+      },
+      "input_labels": {
+        "Value": "Value"
+      },
+      "outputs": {
+        "Value": "Resulting number, in the units of your calculation. Connect it to a compatible numeric input."
+      },
+      "output_labels": {
+        "Value": "Value"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "invert_colour": {
+      "label": "Invert Colour",
+      "description": "Reverses colours so dark areas become light and colours turn into their opposites.",
+      "help": "Connect a Selection to invert only part of your scene.\nUse twice to restore base colour, unless earlier clipping has lost detail.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "Where you apply the edit, 0–1: 0 leaves it unchanged, 1 applies it fully. Unconnected means everything."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "join_geometry": {
+      "label": "Join Geometry",
+      "description": "Combines several inputs into one; splats with different SH degrees are padded to the highest.",
+      "help": "Connect several Geometry outputs to the same input.\nUse after Separate Geometry to reunite branches.\nOverlapping copies remain separate splats, points or mesh faces.",
+      "inputs": {
+        "Geometry": "Geometry sources to combine. Connect several links here; an unconnected input gives an empty result."
+      },
+      "input_labels": {
+        "Geometry": "Geometry"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "map_range": {
+      "label": "Map Range",
+      "description": "Converts a value from one range to another, e.g. height 0–2 m into a fade from 1 to 0.",
+      "help": "Set From Min and From Max to your source range.\nSet To Min 1 and To Max 0 for a reversed fade.\nLeave Clamp on to keep the result between the output limits.",
+      "inputs": {
+        "Value": "Number to convert, in the source range's units. 0 is the default; connect Position or another value.",
+        "From Min": "Lower end of the source range, in the units of Value. 0 is the default.",
+        "From Max": "Upper end of the source range, in the units of Value. 1 is the default; keep it different from From Min.",
+        "To Min": "Result at From Min. 0 is the default; use 1 here and 0 at To Max to reverse a fade.",
+        "To Max": "Result at From Max. 1 is the default; use 0 here and 1 at To Min to reverse a fade."
+      },
+      "input_labels": {
+        "Value": "Value",
+        "From Min": "From Min",
+        "From Max": "From Max",
+        "To Min": "To Min",
+        "To Max": "To Max"
+      },
+      "outputs": {
+        "Result": "Resulting number, in the units of your calculation. Connect it to a compatible numeric input."
+      },
+      "output_labels": {
+        "Result": "Result"
+      },
+      "properties": {
+        "clamp": "Keep results within the output range. On by default; off allows values beyond either end."
+      },
+      "property_labels": {
+        "clamp": "Clamp"
+      }
+    },
+    "math": {
+      "label": "Math",
+      "description": "Calculates new values to control edits, selections and fades.",
+      "help": "Choose an operation, then connect values to A and B.\nStart with Multiply to scale a selection's strength.",
+      "inputs": {
+        "A": "First number in the units of your calculation. 0 is the default.",
+        "B": "Second number in the units of your calculation. 0 is the default."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Value": "Resulting number, in the units of your calculation. Connect it to a compatible numeric input."
+      },
+      "output_labels": {
+        "Value": "Value"
+      },
+      "properties": {
+        "operation": "Calculation to perform. Add is the default; operations such as Absolute use A only."
+      },
+      "property_labels": {
+        "operation": "Operation"
+      }
+    },
+    "mesh_to_points": {
+      "label": "Mesh to Points",
+      "description": "Turns mesh vertices into a point cloud, keeping available vertex colours.",
+      "help": "Connect a mesh from Object Info.\nYou get one point per vertex, not an evenly sampled surface.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry."
+      },
+      "input_labels": {
+        "Geometry": "Geometry"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "mesh_to_splats": {
+      "label": "Mesh to Splats",
+      "description": "Covers a mesh surface with coloured, flat splats.",
+      "help": "Start with the default Density for about 20,000 splats on a unit sphere.\nRaise Density for finer detail; Max Count limits the total.\nVertex colours take priority over material colours and textures.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Density": "Splats per square scene unit. About 1,592 by default gives 20,000 on a unit sphere; 0 produces no splats.",
+        "Max Count": "Maximum splats to create, 0–2,000,000. The default caps output at 2,000,000; 0 creates none.",
+        "Opacity": "Splat opacity, 0–1: 0 is transparent, 1 opaque. 0.95, the default, is nearly opaque."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Density": "Density",
+        "Max Count": "Max Count",
+        "Opacity": "Opacity"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {
+        "seed": "Whole-number seed for a repeatable pattern. 0 is the default; changing it gives a different pattern."
+      },
+      "property_labels": {
+        "seed": "Seed"
+      }
+    },
+    "mix_colour": {
+      "label": "Mix Colour",
+      "description": "Blends two colours or combines them with a chosen colour operation.",
+      "help": "Connect colours to A and B; Factor 0.5 gives an equal mix.\nStart with Mix mode before trying Multiply or Add.",
+      "inputs": {
+        "A": "First RGB colour, usually 0–1 per channel. The default is black.",
+        "B": "Second RGB colour, usually 0–1 per channel. The default is black.",
+        "Factor": "Blend strength, 0–1. 0 keeps A, 1 uses the chosen operation fully; 0.5 gives a half-strength blend."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Factor": "Factor"
+      },
+      "outputs": {
+        "Colour": "Resulting RGB colour. 0 is black and 1 is white per channel; some calculations can exceed this range."
+      },
+      "output_labels": {
+        "Colour": "Colour"
+      },
+      "properties": {
+        "mode": "How you combine colours. Mix is the default; Add, Subtract and Multiply change the blend before Factor is applied."
+      },
+      "property_labels": {
+        "mode": "Mode"
+      }
+    },
+    "named_attribute": {
+      "label": "Named Attribute",
+      "description": "Reads a stored value by name so you can use it to control your edits.",
+      "help": "Enter the exact attribute name and choose its type.\nA missing attribute cannot provide values.",
+      "inputs": {
+        "Name": "Exact stored attribute name, including case. Empty by default; enter a name before using the output."
+      },
+      "input_labels": {
+        "Name": "Name"
+      },
+      "outputs": {
+        "Attribute": "Values read from the named attribute, in its stored units."
+      },
+      "output_labels": {
+        "Attribute": "Attribute"
+      },
+      "properties": {
+        "type": "Stored value type to read. Float, the default, reads one decimal value per element."
+      },
+      "property_labels": {
+        "type": "Type"
+      }
+    },
+    "neighbour_count": {
+      "label": "Neighbour Count",
+      "description": "Counts nearby splats or points so you can find sparse parts of your scene.",
+      "help": "Connect Count to Compare to select low counts.\nStart with Radius 3 and Relative to size for splats.\nA point never counts itself.",
+      "inputs": {
+        "Radius": "Neighbour distance. 1 by default; scene units, or splat-size multiples with Relative to size. 0 counts none."
+      },
+      "input_labels": {
+        "Radius": "Radius"
+      },
+      "outputs": {
+        "Count": "Number of neighbours inside Radius, excluding the point itself. 0 means isolated."
+      },
+      "output_labels": {
+        "Count": "Count"
+      },
+      "properties": {
+        "relative_to_size": "Use each splat's size as the radius unit. Off by default uses scene units; points always use scene units."
+      },
+      "property_labels": {
+        "relative_to_size": "Relative To Size"
+      }
+    },
+    "opacity": {
+      "label": "Opacity",
+      "description": "Reads how opaque each splat is so you can find faint or solid areas.",
+      "help": "Connect Opacity to Compare to select faint splats.\nValues run from 0 for transparent to 1 for opaque.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Opacity": "Opacity from 0 for transparent to 1 for opaque, before rendering."
+      },
+      "output_labels": {
+        "Opacity": "Opacity"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "points_to_splats": {
+      "label": "Points to Splats",
+      "description": "Turns a point cloud into coloured, round splats.",
+      "help": "Leave Radius at 0 to estimate size from nearby points.\nSet a positive radius in scene units if the automatic size leaves gaps.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Radius": "Splat radius in scene units. 0, the default, estimates half the nearby point spacing; positive values set one size.",
+        "Opacity": "Splat opacity, 0–1: 0 is transparent, 1 opaque. 0.9, the default, keeps a little transparency."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Radius": "Radius",
+        "Opacity": "Opacity"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "position": {
+      "label": "Position",
+      "description": "Reads where each splat, point or mesh vertex sits in your object.",
+      "help": "Connect Position to Separate XYZ to select by height or distance along an axis.\nCoordinates use the object's local space.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Local X, Y and Z position in scene units."
+      },
+      "output_labels": {
+        "Position": "Position"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "posterize": {
+      "label": "Posterize",
+      "description": "Reduces your scene's colours to a small number of flat steps.",
+      "help": "Start with Levels 4 for a four-step palette per colour channel.\nConnect a Selection to limit the effect.\nSelected splats lose camera-dependent colour variation.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "Where you apply the edit, 0–1: 0 leaves it unchanged, 1 applies it fully. Unconnected means everything.",
+        "Levels": "Colour steps per RGB channel, 2–32. 2 gives only low and high values; 4 is the default."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Levels": "Levels"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "random_value": {
+      "label": "Random Value",
+      "description": "Gives each splat or point a repeatable random value for varied edits.",
+      "help": "Set Min and Max to the range you need.\nChange Seed for another pattern; reordering geometry can change it too.",
+      "inputs": {
+        "Min": "Lowest random value, in the units you need. 0 is the default; keep it below Max.",
+        "Max": "Highest random value, in the units you need. 1 is the default; keep it above Min."
+      },
+      "input_labels": {
+        "Min": "Min",
+        "Max": "Max"
+      },
+      "outputs": {
+        "Value": "Resulting number, in the units of your calculation. Connect it to a compatible numeric input."
+      },
+      "output_labels": {
+        "Value": "Value"
+      },
+      "properties": {
+        "seed": "Whole-number seed for a repeatable pattern. 0 is the default; changing it gives a different pattern."
+      },
+      "property_labels": {
+        "seed": "Seed"
+      }
+    },
+    "recolour": {
+      "label": "Recolour",
+      "description": "Changes the colour of selected splats while optionally preserving their light and shade.",
+      "help": "Pick Colour and start with Weight 0.3 for a gentle tint.\nLeave Keep Shading on to retain lighting detail.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "Where you apply the edit, 0–1: 0 leaves it unchanged, 1 applies it fully. Unconnected means everything.",
+        "Colour": "Target RGB colour. Channels usually run from 0 to 1; the default is blue. Keep Shading retains light and shade.",
+        "Weight": "Recolour strength, 0–1. 0 keeps the original, 1 applies the full new colour; the default is 1."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Colour": "Colour",
+        "Weight": "Weight"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {
+        "keep_shading": "Retain original light and shade while changing colour. On by default; off applies a flat colour.",
+        "fade_view_dependent": "Reduce camera-dependent colour as you recolour. On by default; off retains the original variation."
+      },
+      "property_labels": {
+        "keep_shading": "Keep Shading",
+        "fade_view_dependent": "Fade View Dependent"
+      }
+    },
+    "remove_floaters": {
+      "label": "Remove Floaters",
+      "description": "Deletes stray splats floating in empty space, such as specks in the sky or haze below the ground.",
+      "help": "Turn on Preview first: it shows only what would be removed.\nIsolation Radius 3 with 'Relative to size' judges each splat at its own scale, so the sparse background survives.\nConnect a Selection to limit the clean-up, for example to heights below the ground.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "Where you test for removal: weights of 0.5 or more. Unconnected tests every splat.",
+        "Min Opacity": "Remove splats below this opacity, 0–1. 0 disables this test; 0.02, the default, removes very faint splats.",
+        "Max Size": "Remove splats whose longest axis exceeds this many scene units. 0, the default, disables this test.",
+        "Isolation Radius": "How far to look for neighbours. With 'Relative to size' it is a multiple of each splat's size; otherwise scene units. 0 turns the test off.",
+        "Min Neighbours": "A splat with fewer neighbours than this inside the radius is removed. 1 removes only completely isolated splats."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Min Opacity": "Min Opacity",
+        "Max Size": "Max Size",
+        "Isolation Radius": "Isolation Radius",
+        "Min Neighbours": "Min Neighbours"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {
+        "preview": "Show only the splats you would remove, unchanged. Off by default shows the cleaned result.",
+        "relative_to_size": "Use each splat's size as the radius unit. On by default protects sparse areas; off uses scene units."
+      },
+      "property_labels": {
+        "preview": "Preview",
+        "relative_to_size": "Relative To Size"
+      }
+    },
+    "scale": {
+      "label": "Scale",
+      "description": "Reads each splat's size along its three local axes.",
+      "help": "Connect Scale to Separate XYZ to compare axis sizes.\nValues use scene units, not a size multiplier.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Scale": "Size along each splat's three local axes, in scene units."
+      },
+      "output_labels": {
+        "Scale": "Scale"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "scale_clamp": {
+      "label": "Scale Clamp",
+      "description": "Fixes needle- and pancake-shaped Gaussians that show up as streaks when you move away from the capture path.",
+      "help": "Use after training when thin streaks appear off the camera path.\nStart with Max Aspect 8; lower values make splats rounder but softer.\nOnly the shape changes; position, colour and count stay the same.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "Where you apply the edit, 0–1: 0 leaves it unchanged, 1 applies it fully. Unconnected means everything.",
+        "Max Aspect": "Largest allowed ratio between a splat's longest and shortest axis. 1 makes every splat round; 8 is a good start."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Max Aspect": "Max Aspect"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_colour": {
+      "label": "Separate Colour",
+      "description": "Splits a colour into RGB or HSV values so you can edit or compare each part.",
+      "help": "Choose HSV to isolate hue, saturation or brightness.\nIn HSV mode the R, G and B outputs carry those values in that order.",
+      "inputs": {
+        "Colour": "Colour to split, usually 0–1 per RGB channel. The default is black, with all channels at 0."
+      },
+      "input_labels": {
+        "Colour": "Colour"
+      },
+      "outputs": {
+        "R": "Red channel in RGB mode or hue in HSV mode. Hue runs from 0 to 1 around the colour wheel.",
+        "G": "Green channel in RGB mode or saturation in HSV mode. HSV 0 is grey and 1 is fully saturated.",
+        "B": "Blue channel in RGB mode or brightness in HSV mode. HSV 0 is black and 1 is full brightness."
+      },
+      "output_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "properties": {
+        "mode": "Colour interpretation. RGB, the default, uses red, green and blue; HSV uses hue, saturation and brightness."
+      },
+      "property_labels": {
+        "mode": "Mode"
+      }
+    },
+    "separate_geometry": {
+      "label": "Separate Geometry",
+      "description": "Splits into the selected part and the rest, so each can be edited differently and joined back.",
+      "help": "Connect a Selection, then edit the two outputs separately.\nUse Join Geometry to bring the branches back together.\nSoft selection weights become a yes/no split at 0.5.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "What goes to Selection: weights of 0.5 or more. Lower weights go to Inverted; unconnected selects everything."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection"
+      },
+      "outputs": {
+        "Selection": "Geometry whose selection weight is at least 0.5. Edit this branch separately.",
+        "Inverted": "Geometry whose selection weight is below 0.5. This is the part left outside your selection."
+      },
+      "output_labels": {
+        "Selection": "Selection",
+        "Inverted": "Inverted"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_xyz": {
+      "label": "Separate XYZ",
+      "description": "Splits a position or direction into its X, Y and Z values.",
+      "help": "Connect Position, then send the height axis to Compare or Map Range.\nCheck which axis points up in your scene.",
+      "inputs": {
+        "Vector": "X, Y and Z values in the units you need. The default (0, 0, 0) gives zero on every axis."
+      },
+      "input_labels": {
+        "Vector": "Vector"
+      },
+      "outputs": {
+        "X": "X coordinate of the input, in the same units. 0 lies on the other two axes' plane.",
+        "Y": "Y coordinate of the input, in the same units. 0 lies on the other two axes' plane.",
+        "Z": "Z coordinate of the input, in the same units. 0 lies on the other two axes' plane."
+      },
+      "output_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_colour": {
+      "label": "Set Colour",
+      "description": "Replaces selected splats' base colour with the colour you provide.",
+      "help": "Pick Colour or connect colours from another node.\nLeave Clear View Dependent on for a flat painted colour.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "Where you apply the edit, 0–1: 0 leaves it unchanged, 1 applies it fully. Unconnected means everything.",
+        "Colour": "RGB colour, usually 0–1 per channel: 0 is black, 1 is white. The default (0.5, 0.5, 0.5) is mid grey."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Colour": "Colour"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {
+        "clear_view_dependent": "Remove camera-dependent colour on selected splats. On by default gives flat colour; off retains reflections."
+      },
+      "property_labels": {
+        "clear_view_dependent": "Clear View Dependent"
+      }
+    },
+    "set_opacity": {
+      "label": "Set Opacity",
+      "description": "Changes how transparent selected splats appear.",
+      "help": "Start with Opacity 0.5 to make selected splats translucent.\nUse Selection for a soft blend with their original opacity.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "Where you apply the edit, 0–1: 0 leaves it unchanged, 1 applies it fully. Unconnected means everything.",
+        "Opacity": "New opacity, 0–1: 0 is transparent, 1 opaque. The default 1 makes selected splats opaque."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Opacity": "Opacity"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_position": {
+      "label": "Set Position",
+      "description": "Moves selected splats, points or mesh vertices to new positions with an optional offset.",
+      "help": "Connect Position to Position, then set Offset for a relative move.\nWithout that connection, Position defaults to the origin.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "Where you apply the edit, 0–1: 0 leaves it unchanged, 1 applies it fully. Unconnected means everything.",
+        "Position": "New position in local scene units. The default is the origin; connect Position to retain existing positions.",
+        "Offset": "Extra movement along X, Y and Z in local scene units. (0, 0, 0), the default, adds no movement."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Position": "Position",
+        "Offset": "Offset"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_scale": {
+      "label": "Set Scale",
+      "description": "Sets the size of selected splats along each of their three local axes.",
+      "help": "Connect Scale through Vector Math to multiply existing sizes.\nUnconnected values replace sizes in scene units, not by a multiplier.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "Where you apply the edit, 0–1: 0 leaves it unchanged, 1 applies it fully. Unconnected means everything.",
+        "Scale": "New size along each local axis, in scene units. (1, 1, 1), the default, sets unit-sized round splats."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Scale": "Scale"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_sh_degree": {
+      "label": "Set SH Degree",
+      "description": "Limits how much a splat's colour can vary with the viewing direction.",
+      "help": "Use Degree 0 for flat colour and smaller exports.\nRaising the degree adds room for detail but cannot restore discarded colour.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Degree": "SH degree, 0–3. 0, the default, removes view-dependent colour; higher values allow more angular detail."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Degree": "Degree"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "sharpen": {
+      "label": "Sharpen",
+      "description": "Shrinks selected splats to make soft details crisper.",
+      "help": "Start with Amount 0.25 and leave Keep Coverage on.\nHigh amounts can reveal gaps between splats.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Selection": "Where you apply the edit, 0–1: 0 leaves it unchanged, 1 applies it fully. Unconnected means everything.",
+        "Amount": "Size reduction, 0–0.95. 0 does nothing; 0.25, the default, shrinks each axis by 25%."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Amount": "Amount"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {
+        "keep_coverage": "Increase opacity as splats shrink to keep coverage. On by default; off can make the result more transparent."
+      },
+      "property_labels": {
+        "keep_coverage": "Keep Coverage"
+      }
+    },
+    "simplify": {
+      "label": "Simplify",
+      "description": "Combines splats to reduce their count while preserving the scene's overall appearance.",
+      "help": "Start with Ratio 0.5 to aim for half the splats.\nThis can take longer than other nodes; lower ratios lose fine detail.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Ratio": "Target share of splats to retain, 0.01–1. 0.5, the default, aims for half; 1 keeps the original count."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Ratio": "Ratio"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "splats_to_points": {
+      "label": "Splats to Points",
+      "description": "Turns splat centres and base colours into a point cloud.",
+      "help": "Use to export centres or process your scene as points.\nSplat size, opacity and camera-dependent colour are not kept.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry."
+      },
+      "input_labels": {
+        "Geometry": "Geometry"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "stored_selection": {
+      "label": "Stored Selection",
+      "description": "Reuses a selection you capture from the viewport.",
+      "help": "Select splats in the viewport, then press Capture selection.\nCapture again after changing element count or order.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Selection": "On for selected elements, off for unselected elements. Connect to a Selection or Boolean input."
+      },
+      "output_labels": {
+        "Selection": "Selection"
+      },
+      "properties": {
+        "data": "Captured viewport selection. Empty until you press Capture selection; stored separately for each modifier.",
+        "size": "Element count when you captured the selection. 0 means empty; capture again if the count changes.",
+        "invert": "Reverse the captured selection. Off by default keeps selected elements; on selects the rest."
+      },
+      "property_labels": {
+        "data": "Data",
+        "size": "Size",
+        "invert": "Invert"
+      }
+    },
+    "transform_geometry": {
+      "label": "Transform Geometry",
+      "description": "Moves, rotates and resizes the whole geometry together.",
+      "help": "Start with Translation for a move or Scale 1 to keep the original size.\nRotation uses degrees around the object's origin.",
+      "inputs": {
+        "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
+        "Translation": "Movement along X, Y and Z in scene units. (0, 0, 0), the default, leaves positions unchanged.",
+        "Rotation": "Rotation around X, Y and Z in degrees. The default (0, 0, 0) leaves the orientation unchanged.",
+        "Scale": "Size multiplier. 1 keeps the original size, 0 collapses it to the origin; negative values mirror it."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Translation": "Translation",
+        "Rotation": "Rotation",
+        "Scale": "Scale"
+      },
+      "outputs": {
+        "Geometry": "Resulting geometry. Connect to another editing node or Group Output."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "value": {
+      "label": "Value",
+      "description": "Gives you one number to share between connected settings.",
+      "help": "Connect Value to several numeric inputs to control them together.\nStart at 0 and drag the number to adjust it.",
+      "inputs": {
+        "Value": "Shared number. 0 is the default; negative and positive numbers are allowed."
+      },
+      "input_labels": {
+        "Value": "Value"
+      },
+      "outputs": {
+        "Value": "Resulting number, in the units of your calculation. Connect it to a compatible numeric input."
+      },
+      "output_labels": {
+        "Value": "Value"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector": {
+      "label": "Vector",
+      "description": "Gives you one set of X, Y and Z values to share between nodes.",
+      "help": "Use for a common position, offset or direction.\nThe default has all three coordinates at 0.",
+      "inputs": {
+        "Vector": "X, Y and Z values in the units you need. The default (0, 0, 0) gives zero on every axis."
+      },
+      "input_labels": {
+        "Vector": "Vector"
+      },
+      "outputs": {
+        "Vector": "Resulting X, Y and Z values, in the units of your calculation."
+      },
+      "output_labels": {
+        "Vector": "Vector"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector_math": {
+      "label": "Vector Math",
+      "description": "Calculates positions, directions and distances from three-part values.",
+      "help": "Use Scale to resize an offset or Distance to compare two positions.\nLength, Distance and Dot use the Value output; other operations use Vector.",
+      "inputs": {
+        "A": "First three-part value in the units of your calculation. The default is (0, 0, 0).",
+        "B": "Second three-part value in the units of your calculation. The default is (0, 0, 0).",
+        "Scale": "Multiplier used by the Scale operation. 1 keeps A unchanged, 0 gives zero, and −1 reverses the direction."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Scale": "Scale"
+      },
+      "outputs": {
+        "Vector": "Resulting X, Y and Z values, in the units of your calculation.",
+        "Value": "Resulting number, in the units of your calculation. Connect it to a compatible numeric input."
+      },
+      "output_labels": {
+        "Vector": "Vector",
+        "Value": "Value"
+      },
+      "properties": {
+        "operation": "Vector calculation. Add is the default; Length, Distance and Dot produce a Value instead of a Vector."
+      },
+      "property_labels": {
+        "operation": "Operation"
+      }
+    },
+    "object_info": {
+      "label": "Object Info",
+      "description": "Brings another scene object's geometry into your graph as a reference or an extra part.",
+      "help": "Choose the exact name or UUID of the reference object.\nUse Relative space to place it relative to the object being modified.\nAvoid referencing an object that depends on this modifier.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Reference object's geometry in the chosen space, including its visible modifiers."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {
+        "object": "Exact scene object name or UUID to read. Empty by default; choose a reference object before evaluating.",
+        "transform_space": "Reference space. Original keeps local coordinates; Relative transforms into the modified object's space."
+      },
+      "property_labels": {
+        "object": "Object",
+        "transform_space": "Transform Space"
+      }
+    }
+  },
+  "node_editor.how_to_use": "How to use",
+  "node_editor.learn_more": "Learn more"
 }

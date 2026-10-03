@@ -13,6 +13,7 @@ namespace lfs::vis::input {
         InjectedPointerState state;
         bool active = false;
         bool positioned = false;
+        std::chrono::steady_clock::time_point retain_until;
         enum class PendingKind { Move,
                                  ButtonDown,
                                  ButtonUp,
@@ -51,6 +52,7 @@ namespace lfs::vis::input {
 
     void injectPointerMove(const float x, const float y) {
         std::lock_guard lock(state_mutex);
+        retain_until = {};
         state.x = x;
         state.y = y;
         positioned = true;
@@ -58,8 +60,14 @@ namespace lfs::vis::input {
         pending.push_back({PendingKind::Move, state});
     }
 
+    void retainInjectedPointerFor(const std::chrono::milliseconds duration) {
+        std::lock_guard lock(state_mutex);
+        retain_until = std::chrono::steady_clock::now() + duration;
+    }
+
     void injectPointerButton(const int sdl_button, const bool down) {
         std::lock_guard lock(state_mutex);
+        retain_until = {};
         const auto mask = buttonMask(sdl_button);
         if (down)
             state.buttons |= mask;
@@ -71,6 +79,7 @@ namespace lfs::vis::input {
 
     void injectPointerWheel() {
         std::lock_guard lock(state_mutex);
+        retain_until = {};
         active = true;
         pending.push_back({PendingKind::Wheel, state});
     }
@@ -115,7 +124,7 @@ namespace lfs::vis::input {
 
     void finishInjectedPointerFrame() {
         std::lock_guard lock(state_mutex);
-        if (pending.empty() && state.buttons == 0) {
+        if (pending.empty() && state.buttons == 0 && std::chrono::steady_clock::now() >= retain_until) {
             active = false;
             if (modifiers_active) {
                 SDL_SetModState(previous_modifiers);

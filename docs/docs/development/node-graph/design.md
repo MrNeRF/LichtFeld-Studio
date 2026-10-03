@@ -127,12 +127,12 @@ treat `selection >= 0.5` as selected.
 ```
 NodeTypeInfo {
   id            "lfs.set_colour" (built-ins), "<plugin>.<name>" (plugins)
-  label, category, description, version
+  label, category, description, help, version
   tree_types    {"lfs.geometry"}
   inputs/outputs  SocketDecl{identifier, label, type, default, min, max,
-                             step, field, multi_input, hide_value}
+                             step, field, multi_input, hide_value, description}
   properties    PropertyDecl{identifier, label, kind (enum|string|int|float|bool|data),
-                             default, items, min, max}
+                             default, items, min, max, description}
   evaluate      fn(NodeContext&) -> void       (C++ or Python)
   upgrade       optional fn(json params, int from_version) -> json
 }
@@ -141,6 +141,13 @@ NodeTypeInfo {
 The editor UI and the property panels are generated from these
 descriptors; no per-node UI code exists. `lichtfeld.nodes.node_types()`
 returns them as JSON.
+
+Built-in English text lives in the `nodes` catalogue in `locales/en.json`,
+embedded into core at build time for headless use. Presentation uses cached
+localised descriptor copies, invalidated by the language generation; evaluation
+retains untranslated descriptors and exact identifiers. Plug-ins supply their
+own strings. `description` is one scene-focused sentence; `help` is optional
+plain text with short usage, starting-value and caveat lines.
 
 ### 3.5 Trees, groups, modifiers
 

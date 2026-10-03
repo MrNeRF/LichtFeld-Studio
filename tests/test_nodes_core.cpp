@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <numbers>
@@ -176,6 +177,32 @@ namespace {
         EXPECT_GE(nodes.list().size(), 45u);
         EXPECT_FALSE(nodes.find("lfs.object_info"));
         EXPECT_TRUE(nodes.find("lfs.mesh_to_splats"));
+    }
+
+    TEST(NodesCoreMetadata, BuiltinHelpIsCompleteWithoutUiInitialisation) {
+        NodeTypeRegistry registry;
+        register_builtin_nodes(registry);
+        for (const auto& node : registry.list()) {
+            SCOPED_TRACE(node->id);
+            EXPECT_FALSE(node->description.empty());
+            const auto characters = std::ranges::count_if(node->description, [](unsigned char c) {
+                return (c & 0xc0) != 0x80;
+            });
+            EXPECT_LE(characters, 110);
+            for (const auto* banned : {"log-scale", "geometric mean", "field", "tensor", "domain"})
+                EXPECT_EQ(node->description.find(banned), std::string::npos);
+            const auto lines = std::ranges::count(node->help, '\n') + 1;
+            EXPECT_GE(lines, 2);
+            EXPECT_LE(lines, 4);
+            for (const auto& socket : node->inputs)
+                EXPECT_FALSE(socket.description.empty()) << socket.identifier;
+            for (const auto& socket : node->outputs)
+                EXPECT_FALSE(socket.description.empty()) << socket.identifier;
+            for (const auto& property : node->properties)
+                EXPECT_FALSE(property.description.empty()) << property.identifier;
+        }
+        EXPECT_EQ(registry.find("lfs.scale_clamp")->description,
+                  "Fixes needle- and pancake-shaped Gaussians that show up as streaks when you move away from the capture path.");
     }
 
     TEST(NodesCoreMetadata, JsonRoundTripPreservesMissingNodeAndToleratesUnknownKeys) {

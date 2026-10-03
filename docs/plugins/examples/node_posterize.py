@@ -7,13 +7,17 @@ class PosterizeExample(lf.nodes.Node):
     id = "example.posterize"
     label = "Posterize Example"
     category = "Colour"
+    description = "Reduces your scene's colours to a small number of flat steps."
+    help = "Start with Levels 4 for four steps per colour channel.\nConnect a Selection to limit the effect."
 
     inputs = [
-        lf.nodes.Input("Geometry", "geometry"),
-        lf.nodes.Input("Selection", "float", 1.0, min=0.0, max=1.0, field=True),
-        lf.nodes.Input("Levels", "int", 4, min=2, max=32),
+        lf.nodes.Input("Geometry", "geometry", description="Splats you want to posterise. Connect a source; unconnected means no geometry."),
+        lf.nodes.Input("Selection", "float", 1.0, min=0.0, max=1.0, field=True,
+                       description="Effect strength, 0–1: 0 keeps the original, 1 fully posterises it. Unconnected means everything."),
+        lf.nodes.Input("Levels", "int", 4, min=2, max=32,
+                       description="Colour steps per channel, 2–32. 2 gives low and high values; 4 is the default."),
     ]
-    outputs = [lf.nodes.Output("Geometry", "geometry")]
+    outputs = [lf.nodes.Output("Geometry", "geometry", description="Posterised splats, with selected camera-dependent colour faded out.")]
 
     def execute(self, ctx):
         geometry = ctx.input("Geometry")

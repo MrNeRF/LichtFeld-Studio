@@ -47,7 +47,7 @@ namespace lfs::nodes::builtin {
     SocketDecl out(std::string, std::string);
     PropertyDecl prop(std::string, PropertyKind, nlohmann::json, std::vector<std::string> items = {});
     std::vector<SocketDecl> geometry_inputs(std::vector<SocketDecl>);
-    NodeTypeInfo type(std::string, std::string, std::string, std::string, std::vector<SocketDecl>,
+    NodeTypeInfo type(std::string, std::string, std::vector<SocketDecl>,
                       std::vector<SocketDecl>, std::function<void(NodeContext&)>,
                       std::vector<PropertyDecl> properties = {});
     void register_type(NodeTypeRegistry&, NodeTypeInfo);

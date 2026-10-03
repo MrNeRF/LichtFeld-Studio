@@ -221,14 +221,12 @@ namespace lfs::nodes::builtin {
         return extra;
     }
 
-    NodeTypeInfo type(std::string id, std::string label, std::string category, std::string description,
+    NodeTypeInfo type(std::string id, std::string category,
                       std::vector<SocketDecl> inputs, std::vector<SocketDecl> outputs,
                       std::function<void(NodeContext&)> evaluate, std::vector<PropertyDecl> properties) {
         NodeTypeInfo result;
         result.id = std::move(id);
-        result.label = std::move(label);
         result.category = std::move(category);
-        result.description = std::move(description);
         result.inputs = std::move(inputs);
         result.outputs = std::move(outputs);
         result.properties = std::move(properties);
@@ -237,6 +235,7 @@ namespace lfs::nodes::builtin {
     }
 
     void register_type(NodeTypeRegistry& registry, NodeTypeInfo info) {
+        set_builtin_node_text(info);
         registry.register_type(std::move(info));
     }
 

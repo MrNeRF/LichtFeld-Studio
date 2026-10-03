@@ -298,11 +298,13 @@ namespace lfs::python {
             std::optional<double> min;
             std::optional<double> max;
             bool field = false;
+            std::string description;
         };
 
         struct PyOutputDecl {
             std::string identifier;
             std::string type;
+            std::string description;
         };
 
         struct PyPropertyDecl {
@@ -310,6 +312,7 @@ namespace lfs::python {
             std::string type;
             nlohmann::json default_value;
             std::vector<std::string> items;
+            std::string description;
         };
 
         struct PyNodeBase {};
@@ -400,6 +403,7 @@ namespace lfs::python {
             info.description = nb::hasattr(cls, "description")
                                    ? nb::cast<std::string>(cls.attr("description"))
                                    : std::string{};
+            info.help = nb::hasattr(cls, "help") ? nb::cast<std::string>(cls.attr("help")) : std::string{};
             std::unordered_set<std::string> declared;
             if (!nb::hasattr(cls, "execute") || !PyCallable_Check(cls.attr("execute").ptr()))
                 throw nb::type_error("Node classes must implement execute(self, ctx)");
@@ -412,12 +416,14 @@ namespace lfs::python {
                     info.inputs.push_back({identifier, identifier, declaration.type,
                                            declaration.default_value, declaration.min,
                                            declaration.max, std::nullopt, declaration.field});
+                    info.inputs.back().description = declaration.description;
                 } else if (nb::isinstance<PyOutputDecl>(value)) {
                     const auto& declaration = nb::cast<const PyOutputDecl&>(value);
                     const auto& identifier = declaration.identifier;
                     if (collection != "outputs" || identifier.empty() || !declared.insert("output:" + identifier).second)
                         throw nb::value_error("outputs must contain Output declarations with unique, non-empty identifiers");
                     info.outputs.push_back({identifier, identifier, declaration.type});
+                    info.outputs.back().description = declaration.description;
                 } else if (nb::isinstance<PyPropertyDecl>(value)) {
                     const auto& declaration = nb::cast<const PyPropertyDecl&>(value);
                     const auto& identifier = declaration.identifier;
@@ -434,6 +440,7 @@ namespace lfs::python {
                         kind = PropertyKind::Enum;
                     info.properties.push_back({identifier, identifier, kind,
                                                declaration.default_value, declaration.items});
+                    info.properties.back().description = declaration.description;
                 } else {
                     throw nb::type_error("Node declarations must be Input, Output or Property objects in their corresponding lists");
                 }
@@ -454,6 +461,8 @@ namespace lfs::python {
                 }
             }
             const std::string type_id = info.id;
+            if (nb::cast<std::string>(cls.attr("__module__")) == "lfs_plugins.node_posterize" && info.id == "lfs.posterize")
+                set_builtin_node_text(info);
             info.evaluate = [type_id](NodeContext& context) {
                 SafeClass type;
                 {
@@ -603,11 +612,11 @@ namespace lfs::python {
             .def("replace", &PyGeometry::replace);
 
         nb::class_<PyInputDecl>(module, "Input")
-            .def("__init__", [](PyInputDecl* self, std::string identifier, std::string type, nb::object default_value, std::optional<double> min, std::optional<double> max, bool field) { new (self) PyInputDecl{std::move(identifier), socket_type(std::move(type)), python_to_value(default_value), min, max, field}; }, nb::arg("identifier"), nb::arg("type"), nb::arg("default") = nb::none(), nb::arg("min") = nb::none(), nb::arg("max") = nb::none(), nb::arg("field") = false);
+            .def("__init__", [](PyInputDecl* self, std::string identifier, std::string type, nb::object default_value, std::optional<double> min, std::optional<double> max, bool field, std::string description) { new (self) PyInputDecl{std::move(identifier), socket_type(std::move(type)), python_to_value(default_value), min, max, field, std::move(description)}; }, nb::arg("identifier"), nb::arg("type"), nb::arg("default") = nb::none(), nb::arg("min") = nb::none(), nb::arg("max") = nb::none(), nb::arg("field") = false, nb::arg("description") = "");
         nb::class_<PyOutputDecl>(module, "Output")
-            .def("__init__", [](PyOutputDecl* self, std::string identifier, std::string type) { new (self) PyOutputDecl{std::move(identifier), socket_type(std::move(type))}; }, nb::arg("identifier"), nb::arg("type"));
+            .def("__init__", [](PyOutputDecl* self, std::string identifier, std::string type, std::string description) { new (self) PyOutputDecl{std::move(identifier), socket_type(std::move(type)), std::move(description)}; }, nb::arg("identifier"), nb::arg("type"), nb::arg("description") = "");
         nb::class_<PyPropertyDecl>(module, "Property")
-            .def("__init__", [](PyPropertyDecl* self, std::string identifier, std::string type, nb::object default_value, std::vector<std::string> items) { new (self) PyPropertyDecl{std::move(identifier), std::move(type), python_to_json(default_value), std::move(items)}; }, nb::arg("identifier"), nb::arg("type"), nb::arg("default") = nb::none(), nb::arg("items") = std::vector<std::string>{});
+            .def("__init__", [](PyPropertyDecl* self, std::string identifier, std::string type, nb::object default_value, std::vector<std::string> items, std::string description) { new (self) PyPropertyDecl{std::move(identifier), std::move(type), python_to_json(default_value), std::move(items), std::move(description)}; }, nb::arg("identifier"), nb::arg("type"), nb::arg("default") = nb::none(), nb::arg("items") = std::vector<std::string>{}, nb::arg("description") = "");
         nb::class_<PyNodeBase>(module, "Node", nb::dynamic_attr()).def(nb::init<>());
         nb::class_<PyNodeContext>(module, "NodeContext")
             .def("input", &PyNodeContext::input)
@@ -797,12 +806,13 @@ namespace lfs::python {
 
         module.def("node_types", [] {
             nb::list result;
-            for (const auto& type : active_registry().list()) {
+            for (const auto& type : active_registry().list_localized()) {
                 nb::dict item;
                 item["id"] = type->id;
                 item["label"] = type->label;
                 item["category"] = type->category;
                 item["description"] = type->description;
+                item["help"] = type->help;
                 item["version"] = type->version;
                 nb::list inputs;
                 for (const auto& socket : type->inputs) {
@@ -819,6 +829,7 @@ namespace lfs::python {
                     descriptor["field"] = socket.field;
                     descriptor["multi_input"] = socket.multi_input;
                     descriptor["hide_value"] = socket.hide_value;
+                    descriptor["description"] = socket.description;
                     inputs.append(std::move(descriptor));
                 }
                 item["inputs"] = std::move(inputs);
@@ -829,6 +840,7 @@ namespace lfs::python {
                     descriptor["label"] = socket.label;
                     descriptor["type"] = socket.type;
                     descriptor["multi_input"] = socket.multi_input;
+                    descriptor["description"] = socket.description;
                     outputs.append(std::move(descriptor));
                 }
                 item["outputs"] = std::move(outputs);
@@ -837,6 +849,7 @@ namespace lfs::python {
                     nb::dict descriptor;
                     descriptor["identifier"] = property.identifier;
                     descriptor["label"] = property.label;
+                    descriptor["description"] = property.description;
                     descriptor["kind"] = static_cast<int>(property.kind);
                     descriptor["default"] = json_to_python(property.default_value);
                     descriptor["items"] = property.items;

@@ -607,9 +607,7 @@ namespace lfs::vis {
     void ModifierManager::registerVisualizerNodes() {
         NodeTypeInfo object_info;
         object_info.id = "lfs.object_info";
-        object_info.label = "Object Info";
         object_info.category = "Input";
-        object_info.description = "Read effective geometry from another scene node.";
         object_info.outputs = {SocketDecl{"Geometry", "Geometry", std::string(lfs::nodes::GEOMETRY_SOCKET)}};
         object_info.properties = {
             PropertyDecl{"object", "Object", PropertyKind::String, ""},
@@ -628,6 +626,7 @@ namespace lfs::vis {
                 throw NodeError("Object Info target produced no geometry");
             context.set_output("Geometry", std::move(*geometry));
         };
+        lfs::nodes::set_builtin_node_text(object_info);
         registry_.register_type(std::move(object_info));
     }
 

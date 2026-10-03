@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import json
+import importlib.util
+from pathlib import Path
 
 import pytest
 
@@ -46,6 +48,84 @@ def test_types_and_tree_json_round_trip(lf):
     assert payload["interface"]["inputs"][1]["identifier"] == "Strength"
     assert payload["interface"]["inputs"][1]["min"] == 0.0
     assert payload["interface"]["inputs"][1]["max"] == 1.0
+
+
+def test_builtin_help_contract(lf):
+    root = Path(__file__).resolve().parents[2]
+    english = json.loads((root / "src/visualizer/gui/resources/locales/en.json").read_text())["nodes"]
+    for node in lf.nodes.node_types():
+        if node["id"][4:] not in english:
+            continue
+        assert 0 < len(node["description"]) <= 110, node["id"]
+        for banned in ("log-scale", "geometric mean", "field", "tensor", "domain"):
+            assert banned not in node["description"].lower(), (node["id"], banned)
+        assert 2 <= len(node["help"].splitlines()) <= 4, node["id"]
+        text = english[node["id"][4:]]
+        assert node["description"] == text["description"]
+        assert node["help"] == text["help"]
+        for collection in ("inputs", "outputs", "properties"):
+            for declaration in node[collection]:
+                message = declaration["description"]
+                assert message == text[collection][declaration["identifier"]]
+                # This supplied model text is intentionally verbatim, at 139 characters.
+                limit = 139 if (node["id"], declaration["identifier"]) == ("lfs.remove_floaters", "Isolation Radius") else 120
+                assert 0 < len(message) <= limit, (node["id"], declaration["identifier"])
+
+
+def test_builtin_help_translations_are_complete_and_compact():
+    root = Path(__file__).resolve().parents[2]
+    for locale in (root / "src/visualizer/gui/resources/locales").glob("*.json"):
+        for node_id, node in json.loads(locale.read_text(encoding="utf-8"))["nodes"].items():
+            assert node["label"].strip(), (locale.name, node_id)
+            assert 0 < len(node["description"]) <= 110, (locale.name, node_id)
+            assert 2 <= len(node["help"].splitlines()) <= 4, (locale.name, node_id)
+            for collection in ("inputs", "outputs", "properties"):
+                for identifier, message in node[collection].items():
+                    limit = 139 if (locale.stem, node_id, identifier) == ("en", "remove_floaters", "Isolation Radius") else 120
+                    assert 0 < len(message) <= limit, (locale.name, node_id, identifier)
+
+
+def test_python_help_declarations_round_trip(lf):
+    class HelpNode(lf.nodes.Node):
+        id = "tests.help"
+        description = "Plugin description, unchanged."
+        help = "First line.\nSecond line."
+        inputs = [lf.nodes.Input("Amount", "float", 1.0, description="Your input help.")]
+        outputs = [lf.nodes.Output("Result", "float", description="Your output help.")]
+        properties = [lf.nodes.Property("Mode", "enum", "first", ["first", "second"], description="Your setting help.")]
+
+        def execute(self, ctx):
+            return {"Result": ctx.input("Amount")}
+
+    lf.nodes.register_node(HelpNode)
+    try:
+        descriptor = next(node for node in lf.nodes.node_types() if node["id"] == HelpNode.id)
+        assert descriptor["description"] == HelpNode.description
+        assert descriptor["help"] == HelpNode.help
+        assert descriptor["inputs"][0]["description"] == "Your input help."
+        assert descriptor["outputs"][0]["description"] == "Your output help."
+        assert descriptor["properties"][0]["description"] == "Your setting help."
+    finally:
+        lf.nodes.unregister_node(HelpNode.id)
+
+
+def test_generated_node_reference_is_current(lf):
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location("node_reference", root / "tools/generate_node_reference.py")
+    reference = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reference)
+    descriptors = {node["id"]: node for node in lf.nodes.node_types() if node["id"].startswith("lfs.")}
+    for node in descriptors.values():
+        path = reference.DESTINATION / (node["id"] + ".md")
+        assert path.read_text(encoding="utf-8") == reference.render_node(node), node["id"]
+    # Host-only descriptors are checked against the live MCP registry in C++.
+    # Include their page headings when checking the complete index headlessly.
+    for page in reference.DESTINATION.glob("lfs.*.md"):
+        if page.stem not in descriptors:
+            lines = page.read_text(encoding="utf-8").splitlines()
+            descriptors[page.stem] = dict(id=page.stem, label=lines[1][2:],
+                                           description=lines[3], category=lines[5].split(" · ", 1)[1])
+    assert (reference.DESTINATION / "index.md").read_text(encoding="utf-8") == reference.render_index(descriptors.values())
 
 
 def test_builtin_python_posterize_evaluates(lf, numpy):

@@ -24,6 +24,21 @@
 .target-type, .node-description, .node-eval-time, #node-canvas-notice {
     color: @{text_dim};
 }
+.node-help-text, .node-field-help, .node-add-preview-help {
+    color: @{text_dim};
+}
+.node-help-toggle, .node-learn-more {
+    background-color: transparent;
+    color: @{text};
+}
+.node-help-toggle:hover, .node-learn-more:hover {
+    color: @{primary};
+}
+#node-add-preview {
+    background-color: @{surface};
+    border-color: @{border};
+    color: @{text};
+}
 #node-editor-sidebar {
     background-color: @{surface};
     border-left-color: @{border};

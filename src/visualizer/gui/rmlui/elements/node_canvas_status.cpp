@@ -90,9 +90,20 @@ namespace lfs::vis::gui {
             std::chrono::steady_clock::now() - progress.started_at >= std::chrono::milliseconds(80)) {
             if (progress.label.empty())
                 return LOC("node_editor.updating");
+            auto label = progress.label;
+            const auto* stack = manager_->stack(*host);
+            const lfs::nodes::NodeTree* tree = nullptr;
+            if (stack) {
+                const auto modifier = std::ranges::find(stack->modifiers, progress.modifier, &Modifier::uuid);
+                if (modifier != stack->modifiers.end())
+                    tree = manager_->tree(modifier->tree_uuid);
+            }
+            const auto* node = tree ? tree->find_node(progress.node) : nullptr;
+            if (const auto type = node ? manager_->registry().find_localized(node->type_id) : nullptr)
+                label = type->label;
             const auto current = std::min(progress.completed + 1, progress.total);
             return std::vformat(LOC("node_editor.updating_node"),
-                                std::make_format_args(current, progress.total, progress.label));
+                                std::make_format_args(current, progress.total, label));
         }
         const auto* result = manager_->lastResult(*host);
         if (!result)

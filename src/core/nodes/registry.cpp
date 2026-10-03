@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/nodes/registry.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 
 #include <algorithm>
 #include <mutex>
@@ -86,6 +87,7 @@ namespace lfs::nodes {
 
     bool NodeTypeRegistry::unregister_type(std::string_view id) {
         std::unique_lock lock(mutex_);
+        localized_types_.erase(std::string(id));
         return types_.erase(std::string(id)) != 0;
     }
 
@@ -105,6 +107,54 @@ namespace lfs::nodes {
         std::ranges::sort(result, {}, [](const auto& info) -> const std::string& {
             return info->id;
         });
+        return result;
+    }
+
+    std::shared_ptr<const NodeTypeInfo> NodeTypeRegistry::find_localized(std::string_view id) const {
+        auto& locale = event::LocalizationManager::getInstance();
+        std::unique_lock lock(mutex_);
+        const auto source = types_.find(std::string(id));
+        if (source == types_.end())
+            return {};
+        if (source->second->localization_key.empty())
+            return source->second;
+        const auto generation = locale.getCurrentLanguageGeneration();
+        if (generation != language_generation_) {
+            localized_types_.clear();
+            language_generation_ = generation;
+        }
+        if (const auto found = localized_types_.find(source->first); found != localized_types_.end())
+            return found->second;
+        auto info = std::make_shared<NodeTypeInfo>(*source->second);
+        const auto translate = [&](std::string& value, const std::string& suffix) {
+            const auto key = info->localization_key + "." + suffix;
+            if (locale.hasKey(key))
+                value = LOC(key);
+        };
+        translate(info->label, "label");
+        translate(info->description, "description");
+        translate(info->help, "help");
+        for (auto& socket : info->inputs) {
+            translate(socket.label, "input_labels." + socket.identifier);
+            translate(socket.description, "inputs." + socket.identifier);
+        }
+        for (auto& socket : info->outputs) {
+            translate(socket.label, "output_labels." + socket.identifier);
+            translate(socket.description, "outputs." + socket.identifier);
+        }
+        for (auto& property : info->properties) {
+            translate(property.label, "property_labels." + property.identifier);
+            translate(property.description, "properties." + property.identifier);
+        }
+        localized_types_[source->first] = info;
+        return info;
+    }
+
+    std::vector<std::shared_ptr<const NodeTypeInfo>> NodeTypeRegistry::list_localized() const {
+        auto result = list();
+        for (auto& type : result)
+            type = find_localized(type->id);
+        std::erase(result, nullptr);
         return result;
     }
 

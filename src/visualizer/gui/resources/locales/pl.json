@@ -3155,8 +3155,6 @@
   "runtime.import_batch_kept": "Pozostałe pliki zostały wczytane i nadal są dostępne w scenie.",
   "runtime.import_render_failed": "Nie udało się przygotować tego pliku do wyświetlenia",
   "nodes.edit_stored_splats_blocked": "Zastosuj lub ukryj modyfikatory węzłów, aby edytować zapisane splaty",
-  "nodes.posterize.label": "Posteryzacja",
-  "nodes.posterize.description": "Zmniejsza liczbę poziomów kolorów.",
   "editor.node_editor": "Edytor węzłów",
   "node_editor.toggle": "Przełącz edytor węzłów",
   "node_editor.preview_selection": "Preview Selection",
@@ -3211,5 +3209,1269 @@
   "node_editor.queued": "W kolejce",
   "node_editor.no_results": "Brak pasujących węzłów",
   "node_editor.optional_selection": "Opcjonalne: bez połączenia zaznaczone jest wszystko",
-  "node_editor.captured_count": "Przechwycono: {} zaznaczonych"
+  "node_editor.captured_count": "Przechwycono: {} zaznaczonych",
+  "nodes": {
+    "boolean": {
+      "label": "Wartość logiczna",
+      "description": "Udostępnia jeden przełącznik do sterowania kilkoma połączonymi ustawieniami.",
+      "help": "Użyj go do wspólnego włączania opcji.\nPołącz Wartość z wejściem logicznym; domyślnie jest wyłączona.",
+      "inputs": {
+        "Value": "Włącza lub wyłącza wartość. Domyślnie wyłączone; włączone oznacza zaznaczenie wszystkiego."
+      },
+      "input_labels": {
+        "Value": "Wartość"
+      },
+      "outputs": {
+        "Value": "Zwraca włączone dla zaznaczonych elementów i wyłączone dla pozostałych."
+      },
+      "output_labels": {
+        "Value": "Wartość"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "boolean_math": {
+      "label": "Operacje logiczne",
+      "description": "Łączy zaznaczenia przez część wspólną, sumę lub odwrócenie.",
+      "help": "Użyj I dla części wspólnej albo Lub dla dowolnego zaznaczenia.\nOperacja Nie odwraca A i pomija B.",
+      "inputs": {
+        "A": "Pierwsza wartość logiczna. Domyślnie wyłączona; podłącz zaznaczenie, aby je połączyć.",
+        "B": "Druga wartość logiczna. Domyślnie wyłączona; operacja Nie jej nie używa."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Result": "Zwraca włączone dla zaznaczonych elementów i wyłączone dla pozostałych."
+      },
+      "output_labels": {
+        "Result": "Wynik"
+      },
+      "properties": {
+        "operation": "Wybiera sposób łączenia zaznaczeń. I zachowuje część wspólną; Nie odwraca tylko A."
+      },
+      "property_labels": {
+        "operation": "Operacja"
+      }
+    },
+    "box_selection": {
+      "label": "Zaznaczenie pudełkiem",
+      "description": "Zaznacza część sceny wewnątrz pudełka, opcjonalnie z miękkimi brzegami.",
+      "help": "Przesuń Środek i dopasuj Rozmiar do obiektu.\nZacznij od Zanikania 0, aby uzyskać ostrą granicę.",
+      "inputs": {
+        "Centre": "Środek X/Y/Z w lokalnych jednostkach sceny. (0, 0, 0) oznacza początek układu.",
+        "Size": "Pełna szerokość, wysokość i głębokość w jednostkach sceny, nieujemne. (1, 1, 1) daje sześcian jednostkowy.",
+        "Rotation": "Obrót X/Y/Z w stopniach. (0, 0, 0) pozostawia osie bez obrotu.",
+        "Falloff": "Szerokość miękkiej krawędzi poza bryłą w jednostkach sceny. 0 daje ostrą granicę."
+      },
+      "input_labels": {
+        "Centre": "Środek",
+        "Size": "Rozmiar",
+        "Rotation": "Obrót",
+        "Falloff": "Zanikanie"
+      },
+      "outputs": {
+        "Selection": "Siła zaznaczenia: 0 pomija element, 1 zaznacza go w pełni; wartości pośrednie zmiękczają krawędź."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour": {
+      "label": "Kolor",
+      "description": "Udostępnia jeden kolor do współdzielenia przez połączone węzły.",
+      "help": "Wybierz kolor i podłącz do ustawień, które mają go współdzielić.\nDomyślny jest średni szary.",
+      "inputs": {
+        "Colour": "Składowe RGB: 0 to czerń, 1 to biel. Domyślne (0,5, 0,5, 0,5) daje szarość."
+      },
+      "input_labels": {
+        "Colour": "Kolor"
+      },
+      "outputs": {
+        "Colour": "Zwraca kolor RGB do dalszej edycji. Składowe mogą wykraczać poza 0–1."
+      },
+      "output_labels": {
+        "Colour": "Kolor"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_attribute": {
+      "label": "Atrybut koloru",
+      "description": "Odczytuje kolor bazowy każdego splatu lub punktu do edycji i zaznaczania według koloru.",
+      "help": "Połącz Kolor z Rozdziel kolor, aby sprawdzić kanały.\nOdczytujesz kolor bazowy, a nie odbicia zależne od widoku.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Colour": "Zwraca kolor RGB do dalszej edycji. Składowe mogą wykraczać poza 0–1."
+      },
+      "output_labels": {
+        "Colour": "Kolor"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_correct": {
+      "label": "Korekcja koloru",
+      "description": "Zmienia jasność, kontrast i balans kolorów, zachowując szczegóły sceny.",
+      "help": "Zacznij od Ekspozycji, potem ustaw Kontrast i Nasycenie.\nPodłącz Zaznaczenie, aby skorygować tylko część sceny.\nWyśrodkuj koła, aby cienie, półtony i światła były neutralne.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Exposure": "Jasność w stopniach ekspozycji. 0 bez zmian; +1 podwaja jasność, −1 zmniejsza ją o połowę.",
+        "Black Point": "Jasność wejściowa zamieniana na czerń. Domyślne 0 zachowuje czerń; wyższe wartości pogłębiają cienie.",
+        "White Point": "Jasność wejściowa zamieniana na biel. Domyślne 1 zachowuje biel; niższe wartości rozjaśniają obraz.",
+        "Midpoint": "Jasność wejściowa zamieniana na średnią szarość, 0,01–0,99. 0,5 jest neutralne; niższe rozjaśniają półtony.",
+        "Contrast": "Siła kontrastu. 0 daje jednolitą szarość, 1 bez zmian, wartości powyżej 1 zwiększają kontrast.",
+        "Saturation": "Siła koloru. 0 daje szarość, 1 bez zmian, wartości powyżej 1 wzmacniają kolory.",
+        "Hue Shift": "Przesunięcie odcienia w stopniach. 0 bez zmian; 180 daje kolor przeciwny na kole barw.",
+        "Temperature": "Balans chłodny/ciepły, −1–1. 0 neutralnie; wartości ujemne chłodzą, dodatnie ocieplają.",
+        "Tint": "Balans zieleni i magenty, −1–1. 0 neutralnie; ujemne dodają magentę, dodatnie zieleń.",
+        "Shadows": "Korekta RGB cieni, −1–1 na kanał. 0 neutralnie; wartości ujemne odejmują dany kolor.",
+        "Midtones": "Korekta RGB półtonów, −1–1 na kanał. 0 neutralnie; wartości dodatnie dodają dany kolor.",
+        "Highlights": "Korekta RGB świateł, −1–1 na kanał. 0 neutralnie; wartości dodatnie dodają dany kolor.",
+        "Gamma": "Krzywa jasności, powyżej 0. 1 bez zmian; powyżej 1 rozjaśnia, poniżej 1 przyciemnia."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Exposure": "Ekspozycja",
+        "Black Point": "Punkt czerni",
+        "White Point": "Punkt bieli",
+        "Midpoint": "Punkt środkowy",
+        "Contrast": "Kontrast",
+        "Saturation": "Nasycenie",
+        "Hue Shift": "Przesunięcie odcienia",
+        "Temperature": "Temperatura",
+        "Tint": "Zabarwienie",
+        "Shadows": "Cienie",
+        "Midtones": "Półtony",
+        "Highlights": "Światła",
+        "Gamma": "Gamma"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "auto_range": "Automatycznie dobiera czerń i biel. Domyślnie wyłączone, aby używać ręcznych punktów czerni i bieli."
+      },
+      "property_labels": {
+        "auto_range": "Zakres automatyczny"
+      }
+    },
+    "colour_key": {
+      "label": "Klucz koloru",
+      "description": "Zaznacza części sceny o kolorach zbliżonych do wybranego.",
+      "help": "Wybierz Kolor i zwiększaj Tolerancję, aż obejmiesz cel.\nDodaj trochę Miękkości, aby uniknąć ostrej krawędzi.",
+      "inputs": {
+        "Colour": "Poszukiwany kolor RGB, 0–1 na kanał. Domyślnie czarny; wybierz kolor obiektu.",
+        "Tolerance": "Dopuszczalna różnica RGB. 0 trafia tylko w dokładny kolor; domyślne 0,1 obejmuje małe różnice.",
+        "Softness": "Szerokość miękkiej granicy koloru. 0 daje ostrą granicę; większe wartości łagodzą przejście."
+      },
+      "input_labels": {
+        "Colour": "Kolor",
+        "Tolerance": "Tolerancja",
+        "Softness": "Miękkość"
+      },
+      "outputs": {
+        "Selection": "Siła zaznaczenia: 0 pomija element, 1 zaznacza go w pełni; wartości pośrednie zmiękczają krawędź."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "combine_colour": {
+      "label": "Połącz kolor",
+      "description": "Tworzy kolor z oddzielnych wartości RGB lub HSV.",
+      "help": "Podłącz trzy wartości i wybierz RGB albo HSV.\nW HSV wejścia R, G i B oznaczają odcień, nasycenie i jasność.",
+      "inputs": {
+        "R": "Czerwień w RGB lub odcień w HSV, 0–1. Domyślne 0 nie dodaje czerwieni lub ustawia czerwony odcień.",
+        "G": "Zieleń w RGB lub nasycenie w HSV, 0–1. Domyślne 0 nie dodaje zieleni lub daje szarość.",
+        "B": "Niebieski w RGB lub jasność w HSV, 0–1. Domyślne 0 nie dodaje niebieskiego lub daje czerń."
+      },
+      "input_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "outputs": {
+        "Colour": "Zwraca kolor RGB do dalszej edycji. Składowe mogą wykraczać poza 0–1."
+      },
+      "output_labels": {
+        "Colour": "Kolor"
+      },
+      "properties": {
+        "mode": "Wybiera składowe RGB lub HSV. Domyślnie RGB: czerwony, zielony i niebieski."
+      },
+      "property_labels": {
+        "mode": "Tryb"
+      }
+    },
+    "combine_xyz": {
+      "label": "Połącz XYZ",
+      "description": "Tworzy pozycję lub kierunek z wartości X, Y i Z.",
+      "help": "Zmieniaj jedną współrzędną, zachowując pozostałe dwie.\nPołącz wynik z wejściem Wektor.",
+      "inputs": {
+        "X": "Składowa X w jednostkach następnej operacji. Domyślnie 0.",
+        "Y": "Składowa Y w jednostkach następnej operacji. Domyślnie 0.",
+        "Z": "Składowa Z w jednostkach następnej operacji. Domyślnie 0."
+      },
+      "input_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "outputs": {
+        "Vector": "Wynikowe składowe X/Y/Z w jednostkach operacji."
+      },
+      "output_labels": {
+        "Vector": "Wektor"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "compare": {
+      "label": "Porównaj",
+      "description": "Zaznacza części sceny przez porównanie dwóch wartości, na przykład wysokości i poziomu gruntu.",
+      "help": "Podłącz wysokość do A, poziom gruntu do B i wybierz Mniejsze niż.\nEpsilon dotyczy tylko Równe i Różne.",
+      "inputs": {
+        "A": "Pierwsza liczba w jednostkach operacji. Domyślnie 0.",
+        "B": "Druga liczba w jednostkach operacji. Domyślnie 0.",
+        "Epsilon": "Traktuje liczby jako równe w tej tolerancji, w jednostkach A/B. Domyślne 0,001; 0 wymaga dokładnej równości."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Epsilon": "Epsilon"
+      },
+      "outputs": {
+        "Result": "Zwraca włączone dla zaznaczonych elementów i wyłączone dla pozostałych."
+      },
+      "output_labels": {
+        "Result": "Wynik"
+      },
+      "properties": {
+        "operation": "Wybiera porównanie. Domyślnie Równe; Mniejsze i Większe porównują A z B."
+      },
+      "property_labels": {
+        "operation": "Operacja"
+      }
+    },
+    "decimate": {
+      "label": "Przerzedź",
+      "description": "Zmniejsza liczbę splatów, zachowując większe i bardziej nieprzezroczyste w zaznaczeniu.",
+      "help": "Zacznij od Zachowanej części 0,5, aby zostawić około połowy.\nNiezaznaczone splaty zostają; jednakowe wyniki mogą zachować więcej niż zakładano.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Elementy do przerzedzenia: co najmniej 0,5 oznacza zaznaczenie. Bez połączenia obejmuje wszystko.",
+        "Keep Fraction": "Część zaznaczonych elementów do zachowania, 0,001–1. 0,5 zachowuje połowę; 1 zachowuje wszystko."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Keep Fraction": "Zachowana część"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "delete_geometry": {
+      "label": "Usuń geometrię",
+      "description": "Usuwa ze sceny zaznaczone splaty, punkty lub wierzchołki siatki.",
+      "help": "Podłącz zaznaczenie przed podłączeniem Geometrii.\nBez połączenia Zaznaczenia usuniesz wszystko, również ściany dotykające usuniętych wierzchołków.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Elementy do usunięcia: co najmniej 0,5 oznacza zaznaczenie. Bez połączenia usuwa wszystko."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "ellipsoid_selection": {
+      "label": "Zaznaczenie elipsoidą",
+      "description": "Zaznacza kulisty lub wydłużony obszar sceny, opcjonalnie z miękkimi brzegami.",
+      "help": "Ustaw Środek i Promienie wokół celu.\nRówne promienie dają kulę; Zanikanie 0 daje ostrą granicę.",
+      "inputs": {
+        "Centre": "Środek X/Y/Z w lokalnych jednostkach sceny. (0, 0, 0) oznacza początek układu.",
+        "Radii": "Promienie X/Y/Z w jednostkach sceny, nieujemne. (1, 1, 1) daje sferę jednostkową.",
+        "Rotation": "Obrót X/Y/Z w stopniach. (0, 0, 0) pozostawia osie bez obrotu.",
+        "Falloff": "Szerokość miękkiej krawędzi jako część promieni. 0 daje ostrą granicę."
+      },
+      "input_labels": {
+        "Centre": "Środek",
+        "Radii": "Promienie",
+        "Rotation": "Obrót",
+        "Falloff": "Zanikanie"
+      },
+      "outputs": {
+        "Selection": "Siła zaznaczenia: 0 pomija element, 1 zaznacza go w pełni; wartości pośrednie zmiękczają krawędź."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_input": {
+      "label": "Wejście grupy",
+      "description": "Wprowadza geometrię obiektu gospodarza do grafu węzłów.",
+      "help": "Podłącz Geometrię do pierwszego węzła edycji.\nW stosie otrzymujesz wynik poprzedniego modyfikatora.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Geometria obiektu docelowego lub wynik poprzedniego modyfikatora."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_output": {
+      "label": "Wyjście grupy",
+      "description": "Zwraca końcową geometrię grafu węzłów do sceny.",
+      "help": "Podłącz ostatni węzeł edycji do Geometrii.\nTylko gałąź docierająca do tego węzła wpływa na wynik.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste."
+      },
+      "input_labels": {
+        "Geometry": "Geometria"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "hsv_range": {
+      "label": "Zakres HSV",
+      "description": "Zaznacza splaty według zakresu koloru, na przykład zieleń trawnika, z miękkimi brzegami.",
+      "help": "Wybierz odcień i poszerzaj Zakres odcienia, aż obejmiesz cały obiekt.\nPodnieś Min. nasycenie, aby pominąć szarości, i Min. jasność, aby pominąć cienie.\nWłącz Podgląd zaznaczenia, aby zobaczyć wynik w widoku.",
+      "inputs": {
+        "Hue": "Środek zakresu na kole barw, 0–1: 0 czerwony, 0,17 żółty, 0,33 zielony, 0,5 cyjan, 0,67 niebieski, 0,83 magenta.",
+        "Hue Range": "Zasięg po obu stronach Odcienia, 0–0,5 obrotu koła. 0,07 obejmuje jedną rodzinę kolorów.",
+        "Hue Softness": "Miękkie przejście poza zakresem odcienia, w obrotach koła. 0 daje ostrą granicę.",
+        "Saturation Min": "Najniższe nasycenie, 0–1. Domyślne 0 obejmuje szarości; zwiększ, aby je pominąć.",
+        "Saturation Max": "Najwyższe nasycenie, 0–1. Domyślne 1 obejmuje w pełni nasycone kolory.",
+        "Value Min": "Najniższa jasność, 0–1. Domyślne 0 obejmuje czerń; zwiększ, aby pominąć cienie.",
+        "Value Max": "Najwyższa jasność, 0–1. Domyślne 1 obejmuje biel; zmniejsz, aby pominąć światła.",
+        "Softness": "Szerokość miękkiej granicy koloru. 0 daje ostrą granicę; większe wartości łagodzą przejście."
+      },
+      "input_labels": {
+        "Hue": "Odcień",
+        "Hue Range": "Zakres odcienia",
+        "Hue Softness": "Miękkość odcienia",
+        "Saturation Min": "Minimum nasycenia",
+        "Saturation Max": "Maksimum nasycenia",
+        "Value Min": "Minimum jasności",
+        "Value Max": "Maksimum jasności",
+        "Softness": "Miękkość"
+      },
+      "outputs": {
+        "Selection": "Siła zaznaczenia: 0 pomija element, 1 zaznacza go w pełni; wartości pośrednie zmiękczają krawędź."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "index": {
+      "label": "Indeks",
+      "description": "Podaje pozycję splatu, punktu lub wierzchołka w bieżącej liście, licząc od zera.",
+      "help": "Użyj Matematyki lub Porównaj, aby zaznaczać według numeru.\nUsuwanie lub łączenie geometrii może zmienić numery.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Index": "Numer elementu od 0. Usuwanie i łączenie geometrii zmienia numerację."
+      },
+      "output_labels": {
+        "Index": "Indeks"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "inside_mesh": {
+      "label": "Wewnątrz siatki",
+      "description": "Zaznacza część sceny zamkniętą w siatce odniesienia.",
+      "help": "Podłącz zamkniętą siatkę z Informacji o obiekcie do Siatki.\nOtwory i samoprzecięcia mogą utrudnić określenie wnętrza.",
+      "inputs": {
+        "Mesh": "Zamknięta siatka wyznaczająca wnętrze, np. z Informacji o obiekcie. Bez połączenia nic nie zaznacza."
+      },
+      "input_labels": {
+        "Mesh": "Siatka"
+      },
+      "outputs": {
+        "Selection": "Zwraca włączone dla zaznaczonych elementów i wyłączone dla pozostałych."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "integer": {
+      "label": "Liczba całkowita",
+      "description": "Udostępnia jedną liczbę całkowitą dla połączonych ustawień.",
+      "help": "Podłącz Wartość do liczników lub ustawień całkowitych.\nZacznij od 0; przyciski zmieniają wartość o jeden.",
+      "inputs": {
+        "Value": "Liczba całkowita. Domyślne 0; wartości dodatnie i ujemne są dozwolone."
+      },
+      "input_labels": {
+        "Value": "Wartość"
+      },
+      "outputs": {
+        "Value": "Wynik liczbowy w jednostkach operacji. Podłącz do zgodnego wejścia liczbowego."
+      },
+      "output_labels": {
+        "Value": "Wartość"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "invert_colour": {
+      "label": "Odwróć kolor",
+      "description": "Odwraca kolory, rozjaśniając ciemne obszary i zamieniając barwy na przeciwne.",
+      "help": "Podłącz Zaznaczenie, aby odwrócić tylko część sceny.\nDwa zastosowania przywracają kolor bazowy, chyba że wcześniejsze przycięcie utraciło szczegóły.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "join_geometry": {
+      "label": "Połącz geometrię",
+      "description": "Łączy wiele wejść; splaty o różnych stopniach SH są dopełniane do najwyższego.",
+      "help": "Podłącz kilka wyjść Geometria do tego samego wejścia.\nPołącz tak gałęzie po Rozdziel geometrię.\nNakładające się kopie pozostają osobnymi splatami, punktami lub ścianami.",
+      "inputs": {
+        "Geometry": "Geometrie do połączenia. Przyjmuje wiele połączeń; bez połączenia wynik jest pusty."
+      },
+      "input_labels": {
+        "Geometry": "Geometria"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "map_range": {
+      "label": "Przekształć zakres",
+      "description": "Przelicza zakres wartości na inny, na przykład wysokość 0–2 m na przejście od 1 do 0.",
+      "help": "Ustaw Min. źródła i Maks. źródła na zakres początkowy.\nMin. celu 1 i Maks. celu 0 odwracają przejście.\nZostaw Ogranicz włączone, aby nie przekroczyć granic wyjścia.",
+      "inputs": {
+        "Value": "Liczba do przeliczenia w jednostkach źródłowych. Domyślne 0; podłącz np. wysokość z Pozycji.",
+        "From Min": "Dolny koniec zakresu źródłowego. Domyślne 0, w tych samych jednostkach co Wartość.",
+        "From Max": "Górny koniec zakresu źródłowego. Domyślne 1; musi różnić się od Minimum źródła.",
+        "To Min": "Wynik na dolnym końcu źródła. Domyślne 0; ustaw 1 i Maksimum celu 0, aby odwrócić przejście.",
+        "To Max": "Wynik na górnym końcu źródła. Domyślne 1; ustaw 0 i Minimum celu 1, aby odwrócić przejście."
+      },
+      "input_labels": {
+        "Value": "Wartość",
+        "From Min": "Minimum źródła",
+        "From Max": "Maksimum źródła",
+        "To Min": "Minimum celu",
+        "To Max": "Maksimum celu"
+      },
+      "outputs": {
+        "Result": "Wynik liczbowy w jednostkach operacji. Podłącz do zgodnego wejścia liczbowego."
+      },
+      "output_labels": {
+        "Result": "Wynik"
+      },
+      "properties": {
+        "clamp": "Ogranicza wynik do zakresu docelowego. Domyślnie włączone; wyłącz, aby dopuścić wartości poza zakresem."
+      },
+      "property_labels": {
+        "clamp": "Ogranicz"
+      }
+    },
+    "math": {
+      "label": "Matematyka",
+      "description": "Oblicza wartości do sterowania edycją, zaznaczeniami i przejściami.",
+      "help": "Wybierz działanie i podłącz wartości do A i B.\nZacznij od Mnożenia, aby zmieniać siłę zaznaczenia.",
+      "inputs": {
+        "A": "Pierwsza liczba w jednostkach operacji. Domyślnie 0.",
+        "B": "Druga liczba w jednostkach operacji. Domyślnie 0."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Value": "Wynik liczbowy w jednostkach operacji. Podłącz do zgodnego wejścia liczbowego."
+      },
+      "output_labels": {
+        "Value": "Wartość"
+      },
+      "properties": {
+        "operation": "Wybiera działanie na liczbach. Domyślnie Dodawanie; Wartość bezwzględna używa tylko A."
+      },
+      "property_labels": {
+        "operation": "Operacja"
+      }
+    },
+    "mesh_to_points": {
+      "label": "Siatka na punkty",
+      "description": "Zamienia wierzchołki siatki w chmurę punktów, zachowując dostępne kolory wierzchołków.",
+      "help": "Podłącz siatkę z Informacji o obiekcie.\nOtrzymujesz punkt na wierzchołek, nie równomierne próbkowanie powierzchni.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste."
+      },
+      "input_labels": {
+        "Geometry": "Geometria"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "mesh_to_splats": {
+      "label": "Siatka na splaty",
+      "description": "Pokrywa powierzchnię siatki płaskimi, kolorowymi splatami.",
+      "help": "Domyślna gęstość daje około 20 000 splatów na kuli jednostkowej.\nZwiększ Gęstość dla szczegółów; Maks. liczba ogranicza sumę.\nKolory wierzchołków mają pierwszeństwo przed materiałami i teksturami.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Density": "Liczba splatów na jednostkę kwadratową powierzchni. Około 1592 daje 20 tys. na sferze jednostkowej; 0 daje zero.",
+        "Max Count": "Limit liczby splatów. Domyślne 2 000 000; 0 nie tworzy żadnych.",
+        "Opacity": "Nieprzezroczystość nowych splatów, 0–1. 0 przezroczyste, 1 nieprzezroczyste; domyślne 0,95."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Density": "Gęstość",
+        "Max Count": "Limit liczby",
+        "Opacity": "Nieprzezroczystość"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "seed": "Ziarno losowania, liczba całkowita. Domyślne 0 daje powtarzalny wynik."
+      },
+      "property_labels": {
+        "seed": "Ziarno"
+      }
+    },
+    "mix_colour": {
+      "label": "Mieszaj kolory",
+      "description": "Miesza dwa kolory lub łączy je wybranym działaniem.",
+      "help": "Podłącz kolory do A i B; Współczynnik 0,5 miesza po równo.\nZacznij od Mieszania przed próbą Mnożenia lub Dodawania.",
+      "inputs": {
+        "A": "Pierwszy kolor RGB, 0–1 na kanał. Domyślnie czarny.",
+        "B": "Drugi kolor RGB, 0–1 na kanał. Domyślnie czarny.",
+        "Factor": "Siła mieszania, 0–1. 0 zachowuje A, 1 stosuje pełne działanie; domyślne 0,5 daje połowę."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Factor": "Współczynnik"
+      },
+      "outputs": {
+        "Colour": "Zwraca kolor RGB do dalszej edycji. Składowe mogą wykraczać poza 0–1."
+      },
+      "output_labels": {
+        "Colour": "Kolor"
+      },
+      "properties": {
+        "mode": "Wybiera mieszanie, dodawanie, odejmowanie lub mnożenie kolorów przed zastosowaniem Współczynnika."
+      },
+      "property_labels": {
+        "mode": "Tryb"
+      }
+    },
+    "named_attribute": {
+      "label": "Nazwany atrybut",
+      "description": "Odczytuje zapisaną wartość po nazwie, aby sterować edycją.",
+      "help": "Wpisz dokładną nazwę atrybutu i wybierz jego typ.\nBrakujący atrybut nie może dostarczyć wartości.",
+      "inputs": {
+        "Name": "Dokładna nazwa atrybutu, z uwzględnieniem wielkości liter. Domyślnie pusta; wpisz zapisaną nazwę."
+      },
+      "input_labels": {
+        "Name": "Nazwa"
+      },
+      "outputs": {
+        "Attribute": "Wartości zapisanego atrybutu, z zachowaniem jego jednostek."
+      },
+      "output_labels": {
+        "Attribute": "Atrybut"
+      },
+      "properties": {
+        "type": "Rodzaj odczytywanej wartości. Domyślnie liczba zmiennoprzecinkowa."
+      },
+      "property_labels": {
+        "type": "Typ"
+      }
+    },
+    "neighbour_count": {
+      "label": "Liczba sąsiadów",
+      "description": "Liczy pobliskie splaty lub punkty, pomagając znaleźć rzadkie obszary sceny.",
+      "help": "Podłącz Liczbę do Porównaj, aby zaznaczyć małe wyniki.\nDla splatów zacznij od Promienia 3 i Względem rozmiaru.\nPunkt nigdy nie liczy siebie.",
+      "inputs": {
+        "Radius": "Promień wyszukiwania w jednostkach sceny lub wielokrotności rozmiaru splata. Domyślne 1; 0 nie liczy sąsiadów."
+      },
+      "input_labels": {
+        "Radius": "Promień"
+      },
+      "outputs": {
+        "Count": "Liczba pobliskich punktów, bez samego siebie. 0 oznacza element odosobniony."
+      },
+      "output_labels": {
+        "Count": "Liczba"
+      },
+      "properties": {
+        "relative_to_size": "Używa rozmiaru splata jako jednostki. Domyślnie wyłączone; punkty zawsze używają jednostek sceny."
+      },
+      "property_labels": {
+        "relative_to_size": "Względem rozmiaru"
+      }
+    },
+    "opacity": {
+      "label": "Nieprzezroczystość",
+      "description": "Odczytuje nieprzezroczystość splatów, aby znaleźć słabe lub pełne obszary.",
+      "help": "Podłącz Nieprzezroczystość do Porównaj, aby zaznaczyć słabe splaty.\n0 oznacza przezroczystość, a 1 pełne krycie.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Opacity": "Nieprzezroczystość każdego splata, 0–1: 0 przezroczysty, 1 nieprzezroczysty."
+      },
+      "output_labels": {
+        "Opacity": "Nieprzezroczystość"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "points_to_splats": {
+      "label": "Punkty na splaty",
+      "description": "Zamienia chmurę punktów w okrągłe, kolorowe splaty.",
+      "help": "Zostaw Promień 0, aby oszacować rozmiar z sąsiednich punktów.\nUstaw dodatni promień w jednostkach sceny, jeśli zostają dziury.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Radius": "Promień splata w jednostkach sceny. 0 szacuje połowę odstępu między sąsiadami; dodatnia wartość ustala promień.",
+        "Opacity": "Nieprzezroczystość nowych splatów, 0–1. 0 przezroczyste, 1 nieprzezroczyste; domyślne 0,9."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Radius": "Promień",
+        "Opacity": "Nieprzezroczystość"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "position": {
+      "label": "Pozycja",
+      "description": "Odczytuje położenie każdego splatu, punktu lub wierzchołka w obiekcie.",
+      "help": "Podłącz Pozycję do Rozdziel XYZ, aby zaznaczać według wysokości lub odległości wzdłuż osi.\nWspółrzędne są lokalne dla obiektu.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Pozycja X/Y/Z każdego elementu w lokalnych jednostkach sceny."
+      },
+      "output_labels": {
+        "Position": "Pozycja"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "posterize": {
+      "label": "Posteryzacja",
+      "description": "Ogranicza kolory sceny do kilku jednolitych poziomów.",
+      "help": "Zacznij od Poziomów 4, aby uzyskać cztery poziomy na kanał.\nPodłącz Zaznaczenie, aby ograniczyć efekt.\nZaznaczone splaty tracą zmiany koloru zależne od widoku.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Levels": "Liczba poziomów na kanał koloru, 2–32. Domyślne 4; 2 daje tylko dolny i górny poziom."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Levels": "Poziomy"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "random_value": {
+      "label": "Wartość losowa",
+      "description": "Nadaje splatom lub punktom powtarzalne losowe wartości, aby urozmaicić edycję.",
+      "help": "Ustaw Min. i Maks. na potrzebny zakres.\nZmień Ziarno dla innego wzoru; zmiana kolejności geometrii też może go zmienić.",
+      "inputs": {
+        "Min": "Dolna granica losowanych wartości. Domyślne 0; musi być mniejsza od Maksimum.",
+        "Max": "Górna granica losowanych wartości. Domyślne 1; musi być większa od Minimum."
+      },
+      "input_labels": {
+        "Min": "Minimum",
+        "Max": "Maksimum"
+      },
+      "outputs": {
+        "Value": "Wynik liczbowy w jednostkach operacji. Podłącz do zgodnego wejścia liczbowego."
+      },
+      "output_labels": {
+        "Value": "Wartość"
+      },
+      "properties": {
+        "seed": "Ziarno losowania, liczba całkowita. Domyślne 0 daje powtarzalny wynik."
+      },
+      "property_labels": {
+        "seed": "Ziarno"
+      }
+    },
+    "recolour": {
+      "label": "Zmień kolor",
+      "description": "Zmienia kolor zaznaczonych splatów, opcjonalnie zachowując światło i cień.",
+      "help": "Wybierz Kolor i zacznij od Wagi 0,3 dla delikatnego zabarwienia.\nZostaw Zachowaj cieniowanie włączone, aby utrzymać szczegóły oświetlenia.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Colour": "Docelowy kolor RGB, 0–1 na kanał. Domyślnie niebieski; cieniowanie można zachować.",
+        "Weight": "Siła zmiany koloru, 0–1. 0 zachowuje oryginał, 1 stosuje pełny kolor; domyślne 1."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Colour": "Kolor",
+        "Weight": "Waga"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "keep_shading": "Zachowuje różnice jasności przy zmianie koloru. Domyślnie włączone.",
+        "fade_view_dependent": "Wygasza barwę zależną od kierunku patrzenia w edytowanym obszarze. Domyślnie włączone."
+      },
+      "property_labels": {
+        "keep_shading": "Zachowaj cieniowanie",
+        "fade_view_dependent": "Wygaszaj zależność od widoku"
+      }
+    },
+    "remove_floaters": {
+      "label": "Usuń luźne splaty",
+      "description": "Usuwa luźne splaty w pustej przestrzeni, jak plamki na niebie lub mgłę pod ziemią.",
+      "help": "Najpierw włącz Podgląd: pokazuje tylko to, co zostałoby usunięte.\nPromień izolacji 3 z Względem rozmiaru ocenia każdy splat w jego skali, chroniąc rzadkie tło.\nPodłącz Zaznaczenie, aby ograniczyć czyszczenie, na przykład do wysokości poniżej gruntu.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Elementy do sprawdzenia: co najmniej 0,5 oznacza zaznaczenie. Bez połączenia sprawdza wszystko.",
+        "Min Opacity": "Najniższa zachowana nieprzezroczystość, 0–1. Domyślne 0,02; 0 wyłącza ten test.",
+        "Max Size": "Najdłuższa zachowana oś splata w jednostkach sceny. Domyślne 0 wyłącza ten test.",
+        "Isolation Radius": "Zasięg sąsiadów: wielokrotność rozmiaru splata przy opcji Względem rozmiaru, inaczej jednostki sceny. 0 wyłącza test.",
+        "Min Neighbours": "Usuwa splaty z mniejszą liczbą sąsiadów w promieniu. 1 usuwa tylko całkiem odosobnione splaty."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Min Opacity": "Minimum nieprzezroczystości",
+        "Max Size": "Maksymalny rozmiar",
+        "Isolation Radius": "Promień izolacji",
+        "Min Neighbours": "Minimum sąsiadów"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "preview": "Pokazuje tylko splaty do usunięcia, bez zmian. Domyślnie wyłączone: pokazuje oczyszczony wynik.",
+        "relative_to_size": "Mierzy promień rozmiarem każdego splata. Domyślnie włączone, aby chronić rzadkie tło."
+      },
+      "property_labels": {
+        "preview": "Podgląd",
+        "relative_to_size": "Względem rozmiaru"
+      }
+    },
+    "scale": {
+      "label": "Skala",
+      "description": "Odczytuje rozmiar każdego splatu wzdłuż jego trzech lokalnych osi.",
+      "help": "Podłącz Skalę do Rozdziel XYZ, aby porównać rozmiary osi.\nWartości to jednostki sceny, nie mnożniki.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Scale": "Rozmiary trzech lokalnych osi każdego splata w jednostkach sceny."
+      },
+      "output_labels": {
+        "Scale": "Skala"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "scale_clamp": {
+      "label": "Ogranicz proporcje",
+      "description": "Poprawia igłowe i płaskie Gaussians, które tworzą smugi po oddaleniu od trasy rejestracji.",
+      "help": "Użyj po treningu, gdy poza trasą kamery pojawiają się cienkie smugi.\nZacznij od Maks. proporcji 8; mniejsze wartości dają bardziej okrągłe, ale miększe splaty.\nZmienia się tylko kształt; pozycja, kolor i liczba pozostają takie same.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Max Aspect": "Maksymalny stosunek najdłuższej osi splata do najkrótszej. 1 zaokrągla wszystkie splaty; 8 to dobry początek."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Max Aspect": "Maksymalna proporcja"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_colour": {
+      "label": "Rozdziel kolor",
+      "description": "Rozdziela kolor na wartości RGB lub HSV, aby osobno je edytować lub porównywać.",
+      "help": "Wybierz HSV, aby wydzielić odcień, nasycenie lub jasność.\nW HSV wyjścia R, G i B podają te wartości w tej kolejności.",
+      "inputs": {
+        "Colour": "Kolor RGB do rozdzielenia, 0–1 na kanał. Domyślnie czarny."
+      },
+      "input_labels": {
+        "Colour": "Kolor"
+      },
+      "outputs": {
+        "R": "Czerwień w RGB lub odcień w HSV, 0–1 dla zwykłych kolorów.",
+        "G": "Zieleń w RGB lub nasycenie w HSV, 0–1 dla zwykłych kolorów.",
+        "B": "Niebieski w RGB lub jasność w HSV, 0–1 dla zwykłych kolorów."
+      },
+      "output_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "properties": {
+        "mode": "Wybiera składowe RGB lub HSV. Domyślnie RGB: czerwony, zielony i niebieski."
+      },
+      "property_labels": {
+        "mode": "Tryb"
+      }
+    },
+    "separate_geometry": {
+      "label": "Rozdziel geometrię",
+      "description": "Oddziela zaznaczenie od reszty, aby edytować je inaczej, a potem ponownie połączyć.",
+      "help": "Podłącz Zaznaczenie i edytuj oba wyjścia oddzielnie.\nPołącz gałęzie przez Połącz geometrię.\nMiękkie wagi stają się wyborem tak/nie przy progu 0,5.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Wartości co najmniej 0,5 trafiają do Zaznaczenia, niższe do Reszty. Bez połączenia zaznacza wszystko."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie"
+      },
+      "outputs": {
+        "Selection": "Geometria zaznaczonych elementów o wadze co najmniej 0,5.",
+        "Inverted": "Geometria pozostałych elementów o wadze poniżej 0,5."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie",
+        "Inverted": "Reszta"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_xyz": {
+      "label": "Rozdziel XYZ",
+      "description": "Rozdziela pozycję lub kierunek na wartości X, Y i Z.",
+      "help": "Podłącz Pozycję, a oś wysokości do Porównaj lub Przekształć zakres.\nSprawdź, która oś wskazuje górę w twojej scenie.",
+      "inputs": {
+        "Vector": "Wektor X/Y/Z do rozdzielenia. Domyślne (0, 0, 0); jednostki zależą od źródła."
+      },
+      "input_labels": {
+        "Vector": "Wektor"
+      },
+      "outputs": {
+        "X": "Składowa X, w jednostkach wejścia. 0 leży w płaszczyźnie YZ.",
+        "Y": "Składowa Y, w jednostkach wejścia. 0 leży w płaszczyźnie XZ.",
+        "Z": "Składowa Z, w jednostkach wejścia. 0 leży w płaszczyźnie XY."
+      },
+      "output_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_colour": {
+      "label": "Ustaw kolor",
+      "description": "Zastępuje kolor bazowy zaznaczonych splatów podanym kolorem.",
+      "help": "Wybierz Kolor lub podłącz kolory z innego węzła.\nZostaw Usuń zależność od widoku włączone dla jednolitej malowanej barwy.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Colour": "Składowe RGB: 0 to czerń, 1 to biel. Domyślne (0,5, 0,5, 0,5) daje szarość."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Colour": "Kolor"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "clear_view_dependent": "Usuwa kolor zależny od kierunku patrzenia. Domyślnie włączone dla płaskiego koloru; wyłącz, aby zachować odbicia."
+      },
+      "property_labels": {
+        "clear_view_dependent": "Usuń zależność od widoku"
+      }
+    },
+    "set_opacity": {
+      "label": "Ustaw nieprzezroczystość",
+      "description": "Zmienia widoczną przezroczystość zaznaczonych splatów.",
+      "help": "Zacznij od Nieprzezroczystości 0,5 dla półprzezroczystych splatów.\nUżyj Zaznaczenia do łagodnego mieszania z oryginalną nieprzezroczystością.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Opacity": "Nowa nieprzezroczystość, 0–1. 0 przezroczyste, 1 nieprzezroczyste; domyślne 1."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Opacity": "Nieprzezroczystość"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_position": {
+      "label": "Ustaw pozycję",
+      "description": "Przesuwa wybrane splaty, punkty lub wierzchołki do nowych pozycji, opcjonalnie z przesunięciem.",
+      "help": "Podłącz Pozycję do Pozycji i ustaw Przesunięcie dla ruchu względnego.\nBez tego połączenia pozycją domyślną jest początek układu.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Position": "Nowa pozycja X/Y/Z w jednostkach sceny. Domyślnie początek układu; podłącz Pozycję, aby zachować położenie.",
+        "Offset": "Przesunięcie X/Y/Z dodawane w jednostkach sceny. (0, 0, 0) niczego nie przesuwa."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Position": "Pozycja",
+        "Offset": "Przesunięcie"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_scale": {
+      "label": "Ustaw skalę",
+      "description": "Ustawia rozmiar zaznaczonych splatów wzdłuż ich trzech lokalnych osi.",
+      "help": "Podłącz Skalę przez Działania wektorowe, aby pomnożyć istniejące rozmiary.\nNiepodłączone wartości zastępują rozmiary w jednostkach sceny, nie mnożą ich.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Scale": "Nowe rozmiary osi w jednostkach sceny, nie mnożniki. Domyślne (1, 1, 1)."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Scale": "Skala"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_sh_degree": {
+      "label": "Ustaw stopień SH",
+      "description": "Ogranicza zmienność koloru splatu w zależności od kierunku patrzenia.",
+      "help": "Użyj Stopnia 0 dla jednolitego koloru i mniejszych eksportów.\nWyższy stopień daje miejsce na szczegóły, ale nie odzyskuje odrzuconego koloru.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Degree": "Stopień SH, 0–3. Domyślne 0 usuwa kolor zależny od kierunku patrzenia."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Degree": "Stopień"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "sharpen": {
+      "label": "Wyostrz",
+      "description": "Zmniejsza zaznaczone splaty, aby nadać miękkim szczegółom ostrość.",
+      "help": "Zacznij od Siły 0,25 i zostaw Zachowaj pokrycie włączone.\nWysokie wartości mogą odsłonić szczeliny między splatami.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
+        "Amount": "Część rozmiaru do odjęcia, 0–0,95. 0 bez zmian; domyślne 0,25 zmniejsza o 25%."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Amount": "Siła"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "keep_coverage": "Zwiększa nieprzezroczystość przy zmniejszaniu splatów, aby ograniczyć dziury. Domyślnie włączone."
+      },
+      "property_labels": {
+        "keep_coverage": "Zachowaj pokrycie"
+      }
+    },
+    "simplify": {
+      "label": "Uprość",
+      "description": "Łączy splaty, aby zmniejszyć ich liczbę i zachować ogólny wygląd sceny.",
+      "help": "Zacznij od Proporcji 0,5, celując w połowę splatów.\nMoże to trwać dłużej; niższe proporcje tracą drobne szczegóły.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Ratio": "Część splatów do zachowania, 0,01–1. Domyślne 0,5 daje połowę; 1 zachowuje wszystko."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Ratio": "Udział"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "splats_to_points": {
+      "label": "Splaty na punkty",
+      "description": "Zamienia środki i kolory bazowe splatów w chmurę punktów.",
+      "help": "Użyj do eksportu środków lub obróbki sceny jako punktów.\nRozmiar, nieprzezroczystość i kolor zależny od widoku nie są zachowane.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste."
+      },
+      "input_labels": {
+        "Geometry": "Geometria"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "stored_selection": {
+      "label": "Zapisane zaznaczenie",
+      "description": "Ponownie wykorzystuje zaznaczenie przechwycone z widoku.",
+      "help": "Zaznacz splaty w widoku i naciśnij Przechwyć zaznaczenie.\nPrzechwyć ponownie po zmianie liczby lub kolejności elementów.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Selection": "Zwraca włączone dla zaznaczonych elementów i wyłączone dla pozostałych."
+      },
+      "output_labels": {
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {
+        "data": "Przechwycone zaznaczenie. Puste do użycia Przechwyć zaznaczenie; zapisane osobno dla modyfikatora.",
+        "size": "Liczba przechwyconych elementów. 0 oznacza puste; po zmianie liczby elementów przechwyć ponownie.",
+        "invert": "Odwraca zapisane zaznaczenie. Domyślnie wyłączone; włącz, aby wybrać pozostałe elementy."
+      },
+      "property_labels": {
+        "data": "Dane",
+        "size": "Rozmiar",
+        "invert": "Odwróć"
+      }
+    },
+    "transform_geometry": {
+      "label": "Przekształć geometrię",
+      "description": "Przesuwa, obraca i skaluje całą geometrię razem.",
+      "help": "Zacznij od Translacji lub Skali 1, aby zachować rozmiar.\nObrót używa stopni wokół początku układu obiektu.",
+      "inputs": {
+        "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
+        "Translation": "Przesunięcie X/Y/Z w jednostkach sceny. (0, 0, 0) zachowuje położenie.",
+        "Rotation": "Obrót X/Y/Z w stopniach. (0, 0, 0) pozostawia osie bez obrotu.",
+        "Scale": "Mnożniki X/Y/Z. 1 zachowuje rozmiar, 0 zapada oś, wartości ujemne odbijają ją."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Translation": "Przesunięcie",
+        "Rotation": "Obrót",
+        "Scale": "Skala"
+      },
+      "outputs": {
+        "Geometry": "Edytowana geometria. Podłącz kolejny węzeł lub Wyjście grupy."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "value": {
+      "label": "Wartość",
+      "description": "Udostępnia jedną liczbę dla kilku połączonych ustawień.",
+      "help": "Podłącz Wartość do kilku wejść liczbowych, aby sterować nimi razem.\nZacznij od 0 i przeciągaj liczbę, aby ją zmieniać.",
+      "inputs": {
+        "Value": "Liczba w jednostkach następnej operacji. Domyślne 0; wartości ujemne i dodatnie są dozwolone."
+      },
+      "input_labels": {
+        "Value": "Wartość"
+      },
+      "outputs": {
+        "Value": "Wynik liczbowy w jednostkach operacji. Podłącz do zgodnego wejścia liczbowego."
+      },
+      "output_labels": {
+        "Value": "Wartość"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector": {
+      "label": "Wektor",
+      "description": "Udostępnia wspólne wartości X, Y i Z dla kilku węzłów.",
+      "help": "Użyj dla wspólnej pozycji, przesunięcia lub kierunku.\nWszystkie trzy współrzędne są domyślnie 0.",
+      "inputs": {
+        "Vector": "Wektor X/Y/Z do rozdzielenia. Domyślne (0, 0, 0); jednostki zależą od źródła."
+      },
+      "input_labels": {
+        "Vector": "Wektor"
+      },
+      "outputs": {
+        "Vector": "Wynikowe składowe X/Y/Z w jednostkach operacji."
+      },
+      "output_labels": {
+        "Vector": "Wektor"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector_math": {
+      "label": "Działania wektorowe",
+      "description": "Oblicza pozycje, kierunki i odległości z wartości o trzech składowych.",
+      "help": "Użyj Skali dla przesunięcia lub Odległości między dwiema pozycjami.\nDługość, Odległość i Iloczyn skalarny używają Wartości; pozostałe operacje używają Wektora.",
+      "inputs": {
+        "A": "Pierwszy wektor X/Y/Z. Domyślne (0, 0, 0); jednostki zależą od operacji.",
+        "B": "Drugi wektor X/Y/Z. Domyślne (0, 0, 0); jednostki zależą od operacji.",
+        "Scale": "Mnożnik wektora. 1 bez zmian, 0 zeruje wektor, −1 odwraca kierunek."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Scale": "Skala"
+      },
+      "outputs": {
+        "Vector": "Wynikowe składowe X/Y/Z w jednostkach operacji.",
+        "Value": "Wynik liczbowy w jednostkach operacji. Podłącz do zgodnego wejścia liczbowego."
+      },
+      "output_labels": {
+        "Vector": "Wektor",
+        "Value": "Wartość"
+      },
+      "properties": {
+        "operation": "Wybiera działanie. Długość, Odległość i Iloczyn skalarny zwracają Wartość; pozostałe zwracają Wektor."
+      },
+      "property_labels": {
+        "operation": "Operacja"
+      }
+    },
+    "object_info": {
+      "label": "Informacje o obiekcie",
+      "description": "Wprowadza geometrię innego obiektu do grafu jako odniesienie lub dodatkową część.",
+      "help": "Wybierz dokładną nazwę lub UUID obiektu odniesienia.\nUżyj przestrzeni Względnej, aby ustawić go względem modyfikowanego obiektu.\nUnikaj odniesień do obiektów zależnych od tego modyfikatora.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Geometria wskazanego obiektu w wybranej przestrzeni, wraz z widocznymi modyfikatorami."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "object": "Dokładna nazwa lub UUID obiektu sceny. Domyślnie puste; wybierz obiekt źródłowy.",
+        "transform_space": "Oryginalna zachowuje lokalne współrzędne źródła; Względna przelicza je względem obiektu docelowego."
+      },
+      "property_labels": {
+        "object": "Obiekt",
+        "transform_space": "Przestrzeń przekształcenia"
+      }
+    }
+  },
+  "node_editor.how_to_use": "Jak używać",
+  "node_editor.learn_more": "Dowiedz się więcej"
 }

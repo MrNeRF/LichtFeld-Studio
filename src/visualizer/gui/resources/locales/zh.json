@@ -3155,8 +3155,6 @@
   "runtime.import_batch_kept": "其他文件已加载，仍可在场景中使用。",
   "runtime.import_render_failed": "无法准备此文件以进行渲染",
   "nodes.edit_stored_splats_blocked": "应用或隐藏节点修改器以编辑存储的溅点",
-  "nodes.posterize.label": "色调分离",
-  "nodes.posterize.description": "减少颜色层级数量。",
   "editor.node_editor": "节点编辑器",
   "node_editor.toggle": "切换节点编辑器",
   "node_editor.preview_selection": "Preview Selection",
@@ -3211,5 +3209,1269 @@
   "node_editor.queued": "排队中",
   "node_editor.no_results": "没有匹配的节点",
   "node_editor.optional_selection": "可选：未连接时选择全部",
-  "node_editor.captured_count": "已捕获：{} 个选中项"
+  "node_editor.captured_count": "已捕获：{} 个选中项",
+  "nodes": {
+    "boolean": {
+      "label": "布尔值",
+      "description": "提供一个开关，同时控制多个已连接的设置。",
+      "help": "用它一起开关多个选项。\n将值连接到布尔输入；默认关闭。",
+      "inputs": {
+        "Value": "共用开关。默认关闭表示假或未选中；开启表示真或选中。"
+      },
+      "input_labels": {
+        "Value": "数值"
+      },
+      "outputs": {
+        "Value": "选中元素为开，未选中为关。连接到选择或布尔输入。"
+      },
+      "output_labels": {
+        "Value": "数值"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "boolean_math": {
+      "label": "布尔运算",
+      "description": "通过交集、并集或反选组合你的选择。",
+      "help": "用“与”保留交集，用“或”包含任一选择。\n“非”反转 A 并忽略 B。",
+      "inputs": {
+        "A": "第一个开关值或选择。默认关闭；开启时包含该元素。",
+        "B": "第二个开关值或选择。默认关闭；开启时包含该元素。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Result": "选中元素为开，未选中为关。连接到选择或布尔输入。"
+      },
+      "output_labels": {
+        "Result": "结果"
+      },
+      "properties": {
+        "operation": "组合 A 与 B 的方式。默认“与”保留交集；“非”反转 A 并忽略 B。"
+      },
+      "property_labels": {
+        "operation": "运算"
+      }
+    },
+    "box_selection": {
+      "label": "方框选择",
+      "description": "选择场景中方框以内的部分，并可柔化边缘。",
+      "help": "移动中心并调整尺寸以包围目标。\n先将衰减设为 0，获得清晰边界。",
+      "inputs": {
+        "Centre": "中心的局部 X、Y、Z 坐标，单位为场景单位。默认 (0, 0, 0) 是对象原点。",
+        "Size": "完整宽、高、深，均为非负场景单位。默认 (1, 1, 1) 是单位方框。",
+        "Rotation": "绕 X、Y、Z 轴旋转的角度，单位为度。默认 (0, 0, 0) 不改变方向。",
+        "Falloff": "方框外侧的柔和边缘宽度，单位为场景单位。默认 0 产生清晰边界。"
+      },
+      "input_labels": {
+        "Centre": "中心",
+        "Size": "大小",
+        "Rotation": "旋转",
+        "Falloff": "衰减"
+      },
+      "outputs": {
+        "Selection": "选择强度：0 未选中，1 完全选中，中间值产生柔和过渡。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour": {
+      "label": "颜色",
+      "description": "提供一种颜色，供相连的节点共同使用。",
+      "help": "选取颜色，再连接到需要共享颜色的设置。\n默认是中灰色。",
+      "inputs": {
+        "Colour": "RGB 颜色，每通道通常为 0–1：0 黑，1 白。默认 (0.5, 0.5, 0.5) 是中灰。"
+      },
+      "input_labels": {
+        "Colour": "颜色"
+      },
+      "outputs": {
+        "Colour": "输出 RGB 颜色。每通道 0 黑、1 白；某些运算可能超出此范围。"
+      },
+      "output_labels": {
+        "Colour": "颜色"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_attribute": {
+      "label": "颜色属性",
+      "description": "读取每个 splat 或点的基础颜色，用于改色或按颜色选择。",
+      "help": "连接到分离颜色以检查各通道。\n它读取基础颜色，而非随视角变化的反光。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Colour": "输出 RGB 颜色。每通道 0 黑、1 白；某些运算可能超出此范围。"
+      },
+      "output_labels": {
+        "Colour": "颜色"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_correct": {
+      "label": "颜色校正",
+      "description": "调整亮度、对比度和色彩平衡，同时保留场景细节。",
+      "help": "先用曝光调整亮度，再调对比度与饱和度。\n连接选择以仅校正场景的一部分。\n将色轮归中可恢复中性的阴影、中间调和高光。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Exposure": "以档为单位的亮度：+1 加倍，−1 减半。默认 0 不改变亮度。",
+        "Black Point": "映射为黑色的输入亮度。默认 0 保留原黑色；提高会加深阴影。",
+        "White Point": "映射为白色的输入亮度。默认 1 保留原白色；降低会提亮高光。",
+        "Midpoint": "映射为中灰的输入亮度，0.01–0.99。0.5 中性；降低可提亮中间调。",
+        "Contrast": "明暗差异。1 保持不变，0 成为单一色调，大于 1 增强对比。",
+        "Saturation": "颜色强度。0 去除颜色，1 保持不变，大于 1 增强颜色。",
+        "Hue Shift": "色轮旋转角度，单位为度。0 保持颜色；180 将颜色变为互补色。",
+        "Temperature": "冷暖平衡，−1 至 1。负值偏冷，正值偏暖；0 中性。",
+        "Tint": "绿／洋红平衡，−1 至 1。负值增加洋红，正值增加绿色；0 中性。",
+        "Shadows": "暗部颜色偏移，每通道 −1 至 1。0 中性；负值减去该颜色。",
+        "Midtones": "中间亮度区域的颜色偏移，每通道 −1 至 1。0 中性；正值增加该颜色。",
+        "Highlights": "亮部颜色偏移，每通道 −1 至 1。0 中性；正值增加该颜色。",
+        "Gamma": "中间调亮度，必须大于 0。1 中性；大于 1 提亮，小于 1 压暗。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Exposure": "曝光",
+        "Black Point": "黑点",
+        "White Point": "白点",
+        "Midpoint": "中点",
+        "Contrast": "对比度",
+        "Saturation": "饱和度",
+        "Hue Shift": "色相偏移",
+        "Temperature": "色温",
+        "Tint": "色调",
+        "Shadows": "阴影",
+        "Midtones": "中间调",
+        "Highlights": "高光",
+        "Gamma": "Gamma"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "auto_range": "从场景测量黑点和白点。默认关闭，由你手动控制这两个值。"
+      },
+      "property_labels": {
+        "auto_range": "自动范围"
+      }
+    },
+    "colour_key": {
+      "label": "颜色键",
+      "description": "选出颜色与你指定颜色相近的场景部分。",
+      "help": "选取颜色，再增大容差直到覆盖目标。\n增加少量柔和度以避免硬边。",
+      "inputs": {
+        "Colour": "要匹配的 RGB 颜色，每通道通常为 0–1。默认黑色；在此选择目标色。",
+        "Tolerance": "允许与目标颜色相差的 RGB 距离。0 只匹配精确颜色；默认 0.1 允许少量变化。",
+        "Softness": "柔和过渡的宽度。默认 0 产生硬边；更大的值柔化选择。"
+      },
+      "input_labels": {
+        "Colour": "颜色",
+        "Tolerance": "容差",
+        "Softness": "柔和度"
+      },
+      "outputs": {
+        "Selection": "选择强度：0 未选中，1 完全选中，中间值产生柔和过渡。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "combine_colour": {
+      "label": "合成颜色",
+      "description": "将独立的 RGB 或 HSV 数值合成为颜色。",
+      "help": "连接三个数值，并选择 RGB 或 HSV 模式。\nHSV 模式下，R、G、B 分别代表色相、饱和度和明度。",
+      "inputs": {
+        "R": "RGB 的红色或 HSV 的色相，通常为 0–1。默认 0 表示无红色，或 HSV 红色色相。",
+        "G": "RGB 的绿色或 HSV 的饱和度，通常为 0–1。默认 0 表示无绿色，或 HSV 灰色。",
+        "B": "RGB 的蓝色或 HSV 的明度，通常为 0–1。默认 0 表示无蓝色，或 HSV 黑色。"
+      },
+      "input_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "outputs": {
+        "Colour": "输出 RGB 颜色。每通道 0 黑、1 白；某些运算可能超出此范围。"
+      },
+      "output_labels": {
+        "Colour": "颜色"
+      },
+      "properties": {
+        "mode": "颜色解释方式。默认 RGB 使用红、绿、蓝；HSV 使用色相、饱和度、明度。"
+      },
+      "property_labels": {
+        "mode": "模式"
+      }
+    },
+    "combine_xyz": {
+      "label": "合成 XYZ",
+      "description": "将独立的 X、Y、Z 数值合成为位置或方向。",
+      "help": "用它修改一个坐标，同时保留另外两个。\n将结果连接到向量输入。",
+      "inputs": {
+        "X": "X 坐标，使用你所需的单位。默认 0 在该轴上不作贡献。",
+        "Y": "Y 坐标，使用你所需的单位。默认 0 在该轴上不作贡献。",
+        "Z": "Z 坐标，使用你所需的单位。默认 0 在该轴上不作贡献。"
+      },
+      "input_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "outputs": {
+        "Vector": "输出 X、Y、Z 数值，单位与你的运算一致。"
+      },
+      "output_labels": {
+        "Vector": "向量"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "compare": {
+      "label": "比较",
+      "description": "通过比较两个数值，例如高度和地面高度，选择场景的一部分。",
+      "help": "将高度连接到 A、地面高度连接到 B，再选“小于”。\n容差仅影响“等于”和“不等于”。",
+      "inputs": {
+        "A": "第一个数值，单位与你的运算一致。默认 0。",
+        "B": "第二个数值，单位与你的运算一致。默认 0。",
+        "Epsilon": "“等于”和“不等于”的容差，单位与 A、B 相同。0 表示精确比较；默认 0.001。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Epsilon": "Epsilon"
+      },
+      "outputs": {
+        "Result": "选中元素为开，未选中为关。连接到选择或布尔输入。"
+      },
+      "output_labels": {
+        "Result": "结果"
+      },
+      "properties": {
+        "operation": "比较方式。默认“等于”；选择“小于”或“大于”以选出 B 一侧的数值。"
+      },
+      "property_labels": {
+        "operation": "运算"
+      }
+    },
+    "decimate": {
+      "label": "按重要性精简",
+      "description": "保留选择中更大、更不透明的 splat，以减少总数。",
+      "help": "从保留比例 0.5 开始，保留约一半选中 splat。\n未选中的始终保留；重要性相同可能导致保留数量略多。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "要减少的 splat：选择权重至少 0.5。未连接表示所有 splat。",
+        "Keep Fraction": "保留选中 splat 的比例，0.001–1。0.5 保留约一半；1 全部保留。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Keep Fraction": "保留比例"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "delete_geometry": {
+      "label": "删除几何体",
+      "description": "从场景中移除选中的 splat、点或网格顶点。",
+      "help": "先连接选择，再连接几何体。\n选择未连接会删除全部；接触已删顶点的网格面也会删除。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "要移除的元素：权重至少 0.5。未连接表示删除全部，因此输出为空。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "ellipsoid_selection": {
+      "label": "椭球选择",
+      "description": "选择场景中球形或拉伸球形以内的部分，并可柔化边缘。",
+      "help": "设置中心和半径以包围目标。\n各半径相等时为球形；衰减 0 产生清晰边界。",
+      "inputs": {
+        "Centre": "中心的局部 X、Y、Z 坐标，单位为场景单位。默认 (0, 0, 0) 是对象原点。",
+        "Radii": "沿各轴的半径，均为非负场景单位。默认 (1, 1, 1) 形成单位球。",
+        "Rotation": "绕 X、Y、Z 轴旋转的角度，单位为度。默认 (0, 0, 0) 不改变方向。",
+        "Falloff": "椭球外侧的柔和边缘，相对于各半径。默认 0 产生清晰边界。"
+      },
+      "input_labels": {
+        "Centre": "中心",
+        "Radii": "半径组",
+        "Rotation": "旋转",
+        "Falloff": "衰减"
+      },
+      "outputs": {
+        "Selection": "选择强度：0 未选中，1 完全选中，中间值产生柔和过渡。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_input": {
+      "label": "组输入",
+      "description": "将宿主对象的几何体引入节点图。",
+      "help": "将几何体连接到第一个编辑节点。\n在修改器栈中，你会收到前一修改器的结果。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "宿主输入几何体或上一修改器的结果。连接到第一个编辑节点。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_output": {
+      "label": "组输出",
+      "description": "将节点图的最终几何体返回场景。",
+      "help": "将最后一个编辑节点连接到几何体。\n只有通向此节点的分支会影响修改器结果。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。"
+      },
+      "input_labels": {
+        "Geometry": "几何体"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "hsv_range": {
+      "label": "HSV 范围",
+      "description": "按颜色范围选择 splat，例如草坪上的所有绿色，并保留柔和边缘。",
+      "help": "先选色相，再扩大色相范围直到整个对象都被选中。\n提高最低饱和度以忽略灰色，提高最低明度以忽略阴影。\n开启选择预览，在视口中查看结果。",
+      "inputs": {
+        "Hue": "色轮上的范围中心，0–1：0 红、0.17 黄、0.33 绿、0.5 青、0.67 蓝、0.83 洋红。",
+        "Hue Range": "色相两侧允许的距离，0–0.5 圈。0.07 可覆盖一组相近颜色。",
+        "Hue Softness": "色相范围外的渐隐宽度，以色轮圈数计。默认 0 产生清晰的色相边界。",
+        "Saturation Min": "包含的最低颜色强度，0–1。默认 0 包含灰色；提高可排除灰色。",
+        "Saturation Max": "包含的最高颜色强度，0–1。默认 1 包含完全饱和的颜色。",
+        "Value Min": "包含的最低亮度，0–1。默认 0 包含黑色；提高可排除阴影。",
+        "Value Max": "包含的最高亮度，0–1。默认 1 包含白色；降低可排除高光。",
+        "Softness": "柔和过渡的宽度。默认 0 产生硬边；更大的值柔化选择。"
+      },
+      "input_labels": {
+        "Hue": "色相",
+        "Hue Range": "色相范围",
+        "Hue Softness": "色相柔和度",
+        "Saturation Min": "最低饱和度",
+        "Saturation Max": "最高饱和度",
+        "Value Min": "最低明度",
+        "Value Max": "最高明度",
+        "Softness": "柔和度"
+      },
+      "outputs": {
+        "Selection": "选择强度：0 未选中，1 完全选中，中间值产生柔和过渡。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "index": {
+      "label": "索引",
+      "description": "给出每个 splat、点或网格顶点在当前列表中的位置，从零开始。",
+      "help": "配合数学运算或比较来选择指定编号。\n删除或合并几何体会改变这些编号。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Index": "当前列表位置，从 0 开始。合并或删除几何体可能重新编号。"
+      },
+      "output_labels": {
+        "Index": "索引"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "inside_mesh": {
+      "label": "网格内部",
+      "description": "选择被参考网格包围的场景部分。",
+      "help": "将对象信息中的封闭网格连接到网格输入。\n孔洞或自相交会使内外判断不明确。",
+      "inputs": {
+        "Mesh": "定义内部的封闭参考网格。请连接对象信息；未连接时无法选中任何元素。"
+      },
+      "input_labels": {
+        "Mesh": "网格"
+      },
+      "outputs": {
+        "Selection": "选中元素为开，未选中为关。连接到选择或布尔输入。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "integer": {
+      "label": "整数",
+      "description": "提供一个整数，供多个相连设置共同使用。",
+      "help": "将值连接到数量或整数设置。\n从 0 开始，用步进按钮每次调整一。",
+      "inputs": {
+        "Value": "共用整数。默认 0；允许负数和正数。"
+      },
+      "input_labels": {
+        "Value": "数值"
+      },
+      "outputs": {
+        "Value": "输出数值，单位与你的运算一致。连接到兼容的数值输入。"
+      },
+      "output_labels": {
+        "Value": "数值"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "invert_colour": {
+      "label": "反转颜色",
+      "description": "反转颜色，使暗部变亮，并将颜色变为互补色。",
+      "help": "连接选择以仅反转部分场景。\n应用两次可恢复基础颜色，除非此前裁剪已损失细节。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "join_geometry": {
+      "label": "合并几何体",
+      "description": "将多个输入合为一个；不同 SH 阶数的 splat 会补齐到最高阶。",
+      "help": "将多个几何体输出连接到同一个输入。\n用它重新合并分离几何体后的分支。\n重叠的副本仍是独立的 splat、点或网格面。",
+      "inputs": {
+        "Geometry": "要合并的几何体来源。此处可连接多条线；未连接时结果为空。"
+      },
+      "input_labels": {
+        "Geometry": "几何体"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "map_range": {
+      "label": "映射范围",
+      "description": "将一个数值范围转换为另一个，例如将 0–2 m 高度转为从 1 到 0 的渐变。",
+      "help": "设置源最小值与源最大值来确定原始范围。\n目标最小值 1、目标最大值 0 可产生反向渐变。\n保持限制开启，让结果不超出目标边界。",
+      "inputs": {
+        "Value": "要转换的数值，单位与源范围一致。默认 0；连接位置或其他数值。",
+        "From Min": "源范围下限，单位与数值输入相同。默认 0。",
+        "From Max": "源范围上限，单位与数值输入相同。默认 1；应与源最小值不同。",
+        "To Min": "源最小值对应的结果。默认 0；此处设 1、目标最大值设 0 可反向渐变。",
+        "To Max": "源最大值对应的结果。默认 1；此处设 0、目标最小值设 1 可反向渐变。"
+      },
+      "input_labels": {
+        "Value": "数值",
+        "From Min": "源最小值",
+        "From Max": "源最大值",
+        "To Min": "目标最小值",
+        "To Max": "目标最大值"
+      },
+      "outputs": {
+        "Result": "输出数值，单位与你的运算一致。连接到兼容的数值输入。"
+      },
+      "output_labels": {
+        "Result": "结果"
+      },
+      "properties": {
+        "clamp": "将结果限制在输出范围内。默认开启；关闭后允许超出两端。"
+      },
+      "property_labels": {
+        "clamp": "限制"
+      }
+    },
+    "math": {
+      "label": "数学运算",
+      "description": "计算新数值，以控制编辑、选择和渐变。",
+      "help": "选择运算，再将数值连接到 A 与 B。\n先尝试乘法来缩放选择强度。",
+      "inputs": {
+        "A": "第一个数值，单位与你的运算一致。默认 0。",
+        "B": "第二个数值，单位与你的运算一致。默认 0。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Value": "输出数值，单位与你的运算一致。连接到兼容的数值输入。"
+      },
+      "output_labels": {
+        "Value": "数值"
+      },
+      "properties": {
+        "operation": "要进行的计算。默认为加法；绝对值等运算仅使用 A。"
+      },
+      "property_labels": {
+        "operation": "运算"
+      }
+    },
+    "mesh_to_points": {
+      "label": "网格转点",
+      "description": "将网格顶点转换为点云，并保留可用的顶点颜色。",
+      "help": "连接对象信息中的网格。\n每个顶点生成一个点，而非在表面均匀采样。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。"
+      },
+      "input_labels": {
+        "Geometry": "几何体"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "mesh_to_splats": {
+      "label": "网格转 splat",
+      "description": "用有色的扁平 splat 覆盖网格表面。",
+      "help": "默认密度会在单位球上生成约 20,000 个 splat。\n提高密度可增加细节；最大数量限制总数。\n顶点颜色优先于材质颜色和纹理。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Density": "每平方场景单位的 splat 数。默认约 1,592，在单位球上生成 20,000；0 不生成。",
+        "Max Count": "生成 splat 的数量上限，0–2,000,000。默认限制为 2,000,000；0 不生成。",
+        "Opacity": "splat 不透明度，0–1：0 透明，1 不透明。默认 0.95 接近不透明。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Density": "密度",
+        "Max Count": "最大数量",
+        "Opacity": "不透明度"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "seed": "可重复图案的整数种子。默认 0；改变它会得到另一种图案。"
+      },
+      "property_labels": {
+        "seed": "种子"
+      }
+    },
+    "mix_colour": {
+      "label": "混合颜色",
+      "description": "混合两种颜色，或按指定的颜色运算组合它们。",
+      "help": "将颜色连接到 A 和 B；系数 0.5 可等量混合。\n先用混合模式，再尝试乘法或加法。",
+      "inputs": {
+        "A": "第一个 RGB 颜色，每通道通常为 0–1。默认黑色。",
+        "B": "第二个 RGB 颜色，每通道通常为 0–1。默认黑色。",
+        "Factor": "混合强度，0–1。0 保留 A，1 完全应用所选运算；0.5 为半强度。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Factor": "系数"
+      },
+      "outputs": {
+        "Colour": "输出 RGB 颜色。每通道 0 黑、1 白；某些运算可能超出此范围。"
+      },
+      "output_labels": {
+        "Colour": "颜色"
+      },
+      "properties": {
+        "mode": "颜色组合方式。默认混合；加法、减法、乘法在系数混合前应用。"
+      },
+      "property_labels": {
+        "mode": "模式"
+      }
+    },
+    "named_attribute": {
+      "label": "命名属性",
+      "description": "按名称读取存储的数值，用于控制编辑。",
+      "help": "输入精确的属性名并选择类型。\n不存在的属性无法提供数值。",
+      "inputs": {
+        "Name": "存储属性的精确名称，区分大小写。默认空；使用输出前请填写名称。"
+      },
+      "input_labels": {
+        "Name": "名称"
+      },
+      "outputs": {
+        "Attribute": "从命名属性读取的值，使用其存储单位。"
+      },
+      "output_labels": {
+        "Attribute": "属性"
+      },
+      "properties": {
+        "type": "要读取的值类型。默认 Float，为每个元素读取一个小数。"
+      },
+      "property_labels": {
+        "type": "类型"
+      }
+    },
+    "neighbour_count": {
+      "label": "邻居数量",
+      "description": "统计附近 splat 或点的数量，帮助你找出场景中的稀疏区域。",
+      "help": "将数量连接到比较，选择邻居较少的部分。\n对 splat 可从半径 3 并开启相对尺寸开始。\n点自身不会计入。",
+      "inputs": {
+        "Radius": "邻居距离。默认 1，单位为场景单位，或开启相对尺寸后的大小倍数。0 不统计邻居。"
+      },
+      "input_labels": {
+        "Radius": "半径"
+      },
+      "outputs": {
+        "Count": "半径内的邻居数量，不包含点自身。0 表示孤立。"
+      },
+      "output_labels": {
+        "Count": "数量"
+      },
+      "properties": {
+        "relative_to_size": "用每个 splat 的尺寸作为半径单位。默认关闭使用场景单位；点始终使用场景单位。"
+      },
+      "property_labels": {
+        "relative_to_size": "相对尺寸"
+      }
+    },
+    "opacity": {
+      "label": "不透明度",
+      "description": "读取每个 splat 的不透明度，帮助找出微弱或实心区域。",
+      "help": "将不透明度连接到比较，以选择微弱的 splat。\n0 表示透明，1 表示不透明。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Opacity": "渲染前的不透明度：0 透明，1 不透明。"
+      },
+      "output_labels": {
+        "Opacity": "不透明度"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "points_to_splats": {
+      "label": "点转 splat",
+      "description": "将点云转换为有色的圆形 splat。",
+      "help": "保持半径为 0，根据附近点估计尺寸。\n若自动尺寸留下空隙，可指定以场景单位计的正半径。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Radius": "splat 半径，单位为场景单位。默认 0 估计为附近点间距的一半；正值设置统一尺寸。",
+        "Opacity": "splat 不透明度，0–1：0 透明，1 不透明。默认 0.9 保留少量透明度。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Radius": "半径",
+        "Opacity": "不透明度"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "position": {
+      "label": "位置",
+      "description": "读取每个 splat、点或网格顶点在对象中的位置。",
+      "help": "将位置连接到分离 XYZ，按高度或沿轴距离选择。\n坐标使用对象的局部空间。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "局部 X、Y、Z 位置，单位为场景单位。"
+      },
+      "output_labels": {
+        "Position": "位置"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "posterize": {
+      "label": "色调分层",
+      "description": "将场景颜色减少为少数平坦的色阶。",
+      "help": "从级数 4 开始，每个颜色通道得到四级。\n连接选择以限制效果范围。\n选中的 splat 会失去随视角变化的颜色。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Levels": "每个 RGB 通道的色阶数，2–32。2 仅保留低、高两级；默认 4。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Levels": "级数"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "random_value": {
+      "label": "随机值",
+      "description": "给每个 splat 或点分配可重复的随机值，为编辑增加变化。",
+      "help": "设置所需的最小值和最大值。\n改变种子可得到新图案；重新排序几何体也会改变图案。",
+      "inputs": {
+        "Min": "最小随机值，使用你所需的单位。默认 0；应小于最大值。",
+        "Max": "最大随机值，使用你所需的单位。默认 1；应大于最小值。"
+      },
+      "input_labels": {
+        "Min": "最小值",
+        "Max": "最大值"
+      },
+      "outputs": {
+        "Value": "输出数值，单位与你的运算一致。连接到兼容的数值输入。"
+      },
+      "output_labels": {
+        "Value": "数值"
+      },
+      "properties": {
+        "seed": "可重复图案的整数种子。默认 0；改变它会得到另一种图案。"
+      },
+      "property_labels": {
+        "seed": "种子"
+      }
+    },
+    "recolour": {
+      "label": "重新着色",
+      "description": "改变选中 splat 的颜色，并可保留原有明暗。",
+      "help": "选取颜色，从权重 0.3 开始获得轻微染色。\n保持保留明暗开启，以保留照明细节。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Colour": "目标 RGB 颜色，每通道通常为 0–1。默认蓝色；保留明暗可保持原照明层次。",
+        "Weight": "改色强度，0–1。0 保留原色，1 完全使用新色；默认 1。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Colour": "颜色",
+        "Weight": "权重"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "keep_shading": "改色时保留原有明暗。默认开启；关闭后应用平坦颜色。",
+        "fade_view_dependent": "改色时减少视角相关颜色。默认开启；关闭保留原有变化。"
+      },
+      "property_labels": {
+        "keep_shading": "保留明暗",
+        "fade_view_dependent": "减弱视角变化"
+      }
+    },
+    "remove_floaters": {
+      "label": "移除漂浮点",
+      "description": "删除空中游离的 splat，例如天空斑点或地面下方的雾状杂点。",
+      "help": "先开启预览：它只显示将被移除的部分。\n隔离半径 3 配合相对尺寸，按每个 splat 自身大小判断，以保留稀疏背景。\n连接选择来限制清理范围，例如只处理地面以下。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "执行移除检查的范围：权重至少 0.5。未连接会检查每个 splat。",
+        "Min Opacity": "移除低于此不透明度的 splat，0–1。0 关闭测试；默认 0.02 移除很微弱的 splat。",
+        "Max Size": "移除最长轴超过此场景尺寸的 splat。默认 0 关闭此测试。",
+        "Isolation Radius": "查找邻居的距离。开启相对尺寸时是每个 splat 尺寸的倍数，否则为场景单位。0 关闭测试。",
+        "Min Neighbours": "半径内邻居少于此数量的 splat 将被移除。1 只移除完全孤立的 splat。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Min Opacity": "最低不透明度",
+        "Max Size": "最大尺寸",
+        "Isolation Radius": "隔离半径",
+        "Min Neighbours": "最少邻居"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "preview": "仅显示将被移除的 splat，保持原样。默认关闭显示清理结果。",
+        "relative_to_size": "用每个 splat 的尺寸作为半径单位。默认开启保护稀疏区域；关闭则使用场景单位。"
+      },
+      "property_labels": {
+        "preview": "预览",
+        "relative_to_size": "相对尺寸"
+      }
+    },
+    "scale": {
+      "label": "尺寸",
+      "description": "读取每个 splat 沿三个局部轴的尺寸。",
+      "help": "将尺寸连接到分离 XYZ，以比较各轴大小。\n数值使用场景单位，不是尺寸倍数。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Scale": "每个 splat 沿三个局部轴的尺寸，单位为场景单位。"
+      },
+      "output_labels": {
+        "Scale": "尺寸"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "scale_clamp": {
+      "label": "限制轴比",
+      "description": "修正远离拍摄路径时形成拖痕的针状或薄饼状 Gaussian。",
+      "help": "训练后，若相机路径以外出现细条纹，可使用此节点。\n从最大轴比 8 开始；更小的值使 splat 更圆但也更柔和。\n只改变形状；位置、颜色和数量保持不变。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Max Aspect": "允许的最长轴与最短轴的最大比值。1 使每个 splat 变圆；8 是合适起点。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Max Aspect": "最大轴比"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_colour": {
+      "label": "分离颜色",
+      "description": "将颜色分为 RGB 或 HSV 数值，以分别编辑或比较。",
+      "help": "选择 HSV 可分离色相、饱和度或明度。\nHSV 模式下，R、G、B 依次输出这三个数值。",
+      "inputs": {
+        "Colour": "要分离的颜色，每个 RGB 通道通常为 0–1。默认黑色，所有通道为 0。"
+      },
+      "input_labels": {
+        "Colour": "颜色"
+      },
+      "outputs": {
+        "R": "RGB 模式的红通道或 HSV 模式的色相。色相沿色轮从 0 到 1。",
+        "G": "RGB 模式的绿通道或 HSV 模式的饱和度。HSV 中 0 为灰色，1 为完全饱和。",
+        "B": "RGB 模式的蓝通道或 HSV 模式的明度。HSV 中 0 为黑色，1 为完整亮度。"
+      },
+      "output_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "properties": {
+        "mode": "颜色解释方式。默认 RGB 使用红、绿、蓝；HSV 使用色相、饱和度、明度。"
+      },
+      "property_labels": {
+        "mode": "模式"
+      }
+    },
+    "separate_geometry": {
+      "label": "分离几何体",
+      "description": "将选中部分与其余部分分开，让你分别编辑后再合并。",
+      "help": "连接选择，再分别编辑两个输出。\n用合并几何体重新连接分支。\n柔和的选择权重以 0.5 为界变为选中或未选中。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "权重至少 0.5 的进入选择输出，较低的进入反选输出；未连接表示全选。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择"
+      },
+      "outputs": {
+        "Selection": "选择权重至少 0.5 的几何体。可单独编辑此分支。",
+        "Inverted": "选择权重低于 0.5 的几何体，即选择范围之外的部分。"
+      },
+      "output_labels": {
+        "Selection": "选择",
+        "Inverted": "反选"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_xyz": {
+      "label": "分离 XYZ",
+      "description": "将位置或方向分为 X、Y、Z 数值。",
+      "help": "连接位置，再将高度轴连接到比较或映射范围。\n先确认场景中哪个轴朝上。",
+      "inputs": {
+        "Vector": "X、Y、Z 数值，使用你所需的单位。默认 (0, 0, 0) 使每个轴都为零。"
+      },
+      "input_labels": {
+        "Vector": "向量"
+      },
+      "outputs": {
+        "X": "输入的 X 坐标，单位不变。0 位于另两轴构成的平面。",
+        "Y": "输入的 Y 坐标，单位不变。0 位于另两轴构成的平面。",
+        "Z": "输入的 Z 坐标，单位不变。0 位于另两轴构成的平面。"
+      },
+      "output_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_colour": {
+      "label": "设置颜色",
+      "description": "用你指定的颜色替换选中 splat 的基础颜色。",
+      "help": "选取颜色，或连接其他节点的颜色。\n保持清除视角变化开启，可获得平坦的涂色。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Colour": "RGB 颜色，每通道通常为 0–1：0 黑，1 白。默认 (0.5, 0.5, 0.5) 是中灰。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Colour": "颜色"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "clear_view_dependent": "移除选中 splat 的视角相关颜色。默认开启产生平坦颜色；关闭保留反光。"
+      },
+      "property_labels": {
+        "clear_view_dependent": "清除视角变化"
+      }
+    },
+    "set_opacity": {
+      "label": "设置不透明度",
+      "description": "改变选中 splat 的透明程度。",
+      "help": "从不透明度 0.5 开始，让选中 splat 半透明。\n使用选择权重与原始不透明度柔和混合。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Opacity": "新不透明度，0–1：0 透明，1 不透明。默认 1 使选中 splat 不透明。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Opacity": "不透明度"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_position": {
+      "label": "设置位置",
+      "description": "将选中的 splat、点或网格顶点移动到新位置，并可添加偏移。",
+      "help": "将位置输出连接到位置输入，再设置偏移以进行相对移动。\n若未连接，位置默认在原点。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Position": "新位置，以局部场景单位计。默认原点；连接位置可保留原有位置。",
+        "Offset": "沿 X、Y、Z 添加的局部移动，单位为场景单位。默认 (0, 0, 0) 不添加移动。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Position": "位置",
+        "Offset": "偏移"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_scale": {
+      "label": "设置尺寸",
+      "description": "设置选中 splat 沿三个局部轴的尺寸。",
+      "help": "让尺寸经过向量运算来缩放现有大小。\n未连接的数值直接替换场景单位下的尺寸，不是乘数。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Scale": "沿每个局部轴的新尺寸，单位为场景单位。默认 (1, 1, 1) 生成单位大小的圆形 splat。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Scale": "尺寸"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_sh_degree": {
+      "label": "设置 SH 阶数",
+      "description": "限制 splat 颜色随观察方向变化的程度。",
+      "help": "使用阶数 0 可获得平坦颜色并减小导出文件。\n提高阶数可容纳更多细节，但不能恢复已丢弃的颜色。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Degree": "SH 阶数，0–3。默认 0 移除视角相关颜色；更高值允许更多角度细节。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Degree": "阶数"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "sharpen": {
+      "label": "锐化",
+      "description": "缩小选中 splat，使模糊细节更清晰。",
+      "help": "从强度 0.25 开始，并保持保留覆盖开启。\n数值过高会显露 splat 之间的空隙。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
+        "Amount": "尺寸减少量，0–0.95。0 无效果；默认 0.25 将每轴缩小 25%。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Amount": "强度"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "keep_coverage": "缩小 splat 时提高不透明度以维持覆盖。默认开启；关闭后可能更透明。"
+      },
+      "property_labels": {
+        "keep_coverage": "保留覆盖"
+      }
+    },
+    "simplify": {
+      "label": "简化",
+      "description": "合并 splat 以减少数量，同时保持场景的整体外观。",
+      "help": "从比例 0.5 开始，目标是保留一半 splat。\n可能比其他节点耗时更长；更低比例会损失细节。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Ratio": "目标保留比例，0.01–1。默认 0.5 目标为一半；1 保留原始数量。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Ratio": "比例"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "splats_to_points": {
+      "label": "splat 转点",
+      "description": "将 splat 中心和基础颜色转换为点云。",
+      "help": "用于导出中心或将场景作为点处理。\n不保留 splat 尺寸、不透明度及视角相关颜色。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。"
+      },
+      "input_labels": {
+        "Geometry": "几何体"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "stored_selection": {
+      "label": "已存选择",
+      "description": "重复使用你在视口中捕获的选择。",
+      "help": "在视口中选择 splat，然后点击捕获选择。\n改变元素数量或顺序后，请重新捕获。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Selection": "选中元素为开，未选中为关。连接到选择或布尔输入。"
+      },
+      "output_labels": {
+        "Selection": "选择"
+      },
+      "properties": {
+        "data": "捕获的视口选择。点击捕获选择前为空；每个修改器分别存储。",
+        "size": "捕获选择时的元素数量。0 表示空；数量变化后请重新捕获。",
+        "invert": "反转已捕获选择。默认关闭保留选中元素；开启选择其余部分。"
+      },
+      "property_labels": {
+        "data": "数据",
+        "size": "大小",
+        "invert": "反转"
+      }
+    },
+    "transform_geometry": {
+      "label": "变换几何体",
+      "description": "一起移动、旋转和缩放整个几何体。",
+      "help": "先用平移移动，或用缩放 1 保持原尺寸。\n旋转以度为单位，围绕对象原点进行。",
+      "inputs": {
+        "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
+        "Translation": "沿 X、Y、Z 的移动，单位为场景单位。默认 (0, 0, 0) 不改变位置。",
+        "Rotation": "绕 X、Y、Z 轴旋转的角度，单位为度。默认 (0, 0, 0) 不改变方向。",
+        "Scale": "尺寸倍数。1 保持原尺寸，0 收缩到原点；负值产生镜像。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Translation": "平移",
+        "Rotation": "旋转",
+        "Scale": "尺寸"
+      },
+      "outputs": {
+        "Geometry": "输出几何体。连接到其他编辑节点或组输出。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "value": {
+      "label": "数值",
+      "description": "提供一个数值，供多个相连设置共同使用。",
+      "help": "将值连接到多个数值输入，以统一控制它们。\n从 0 开始，横向拖动数值来调整。",
+      "inputs": {
+        "Value": "共用数值。默认 0；允许负数和正数。"
+      },
+      "input_labels": {
+        "Value": "数值"
+      },
+      "outputs": {
+        "Value": "输出数值，单位与你的运算一致。连接到兼容的数值输入。"
+      },
+      "output_labels": {
+        "Value": "数值"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector": {
+      "label": "向量",
+      "description": "提供一组 X、Y、Z 数值，供多个节点共同使用。",
+      "help": "用于共享位置、偏移或方向。\n默认三个坐标均为 0。",
+      "inputs": {
+        "Vector": "X、Y、Z 数值，使用你所需的单位。默认 (0, 0, 0) 使每个轴都为零。"
+      },
+      "input_labels": {
+        "Vector": "向量"
+      },
+      "outputs": {
+        "Vector": "输出 X、Y、Z 数值，单位与你的运算一致。"
+      },
+      "output_labels": {
+        "Vector": "向量"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector_math": {
+      "label": "向量运算",
+      "description": "用三个分量的数值计算位置、方向和距离。",
+      "help": "使用缩放调整偏移，或用距离比较两个位置。\n长度、距离和点积使用数值输出；其他运算使用向量输出。",
+      "inputs": {
+        "A": "第一个三分量数值，单位与你的运算一致。默认 (0, 0, 0)。",
+        "B": "第二个三分量数值，单位与你的运算一致。默认 (0, 0, 0)。",
+        "Scale": "缩放运算使用的倍数。1 保持 A，0 得到零，−1 反转方向。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Scale": "尺寸"
+      },
+      "outputs": {
+        "Vector": "输出 X、Y、Z 数值，单位与你的运算一致。",
+        "Value": "输出数值，单位与你的运算一致。连接到兼容的数值输入。"
+      },
+      "output_labels": {
+        "Vector": "向量",
+        "Value": "数值"
+      },
+      "properties": {
+        "operation": "向量计算。默认加法；长度、距离和点积输出数值，而非向量。"
+      },
+      "property_labels": {
+        "operation": "运算"
+      }
+    },
+    "object_info": {
+      "label": "对象信息",
+      "description": "将另一个场景对象的几何体引入图中，作为参考或额外部分。",
+      "help": "选择参考对象的精确名称或 UUID。\n使用相对空间，将它放到相对于被修改对象的位置。\n避免引用依赖当前修改器的对象。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "指定空间中的参考对象几何体，包括其可见修改器。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "object": "要读取的精确对象名称或 UUID。默认空；评估前请选择参考对象。",
+        "transform_space": "参考空间。原始保留局部坐标；相对变换到被修改对象的空间。"
+      },
+      "property_labels": {
+        "object": "对象",
+        "transform_space": "变换空间"
+      }
+    }
+  },
+  "node_editor.how_to_use": "使用方法",
+  "node_editor.learn_more": "了解更多"
 }

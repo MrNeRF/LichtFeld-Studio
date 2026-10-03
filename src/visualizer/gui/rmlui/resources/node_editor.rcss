@@ -365,6 +365,78 @@ body {
 .node-setting {
     align-items: flex-start;
 }
+.node-setting-help {
+    width: 100%;
+}
+.node-field-help {
+    display: none;
+    margin: 2dp 0 6dp;
+    font-size: 11dp;
+}
+.node-setting-help.show-help .node-field-help {
+    display: block;
+}
+.node-help {
+    width: 100%;
+    margin: 8dp 0;
+}
+.node-help-toggle, .node-learn-more {
+    display: block;
+    width: 100%;
+    height: 24dp;
+    text-align: left;
+    font-size: 12dp;
+    padding: 2dp 0;
+    border-width: 0;
+    decorator: none;
+}
+.node-help-text {
+    display: none;
+    white-space: pre-wrap;
+    font-size: 11dp;
+    line-height: 16dp;
+    padding: 4dp 0;
+}
+.node-help.expanded .node-help-text {
+    display: block;
+}
+#node-add-preview {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 100%;
+    width: 260dp;
+    padding: 12dp;
+    box-sizing: border-box;
+    border-width: 1dp;
+    border-radius: 6dp;
+    overflow-y: auto;
+}
+#node-add-menu.has-preview #node-add-preview {
+    display: block;
+}
+#node-add-menu:not(.searching) #node-add-preview {
+    margin-left: 224dp;
+}
+#node-add-menu.cascade-left #node-add-preview {
+    left: auto;
+    right: 100%;
+}
+#node-add-menu.cascade-left:not(.searching) #node-add-preview {
+    margin-left: 0;
+    margin-right: 224dp;
+}
+.node-add-preview-title {
+    font-size: 13dp;
+    font-weight: bold;
+    margin-bottom: 8dp;
+}
+.node-add-preview-help {
+    white-space: pre-wrap;
+    font-size: 11dp;
+    line-height: 16dp;
+    margin-top: 8dp;
+}
 .node-setting > .prop-label {
     padding-top: 3dp;
 }

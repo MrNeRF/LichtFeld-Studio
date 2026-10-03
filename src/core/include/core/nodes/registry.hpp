@@ -46,6 +46,7 @@ namespace lfs::nodes {
         bool hide_value = false;
         std::optional<double> soft_min;
         std::optional<double> soft_max;
+        std::string description;
 
         SocketDecl&& range(double lower, double upper) && {
             min = lower;
@@ -85,6 +86,7 @@ namespace lfs::nodes {
         std::vector<std::string> items;
         std::optional<double> min;
         std::optional<double> max;
+        std::string description;
     };
 
     struct NodeTypeInfo {
@@ -92,6 +94,9 @@ namespace lfs::nodes {
         std::string label;
         std::string category;
         std::string description;
+        std::string help;
+        // Empty for plug-ins that supply their own display strings.
+        std::string localization_key;
         int version = 1;
         std::vector<std::string> tree_types{"lfs.geometry"};
         std::vector<SocketDecl> inputs;
@@ -134,10 +139,14 @@ namespace lfs::nodes {
         bool unregister_type(std::string_view id);
         [[nodiscard]] std::shared_ptr<const NodeTypeInfo> find(std::string_view id) const;
         [[nodiscard]] std::vector<std::shared_ptr<const NodeTypeInfo>> list() const;
+        [[nodiscard]] std::shared_ptr<const NodeTypeInfo> find_localized(std::string_view id) const;
+        [[nodiscard]] std::vector<std::shared_ptr<const NodeTypeInfo>> list_localized() const;
 
     private:
         mutable std::shared_mutex mutex_;
         std::unordered_map<std::string, std::shared_ptr<const NodeTypeInfo>> types_;
+        mutable std::uint64_t language_generation_ = 0;
+        mutable std::unordered_map<std::string, std::shared_ptr<const NodeTypeInfo>> localized_types_;
     };
 
 } // namespace lfs::nodes

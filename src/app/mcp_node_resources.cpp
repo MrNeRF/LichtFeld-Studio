@@ -12,7 +12,7 @@
 namespace lfs::app::node_mcp {
     namespace {
         json socket(const lfs::nodes::SocketDecl& value) {
-            json result = {{"identifier", value.identifier}, {"label", value.label}, {"type", value.type}, {"default", value.default_value}, {"field", value.field}, {"multi_input", value.multi_input}, {"hide_value", value.hide_value}};
+            json result = {{"identifier", value.identifier}, {"label", value.label}, {"description", value.description}, {"type", value.type}, {"default", value.default_value}, {"field", value.field}, {"multi_input", value.multi_input}, {"hide_value", value.hide_value}};
             const auto number = [&](const char* name, const std::optional<double>& v) {
                 result[name] = v ? json(*v) : json(nullptr);
             };
@@ -47,7 +47,7 @@ namespace lfs::app::node_mcp {
     json types(vis::ModifierManager& manager) {
         json result = json::array();
         constexpr const char* kinds[] = {"enum", "string", "int", "float", "bool", "data"};
-        for (const auto& descriptor : manager.registry().list()) {
+        for (const auto& descriptor : manager.registry().list_localized()) {
             const auto& type = *descriptor;
             json inputs = json::array();
             json outputs = json::array();
@@ -57,8 +57,8 @@ namespace lfs::app::node_mcp {
             for (const auto& output : type.outputs)
                 outputs.push_back(socket(output));
             for (const auto& prop : type.properties)
-                properties.push_back({{"identifier", prop.identifier}, {"label", prop.label}, {"kind", kinds[static_cast<int>(prop.kind)]}, {"default", prop.default_value}, {"items", prop.items}, {"min", prop.min ? json(*prop.min) : json(nullptr)}, {"max", prop.max ? json(*prop.max) : json(nullptr)}});
-            result.push_back({{"id", type.id}, {"label", type.label}, {"category", type.category}, {"description", type.description}, {"version", type.version}, {"tree_types", type.tree_types}, {"inputs", inputs}, {"outputs", outputs}, {"properties", properties}});
+                properties.push_back({{"identifier", prop.identifier}, {"label", prop.label}, {"description", prop.description}, {"kind", kinds[static_cast<int>(prop.kind)]}, {"default", prop.default_value}, {"items", prop.items}, {"min", prop.min ? json(*prop.min) : json(nullptr)}, {"max", prop.max ? json(*prop.max) : json(nullptr)}});
+            result.push_back({{"id", type.id}, {"label", type.label}, {"category", type.category}, {"description", type.description}, {"help", type.help}, {"version", type.version}, {"tree_types", type.tree_types}, {"inputs", inputs}, {"outputs", outputs}, {"properties", properties}});
         }
         return result;
     }

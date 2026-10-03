@@ -233,19 +233,15 @@ namespace lfs::nodes::builtin {
     void register_conversion(NodeTypeRegistry& registry) {
         const auto geo = std::string(GEOMETRY_SOCKET);
         const auto f = std::string(FLOAT_SOCKET);
-        register_type(registry, type("lfs.points_to_splats", "Points to Splats", "Conversion",
-                                     "Create isotropic degree-zero splats from point positions and colours.",
+        register_type(registry, type("lfs.points_to_splats", "Conversion",
                                      geometry_inputs({in("Radius", f, 0.0f).minimum(0).step_size(0.01),
                                                       in("Opacity", f, 0.9f).range(0, 1).step_size(0.01)}),
                                      {out("Geometry", geo)}, evaluate_points_to_splats));
-        register_type(registry, type("lfs.splats_to_points", "Splats to Points", "Conversion",
-                                     "Create points from splat positions and clamped base colours.",
+        register_type(registry, type("lfs.splats_to_points", "Conversion",
                                      geometry_inputs({}), {out("Geometry", geo)}, evaluate_splats_to_points));
-        register_type(registry, type("lfs.mesh_to_points", "Mesh to Points", "Conversion",
-                                     "Create points from mesh vertices and vertex colours.",
+        register_type(registry, type("lfs.mesh_to_points", "Conversion",
                                      geometry_inputs({}), {out("Geometry", geo)}, evaluate_mesh_to_points));
-        register_type(registry, type("lfs.mesh_to_splats", "Mesh to Splats", "Conversion",
-                                     "Sample flat Gaussian splats over mesh surfaces, preserving vertex or material colours.",
+        register_type(registry, type("lfs.mesh_to_splats", "Conversion",
                                      geometry_inputs({in("Density", f, 20000.0f / (4.0f * std::numbers::pi_v<float>)).minimum(0).step_size(10),
                                                       in("Max Count", std::string(INT_SOCKET), std::int64_t(2000000)).range(0, 2000000).step_size(1000),
                                                       in("Opacity", f, 0.95f).range(0, 1).step_size(0.01)}),

@@ -183,8 +183,7 @@ namespace lfs::nodes::builtin {
         const auto v = std::string(VECTOR_SOCKET);
         const auto c = std::string(COLOUR_SOCKET);
         register_type(registry,
-                      type("lfs.math", "Math", "Utilities",
-                           "Apply a scalar arithmetic operation to two fields.",
+                      type("lfs.math", "Utilities",
                            {in("A", f, 0.0f, true).step_size(0.01),
                             in("B", f, 0.0f, true).step_size(0.01)},
                            {out("Value", f)}, evaluate_math,
@@ -194,8 +193,7 @@ namespace lfs::nodes::builtin {
                                   "less_than", "clamp"})}));
         register_type(
             registry,
-            type("lfs.vector_math", "Vector Math", "Utilities",
-                 "Apply a vector arithmetic operation to vector fields.",
+            type("lfs.vector_math", "Utilities",
                  {in("A", v, glm::vec3(0), true).step_size(0.01),
                   in("B", v, glm::vec3(0), true).step_size(0.01),
                   in("Scale", f, 1.0f, true).step_size(0.01)},
@@ -204,8 +202,7 @@ namespace lfs::nodes::builtin {
                        {"add", "subtract", "multiply", "scale", "length", "distance", "dot", "normalise"})}));
         register_type(
             registry,
-            type("lfs.compare", "Compare", "Utilities",
-                 "Compare scalar fields using an optional equality tolerance.",
+            type("lfs.compare", "Utilities",
                  {in("A", f, 0.0f, true).step_size(0.01),
                   in("B", f, 0.0f, true).step_size(0.01),
                   in("Epsilon", f, 0.001f, true).minimum(0).step_size(0.001)},
@@ -213,29 +210,25 @@ namespace lfs::nodes::builtin {
                  {prop("operation", PropertyKind::Enum, "equal",
                        {"less_than", "less_equal", "greater_than", "greater_equal", "equal", "not_equal"})}));
         register_type(registry,
-                      type("lfs.boolean_math", "Boolean Math", "Utilities",
-                           "Combine boolean fields with a logical operation.",
+                      type("lfs.boolean_math", "Utilities",
                            {in("A", b, false, true), in("B", b, false, true)}, {out("Result", b)},
                            evaluate_boolean_math,
                            {prop("operation", PropertyKind::Enum, "and", {"and", "or", "not", "xor"})}));
         register_type(
             registry,
-            type("lfs.map_range", "Map Range", "Utilities",
-                 "Remap a scalar field between two numeric ranges.",
+            type("lfs.map_range", "Utilities",
                  {in("Value", f, 0.0f, true).step_size(0.01),
                   in("From Min", f, 0.0f, true).step_size(0.01),
                   in("From Max", f, 1.0f, true).step_size(0.01),
                   in("To Min", f, 0.0f, true).step_size(0.01),
                   in("To Max", f, 1.0f, true).step_size(0.01)},
                  {out("Result", f)}, evaluate_map_range, {prop("clamp", PropertyKind::Bool, true)}));
-        register_type(registry, type("lfs.separate_xyz", "Separate XYZ", "Utilities",
-                                     "Separate a vector field into its three coordinates.",
+        register_type(registry, type("lfs.separate_xyz", "Utilities",
                                      {in("Vector", v, glm::vec3(0), true).step_size(0.01)},
                                      {out("X", f), out("Y", f), out("Z", f)}, [](NodeContext& x) {
                                          evaluate_separate(x, false);
                                      }));
-        register_type(registry, type("lfs.combine_xyz", "Combine XYZ", "Utilities",
-                                     "Combine three scalar fields into a vector field.",
+        register_type(registry, type("lfs.combine_xyz", "Utilities",
                                      {in("X", f, 0.0f, true).step_size(0.01),
                                       in("Y", f, 0.0f, true).step_size(0.01),
                                       in("Z", f, 0.0f, true).step_size(0.01)},
@@ -243,16 +236,14 @@ namespace lfs::nodes::builtin {
                                          evaluate_combine_xyz(x, false);
                                      }));
         register_type(registry,
-                      type("lfs.separate_colour", "Separate Colour", "Utilities",
-                           "Separate a colour field into RGB or HSV channels.",
+                      type("lfs.separate_colour", "Utilities",
                            {in("Colour", c, glm::vec3(0), true).step_size(0.01)},
                            {out("R", f), out("G", f), out("B", f)},
                            [](NodeContext& x) {
                                evaluate_separate(x, true);
                            },
                            {prop("mode", PropertyKind::Enum, "rgb", {"rgb", "hsv"})}));
-        register_type(registry, type("lfs.combine_colour", "Combine Colour", "Utilities",
-                                     "Combine RGB or HSV channels into a colour field.",
+        register_type(registry, type("lfs.combine_colour", "Utilities",
                                      {in("R", f, 0.0f, true).step_size(0.01),
                                       in("G", f, 0.0f, true).step_size(0.01),
                                       in("B", f, 0.0f, true).step_size(0.01)},
@@ -261,8 +252,7 @@ namespace lfs::nodes::builtin {
                                          evaluate_combine_xyz(x, true);
                                      },
                                      {prop("mode", PropertyKind::Enum, "rgb", {"rgb", "hsv"})}));
-        register_type(registry, type("lfs.mix_colour", "Mix Colour", "Utilities",
-                                     "Blend two colour fields using a selected mixing operation.",
+        register_type(registry, type("lfs.mix_colour", "Utilities",
                                      {in("A", c, glm::vec3(0), true).step_size(0.01),
                                       in("B", c, glm::vec3(0), true).step_size(0.01),
                                       in("Factor", f, 0.5f, true).range(0, 1).step_size(0.01)},

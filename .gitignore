@@ -42,6 +42,7 @@ tests/data/nn/*
 !tests/real_bicycle_sh_degree_training.py
 !tests/python/**/*.py
 !docs/plugins/examples/**/*.py
+!docs/docs/development/node-graph/examples/*.py
 !tools/*.py
 !tools/nn_export/export_lpips_weights.py
 .venv/

@@ -213,9 +213,17 @@ namespace lfs::vis::gui {
                 return type ? type->inputs : std::vector<lfs::nodes::SocketDecl>{};
             std::vector<lfs::nodes::SocketDecl> result;
             result.reserve(tree.interface.outputs.size());
-            for (const auto& socket : tree.interface.outputs)
+            for (const auto& socket : tree.interface.outputs) {
                 result.push_back({socket.identifier, socket.label, socket.type, socket.default_value,
                                   socket.min, socket.max, socket.step});
+                if (type) {
+                    const auto declared = std::ranges::find(type->inputs, socket.identifier, &lfs::nodes::SocketDecl::identifier);
+                    if (declared != type->inputs.end()) {
+                        result.back().label = declared->label;
+                        result.back().description = declared->description;
+                    }
+                }
+            }
             return result;
         }
 
@@ -228,9 +236,17 @@ namespace lfs::vis::gui {
                 return type ? type->outputs : std::vector<lfs::nodes::SocketDecl>{};
             std::vector<lfs::nodes::SocketDecl> result;
             result.reserve(tree.interface.inputs.size());
-            for (const auto& socket : tree.interface.inputs)
+            for (const auto& socket : tree.interface.inputs) {
                 result.push_back({socket.identifier, socket.label, socket.type, socket.default_value,
                                   socket.min, socket.max, socket.step});
+                if (type) {
+                    const auto declared = std::ranges::find(type->outputs, socket.identifier, &lfs::nodes::SocketDecl::identifier);
+                    if (declared != type->outputs.end()) {
+                        result.back().label = declared->label;
+                        result.back().description = declared->description;
+                    }
+                }
+            }
             return result;
         }
     } // namespace
@@ -246,6 +262,8 @@ namespace lfs::vis::gui {
         AddEventListener("drag", this, true);
         AddEventListener("dblclick", this, true);
         AddEventListener("blur", this, true);
+        AddEventListener("focus", this, true);
+        AddEventListener("click", this, true);
         AddEventListener("keydown", this, true);
         AddEventListener("change", this, true);
         AddEventListener("mousedown", this, true);
@@ -360,6 +378,7 @@ namespace lfs::vis::gui {
 
     void NodeCanvasElement::setPreviewSelection(const bool enabled) {
         preview_selection_ = enabled;
+        preview_selection_opt_out_ = !enabled;
         updateSelectionPreview();
     }
 
@@ -444,6 +463,12 @@ namespace lfs::vis::gui {
     void NodeCanvasElement::syncModel() {
         ensureDom();
         updateProgress();
+        const auto language_generation = event::LocalizationManager::getInstance().getCurrentLanguageGeneration();
+        if (language_generation_ != language_generation) {
+            language_generation_ = language_generation;
+            dom_dirty_ = true;
+            closeAddMenu();
+        }
         const float ratio = currentDpRatio(this);
         const auto signature = rml_theme::currentThemeSignature();
         if (dp_ratio_ != ratio || theme_signature_ != signature) {
@@ -530,7 +555,9 @@ namespace lfs::vis::gui {
     }
 
     bool NodeCanvasElement::needsModelUpdate() const {
-        return dom_dirty_ || geometry_dirty_ || frame_pending_ || pointer_down_ || field_step_direction_ != 0 || (manager_ && (manager_->generation() != last_generation_ || manager_->resultGeneration() != last_result_generation_ || manager_->progress().busy)) ||
+        return dom_dirty_ || geometry_dirty_ || frame_pending_ || pointer_down_ || field_step_direction_ != 0 ||
+               language_generation_ != event::LocalizationManager::getInstance().getCurrentLanguageGeneration() ||
+               (manager_ && (manager_->generation() != last_generation_ || manager_->resultGeneration() != last_result_generation_ || manager_->progress().busy)) ||
                app_store().selection_generation.get() != last_selection_generation_;
     }
 
@@ -559,7 +586,7 @@ namespace lfs::vis::gui {
             }
         }
         for (const auto& node : tree->nodes) {
-            const auto type = manager_->registry().find(node.type_id);
+            const auto type = manager_->registry().find_localized(node.type_id);
             const auto inputs = canvasInputs(*tree, node, type);
             const auto outputs = canvasOutputs(*tree, node, type);
             NodeVisual visual;
@@ -642,6 +669,16 @@ namespace lfs::vis::gui {
     void NodeCanvasElement::updateSelectionPreview() {
         if (!scene_manager_ || !manager_)
             return;
+        if (!preview_selection_opt_out_ && selected_nodes_.size() == 1) {
+            const auto* tree = activeTree();
+            const auto* node = tree ? tree->find_node(*selected_nodes_.begin()) : nullptr;
+            const auto type = node ? manager_->registry().find(node->type_id) : nullptr;
+            if (type && std::ranges::any_of(type->outputs, [](const auto& socket) {
+                    return socket.type == lfs::nodes::BOOL_SOCKET ||
+                           (socket.identifier == "Selection" && socket.type != lfs::nodes::GEOMETRY_SOCKET);
+                }))
+                preview_selection_ = true;
+        }
         const auto host = activeHost();
         if (!preview_selection_ || !host || selected_nodes_.size() != 1 ||
             active_modifier_uuid_.empty()) {
@@ -703,7 +740,7 @@ namespace lfs::vis::gui {
         if (document && tree) {
             for (const auto& visual : visuals_) {
                 const auto* node = tree->find_node(visual.interaction.id);
-                const auto type = node ? manager_->registry().find(node->type_id) : nullptr;
+                const auto type = node ? manager_->registry().find_localized(node->type_id) : nullptr;
                 const auto inputs = node ? canvasInputs(*tree, *node, type)
                                          : std::vector<lfs::nodes::SocketDecl>{};
                 const auto outputs = node ? canvasOutputs(*tree, *node, type)
@@ -730,19 +767,20 @@ namespace lfs::vis::gui {
                     {"properties", node->properties},
                     {"descriptor", reinterpret_cast<std::uintptr_t>(type.get())},
                     {"theme", theme_signature_},
+                    {"language", language_generation_},
                     {"optional", LOC("node_editor.optional_selection")}};
                 for (const auto& input : inputs)
                     content_state["inputs"].push_back({input.identifier, input.label, input.type});
                 for (const auto& output : outputs)
                     content_state["outputs"].push_back({output.identifier, output.label, output.type});
                 if (node_content_state_[visual.interaction.id] != content_state) {
-                    std::string title = "<div class=\"node-title\" style=\"background-color:" +
+                    std::string title = "<div class=\"node-title\" title=\"" + escape(type ? type->description : "") + "\" style=\"background-color:" +
                                         categoryColor(visual.category) + "\">" + node_widgets::categoryIcon(visual.category) +
                                         "<span class=\"node-title-label\">" + escape(visual.title) +
                                         "</span>";
                     title += "</div><div class=\"socket-rows\">";
                     for (const auto& output : outputs)
-                        title += "<div class=\"socket-row output\"><span class=\"socket-label\">" +
+                        title += "<div class=\"socket-row output\" title=\"" + escape(output.description) + "\"><span class=\"socket-label\">" +
                                  escape(output.label) + "</span></div>";
                     const auto settings = std::ranges::count_if(inputs, node_widgets::singleValue) +
                                           (type ? std::ranges::count_if(type->properties, [](const auto& property) {
@@ -757,12 +795,12 @@ namespace lfs::vis::gui {
                         for (const auto& property : type->properties)
                             if (property.kind != lfs::nodes::PropertyKind::Data)
                                 title += "<div class=\"socket-row node-property\" title=\"" +
-                                         escape(property.label) + "\">" +
+                                         escape(property.description) + "\">" +
                                          node_widgets::property(*node, property) + "</div>";
                     for (const auto& input : inputs) {
                         const bool has_widget = !input.hide_value &&
                                                 input.type != lfs::nodes::GEOMETRY_SOCKET;
-                        title += "<div class=\"socket-input\"><span class=\"socket-label" +
+                        title += "<div class=\"socket-input\" title=\"" + escape(input.description) + "\"><span class=\"socket-label" +
                                  std::string(has_widget ? " value-fallback" : "") + "\">" +
                                  escape(input.label) +
                                  (input.identifier == "Selection"
@@ -917,9 +955,11 @@ namespace lfs::vis::gui {
                 escape(LOC("node_editor.add_modifier")) + "</button></div>";
         if (const auto* tree = activeTree(); tree && selected_nodes_.size() == 1) {
             if (const auto* node = tree->find_node(*selected_nodes_.begin())) {
-                const auto type = manager_->registry().find(node->type_id);
+                const auto type = manager_->registry().find_localized(node->type_id);
                 html += "<div class=\"sidebar-section\"><div class=\"selected-node-name\">" +
                         escape(type ? type->label : node->type_id) + "</div>";
+                if (type)
+                    html += "<div class=\"node-description\">" + escape(type->description) + "</div>";
                 html += "<div class=\"target-type\">" + escape(type ? type->category : node->type_id) + "</div>";
                 const auto last_run = nodeStatus(node->name);
                 html += "<div id=\"node-inspector-last-run\" class=\"node-eval-time\" data-preserve-content>" +
@@ -928,18 +968,27 @@ namespace lfs::vis::gui {
                         escape(LOC("node_editor.node_on")) + "</span><input type=\"checkbox\" data-action=\"node-on\" data-node=\"" +
                         escape(node->name) + "\"" + (node->muted ? "" : " checked") + "/></label>";
                 if (type) {
+                    if (!type->help.empty()) {
+                        const bool expanded = expanded_help_.try_emplace(type->id, true).first->second;
+                        html += "<div class=\"node-help" + std::string(expanded ? " expanded" : "") +
+                                "\"><button class=\"node-help-toggle\" data-action=\"node-help\" data-type=\"" +
+                                escape(type->id) + "\"><span class=\"settings-arrow" + std::string(expanded ? " expanded" : "") +
+                                "\"></span> " + escape(LOC("node_editor.how_to_use")) +
+                                "</button><div class=\"node-help-text\">" + escape(type->help) + "</div></div>";
+                    }
                     for (const auto& socket : type->inputs) {
                         if (socket.hide_value || socket.type == lfs::nodes::GEOMETRY_SOCKET ||
                             node_widgets::linked(*tree, *node, socket))
                             continue;
-                        html += "<div class=\"setting-row node-setting\"><span class=\"prop-label\">" +
+                        html += "<div class=\"node-setting-help\" title=\"" + escape(socket.description) + "\"><div class=\"setting-row node-setting\"><span class=\"prop-label\">" +
                                 escape(socket.label) + "</span><div class=\"node-field-control\">" +
-                                node_widgets::input(*node, socket, false) + "</div></div>";
+                                node_widgets::input(*node, socket, false) + "</div></div><div class=\"node-field-help\">" +
+                                escape(socket.description) + "</div></div>";
                     }
                     for (const auto& property : type->properties) {
                         if (property.kind == lfs::nodes::PropertyKind::Data) {
                             if (node->type_id == "lfs.stored_selection") {
-                                html += "<button class=\"btn sidebar-button\" data-action=\"capture-selection\">" +
+                                html += "<button class=\"btn sidebar-button\" data-action=\"capture-selection\" title=\"" + escape(property.description) + "\">" +
                                         escape(LOC("node_editor.capture_selection")) + "</button>";
                                 const nlohmann::json* data = &node->properties;
                                 if (const auto* stack = host_uuid ? manager_->stack(*host_uuid) : nullptr) {
@@ -953,11 +1002,14 @@ namespace lfs::vis::gui {
                             }
                             continue;
                         }
-                        html += "<div class=\"setting-row node-setting\"><span class=\"prop-label\">" +
+                        html += "<div class=\"node-setting-help\" title=\"" + escape(property.description) + "\"><div class=\"setting-row node-setting\"><span class=\"prop-label\">" +
                                 escape(property.label) + "</span><div class=\"node-field-control\">" +
-                                node_widgets::property(*node, property) + "</div></div>";
+                                node_widgets::property(*node, property) + "</div></div><div class=\"node-field-help\">" +
+                                escape(property.description) + "</div></div>";
                     }
-                    html += "<div class=\"node-description\">" + escape(type->description) + "</div>";
+                    if (!type->localization_key.empty())
+                        html += "<button class=\"node-learn-more\" data-action=\"node-learn-more\" data-type=\"" +
+                                escape(type->id) + "\">" + escape(LOC("node_editor.learn_more")) + "</button>";
                 }
                 const auto visual = std::ranges::find_if(visuals_, [&](const NodeVisual& item) {
                     return item.interaction.id == node->name;
@@ -1169,7 +1221,7 @@ namespace lfs::vis::gui {
                     edited |= tree->remove_link({link.from.node, link.from.identifier, link.to.node, link.to.identifier});
             } else if (command.kind == CanvasCommandKind::Splice && command.before && !command.nodes.empty()) {
                 auto* node = tree->find_node(command.nodes.front());
-                const auto type = node ? manager_->registry().find(node->type_id) : nullptr;
+                const auto type = node ? manager_->registry().find_localized(node->type_id) : nullptr;
                 if (!node || !type)
                     continue;
                 const auto input = std::ranges::find_if(type->inputs, [&](const lfs::nodes::SocketDecl& socket) {
@@ -1352,6 +1404,10 @@ namespace lfs::vis::gui {
             return true;
         }
         if (add_menu_) {
+            if (scancode == SDL_SCANCODE_UP || scancode == SDL_SCANCODE_DOWN) {
+                moveAddHighlight(scancode == SDL_SCANCODE_UP ? -1 : 1);
+                return true;
+            }
             if (scancode == SDL_SCANCODE_ESCAPE) {
                 closeAddMenu();
                 return true;
@@ -1433,7 +1489,7 @@ namespace lfs::vis::gui {
             }
             return;
         }
-        if (!editableMode() || processAddMenuEvent(event) || processFieldEvent(event))
+        if (!editableMode() || processAddMenuEvent(event) || processHelpEvent(event) || processFieldEvent(event))
             return;
         // RmlUi mousemove has no bubbling default action. Live gestures must
         // consume motion as listeners, not wait for ProcessDefaultAction/up.

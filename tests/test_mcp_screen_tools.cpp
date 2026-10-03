@@ -55,6 +55,35 @@ namespace {
         SDL_QuitSubSystem(SDL_INIT_EVENTS);
     }
 
+    TEST(McpInjectedPointer, HoverSurvivesFramesUntilDeadlineOrNextGesture) {
+        using namespace lfs::vis::input;
+        ASSERT_TRUE(SDL_InitSubSystem(SDL_INIT_EVENTS));
+        const auto move = []() {
+            injectPointerMove(250, 300);
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_MOTION;
+            pushInjectedPointerEvent(event);
+            EXPECT_TRUE(prepareInjectedPointerEvent(event));
+        };
+        move();
+        retainInjectedPointerFor(std::chrono::seconds(1));
+        for (int frame = 0; frame < 5; ++frame) {
+            finishInjectedPointerFrame();
+            ASSERT_TRUE(injectedPointer());
+            EXPECT_EQ(injectedPointer()->buttons, 0u);
+        }
+        // An expired lease restores real input, even without another event.
+        retainInjectedPointerFor(std::chrono::milliseconds(0));
+        finishInjectedPointerFrame();
+        EXPECT_FALSE(injectedPointer());
+        move();
+        retainInjectedPointerFor(std::chrono::seconds(1));
+        move();
+        finishInjectedPointerFrame();
+        EXPECT_FALSE(injectedPointer());
+        SDL_QuitSubSystem(SDL_INIT_EVENTS);
+    }
+
     constexpr std::array<const char*, 14> kScreenToolNames = {
         "screen.get",
         "screen.split",

@@ -8,13 +8,16 @@ class Posterize:
     label = lf.ui.tr("nodes.posterize.label")
     category = "Colour"
     description = lf.ui.tr("nodes.posterize.description")
+    help = lf.ui.tr("nodes.posterize.help")
 
     inputs = [
-        lf.nodes.Input("Geometry", "geometry"),
-        lf.nodes.Input("Selection", "float", 1.0, min=0.0, max=1.0, field=True),
-        lf.nodes.Input("Levels", "int", 4, min=2, max=32),
+        lf.nodes.Input("Geometry", "geometry", description=lf.ui.tr("nodes.posterize.inputs.Geometry")),
+        lf.nodes.Input("Selection", "float", 1.0, min=0.0, max=1.0, field=True,
+                       description=lf.ui.tr("nodes.posterize.inputs.Selection")),
+        lf.nodes.Input("Levels", "int", 4, min=2, max=32,
+                       description=lf.ui.tr("nodes.posterize.inputs.Levels")),
     ]
-    outputs = [lf.nodes.Output("Geometry", "geometry")]
+    outputs = [lf.nodes.Output("Geometry", "geometry", description=lf.ui.tr("nodes.posterize.outputs.Geometry"))]
 
     def execute(self, ctx):
         geometry = ctx.input("Geometry")

@@ -91,7 +91,10 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::string nodeStatus(std::string_view name) const;
         bool processAddMenuEvent(Rml::Event& event);
         void filterAddMenu(std::string_view search);
+        void highlightAddType(std::string_view id);
+        void moveAddHighlight(int direction);
         void closeAddMenu();
+        bool processHelpEvent(Rml::Event& event);
         void updateSidebar();
         void updateSelectionPreview();
         bool processFieldEvent(Rml::Event& event);
@@ -132,6 +135,8 @@ namespace lfs::vis::gui {
         Rml::Element* add_menu_ = nullptr;
         CanvasPoint add_position_;
         std::string first_add_type_;
+        std::unordered_map<std::string, bool> expanded_help_;
+        std::uint64_t language_generation_ = 0;
         std::string busy_node_;
         std::unordered_set<std::string> queued_nodes_;
         std::unordered_map<std::string, lfs::nodes::NodeEvaluation> progress_nodes_;
@@ -160,6 +165,7 @@ namespace lfs::vis::gui {
         double evaluation_total_ms_ = 0.0;
         bool sidebar_visible_ = true;
         bool preview_selection_ = true;
+        bool preview_selection_opt_out_ = false;
         bool dom_dirty_ = true;
         bool geometry_dirty_ = true;
         bool pointer_down_ = false;

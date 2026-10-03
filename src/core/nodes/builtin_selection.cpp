@@ -277,8 +277,7 @@ namespace lfs::nodes::builtin {
         const auto b = std::string(BOOL_SOCKET);
         const auto v = std::string(VECTOR_SOCKET);
         const auto c = std::string(COLOUR_SOCKET);
-        register_type(registry, type("lfs.box_selection", "Box Selection", "Selection",
-                                     "Select elements inside an oriented box with optional falloff.",
+        register_type(registry, type("lfs.box_selection", "Selection",
                                      {in("Centre", v, glm::vec3(0)).step_size(0.01),
                                       in("Size", v, glm::vec3(1)).minimum(0).step_size(0.01),
                                       in("Rotation", v, glm::vec3(0)).step_size(1),
@@ -286,8 +285,7 @@ namespace lfs::nodes::builtin {
                                      {out("Selection", f)}, [](NodeContext& x) {
                                          evaluate_box(x, false);
                                      }));
-        register_type(registry, type("lfs.ellipsoid_selection", "Ellipsoid Selection", "Selection",
-                                     "Select elements inside an oriented ellipsoid with optional falloff.",
+        register_type(registry, type("lfs.ellipsoid_selection", "Selection",
                                      {in("Centre", v, glm::vec3(0)).step_size(0.01),
                                       in("Radii", v, glm::vec3(1)).minimum(0).step_size(0.01),
                                       in("Rotation", v, glm::vec3(0)).step_size(1),
@@ -296,15 +294,13 @@ namespace lfs::nodes::builtin {
                                          evaluate_box(x, true);
                                      }));
         register_type(registry,
-                      type("lfs.colour_key", "Colour Key", "Selection",
-                           "Select elements by distance from a linear RGB colour.",
+                      type("lfs.colour_key", "Selection",
                            {in("Colour", c, glm::vec3(0)).step_size(0.01),
                             in("Tolerance", f, 0.1f).minimum(0).step_size(0.01),
                             in("Softness", f, 0.0f).minimum(0).step_size(0.01)},
                            {out("Selection", f)}, evaluate_colour_key));
         register_type(registry,
-                      type("lfs.hsv_range", "HSV Range", "Selection",
-                           "Select elements within a circular hue range and saturation and value bands.",
+                      type("lfs.hsv_range", "Selection",
                            {in("Hue", f, 0.0f).range(0, 1).step_size(0.01),
                             in("Hue Range", f, 0.1f).range(0, 1).step_size(0.01),
                             in("Hue Softness", f, 0.0f).minimum(0).step_size(0.01),
@@ -314,11 +310,9 @@ namespace lfs::nodes::builtin {
                             in("Value Max", f, 1.0f).range(0, 1).step_size(0.01),
                             in("Softness", f, 0.0f).minimum(0).step_size(0.01)},
                            {out("Selection", f)}, evaluate_hsv_range));
-        register_type(registry, type("lfs.inside_mesh", "Inside Mesh", "Selection",
-                                     "Select elements inside a closed mesh using ray parity.",
+        register_type(registry, type("lfs.inside_mesh", "Selection",
                                      {in("Mesh", geo)}, {out("Selection", b)}, evaluate_inside_mesh));
-        register_type(registry, type("lfs.neighbour_count", "Neighbour Count", "Selection",
-                                     "Count neighbours within a Euclidean radius, excluding the point itself.",
+        register_type(registry, type("lfs.neighbour_count", "Selection",
                                      {in("Radius", f, 1.0f).minimum(0).step_size(0.01)},
                                      {out("Count", i)}, evaluate_neighbour_count,
                                      {prop("relative_to_size", PropertyKind::Bool, false)}));

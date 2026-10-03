@@ -273,8 +273,7 @@ namespace lfs::nodes::builtin {
         const auto i = std::string(INT_SOCKET);
         const auto v = std::string(VECTOR_SOCKET);
         const auto c = std::string(COLOUR_SOCKET);
-        register_type(registry, type("lfs.set_colour", "Set Colour", "Splat",
-                                     "Replace splat base colours and optionally clear view-dependent colour.",
+        register_type(registry, type("lfs.set_colour", "Splat",
                                      geometry_inputs({in("Selection", f, 1.0f, true)
                                                           .range(0, 1)
                                                           .step_size(0.01),
@@ -282,15 +281,13 @@ namespace lfs::nodes::builtin {
                                      {out("Geometry", geo)}, evaluate_set_colour,
                                      {prop("clear_view_dependent", PropertyKind::Bool, true)}));
         register_type(registry,
-                      type("lfs.set_opacity", "Set Opacity", "Splat",
-                           "Replace splat opacity in activated space, blended by selection.",
+                      type("lfs.set_opacity", "Splat",
                            geometry_inputs({in("Selection", f, 1.0f, true)
                                                 .range(0, 1)
                                                 .step_size(0.01),
                                             in("Opacity", f, 1.0f, true).range(0, 1).step_size(0.01)}),
                            {out("Geometry", geo)}, evaluate_set_opacity));
-        register_type(registry, type("lfs.set_scale", "Set Scale", "Splat",
-                                     "Replace splat axis scales in activated space, blended by selection.",
+        register_type(registry, type("lfs.set_scale", "Splat",
                                      geometry_inputs({in("Selection", f, 1.0f, true)
                                                           .range(0, 1)
                                                           .step_size(0.01),
@@ -298,12 +295,10 @@ namespace lfs::nodes::builtin {
                                                           .minimum(0)
                                                           .step_size(0.01)}),
                                      {out("Geometry", geo)}, evaluate_set_scale));
-        register_type(registry, type("lfs.set_sh_degree", "Set SH Degree", "Splat",
-                                     "Truncate or zero-pad the view-dependent SH coefficients.",
+        register_type(registry, type("lfs.set_sh_degree", "Splat",
                                      geometry_inputs({in("Degree", i, std::int64_t(0)).range(0, 3).step_size(1)}),
                                      {out("Geometry", geo)}, evaluate_set_degree));
-        register_type(registry, type("lfs.sharpen", "Sharpen", "Splat",
-                                     "Shrink splats while optionally compensating opacity for coverage.",
+        register_type(registry, type("lfs.sharpen", "Splat",
                                      geometry_inputs({in("Selection", f, 1.0f, true)
                                                           .range(0, 1)
                                                           .step_size(0.01),
@@ -311,16 +306,14 @@ namespace lfs::nodes::builtin {
                                      {out("Geometry", geo)}, evaluate_sharpen,
                                      {prop("keep_coverage", PropertyKind::Bool, true)}));
         register_type(registry,
-                      type("lfs.scale_clamp", "Scale Clamp", "Splat",
-                           "Limit log-scale axes around their geometric mean.",
+                      type("lfs.scale_clamp", "Splat",
                            geometry_inputs({in("Selection", f, 1.0f, true)
                                                 .range(0, 1)
                                                 .step_size(0.01),
                                             in("Max Aspect", f, 10.0f).minimum(1).step_size(0.1)}),
                            {out("Geometry", geo)}, evaluate_scale_clamp));
         register_type(registry,
-                      type("lfs.colour_correct", "Colour Correct", "Colour",
-                           "Apply affine colour correction to all SH coefficients and non-linear grading to base colour.",
+                      type("lfs.colour_correct", "Colour",
                            geometry_inputs({in("Selection", f, 1.0f, true)
                                                 .range(0, 1)
                                                 .step_size(0.01),
@@ -340,8 +333,7 @@ namespace lfs::nodes::builtin {
                            {out("Geometry", geo)}, evaluate_colour_correct,
                            {prop("auto_range", PropertyKind::Bool, false)}));
         register_type(registry,
-                      type("lfs.recolour", "Recolour", "Colour",
-                           "Mix splat base colours toward a target while optionally preserving shading.",
+                      type("lfs.recolour", "Colour",
                            geometry_inputs({in("Selection", f, 1.0f, true)
                                                 .range(0, 1)
                                                 .step_size(0.01),
@@ -350,8 +342,7 @@ namespace lfs::nodes::builtin {
                            {out("Geometry", geo)}, evaluate_recolour,
                            {prop("keep_shading", PropertyKind::Bool, true),
                             prop("fade_view_dependent", PropertyKind::Bool, true)}));
-        register_type(registry, type("lfs.invert_colour", "Invert Colour", "Colour",
-                                     "Invert base colours and negate view-dependent SH coefficients.",
+        register_type(registry, type("lfs.invert_colour", "Colour",
                                      geometry_inputs(
                                          {in("Selection", f, 1.0f, true).range(0, 1).step_size(0.01)}),
                                      {out("Geometry", geo)}, evaluate_invert));

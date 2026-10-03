@@ -7,6 +7,7 @@
 
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_mouse.h>
+#include <chrono>
 #include <optional>
 
 namespace lfs::vis::input {
@@ -18,6 +19,7 @@ namespace lfs::vis::input {
     };
 
     LFS_VIS_API void injectPointerMove(float x, float y);
+    LFS_VIS_API void retainInjectedPointerFor(std::chrono::milliseconds duration);
     LFS_VIS_API void injectPointerButton(int sdl_button, bool down);
     LFS_VIS_API void injectPointerWheel();
     LFS_VIS_API void injectPointerModifiers(SDL_Keymod modifiers);

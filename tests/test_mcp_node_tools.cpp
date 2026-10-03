@@ -13,7 +13,10 @@
 
 #include <RmlUi/Core.h>
 #include <SDL3/SDL.h>
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <sstream>
 
 namespace lfs::vis {
     namespace {
@@ -94,6 +97,14 @@ namespace lfs::vis {
 
     TEST_F(McpNodeToolsTest, DescriptorsResourcesAndMetadata) {
         EXPECT_GT(resource("types").size(), 20u);
+        for (const auto& type : resource("types")) {
+            SCOPED_TRACE(type["id"].get<std::string>());
+            EXPECT_FALSE(type["description"].get<std::string>().empty());
+            EXPECT_FALSE(type["help"].get<std::string>().empty());
+            for (const auto* collection : {"inputs", "outputs", "properties"})
+                for (const auto& declaration : type[collection])
+                    EXPECT_FALSE(declaration["description"].get<std::string>().empty());
+        }
         EXPECT_TRUE(resource("trees").empty());
         EXPECT_TRUE(resource("stacks").empty());
         EXPECT_FALSE(resource("editor")["open"].get<bool>());
@@ -112,6 +123,30 @@ namespace lfs::vis {
             EXPECT_TRUE(descriptor["annotations"].contains("idempotentHint"));
         }
         EXPECT_EQ(count, 28u);
+    }
+
+    TEST_F(McpNodeToolsTest, HostOnlyReferenceMatchesDescriptorText) {
+        const auto types = resource("types");
+        const auto found = std::ranges::find_if(types, [](const json& type) {
+            return type["id"] == "lfs.object_info";
+        });
+        ASSERT_NE(found, types.end());
+        std::ifstream input(std::filesystem::path(PROJECT_ROOT_PATH) /
+                            "docs/docs/development/node-graph/nodes/lfs.object_info.md");
+        ASSERT_TRUE(input.is_open());
+        std::ostringstream contents;
+        contents << input.rdbuf();
+        const auto page = contents.str();
+        for (const auto* key : {"label", "description", "category"})
+            EXPECT_NE(page.find(found->at(key).get<std::string>()), std::string::npos) << key;
+        std::istringstream help(found->at("help").get<std::string>());
+        std::string line;
+        while (std::getline(help, line))
+            EXPECT_NE(page.find(line), std::string::npos);
+        for (const auto* collection : {"inputs", "outputs", "properties"})
+            for (const auto& declaration : found->at(collection))
+                for (const auto* key : {"identifier", "label", "description"})
+                    EXPECT_NE(page.find(declaration.at(key).get<std::string>()), std::string::npos) << key;
     }
 
     TEST_F(McpNodeToolsTest, TreeAndNodeCommandsUndoAndValidate) {

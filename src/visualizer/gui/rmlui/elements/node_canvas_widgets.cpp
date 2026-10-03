@@ -24,7 +24,7 @@ namespace lfs::vis::gui::node_widgets {
                           : category == "Output"     ? "viewport-export"
                                                      : "settings";
         const auto path = rml_theme::pathToRmlImageSource(getAssetPath("icon/" + std::string(icon) + ".png"));
-        return "<img class=\"node-category-icon\" src=\"" + escape(path) + "\" title=\"" + escape(category) + "\"/>";
+        return "<img class=\"node-category-icon\" src=\"" + escape(path) + "\"/>";
     }
 
     void layoutCard(Rml::Element& card, const float zoom, const float dp_ratio) {

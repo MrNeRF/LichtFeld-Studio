@@ -98,9 +98,17 @@ namespace lfs::app {
             const auto current = vis::input::lastInjectedPointer();
             glm::vec2 position = current ? glm::vec2(current->x, current->y)
                                          : vis::input::wheelPointerInPixels(window);
-            if (action == "move" || action == "down" || action == "up") {
+            if (action == "move" || action == "hover" || action == "down" || action == "up") {
+                int duration = 1000;
+                if (action == "hover") {
+                    if (args.contains("duration_ms") && !args["duration_ms"].is_number_integer())
+                        return mcp::invalid_argument_result("duration_ms must be an integer from 1 to 10000", "duration_ms");
+                    duration = args.value("duration_ms", 1000);
+                    if (duration < 1 || duration > 10000)
+                        return mcp::invalid_argument_result("duration_ms must be from 1 to 10000", "duration_ms");
+                }
                 glm::vec2 next = position;
-                if (action == "move" || args.contains("x") || args.contains("y")) {
+                if (action == "move" || action == "hover" || args.contains("x") || args.contains("y")) {
                     if (!args.contains("x") || !args.contains("y") || !args["x"].is_number() ||
                         !args["y"].is_number())
                         return mcp::invalid_argument_result("x and y must both be numbers", "x");
@@ -110,8 +118,10 @@ namespace lfs::app {
                     return mcp::invalid_argument_result("x and y must be finite", "x");
                 vis::input::injectPointerModifiers(pointerModifiers(args));
                 vis::input::injectPointerMove(next.x, next.y);
+                if (action == "hover")
+                    vis::input::retainInjectedPointerFor(std::chrono::milliseconds(duration));
                 pushMotion(window, next, position);
-                if (action != "move") {
+                if (action == "down" || action == "up") {
                     const auto button = pointerButton(args);
                     if (!button)
                         return mcp::invalid_argument_result(button.error().message, "button");
@@ -239,7 +249,8 @@ namespace lfs::app {
                     {.type = "object",
                      .properties = json{
                          {"action", json{{"type", "string"},
-                                         {"enum", json::array({"move", "down", "up", "wheel", "pinch", "drag"})}}},
+                                         {"enum", json::array({"move", "hover", "down", "up", "wheel", "pinch", "drag"})}}},
+                         {"duration_ms", {{"type", "integer"}, {"minimum", 1}, {"maximum", 10000}, {"description", "Hover duration, default 1000 ms; returns immediately"}}},
                          {"scale", {{"type", "number"}, {"exclusiveMinimum", 0}}},
                          {"x", json{{"type", "number"}}},
                          {"y", json{{"type", "number"}}},

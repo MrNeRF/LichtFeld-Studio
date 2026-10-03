@@ -37,14 +37,14 @@ class Geometry:
 class Input:
     def __init__(self, identifier: str, type: str, default: Any = None,
                  min: Optional[float] = None, max: Optional[float] = None,
-                 field: bool = False) -> None: ...
+                 field: bool = False, description: str = "") -> None: ...
 
 class Output:
-    def __init__(self, identifier: str, type: str) -> None: ...
+    def __init__(self, identifier: str, type: str, description: str = "") -> None: ...
 
 class Property:
     def __init__(self, identifier: str, type: str, default: Any = None,
-                 items: list[str] = []) -> None: ...
+                 items: list[str] = [], description: str = "") -> None: ...
 
 class NodeContext:
     def input(self, identifier: str) -> Any: ...
@@ -57,6 +57,7 @@ class Node:
     label: str
     category: str
     description: str
+    help: str
     inputs: list[Input]
     outputs: list[Output]
     properties: list[Property]

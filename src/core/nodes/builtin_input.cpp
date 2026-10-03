@@ -101,67 +101,66 @@ namespace lfs::nodes::builtin {
         const auto v = std::string(VECTOR_SOCKET);
         const auto c = std::string(COLOUR_SOCKET);
         const auto s = std::string(STRING_SOCKET);
-        register_type(registry, type("lfs.group_input", "Group Input", "Input",
-                                     "Expose the geometry and interface values supplied to this node graph.",
+        register_type(registry, type("lfs.group_input", "Input",
                                      {}, {out("Geometry", geo)}, {}));
-        register_type(registry, type("lfs.group_output", "Group Output", "Output",
-                                     "Return the evaluated geometry from this node graph.",
+        register_type(registry, type("lfs.group_output", "Output",
                                      {in("Geometry", geo)}, {out("Geometry", geo)}, [](NodeContext& x) {
                                          x.set_output("Geometry", x.input("Geometry"));
                                      }));
         register_type(registry,
-                      type("lfs.value", "Value", "Input", "Provide a constant floating-point value.",
+                      type("lfs.value", "Input",
                            {in("Value", f, 0.0f).step_size(0.01)}, {out("Value", f)}, [](NodeContext& x) {
                                x.set_output("Value", x.input("Value"));
                            }));
         register_type(registry,
-                      type("lfs.integer", "Integer", "Input", "Provide a constant integer value.",
+                      type("lfs.integer", "Input",
                            {in("Value", i, std::int64_t(0)).step_size(1)}, {out("Value", i)}, [](NodeContext& x) {
                                x.set_output("Value", x.input("Value"));
                            }));
-        register_type(registry, type("lfs.boolean", "Boolean", "Input", "Provide a constant boolean value.",
+        register_type(registry, type("lfs.boolean", "Input",
                                      {in("Value", b, false)}, {out("Value", b)}, [](NodeContext& x) {
                                          x.set_output("Value", x.input("Value"));
                                      }));
         register_type(registry,
-                      type("lfs.vector", "Vector", "Input", "Provide a constant three-dimensional vector.",
+                      type("lfs.vector", "Input",
                            {in("Vector", v, glm::vec3(0)).step_size(0.01)}, {out("Vector", v)}, [](NodeContext& x) {
                                x.set_output("Vector", x.input("Vector"));
                            }));
         register_type(registry,
-                      type("lfs.colour", "Colour", "Input", "Provide a constant linear RGB colour.",
+                      type("lfs.colour", "Input",
                            {in("Colour", c, glm::vec3(0.5f)).step_size(0.01)}, {out("Colour", c)}, [](NodeContext& x) {
                                x.set_output("Colour", x.input("Colour"));
                            }));
-        register_type(registry, type("lfs.position", "Position", "Input",
-                                     "Read each element's position in its geometry domain.", {},
+        register_type(registry, type("lfs.position", "Input",
+                                     {},
                                      {out("Position", v)}, [](NodeContext& x) {
                                          x.set_output("Position", position_field());
                                      }));
-        register_type(registry, type("lfs.colour_attribute", "Colour Attribute", "Input",
-                                     "Read each element's linear base colour.", {}, {out("Colour", c)},
+        register_type(registry, type("lfs.colour_attribute", "Input",
+                                     {}, {out("Colour", c)},
                                      [](NodeContext& x) {
                                          x.set_output("Colour", colour_field());
                                      }));
         register_type(registry,
-                      type("lfs.opacity", "Opacity", "Input", "Read each splat's activated opacity.", {},
+                      type("lfs.opacity", "Input",
+                           {},
                            {out("Opacity", f)}, [](NodeContext& x) {
                                x.set_output("Opacity", opacity_field());
                            }));
-        register_type(registry, type("lfs.scale", "Scale", "Input",
-                                     "Read each splat's activated scale along its three axes.", {},
+        register_type(registry, type("lfs.scale", "Input",
+                                     {},
                                      {out("Scale", v)}, [](NodeContext& x) {
                                          x.set_output("Scale", scale_field());
                                      }));
-        register_type(registry, type("lfs.index", "Index", "Input",
-                                     "Read each element's zero-based index in its geometry domain.", {},
+        register_type(registry, type("lfs.index", "Input",
+                                     {},
                                      {out("Index", i)}, [](NodeContext& x) {
                                          x.set_output("Index", index_field());
                                      }));
         register_type(
             registry,
-            type("lfs.named_attribute", "Named Attribute", "Input",
-                 "Read a named attribute from the current geometry domain.", {in("Name", s, std::string{})},
+            type("lfs.named_attribute", "Input",
+                 {in("Name", s, std::string{})},
                  {out("Attribute", f)},
                  [](NodeContext& x) {
                      std::string name;
@@ -171,15 +170,14 @@ namespace lfs::nodes::builtin {
                                                    name, named_type(property_string(x, "type", "float"))));
                  },
                  {prop("type", PropertyKind::Enum, "float", {"float", "int", "bool", "vector", "colour"})}));
-        register_type(registry, type("lfs.random_value", "Random Value", "Input",
-                                     "Generate repeatable per-index random values within a range.",
+        register_type(registry, type("lfs.random_value", "Input",
                                      {in("Min", f, 0.0f, true).step_size(0.01),
                                       in("Max", f, 1.0f, true).step_size(0.01)},
                                      {out("Value", f)},
                                      evaluate_random, {prop("seed", PropertyKind::Int, 0)}));
         register_type(registry,
-                      type("lfs.stored_selection", "Stored Selection", "Input",
-                           "Read a captured selection bitmask, optionally inverted.", {},
+                      type("lfs.stored_selection", "Input",
+                           {},
                            {out("Selection", b)},
                            [](NodeContext& x) {
                                x.set_output("Selection", stored_selection_field(x.node()));

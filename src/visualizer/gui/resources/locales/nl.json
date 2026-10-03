@@ -3155,8 +3155,6 @@
   "runtime.import_batch_kept": "De overige bestanden zijn geladen en blijven beschikbaar in de scène.",
   "runtime.import_render_failed": "Dit bestand kon niet worden voorbereid voor weergave",
   "nodes.edit_stored_splats_blocked": "Pas de knooppuntmodifiers toe of verberg ze om de opgeslagen splats te bewerken",
-  "nodes.posterize.label": "Posteriseren",
-  "nodes.posterize.description": "Vermindert het aantal kleurniveaus.",
   "editor.node_editor": "Node-editor",
   "node_editor.toggle": "Node-editor wisselen",
   "node_editor.preview_selection": "Preview Selection",
@@ -3211,5 +3209,1269 @@
   "node_editor.queued": "In wachtrij",
   "node_editor.no_results": "Geen overeenkomende nodes",
   "node_editor.optional_selection": "Optioneel: zonder verbinding wordt alles geselecteerd",
-  "node_editor.captured_count": "Vastgelegd: {} geselecteerd"
+  "node_editor.captured_count": "Vastgelegd: {} geselecteerd",
+  "nodes": {
+    "boolean": {
+      "label": "Booleaans",
+      "description": "Geeft je één aan-uitknop voor meerdere verbonden instellingen.",
+      "help": "Schakel hiermee meerdere opties tegelijk.\nVerbind Waarde met een booleaanse ingang; standaard staat hij uit.",
+      "inputs": {
+        "Value": "Gedeelde aan-uitwaarde. Standaard uit betekent onwaar of niet geselecteerd; aan betekent waar of geselecteerd."
+      },
+      "input_labels": {
+        "Value": "Waarde"
+      },
+      "outputs": {
+        "Value": "Aan voor geselecteerde elementen, uit voor de rest. Verbind met Selectie of een booleaanse ingang."
+      },
+      "output_labels": {
+        "Value": "Waarde"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "boolean_math": {
+      "label": "Booleaanse logica",
+      "description": "Combineert selecties tot hun overlap, samenvoeging of omgekeerde.",
+      "help": "Gebruik En voor de overlap en Of om beide selecties mee te nemen.\nNiet keert A om en negeert B.",
+      "inputs": {
+        "A": "Eerste aan-uitwaarde of selectie. Standaard uit; aan neemt het element mee.",
+        "B": "Tweede aan-uitwaarde of selectie. Standaard uit; aan neemt het element mee."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Result": "Aan voor geselecteerde elementen, uit voor de rest. Verbind met Selectie of een booleaanse ingang."
+      },
+      "output_labels": {
+        "Result": "Resultaat"
+      },
+      "properties": {
+        "operation": "Combinatie van A en B. Standaard En behoudt de overlap; Niet keert A om en negeert B."
+      },
+      "property_labels": {
+        "operation": "Bewerking"
+      }
+    },
+    "box_selection": {
+      "label": "Kaderselectie",
+      "description": "Selecteert het deel van je scène binnen een kader, met optioneel zachte randen.",
+      "help": "Verplaats Centrum en pas Grootte aan rond je doel.\nBegin met Afname 0 voor een scherpe grens.",
+      "inputs": {
+        "Centre": "Centrum langs X, Y en Z in lokale scène-eenheden. Standaard (0, 0, 0) is de oorsprong van het object.",
+        "Size": "Volledige breedte, hoogte en diepte in scène-eenheden, niet negatief. Standaard (1, 1, 1) is een eenheidskader.",
+        "Rotation": "Rotatie rond X, Y en Z in graden. Standaard (0, 0, 0) laat de richting onveranderd.",
+        "Falloff": "Zachte rand buiten het kader in scène-eenheden. Standaard 0 geeft een scherpe grens."
+      },
+      "input_labels": {
+        "Centre": "Centrum",
+        "Size": "Grootte",
+        "Rotation": "Rotatie",
+        "Falloff": "Afname"
+      },
+      "outputs": {
+        "Selection": "Selectiesterkte: 0 niet geselecteerd, 1 volledig geselecteerd; tussenwaarden geven zachte overgangen."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour": {
+      "label": "Kleur",
+      "description": "Geeft je één kleur om tussen verbonden knopen te delen.",
+      "help": "Kies een kleur en verbind deze met de gewenste instellingen.\nDe standaardkleur is middengrijs.",
+      "inputs": {
+        "Colour": "RGB-kleur, meestal 0–1 per kanaal: 0 zwart, 1 wit. Standaard (0,5, 0,5, 0,5) is middengrijs."
+      },
+      "input_labels": {
+        "Colour": "Kleur"
+      },
+      "outputs": {
+        "Colour": "RGB-resultaat: 0 zwart en 1 wit per kanaal. Sommige berekeningen kunnen dit bereik overschrijden."
+      },
+      "output_labels": {
+        "Colour": "Kleur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_attribute": {
+      "label": "Kleurattribuut",
+      "description": "Leest de basiskleur van elke splat of elk punt voor bewerking en kleurselectie.",
+      "help": "Verbind Kleur met Kleur splitsen om afzonderlijke kanalen te bekijken.\nDit leest de basiskleur, niet kijkafhankelijke reflecties.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Colour": "RGB-resultaat: 0 zwart en 1 wit per kanaal. Sommige berekeningen kunnen dit bereik overschrijden."
+      },
+      "output_labels": {
+        "Colour": "Kleur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_correct": {
+      "label": "Kleurcorrectie",
+      "description": "Past helderheid, contrast en kleurbalans aan en behoudt de details van je scène.",
+      "help": "Begin met Belichting en pas daarna Contrast en Verzadiging aan.\nVerbind een Selectie om slechts een deel te corrigeren.\nCentreer de kleurwielen voor neutrale schaduwen, middentonen en hooglichten.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Exposure": "Helderheid in stops: +1 verdubbelt licht, −1 halveert het. Standaard 0 laat helderheid onveranderd.",
+        "Black Point": "Invoerhelderheid die zwart wordt. Standaard 0 behoudt zwart; verhogen verdiept schaduwen.",
+        "White Point": "Invoerhelderheid die wit wordt. Standaard 1 behoudt wit; verlagen verheldert hooglichten.",
+        "Midpoint": "Invoerhelderheid die middengrijs wordt, 0,01–0,99. 0,5 is neutraal; verlagen verheldert middentonen.",
+        "Contrast": "Verschil tussen licht en donker. 1 onveranderd, 0 vlakke toon; boven 1 neemt contrast toe.",
+        "Saturation": "Kleursterkte. 0 verwijdert kleur, 1 behoudt kleur; boven 1 worden kleuren sterker.",
+        "Hue Shift": "Kleurwielrotatie in graden. 0 behoudt kleuren; 180 geeft elke kleur zijn tegenkleur.",
+        "Temperature": "Warm/koud-balans, −1 tot 1. Negatief koelt, positief verwarmt; 0 is neutraal.",
+        "Tint": "Groen/magenta-balans, −1 tot 1. Negatief voegt magenta toe, positief groen; 0 is neutraal.",
+        "Shadows": "Kleurverschuiving in donkere delen, −1 tot 1 per kanaal. 0 neutraal; negatief verwijdert die kleur.",
+        "Midtones": "Kleurverschuiving in middentonen, −1 tot 1 per kanaal. 0 neutraal; positief voegt die kleur toe.",
+        "Highlights": "Kleurverschuiving in lichte delen, −1 tot 1 per kanaal. 0 neutraal; positief voegt die kleur toe.",
+        "Gamma": "Middentoonhelderheid, groter dan 0. 1 neutraal; boven 1 lichter, onder 1 donkerder."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Exposure": "Belichting",
+        "Black Point": "Zwartpunt",
+        "White Point": "Witpunt",
+        "Midpoint": "Middenpunt",
+        "Contrast": "Contrast",
+        "Saturation": "Verzadiging",
+        "Hue Shift": "Tintverschuiving",
+        "Temperature": "Temperatuur",
+        "Tint": "Kleurzweem",
+        "Shadows": "Schaduwen",
+        "Midtones": "Middentonen",
+        "Highlights": "Hooglichten",
+        "Gamma": "Gamma"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "auto_range": "Meet zwart- en witpunt uit de scène. Standaard uit, zodat je beide zelf instelt."
+      },
+      "property_labels": {
+        "auto_range": "Automatisch bereik"
+      }
+    },
+    "colour_key": {
+      "label": "Kleursleutel",
+      "description": "Selecteert delen van je scène waarvan de kleur lijkt op jouw gekozen kleur.",
+      "help": "Kies Kleur en verhoog Tolerantie tot je doel is meegenomen.\nVoeg wat Zachtheid toe om een harde rand te vermijden.",
+      "inputs": {
+        "Colour": "Te zoeken RGB-kleur, meestal 0–1 per kanaal. Standaard zwart; kies hier je doelkleur.",
+        "Tolerance": "Toegestane RGB-afstand tot Kleur. 0 vereist exact die kleur; standaard 0,1 staat kleine verschillen toe.",
+        "Softness": "Breedte van de zachte overgang. Standaard 0 geeft harde randen; hogere waarden verzachten de selectie."
+      },
+      "input_labels": {
+        "Colour": "Kleur",
+        "Tolerance": "Tolerantie",
+        "Softness": "Zachtheid"
+      },
+      "outputs": {
+        "Selection": "Selectiesterkte: 0 niet geselecteerd, 1 volledig geselecteerd; tussenwaarden geven zachte overgangen."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "combine_colour": {
+      "label": "Kleur samenstellen",
+      "description": "Stelt een kleur samen uit afzonderlijke RGB- of HSV-waarden.",
+      "help": "Verbind drie waarden en kies RGB of HSV.\nIn HSV betekenen R, G en B tint, verzadiging en helderheid.",
+      "inputs": {
+        "R": "Rood in RGB of tint in HSV, meestal 0–1. Standaard 0 geeft geen rood, of een rode tint in HSV.",
+        "G": "Groen in RGB of verzadiging in HSV, meestal 0–1. Standaard 0 geeft geen groen, of grijs in HSV.",
+        "B": "Blauw in RGB of helderheid in HSV, meestal 0–1. Standaard 0 geeft geen blauw, of zwart in HSV."
+      },
+      "input_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "outputs": {
+        "Colour": "RGB-resultaat: 0 zwart en 1 wit per kanaal. Sommige berekeningen kunnen dit bereik overschrijden."
+      },
+      "output_labels": {
+        "Colour": "Kleur"
+      },
+      "properties": {
+        "mode": "Kleurinterpretatie. Standaard RGB gebruikt rood, groen en blauw; HSV gebruikt tint, verzadiging en helderheid."
+      },
+      "property_labels": {
+        "mode": "Modus"
+      }
+    },
+    "combine_xyz": {
+      "label": "XYZ samenstellen",
+      "description": "Stelt een positie of richting samen uit X-, Y- en Z-waarden.",
+      "help": "Wijzig hiermee één coördinaat terwijl je de andere twee behoudt.\nVerbind het resultaat met een Vector-ingang.",
+      "inputs": {
+        "X": "X-coördinaat in je gewenste eenheden. Standaard 0 draagt niets bij langs deze as.",
+        "Y": "Y-coördinaat in je gewenste eenheden. Standaard 0 draagt niets bij langs deze as.",
+        "Z": "Z-coördinaat in je gewenste eenheden. Standaard 0 draagt niets bij langs deze as."
+      },
+      "input_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "outputs": {
+        "Vector": "Resulterende X-, Y- en Z-waarden in de eenheden van je berekening."
+      },
+      "output_labels": {
+        "Vector": "Vector"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "compare": {
+      "label": "Vergelijken",
+      "description": "Selecteert delen van je scène door twee waarden te vergelijken, zoals hoogte en grondniveau.",
+      "help": "Verbind hoogte met A en het grondniveau met B; kies Kleiner dan.\nEpsilon werkt alleen bij Gelijk en Ongelijk.",
+      "inputs": {
+        "A": "Eerste getal in de eenheden van je berekening. Standaard 0.",
+        "B": "Tweede getal in de eenheden van je berekening. Standaard 0.",
+        "Epsilon": "Tolerantie voor Gelijk en Ongelijk, in dezelfde eenheden als A en B. 0 is exact; standaard 0,001."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Epsilon": "Epsilon"
+      },
+      "outputs": {
+        "Result": "Aan voor geselecteerde elementen, uit voor de rest. Verbind met Selectie of een booleaanse ingang."
+      },
+      "output_labels": {
+        "Result": "Resultaat"
+      },
+      "properties": {
+        "operation": "Vergelijking. Standaard Gelijk; Kleiner dan of Groter dan selecteert een kant van B."
+      },
+      "property_labels": {
+        "operation": "Bewerking"
+      }
+    },
+    "decimate": {
+      "label": "Uitdunnen",
+      "description": "Vermindert splats door grotere, minder transparante splats in je selectie te behouden.",
+      "help": "Begin met Behouden aandeel 0,5 om ongeveer de helft te bewaren.\nNiet-geselecteerde splats blijven; gelijke scores kunnen meer splats behouden.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Te verminderen splats: gewichten vanaf 0,5. Zonder verbinding worden alle splats meegenomen.",
+        "Keep Fraction": "Te behouden aandeel geselecteerde splats, 0,001–1. 0,5 behoudt ongeveer de helft, 1 alles."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Keep Fraction": "Behouden aandeel"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "delete_geometry": {
+      "label": "Geometrie verwijderen",
+      "description": "Verwijdert geselecteerde splats, punten of meshhoekpunten uit je scène.",
+      "help": "Verbind een selectie voordat je Geometrie aansluit.\nZonder Selectie-verbinding verdwijnt alles, ook vlakken aan verwijderde hoekpunten.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Wat je verwijdert: gewichten vanaf 0,5. Zonder verbinding verdwijnt alles en is de uitvoer leeg."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "ellipsoid_selection": {
+      "label": "Ellipsoïdeselectie",
+      "description": "Selecteert een bolvormig of uitgerekt deel van je scène, met optioneel zachte randen.",
+      "help": "Stel Centrum en Stralen in rond je doel.\nGelijke stralen geven een bol; Afname 0 geeft een scherpe grens.",
+      "inputs": {
+        "Centre": "Centrum langs X, Y en Z in lokale scène-eenheden. Standaard (0, 0, 0) is de oorsprong van het object.",
+        "Radii": "Straal langs elke as in scène-eenheden, niet negatief. Standaard (1, 1, 1) geeft een eenheidsbol.",
+        "Rotation": "Rotatie rond X, Y en Z in graden. Standaard (0, 0, 0) laat de richting onveranderd.",
+        "Falloff": "Zachte rand buiten de ellipsoïde, relatief aan de stralen. Standaard 0 geeft een scherpe grens."
+      },
+      "input_labels": {
+        "Centre": "Centrum",
+        "Radii": "Stralen",
+        "Rotation": "Rotatie",
+        "Falloff": "Afname"
+      },
+      "outputs": {
+        "Selection": "Selectiesterkte: 0 niet geselecteerd, 1 volledig geselecteerd; tussenwaarden geven zachte overgangen."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_input": {
+      "label": "Groepsingang",
+      "description": "Brengt de geometrie van het gastobject in je knoopgrafiek.",
+      "help": "Verbind Geometrie met de eerste bewerkingsknoop.\nIn een stapel ontvang je het resultaat van de vorige modifier.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Inkomende gastgeometrie of resultaat van de vorige modifier. Verbind met je eerste bewerkingsknoop."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_output": {
+      "label": "Groepsuitgang",
+      "description": "Stuurt de uiteindelijke geometrie van je knoopgrafiek terug naar de scène.",
+      "help": "Verbind de laatste bewerkingsknoop met Geometrie.\nAlleen de tak die deze knoop bereikt draagt bij aan het resultaat.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "hsv_range": {
+      "label": "HSV-bereik",
+      "description": "Selecteert splats op kleurbereik, bijvoorbeeld het groen van een gazon, met zachte randen.",
+      "help": "Kies de tint en vergroot Tintbereik tot het hele object is meegenomen.\nVerhoog Verzadiging min om grijs te negeren en Waarde min om schaduw te negeren.\nZet Selectievoorbeeld aan om het resultaat in het kijkvenster te zien.",
+      "inputs": {
+        "Hue": "Midden op het kleurwiel, 0–1: 0 rood, 0,17 geel, 0,33 groen, 0,5 cyaan, 0,67 blauw, 0,83 magenta.",
+        "Hue Range": "Afstand aan beide kanten van Tint, 0–0,5 van het wiel. 0,07 neemt één kleurfamilie mee.",
+        "Hue Softness": "Vervaging buiten het tintbereik in kleurwielomwentelingen. Standaard 0 geeft een scherpe tintgrens.",
+        "Saturation Min": "Laagste opgenomen kleursterkte, 0–1. Standaard 0 omvat grijs; verhoog om grijs uit te sluiten.",
+        "Saturation Max": "Hoogste opgenomen kleursterkte, 0–1. Standaard 1 omvat volledig verzadigde kleuren.",
+        "Value Min": "Laagste opgenomen helderheid, 0–1. Standaard 0 omvat zwart; verhoog om schaduwen uit te sluiten.",
+        "Value Max": "Hoogste opgenomen helderheid, 0–1. Standaard 1 omvat wit; verlaag om hooglichten uit te sluiten.",
+        "Softness": "Breedte van de zachte overgang. Standaard 0 geeft harde randen; hogere waarden verzachten de selectie."
+      },
+      "input_labels": {
+        "Hue": "Tint",
+        "Hue Range": "Tintbereik",
+        "Hue Softness": "Tintzachtheid",
+        "Saturation Min": "Verzadiging min",
+        "Saturation Max": "Verzadiging max",
+        "Value Min": "Waarde min",
+        "Value Max": "Waarde max",
+        "Softness": "Zachtheid"
+      },
+      "outputs": {
+        "Selection": "Selectiesterkte: 0 niet geselecteerd, 1 volledig geselecteerd; tussenwaarden geven zachte overgangen."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "index": {
+      "label": "Index",
+      "description": "Geeft de lijstpositie van elke splat, elk punt of meshhoekpunt, beginnend bij nul.",
+      "help": "Gebruik Rekenen of Vergelijken om op nummer te selecteren.\nVerwijderen of samenvoegen kan deze nummers veranderen.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Index": "Huidige lijstpositie vanaf 0. Samenvoegen of verwijderen kan elementen opnieuw nummeren."
+      },
+      "output_labels": {
+        "Index": "Index"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "inside_mesh": {
+      "label": "Binnen mesh",
+      "description": "Selecteert het deel van je scène dat binnen een referentiemesh ligt.",
+      "help": "Verbind een gesloten mesh uit Objectinformatie met Mesh.\nGaten en zelfdoorsnijdingen kunnen de binnenkant onduidelijk maken.",
+      "inputs": {
+        "Mesh": "Gesloten referentiemesh voor de binnenkant. Verbind Objectinformatie; zonder verbinding wordt niets geselecteerd."
+      },
+      "input_labels": {
+        "Mesh": "Mesh"
+      },
+      "outputs": {
+        "Selection": "Aan voor geselecteerde elementen, uit voor de rest. Verbind met Selectie of een booleaanse ingang."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "integer": {
+      "label": "Geheel getal",
+      "description": "Geeft je één geheel getal voor meerdere verbonden instellingen.",
+      "help": "Verbind Waarde met aantallen of instellingen voor gehele getallen.\nBegin bij 0; de stapknoppen wijzigen steeds met één.",
+      "inputs": {
+        "Value": "Gedeeld geheel getal. Standaard 0; negatieve en positieve getallen zijn toegestaan."
+      },
+      "input_labels": {
+        "Value": "Waarde"
+      },
+      "outputs": {
+        "Value": "Resulterend getal in je berekeningseenheden. Verbind met een geschikte numerieke ingang."
+      },
+      "output_labels": {
+        "Value": "Waarde"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "invert_colour": {
+      "label": "Kleur omkeren",
+      "description": "Keert kleuren om, zodat donker licht wordt en kleuren hun tegenkleur krijgen.",
+      "help": "Verbind een Selectie om slechts een deel om te keren.\nTweemaal toepassen herstelt de basiskleur, tenzij eerder afkappen details heeft verloren.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "join_geometry": {
+      "label": "Geometrie samenvoegen",
+      "description": "Voegt ingangen samen; splats met verschillende SH-graden worden tot de hoogste aangevuld.",
+      "help": "Verbind meerdere Geometrie-uitgangen met dezelfde ingang.\nVoeg hiermee takken na Geometrie splitsen weer samen.\nOverlappende kopieën blijven afzonderlijke splats, punten of meshvlakken.",
+      "inputs": {
+        "Geometry": "Samen te voegen geometriebronnen. Meerdere verbindingen zijn mogelijk; zonder verbinding is het resultaat leeg."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "map_range": {
+      "label": "Bereik omzetten",
+      "description": "Zet een waardebereik om in een ander, bijvoorbeeld hoogte 0–2 m in een verloop van 1 naar 0.",
+      "help": "Stel Bron min en Bron max in op je oorspronkelijke bereik.\nDoel min 1 en Doel max 0 geven een omgekeerd verloop.\nLaat Begrenzen aan om binnen de uitvoergrenzen te blijven.",
+      "inputs": {
+        "Value": "Om te zetten getal in de broneenheden. Standaard 0; verbind Positie of een andere waarde.",
+        "From Min": "Ondergrens van het bronbereik in de eenheden van Waarde. Standaard 0.",
+        "From Max": "Bovengrens van het bronbereik in de eenheden van Waarde. Standaard 1; houd deze anders dan Bron min.",
+        "To Min": "Resultaat bij Bron min. Standaard 0; 1 hier en 0 bij Doel max keren een verloop om.",
+        "To Max": "Resultaat bij Bron max. Standaard 1; 0 hier en 1 bij Doel min keren een verloop om."
+      },
+      "input_labels": {
+        "Value": "Waarde",
+        "From Min": "Bron min",
+        "From Max": "Bron max",
+        "To Min": "Doel min",
+        "To Max": "Doel max"
+      },
+      "outputs": {
+        "Result": "Resulterend getal in je berekeningseenheden. Verbind met een geschikte numerieke ingang."
+      },
+      "output_labels": {
+        "Result": "Resultaat"
+      },
+      "properties": {
+        "clamp": "Houd resultaten binnen het doelbereik. Standaard aan; uit staat waarden buiten beide grenzen toe."
+      },
+      "property_labels": {
+        "clamp": "Begrenzen"
+      }
+    },
+    "math": {
+      "label": "Rekenen",
+      "description": "Berekent waarden voor je bewerkingen, selecties en verlopen.",
+      "help": "Kies een bewerking en verbind waarden met A en B.\nBegin met Vermenigvuldigen om de sterkte van een selectie te schalen.",
+      "inputs": {
+        "A": "Eerste getal in de eenheden van je berekening. Standaard 0.",
+        "B": "Tweede getal in de eenheden van je berekening. Standaard 0."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Value": "Resulterend getal in je berekeningseenheden. Verbind met een geschikte numerieke ingang."
+      },
+      "output_labels": {
+        "Value": "Waarde"
+      },
+      "properties": {
+        "operation": "Uit te voeren berekening. Standaard Optellen; bewerkingen zoals Absoluut gebruiken alleen A."
+      },
+      "property_labels": {
+        "operation": "Bewerking"
+      }
+    },
+    "mesh_to_points": {
+      "label": "Mesh naar punten",
+      "description": "Zet meshhoekpunten om in een puntenwolk en behoudt beschikbare hoekpuntkleuren.",
+      "help": "Verbind een mesh uit Objectinformatie.\nJe krijgt één punt per hoekpunt, geen gelijkmatig bemonsterd oppervlak.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "mesh_to_splats": {
+      "label": "Mesh naar splats",
+      "description": "Bedekt een meshoppervlak met gekleurde, platte splats.",
+      "help": "De standaarddichtheid geeft circa 20.000 splats op een eenheidsbol.\nVerhoog Dichtheid voor detail; Max. aantal begrenst het totaal.\nHoekpuntkleuren gaan vóór materiaalkleuren en texturen.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Density": "Splats per vierkante scène-eenheid. Standaard circa 1.592 geeft 20.000 op een eenheidsbol; 0 maakt geen splats.",
+        "Max Count": "Maximaal aantal nieuwe splats, 0–2.000.000. Standaard begrensd tot 2.000.000; 0 maakt niets.",
+        "Opacity": "Splatdekking, 0–1: 0 transparant, 1 dekkend. Standaard 0,95 is bijna dekkend."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Density": "Dichtheid",
+        "Max Count": "Max. aantal",
+        "Opacity": "Dekking"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "seed": "Gehele startwaarde voor een herhaalbaar patroon. Standaard 0; veranderen geeft een ander patroon."
+      },
+      "property_labels": {
+        "seed": "Startwaarde"
+      }
+    },
+    "mix_colour": {
+      "label": "Kleuren mengen",
+      "description": "Mengt twee kleuren of combineert ze met een gekozen kleurbewerking.",
+      "help": "Verbind kleuren met A en B; Factor 0,5 geeft een gelijke menging.\nBegin met Mengen voordat je Vermenigvuldigen of Optellen probeert.",
+      "inputs": {
+        "A": "Eerste RGB-kleur, meestal 0–1 per kanaal. Standaard zwart.",
+        "B": "Tweede RGB-kleur, meestal 0–1 per kanaal. Standaard zwart.",
+        "Factor": "Mengsterkte, 0–1. 0 behoudt A, 1 past de hele bewerking toe; 0,5 geeft halve sterkte."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Factor": "Factor"
+      },
+      "outputs": {
+        "Colour": "RGB-resultaat: 0 zwart en 1 wit per kanaal. Sommige berekeningen kunnen dit bereik overschrijden."
+      },
+      "output_labels": {
+        "Colour": "Kleur"
+      },
+      "properties": {
+        "mode": "Kleurcombinatie. Standaard Mengen; Optellen, Aftrekken en Vermenigvuldigen komen vóór Factor."
+      },
+      "property_labels": {
+        "mode": "Modus"
+      }
+    },
+    "named_attribute": {
+      "label": "Benoemd attribuut",
+      "description": "Leest een opgeslagen waarde op naam om je bewerkingen te sturen.",
+      "help": "Voer de exacte attribuutnaam in en kies het type.\nEen ontbrekend attribuut kan geen waarden leveren.",
+      "inputs": {
+        "Name": "Exacte opgeslagen attribuutnaam, hoofdlettergevoelig. Standaard leeg; vul vóór gebruik een naam in."
+      },
+      "input_labels": {
+        "Name": "Naam"
+      },
+      "outputs": {
+        "Attribute": "Waarden uit het benoemde attribuut in de opgeslagen eenheden."
+      },
+      "output_labels": {
+        "Attribute": "Attribuut"
+      },
+      "properties": {
+        "type": "Te lezen waardetype. Standaard Float leest één decimale waarde per element."
+      },
+      "property_labels": {
+        "type": "Type"
+      }
+    },
+    "neighbour_count": {
+      "label": "Aantal buren",
+      "description": "Telt nabije splats of punten zodat je dunbezette delen van je scène vindt.",
+      "help": "Verbind Aantal met Vergelijken om lage aantallen te selecteren.\nBegin voor splats met Straal 3 en Relatief aan grootte.\nEen punt telt zichzelf nooit mee.",
+      "inputs": {
+        "Radius": "Buurafstand. Standaard 1 scène-eenheid, of grootteveelvoud bij Relatief aan grootte. 0 telt niets."
+      },
+      "input_labels": {
+        "Radius": "Straal"
+      },
+      "outputs": {
+        "Count": "Aantal buren binnen Straal, zonder het punt zelf. 0 betekent geïsoleerd."
+      },
+      "output_labels": {
+        "Count": "Aantal"
+      },
+      "properties": {
+        "relative_to_size": "Gebruik splatgrootte als straaleenheid. Standaard uit gebruikt scène-eenheden; punten gebruiken die altijd."
+      },
+      "property_labels": {
+        "relative_to_size": "Relatief aan grootte"
+      }
+    },
+    "opacity": {
+      "label": "Dekking",
+      "description": "Leest de dekking van elke splat om zwakke of dichte gebieden te vinden.",
+      "help": "Verbind Dekking met Vergelijken om zwakke splats te selecteren.\n0 is transparant en 1 volledig dekkend.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Opacity": "Dekking vóór weergave: 0 transparant, 1 dekkend."
+      },
+      "output_labels": {
+        "Opacity": "Dekking"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "points_to_splats": {
+      "label": "Punten naar splats",
+      "description": "Zet een puntenwolk om in gekleurde, ronde splats.",
+      "help": "Laat Straal op 0 om de grootte uit nabije punten te schatten.\nKies een positieve straal in scène-eenheden als er gaten blijven.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Radius": "Splatstraal in scène-eenheden. Standaard 0 schat de halve buurafstand; positief stelt één grootte in.",
+        "Opacity": "Splatdekking, 0–1: 0 transparant, 1 dekkend. Standaard 0,9 blijft iets transparant."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Radius": "Straal",
+        "Opacity": "Dekking"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "position": {
+      "label": "Positie",
+      "description": "Leest waar elke splat, elk punt of meshhoekpunt zich in je object bevindt.",
+      "help": "Verbind Positie met XYZ splitsen om op hoogte of afstand langs een as te selecteren.\nDe coördinaten zijn lokaal voor het object.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Lokale X-, Y- en Z-positie in scène-eenheden."
+      },
+      "output_labels": {
+        "Position": "Positie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "posterize": {
+      "label": "Posteriseren",
+      "description": "Vermindert de kleuren van je scène tot enkele vlakke stappen.",
+      "help": "Begin met Niveaus 4 voor vier stappen per kleurkanaal.\nVerbind een Selectie om het effect te beperken.\nGeselecteerde splats verliezen kijkafhankelijke kleurvariatie.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Levels": "Kleurstappen per RGB-kanaal, 2–32. 2 geeft alleen lage en hoge waarden; standaard 4."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Levels": "Niveaus"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "random_value": {
+      "label": "Willekeurige waarde",
+      "description": "Geeft elke splat of elk punt een herhaalbare willekeurige waarde voor gevarieerde bewerkingen.",
+      "help": "Stel Min en Max in op het gewenste bereik.\nVerander Startwaarde voor een ander patroon; herschikken van geometrie kan het ook veranderen.",
+      "inputs": {
+        "Min": "Laagste willekeurige waarde in je eenheden. Standaard 0; houd deze lager dan Max.",
+        "Max": "Hoogste willekeurige waarde in je eenheden. Standaard 1; houd deze hoger dan Min."
+      },
+      "input_labels": {
+        "Min": "Min",
+        "Max": "Max"
+      },
+      "outputs": {
+        "Value": "Resulterend getal in je berekeningseenheden. Verbind met een geschikte numerieke ingang."
+      },
+      "output_labels": {
+        "Value": "Waarde"
+      },
+      "properties": {
+        "seed": "Gehele startwaarde voor een herhaalbaar patroon. Standaard 0; veranderen geeft een ander patroon."
+      },
+      "property_labels": {
+        "seed": "Startwaarde"
+      }
+    },
+    "recolour": {
+      "label": "Herkleuren",
+      "description": "Verandert de kleur van geselecteerde splats en behoudt desgewenst licht en schaduw.",
+      "help": "Kies Kleur en begin met Gewicht 0,3 voor een zachte tint.\nLaat Schaduw behouden aan om lichtdetails te bewaren.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Colour": "RGB-doelkleur, meestal 0–1 per kanaal. Standaard blauw. Schaduw behouden bewaart licht en schaduw.",
+        "Weight": "Herkleursterkte, 0–1. 0 behoudt het origineel, 1 past de nieuwe kleur volledig toe; standaard 1."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Colour": "Kleur",
+        "Weight": "Gewicht"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "keep_shading": "Bewaar licht en schaduw bij herkleuring. Standaard aan; uit geeft vlakke kleur.",
+        "fade_view_dependent": "Verminder kijkafhankelijke kleur bij herkleuring. Standaard aan; uit behoudt de oorspronkelijke variatie."
+      },
+      "property_labels": {
+        "keep_shading": "Schaduw behouden",
+        "fade_view_dependent": "Kijkafhankelijkheid vervagen"
+      }
+    },
+    "remove_floaters": {
+      "label": "Losse splats verwijderen",
+      "description": "Verwijdert losse splats in lege ruimte, zoals stippen in de lucht of nevel onder de grond.",
+      "help": "Zet eerst Voorbeeld aan: dit toont alleen wat zou verdwijnen.\nIsolatiestraal 3 met Relatief aan grootte beoordeelt elke splat op eigen schaal en spaart de ijle achtergrond.\nVerbind een Selectie om de schoonmaak te beperken, bijvoorbeeld tot onder de grond.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je verwijdering test: gewichten vanaf 0,5. Zonder verbinding test je elke splat.",
+        "Min Opacity": "Verwijder onder deze dekking, 0–1. 0 schakelt de test uit; standaard 0,02 verwijdert zeer zwakke splats.",
+        "Max Size": "Verwijder splats met een langste as boven deze scène-eenheden. Standaard 0 schakelt de test uit.",
+        "Isolation Radius": "Zoekafstand voor buren: grootteveelvoud bij Relatief aan grootte, anders scène-eenheden. 0 schakelt de test uit.",
+        "Min Neighbours": "Verwijder splats met minder buren binnen de straal. 1 verwijdert alleen volledig geïsoleerde splats."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Min Opacity": "Min. dekking",
+        "Max Size": "Max. grootte",
+        "Isolation Radius": "Isolatiestraal",
+        "Min Neighbours": "Min. buren"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "preview": "Toon alleen de te verwijderen splats, ongewijzigd. Standaard uit toont het opgeschoonde resultaat.",
+        "relative_to_size": "Gebruik splatgrootte als straaleenheid. Standaard aan spaart ijle gebieden; uit gebruikt scène-eenheden."
+      },
+      "property_labels": {
+        "preview": "Voorbeeld",
+        "relative_to_size": "Relatief aan grootte"
+      }
+    },
+    "scale": {
+      "label": "Schaal",
+      "description": "Leest de grootte van elke splat langs zijn drie lokale assen.",
+      "help": "Verbind Schaal met XYZ splitsen om asgroottes te vergelijken.\nDe waarden zijn scène-eenheden, geen vermenigvuldigingsfactoren.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Scale": "Grootte langs de drie lokale splatassen in scène-eenheden."
+      },
+      "output_labels": {
+        "Scale": "Schaal"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "scale_clamp": {
+      "label": "Asverhouding begrenzen",
+      "description": "Herstelt naald- en schijfvormige Gaussians die strepen tonen wanneer je het opnamepad verlaat.",
+      "help": "Gebruik dit na het trainen wanneer dunne strepen buiten het camerapad verschijnen.\nBegin met Max. asverhouding 8; lagere waarden maken splats ronder maar zachter.\nAlleen de vorm verandert; positie, kleur en aantal blijven gelijk.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Max Aspect": "Hoogste verhouding tussen langste en kortste splatas. 1 maakt elke splat rond; 8 is een goed begin."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Max Aspect": "Max. asverhouding"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_colour": {
+      "label": "Kleur splitsen",
+      "description": "Splitst een kleur in RGB- of HSV-waarden om elk deel apart te bewerken of vergelijken.",
+      "help": "Kies HSV om tint, verzadiging of helderheid te isoleren.\nIn HSV leveren R, G en B deze waarden in die volgorde.",
+      "inputs": {
+        "Colour": "Te splitsen kleur, meestal 0–1 per RGB-kanaal. Standaard zwart, alle kanalen op 0."
+      },
+      "input_labels": {
+        "Colour": "Kleur"
+      },
+      "outputs": {
+        "R": "Rood in RGB of tint in HSV. Tint loopt van 0 tot 1 rond het kleurwiel.",
+        "G": "Groen in RGB of verzadiging in HSV. In HSV is 0 grijs en 1 volledig verzadigd.",
+        "B": "Blauw in RGB of helderheid in HSV. In HSV is 0 zwart en 1 volledige helderheid."
+      },
+      "output_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "properties": {
+        "mode": "Kleurinterpretatie. Standaard RGB gebruikt rood, groen en blauw; HSV gebruikt tint, verzadiging en helderheid."
+      },
+      "property_labels": {
+        "mode": "Modus"
+      }
+    },
+    "separate_geometry": {
+      "label": "Geometrie splitsen",
+      "description": "Splitst de selectie van de rest zodat je beide apart kunt bewerken en weer samenvoegen.",
+      "help": "Verbind een Selectie en bewerk de twee uitgangen afzonderlijk.\nGebruik Geometrie samenvoegen om de takken te herenigen.\nZachte gewichten worden bij 0,5 gesplitst in ja of nee.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Gewichten vanaf 0,5 gaan naar Selectie; lagere naar Omgekeerd. Zonder verbinding is alles geselecteerd."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie"
+      },
+      "outputs": {
+        "Selection": "Geometrie met een selectiegewicht van minstens 0,5. Bewerk deze tak afzonderlijk.",
+        "Inverted": "Geometrie met een selectiegewicht onder 0,5. Dit is het deel buiten je selectie."
+      },
+      "output_labels": {
+        "Selection": "Selectie",
+        "Inverted": "Omgekeerd"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_xyz": {
+      "label": "XYZ splitsen",
+      "description": "Splitst een positie of richting in X-, Y- en Z-waarden.",
+      "help": "Verbind Positie en stuur de hoogte-as naar Vergelijken of Bereik omzetten.\nControleer welke as in je scène omhoog wijst.",
+      "inputs": {
+        "Vector": "X-, Y- en Z-waarden in je eenheden. Standaard (0, 0, 0) geeft nul op elke as."
+      },
+      "input_labels": {
+        "Vector": "Vector"
+      },
+      "outputs": {
+        "X": "X-coördinaat van de invoer, in dezelfde eenheden. 0 ligt op het vlak van de andere twee assen.",
+        "Y": "Y-coördinaat van de invoer, in dezelfde eenheden. 0 ligt op het vlak van de andere twee assen.",
+        "Z": "Z-coördinaat van de invoer, in dezelfde eenheden. 0 ligt op het vlak van de andere twee assen."
+      },
+      "output_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_colour": {
+      "label": "Kleur instellen",
+      "description": "Vervangt de basiskleur van geselecteerde splats door jouw opgegeven kleur.",
+      "help": "Kies Kleur of verbind kleuren van een andere knoop.\nLaat Kijkafhankelijkheid wissen aan voor een vlak geschilderde kleur.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Colour": "RGB-kleur, meestal 0–1 per kanaal: 0 zwart, 1 wit. Standaard (0,5, 0,5, 0,5) is middengrijs."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Colour": "Kleur"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "clear_view_dependent": "Verwijder kijkafhankelijke kleur van geselecteerde splats. Standaard aan geeft vlakke kleur; uit behoudt reflecties."
+      },
+      "property_labels": {
+        "clear_view_dependent": "Kijkafhankelijkheid wissen"
+      }
+    },
+    "set_opacity": {
+      "label": "Dekking instellen",
+      "description": "Verandert hoe transparant geselecteerde splats eruitzien.",
+      "help": "Begin met Dekking 0,5 voor doorschijnende splats.\nGebruik Selectie voor een zachte menging met hun oorspronkelijke dekking.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Opacity": "Nieuwe dekking, 0–1: 0 transparant, 1 dekkend. Standaard 1 maakt geselecteerde splats dekkend."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Opacity": "Dekking"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_position": {
+      "label": "Positie instellen",
+      "description": "Verplaatst geselecteerde splats, punten of meshhoekpunten naar nieuwe posities, met optionele verschuiving.",
+      "help": "Verbind Positie met Positie en stel Verschuiving in voor relatieve beweging.\nZonder die verbinding staat Positie standaard op de oorsprong.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Position": "Nieuwe lokale positie in scène-eenheden. Standaard oorsprong; verbind Positie om posities te behouden.",
+        "Offset": "Extra X-, Y- en Z-beweging in lokale scène-eenheden. Standaard (0, 0, 0) voegt geen beweging toe."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Position": "Positie",
+        "Offset": "Verschuiving"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_scale": {
+      "label": "Schaal instellen",
+      "description": "Stelt de grootte van geselecteerde splats langs hun drie lokale assen in.",
+      "help": "Verbind Schaal via Vectorrekenen om bestaande groottes te vermenigvuldigen.\nZonder verbinding vervangen waarden de grootte in scène-eenheden; het zijn geen factoren.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Scale": "Nieuwe grootte per lokale as in scène-eenheden. Standaard (1, 1, 1) geeft ronde splats met eenheidsgrootte."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Scale": "Schaal"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_sh_degree": {
+      "label": "SH-graad instellen",
+      "description": "Beperkt hoeveel de kleur van een splat met de kijkrichting kan veranderen.",
+      "help": "Gebruik Graad 0 voor vlakke kleur en kleinere exports.\nEen hogere graad biedt ruimte voor detail maar herstelt weggegooide kleur niet.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Degree": "SH-graad, 0–3. Standaard 0 verwijdert kijkafhankelijke kleur; hogere waarden laten meer hoekdetail toe."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Degree": "Graad"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "sharpen": {
+      "label": "Verscherpen",
+      "description": "Verkleint geselecteerde splats om zachte details scherper te maken.",
+      "help": "Begin met Sterkte 0,25 en laat Bedekking behouden aan.\nHoge waarden kunnen gaten tussen splats zichtbaar maken.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
+        "Amount": "Groottereductie, 0–0,95. 0 doet niets; standaard 0,25 verkleint elke as met 25%."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Amount": "Sterkte"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "keep_coverage": "Verhoog dekking bij verkleinen om bedekking te bewaren. Standaard aan; uit kan transparanter worden."
+      },
+      "property_labels": {
+        "keep_coverage": "Bedekking behouden"
+      }
+    },
+    "simplify": {
+      "label": "Vereenvoudigen",
+      "description": "Combineert splats om hun aantal te verlagen en het totaalbeeld te behouden.",
+      "help": "Begin met Verhouding 0,5 om naar de helft van de splats te streven.\nDit kan langer duren; lagere verhoudingen verliezen fijne details.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Ratio": "Gewenst splataandeel, 0,01–1. Standaard 0,5 streeft naar de helft; 1 behoudt het oorspronkelijke aantal."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Ratio": "Verhouding"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "splats_to_points": {
+      "label": "Splats naar punten",
+      "description": "Zet splatmiddens en basiskleuren om in een puntenwolk.",
+      "help": "Gebruik dit om middens te exporteren of je scène als punten te bewerken.\nGrootte, dekking en kijkafhankelijke kleur blijven niet behouden.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "stored_selection": {
+      "label": "Opgeslagen selectie",
+      "description": "Hergebruikt een selectie die je in het kijkvenster vastlegt.",
+      "help": "Selecteer splats in het kijkvenster en druk op Selectie vastleggen.\nLeg opnieuw vast na veranderingen in aantal of volgorde.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Selection": "Aan voor geselecteerde elementen, uit voor de rest. Verbind met Selectie of een booleaanse ingang."
+      },
+      "output_labels": {
+        "Selection": "Selectie"
+      },
+      "properties": {
+        "data": "Vastgelegde kijkvensterselectie. Leeg tot Selectie vastleggen; apart opgeslagen per modifier.",
+        "size": "Elementaantal bij het vastleggen. 0 betekent leeg; leg opnieuw vast als het aantal verandert.",
+        "invert": "Keer de vastgelegde selectie om. Standaard uit behoudt geselecteerde elementen; aan kiest de rest."
+      },
+      "property_labels": {
+        "data": "Gegevens",
+        "size": "Grootte",
+        "invert": "Omkeren"
+      }
+    },
+    "transform_geometry": {
+      "label": "Geometrie transformeren",
+      "description": "Verplaatst, draait en schaalt de hele geometrie tegelijk.",
+      "help": "Begin met Verplaatsing of Schaal 1 om de grootte te behouden.\nRotatie gebruikt graden rond de oorsprong van het object.",
+      "inputs": {
+        "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
+        "Translation": "X-, Y- en Z-beweging in scène-eenheden. Standaard (0, 0, 0) laat posities onveranderd.",
+        "Rotation": "Rotatie rond X, Y en Z in graden. Standaard (0, 0, 0) laat de richting onveranderd.",
+        "Scale": "Groottefactor. 1 behoudt grootte, 0 vouwt samen tot de oorsprong; negatieve waarden spiegelen."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Translation": "Verplaatsing",
+        "Rotation": "Rotatie",
+        "Scale": "Schaal"
+      },
+      "outputs": {
+        "Geometry": "Resulterende geometrie. Verbind met een andere bewerkingsknoop of Groepsuitgang."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "value": {
+      "label": "Waarde",
+      "description": "Geeft je één getal voor meerdere verbonden instellingen.",
+      "help": "Verbind Waarde met meerdere numerieke ingangen om ze samen te regelen.\nBegin bij 0 en versleep het getal om het aan te passen.",
+      "inputs": {
+        "Value": "Gedeeld getal. Standaard 0; negatieve en positieve getallen zijn toegestaan."
+      },
+      "input_labels": {
+        "Value": "Waarde"
+      },
+      "outputs": {
+        "Value": "Resulterend getal in je berekeningseenheden. Verbind met een geschikte numerieke ingang."
+      },
+      "output_labels": {
+        "Value": "Waarde"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector": {
+      "label": "Vector",
+      "description": "Geeft je gedeelde X-, Y- en Z-waarden voor meerdere knopen.",
+      "help": "Gebruik dit voor een gezamenlijke positie, verschuiving of richting.\nAlle drie de coördinaten zijn standaard 0.",
+      "inputs": {
+        "Vector": "X-, Y- en Z-waarden in je eenheden. Standaard (0, 0, 0) geeft nul op elke as."
+      },
+      "input_labels": {
+        "Vector": "Vector"
+      },
+      "outputs": {
+        "Vector": "Resulterende X-, Y- en Z-waarden in de eenheden van je berekening."
+      },
+      "output_labels": {
+        "Vector": "Vector"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector_math": {
+      "label": "Vectorrekenen",
+      "description": "Berekent posities, richtingen en afstanden uit waarden met drie componenten.",
+      "help": "Gebruik Schaal voor een verschuiving of Afstand tussen twee posities.\nLengte, Afstand en Inproduct gebruiken Waarde; de andere bewerkingen gebruiken Vector.",
+      "inputs": {
+        "A": "Eerste driedelige waarde in je berekeningseenheden. Standaard (0, 0, 0).",
+        "B": "Tweede driedelige waarde in je berekeningseenheden. Standaard (0, 0, 0).",
+        "Scale": "Factor voor Schaal. 1 laat A onveranderd, 0 geeft nul en −1 keert de richting om."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Scale": "Schaal"
+      },
+      "outputs": {
+        "Vector": "Resulterende X-, Y- en Z-waarden in de eenheden van je berekening.",
+        "Value": "Resulterend getal in je berekeningseenheden. Verbind met een geschikte numerieke ingang."
+      },
+      "output_labels": {
+        "Vector": "Vector",
+        "Value": "Waarde"
+      },
+      "properties": {
+        "operation": "Vectorberekening. Standaard Optellen; Lengte, Afstand en Inproduct geven Waarde in plaats van Vector."
+      },
+      "property_labels": {
+        "operation": "Bewerking"
+      }
+    },
+    "object_info": {
+      "label": "Objectinformatie",
+      "description": "Brengt geometrie van een ander scèneobject als referentie of extra deel in je grafiek.",
+      "help": "Kies de exacte naam of UUID van het referentieobject.\nGebruik Relatief om het ten opzichte van het gewijzigde object te plaatsen.\nVermijd referenties naar objecten die van deze modifier afhangen.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Referentiegeometrie in de gekozen ruimte, inclusief zichtbare modifiers."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "object": "Exacte objectnaam of UUID. Standaard leeg; kies een referentie vóór de berekening.",
+        "transform_space": "Referentieruimte. Origineel behoudt lokale coördinaten; Relatief rekent om naar de ruimte van het gewijzigde object."
+      },
+      "property_labels": {
+        "object": "Object",
+        "transform_space": "Transformatieruimte"
+      }
+    }
+  },
+  "node_editor.how_to_use": "Zo gebruik je dit",
+  "node_editor.learn_more": "Meer informatie"
 }

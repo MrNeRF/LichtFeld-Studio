@@ -251,6 +251,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/node_canvas_dom.cpp
         gui/rmlui/elements/node_canvas_status.cpp
         gui/rmlui/elements/node_canvas_menu.cpp
+        gui/rmlui/elements/node_canvas_help.cpp
         gui/rmlui/elements/vram_timeline_element.cpp
         gui/rmlui/elements/python_editor_element.cpp
         gui/rmlui/elements/scene_graph_element.cpp

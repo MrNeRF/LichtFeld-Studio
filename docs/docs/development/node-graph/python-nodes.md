@@ -29,14 +29,29 @@ class PassThrough(lf.nodes.Node):
     id = "example.pass_through"
     label = "Pass Through"
     category = "Utilities"
-    inputs = [lf.nodes.Input("Geometry", "geometry")]
-    outputs = [lf.nodes.Output("Geometry", "geometry")]
+    description = "Passes your geometry through without changing it."
+    help = "Use while testing a graph connection.\nConnect Geometry at both ends."
+    inputs = [lf.nodes.Input("Geometry", "geometry", description="Geometry to pass through; connect a source.")]
+    outputs = [lf.nodes.Output("Geometry", "geometry", description="The unchanged input geometry.")]
 
     def execute(self, ctx):
         return {"Geometry": ctx.input("Geometry")}
 
 lf.nodes.register_node(PassThrough)
 ```
+
+`Input`, `Output` and `Property` accept an optional `description` keyword.
+Write what the control does, its units/range and what its default means.
+The editor shows these strings on hover and when an inspector control has focus.
+`Node.description` is a short sentence and `Node.help` is optional multiline
+plain text, shown in the Add preview and the inspector's How to use block.
+Plug-ins provide their own strings (or use their own translation catalogue);
+their identifiers are never translated.
+
+The [node reference](nodes/index.md) is generated from `lf.nodes.node_types()`.
+Run `tools/generate_node_reference.py` in the application for the complete
+catalogue, including Object Info. An English JSON export can also be passed
+with `--descriptors`; `--check` detects stale pages without writing them.
 
 Use `new_tree`, `NodeTree.add_node`, and `NodeTree.link` to construct a node graph.
 The default graph name is "Node Graph"; duplicate names gain a numeric suffix

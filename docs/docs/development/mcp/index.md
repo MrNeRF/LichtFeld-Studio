@@ -60,7 +60,9 @@ Then narrow further:
 
 ## Pointer Injection
 
-`ui.pointer` drives the same SDL event and polled-pointer path as the physical mouse. Coordinates are window pixels, matching `render_capture_window`. Supported actions are `move`, `down`, `up`, `wheel`, `pinch`, and `drag`; `drag` accepts `from`, `to`, `button`, `steps`, and optional Ctrl, Shift, Alt, or Meta modifiers. During an injected gesture the physical cursor is ignored, and normal input resumes after the injected button is released.
+`ui.pointer` drives the same SDL event and polled-pointer path as the physical mouse. Coordinates are window pixels, matching `render_capture_window`. Supported actions are `move`, `hover`, `down`, `up`, `wheel`, `pinch`, and `drag`; `drag` accepts `from`, `to`, `button`, `steps`, and optional Ctrl, Shift, Alt, or Meta modifiers. During an injected gesture the physical cursor is ignored, and normal input resumes after the injected button is released.
+
+`hover` accepts `x`, `y` and optional `duration_ms` (1–10000, default 1000). It returns immediately and retains the pointer for delayed tooltips; capture after the 500 ms tooltip delay. Normal input resumes when the duration expires or another pointer action starts.
 
 Use this tool for end-to-end GUI automation instead of pushing SDL events directly. A direct push does not update SDL's polled mouse state, which causes event-driven and per-frame GUI input to disagree.
 

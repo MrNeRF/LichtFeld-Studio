@@ -75,8 +75,7 @@ namespace lfs::nodes::builtin {
         const auto f = std::string(FLOAT_SOCKET);
         const auto i = std::string(INT_SOCKET);
         register_type(registry,
-                      type("lfs.remove_floaters", "Remove Floaters", "Clean-up",
-                           "Remove selected splats failing opacity, size or isolation thresholds.",
+                      type("lfs.remove_floaters", "Clean-up",
                            geometry_inputs({in("Selection", f, 1.0f, true)
                                                 .range(0, 1)
                                                 .step_size(0.01),
@@ -87,14 +86,12 @@ namespace lfs::nodes::builtin {
                            {out("Geometry", geo)}, evaluate_remove_floaters,
                            {prop("preview", PropertyKind::Bool, false),
                             prop("relative_to_size", PropertyKind::Bool, true)}));
-        register_type(registry, type("lfs.simplify", "Simplify", "Clean-up",
-                                     "Simplify splats to a requested fraction of the input count.",
+        register_type(registry, type("lfs.simplify", "Clean-up",
                                      geometry_inputs({in("Ratio", f, 0.5f).range(0.01, 1).step_size(0.01)}),
                                      {out("Geometry", geo)},
                                      evaluate_simplify));
         register_type(registry,
-                      type("lfs.decimate", "Decimate", "Clean-up",
-                           "Keep the most important selected splats while always retaining unselected splats.",
+                      type("lfs.decimate", "Clean-up",
                            geometry_inputs({in("Selection", f, 1.0f, true)
                                                 .range(0, 1)
                                                 .step_size(0.01),
