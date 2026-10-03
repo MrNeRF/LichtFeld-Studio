@@ -44,10 +44,13 @@ def test_fps_resize_scale_and_background_updates(tmp_path):
     def quiet():
         deadline = time.monotonic() + 15
         previous = _ledger(endpoint)
+        stable_since = time.monotonic()
         while time.monotonic() < deadline:
             time.sleep(0.15)
             current = _ledger(endpoint)
-            if current["ui_fps"] == current["viewport_fps"] == 0 and current["frames_presented"] == previous["frames_presented"]:
+            if current["frames_presented"] != previous["frames_presented"]:
+                stable_since = time.monotonic()
+            if current["ui_fps"] == current["viewport_fps"] == 0 and time.monotonic() - stable_since > 1.2:
                 return current
             previous = current
         pytest.fail(f"did not become idle: {previous}")
@@ -75,10 +78,16 @@ def test_fps_resize_scale_and_background_updates(tmp_path):
             names = {t["name"] for t in _call(endpoint, "tools/list")["tools"]}
             assert {"runtime_frame_ledger", "scene_load_ply", "editor_run"} <= names
             _tool(endpoint, "scene_load_ply", {"path": str(fixture)})
+            deadline = time.monotonic() + 30
+            while _ledger(endpoint)["views_rendered"] == 0:
+                assert time.monotonic() < deadline, "scene never rendered"
+                time.sleep(0.1)
             quiet()
             window = subprocess.check_output(["xdotool", "search", "--pid", str(app.pid)], env=env, text=True).splitlines()[0]
             xd("windowmove", window, 0, 0)
             xd("windowsize", window, 1600, 1000)
+            xd("windowfocus", window)
+            xd("mousemove", 0, 1300)
             quiet()
             # A Python callback must reveal the HUD without any unrelated input.
             before = _ledger(endpoint)
@@ -103,6 +112,37 @@ def test_fps_resize_scale_and_background_updates(tmp_path):
             assert _ledger(endpoint)["frames_presented"] == stopped["frames_presented"]
             assert stopped["last_frame_reasons"] == ["FpsIdle"]
             capture("idle")
+            editor("lf.ui.message_dialog('Redraw check', 'Dismiss without mouse input')")
+            quiet()
+            before = _ledger(endpoint)
+            _tool(endpoint, "ui_modal_press", {"label": "OK"})
+            after = quiet()
+            assert after["frames_presented"] > before["frames_presented"]
+            assert after["views_rendered"] == before["views_rendered"]
+            capture("modal-dismissed")
+            editor("lf.ui.input_dialog('Caret check', 'Input', 'text')")
+            time.sleep(0.2)
+            before = _ledger(endpoint)
+            time.sleep(1.5)
+            after = _ledger(endpoint)
+            assert after["frames_presented"] > before["frames_presented"]
+            assert after["views_rendered"] == before["views_rendered"]
+            _tool(endpoint, "ui_modal_press", {"label": "OK"})
+            quiet()
+            # A focused text caret has a real Rml deadline; blur removes it.
+            xd("mousemove", 80, 48)
+            xd("click", 1)
+            xd("type", "caret")
+            time.sleep(0.2)
+            before = _ledger(endpoint)
+            time.sleep(1.5)
+            after = _ledger(endpoint)
+            assert after["frames_presented"] > before["frames_presented"]
+            assert after["views_rendered"] == before["views_rendered"]
+            xd("key", "ctrl+a", "BackSpace", "Tab")
+            stopped = quiet()
+            time.sleep(1.2)
+            assert _ledger(endpoint)["frames_presented"] == stopped["frames_presented"]
             for scale in (2.0, 1.5, 1.0):
                 before = _ledger(endpoint)
                 editor(f"lf.ui.set_ui_scale({scale})")

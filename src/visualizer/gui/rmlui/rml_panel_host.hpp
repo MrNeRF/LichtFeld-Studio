@@ -8,6 +8,7 @@
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include <chrono>
 #include <core/export.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -76,7 +77,7 @@ namespace lfs::vis::gui {
             clip_y_max_ = y_max;
         }
         bool needsAnimationFrame() const {
-            return render_needed_ || content_dirty_ || animation_active_ || tooltip_.revealDue();
+            return render_needed_ || content_dirty_ || animation_active_ || scheduledUpdateDue() || tooltip_.revealDue();
         }
         [[nodiscard]] bool needsImmediateAnimationFrame() const {
             return content_height_settling_;
@@ -91,6 +92,9 @@ namespace lfs::vis::gui {
         bool isDocumentLoaded() const { return document_ != nullptr; }
 
     private:
+        bool scheduledUpdateDue() const {
+            return next_update_at_ && std::chrono::steady_clock::now() >= *next_update_at_;
+        }
         std::optional<RmlRect> openDropdownBounds() const;
         bool openDropdownContainsPoint(float local_x, float local_y) const;
         Rml::Element* openDropdownOptionAtPoint(float local_x, float local_y) const;
@@ -152,6 +156,7 @@ namespace lfs::vis::gui {
         bool render_needed_ = true;
         bool animation_active_ = false;
         double next_update_delay_ = std::numeric_limits<double>::infinity();
+        std::optional<std::chrono::steady_clock::time_point> next_update_at_;
         int content_height_rearm_count_ = 0;
         bool content_height_rearm_warned_ = false;
         bool content_height_settling_ = false;

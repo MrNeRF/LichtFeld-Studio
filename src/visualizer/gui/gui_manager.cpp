@@ -8695,6 +8695,9 @@ namespace lfs::vis::gui {
                                "panels");
         }
 
+        if (rml_modal_overlay_)
+            result = min_delay(result, rml_modal_overlay_->secondsUntilNextUpdate(), "modal_overlay");
+
         result = min_delay(result, rml_viewport_overlay_.nextScheduledUpdateDelay(),
                            "viewport_overlay");
         result = min_delay(result, rml_status_bar_.secondsUntilAnimationFrame(now),
