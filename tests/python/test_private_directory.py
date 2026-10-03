@@ -5,6 +5,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 import shutil
+import sys
 import uuid
 
 import pytest
@@ -178,7 +179,7 @@ def test_elevated_and_normal_tokens_share_encrypted_credentials_and_lock():
     # either token; pytest's elevated temporary root may itself be owner-only.
     build = Path(__file__).resolve().parents[2] / "build-windows-release"
     root = build / ("verify-uac-" + uuid.uuid4().hex)
-    mkdir_private(root)
+    mkdir_private(root, parents=True)
     try:
         legacy = root / "legacy"
         legacy.mkdir(mode=0o700)
@@ -209,3 +210,21 @@ def test_elevated_and_normal_tokens_share_encrypted_credentials_and_lock():
         assert normal_value not in ciphertext
     finally:
         shutil.rmtree(root)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows UAC workspace")
+def test_uac_workspace_without_build_directory_reaches_skip_and_cleans_up(monkeypatch, tmp_path):
+    checkout = tmp_path / "checkout"
+    build = checkout / "build-windows-release"
+    assert not build.exists()
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "__file__", str(checkout / "tests/python/test_private_directory.py"))
+
+    def unavailable_normal_token():
+        pytest.skip("UAC prerequisite unavailable")
+
+    monkeypatch.setattr(module, "_filtered_user", unavailable_normal_token)
+    with pytest.raises(pytest.skip.Exception, match="UAC prerequisite unavailable"):
+        test_elevated_and_normal_tokens_share_encrypted_credentials_and_lock()
+    assert build.is_dir()
+    assert list(build.iterdir()) == []
