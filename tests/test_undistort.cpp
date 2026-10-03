@@ -500,6 +500,33 @@ TEST(UndistortResampling, MatchesEightByEightOracle) {
     EXPECT_LE(hf_ratio, 1.10);
 }
 
+TEST(UndistortResampling, CpuLanczosPreservesZerosAndNearIntegerBorderWeights) {
+    const std::vector<float> source = {0.2f, 0.3f, 0.4f,
+                                       0.8f, 0.7f, 0.6f,
+                                       0.4f, 0.5f, 0.6f};
+    const auto input = Tensor::from_vector(source, {1, 3, 3}, Device::CPU);
+    UndistortParams p{};
+    p.model_type = CameraModelType::PINHOLE;
+    p.src_width = p.src_height = 3;
+    p.dst_width = p.dst_height = 1;
+    // Keep the entire output footprint at the same float source coordinate.
+    p.src_fx = p.src_fy = 1.0e-9f;
+    p.dst_fx = p.dst_fy = 1.0f;
+    p.dst_cx = p.dst_cy = 0.5f;
+    p.src_cx = 1.5f;
+    for (const float y : {-1.0f, -1.00000286102294921875f, -0.99999713897705078125f}) {
+        SCOPED_TRACE(y);
+        p.src_cy = y + 0.5f;
+        const float value = undistort_image(input, p, nullptr).item<float>();
+        if (y == -1.0f) {
+            // All in-bounds taps are sinc zeros; use the nearest border pixel.
+            EXPECT_NEAR(value, source[1], 1.0e-6f);
+        } else {
+            EXPECT_NEAR(value, reconstruct_lanczos3(source, 3, 3, 1.0, y), 1.0e-6f);
+        }
+    }
+}
+
 TEST(UndistortResampling, PreservesConstantWithDistortionAndBorderRenormalization) {
     const auto native = compute_undistort_params(
         62.5f, 62.5f, 32.0f, 20.0f, 64, 40,

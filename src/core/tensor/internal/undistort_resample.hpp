@@ -291,11 +291,15 @@ namespace lfs::core::internal::warp_math {
             return 0.0f;
         if (absolute_value < 1.0e-6f)
             return 1.0f;
-        constexpr float PI = 3.14159265358979323846f;
-        const float pi_value = PI * value;
-        return sinf(pi_value) / pi_value *
-               (sinf(pi_value / static_cast<float>(LANCZOS_RADIUS)) /
-                (pi_value / static_cast<float>(LANCZOS_RADIUS)));
+        // Match CUDA's sinpif zeros and keep near-integer taps accurate: border
+        // normalization can amplify float sine argument-reduction error.
+        if (absolute_value == floorf(absolute_value))
+            return 0.0f;
+        constexpr double PI = 3.14159265358979323846;
+        const double pi_value = PI * static_cast<double>(value);
+        return static_cast<float>(std::sin(pi_value) / pi_value *
+                                  (std::sin(pi_value / LANCZOS_RADIUS) /
+                                   (pi_value / LANCZOS_RADIUS)));
     }
 
     inline bool lanczos3_sample(
@@ -369,8 +373,10 @@ namespace lfs::core::internal::warp_math {
                 float dnx, dny;
                 apply_distortion(nx, ny, params.model_type, params.distortion,
                                  params.num_distortion, dnx, dny);
-                const float sx = dnx * params.src_fx + params.src_cx - PIXEL_CENTER_OFFSET;
-                const float sy = dny * params.src_fy + params.src_cy - PIXEL_CENTER_OFFSET;
+                // CUDA fuses this projection. Separate rounding can move a tap
+                // exactly onto a sinc zero just outside the image border.
+                const float sx = std::fma(dnx, params.src_fx, params.src_cx) - PIXEL_CENTER_OFFSET;
+                const float sy = std::fma(dny, params.src_fy, params.src_cy) - PIXEL_CENTER_OFFSET;
                 float sample[4] = {0.0f, 0.0f, 0.0f, 0.0f};
                 float absolute_inside = 0.0f;
                 float absolute_full = 0.0f;
