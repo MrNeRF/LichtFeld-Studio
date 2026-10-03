@@ -13,6 +13,7 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/loss_tensor_contract.cpp
     kernels/camera_loss_heatmap.cu
     kernels/thin_structure.cu
+    kernels/blob_seeding.cu
     kernels/gradient_residual.cu
     kernels/ssim.cu
     kernels/l1_loss.cu
@@ -94,6 +95,7 @@ set(TRAINING_NEW_SOURCES
     strategies/strategy_utils.cpp
     strategies/mcmc.cpp
     strategies/mrnf.cpp
+    strategies/blob_seeding.cpp
     strategies/strategy_factory.cpp
     strategies/improved_gs_plus.cpp
     rasterization/fast_rasterizer.cpp

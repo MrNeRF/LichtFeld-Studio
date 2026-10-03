@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "blob_seeding.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "istrategy.hpp"
@@ -60,6 +61,7 @@ namespace lfs::training {
     inline constexpr int kExploreSplits = 20;
     inline constexpr int kExploreSeeds = 20;
     inline constexpr float kSeedOpacity = 0.03f;
+    inline constexpr float kBlobSeedOpacity = 0.5f;
     inline constexpr float kFarGrowthCap = 0.3f;
     inline constexpr float kFarDecayScale = 0.25f;
     inline constexpr float kFarMaskOrbits = 2.0f;
@@ -193,6 +195,7 @@ namespace lfs::training {
         void cache_seed_view(int iter, const RenderOutput& render_output);
         [[nodiscard]] bool should_cache_seed_view(int iter) const;
         void seed_from_view(int iter, const RenderOutput& render_output);
+        void append_blob_seeds();
         [[nodiscard]] bool cfg_ratio_rank_on() const;
         [[nodiscard]] float cfg_ratio_pow() const;
         [[nodiscard]] bool has_separate_visibility_buffer() const;
@@ -286,6 +289,7 @@ namespace lfs::training {
         int _cached_seed_width = 0;
         int _cached_seed_height = 0;
         bool _cached_seed_valid = false;
+        std::unique_ptr<BlobSeeder> _blob_seeder;
         FarGrowthState _far_growth;
         lfs::core::Tensor _far_field_mask;
         float _cam_centroid[3] = {0.0f, 0.0f, 0.0f};

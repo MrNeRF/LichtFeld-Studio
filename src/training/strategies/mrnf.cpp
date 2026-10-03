@@ -726,6 +726,10 @@ namespace lfs::training {
         refresh_camera_hull();
         ensure_mean_step_far_mask();
 
+        _blob_seeder.reset();
+        if (n > 0)
+            _blob_seeder = std::make_unique<BlobSeeder>(_splat_data->means());
+
         LOG_INFO("MRNF strategy initialized with {} Gaussians", n);
     }
 
@@ -1129,6 +1133,10 @@ namespace lfs::training {
     void MRNF::post_render(int iter, RenderOutput& render_output) {
         accumulate_explore_sample(iter, render_output);
         cache_seed_view(iter, render_output);
+        if (_blob_seeder && render_output.camera && iter < effective_grow_until_iter() &&
+            is_cuda_image(render_output.target_image)) {
+            _blob_seeder->capture(*render_output.camera, to_float01_cuda(render_output.target_image));
+        }
     }
 
     void MRNF::post_backward(int iter, RenderOutput& render_output) {
@@ -1399,6 +1407,12 @@ namespace lfs::training {
         grow_and_split(iter, pruned_count);
         if (seed_far) {
             seed_from_view(iter, render_output);
+        }
+        if (!growing) {
+            _blob_seeder.reset();
+        } else if (_blob_seeder && (_blob_seeder->budget_exhausted() ||
+                                    iter > static_cast<int>(_views ? _views->size() : 0))) {
+            append_blob_seeds();
         }
         reset_explore_accumulator();
 
@@ -3339,6 +3353,50 @@ namespace lfs::training {
         LFS_COUNTER_ADD("strategy.mrnf.explore_seed", kept);
     }
 
+    void MRNF::append_blob_seeds() {
+        using namespace lfs::core;
+        LOG_TIMER("MRNF::append_blob_seeds");
+        const auto seeds = _blob_seeder->triangulate();
+        _blob_seeder.reset();
+        const size_t budget = _params->max_cap > 0
+                                  ? static_cast<size_t>(std::max<int64_t>(0, int64_t{_params->max_cap} - static_cast<int64_t>(active_count())))
+                                  : seeds.size();
+        const size_t count = std::min(seeds.size(), budget);
+        if (count == 0) {
+            return;
+        }
+
+        std::vector<float> means(seeds.means.begin(), seeds.means.begin() + static_cast<std::ptrdiff_t>(count * 3));
+        std::vector<float> sh0(count * 3);
+        std::vector<float> scales(count * 3);
+        std::vector<float> rotations(count * 4, 0.0f);
+        for (size_t i = 0; i < count; ++i) {
+            for (int c = 0; c < 3; ++c) {
+                sh0[i * 3 + c] = (seeds.colors[i * 3 + c] - 0.5f) / MRNF_SH_C0;
+                scales[i * 3 + c] = seeds.log_scales[i];
+            }
+            rotations[i * 4] = 1.0f;
+        }
+        auto pos = Tensor::from_vector(means, TensorShape({count, 3}), Device::CUDA);
+        auto rot = Tensor::from_vector(rotations, TensorShape({count, 4}), Device::CUDA);
+        auto scl = Tensor::from_vector(scales, TensorShape({count, 3}), Device::CUDA);
+        auto sh0_t = Tensor::from_vector(sh0, TensorShape({count, 1, 3}), Device::CUDA);
+        auto opa = Tensor::full({count}, logit_clamped(kBlobSeedOpacity), Device::CUDA);
+        Tensor shN;
+        if (const size_t sh_rest = _splat_data->max_sh_coeffs_rest(); sh_rest > 0) {
+            shN = Tensor::zeros({count, sh_rest, 3}, Device::CUDA);
+        }
+
+        lfs::training::sh_value::ShNMutationBatch shn_batch(*_splat_data);
+        auto [filled, remaining_after_fill] = fill_free_slots_with_data(
+            pos, rot, scl, sh0_t, shN, opa, static_cast<int64_t>(count), &shn_batch);
+        const size_t append_start = count - static_cast<size_t>(remaining_after_fill);
+        append_child_rows(pos, rot, scl, sh0_t, shN, opa, append_start, count, &shn_batch);
+        shn_batch.flush();
+        LOG_INFO("MRNF: added {} blob seeds", count);
+        LFS_COUNTER_ADD("strategy.mrnf.blob_seed", count);
+    }
+
     void MRNF::compute_bounds() {
         const size_t current_size = static_cast<size_t>(_splat_data->size());
         lfs::core::Tensor active_indices;
@@ -3576,6 +3634,7 @@ namespace lfs::training {
     }
 
     void MRNF::deserialize(std::istream& is) {
+        _blob_seeder.reset();
         uint32_t magic = 0, version = 0;
         lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "MRNF magic");
         lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "MRNF version");
@@ -3710,6 +3769,7 @@ namespace lfs::training {
 
     void MRNF::adopt_checkpoint_state(IStrategy& loaded) noexcept {
         auto& source = checked_checkpoint_source<MRNF>(loaded);
+        _blob_seeder.reset();
         if (_optimizer)
             _optimizer->adopt_checkpoint_state(*source._optimizer);
         if (_scheduler)
