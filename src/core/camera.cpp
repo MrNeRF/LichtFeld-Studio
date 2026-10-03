@@ -720,9 +720,7 @@ namespace lfs::core {
             // UInt8 truncates interpolated values such as 250.6 → 250.
             mask = mask.contiguous();
         }
-        if (_stream) {
-            LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "mask load sync");
-        }
+        finish_upload(_stream, "mask load sync");
         _cached_mask = mask;
         _mask_loaded = true;
         _cached_mask_resize_factor = resize_factor;
@@ -803,9 +801,7 @@ namespace lfs::core {
         }
 
         _cached_depth = depth.contiguous();
-        if (_stream) {
-            LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "depth load sync");
-        }
+        finish_upload(_stream, "depth load sync");
         _depth_loaded = true;
 
         LOG_DEBUG("Loaded depth for {}: [{},{}]", _image_name, _cached_depth.shape()[0], _cached_depth.shape()[1]);
@@ -920,9 +916,7 @@ namespace lfs::core {
         }
 
         _cached_normal = normal.contiguous();
-        if (_stream) {
-            LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal load sync");
-        }
+        finish_upload(_stream, "normal load sync");
         _normal_loaded = true;
 
         LOG_DEBUG("Loaded normal map for {}: [{},{}]", _image_name,

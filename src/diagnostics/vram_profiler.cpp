@@ -1835,7 +1835,7 @@ namespace lfs::diagnostics {
     }
 
     std::optional<std::size_t> process_device_memory_bytes() {
-#ifndef _WIN32
+#if !defined(_WIN32) && LFS_HAS_CUDA
         if (const auto bytes = nvml_memory_sample().process)
             return bytes;
 #endif
