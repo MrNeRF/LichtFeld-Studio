@@ -3202,7 +3202,8 @@
   "node_editor.file_read_error": "Kan de nodegrafiek niet lezen",
   "node_editor.file_write_error": "Kan de nodegrafiek niet opslaan",
   "node_editor.search_nodes": "Nodes zoeken…",
-  "node_editor.settings_count": "{} instellingen",
+  "node_editor.settings_count_one": "{} instelling",
+  "node_editor.settings_count_other": "{} instellingen",
   "node_editor.arrange": "Ordenen",
   "node_editor.arrange_shortcut": "Shift+L",
   "node_editor.running": "Bezig…",
@@ -3316,7 +3317,7 @@
     },
     "colour_correct": {
       "label": "Kleurcorrectie",
-      "description": "Past helderheid, contrast en kleurbalans aan en behoudt de details van je scène.",
+      "description": "Beoordeelt kleur: belichting, niveaus, contrast, verzadiging, tint, witbalans en driewegtonen.",
       "help": "Begin met Belichting en pas daarna Contrast en Verzadiging aan.\nVerbind een Selectie om slechts een deel te corrigeren.\nCentreer de kleurwielen voor neutrale schaduwen, middentonen en hooglichten.",
       "inputs": {
         "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
@@ -3727,7 +3728,7 @@
     },
     "math": {
       "label": "Rekenen",
-      "description": "Berekent waarden voor je bewerkingen, selecties en verlopen.",
+      "description": "Telt op, vermenigvuldigt, vergelijkt of rondt getallen af — bijvoorbeeld dekking schalen met hoogte.",
       "help": "Kies een bewerking en verbind waarden met A en B.\nBegin met Vermenigvuldigen om de sterkte van een selectie te schalen.",
       "inputs": {
         "A": "Eerste getal in de eenheden van je berekening. Standaard 0.",
@@ -4249,7 +4250,7 @@
     },
     "set_sh_degree": {
       "label": "SH-graad instellen",
-      "description": "Beperkt hoeveel de kleur van een splat met de kijkrichting kan veranderen.",
+      "description": "Beperkt kijkafhankelijke splatkleur; lagere graden maken bestanden veel kleiner.",
       "help": "Gebruik Graad 0 voor vlakke kleur en kleinere exports.\nEen hogere graad biedt ruimte voor detail maar herstelt weggegooide kleur niet.",
       "inputs": {
         "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
@@ -4338,7 +4339,7 @@
     "stored_selection": {
       "label": "Opgeslagen selectie",
       "description": "Hergebruikt een selectie die je in het kijkvenster vastlegt.",
-      "help": "Selecteer splats in het kijkvenster en druk op Selectie vastleggen.\nLeg opnieuw vast na veranderingen in aantal of volgorde.",
+      "help": "Verberg deze modifier met het oogpictogram, selecteer splats in het kijkvenster (penseel, lasso of vak), druk op Selectie vastleggen en toon hem weer.\nLeg opnieuw vast als iets vóór deze node het aantal splats verandert.",
       "inputs": {},
       "input_labels": {},
       "outputs": {
@@ -4423,7 +4424,7 @@
     },
     "vector_math": {
       "label": "Vectorrekenen",
-      "description": "Berekent posities, richtingen en afstanden uit waarden met drie componenten.",
+      "description": "Telt posities en richtingen op, trekt ze af en meet ze — bijvoorbeeld afstand tot een punt.",
       "help": "Gebruik Schaal voor een verschuiving of Afstand tussen twee posities.\nLengte, Afstand en Inproduct gebruiken Waarde; de andere bewerkingen gebruiken Vector.",
       "inputs": {
         "A": "Eerste driedelige waarde in je berekeningseenheden. Standaard (0, 0, 0).",

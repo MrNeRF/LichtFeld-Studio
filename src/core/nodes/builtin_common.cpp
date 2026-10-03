@@ -72,7 +72,9 @@ namespace lfs::nodes::builtin {
     core::Tensor blend(const core::Tensor& old_value, const core::Tensor& new_value, core::Tensor weight) {
         while (weight.ndim() < old_value.ndim())
             weight = weight.unsqueeze(-1);
-        return old_value * (weight.neg() + 1.0f) + new_value * weight;
+        const auto mixed = old_value * (weight.neg() + 1.0f) + new_value * weight;
+        return core::Tensor::where(weight.eq(0), old_value,
+                                   core::Tensor::where(weight.eq(1), new_value, mixed));
     }
 
     template <typename Component>
@@ -173,11 +175,12 @@ namespace lfs::nodes::builtin {
     }
 
     Tensor rgb_to_hsv(const Tensor& rgb) {
-        const auto maximum = rgb.max(1);
-        const auto delta = maximum - rgb.min(1);
-        const auto r = channel(rgb, 0);
-        const auto g = channel(rgb, 1);
-        const auto b = channel(rgb, 2);
+        const auto displayed = rgb.clamp(0, 1);
+        const auto maximum = displayed.max(1);
+        const auto delta = maximum - displayed.min(1);
+        const auto r = channel(displayed, 0);
+        const auto g = channel(displayed, 1);
+        const auto b = channel(displayed, 2);
         const auto red = safe_divide(g - b, delta);
         const auto green = safe_divide(b - r, delta) + 2;
         const auto blue = safe_divide(r - g, delta) + 4;

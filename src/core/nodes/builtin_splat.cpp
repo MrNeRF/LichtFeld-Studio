@@ -63,11 +63,9 @@ namespace lfs::nodes::builtin {
             auto fc = field_context(s);
             auto w = selection(context, "Selection", fc);
             auto color = context.evaluate_field("Colour", fc, COLOUR_SOCKET);
-            auto base = s.sh0 * kShC0 + 0.5f;
-            s.sh0 = (blend(base, color, w) - 0.5f) / kShC0;
+            s.sh0 = blend(s.sh0, (color - 0.5f) / kShC0, w);
             if (property_bool(context, "clear_view_dependent", true)) {
-                auto expanded = w.unsqueeze(1).unsqueeze(2);
-                s.shN = s.shN * (expanded.neg() + 1.0f);
+                s.shN = blend(s.shN, Tensor::zeros_like(s.shN), w);
             }
         }
         context.set_output("Geometry", std::move(geometry));
@@ -80,7 +78,7 @@ namespace lfs::nodes::builtin {
             auto fc = field_context(s);
             auto w = selection(context, "Selection", fc);
             auto value = context.evaluate_field("Opacity", fc, FLOAT_SOCKET).clamp(1e-6f, 1.0f - 1e-6f);
-            s.opacity = blend(s.opacity.sigmoid(), value, w).clamp(1e-6f, 1.0f - 1e-6f).logit();
+            s.opacity = blend(s.opacity, value.logit(), w);
         }
         context.set_output("Geometry", std::move(geometry));
     }
@@ -91,7 +89,7 @@ namespace lfs::nodes::builtin {
             auto fc = field_context(s);
             auto w = selection(context, "Selection", fc);
             auto value = context.evaluate_field("Scale", fc, VECTOR_SOCKET).clamp_min(1e-8f);
-            s.scaling = blend(s.scaling.exp(), value, w).clamp_min(1e-8f).log();
+            s.scaling = blend(s.scaling, value.log(), w);
         }
         context.set_output("Geometry", std::move(geometry));
     }
@@ -126,9 +124,8 @@ namespace lfs::nodes::builtin {
             splats.scaling = blend(splats.scaling, splats.scaling + std::log(shrink), weight);
             if (property_bool(context, "keep_coverage", true)) {
                 const auto opacity = splats.opacity.sigmoid();
-                splats.opacity = blend(opacity, (opacity / shrink).clamp(1e-6f, 1 - 1e-6f), weight)
-                                     .clamp(1e-6f, 1 - 1e-6f)
-                                     .logit();
+                const auto corrected = (opacity / shrink).clamp(1e-6f, 1 - 1e-6f).logit();
+                splats.opacity = blend(splats.opacity, corrected, weight);
             }
         }
         context.set_output("Geometry", std::move(geometry));
@@ -139,7 +136,11 @@ namespace lfs::nodes::builtin {
         if (geometry.splats) {
             auto& splats = *geometry.splats;
             const auto weight = selection(context, "Selection", field_context(splats));
-            const float limit = std::log(input_float(context, "Max Aspect", 10));
+            if (splats.means.shape()[0] == 0) {
+                context.set_output("Geometry", std::move(geometry));
+                return;
+            }
+            const float limit = std::log(input_float(context, "Max Aspect", 8));
             const auto centre = (splats.scaling.max(1, true) + splats.scaling.min(1, true)) * 0.5f;
             const auto clamped = splats.scaling.maximum(centre - limit * 0.5f).minimum(centre + limit * 0.5f);
             splats.scaling = blend(splats.scaling, clamped, weight);
@@ -208,22 +209,32 @@ namespace lfs::nodes::builtin {
             const auto affine = matrix_tensor(matrix, splats.means.device());
             auto corrected =
                 affine_identity ? base : base.matmul(affine) + vector_tensor(offset, base.device());
+            const auto bounded_transform = [](const Tensor& value, const auto& transform) {
+                const auto bounded = value.clamp(0, 1);
+                return transform(bounded) + (value - bounded);
+            };
             if (!midpoint_identity) {
                 const float exponent = std::log(0.5f) / std::log(midpoint);
-                corrected = corrected.sign() * corrected.abs().pow(exponent);
+                corrected = bounded_transform(corrected, [exponent](const Tensor& bounded) {
+                    return bounded.pow(exponent);
+                });
             }
             if (!grading_identity) {
-                const auto luma = rec709_luma(corrected).clamp(0, 1);
+                const auto bounded = corrected.clamp(0, 1);
+                const auto luma = rec709_luma(bounded).clamp(0, 1);
                 const auto shadow_weight = (luma.neg() * 2 + 1).clamp(0, 1).pow(2).unsqueeze(1);
                 const auto highlight_weight = (luma * 2 - 1).clamp(0, 1).pow(2).unsqueeze(1);
                 const auto midtone_weight = ((luma * 2 - 1).abs().neg() + 1).clamp(0, 1).pow(2).unsqueeze(1);
-                corrected = corrected + vector_tensor(shadows * 0.35f, corrected.device()) * shadow_weight +
+                corrected = bounded + (corrected - bounded) +
+                            vector_tensor(shadows * 0.35f, corrected.device()) * shadow_weight +
                             vector_tensor(midtones * 0.35f, corrected.device()) * midtone_weight +
                             vector_tensor(highlights * 0.35f, corrected.device()) * highlight_weight;
             }
             if (gamma != 1)
-                corrected = corrected.maximum(0).pow(1 / gamma);
-            splats.sh0 = (blend(base, corrected, weight) - 0.5f) / kShC0;
+                corrected = bounded_transform(corrected, [gamma](const Tensor& bounded) {
+                    return bounded.pow(1 / gamma);
+                });
+            splats.sh0 = blend(splats.sh0, (corrected - 0.5f) / kShC0, weight);
             if (!affine_identity && splats.shN.numel()) {
                 const auto transformed =
                     splats.shN.reshape({-1, 3}).matmul(affine).reshape(splats.shN.shape());
@@ -248,9 +259,9 @@ namespace lfs::nodes::builtin {
                     const float target_luma = std::max(glm::dot(target_value, kRec709Luma), 1e-4f);
                     target = target * (rec709_luma(base) / target_luma).unsqueeze(1);
                 }
-                splats.sh0 = (blend(base, target, weight) - 0.5f) / kShC0;
+                splats.sh0 = blend(splats.sh0, (target - 0.5f) / kShC0, weight);
                 if (property_bool(context, "fade_view_dependent", true) && splats.shN.numel())
-                    splats.shN = splats.shN * (weight.neg() + 1).unsqueeze(1).unsqueeze(2);
+                    splats.shN = blend(splats.shN, Tensor::zeros_like(splats.shN), weight);
             }
         }
         context.set_output("Geometry", std::move(geometry));
@@ -261,8 +272,7 @@ namespace lfs::nodes::builtin {
         if (geometry.splats) {
             auto& splats = *geometry.splats;
             const auto weight = selection(context, "Selection", field_context(splats));
-            const auto base = splats.sh0 * kShC0 + 0.5f;
-            splats.sh0 = (blend(base, base.neg() + 1, weight) - 0.5f) / kShC0;
+            splats.sh0 = blend(splats.sh0, -splats.sh0, weight);
             splats.shN = blend(splats.shN, -splats.shN, weight);
         }
         context.set_output("Geometry", std::move(geometry));
@@ -310,7 +320,7 @@ namespace lfs::nodes::builtin {
                            geometry_inputs({in("Selection", f, 1.0f, true)
                                                 .range(0, 1)
                                                 .step_size(0.01),
-                                            in("Max Aspect", f, 10.0f).minimum(1).step_size(0.1)}),
+                                            in("Max Aspect", f, 8.0f).minimum(1).step_size(0.1)}),
                            {out("Geometry", geo)}, evaluate_scale_clamp));
         register_type(registry,
                       type("lfs.colour_correct", "Colour",

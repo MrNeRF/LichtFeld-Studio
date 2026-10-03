@@ -49,7 +49,7 @@ namespace lfs::nodes::builtin {
 
     void evaluate_set_position(NodeContext& context) {
         Geometry geometry = geometry_input(context);
-        if (geometry.splats) {
+        if (geometry.splats && geometry.splats->means.shape()[0] != 0) {
             auto& s = *geometry.splats;
             auto fc = field_context(s);
             auto w = selection(context, "Selection", fc);
@@ -80,11 +80,16 @@ namespace lfs::nodes::builtin {
     void evaluate_transform(NodeContext& context) {
         auto geometry = geometry_input(context);
         const auto translation = input_vector(context, "Translation");
-        const auto rotation = rotation_matrix(input_vector(context, "Rotation"));
+        const auto rotation_value = input_vector(context, "Rotation");
         const float scale = input_float(context, "Scale", 1);
+        if (translation == glm::vec3(0) && rotation_value == glm::vec3(0) && scale == 1.0f) {
+            context.set_output("Geometry", std::move(geometry));
+            return;
+        }
+        const auto rotation = rotation_matrix(rotation_value);
         const auto matrix =
             glm::translate(glm::mat4(1), translation) * rotation * glm::scale(glm::mat4(1), glm::vec3(scale));
-        if (geometry.splats) {
+        if (geometry.splats && geometry.splats->means.shape()[0] != 0) {
             auto attributes = geometry.splats->attributes;
             auto data = splat_data_from_geometry(geometry);
             core::transform(*data, matrix);

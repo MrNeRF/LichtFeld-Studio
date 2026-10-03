@@ -39,7 +39,9 @@ namespace lfs::nodes::builtin {
             "Selection",
             operation(FLOAT_SOCKET, {colour_field()},
                       [target, tolerance, softness](const std::vector<Tensor>& values) {
-                          const auto difference = values[0] - vector_tensor(target, values[0].device());
+                          const auto difference = values[0].clamp(0, 1) -
+                                                  vector_tensor(glm::clamp(target, glm::vec3(0), glm::vec3(1)),
+                                                                values[0].device());
                           const auto distance = (difference * difference).sum(1).sqrt();
                           return softness <= 0
                                      ? distance.le(tolerance).to(DataType::Float32)

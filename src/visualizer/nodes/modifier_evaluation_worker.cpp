@@ -199,31 +199,42 @@ namespace lfs::vis {
             return core::gpu_backend_available(backend) ? std::optional{backend} : std::nullopt;
         }
 
-        std::optional<FieldContext> fieldContext(const Geometry& geometry, const std::uint64_t identity) {
+        std::optional<FieldContext> fieldContext(const Geometry& geometry) {
             FieldContext context;
-            context.identity = identity;
             if (geometry.splats) {
                 context.domain = Domain::Splat;
                 context.splats = &*geometry.splats;
+                const auto& splats = *geometry.splats;
+                context.identity = static_cast<std::uint64_t>(splats.means.debug_id()) ^
+                                   (static_cast<std::uint64_t>(splats.sh0.debug_id()) << 8U) ^
+                                   (static_cast<std::uint64_t>(splats.scaling.debug_id()) << 16U) ^
+                                   (static_cast<std::uint64_t>(splats.opacity.debug_id()) << 24U) ^
+                                   (static_cast<std::uint64_t>(splats.shN.debug_id()) << 32U);
             } else if (geometry.points) {
                 context.domain = Domain::Point;
                 context.points = &*geometry.points;
+                context.identity = static_cast<std::uint64_t>(geometry.points->positions.debug_id()) ^
+                                   (static_cast<std::uint64_t>(geometry.points->colors.debug_id()) << 32U);
             } else if (geometry.mesh) {
                 context.domain = Domain::Vertex;
                 context.mesh = &*geometry.mesh;
+                context.identity = geometry.mesh->mesh ? geometry.mesh->mesh->id() : 0;
             } else {
                 return std::nullopt;
             }
             return context;
         }
 
+        bool sameGeometry(const FieldContext& left, const FieldContext& right) {
+            return left.domain == right.domain && left.size() == right.size() &&
+                   left.identity == right.identity;
+        }
+
         void selectionPreviews(const NodeTree& tree, const EvalCache& cache,
                                const std::string& modifier, ModifierHostResult& result,
                                const std::function<bool()>& cancelled) {
-            const auto context = fieldContext(result.evaluation.geometry, result.evaluation.geometry.splats
-                                                                              ? result.evaluation.geometry.splats->means.debug_id()
-                                                                              : 0);
-            if (!context)
+            const auto displayed = fieldContext(result.evaluation.geometry);
+            if (!displayed)
                 return;
             FieldMemo memo;
             std::unordered_map<std::string, std::pair<core::Tensor, double>> masks;
@@ -236,8 +247,18 @@ namespace lfs::vis {
                 std::string source = node.name;
                 std::string socket;
                 const auto output = std::ranges::find(type->outputs, "Selection", &SocketDecl::identifier);
-                if (output != type->outputs.end()) {
+                const CachedNodeOutput* consumer = nullptr;
+                if (output != type->outputs.end() && output->type != GEOMETRY_SOCKET) {
                     socket = output->identifier;
+                    const auto link = std::ranges::find_if(tree.links, [&](const Link& item) {
+                        return item.from_node == node.name && item.from_socket == output->identifier;
+                    });
+                    if (link == tree.links.end())
+                        continue;
+                    const auto cached_consumer = cache.nodes.find(link->to_node);
+                    if (cached_consumer == cache.nodes.end())
+                        continue;
+                    consumer = &cached_consumer->second;
                 } else {
                     const auto input = std::ranges::find(type->inputs, "Selection", &SocketDecl::identifier);
                     if (input == type->inputs.end())
@@ -249,29 +270,49 @@ namespace lfs::vis {
                         continue;
                     source = link->from_node;
                     socket = link->from_socket;
+                    const auto cached_consumer = cache.nodes.find(node.name);
+                    if (cached_consumer == cache.nodes.end())
+                        continue;
+                    consumer = &cached_consumer->second;
                 }
+                if (!consumer || !consumer->geometry_input)
+                    continue;
+                const auto context = fieldContext(*consumer->geometry_input);
+                if (!context)
+                    continue;
                 const auto cached = cache.nodes.find(source);
                 if (cached == cache.nodes.end())
                     continue;
                 const auto value = cached->second.outputs.find(socket);
                 if (value == cached->second.outputs.end())
                     continue;
-                const std::string key = source + "/" + socket;
+                const std::string key = source + "/" + socket + "/" +
+                                        std::to_string(static_cast<int>(context->domain)) + "/" +
+                                        std::to_string(context->identity) + "/" +
+                                        std::to_string(context->size());
                 auto found = masks.find(key);
                 if (found == masks.end()) {
-                    const auto* field = value->second.get_if<Field>();
-                    auto mask = (field ? convert_field(*field, FLOAT_SOCKET)
-                                       : constant_field(value->second, FLOAT_SOCKET))
-                                    .evaluate(*context, memo)
-                                    .ge(0.5f);
-                    const auto count = mask.numel();
-                    const double share = count ? static_cast<double>(mask.count_nonzero()) / count : 0.0;
-                    found = masks.emplace(key, std::pair{std::move(mask), share}).first;
+                    try {
+                        const auto* field = value->second.get_if<Field>();
+                        auto mask = (field ? convert_field(*field, FLOAT_SOCKET)
+                                           : constant_field(value->second, FLOAT_SOCKET))
+                                        .evaluate(*context, memo)
+                                        .ge(0.5f);
+                        const auto count = mask.numel();
+                        const double share = count ? static_cast<double>(mask.count_nonzero()) / count : 0.0;
+                        found = masks.emplace(key, std::pair{std::move(mask), share}).first;
+                    } catch (const std::exception&) {
+                        // LFS-CENSUS-OK(empty-catch): optional selection diagnostics cannot fail evaluation.
+                        // Selection statistics and viewport previews are ancillary. A field that
+                        // cannot be evaluated in this context must not change the graph result.
+                        continue;
+                    }
                 }
-                result.previews[modifier + "/" + node.name] = found->second.first;
                 if (auto status = result.evaluation.nodes.find(modifier + "/" + node.name);
                     status != result.evaluation.nodes.end())
                     status->second.selected_share = found->second.second;
+                if (sameGeometry(*context, *displayed))
+                    result.previews[modifier + "/" + node.name] = found->second.first;
             }
         }
 
@@ -292,8 +333,16 @@ namespace lfs::vis {
                 if (target == request_.objects.end())
                     throw NodeError(std::format("Object '{}' does not exist", name));
                 auto& result = run(*target);
-                if (!result.evaluation.ok)
+                if (!result.evaluation.ok) {
+                    const auto cycle = std::ranges::find_if(result.evaluation.errors, [](const auto& error) {
+                        return error.second.starts_with("Dependency cycle:");
+                    });
+                    if (cycle != result.evaluation.errors.end())
+                        throw NodeError(cycle->second);
+                    if (!result.evaluation.errors.empty())
+                        throw NodeError(result.evaluation.errors.begin()->second);
                     throw NodeError("Object Info target modifier evaluation failed");
+                }
                 auto geometry = result.evaluation.geometry;
                 if (space == TransformSpace::Relative)
                     geometry = transform_geometry(std::move(geometry), glm::inverse(current_world_) * target->world);
@@ -301,11 +350,24 @@ namespace lfs::vis {
             }
 
             ModifierHostResult& run(const ModifierObjectSnapshot& object) {
-                if (active_.contains(object.uuid))
-                    throw NodeError("Object Info dependency cycle");
+                if (active_.contains(object.uuid)) {
+                    const auto first = std::ranges::find(active_path_, object.uuid,
+                                                         &ModifierObjectSnapshot::uuid);
+                    std::string path;
+                    for (auto current = first; current != active_path_.end(); ++current) {
+                        if (!path.empty())
+                            path += " → ";
+                        path += current->name;
+                    }
+                    if (!path.empty())
+                        path += " → ";
+                    path += object.name;
+                    throw NodeError("Dependency cycle: " + path);
+                }
                 if (auto found = results.find(object.uuid); found != results.end())
                     return found->second;
                 active_.insert(object.uuid);
+                active_path_.push_back(object);
                 const auto previous_world = current_world_;
                 current_world_ = object.world;
                 auto& result = results[object.uuid];
@@ -389,6 +451,7 @@ namespace lfs::vis {
                 result.evaluation.total_time_ms =
                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
                 active_.erase(object.uuid);
+                active_path_.pop_back();
                 current_world_ = previous_world;
                 return result;
             }
@@ -404,6 +467,7 @@ namespace lfs::vis {
             const EvalControl& control_;
             std::function<void(const core::Uuid&, const std::string&, const NodeTree&)> stack_started_;
             std::unordered_set<core::Uuid> active_;
+            std::vector<ModifierObjectSnapshot> active_path_;
             glm::mat4 current_world_{1.0f};
         };
     } // namespace

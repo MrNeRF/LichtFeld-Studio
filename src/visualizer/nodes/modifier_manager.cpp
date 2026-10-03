@@ -428,7 +428,8 @@ namespace lfs::vis {
         const auto* stored_node = node_tree ? node_tree->find_node(stored_selection_node) : nullptr;
         if (!stored_node || stored_node->type_id != "lfs.stored_selection")
             return std::unexpected(ModifierError{"Stored Selection node does not exist"});
-        if (node->evaluated_model && node->model && node->evaluated_model->size() != node->model->size())
+        if (modifier->enabled && modifier->show_viewport && node->evaluated_model && node->model &&
+            node->evaluated_model->size() != node->model->size())
             return std::unexpected(
                 ModifierError{"Hide the node modifiers before capturing a stored selection"});
         auto selection = scene.selectionMaskSliceForNode(node->id);
@@ -597,6 +598,11 @@ namespace lfs::vis {
         before_state["stacks"][node_uuid.to_string()] = std::move(before);
         op::undoHistory().push(std::make_unique<ModifierStateUndoEntry>(
             *this, std::move(before_state), std::move(after), std::move(merge_key)));
+        if (const auto* modifiers = stack(node_uuid);
+            modifiers && std::ranges::none_of(modifiers->modifiers, [](const Modifier& modifier) {
+                return modifier.enabled && modifier.show_viewport;
+            }))
+            scene_manager_->getScene().clearNodeEvaluatedPayload(node_uuid);
         markDirty(node_uuid);
     }
 

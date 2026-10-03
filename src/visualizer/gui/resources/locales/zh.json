@@ -3202,7 +3202,8 @@
   "node_editor.file_read_error": "无法读取节点图",
   "node_editor.file_write_error": "无法保存节点图",
   "node_editor.search_nodes": "搜索节点…",
-  "node_editor.settings_count": "{} 项设置",
+  "node_editor.settings_count_one": "{} 项设置",
+  "node_editor.settings_count_other": "{} 项设置",
   "node_editor.arrange": "排列",
   "node_editor.arrange_shortcut": "Shift+L",
   "node_editor.running": "运行中…",
@@ -3316,7 +3317,7 @@
     },
     "colour_correct": {
       "label": "颜色校正",
-      "description": "调整亮度、对比度和色彩平衡，同时保留场景细节。",
+      "description": "调整颜色：曝光、色阶、对比度、饱和度、色相、白平衡以及阴影/中间调/高光色调。",
       "help": "先用曝光调整亮度，再调对比度与饱和度。\n连接选择以仅校正场景的一部分。\n将色轮归中可恢复中性的阴影、中间调和高光。",
       "inputs": {
         "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
@@ -3727,7 +3728,7 @@
     },
     "math": {
       "label": "数学运算",
-      "description": "计算新数值，以控制编辑、选择和渐变。",
+      "description": "对数值进行加、乘、比较或舍入 — 例如根据高度缩放不透明度。",
       "help": "选择运算，再将数值连接到 A 与 B。\n先尝试乘法来缩放选择强度。",
       "inputs": {
         "A": "第一个数值，单位与你的运算一致。默认 0。",
@@ -4249,7 +4250,7 @@
     },
     "set_sh_degree": {
       "label": "设置 SH 阶数",
-      "description": "限制 splat 颜色随观察方向变化的程度。",
+      "description": "限制 splat 颜色随观察方向的变化；较低阶数可大幅减小文件。",
       "help": "使用阶数 0 可获得平坦颜色并减小导出文件。\n提高阶数可容纳更多细节，但不能恢复已丢弃的颜色。",
       "inputs": {
         "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
@@ -4338,7 +4339,7 @@
     "stored_selection": {
       "label": "已存选择",
       "description": "重复使用你在视口中捕获的选择。",
-      "help": "在视口中选择 splat，然后点击捕获选择。\n改变元素数量或顺序后，请重新捕获。",
+      "help": "用眼睛图标隐藏此修改器，在视口中选择 splat（画笔、套索或方框），点击捕获选择，然后再次显示修改器。\n如果此节点之前的任何内容改变了 splat 数量，请重新捕获。",
       "inputs": {},
       "input_labels": {},
       "outputs": {
@@ -4423,7 +4424,7 @@
     },
     "vector_math": {
       "label": "向量运算",
-      "description": "用三个分量的数值计算位置、方向和距离。",
+      "description": "对位置和方向进行加、减和测量 — 例如计算与某点的距离。",
       "help": "使用缩放调整偏移，或用距离比较两个位置。\n长度、距离和点积使用数值输出；其他运算使用向量输出。",
       "inputs": {
         "A": "第一个三分量数值，单位与你的运算一致。默认 (0, 0, 0)。",

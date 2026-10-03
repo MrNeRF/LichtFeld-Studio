@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "builtin_common.hpp"
 #include "core/base64.hpp"
+#include "core/number_format.hpp"
 #include "core/tensor_backend.hpp"
 #include <cstring>
 #include <mutex>
@@ -36,6 +37,8 @@ namespace lfs::nodes {
         if (packed.size() != (size + 7) / 8)
             throw NodeError("Stored Selection bitmask length does not match its element count");
         const bool invert = node.properties.value("invert", false);
+        const bool captured = node.properties.contains("selected_count");
+        const std::string node_name = node.name;
         // Base64 is a host serialization boundary; unpack the bits on the
         // evaluation device once and retain them with the cached field.
         const auto encoded = Tensor::from_blob(const_cast<uint8_t*>(packed.data()), {packed.size()}, Device::CPU, DataType::UInt8).clone();
@@ -44,10 +47,16 @@ namespace lfs::nodes {
             std::mutex mutex;
         };
         const auto cache = std::make_shared<Cache>();
-        return Field(std::string(BOOL_SOCKET), [encoded, cache, invert, size](const FieldContext& context,
-                                                                              FieldMemo& memo) {
+        return Field(std::string(BOOL_SOCKET), [encoded, cache, invert, size, captured, node_name](const FieldContext& context,
+                                                                                                   FieldMemo& memo) {
             std::lock_guard lock(cache->mutex);
             const auto positions = position_field().evaluate(context, memo);
+            const auto count = context.size();
+            if (captured && count != size)
+                throw FieldNodeError(node_name, std::format(
+                    "Stored selection was captured on {} splats but receives {} — a node or modifier before it "
+                    "changes the count; recapture or move it before that change.",
+                    core::format_count(size), core::format_count(count)));
             if (!cache->device_values.is_valid() || cache->device_values.device() != context.device() ||
                 core::gpu_backend_of(cache->device_values) != core::gpu_backend_of(positions)) {
                 if (!size) {
@@ -59,7 +68,6 @@ namespace lfs::nodes {
                     cache->device_values = (bit - (bit / 2).floor() * 2).ne(0).reshape({-1}).slice(0, 0, size);
                 }
             }
-            const auto count = context.size();
             Tensor result;
             if (count == size)
                 result = cache->device_values;

@@ -79,6 +79,40 @@ namespace {
             return result;
         }
 
+        void expect_finite(const Geometry& geometry) const {
+            const auto tensor_is_finite = [&](const Tensor& value, std::string_view name) {
+                if (!value.is_valid())
+                    return;
+                for (const float element : host<float>(value.to(lfs::core::DataType::Float32)))
+                    EXPECT_TRUE(std::isfinite(element)) << name << " contains " << element;
+            };
+            if (geometry.splats) {
+                tensor_is_finite(geometry.splats->means, "splats.means");
+                tensor_is_finite(geometry.splats->sh0, "splats.sh0");
+                tensor_is_finite(geometry.splats->shN, "splats.shN");
+                tensor_is_finite(geometry.splats->scaling, "splats.scaling");
+                tensor_is_finite(geometry.splats->rotation, "splats.rotation");
+                tensor_is_finite(geometry.splats->opacity, "splats.opacity");
+                for (const auto& [name, value] : geometry.splats->attributes)
+                    tensor_is_finite(value, "splats." + name);
+            }
+            if (geometry.points) {
+                tensor_is_finite(geometry.points->positions, "points.positions");
+                tensor_is_finite(geometry.points->colors, "points.colors");
+                for (const auto& [name, value] : geometry.points->attributes)
+                    tensor_is_finite(value, "points." + name);
+            }
+            if (geometry.mesh && geometry.mesh->mesh) {
+                const auto& mesh = *geometry.mesh->mesh;
+                tensor_is_finite(mesh.vertices, "mesh.vertices");
+                tensor_is_finite(mesh.indices, "mesh.indices");
+                tensor_is_finite(mesh.normals, "mesh.normals");
+                tensor_is_finite(mesh.tangents, "mesh.tangents");
+                tensor_is_finite(mesh.texcoords, "mesh.texcoords");
+                tensor_is_finite(mesh.colors, "mesh.colors");
+            }
+        }
+
         Geometry splats(int degree = 1) const {
             const std::size_t coeff = static_cast<std::size_t>((degree + 1) * (degree + 1) - 1);
             SplatsComponent value;
@@ -296,6 +330,63 @@ namespace {
         EXPECT_EQ(degree.geometry.splats->shN.shape(), TensorShape({3, 15, 3}));
     }
 
+    TEST_P(NodesCore, SelectionBlendEndpointsPreserveRawAttributesExactly) {
+        auto input = splats(1);
+        input.splats->scaling = tensor({-3, 0, 3, -3, 0, 3, -3, 0, 3}, {3, 3});
+        input.splats->attributes["selection"] = tensor({0, 1, 0.5f}, {3});
+        using Configure = std::function<void(Node&)>;
+        const std::vector<std::pair<std::string, Configure>> writers = {
+            {"lfs.set_position", [](Node& node) { node.input_values["Offset"] = glm::vec3(1, 2, 3); }},
+            {"lfs.set_colour", [](Node& node) { node.input_values["Colour"] = glm::vec3(0.9f, 0.1f, 0.2f); }},
+            {"lfs.set_opacity", [](Node& node) { node.input_values["Opacity"] = 0.25f; }},
+            {"lfs.set_scale", [](Node& node) { node.input_values["Scale"] = glm::vec3(0.2f, 0.3f, 0.4f); }},
+            {"lfs.sharpen", [](Node& node) { node.input_values["Amount"] = 0.5f; }},
+            {"lfs.scale_clamp", [](Node& node) { node.input_values["Max Aspect"] = 2.0f; }},
+            {"lfs.colour_correct", [](Node& node) { node.input_values["Exposure"] = 2.0f; }},
+            {"lfs.recolour", [](Node& node) {
+                 node.input_values["Colour"] = glm::vec3(0.8f, 0.1f, 0.3f);
+                 node.properties["keep_shading"] = false;
+             }},
+            {"lfs.invert_colour", [](Node&) {}}};
+
+        const auto row = [&](const Tensor& value, size_t index) {
+            return host<float>(value.slice(0, index, index + 1).contiguous());
+        };
+        for (const auto& [type, configure] : writers) {
+            SCOPED_TRACE(type);
+            NodeTree tree(registry_);
+            auto& attribute = tree.add_node("lfs.named_attribute", "Selection");
+            attribute.input_values["Name"] = std::string("selection");
+            auto& writer = tree.add_node(type, "Writer");
+            configure(writer);
+            ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Writer", "Geometry"}));
+            ASSERT_TRUE(tree.add_link({"Selection", "Attribute", "Writer", "Selection"}));
+            ASSERT_TRUE(tree.add_link({"Writer", "Geometry", tree.output_node().name, "Geometry"}));
+            const auto result = evaluate(tree, {input, {}, 1});
+            ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
+                                                             : result.errors.begin()->second);
+            ASSERT_TRUE(result.geometry.splats);
+            const auto& before = *input.splats;
+            const auto& after = *result.geometry.splats;
+            EXPECT_EQ(row(after.means, 0), row(before.means, 0));
+            EXPECT_EQ(row(after.sh0, 0), row(before.sh0, 0));
+            EXPECT_EQ(row(after.shN, 0), row(before.shN, 0));
+            EXPECT_EQ(row(after.scaling, 0), row(before.scaling, 0));
+            EXPECT_EQ(row(after.rotation, 0), row(before.rotation, 0));
+            EXPECT_EQ(row(after.opacity, 0), row(before.opacity, 0));
+            for (const auto& [name, value] : before.attributes)
+                EXPECT_EQ(row(after.attributes.at(name), 0), row(value, 0));
+
+            const bool selected_changed = row(after.means, 1) != row(before.means, 1) ||
+                                          row(after.sh0, 1) != row(before.sh0, 1) ||
+                                          row(after.shN, 1) != row(before.shN, 1) ||
+                                          row(after.scaling, 1) != row(before.scaling, 1) ||
+                                          row(after.rotation, 1) != row(before.rotation, 1) ||
+                                          row(after.opacity, 1) != row(before.opacity, 1);
+            EXPECT_TRUE(selected_changed);
+        }
+    }
+
     TEST_P(NodesCore, ColourCorrectGammaTouchesOnlyDCAndAffineTouchesEverySHCoefficient) {
         Geometry input = splats(1);
         const auto original_shn = host<float>(input.splats->shN);
@@ -342,7 +433,7 @@ namespace {
         });
         ASSERT_TRUE(midpoint.ok);
         const auto midpoint_base = host<float>(midpoint.geometry.splats->sh0 * c0 + 0.5f);
-        const std::vector<float> expected_midpoint{-0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f, 1, 1, 1};
+        const std::vector<float> expected_midpoint{-0.25f, -0.25f, -0.25f, 0.5f, 0.5f, 0.5f, 1, 1, 1};
         for (size_t index = 0; index < expected_midpoint.size(); ++index)
             EXPECT_NEAR(midpoint_base[index], expected_midpoint[index], 2e-5f);
         EXPECT_EQ(host<float>(midpoint.geometry.splats->shN), original_shn);
@@ -405,6 +496,66 @@ namespace {
                        colour[index + 2] * 0.0722f;
             };
             EXPECT_NEAR(luma(after, row), luma(before, row), 1e-4f);
+        }
+    }
+
+    TEST_P(NodesCore, ColourCorrectParameterExtremesRemainFiniteOutsideDisplayRange) {
+        constexpr float c0 = 0.28209479177387814f;
+        auto geometry = splats(1);
+        geometry.splats->sh0 =
+            (tensor({-1, 0, 3, 3, -1, 1, 0.5f, 2, -0.5f}, {3, 3}) - 0.5f) / c0;
+        using Configure = std::function<void(Node&)>;
+        const std::vector<std::pair<std::string, Configure>> cases = {
+            {"selection min", [](Node& node) { node.input_values["Selection"] = 0.0f; }},
+            {"selection max", [](Node& node) { node.input_values["Selection"] = 1.0f; }},
+            {"exposure min", [](Node& node) { node.input_values["Exposure"] = -10.0f; }},
+            {"exposure max", [](Node& node) { node.input_values["Exposure"] = 10.0f; }},
+            {"black min", [](Node& node) { node.input_values["Black Point"] = -2.0f; }},
+            {"black max", [](Node& node) { node.input_values["Black Point"] = 2.0f; }},
+            {"white min", [](Node& node) { node.input_values["White Point"] = -2.0f; }},
+            {"white max", [](Node& node) { node.input_values["White Point"] = 2.0f; }},
+            {"levels forward", [](Node& node) {
+                 node.input_values["Black Point"] = -2.0f;
+                 node.input_values["White Point"] = 2.0f;
+             }},
+            {"levels reversed", [](Node& node) {
+                 node.input_values["Black Point"] = 2.0f;
+                 node.input_values["White Point"] = -2.0f;
+             }},
+            {"midpoint min", [](Node& node) { node.input_values["Midpoint"] = 0.01f; }},
+            {"midpoint max", [](Node& node) { node.input_values["Midpoint"] = 0.99f; }},
+            {"contrast min", [](Node& node) { node.input_values["Contrast"] = 0.0f; }},
+            {"contrast max", [](Node& node) { node.input_values["Contrast"] = 2.0f; }},
+            {"saturation min", [](Node& node) { node.input_values["Saturation"] = 0.0f; }},
+            {"saturation max", [](Node& node) { node.input_values["Saturation"] = 2.0f; }},
+            {"hue min", [](Node& node) { node.input_values["Hue Shift"] = -360.0f; }},
+            {"hue max", [](Node& node) { node.input_values["Hue Shift"] = 360.0f; }},
+            {"temperature min", [](Node& node) { node.input_values["Temperature"] = -1.0f; }},
+            {"temperature max", [](Node& node) { node.input_values["Temperature"] = 1.0f; }},
+            {"tint min", [](Node& node) { node.input_values["Tint"] = -1.0f; }},
+            {"tint max", [](Node& node) { node.input_values["Tint"] = 1.0f; }},
+            {"shadows min", [](Node& node) { node.input_values["Shadows"] = glm::vec3(-1); }},
+            {"shadows max", [](Node& node) { node.input_values["Shadows"] = glm::vec3(1); }},
+            {"midtones min", [](Node& node) { node.input_values["Midtones"] = glm::vec3(-1); }},
+            {"midtones max", [](Node& node) { node.input_values["Midtones"] = glm::vec3(1); }},
+            {"highlights min", [](Node& node) { node.input_values["Highlights"] = glm::vec3(-1); }},
+            {"highlights max", [](Node& node) { node.input_values["Highlights"] = glm::vec3(1); }},
+            {"gamma min", [](Node& node) { node.input_values["Gamma"] = 0.001f; }},
+            {"gamma max", [](Node& node) { node.input_values["Gamma"] = 2.0f; }},
+            {"fuzzer overflow case", [](Node& node) {
+                 node.input_values["Exposure"] = 9.0f;
+                 node.input_values["Midpoint"] = 0.99f;
+                 node.input_values["Gamma"] = 0.15f;
+                 node.input_values["Shadows"] = glm::vec3(-1);
+                 node.input_values["Midtones"] = glm::vec3(1);
+                 node.input_values["Highlights"] = glm::vec3(-1);
+             }}};
+        for (const auto& [name, configure] : cases) {
+            SCOPED_TRACE(name);
+            const auto result = single("lfs.colour_correct", geometry, configure);
+            ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
+                                                             : result.errors.begin()->second);
+            expect_finite(result.geometry);
         }
     }
 
@@ -726,8 +877,53 @@ namespace {
             Geometry evaluation_input =
                 builtin->id == "lfs.inside_mesh" || output.type == GEOMETRY_SOCKET ? input : splats();
             const auto result = evaluate(tree, {evaluation_input, {}, 91});
+            if (!result.ok)
+                for (const auto& [name, message] : result.errors)
+                    std::cerr << name << ": " << message << '\n';
             EXPECT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
                                                              : result.errors.begin()->second);
+            if (result.ok)
+                expect_finite(result.geometry);
+        }
+    }
+
+    TEST_P(NodesCore, EveryGeometryBuiltinPassesEmptySplatsCleanly) {
+        Geometry empty;
+        empty.splats = SplatsComponent{Tensor::empty({0, 3}, device()),
+                                       Tensor::empty({0, 3}, device()),
+                                       Tensor::empty({0, 3, 3}, device()),
+                                       Tensor::empty({0, 3}, device()),
+                                       Tensor::empty({0, 4}, device()),
+                                       Tensor::empty({0}, device()),
+                                       1,
+                                       1,
+                                       {{"weight", Tensor::empty({0}, device())}}};
+
+        for (const auto& builtin : registry_.list()) {
+            if (!builtin->id.starts_with("lfs.") || builtin->id == "lfs.group_input" ||
+                builtin->id == "lfs.group_output")
+                continue;
+            const auto input = std::ranges::find(builtin->inputs, GEOMETRY_SOCKET, &SocketDecl::type);
+            const auto output = std::ranges::find(builtin->outputs, GEOMETRY_SOCKET, &SocketDecl::type);
+            if (input == builtin->inputs.end() || output == builtin->outputs.end())
+                continue;
+            SCOPED_TRACE(builtin->id);
+            NodeTree tree(registry_);
+            tree.add_node(builtin->id, "Builtin");
+            ASSERT_TRUE(tree.add_link(
+                {tree.input_node().name, "Geometry", "Builtin", input->identifier}));
+            ASSERT_TRUE(tree.add_link(
+                {"Builtin", output->identifier, tree.output_node().name, "Geometry"}));
+            const auto result = evaluate(tree, {empty, {}, 1});
+            ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
+                                                             : result.errors.begin()->second);
+            expect_finite(result.geometry);
+            if (result.geometry.splats)
+                EXPECT_EQ(result.geometry.splats->means.shape()[0], 0u);
+            if (result.geometry.points)
+                EXPECT_EQ(result.geometry.points->positions.shape()[0], 0u);
+            if (result.geometry.mesh && result.geometry.mesh->mesh)
+                EXPECT_EQ(result.geometry.mesh->mesh->vertex_count(), 0);
         }
     }
 
@@ -795,7 +991,7 @@ namespace {
         EXPECT_FLOAT_EQ(*socket("lfs.remove_floaters", "Min Opacity").default_value.get_if<float>(), 0.02f);
         EXPECT_FLOAT_EQ(*socket("lfs.remove_floaters", "Isolation Radius").default_value.get_if<float>(),
                         3.0f);
-        EXPECT_FLOAT_EQ(*socket("lfs.scale_clamp", "Max Aspect").default_value.get_if<float>(), 10.0f);
+        EXPECT_FLOAT_EQ(*socket("lfs.scale_clamp", "Max Aspect").default_value.get_if<float>(), 8.0f);
         EXPECT_EQ(socket("lfs.colour_correct", "Midpoint").min, 0.01);
         EXPECT_EQ(socket("lfs.colour_correct", "Midpoint").max, 0.99);
         EXPECT_EQ(socket("lfs.recolour", "Weight").min, 0.0);
@@ -1409,6 +1605,43 @@ namespace {
         }
     }
 
+    TEST_P(NodesCore, ColourSelectionsAndHsvUseClampedDisplayedColour) {
+        constexpr float c0 = 0.28209479177387814f;
+        auto geometry = splats(0);
+        geometry.splats->sh0 =
+            (tensor({1.2f, 0.4f, -0.2f, -0.2f, 0.8f, 0.4f, 0.2f, 0.4f, 0.6f}, {3, 3}) -
+             0.5f) /
+            c0;
+
+        const auto hsv = field_result("lfs.hsv_range", "Selection", FLOAT_SOCKET, geometry, [](Node& node) {
+            node.input_values["Hue"] = 1.0f / 15.0f;
+            node.input_values["Hue Range"] = 0.01f;
+            node.input_values["Saturation Min"] = 0.99f;
+            node.input_values["Saturation Max"] = 1.0f;
+            node.input_values["Value Min"] = 0.9f;
+        });
+        EXPECT_EQ(host<float>(hsv), (std::vector<float>{1, 0, 0}));
+
+        const auto keyed = field_result("lfs.colour_key", "Selection", FLOAT_SOCKET, geometry, [](Node& node) {
+            node.input_values["Colour"] = glm::vec3(1.0f, 0.4f, 0.0f);
+            node.input_values["Tolerance"] = 1e-4f;
+        });
+        EXPECT_EQ(host<float>(keyed), (std::vector<float>{1, 0, 0}));
+
+        const auto channel_value = [&](std::string_view output) {
+            return field_result("lfs.separate_colour", output, FLOAT_SOCKET, geometry, [](Node& node) {
+                node.properties["mode"] = "hsv";
+                node.input_values["Colour"] = glm::vec3(-0.2f, 0.8f, 0.4f);
+            });
+        };
+        for (const float value : host<float>(channel_value("R")))
+            EXPECT_NEAR(value, 5.0f / 12.0f, 1e-6f);
+        for (const float value : host<float>(channel_value("G")))
+            EXPECT_FLOAT_EQ(value, 1.0f);
+        for (const float value : host<float>(channel_value("B")))
+            EXPECT_NEAR(value, 0.8f, 1e-6f);
+    }
+
     TEST_P(NodesCore, SharedFieldInDiamondIsComputedOnce) {
         int calls = 0;
         NodeTypeInfo source;
@@ -1468,6 +1701,27 @@ namespace {
                       lfs::core::gpu_backend_of(other_geometry.splats->means));
             EXPECT_EQ(host<std::uint8_t>(other_value), (std::vector<std::uint8_t>{0, 1, 0}));
         }
+    }
+
+    TEST_P(NodesCore, StoredSelectionRejectsChangedElementCount) {
+        constexpr size_t captured_count = 935'592;
+        constexpr size_t received_count = 467'796;
+        NodeTree tree(registry_);
+        auto& stored = tree.add_node("lfs.stored_selection", "Stored");
+        set_stored_selection(stored, Tensor::zeros({captured_count}, Device::CPU,
+                                                   lfs::core::DataType::Bool));
+        tree.add_node("lfs.delete_geometry", "Delete");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Delete", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Stored", "Selection", "Delete", "Selection"}));
+        ASSERT_TRUE(tree.add_link({"Delete", "Geometry", tree.output_node().name, "Geometry"}));
+        auto geometry = splats(0);
+        geometry.splats->means = Tensor::zeros({received_count, 3}, device());
+        const auto result = evaluate(tree, {std::move(geometry), {}, 1});
+        EXPECT_FALSE(result.ok);
+        ASSERT_TRUE(result.errors.contains("Stored"));
+        EXPECT_EQ(result.errors.at("Stored"),
+                  "Stored selection was captured on 935,592 splats but receives 467,796 — a node or modifier before it "
+                  "changes the count; recapture or move it before that change.");
     }
 
     class NodesCoreScale : public NodesCore {};

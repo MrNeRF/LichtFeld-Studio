@@ -30,6 +30,16 @@ namespace lfs::nodes {
         using std::runtime_error::runtime_error;
     };
 
+    class LFS_CORE_API FieldNodeError : public NodeError {
+    public:
+        FieldNodeError(std::string node, std::string message)
+            : NodeError(std::move(message)), node_(std::move(node)) {}
+        [[nodiscard]] const std::string& node() const noexcept { return node_; }
+
+    private:
+        std::string node_;
+    };
+
     struct EvalInputs {
         Geometry geometry;
         std::unordered_map<std::string, Value> interface_overrides;
@@ -65,6 +75,7 @@ namespace lfs::nodes {
         std::size_t key = 0;
         std::unordered_map<std::string, Value> outputs;
         double time_ms = 0;
+        std::optional<Geometry> geometry_input;
     };
 
     struct EvalCache {

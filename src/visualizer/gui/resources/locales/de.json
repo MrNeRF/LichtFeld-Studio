@@ -3202,7 +3202,8 @@
   "node_editor.file_read_error": "Knotengraph konnte nicht gelesen werden",
   "node_editor.file_write_error": "Knotengraph konnte nicht gespeichert werden",
   "node_editor.search_nodes": "Knoten suchen…",
-  "node_editor.settings_count": "{} Einstellungen",
+  "node_editor.settings_count_one": "{} Einstellung",
+  "node_editor.settings_count_other": "{} Einstellungen",
   "node_editor.arrange": "Anordnen",
   "node_editor.arrange_shortcut": "Shift+L",
   "node_editor.running": "Wird ausgeführt…",
@@ -3316,7 +3317,7 @@
     },
     "colour_correct": {
       "label": "Farbkorrektur",
-      "description": "Passt Helligkeit, Kontrast und Farbbalance an und erhält dabei Szenendetails.",
+      "description": "Korrigiert Farben: Belichtung, Tonwerte, Kontrast, Sättigung, Farbton, Weissabgleich und Dreiwege-Tönung.",
       "help": "Beginne mit Belichtung, dann Kontrast und Sättigung.\nVerbinde eine Auswahl, um nur einen Teil zu korrigieren.\nSetze Farbräder für neutrale Schatten, Mitteltöne und Lichter in die Mitte.",
       "inputs": {
         "Geometry": "Zu bearbeitende Geometrie. Verbinde eine Quelle; ohne Verbindung kommt keine Geometrie an.",
@@ -3727,7 +3728,7 @@
     },
     "math": {
       "label": "Mathematik",
-      "description": "Berechnet neue Werte für Bearbeitungen, Auswahlen und Verläufe.",
+      "description": "Addiert, multipliziert, vergleicht oder rundet Zahlen — etwa um Deckkraft mit Höhe zu skalieren.",
       "help": "Wähle eine Operation und verbinde Werte mit A und B.\nBeginne mit Multiplizieren, um die Stärke einer Auswahl zu ändern.",
       "inputs": {
         "A": "Erste Zahl in den Einheiten deiner Berechnung. Standard 0.",
@@ -4249,7 +4250,7 @@
     },
     "set_sh_degree": {
       "label": "SH-Grad setzen",
-      "description": "Begrenzt, wie stark sich die Splat-Farbe mit der Blickrichtung verändern kann.",
+      "description": "Begrenzt blickabhängige Splat-Farben; niedrigere Grade machen Dateien viel kleiner.",
       "help": "Nutze Grad 0 für flache Farbe und kleinere Exporte.\nEin höherer Grad schafft Platz für Details, stellt gelöschte Farben aber nicht wieder her.",
       "inputs": {
         "Geometry": "Zu bearbeitende Geometrie. Verbinde eine Quelle; ohne Verbindung kommt keine Geometrie an.",
@@ -4338,7 +4339,7 @@
     "stored_selection": {
       "label": "Gespeicherte Auswahl",
       "description": "Verwendet eine im Ansichtsfenster erfasste Auswahl erneut.",
-      "help": "Wähle Splats im Ansichtsfenster und drücke Auswahl erfassen.\nErfasse erneut, wenn sich Anzahl oder Reihenfolge ändert.",
+      "help": "Blende diesen Modifikator mit dem Augensymbol aus, wähle Splats im Ansichtsfenster (Pinsel, Lasso oder Rahmen), drücke Auswahl erfassen und blende ihn wieder ein.\nErfasse erneut, wenn etwas vor diesem Knoten die Splat-Anzahl ändert.",
       "inputs": {},
       "input_labels": {},
       "outputs": {
@@ -4423,7 +4424,7 @@
     },
     "vector_math": {
       "label": "Vektormathematik",
-      "description": "Berechnet Positionen, Richtungen und Abstände aus dreiteiligen Werten.",
+      "description": "Addiert, subtrahiert und misst Positionen und Richtungen — etwa den Abstand zu einem Punkt.",
       "help": "Nutze Skalieren für einen Versatz oder Abstand für zwei Positionen.\nLänge, Abstand und Skalarprodukt nutzen Wert, die anderen Operationen Vektor.",
       "inputs": {
         "A": "Erster dreiteiliger Wert in deinen Berechnungseinheiten. Standard (0, 0, 0).",

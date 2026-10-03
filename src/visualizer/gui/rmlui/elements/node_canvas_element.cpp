@@ -790,7 +790,10 @@ namespace lfs::vis::gui {
                     if (settings > 0)
                         title += "<button class=\"node-settings\" data-action=\"node-settings\" data-node=\"" +
                                  escape(node->name) + "\"><span class=\"settings-arrow\" data-preserve-content></span> " +
-                                 escape(std::vformat(LOC("node_editor.settings_count"), std::make_format_args(settings))) + "</button>";
+                                 escape(std::vformat(LOC(settings == 1 ? "node_editor.settings_count_one"
+                                                                      : "node_editor.settings_count_other"),
+                                                     std::make_format_args(settings))) +
+                                 "</button>";
                     if (type)
                         for (const auto& property : type->properties)
                             if (property.kind != lfs::nodes::PropertyKind::Data)

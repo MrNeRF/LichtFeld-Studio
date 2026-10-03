@@ -3202,7 +3202,8 @@
   "node_editor.file_read_error": "Nie można odczytać grafu węzłów",
   "node_editor.file_write_error": "Nie można zapisać grafu węzłów",
   "node_editor.search_nodes": "Szukaj węzłów…",
-  "node_editor.settings_count": "Ustawienia: {}",
+  "node_editor.settings_count_one": "{} ustawienie",
+  "node_editor.settings_count_other": "Ustawienia: {}",
   "node_editor.arrange": "Uporządkuj",
   "node_editor.arrange_shortcut": "Shift+L",
   "node_editor.running": "Przetwarzanie…",
@@ -3316,7 +3317,7 @@
     },
     "colour_correct": {
       "label": "Korekcja koloru",
-      "description": "Zmienia jasność, kontrast i balans kolorów, zachowując szczegóły sceny.",
+      "description": "Koryguje kolor: ekspozycję, poziomy, kontrast, nasycenie, odcień, balans bieli i tony trójzakresowe.",
       "help": "Zacznij od Ekspozycji, potem ustaw Kontrast i Nasycenie.\nPodłącz Zaznaczenie, aby skorygować tylko część sceny.\nWyśrodkuj koła, aby cienie, półtony i światła były neutralne.",
       "inputs": {
         "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
@@ -3727,7 +3728,7 @@
     },
     "math": {
       "label": "Matematyka",
-      "description": "Oblicza wartości do sterowania edycją, zaznaczeniami i przejściami.",
+      "description": "Dodaje, mnoży, porównuje lub zaokrągla liczby — np. skaluje krycie według wysokości.",
       "help": "Wybierz działanie i podłącz wartości do A i B.\nZacznij od Mnożenia, aby zmieniać siłę zaznaczenia.",
       "inputs": {
         "A": "Pierwsza liczba w jednostkach operacji. Domyślnie 0.",
@@ -4249,7 +4250,7 @@
     },
     "set_sh_degree": {
       "label": "Ustaw stopień SH",
-      "description": "Ogranicza zmienność koloru splatu w zależności od kierunku patrzenia.",
+      "description": "Ogranicza kolor splatu zależny od widoku; niższe stopnie znacznie zmniejszają pliki.",
       "help": "Użyj Stopnia 0 dla jednolitego koloru i mniejszych eksportów.\nWyższy stopień daje miejsce na szczegóły, ale nie odzyskuje odrzuconego koloru.",
       "inputs": {
         "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
@@ -4338,7 +4339,7 @@
     "stored_selection": {
       "label": "Zapisane zaznaczenie",
       "description": "Ponownie wykorzystuje zaznaczenie przechwycone z widoku.",
-      "help": "Zaznacz splaty w widoku i naciśnij Przechwyć zaznaczenie.\nPrzechwyć ponownie po zmianie liczby lub kolejności elementów.",
+      "help": "Ukryj ten modyfikator ikoną oka, zaznacz splaty w widoku (pędzlem, lassem lub ramką), naciśnij Przechwyć zaznaczenie i pokaż go ponownie.\nPrzechwyć ponownie, jeśli coś przed tym węzłem zmieni liczbę splatów.",
       "inputs": {},
       "input_labels": {},
       "outputs": {
@@ -4423,7 +4424,7 @@
     },
     "vector_math": {
       "label": "Działania wektorowe",
-      "description": "Oblicza pozycje, kierunki i odległości z wartości o trzech składowych.",
+      "description": "Dodaje, odejmuje i mierzy pozycje oraz kierunki — np. odległość od punktu.",
       "help": "Użyj Skali dla przesunięcia lub Odległości między dwiema pozycjami.\nDługość, Odległość i Iloczyn skalarny używają Wartości; pozostałe operacje używają Wektora.",
       "inputs": {
         "A": "Pierwszy wektor X/Y/Z. Domyślne (0, 0, 0); jednostki zależą od operacji.",

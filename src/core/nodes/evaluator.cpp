@@ -206,6 +206,7 @@ namespace lfs::nodes {
             context.node_ = &node;
             context.memo_ = &memo;
             context.host_ = host;
+            std::optional<Geometry> geometry_input;
             bool upstream_ok = true;
             for (const auto& declaration : type->inputs) {
                 std::vector<Value> resolved;
@@ -310,8 +311,11 @@ namespace lfs::nodes {
                 for (const auto& declaration : type->inputs)
                     for (auto& value : context.inputs_[declaration.identifier]) {
                         value = prepare_input(value, declaration);
-                        if (auto* geometry = value.get_if<Geometry>())
+                        if (auto* geometry = value.get_if<Geometry>()) {
                             *geometry = devices.convert(std::move(*geometry), device);
+                            if (!geometry_input)
+                                geometry_input = *geometry;
+                        }
                     }
                 if (node.type_id == "lfs.group_input") {
                     for (const auto& declaration : tree.interface.inputs) {
@@ -347,6 +351,10 @@ namespace lfs::nodes {
                 }
                 evaluation.outputs = std::move(context.outputs_);
                 evaluation.ok = true;
+            } catch (const FieldNodeError& exception) {
+                result.errors[exception.node()] = exception.what();
+                result.ok = false;
+                evaluation.ok = false;
             } catch (const std::exception& exception) {
                 // LFS-CENSUS-OK(empty-catch): node exceptions are the user-facing per-node error channel.
                 result.errors[node.name] = exception.what();
@@ -357,7 +365,8 @@ namespace lfs::nodes {
             const double elapsed = std::chrono::duration<double, std::milli>(stop - start).count();
             result.time_ms[node.name] = elapsed;
             if (evaluation.ok) {
-                output_cache[node.name] = CachedNodeOutput{key, evaluation.outputs, elapsed};
+                output_cache[node.name] = CachedNodeOutput{key, evaluation.outputs, elapsed,
+                                                           std::move(geometry_input)};
                 report(node.name, output_cache.at(node.name), false);
             }
             active.erase(node.name);

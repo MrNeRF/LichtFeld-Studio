@@ -3202,7 +3202,8 @@
   "node_editor.file_read_error": "Impossible de lire le graphe de nœuds",
   "node_editor.file_write_error": "Impossible d’enregistrer le graphe de nœuds",
   "node_editor.search_nodes": "Rechercher des nœuds…",
-  "node_editor.settings_count": "{} réglages",
+  "node_editor.settings_count_one": "{} réglage",
+  "node_editor.settings_count_other": "{} réglages",
   "node_editor.arrange": "Organiser",
   "node_editor.arrange_shortcut": "Shift+L",
   "node_editor.running": "En cours…",
@@ -3316,7 +3317,7 @@
     },
     "colour_correct": {
       "label": "Correction des couleurs",
-      "description": "Ajuste luminosité, contraste et équilibre des couleurs en conservant les détails de ta scène.",
+      "description": "Étalonne : exposition, niveaux, contraste, saturation, teinte, balance des blancs et tons à trois voies.",
       "help": "Commence par Exposition, puis règle Contraste et Saturation.\nConnecte une Sélection pour ne corriger qu'une partie.\nRecentre les roues pour des ombres, tons moyens et hautes lumières neutres.",
       "inputs": {
         "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
@@ -3727,7 +3728,7 @@
     },
     "math": {
       "label": "Mathématiques",
-      "description": "Calcule des valeurs pour contrôler tes retouches, sélections et fondus.",
+      "description": "Additionne, multiplie, compare ou arrondit des nombres — par exemple pour lier opacité et hauteur.",
       "help": "Choisis une opération puis connecte des valeurs à A et B.\nCommence par Multiplier pour régler la force d'une sélection.",
       "inputs": {
         "A": "Premier nombre dans les unités de ton calcul. Valeur par défaut : 0.",
@@ -4249,7 +4250,7 @@
     },
     "set_sh_degree": {
       "label": "Définir le degré SH",
-      "description": "Limite la variation de couleur d'un splat selon la direction de vue.",
+      "description": "Limite la couleur selon la vue ; des degrés inférieurs réduisent fortement les fichiers.",
       "help": "Utilise Degré 0 pour une couleur uniforme et des exports plus petits.\nAugmenter le degré permet plus de détails, sans restaurer les couleurs supprimées.",
       "inputs": {
         "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
@@ -4338,7 +4339,7 @@
     "stored_selection": {
       "label": "Sélection enregistrée",
       "description": "Réutilise une sélection capturée dans la vue.",
-      "help": "Sélectionne des splats dans la vue puis clique Capturer la sélection.\nCapture à nouveau après un changement du nombre ou de l'ordre des éléments.",
+      "help": "Masque ce modificateur avec l'icône œil, sélectionne les splats dans la vue (pinceau, lasso ou boîte), clique Capturer la sélection, puis réaffiche-le.\nCapture à nouveau si un élément avant ce nœud change le nombre de splats.",
       "inputs": {},
       "input_labels": {},
       "outputs": {
@@ -4423,7 +4424,7 @@
     },
     "vector_math": {
       "label": "Calcul vectoriel",
-      "description": "Calcule positions, directions et distances à partir de valeurs à trois composantes.",
+      "description": "Additionne, soustrait et mesure positions et directions — par exemple la distance à un point.",
       "help": "Utilise Échelle pour un décalage ou Distance entre deux positions.\nLongueur, Distance et Produit scalaire utilisent Valeur ; les autres utilisent Vecteur.",
       "inputs": {
         "A": "Première valeur à trois composantes dans tes unités de calcul. Défaut (0, 0, 0).",

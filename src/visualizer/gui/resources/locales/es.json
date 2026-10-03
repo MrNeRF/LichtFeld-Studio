@@ -3202,7 +3202,8 @@
   "node_editor.file_read_error": "No se pudo leer el grafo de nodos",
   "node_editor.file_write_error": "No se pudo guardar el grafo de nodos",
   "node_editor.search_nodes": "Buscar nodos…",
-  "node_editor.settings_count": "{} ajustes",
+  "node_editor.settings_count_one": "{} ajuste",
+  "node_editor.settings_count_other": "{} ajustes",
   "node_editor.arrange": "Organizar",
   "node_editor.arrange_shortcut": "Shift+L",
   "node_editor.running": "En ejecución…",
@@ -3316,7 +3317,7 @@
     },
     "colour_correct": {
       "label": "Corrección de color",
-      "description": "Ajusta brillo, contraste y balance de color conservando los detalles de tu escena.",
+      "description": "Gradúa color: exposición, niveles, contraste, saturación, tono, balance de blancos y tintes de tres vías.",
       "help": "Empieza con Exposición y luego ajusta Contraste y Saturación.\nConecta una Selección para corregir solo una parte.\nCentra las ruedas para neutralizar sombras, tonos medios y luces.",
       "inputs": {
         "Geometry": "Geometría que quieres editar. Conecta una fuente; sin conexión no se proporciona geometría.",
@@ -3727,7 +3728,7 @@
     },
     "math": {
       "label": "Matemáticas",
-      "description": "Calcula valores para controlar ediciones, selecciones y fundidos.",
+      "description": "Suma, multiplica, compara o redondea números — por ejemplo para escalar opacidad con altura.",
       "help": "Elige una operación y conecta valores a A y B.\nEmpieza con Multiplicar para ajustar la fuerza de una selección.",
       "inputs": {
         "A": "Primer número, en las unidades de tu cálculo. Valor inicial: 0.",
@@ -4249,7 +4250,7 @@
     },
     "set_sh_degree": {
       "label": "Establecer grado SH",
-      "description": "Limita cuánto varía el color de un splat según la dirección de vista.",
+      "description": "Limita la variación del color de un splat con la vista; grados menores reducen mucho los archivos.",
       "help": "Usa Grado 0 para color plano y exportaciones menores.\nAumentar el grado permite más detalle, pero no restaura colores descartados.",
       "inputs": {
         "Geometry": "Geometría que quieres editar. Conecta una fuente; sin conexión no se proporciona geometría.",
@@ -4338,7 +4339,7 @@
     "stored_selection": {
       "label": "Selección guardada",
       "description": "Reutiliza una selección capturada en la vista.",
-      "help": "Selecciona splats en la vista y pulsa Capturar selección.\nCaptura de nuevo si cambia la cantidad o el orden de elementos.",
+      "help": "Oculta este modificador con el icono del ojo, selecciona splats en la vista (pincel, lazo o caja), pulsa Capturar selección y vuelve a mostrarlo.\nCaptura de nuevo si algo anterior a este nodo cambia la cantidad de splats.",
       "inputs": {},
       "input_labels": {},
       "outputs": {
@@ -4423,7 +4424,7 @@
     },
     "vector_math": {
       "label": "Matemática vectorial",
-      "description": "Calcula posiciones, direcciones y distancias a partir de valores de tres componentes.",
+      "description": "Suma, resta y mide posiciones y direcciones — por ejemplo la distancia desde un punto.",
       "help": "Usa Escala para redimensionar un desplazamiento o Distancia entre dos posiciones.\nLongitud, Distancia y Producto escalar usan Valor; las demás operaciones usan Vector.",
       "inputs": {
         "A": "Primer valor de tres componentes en tus unidades de cálculo. Por defecto (0, 0, 0).",

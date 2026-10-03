@@ -3202,7 +3202,8 @@
   "node_editor.file_read_error": "Could not read the node graph",
   "node_editor.file_write_error": "Could not save the node graph",
   "node_editor.search_nodes": "Search nodes…",
-  "node_editor.settings_count": "{} settings",
+  "node_editor.settings_count_one": "{} setting",
+  "node_editor.settings_count_other": "{} settings",
   "node_editor.arrange": "Arrange",
   "node_editor.arrange_shortcut": "Shift+L",
   "node_editor.running": "Running…",
@@ -3316,7 +3317,7 @@
     },
     "colour_correct": {
       "label": "Colour Correct",
-      "description": "Adjusts brightness, contrast and colour balance while keeping your scene's detail.",
+      "description": "Grades colour: exposure, levels, contrast, saturation, hue, white balance and shadow/midtone/highlight tints.",
       "help": "Start with Exposure to set brightness, then adjust Contrast and Saturation.\nConnect a Selection to grade only part of your scene.\nReset colour wheels to the centre for neutral shadows, midtones and highlights.",
       "inputs": {
         "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
@@ -3727,7 +3728,7 @@
     },
     "math": {
       "label": "Math",
-      "description": "Calculates new values to control edits, selections and fades.",
+      "description": "Adds, multiplies, compares or rounds numbers — for example to scale opacity with height.",
       "help": "Choose an operation, then connect values to A and B.\nStart with Multiply to scale a selection's strength.",
       "inputs": {
         "A": "First number in the units of your calculation. 0 is the default.",
@@ -4249,7 +4250,7 @@
     },
     "set_sh_degree": {
       "label": "Set SH Degree",
-      "description": "Limits how much a splat's colour can vary with the viewing direction.",
+      "description": "Limits how much a splat's colour can vary with the viewing direction; lower degrees make files much smaller.",
       "help": "Use Degree 0 for flat colour and smaller exports.\nRaising the degree adds room for detail but cannot restore discarded colour.",
       "inputs": {
         "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
@@ -4338,7 +4339,7 @@
     "stored_selection": {
       "label": "Stored Selection",
       "description": "Reuses a selection you capture from the viewport.",
-      "help": "Select splats in the viewport, then press Capture selection.\nCapture again after changing element count or order.",
+      "help": "Hide this modifier with the eye icon, select splats in the viewport (brush, lasso or box), press Capture selection, then show the modifier again.\nCapture again if anything before this node changes the splat count.",
       "inputs": {},
       "input_labels": {},
       "outputs": {
@@ -4423,7 +4424,7 @@
     },
     "vector_math": {
       "label": "Vector Math",
-      "description": "Calculates positions, directions and distances from three-part values.",
+      "description": "Adds, subtracts and measures positions and directions — for example the distance from a point.",
       "help": "Use Scale to resize an offset or Distance to compare two positions.\nLength, Distance and Dot use the Value output; other operations use Vector.",
       "inputs": {
         "A": "First three-part value in the units of your calculation. The default is (0, 0, 0).",

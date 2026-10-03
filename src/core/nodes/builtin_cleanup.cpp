@@ -34,7 +34,8 @@ namespace lfs::nodes::builtin {
 
     void evaluate_simplify(NodeContext& context) {
         auto geometry = geometry_input(context);
-        if (geometry.splats) {
+        if (geometry.splats && geometry.splats->means.shape()[0] != 0 &&
+            input_float(context, "Ratio", 0.5f) < 1.0f) {
             const auto data = splat_data_from_geometry(geometry);
             core::SplatSimplifyOptions options;
             options.ratio = input_float(context, "Ratio", 0.5f);

@@ -3202,7 +3202,8 @@
   "node_editor.file_read_error": "노드 그래프를 읽을 수 없습니다",
   "node_editor.file_write_error": "노드 그래프를 저장할 수 없습니다",
   "node_editor.search_nodes": "노드 검색…",
-  "node_editor.settings_count": "설정 {}개",
+  "node_editor.settings_count_one": "설정 {}개",
+  "node_editor.settings_count_other": "설정 {}개",
   "node_editor.arrange": "정렬",
   "node_editor.arrange_shortcut": "Shift+L",
   "node_editor.running": "실행 중…",
@@ -3316,7 +3317,7 @@
     },
     "colour_correct": {
       "label": "색상 보정",
-      "description": "장면의 세부를 유지하면서 밝기, 대비와 색상 균형을 조절합니다.",
+      "description": "노출, 레벨, 대비, 채도, 색조, 화이트 밸런스와 그림자/중간톤/하이라이트 틴트를 보정합니다.",
       "help": "노출로 밝기를 맞춘 뒤 대비와 채도를 조절하세요.\n선택을 연결하면 장면의 일부만 보정할 수 있습니다.\n색상 휠을 중앙으로 되돌리면 어두운 영역, 중간톤과 밝은 영역이 중립이 됩니다.",
       "inputs": {
         "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
@@ -3727,7 +3728,7 @@
     },
     "math": {
       "label": "수치 연산",
-      "description": "편집, 선택과 부드러운 변화를 제어할 숫자를 계산합니다.",
+      "description": "숫자를 더하고 곱하고 비교하거나 반올림합니다 — 예: 높이에 따라 불투명도 조절.",
       "help": "연산을 고르고 A와 B에 값을 연결하세요.\n선택 강도를 조절할 때는 Multiply부터 사용하세요.",
       "inputs": {
         "A": "계산 단위의 첫 번째 숫자입니다. 기본값은 0입니다.",
@@ -4249,7 +4250,7 @@
     },
     "set_sh_degree": {
       "label": "SH 차수 설정",
-      "description": "바라보는 방향에 따라 스플랫 색이 변하는 정도를 제한합니다.",
+      "description": "시점에 따른 스플랫 색 변화를 제한합니다. 차수가 낮을수록 파일이 훨씬 작아집니다.",
       "help": "차수 0은 색을 일정하게 만들고 내보낼 파일도 줄입니다.\n차수를 높여도 이미 버린 색상 정보는 복원되지 않습니다.",
       "inputs": {
         "Geometry": "편집할 지오메트리입니다. 원본을 연결하세요. 연결하지 않으면 지오메트리가 없습니다.",
@@ -4338,7 +4339,7 @@
     "stored_selection": {
       "label": "저장된 선택",
       "description": "뷰포트에서 캡처한 선택 영역을 다시 사용합니다.",
-      "help": "뷰포트에서 스플랫을 선택한 뒤 선택 캡처를 누르세요.\n요소 개수나 순서를 바꾸면 다시 캡처하세요.",
+      "help": "눈 아이콘으로 이 모디파이어를 숨기고 뷰포트에서 스플랫을 선택한 뒤(브러시, 올가미 또는 상자) 선택 캡처를 누르고 다시 표시하세요.\n이 노드 앞에서 스플랫 수가 바뀌면 다시 캡처하세요.",
       "inputs": {},
       "input_labels": {},
       "outputs": {
@@ -4423,7 +4424,7 @@
     },
     "vector_math": {
       "label": "벡터 연산",
-      "description": "세 성분의 값으로 위치, 방향과 거리를 계산합니다.",
+      "description": "위치와 방향을 더하고 빼고 측정합니다 — 예: 한 점으로부터의 거리.",
       "help": "Scale로 오프셋 크기를 바꾸거나 Distance로 두 위치를 비교하세요.\nLength, Distance, Dot은 값 출력을, 나머지는 벡터 출력을 사용합니다.",
       "inputs": {
         "A": "계산 단위의 첫 번째 세 성분 값입니다. 기본값은 (0, 0, 0)입니다.",
