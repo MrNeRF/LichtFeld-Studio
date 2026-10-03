@@ -5,10 +5,12 @@
 #include <atomic>
 #include <chrono>
 #include <cuda_runtime.h>
+#include <functional>
 #include <gtest/gtest.h>
 #include <iostream>
 #include <numeric>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "core/tensor.hpp"
@@ -632,6 +634,34 @@ TEST_F(TensorStreamTest, FusedSliceReductionOfStreamTensorWaitsForItsResult) {
         // Hold the producer back so an unordered consumer reads unwritten memory.
         ASSERT_EQ(cudaLaunchHostFunc(producer, [](void*) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); }, nullptr), cudaSuccess);
         EXPECT_FLOAT_EQ(column_gap(produced), -0.25f);
+    }
+    destroyStreamSafely(producer);
+}
+
+TEST_F(TensorStreamTest, EagerOpsOnStreamTensorWaitForItsProducer) {
+    constexpr size_t rows = 1'000'000;
+    cudaStream_t producer;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
+    {
+        Tensor produced;
+        {
+            CUDAStreamGuard guard(producer);
+            produced = (Tensor::full({rows, 3}, 0.25f, Device::CUDA) + Tensor::zeros({rows, 3}, Device::CUDA)).contiguous();
+        }
+        ASSERT_EQ(cudaStreamSynchronize(producer), cudaSuccess);
+        using Probe = std::function<float(const Tensor&)>;
+        const std::vector<std::tuple<const char*, Probe, float>> probes = {
+            {"to", [](const Tensor& v) { return (v * 4.0f).gt(1.5f).to(DataType::Float32).sum().item<float>(); }, 0.0f},
+            {"clamp", [](const Tensor& v) { return (v * 4.0f).clamp(0.0f, 0.5f).sum().item<float>(); }, 1.5e6f},
+            {"cat", [](const Tensor& v) { return Tensor::cat({v * 4.0f, v * 4.0f}, 0).sum().item<float>(); }, 6.0e6f},
+        };
+        for (const auto& [name, probe, expected] : probes) {
+            // Same expressions on other values first, so pooled buffers hold wrong results.
+            (void)probe(Tensor::full({rows, 3}, 0.6f, Device::CUDA));
+            // Hold the producer back so an unordered consumer reads unwritten memory.
+            ASSERT_EQ(cudaLaunchHostFunc(producer, [](void*) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); }, nullptr), cudaSuccess);
+            EXPECT_FLOAT_EQ(probe(produced), expected) << name;
+        }
     }
     destroyStreamSafely(producer);
 }

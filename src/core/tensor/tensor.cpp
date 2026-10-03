@@ -1705,6 +1705,12 @@ namespace lfs::core {
             return contiguous().to(dtype);
         }
 
+        // Convert on the current stream, or this tensor's own when none is set,
+        // after the work that produced this tensor.
+        std::optional<CUDAStreamGuard> conversion_stream;
+        if (device_ == Device::CUDA)
+            conversion_stream.emplace(prepare_inputs_for_stream({this}));
+
 // Macro for type conversions using launch_convert_type
 #define CONVERT_DTYPE_CUDA(FROM_TYPE, TO_TYPE, FROM_DTYPE, TO_DTYPE)                \
     if (dtype_ == FROM_DTYPE && dtype == TO_DTYPE) {                                \

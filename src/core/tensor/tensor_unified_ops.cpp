@@ -2405,9 +2405,10 @@ namespace lfs::core {
 
                     LFS_VALIDATE_CUDA_DEVICE_POINTER(src_ptr, "in-place cat source");
 
+                    prepare_inputs_for_stream({&tensors[i]}, result.stream());
                     LFS_CUDA_CHECK_MSG(
-                        cudaMemcpy(static_cast<char*>(result.data_) + offset, src_ptr, bytes,
-                                   cudaMemcpyDeviceToDevice),
+                        memcpy_ordered(static_cast<char*>(result.data_) + offset, src_ptr, bytes,
+                                       cudaMemcpyDeviceToDevice, result.stream()),
                         "in-place cat copy (tensor_index={}, source_pointer={}, "
                         "source_device={}, source_contiguous={}, source_is_view={}, "
                         "destination_pointer={}, destination_offset={}, bytes={}, "
@@ -2453,9 +2454,10 @@ namespace lfs::core {
                 size_t offset = 0;
                 for (const auto& t : tensors) {
                     size_t bytes = t.bytes();
+                    prepare_inputs_for_stream({&t}, result.stream());
                     LFS_CUDA_CHECK_MSG(
-                        cudaMemcpy(static_cast<char*>(result.data_ptr()) + offset,
-                                   t.data_ptr(), bytes, cudaMemcpyDeviceToDevice),
+                        memcpy_ordered(static_cast<char*>(result.data_ptr()) + offset,
+                                       t.data_ptr(), bytes, cudaMemcpyDeviceToDevice, result.stream()),
                         "cat CUDA copy");
                     offset += bytes;
                 }
@@ -2488,6 +2490,8 @@ namespace lfs::core {
             if (first_device == Device::CUDA) {
                 for (const auto& tensor : tensors)
                     pin_operands({&tensor});
+                for (const auto& tensor : tensors)
+                    prepare_inputs_for_stream({&tensor}, result.stream());
                 tensor_ops::launch_cat_last_dim(
                     result.data_ptr(),
                     tensors,
@@ -2532,6 +2536,8 @@ namespace lfs::core {
         if (first_device == Device::CUDA) {
             for (const auto& tensor : tensors)
                 pin_operands({&tensor});
+            for (const auto& tensor : tensors)
+                prepare_inputs_for_stream({&tensor}, result.stream());
             tensor_ops::launch_cat_middle_dim(
                 result.data_ptr(),
                 tensors,
@@ -2682,6 +2688,7 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             if (dtype_ == DataType::Float32) {
+                prepare_inputs_for_stream({this}, result.stream());
                 // Single-pass: read from source, write clamped to destination
                 const float* src = ptr<float>();
                 float* dst = result.ptr<float>();
