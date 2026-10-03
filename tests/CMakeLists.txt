@@ -273,11 +273,14 @@ endif()
 
 # Headless SDL boundary regression tests, also built in the CPU-only CI configuration.
 # Do not link SDL itself: this isolated executable provides the four SDL state
-# queries used by the production coordinate helpers and frame finalization.
+# queries used by the production coordinate helpers and frame finalization, and
+# reports no injected MCP pointer.
 add_executable(lichtfeld_sdl_coordinate_tests test_sdl_pixel_coordinates.cpp)
 target_compile_features(lichtfeld_sdl_coordinate_tests PRIVATE cxx_std_23)
+target_compile_definitions(lichtfeld_sdl_coordinate_tests PRIVATE LFS_STATIC_BUILD)
 target_include_directories(lichtfeld_sdl_coordinate_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/visualizer
+    ${CMAKE_SOURCE_DIR}/src/core/include
 )
 target_link_libraries(lichtfeld_sdl_coordinate_tests PRIVATE
     GTest::gtest_main
