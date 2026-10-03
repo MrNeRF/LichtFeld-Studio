@@ -158,6 +158,11 @@ jobs:
           cmake --build build --target lichtfeld_format_tests -j $(nproc)
           ctest --test-dir build --output-on-failure -R '^lichtfeld_format_tests$'
 
+      - name: Build and run EXR image codec tests
+        run: |
+          cmake --build build --target lichtfeld_image_codec_tests -j $(nproc)
+          ctest --test-dir build --output-on-failure -R '^lichtfeld_image_codec_tests$'
+
       - name: Build and run frame-demand CPU tests
         run: |
           cmake --build build --target lichtfeld_frame_tests -j $(nproc)

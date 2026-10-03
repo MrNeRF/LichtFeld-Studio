@@ -3,6 +3,10 @@
 
 # Testing module - comprehensive tests for all components
 
+if(BUILD_TESTS OR BUILD_FORMAT_TESTS)
+    add_subdirectory(image_codecs)
+endif()
+
 # =============================================================================
 # Headless localization contracts (no LibTorch/CUDA)
 # =============================================================================

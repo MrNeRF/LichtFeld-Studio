@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "image_codecs.hpp"
+#include "image_exr.hpp"
 
 #include "core/path_utils.hpp"
 
@@ -11,7 +12,6 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 #include <tiffio.h>
-#include <tinyexr.h>
 #include <webp/decode.h>
 #include <zlib.h>
 
@@ -809,7 +809,7 @@ namespace lfs::core::image_codecs {
 #ifndef _WIN32
             if (hdr && target.sample_type == SampleType::Float32) {
                 const int descriptor = open(path.c_str(), O_RDONLY);
-                struct stat file_status {};
+                struct stat file_status{};
                 if (descriptor >= 0 && fstat(descriptor, &file_status) == 0 && file_status.st_size > 0 &&
                     file_status.st_size <= std::numeric_limits<int>::max()) {
                     const auto size = static_cast<std::size_t>(file_status.st_size);
@@ -955,30 +955,6 @@ namespace lfs::core::image_codecs {
             return true;
         }
 
-        bool decode_exr(const std::filesystem::path& path, Image& result, std::string& error) {
-            float* decoded = nullptr;
-            int width = 0;
-            int height = 0;
-            const auto path_utf8 = path_to_utf8(path);
-            const char* exr_error = nullptr;
-            const int status = LoadEXR(&decoded, &width, &height, path_utf8.c_str(), &exr_error);
-            if (status != TINYEXR_SUCCESS || !decoded) {
-                set_error(error, "EXR decode failed", exr_error);
-                if (exr_error)
-                    FreeEXRErrorMessage(exr_error);
-                return false;
-            }
-            result.width = width;
-            result.height = height;
-            result.channels = 4;
-            result.sample_type = SampleType::Float32;
-            const auto bytes = static_cast<std::size_t>(width) * height * 4 * sizeof(float);
-            result.data.resize(bytes);
-            std::memcpy(result.data.data(), decoded, bytes);
-            free(decoded);
-            return true;
-        }
-
     } // namespace
 
     bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
@@ -1016,6 +992,8 @@ namespace lfs::core::image_codecs {
 
     bool probe(const std::filesystem::path& path, Probe& result, std::string& error) {
         const auto extension = lower_extension(path);
+        if (extension == ".exr")
+            return probe_exr(path, result, error);
         if (extension == ".jpg" || extension == ".jpeg")
             return probe_jpeg_file(path, result, error);
         if (extension == ".png")
@@ -1050,10 +1028,8 @@ namespace lfs::core::image_codecs {
         std::vector<std::uint8_t> prefix;
         if (!read_prefix(path, prefix, error))
             return false;
-        if (is_exr(prefix)) {
-            error = "EXR dimensions require codec decode";
-            return false;
-        }
+        if (is_exr(prefix))
+            return probe_exr(path, result, error);
         if (is_tiff(prefix) || extension == ".tif" || extension == ".tiff") {
             TIFF* tiff = open_tiff(path, "r", error);
             if (!tiff)
