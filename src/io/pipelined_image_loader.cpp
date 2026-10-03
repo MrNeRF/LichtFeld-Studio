@@ -2662,15 +2662,13 @@ namespace lfs::io {
                             const auto& bytes = *batch[i].jpeg_data;
                             const bool is_jpeg2k = bytes.size() >= 2 && bytes[0] == 0xff && bytes[1] == 0x4f;
                             if (is_jpeg2k) {
+                                // UINT8 streams decode to raw bytes; UINT16 streams (16-bit alpha)
+                                // decode to normalized Float32.
                                 auto raw = nvcodec->decode_jpeg2k_16bit_from_memory_gpu(
                                     bytes, decode_stream_, false, true);
-                                // Pipeline mask sidecars are always encoded as UINT8 below.
-                                // The decoder returns normalized Float32 for UINT16 streams;
-                                // reinterpreting that output as raw u16 would normalize twice.
-                                LFS_ASSERT_MSG(
-                                    raw.dtype() == lfs::core::DataType::UInt8,
-                                    "pipeline JPEG2000 mask cache must contain eight-bit samples");
-                                mask_tensor = raw.to(lfs::core::DataType::Float32) / 255.0f;
+                                mask_tensor = raw.dtype() == lfs::core::DataType::UInt8
+                                                  ? raw.to(lfs::core::DataType::Float32) / 255.0f
+                                                  : raw;
                             } else {
                                 mask_tensor = nvcodec->load_image_from_memory_gpu(
                                     bytes, 1, 0, decode_stream_, DecodeFormat::Grayscale);
@@ -2834,7 +2832,9 @@ namespace lfs::io {
                     const auto rgba = load_rgba_image_cpu_decoded(
                         item.path,
                         item.undistort ? 1 : item.params.resize_factor,
-                        item.undistort ? 0 : item.params.max_width);
+                        item.undistort ? 0 : item.params.max_width,
+                        nullptr,
+                        config_.use_16bit_color);
                     const size_t H = rgba.shape()[1];
                     const size_t W = rgba.shape()[2];
                     auto rgb = rgba.slice(0, 0, 3).contiguous();
@@ -2864,7 +2864,7 @@ namespace lfs::io {
                             write_derived_cache(*nvcodec, rgb, item.cache_key, nullptr, item.params);
 
                             const auto alpha_key = make_mask_cache_key(item.path, item.params);
-                            auto alpha_jpeg = nvcodec->encode_grayscale_to_jpeg2k(alpha, nullptr, true, true);
+                            auto alpha_jpeg = nvcodec->encode_grayscale_to_jpeg2k(alpha, nullptr, true, false);
                             put_in_jpeg_cache(alpha_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(alpha_jpeg)));
                         } catch (...) {

@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -24,6 +25,7 @@
 #include <map>
 #include <sstream>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -395,6 +397,89 @@ TEST_F(PipelinedImageLoaderTest, AlphaAsMaskRgbUsesGpuLanczos) {
         Tensor::from_blob(rgba.data(), TensorShape({HEIGHT, WIDTH, 4}), Device::CPU, DataType::UInt8).to(Device::CUDA),
         HEIGHT / 2, WIDTH / 2, 2, nullptr);
     EXPECT_EQ(expected.slice(0, 0, 3).contiguous().cpu().to_vector(), ready->tensor.cpu().to_vector());
+}
+
+namespace {
+    // Loads one alpha-as-mask request twice; the second load is served from the derived caches.
+    std::array<std::pair<std::vector<float>, std::vector<float>>, 2> load_rgba_twice(
+        PipelinedImageLoader& loader, const std::filesystem::path& path, const LoadParams& params) {
+        std::array<std::pair<std::vector<float>, std::vector<float>>, 2> loads;
+        for (size_t pass = 0; pass < loads.size(); ++pass) {
+            ImageRequest request{};
+            request.sequence_id = pass;
+            request.path = path;
+            request.params = params;
+            request.extract_alpha_as_mask = true;
+            loader.prefetch({request});
+            const auto ready = loader.try_get_for(std::chrono::seconds(20));
+            EXPECT_TRUE(ready.has_value());
+            if (!ready)
+                return loads;
+            EXPECT_TRUE(ready->error.empty()) << ready->error;
+            EXPECT_TRUE(ready->mask.has_value());
+            if (!ready->mask)
+                return loads;
+            loads[pass] = {ready->tensor.to(DataType::Float32).cpu().to_vector(), ready->mask->cpu().to_vector()};
+        }
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 1U);
+        return loads;
+    }
+} // namespace
+
+// Catches the alpha-as-mask path decoding 16-bit RGBA through an 8-bit buffer, or caching its alpha at 8 bits
+// so that later epochs see a different alpha than the first.
+TEST_F(PipelinedImageLoaderTest, AlphaAsMaskKeepsSixteenBitColorAndAlpha) {
+    constexpr int WIDTH = 19;
+    constexpr int HEIGHT = 13;
+    const lfs::test::licht::TemporaryDirectory temp("lfs-u16-rgba");
+    const auto image_path = temp.path / "image.png";
+    std::vector<uint16_t> rgba(static_cast<size_t>(WIDTH) * HEIGHT * 4);
+    for (size_t index = 0; index < rgba.size(); ++index)
+        rgba[index] = static_cast<uint16_t>((index * 3253 + index / 5) % 65536);
+    ASSERT_TRUE(save_png(image_path, rgba.data(), WIDTH, HEIGHT, 4, 16, 1));
+
+    auto settings = config();
+    settings.use_16bit_color = true;
+    PipelinedImageLoader loader(settings);
+    LoadParams params;
+    params.resize_factor = 1;
+    params.output_uint8 = false;
+    const auto loads = load_rgba_twice(loader, image_path, params);
+    constexpr size_t PIXELS = static_cast<size_t>(WIDTH) * HEIGHT;
+    for (size_t pass = 0; pass < loads.size(); ++pass) {
+        const auto& [rgb, alpha] = loads[pass];
+        ASSERT_EQ(rgb.size(), 3 * PIXELS) << "pass " << pass;
+        ASSERT_EQ(alpha.size(), PIXELS) << "pass " << pass;
+        for (size_t pixel = 0; pixel < PIXELS; ++pixel) {
+            for (size_t c = 0; c < 3; ++c)
+                EXPECT_NEAR(rgb[c * PIXELS + pixel], rgba[pixel * 4 + c] / 65535.0f, 1e-6f)
+                    << "pass " << pass << " c=" << c << " pixel=" << pixel;
+            EXPECT_NEAR(alpha[pixel], rgba[pixel * 4 + 3] / 65535.0f, 1e-6f) << "pass " << pass << " pixel=" << pixel;
+        }
+    }
+}
+
+// Catches an 8-bit alpha cache: a resized alpha would then change between the first and later epochs.
+TEST_F(PipelinedImageLoaderTest, AlphaAsMaskCacheKeepsResizedAlpha) {
+    constexpr int WIDTH = 64;
+    constexpr int HEIGHT = 48;
+    const lfs::test::licht::TemporaryDirectory temp("lfs-u8-rgba-cache");
+    const auto image_path = temp.path / "image.png";
+    std::vector<uint8_t> rgba(static_cast<size_t>(WIDTH) * HEIGHT * 4);
+    for (size_t index = 0; index < rgba.size(); ++index)
+        rgba[index] = static_cast<uint8_t>((index * 73 + index / 11) % 256);
+    ASSERT_TRUE(save_png(image_path, rgba.data(), WIDTH, HEIGHT, 4, 8, 1));
+
+    PipelinedImageLoader loader(config());
+    LoadParams params;
+    params.resize_factor = 2;
+    const auto loads = load_rgba_twice(loader, image_path, params);
+    const auto& first = loads[0].second;
+    const auto& cached = loads[1].second;
+    ASSERT_EQ(first.size(), static_cast<size_t>(WIDTH / 2) * (HEIGHT / 2));
+    ASSERT_EQ(cached.size(), first.size());
+    for (size_t pixel = 0; pixel < first.size(); ++pixel)
+        EXPECT_NEAR(cached[pixel], first[pixel], 1e-5f) << "pixel=" << pixel;
 }
 
 TEST_F(PipelinedImageLoaderTest, ImmediateCacheHitDoesNotRepeatResize) {
