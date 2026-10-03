@@ -73,7 +73,12 @@ namespace lfs::app::node_mcp {
         if (!node)
             return failure("Unknown scene node UUID; read lichtfeld://scene/nodes", "target");
         const auto* value = manager.stack(target);
-        return {{"success", true}, {"target", target.to_string()}, {"name", node->name}, {"modifiers", value ? json(value->modifiers) : json::array()}, {"evaluation", evaluation(manager.lastResult(target), value)}, {"progress", progress(manager.progress())}};
+        auto modifiers = value ? json(value->modifiers) : json::array();
+        for (auto& modifier : modifiers) {
+            const auto* graph = manager.tree(modifier.at("tree_uuid").get<std::string>());
+            modifier["tree_name"] = graph ? graph->name : "";
+        }
+        return {{"success", true}, {"target", target.to_string()}, {"name", node->name}, {"modifiers", std::move(modifiers)}, {"evaluation", evaluation(manager.lastResult(target), value)}, {"progress", progress(manager.progress())}};
     }
 
     json stacks(vis::SceneManager& scene) {
@@ -95,21 +100,35 @@ namespace lfs::app::node_mcp {
                 result.update(canvas->viewState());
             }
         result["progress"] = progress(viewer.getSceneManager()->modifierManager().progress());
+        auto& scene = *viewer.getSceneManager();
+        if (const auto host = target(scene, result))
+            result["target_name"] = scene.getScene().getNodeByUuid(*host)->name;
+        if (auto* graph = tree(scene.modifierManager(), result))
+            result["tree_name"] = graph->name;
         return result;
     }
 
     std::optional<core::Uuid> target(vis::SceneManager& scene, const json& args) {
-        const auto id = core::Uuid::from_string(args.value("target", ""));
+        const auto identifier = args.value("target", "");
+        const auto id = core::Uuid::from_string(identifier);
         const auto* node = id ? scene.getScene().getNodeByUuid(*id) : nullptr;
+        if (!node) {
+            for (const auto* candidate : scene.getScene().getNodes()) {
+                if (candidate->name != identifier)
+                    continue;
+                if (node)
+                    return std::nullopt;
+                node = candidate;
+            }
+        }
         if (!node || (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH && node->type != core::NodeType::POINTCLOUD))
             return std::nullopt;
-        return id;
+        return node->uuid;
     }
 
     lfs::nodes::NodeTree* tree(vis::ModifierManager& manager, const json& args) {
         const auto id = args.value("tree", "");
-        auto* value = manager.tree(id);
-        return value && value->uuid == id ? value : nullptr;
+        return manager.tree(id);
     }
 
     vis::Modifier* modifier(vis::ModifierManager& manager, const core::Uuid& host, const json& args) {
@@ -173,6 +192,10 @@ namespace lfs::app::node_mcp {
     void add(mcp::ToolRegistry& registry, vis::VisualizerImpl* viewer, std::string name,
              std::string description, json properties, std::vector<std::string> required, Handler handler,
              const bool read_only, const bool destructive) {
+        if (properties.contains("tree"))
+            properties["tree"]["description"] = "Node graph UUID or unique exact name; read lichtfeld://nodes/trees";
+        if (properties.contains("target"))
+            properties["target"]["description"] = "Scene node UUID or unique exact name; read lichtfeld://scene/nodes";
         registry.register_tool(mcp::McpTool{
                                    .name = std::move(name),
                                    .description = std::move(description),
@@ -210,7 +233,7 @@ namespace lfs::app {
                 } else if (uri == "lichtfeld://nodes/stacks")
                     result = node_mcp::stacks(scene);
                 else if (uri.starts_with("lichtfeld://nodes/stacks/")) {
-                    const auto id = core::Uuid::from_string(uri.substr(std::string_view("lichtfeld://nodes/stacks/").size()));
+                    const auto id = node_mcp::target(scene, {{"target", uri.substr(std::string_view("lichtfeld://nodes/stacks/").size())}});
                     if (!id)
                         return std::unexpected("Invalid scene node UUID");
                     result = node_mcp::stack(scene, *id);

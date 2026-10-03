@@ -15,24 +15,16 @@ namespace lfs::nodes::builtin {
             const bool relative = property_bool(context, "relative_to_size", true);
             if (maximum_size > 0)
                 candidate = candidate.logical_or(splats.scaling.exp().max(1).gt(maximum_size));
-            if (radius > 0) {
+            if (radius > 0 && neighbours > 0) {
                 const auto activated_scale = splats.scaling.exp();
-                const auto isolated = neighbours <= 1
-                                          ? (relative ? has_relative_neighbour(splats.means, activated_scale, radius)
-                                                      : has_neighbour(splats.means, radius))
-                                                .logical_not()
-                                          : (relative ? relative_neighbour_counts(splats.means, activated_scale, radius)
-                                                      : voxel_neighbour_counts(splats.means, radius))
-                                                .lt(static_cast<float>(neighbours));
+                const auto isolated = (relative ? relative_neighbour_counts(splats.means, activated_scale, radius, neighbours)
+                                                : neighbour_counts(splats.means, radius, neighbours))
+                                          .lt(static_cast<float>(neighbours));
                 candidate = candidate.logical_or(isolated);
             }
             candidate = candidate.logical_and(selection(context, "Selection", field_context(splats), true));
             if (property_bool(context, "preview", false)) {
-                const auto weight = candidate.to(DataType::Float32);
-                const auto base = splats.sh0 * kShC0 + 0.5f;
-                splats.sh0 = (blend(base, vector_tensor({0, 1, 0}, base.device()), weight) - 0.5f) / kShC0;
-                splats.opacity =
-                    blend(splats.opacity, Tensor::full_like(splats.opacity, std::log(999999.0f)), weight);
+                splats = filter_splats(splats, candidate);
             } else {
                 splats = filter_splats(splats, candidate.logical_not());
             }

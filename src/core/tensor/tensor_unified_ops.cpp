@@ -775,7 +775,7 @@ namespace lfs::core {
                             .count = result.numel(),
                             .first = low,
                             .second = high,
-                            .seed = RandomGenerator::instance().get_next_cuda_seed(),
+                            .seed = args.random_seed ? *args.random_seed : RandomGenerator::instance().get_next_cuda_seed(),
                         },
                         internal::ExecContext{stream});
                     // No sync - tensor operation
@@ -786,14 +786,14 @@ namespace lfs::core {
                             .count = result.numel(),
                             .low = static_cast<int>(low),
                             .high = static_cast<int>(high),
-                            .seed = RandomGenerator::instance().get_next_cuda_seed(),
+                            .seed = args.random_seed ? *args.random_seed : RandomGenerator::instance().get_next_cuda_seed(),
                         },
                         internal::ExecContext{stream});
                     // No sync - tensor operation
                 }
             } else {
-                auto& gen = *static_cast<std::mt19937_64*>(
-                    RandomGenerator::instance().get_generator(Device::CPU));
+                std::mt19937_64 local_generator(args.random_seed.value_or(0));
+                auto& gen = args.random_seed ? local_generator : *static_cast<std::mt19937_64*>(RandomGenerator::instance().get_generator(Device::CPU));
 
                 if (result.dtype_ == DataType::Float32) {
                     std::uniform_real_distribution<float> dist(low, high);
@@ -1031,7 +1031,7 @@ namespace lfs::core {
                     internal::RandomProgram{
                         .count = n,
                         .sample_count = num_samples,
-                        .seed = RandomGenerator::instance().get_next_cuda_seed(),
+                        .seed = args.random_seed ? *args.random_seed : RandomGenerator::instance().get_next_cuda_seed(),
                         .replacement = replacement,
                     },
                     internal::ExecContext{result.stream()});
@@ -1054,8 +1054,8 @@ namespace lfs::core {
                     cdf[i] = cdf[i - 1] + weights_data[i] / sum;
                 }
 
-                auto& gen = *static_cast<std::mt19937_64*>(
-                    RandomGenerator::instance().get_generator(Device::CPU));
+                std::mt19937_64 local_generator(args.random_seed.value_or(0));
+                auto& gen = args.random_seed ? local_generator : *static_cast<std::mt19937_64*>(RandomGenerator::instance().get_generator(Device::CPU));
                 std::uniform_real_distribution<double> dis(0.0, 1.0);
 
                 int64_t* samples = result.ptr<int64_t>();
@@ -1156,7 +1156,7 @@ namespace lfs::core {
         return result;
     }
 
-    Tensor Tensor::multinomial(const Tensor& weights, int num_samples, bool replacement) {
+    Tensor Tensor::multinomial(const Tensor& weights, int num_samples, bool replacement, std::optional<uint64_t> seed) {
         LFS_ASSERT_MSG(weights.is_valid() && weights.ndim() == 1,
                        "multinomial requires valid rank-1 weights");
         LFS_ASSERT_MSG(weights.dtype() == DataType::Float32,
@@ -1193,6 +1193,7 @@ namespace lfs::core {
 
         LoadArgs args;
         args.shape = TensorShape({static_cast<size_t>(num_samples)});
+        args.random_seed = seed;
         args.device = dense_weights.device();
         args.dtype = DataType::Int64; // Must be Int64 for MCMC compatibility (nonzero() returns Int64)
         // Pass dense_weights (not the possibly-strided original) so LoadOp and

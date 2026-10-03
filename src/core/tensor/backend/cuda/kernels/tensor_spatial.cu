@@ -37,7 +37,37 @@ namespace lfs::core::tensor_ops {
             }
             output[i] = (!queries || queries[i]) && pointHasNeighbor(points, references, heads, next, i, bucket_mask, radius, exclude_self);
         }
+        __global__ void query_counts(const float* points, const int32_t* heads, const int32_t* next,
+                                     int32_t* output, const size_t count, const uint32_t bucket_mask,
+                                     const float radius, const int32_t max_count, const size_t begin,
+                                     const uint8_t* queries) {
+            const size_t i = begin + static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (i >= count)
+                return;
+            output[i] = (!queries || queries[i]) ? pointNeighborCount(points, heads, next, i, bucket_mask, radius, max_count) : 0;
+        }
     } // namespace
+
+    void launch_radius_neighbor_counts(const float* points, const uint8_t* references, int32_t* heads,
+                                       int32_t* next, int32_t* output, const size_t count, const size_t buckets,
+                                       const float radius, const int32_t max_count, const uint8_t* queries, const cudaStream_t stream) {
+        const auto bucket_mask = static_cast<uint32_t>(buckets - 1);
+        constexpr size_t batch = 8192;
+        for (size_t begin = 0; begin < count; begin += batch) {
+            const auto end = std::min(begin + batch, count);
+            const auto blocks = static_cast<unsigned int>((end - begin + kBlockSize - 1) / kBlockSize);
+            build<<<blocks, kBlockSize, 0, stream>>>(points, references, heads, next, end, bucket_mask, radius, begin);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_neighbor_counts.build");
+            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+        }
+        for (size_t begin = 0; begin < count; begin += batch) {
+            const auto end = std::min(begin + batch, count);
+            const auto blocks = static_cast<unsigned int>((end - begin + kBlockSize - 1) / kBlockSize);
+            query_counts<<<blocks, kBlockSize, 0, stream>>>(points, heads, next, output, end, bucket_mask, radius, max_count, begin, queries);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_neighbor_counts.query");
+            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+        }
+    }
 
     void launch_radius_neighbors(const float* points, const uint8_t* references, int32_t* heads,
                                  int32_t* next, bool* output, const size_t count, const size_t buckets,

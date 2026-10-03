@@ -11,6 +11,7 @@
 #include <RmlUi/Core/EventListener.h>
 #include <RmlUi/Core/Geometry.h>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -95,11 +96,15 @@ namespace lfs::vis::gui {
         bool processFieldEvent(Rml::Event& event);
         void processControlEvent(Rml::Event& event);
         void finishFieldEdit(bool cancel);
+        void stepField();
+        void repeatFieldStep();
         void commitControl(Rml::Element* target, const Rml::Event* event, bool record_undo = true);
         void openModifierMenu(std::string_view uuid, float x, float y);
         void openModifierLibrary(float x, float y);
         void executeCommands(const std::vector<CanvasCommand>& commands);
         void openAddMenu(float screen_x, float screen_y);
+        void openCanvasMenu(CanvasPoint pointer);
+        [[nodiscard]] bool isPanPress(const Rml::Event& event) const;
         void addNode(std::string_view type_id, CanvasPoint graph_position);
         void addModifier();
         void removeSelected();
@@ -157,6 +162,8 @@ namespace lfs::vis::gui {
         bool dom_dirty_ = true;
         bool geometry_dirty_ = true;
         bool pointer_down_ = false;
+        bool pending_context_menu_ = false;
+        CanvasPoint context_press_;
         float dp_ratio_ = 1.0f;
         float layout_zoom_ = -1.0f;
         CanvasPoint panel_screen_offset_;
@@ -166,6 +173,9 @@ namespace lfs::vis::gui {
         float field_start_x_ = 0.0f;
         double field_start_value_ = 0.0;
         bool field_dragged_ = false;
+        int field_step_direction_ = 0;
+        double field_step_multiplier_ = 1.0;
+        std::chrono::steady_clock::time_point field_repeat_at_;
         std::optional<nlohmann::json> field_before_;
         Rml::Geometry grid_geometry_;
         Rml::Geometry wire_geometry_;

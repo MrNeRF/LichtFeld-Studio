@@ -102,7 +102,7 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] std::vector<CanvasCommand> pointerDown(CanvasPoint screen,
                                                              CanvasPointerButton button,
-                                                             CanvasModifiers modifiers = {});
+                                                             CanvasModifiers modifiers = {}, bool pan_drag = false);
         [[nodiscard]] std::vector<CanvasCommand> pointerMove(CanvasPoint screen);
         [[nodiscard]] std::vector<CanvasCommand> pointerUp(CanvasPoint screen);
         void cancel();

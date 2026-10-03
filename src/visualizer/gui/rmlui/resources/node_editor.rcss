@@ -140,6 +140,30 @@ body {
     font-family: Inter;
     font-size: 1em;
     gap: 4dp;
+    focus: auto;
+    tab-index: auto;
+}
+.node-step {
+    position: relative;
+    z-index: 1;
+    width: 14dp;
+    min-width: 14dp;
+    height: 16dp;
+    min-height: 0;
+    padding: 0;
+    border-width: 0;
+    flex-shrink: 0;
+    font-size: 11dp;
+    line-height: 16dp;
+    text-align: center;
+    cursor: pointer;
+    visibility: hidden;
+}
+.node-scrub:hover > .node-step, #node-editor-sidebar .node-step {
+    visibility: visible;
+}
+.node-scrub.is-editing > .node-step {
+    display: none;
 }
 #node-editor-canvas .scrub-field-display, #node-editor-canvas .scrub-field-input {
     font-family: Inter;
@@ -226,9 +250,10 @@ body {
     border-left-width: 1dp;
     font-size: 12dp;
 }
-.sidebar-section {
+#node-editor-sidebar > .sidebar-section {
     display: block;
-    width: auto;
+    width: 100%;
+    min-width: 0;
     box-sizing: border-box;
     padding: 12dp;
     border-bottom-width: 1dp;
@@ -255,12 +280,16 @@ body {
     line-height: 16dp;
 }
 .sidebar-button {
+    box-sizing: border-box;
     width: 100%;
     height: 26dp;
     margin-top: 8dp;
     font-size: 12dp;
+    white-space: nowrap;
 }
 .modifier-row {
+    box-sizing: border-box;
+    width: 100%;
     display: flex;
     align-items: center;
     gap: 5dp;
@@ -276,6 +305,7 @@ body {
 }
 .modifier-row .modifier-rename {
     flex: 1;
+    width: 0;
     min-width: 0;
     height: 22dp;
     font-size: 12dp;
@@ -310,7 +340,7 @@ body {
 }
 .node-field-control {
     flex: 1;
-    min-width: 0;
+    min-width: 120dp;
 }
 .node-field-control select, .node-field-control input[type="text"] {
     width: 100%;

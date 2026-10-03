@@ -1,7 +1,11 @@
 # Node graphs and Node Editor
 
-Initialize MCP and read `tools/list` before calling these tools. Graphs and
-modifiers use exact UUIDs; nodes and sockets use exact descriptor identifiers.
+Initialize MCP and read `tools/list` before calling these tools. Node graphs
+and scene targets accept a UUID or an exact, unique name; modifiers use
+UUIDs and nodes/sockets use exact descriptor identifiers. Ambiguous names are
+rejected, never normalised or fuzzy-matched. Responses return UUIDs and names.
+Create, rename and import uniquify graph names with numeric suffixes, such as
+`Autumn Lawn 2`.
 All mutations run through the viewer work queue and ModifierManager. Graph and
 stack edits use shared history. Selection and pan/zoom are view state only.
 Responses contain the resulting graph, stack or editor state.
@@ -25,7 +29,7 @@ the graph and its modifier instances together.
 | Tools | Arguments |
 | --- | --- |
 | `nodes_tree_create` | optional `name` (default `Node Graph`) |
-| `nodes_tree_delete`, `nodes_tree_export_json` | `tree` UUID |
+| `nodes_tree_delete`, `nodes_tree_export_json` | `tree` UUID or unique name |
 | `nodes_tree_rename` | `tree`, `name` |
 | `nodes_tree_import_json` | `json` object; assigns a fresh UUID |
 | `nodes_node_add` | `tree`, `type_id`; optional unique `name`, `location: [x,y]` |
@@ -35,7 +39,7 @@ the graph and its modifier instances together.
 | `nodes_node_mute` | `tree`, `node`, `muted` |
 | `nodes_node_move` | `tree`, `node`, `location: [x,y]` |
 | `nodes_link`, `nodes_unlink` | `tree`, `from_node`, `from_socket`, `to_node`, `to_socket` |
-| `nodes_modifier_add` | `target` scene UUID, `tree`; optional `name` |
+| `nodes_modifier_add` | `target` scene UUID or unique name, `tree`; optional `name` |
 | `nodes_modifier_remove`, `nodes_modifier_apply` | `target`, `modifier` UUID |
 | `nodes_modifier_move` | `target`, `modifier`, zero-based `index` |
 | `nodes_modifier_set` | `target`, `modifier`; optional `name`, `enabled`, `show_viewport`, `input_overrides` |

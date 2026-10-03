@@ -72,6 +72,15 @@
     border-color: @{alpha(border,0.65)};
     decorator: none;
 }
+.node-step {
+    background-color: transparent;
+    color: @{text_dim};
+    decorator: none;
+}
+.node-step:hover, .node-step:active {
+    background-color: @{alpha(primary,0.2)};
+    color: @{text};
+}
 #node-editor-canvas .node-scrub:hover, #node-editor-canvas .node-scrub.is-dragging, #node-editor-canvas .node-scrub.is-editing {
     border-color: @{primary};
 }

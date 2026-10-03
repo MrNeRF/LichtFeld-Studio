@@ -1,4 +1,4 @@
-from typing import Any, Optional, overload
+from typing import Any, Optional
 from lichtfeld import Tensor
 
 class Splats:
@@ -35,30 +35,32 @@ class Geometry:
     def replace(self, **values: Any) -> Geometry: ...
 
 class Input:
-    @overload
     def __init__(self, identifier: str, type: str, default: Any = None,
-                 min: Optional[float] = None, max: Optional[float] = None,
-                 field: bool = False) -> None: ...
-    @overload
-    def __init__(self, type: str, default: Any = None,
                  min: Optional[float] = None, max: Optional[float] = None,
                  field: bool = False) -> None: ...
 
 class Output:
-    @overload
     def __init__(self, identifier: str, type: str) -> None: ...
-    @overload
-    def __init__(self, type: str) -> None: ...
 
 class Property:
-    @overload
     def __init__(self, identifier: str, type: str, default: Any = None,
                  items: list[str] = []) -> None: ...
-    @overload
-    def __init__(self, type: str, default: Any = None,
-                 items: list[str] = []) -> None: ...
 
-class Node: ...
+class NodeContext:
+    def input(self, identifier: str) -> Any: ...
+    def field(self, identifier: str, domain: Splats | Points | Mesh) -> Tensor: ...
+    def prop(self, identifier: str) -> Any: ...
+    def output(self, identifier: str, value: Any) -> None: ...
+
+class Node:
+    id: str
+    label: str
+    category: str
+    description: str
+    inputs: list[Input]
+    outputs: list[Output]
+    properties: list[Property]
+    def execute(self, ctx: NodeContext) -> Optional[dict[str, Any] | Geometry]: ...
 
 class NodeHandle:
     name: str

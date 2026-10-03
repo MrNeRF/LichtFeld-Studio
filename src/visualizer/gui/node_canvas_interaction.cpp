@@ -302,7 +302,7 @@ namespace lfs::vis::gui {
 
     std::vector<CanvasCommand> NodeCanvasInteraction::pointerDown(const CanvasPoint screen,
                                                                   const CanvasPointerButton button,
-                                                                  const CanvasModifiers modifiers) {
+                                                                  const CanvasModifiers modifiers, const bool pan_drag) {
         if (mode_ != Mode::Idle)
             return {};
         start_ = last_ = pointer_ = screen;
@@ -310,14 +310,15 @@ namespace lfs::vis::gui {
         snapped_.reset();
         highlighted_link_.reset();
 
+        if (pan_drag || button == CanvasPointerButton::Middle) {
+            mode_ = Mode::Pan;
+            return {};
+        }
+
         if ((button == CanvasPointerButton::Right && modifiers.control) ||
             (button == CanvasPointerButton::Left && modifiers.control && modifiers.alt)) {
             mode_ = Mode::Cut;
             cut_points_ = {screen};
-            return {};
-        }
-        if (button == CanvasPointerButton::Middle) {
-            mode_ = Mode::Pan;
             return {};
         }
         if (button != CanvasPointerButton::Left)

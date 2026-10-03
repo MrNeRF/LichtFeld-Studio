@@ -8,14 +8,15 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <format>
 #include <limits>
 #include <vector>
 
 namespace lfs::core {
     using namespace internal;
 
-    Tensor radius_neighbors(const Tensor& points, const Tensor& references, const float radius,
-                            const bool exclude_self, const Tensor* queries) {
+    static Tensor radius_query(const Tensor& points, const Tensor& references, const float radius,
+                               const bool exclude_self, const Tensor* queries, const int32_t max_count) {
         LFS_ASSERT_MSG(points.is_valid() && references.is_valid(), "radius_neighbors requires valid tensors");
         LFS_ASSERT_MSG(points.ndim() == 2 && points.size(1) == 3 && points.dtype() == DataType::Float32,
                        "radius_neighbors requires Float32 [N,3] points");
@@ -35,7 +36,7 @@ namespace lfs::core {
         const size_t count = points.size(0);
         LFS_ASSERT_MSG(count <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
                        "radius_neighbors point count exceeds int32");
-        auto output = internal::allocate_like(points, TensorShape{count}, DataType::Bool);
+        auto output = internal::allocate_like(points, TensorShape{count}, max_count ? DataType::Int32 : DataType::Bool);
         if (count == 0) {
             return output;
         }
@@ -54,19 +55,27 @@ namespace lfs::core {
             const auto stream = queries
                                     ? prepare_inputs_for_stream({&positions, &mask, &heads, &next, &query_mask}, output.stream())
                                     : prepare_inputs_for_stream({&positions, &mask, &heads, &next}, output.stream());
-            internal::backend_ops_for(positions).radius_neighbors(
-                internal::storage_ref(positions), internal::storage_ref(mask),
-                internal::storage_ref(heads), internal::storage_ref(next), internal::storage_ref(output),
-                count, buckets, radius, exclude_self,
-                queries ? std::optional{internal::storage_ref(query_mask)} : std::nullopt,
-                internal::ExecContext{stream});
+            if (max_count) {
+                internal::backend_ops_for(positions).radius_neighbor_counts(
+                    internal::storage_ref(positions), internal::storage_ref(mask),
+                    internal::storage_ref(heads), internal::storage_ref(next), internal::storage_ref(output),
+                    count, buckets, radius, max_count,
+                    queries ? std::optional{internal::storage_ref(query_mask)} : std::nullopt,
+                    internal::ExecContext{stream});
+            } else {
+                internal::backend_ops_for(positions).radius_neighbors(
+                    internal::storage_ref(positions), internal::storage_ref(mask),
+                    internal::storage_ref(heads), internal::storage_ref(next), internal::storage_ref(output),
+                    count, buckets, radius, exclude_self,
+                    queries ? std::optional{internal::storage_ref(query_mask)} : std::nullopt,
+                    internal::ExecContext{stream});
+            }
             return output;
         }
 
         const auto* xyz = positions.ptr<float>();
         const auto* selected = static_cast<const uint8_t*>(mask.data_ptr());
         const auto* queried = queries ? static_cast<const uint8_t*>(query_mask.data_ptr()) : nullptr;
-        auto* result = output.ptr<bool>();
         std::vector<int32_t> heads(buckets, -1), next(count, -1);
         for (size_t i = 0; i < count; ++i) {
             const auto* p = xyz + i * 3;
@@ -77,8 +86,26 @@ namespace lfs::core {
             next[i] = heads[bucket];
             heads[bucket] = static_cast<int32_t>(i);
         }
-        for (size_t i = 0; i < count; ++i)
-            result[i] = (!queried || queried[i]) && internal::pointHasNeighbor(xyz, selected, heads.data(), next.data(), i, bucket_mask, radius, exclude_self);
+        if (max_count) {
+            auto* result = output.ptr<int32_t>();
+            for (size_t i = 0; i < count; ++i)
+                result[i] = (!queried || queried[i]) ? pointNeighborCount(xyz, heads.data(), next.data(), i, bucket_mask, radius, max_count) : 0;
+        } else {
+            auto* result = output.ptr<bool>();
+            for (size_t i = 0; i < count; ++i)
+                result[i] = (!queried || queried[i]) && pointHasNeighbor(xyz, selected, heads.data(), next.data(), i, bucket_mask, radius, exclude_self);
+        }
         return output;
+    }
+
+    Tensor radius_neighbors(const Tensor& points, const Tensor& references, const float radius,
+                            const bool exclude_self, const Tensor* queries) {
+        return radius_query(points, references, radius, exclude_self, queries, 0);
+    }
+
+    Tensor radius_neighbor_counts(const Tensor& points, const Tensor& references, const float radius,
+                                  const int32_t max_count, const Tensor* queries) {
+        LFS_ASSERT_MSG(max_count > 0, std::format("radius_neighbor_counts requires a positive max_count (max_count={})", max_count));
+        return radius_query(points, references, radius, true, queries, max_count);
     }
 } // namespace lfs::core

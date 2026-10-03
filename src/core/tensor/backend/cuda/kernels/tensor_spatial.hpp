@@ -11,4 +11,8 @@ namespace lfs::core::tensor_ops {
                                  int32_t* heads, int32_t* next, bool* output,
                                  size_t count, size_t buckets, float radius, bool exclude_self,
                                  const uint8_t* queries, cudaStream_t stream);
-}
+    void launch_radius_neighbor_counts(const float* points, const uint8_t* references,
+                                       int32_t* heads, int32_t* next, int32_t* output,
+                                       size_t count, size_t buckets, float radius, int32_t max_count,
+                                       const uint8_t* queries, cudaStream_t stream);
+} // namespace lfs::core::tensor_ops

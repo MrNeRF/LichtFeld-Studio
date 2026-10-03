@@ -70,4 +70,32 @@ namespace lfs::core::internal {
         }
         return false;
     }
+    LFS_POINT_HD inline int32_t pointNeighborCount(const float* points, const int32_t* heads,
+                                                   const int32_t* next, size_t i, uint32_t bucket_mask,
+                                                   float radius, int32_t max_count) {
+        const float* p = points + i * 3;
+        if (!finite_point(p))
+            return 0;
+        const int x = cell(p[0], radius);
+        const int y = cell(p[1], radius);
+        const int z = cell(p[2], radius);
+        int32_t count = 0;
+        for (int dz = -1; dz <= 1; ++dz) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const auto bucket = hash_cell(x + dx, y + dy, z + dz, bucket_mask);
+                    for (int32_t j = heads[bucket]; j >= 0; j = next[j]) {
+                        const float* q = points + static_cast<size_t>(j) * 3;
+                        // Hash collisions must not count the same reference twice.
+                        if (static_cast<size_t>(j) != i && cell(q[0], radius) == x + dx &&
+                            cell(q[1], radius) == y + dy && cell(q[2], radius) == z + dz && within(p, q, radius)) {
+                            if (++count == max_count)
+                                return count;
+                        }
+                    }
+                }
+            }
+        }
+        return count;
+    }
 } // namespace lfs::core::internal

@@ -9,7 +9,6 @@
 #include "core/tensor_backend.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
-#include "rendering/mesh2splat.hpp"
 #include "scene/scene_manager.hpp"
 
 #include <algorithm>
@@ -205,7 +204,7 @@ namespace lfs::vis {
 
     lfs::nodes::NodeTree& ModifierManager::newTree(std::string name) {
         const auto before = restoring_ ? nlohmann::json{} : toJson(false);
-        auto value = std::make_unique<lfs::nodes::NodeTree>(registry_, std::move(name));
+        auto value = std::make_unique<lfs::nodes::NodeTree>(registry_, uniqueTreeName(std::move(name)));
         auto* result = value.get();
         trees_[result->uuid] = std::move(value);
         ++generation_;
@@ -219,6 +218,7 @@ namespace lfs::vis {
         const auto before = restoring_ ? nlohmann::json{} : toJson(false);
         auto value = std::make_unique<lfs::nodes::NodeTree>(
             lfs::nodes::NodeTree::from_json(json, registry_));
+        value->name = uniqueTreeName(value->name, value->uuid);
         auto* result = value.get();
         trees_[result->uuid] = std::move(value);
         ++generation_;
@@ -232,10 +232,28 @@ namespace lfs::vis {
     lfs::nodes::NodeTree* ModifierManager::tree(std::string_view uuid_or_name) {
         if (const auto found = trees_.find(std::string(uuid_or_name)); found != trees_.end())
             return found->second.get();
-        const auto found = std::ranges::find_if(trees_, [&](const auto& item) {
-            return item.second->name == uuid_or_name;
-        });
-        return found == trees_.end() ? nullptr : found->second.get();
+        lfs::nodes::NodeTree* result = nullptr;
+        for (const auto& [_, value] : trees_) {
+            if (value->name != uuid_or_name)
+                continue;
+            if (result)
+                return nullptr;
+            result = value.get();
+        }
+        return result;
+    }
+
+    std::string ModifierManager::uniqueTreeName(std::string name, const std::string_view except_uuid) const {
+        if (name.empty())
+            name = "Node Graph";
+        std::unordered_set<std::string_view> used;
+        for (const auto& [uuid, value] : trees_)
+            if (uuid != except_uuid)
+                used.insert(value->name);
+        auto candidate = name;
+        for (size_t suffix = 2; used.contains(candidate); ++suffix)
+            candidate = std::format("{} {}", name, suffix);
+        return candidate;
     }
 
     const lfs::nodes::NodeTree* ModifierManager::tree(std::string_view uuid_or_name) const {
@@ -273,6 +291,7 @@ namespace lfs::vis {
         const auto* node_tree = tree(tree_uuid);
         if (!node_tree)
             throw std::invalid_argument("Node tree does not exist");
+        tree_uuid = node_tree->uuid;
         if (name.empty())
             name = node_tree->name;
         const auto before = stack(node_uuid) ? stack_json(*stack(node_uuid))
@@ -550,9 +569,11 @@ namespace lfs::vis {
                                          std::string merge_key, const bool reevaluate) {
         if (restoring_)
             return;
-        const auto* edited = tree(tree_uuid);
+        auto* edited = tree(tree_uuid);
         if (!edited)
             return;
+        if (before.value("name", "") != edited->name)
+            edited->name = uniqueTreeName(edited->name, edited->uuid);
         const auto after_tree = edited->to_json();
         if (after_tree == before)
             return;
@@ -608,39 +629,6 @@ namespace lfs::vis {
             context.set_output("Geometry", std::move(*geometry));
         };
         registry_.register_type(std::move(object_info));
-
-        NodeTypeInfo mesh_to_splats;
-        mesh_to_splats.id = "lfs.mesh_to_splats";
-        mesh_to_splats.label = "Mesh to Splats";
-        mesh_to_splats.category = "Conversion";
-        mesh_to_splats.description = "Convert mesh geometry into Gaussian splats.";
-        mesh_to_splats.inputs = {
-            SocketDecl{"Geometry", "Geometry", std::string(lfs::nodes::GEOMETRY_SOCKET)},
-            SocketDecl{"Sigma", "Sigma", std::string(lfs::nodes::FLOAT_SOCKET), 0.65f, 0.01, 10.0, 0.01},
-            SocketDecl{"Resolution", "Resolution", std::string(lfs::nodes::INT_SOCKET), std::int64_t(1024),
-                       16.0, 8192.0, 1.0},
-            SocketDecl{"Ambient", "Ambient", std::string(lfs::nodes::FLOAT_SOCKET), 0.4f, 0.0, 1.0, 0.01}};
-        mesh_to_splats.outputs = {
-            SocketDecl{"Geometry", "Geometry", std::string(lfs::nodes::GEOMETRY_SOCKET)}};
-        mesh_to_splats.evaluate = [](NodeContext& context) {
-            const auto* geometry = context.input("Geometry").get_if<Geometry>();
-            if (!geometry || !geometry->mesh || !geometry->mesh->mesh) {
-                context.set_output("Geometry", Geometry{});
-                return;
-            }
-            core::Mesh2SplatOptions options;
-            if (const auto* sigma = context.input("Sigma").get_if<float>())
-                options.sigma = *sigma;
-            if (const auto* resolution = context.input("Resolution").get_if<std::int64_t>())
-                options.resolution_target = static_cast<int>(*resolution);
-            if (const auto* ambient = context.input("Ambient").get_if<float>())
-                options.ambient = *ambient;
-            auto converted = lfs::rendering::mesh_to_splat(*geometry->mesh->mesh, options);
-            if (!converted)
-                throw NodeError(converted.error());
-            context.set_output("Geometry", lfs::nodes::geometry_from_splat_data(**converted));
-        };
-        registry_.register_type(std::move(mesh_to_splats));
     }
 
 } // namespace lfs::vis

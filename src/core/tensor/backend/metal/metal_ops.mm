@@ -2209,11 +2209,10 @@ namespace lfs::core::internal {
         encode_copy(*context, key_order, output, program.sample_count * sizeof(int64_t));
     }
 
-    void MetalBackendOps::radius_neighbors(const StorageRef points, const StorageRef references, const StorageRef heads,
-                                           const StorageRef next, const StorageRef output, const size_t count,
-                                           const size_t buckets, const float radius, const bool exclude_self,
-                                           const std::optional<StorageRef> queries, ExecContext) {
-        LFS_FACADE_TRACE(radius_neighbors);
+    static void radius_query(const StorageRef points, const StorageRef references, const StorageRef heads,
+                             const StorageRef next, const StorageRef output, const size_t count,
+                             const size_t buckets, const float radius, const bool exclude_self,
+                             const std::optional<StorageRef> queries, const int32_t max_count) {
         struct RadiusParams {
             uint64_t points, references, heads, next, output, queries;
             uint32_t count, bucket_mask;
@@ -2232,7 +2231,7 @@ namespace lfs::core::internal {
             .count = checked_u32(count, "Metal radius query count exceeds uint32"),
             .bucket_mask = checked_u32(buckets - 1, "Metal radius bucket count exceeds uint32"),
             .radius = radius,
-            .exclude_self = static_cast<uint32_t>(exclude_self),
+            .exclude_self = static_cast<uint32_t>(max_count ? max_count : exclude_self),
         };
         std::vector<StorageRef> uses{points, references, heads, next, output};
         if (queries)
@@ -2249,12 +2248,28 @@ namespace lfs::core::internal {
         for (size_t begin = 0; begin < count; begin += query_batch) {
             params.query_begin = static_cast<uint32_t>(begin);
             params.query_end = static_cast<uint32_t>(std::min(begin + query_batch, count));
-            dispatch_addressed(*context, uses, context->pipeline("radius_neighbors", {{0, 1}}), params, params.query_end - begin);
+            dispatch_addressed(*context, uses, context->pipeline("radius_neighbors", {{0, max_count ? 2u : 1u}}), params, params.query_end - begin);
             // Isolation queries yield the GPU between bounded query batches.
             // Otherwise a dense-radius dispatch can monopolize it for seconds.
             if (exclude_self)
                 context->wait(context->flush());
         }
+    }
+
+    void MetalBackendOps::radius_neighbors(const StorageRef points, const StorageRef references, const StorageRef heads,
+                                           const StorageRef next, const StorageRef output, const size_t count,
+                                           const size_t buckets, const float radius, const bool exclude_self,
+                                           const std::optional<StorageRef> queries, ExecContext) {
+        LFS_FACADE_TRACE(radius_neighbors);
+        radius_query(points, references, heads, next, output, count, buckets, radius, exclude_self, queries, 0);
+    }
+
+    void MetalBackendOps::radius_neighbor_counts(const StorageRef points, const StorageRef references, const StorageRef heads,
+                                                 const StorageRef next, const StorageRef output, const size_t count,
+                                                 const size_t buckets, const float radius, const int32_t max_count,
+                                                 const std::optional<StorageRef> queries, ExecContext) {
+        LFS_FACADE_TRACE(radius_neighbor_counts);
+        radius_query(points, references, heads, next, output, count, buckets, radius, true, queries, max_count);
     }
 
     void MetalBackendOps::rasterize_points(const PointRasterProgram& program, ExecContext) {

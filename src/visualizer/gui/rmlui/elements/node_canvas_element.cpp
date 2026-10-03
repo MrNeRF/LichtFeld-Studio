@@ -519,7 +519,7 @@ namespace lfs::vis::gui {
     }
 
     bool NodeCanvasElement::needsModelUpdate() const {
-        return dom_dirty_ || geometry_dirty_ || frame_pending_ || pointer_down_ || (manager_ && (manager_->generation() != last_generation_ || manager_->resultGeneration() != last_result_generation_ || manager_->progress().busy)) ||
+        return dom_dirty_ || geometry_dirty_ || frame_pending_ || pointer_down_ || field_step_direction_ != 0 || (manager_ && (manager_->generation() != last_generation_ || manager_->resultGeneration() != last_result_generation_ || manager_->progress().busy)) ||
                app_store().selection_generation.get() != last_selection_generation_;
     }
 
@@ -1079,7 +1079,10 @@ namespace lfs::vis::gui {
         live_wire_geometry_.Render(offset);
     }
 
-    void NodeCanvasElement::OnUpdate() { syncModel(); }
+    void NodeCanvasElement::OnUpdate() {
+        repeatFieldStep();
+        syncModel();
+    }
 
     void NodeCanvasElement::OnResize() {
         geometry_dirty_ = true;
@@ -1392,6 +1395,9 @@ namespace lfs::vis::gui {
         // RmlUi mousemove has no bubbling default action. Live gestures must
         // consume motion as listeners, not wait for ProcessDefaultAction/up.
         if ((event.GetType() == "mousemove" || event.GetType() == "drag") && pointer_down_) {
+            const auto delta = localPointer(event) - context_press_;
+            if (std::abs(delta.x) + std::abs(delta.y) >= 4.0f)
+                pending_context_menu_ = false;
             (void)interaction_.pointerMove(localPointer(event));
             selected_nodes_ = interaction_.selectedNodes();
             updateSelectedClasses();
@@ -1484,6 +1490,45 @@ namespace lfs::vis::gui {
             commitControl(target, &event);
             event.StopPropagation();
             return;
+        }
+    }
+
+    bool NodeCanvasElement::isPanPress(const Rml::Event& event) const {
+        auto* window = services().windowOrNull();
+        auto* controller = window ? window->inputController() : nullptr;
+        if (!controller)
+            return false;
+        const int button = event.GetParameter("button", 0);
+        const auto mouse_button = button == 1 ? input::MouseButton::RIGHT : button == 2 ? input::MouseButton::MIDDLE
+                                                                                        : input::MouseButton::LEFT;
+        int modifiers = input::MODIFIER_NONE;
+        if (event.GetParameter<int>("shift_key", 0))
+            modifiers |= input::MODIFIER_SHIFT;
+        if (event.GetParameter<int>("ctrl_key", 0))
+            modifiers |= input::MODIFIER_CTRL;
+        if (event.GetParameter<int>("meta_key", 0))
+            modifiers |= input::MODIFIER_SUPER;
+        if (event.GetParameter<int>("alt_key", 0))
+            modifiers |= input::MODIFIER_ALT;
+        return controller->isPanDrag(mouse_button, modifiers);
+    }
+
+    void NodeCanvasElement::openCanvasMenu(const CanvasPoint pointer) {
+        const auto offset = GetAbsoluteOffset(Rml::BoxArea::Content);
+        const auto graph_pointer = interaction_.screenToGraph(pointer);
+        const bool over_node = std::ranges::any_of(interaction_.nodes(), [&](const auto& node) { return node.bounds.contains(graph_pointer); });
+        if (over_node && context_menu_) {
+            context_menu_->request({{.label = LOC("node_editor.arrange"), .action = "arrange", .shortcut = LOC("node_editor.arrange_shortcut")},
+                                    {.label = LOC("node_editor.add"), .action = "add"}},
+                                   panel_screen_offset_.x + pointer.x, panel_screen_offset_.y + pointer.y,
+                                   [this, pointer, offset](const std::string_view action) {
+                                       if (action == "arrange")
+                                           arrange();
+                                       else if (action == "add")
+                                           openAddMenu(offset.x + pointer.x, offset.y + pointer.y);
+                                   });
+        } else {
+            openAddMenu(offset.x + pointer.x, offset.y + pointer.y);
         }
     }
 
@@ -1593,26 +1638,13 @@ namespace lfs::vis::gui {
                 .control = event.GetParameter<int>("ctrl_key", 0) != 0 || event.GetParameter<int>("meta_key", 0) != 0,
                 .alt = event.GetParameter<int>("alt_key", 0) != 0,
             };
-            executeCommands(interaction_.pointerDown(pointer, canvas_button, modifiers));
+            const bool pan_drag = isPanPress(event);
+            pending_context_menu_ = button == 1 && pan_drag && !modifiers.control;
+            context_press_ = pointer;
+            executeCommands(interaction_.pointerDown(pointer, canvas_button, modifiers, pan_drag));
             pointer_down_ = interaction_.active();
-            if (button == 1 && !modifiers.control) {
-                const auto offset = GetAbsoluteOffset(Rml::BoxArea::Content);
-                const auto graph_pointer = interaction_.screenToGraph(pointer);
-                const bool over_node = std::ranges::any_of(interaction_.nodes(), [&](const auto& node) { return node.bounds.contains(graph_pointer); });
-                if (over_node && context_menu_) {
-                    context_menu_->request({{.label = LOC("node_editor.arrange"), .action = "arrange", .shortcut = LOC("node_editor.arrange_shortcut")},
-                                            {.label = LOC("node_editor.add"), .action = "add"}},
-                                           panel_screen_offset_.x + pointer.x, panel_screen_offset_.y + pointer.y,
-                                           [this, pointer, offset](const std::string_view action) {
-                                               if (action == "arrange")
-                                                   arrange();
-                                               else if (action == "add")
-                                                   openAddMenu(offset.x + pointer.x, offset.y + pointer.y);
-                                           });
-                } else {
-                    openAddMenu(offset.x + pointer.x, offset.y + pointer.y);
-                }
-            }
+            if (button == 1 && !modifiers.control && !pan_drag)
+                openCanvasMenu(pointer);
             event.StopPropagation();
         } else if ((type == "mouseup" || type == "dragend") && pointer_down_) {
             executeCommands(interaction_.pointerUp(localPointer(event)));
@@ -1620,6 +1652,10 @@ namespace lfs::vis::gui {
             pointer_down_ = false;
             updateNodePositions();
             geometry_dirty_ = true;
+            if (pending_context_menu_) {
+                pending_context_menu_ = false;
+                openCanvasMenu(localPointer(event));
+            }
             event.StopPropagation();
         } else if (type == "keydown") {
             const auto key = static_cast<Rml::Input::KeyIdentifier>(event.GetParameter("key_identifier", 0));

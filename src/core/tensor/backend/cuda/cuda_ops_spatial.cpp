@@ -30,6 +30,18 @@ namespace lfs::core::internal {
                                             queries ? cuda_pointer<const uint8_t>(*queries) : nullptr, context.cuda_stream);
     }
 
+    void CudaBackendOps::radius_neighbor_counts(const StorageRef points, const StorageRef references,
+                                                const StorageRef heads, const StorageRef next, const StorageRef output,
+                                                const size_t count, const size_t buckets, const float radius,
+                                                const int32_t max_count, const std::optional<StorageRef> queries,
+                                                const ExecContext context) {
+        LFS_FACADE_TRACE(radius_neighbor_counts);
+        tensor_ops::launch_radius_neighbor_counts(cuda_pointer<const float>(points), cuda_pointer<const uint8_t>(references),
+                                                  cuda_pointer<int32_t>(heads), cuda_pointer<int32_t>(next), cuda_pointer<int32_t>(output),
+                                                  count, buckets, radius, max_count,
+                                                  queries ? cuda_pointer<const uint8_t>(*queries) : nullptr, context.cuda_stream);
+    }
+
     // CUDA builds rasterize point clouds with the renderer's own kernel.
     void CudaBackendOps::rasterize_points(const PointRasterProgram&, ExecContext) {
         throw TensorError("CUDA rasterizes point clouds in the renderer");

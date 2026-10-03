@@ -55,10 +55,78 @@ def test_builtin_python_posterize_evaluates(lf, numpy):
 
     result = lf.nodes.evaluate_tree(tree, _geometry(lf, numpy))
 
-    assert result.splats.sh0.tolist() == [
-        [0.0, 0.25, 0.25],
-        [0.5, 0.75, 0.75],
-    ]
+    original = numpy.asarray(_geometry(lf, numpy).splats.sh0.tolist())
+    rgb = numpy.clip(0.5 + 0.28209479177387814 * original, 0, 1)
+    expected = (numpy.round(rgb * 3) / 3 - 0.5) / 0.28209479177387814
+    numpy.testing.assert_allclose(result.splats.sh0.tolist(), expected, atol=1e-6)
+
+
+@pytest.mark.parametrize("weight", [0.0, 0.25, 1.0])
+def test_posterize_selection_blends_rgb_and_fades_higher_sh(lf, numpy, weight):
+    tree = lf.nodes.new_tree("Posterize selection")
+    node = tree.add_node("lfs.posterize")
+    node.set_input("Selection", weight)
+    node.set_input("Levels", 3)
+    _insert_between(tree, node, "Geometry")
+    geometry = _geometry(lf, numpy)
+    shn = lf.Tensor.from_numpy(numpy.ones((2, 1, 3), dtype=numpy.float32))
+    geometry = geometry.replace(splats=geometry.splats.replace(shN=shn))
+    original = numpy.asarray(geometry.splats.sh0.tolist())
+    result = lf.nodes.evaluate_tree(tree, geometry)
+    rgb = numpy.clip(0.5 + 0.28209479177387814 * original, 0, 1)
+    quantized = (numpy.round(rgb * 2) / 2 - 0.5) / 0.28209479177387814
+    numpy.testing.assert_allclose(result.splats.sh0.tolist(), original + (quantized - original) * weight, atol=1e-6)
+    numpy.testing.assert_allclose(result.splats.shN.tolist(), 1.0 - weight, atol=1e-6)
+
+
+def test_graph_names_are_unique_on_create_rename_and_import(lf):
+    first = lf.nodes.new_tree("Autumn Lawn")
+    second = lf.nodes.new_tree("Autumn Lawn")
+    assert (first.name, second.name) == ("Autumn Lawn", "Autumn Lawn 2")
+    third = lf.nodes.new_tree("Other")
+    third.name = "Autumn Lawn"
+    assert third.name == "Autumn Lawn 3"
+    data = json.loads(first.to_json())
+    data.pop("uuid")
+    imported = lf.nodes.load_tree(json.dumps(data))
+    assert imported.name == "Autumn Lawn 4"
+
+
+def test_python_node_declarations_require_lists_and_execute(lf):
+    class AttributeNode:
+        id = "tests.invalid_declarations"
+        Geometry = lf.nodes.Input("Geometry", "geometry")
+
+        def execute(self, ctx):
+            return {}
+
+    with pytest.raises(TypeError, match="Attribute-style"):
+        lf.nodes.register_node(AttributeNode)
+
+    class OldCallback:
+        id = AttributeNode.id
+        inputs = []
+        outputs = []
+
+        def evaluate(self, ctx):
+            return {}
+
+    with pytest.raises(TypeError, match="execute"):
+        lf.nodes.register_node(OldCallback)
+
+    class InvalidList:
+        id = AttributeNode.id
+        inputs = (lf.nodes.Input("Geometry", "geometry"),)
+
+        def execute(self, ctx):
+            return {}
+
+    with pytest.raises(TypeError, match="must be lists"):
+        lf.nodes.register_node(InvalidList)
+    with pytest.raises(TypeError):
+        lf.nodes.Input("geometry")
+    with pytest.raises(TypeError):
+        lf.nodes.Output("geometry")
 
 
 def test_python_node_hot_reload_and_error_containment(lf, numpy):

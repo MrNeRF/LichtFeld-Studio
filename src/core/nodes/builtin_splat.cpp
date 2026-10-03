@@ -143,8 +143,8 @@ namespace lfs::nodes::builtin {
             auto& splats = *geometry.splats;
             const auto weight = selection(context, "Selection", field_context(splats));
             const float limit = std::log(input_float(context, "Max Aspect", 10));
-            const auto mean = splats.scaling.mean(1, true);
-            const auto clamped = splats.scaling.maximum(mean - limit).minimum(mean + limit);
+            const auto centre = (splats.scaling.max(1, true) + splats.scaling.min(1, true)) * 0.5f;
+            const auto clamped = splats.scaling.maximum(centre - limit * 0.5f).minimum(centre + limit * 0.5f);
             splats.scaling = blend(splats.scaling, clamped, weight);
         }
         context.set_output("Geometry", std::move(geometry));

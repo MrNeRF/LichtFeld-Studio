@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/node_canvas_interaction.hpp"
+#include "input/input_bindings.hpp"
 
 #include <gtest/gtest.h>
 
@@ -241,6 +242,22 @@ namespace {
         interaction.cancel();
         EXPECT_EQ(interaction.links().front(), link);
         EXPECT_EQ(std::ranges::find(interaction.nodes(), "A", &CanvasNode::id)->bounds.x, 0);
+    }
+
+    TEST(NodeCanvasInteraction, ReboundViewportPanUsesSameBindingTable) {
+        lfs::vis::input::InputBindings bindings;
+        using namespace lfs::vis::input;
+        bindings.setBinding(ToolMode::GLOBAL, Action::CAMERA_PAN, MouseDragTrigger{MouseButton::LEFT, MODIFIER_ALT});
+        auto interaction = graph();
+        const bool pan = bindings.getActionForDrag(ToolMode::GLOBAL, MouseButton::LEFT, MODIFIER_ALT) == Action::CAMERA_PAN;
+        ASSERT_TRUE(pan);
+        EXPECT_NE(bindings.getActionForDrag(ToolMode::GLOBAL, MouseButton::RIGHT, MODIFIER_NONE), Action::CAMERA_PAN);
+        const auto before = interaction.nodes();
+        EXPECT_TRUE(interaction.pointerDown({50, 20}, CanvasPointerButton::Left, {.alt = true}, pan).empty());
+        EXPECT_TRUE(interaction.pointerMove({150, 70}).empty());
+        EXPECT_EQ(interaction.pan(), (CanvasPoint{100, 50}));
+        EXPECT_EQ(interaction.nodes(), before);
+        EXPECT_TRUE(interaction.pointerUp({150, 70}).empty());
     }
 
     TEST(NodeCanvasInteraction, SplicesUnlinkedNodeAcrossCompatibleLink) {

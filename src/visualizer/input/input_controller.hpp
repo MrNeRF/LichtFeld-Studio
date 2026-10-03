@@ -107,6 +107,9 @@ namespace lfs::vis {
         // Input bindings (customizable hotkeys/mouse)
         input::InputBindings& getBindings() { return bindings_; }
         const input::InputBindings& getBindings() const { return bindings_; }
+        [[nodiscard]] bool isPanDrag(input::MouseButton button, int modifiers) const {
+            return bindings_.getActionForDrag(getCurrentToolMode(), button, modifiers, held_keys_) == input::Action::CAMERA_PAN;
+        }
         void loadInputProfile(const std::string& name) { bindings_.loadProfile(name); }
         [[nodiscard]] CameraNavigationMode cameraNavigationMode() const { return camera_navigation_mode_; }
         void setCameraNavigationMode(CameraNavigationMode mode);

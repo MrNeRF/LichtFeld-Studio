@@ -14,8 +14,12 @@ window; `lf.nodes.performance()` reads counters, per-node runs and frame/latency
 samples without resetting them.
 
 Python plug-ins can register node types through `lichtfeld.nodes`.
-Node classes declare inputs, outputs, and properties as class attributes and
-implement `evaluate(ctx)`. Exceptions are attached to the failing node and do
+Node classes declare `inputs = [...]`, `outputs = [...]`, and `properties = [...]`
+lists and implement `execute(self, ctx)`. Each declaration needs an explicit
+identifier and type. Attribute-style declarations and `evaluate` callbacks are
+not supported: using the same attribute for an input and output silently loses
+one declaration in Python. Lists allow both to be named `Geometry` safely.
+Exceptions are attached to the failing node and do
 not stop evaluation of unrelated modifier stacks.
 
 ```python
@@ -28,14 +32,15 @@ class PassThrough(lf.nodes.Node):
     inputs = [lf.nodes.Input("Geometry", "geometry")]
     outputs = [lf.nodes.Output("Geometry", "geometry")]
 
-    def evaluate(self, ctx):
+    def execute(self, ctx):
         return {"Geometry": ctx.input("Geometry")}
 
 lf.nodes.register_node(PassThrough)
 ```
 
 Use `new_tree`, `NodeTree.add_node`, and `NodeTree.link` to construct a node graph.
-The default graph name is "Node Graph". Open the Node Editor with
+The default graph name is "Node Graph"; duplicate names gain a numeric suffix
+("Node Graph 2", "Node Graph 3") on creation, rename, or import. Open the Node Editor with
 `lf.ui.screen.open_editor("node_editor")`.
 `evaluate_tree(tree, geometry)` evaluates without a running application, which
 is useful for plug-in tests. In the application, `add_modifier` attaches the
@@ -43,3 +48,5 @@ graph to a scene node; `evaluated` reads the derived result and
 `apply_modifier` bakes it into stored geometry as one undo operation.
 
 See `docs/plugins/examples/node_posterize.py` for a complete plug-in lifecycle.
+Posterize quantizes clamped base RGB, not the raw SH DC coefficient. Its Selection
+field blends the quantized colour and fades selected view-dependent SH coefficients.

@@ -86,6 +86,7 @@ namespace lfs::vis {
         [[nodiscard]] const lfs::nodes::NodeTree* tree(std::string_view uuid_or_name) const;
         [[nodiscard]] std::vector<lfs::nodes::NodeTree*> trees();
         bool removeTree(std::string_view uuid_or_name);
+        [[nodiscard]] std::string uniqueTreeName(std::string name, std::string_view except_uuid = {}) const;
         [[nodiscard]] ModifierResult setNodeInput(std::string_view tree_uuid, std::string_view node_name,
                                                   std::string_view input, lfs::nodes::Value value);
 

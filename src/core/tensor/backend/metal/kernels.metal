@@ -2119,8 +2119,7 @@ static float dot_rounded(float3 a, float3 b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-// kOp 0 links reference points into hashed cells, 1 marks the points within
-// the radius of a reference.
+// kOp 0 builds hashed cells, 1 marks radius matches, 2 counts other references.
 struct RadiusParams {
     device const float* points;
     device const uchar* references;
@@ -2131,7 +2130,7 @@ struct RadiusParams {
     uint count;
     uint bucket_mask;
     float radius;
-    uint exclude_self;
+    uint exclude_self; // Mode 1: boolean; mode 2: positive count saturation limit.
     uint query_begin;
     uint query_end;
 };
@@ -2158,12 +2157,41 @@ static bool within_radius(float3 a, float3 b, float radius) {
     return dot_rounded(d, d) <= r2;
 }
 
+static int radius_count(constant RadiusParams& params, uint i) {
+    if (params.queries && params.queries[i] == 0)
+        return 0;
+    const float3 point = radius_point(params, i);
+    if (!all(isfinite(point)))
+        return 0;
+    const int3 center = radius_cell(point, params.radius);
+    int count = 0;
+    for (int z = -1; z <= 1; ++z) {
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                const int3 target = center + int3(x, y, z);
+                for (int j = params.heads[radius_bucket(target, params.bucket_mask)]; j >= 0; j = params.next[j]) {
+                    const float3 other = radius_point(params, uint(j));
+                    if (uint(j) != i && all(radius_cell(other, params.radius) == target) && within_radius(point, other, params.radius)) {
+                        if (++count == int(params.exclude_self))
+                            return count;
+                    }
+                }
+            }
+        }
+    }
+    return count;
+}
+
 kernel void radius_neighbors(constant RadiusParams& params [[buffer(0)]], uint i [[thread_position_in_grid]]) {
     i += params.query_begin;
     if (i >= params.query_end)
         return;
     if (i >= params.count)
         return;
+    if (kOp == 2) {
+        ((device int*)params.output)[i] = radius_count(params, i);
+        return;
+    }
     if (kOp == 1 && params.queries && params.queries[i] == 0) {
         params.output[i] = 0;
         return;

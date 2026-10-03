@@ -130,4 +130,10 @@ namespace lfs::core {
     // without removing those points from the reference set.
     LFS_CORE_API Tensor radius_neighbors(const Tensor& points, const Tensor& references, float radius,
                                          bool exclude_self = false, const Tensor* queries = nullptr);
+
+    // Exact reference counts within radius, excluding the query point itself.
+    // Int32 [N], saturated at max_count (> 0). Same input/device contract as
+    // radius_neighbors; an optional query mask leaves unused counts at zero.
+    LFS_CORE_API Tensor radius_neighbor_counts(const Tensor& points, const Tensor& references, float radius,
+                                               int32_t max_count, const Tensor* queries = nullptr);
 } // namespace lfs::core

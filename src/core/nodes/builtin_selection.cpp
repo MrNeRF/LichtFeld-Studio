@@ -3,6 +3,7 @@
 #include "builtin_common.hpp"
 #include "core/tensor_fused.hpp"
 #include "core/tensor_spatial.hpp"
+#include <limits>
 namespace lfs::nodes::builtin {
 
     void evaluate_box(NodeContext& context, bool ellipsoid) {
@@ -75,55 +76,11 @@ namespace lfs::nodes::builtin {
             }));
     }
 
-    // Counts the 27 cells surrounding each point. Cells start at radius; large bounds
-    // grow that size until the dense grid fits 128^3 cells. This intentionally
-    // overestimates Euclidean neighbours, especially after budget-driven coarsening.
-    Tensor voxel_neighbour_counts(const Tensor& positions, float radius) {
+    Tensor neighbour_counts(const Tensor& positions, float radius, int32_t max_count) {
         const auto count = positions.shape()[0];
-        if (!count || radius <= 0)
-            return Tensor::zeros({count}, positions.device());
-        const auto minimum = positions.min(0);
-        const auto extent = positions.max(0) - minimum;
-        std::array<float, 3> lengths;
-        for (int axis = 0; axis < 3; ++axis)
-            lengths[axis] = extent.slice(0, axis, axis + 1).item<float>();
-        double cell = radius;
-        std::array<std::size_t, 3> dimensions;
-        constexpr std::size_t budget = 128 * 128 * 128;
-        for (;;) {
-            double cells = 1;
-            for (int axis = 0; axis < 3; ++axis) {
-                dimensions[axis] = static_cast<std::size_t>(std::min(
-                    std::ceil(static_cast<double>(lengths[axis]) / cell) + 3, static_cast<double>(budget)));
-                cells *= dimensions[axis];
-            }
-            if (cells <= budget)
-                break;
-            cell *= std::max(1.1, std::cbrt(cells / budget));
-        }
-        const auto coordinates =
-            ((positions - minimum) / static_cast<float>(cell)).floor().to(DataType::Int32) + 1;
-        const auto x = channel(coordinates, 0);
-        const auto y = channel(coordinates, 1);
-        const auto z = channel(coordinates, 2);
-        const int stride_y = static_cast<int>(dimensions[0]);
-        const int stride_z = static_cast<int>(dimensions[0] * dimensions[1]);
-        const auto indices = (x + y * stride_y + z * stride_z).to(DataType::Int32);
-        auto grid = Tensor::zeros({dimensions[0] * dimensions[1] * dimensions[2]}, positions.device());
-        grid.index_add_(0, indices, Tensor::ones({count}, positions.device()));
-        auto result = Tensor::full({count}, -1.0f, positions.device());
-        for (int dz = -1; dz <= 1; ++dz)
-            for (int dy = -1; dy <= 1; ++dy)
-                for (int dx = -1; dx <= 1; ++dx)
-                    result =
-                        result +
-                        grid.gather(0, (indices + dx + dy * stride_y + dz * stride_z).to(DataType::Int32));
-        return result;
-    }
-
-    Tensor has_neighbour(const Tensor& positions, float radius) {
-        const auto count = positions.shape()[0];
-        return core::radius_neighbors(positions, Tensor::full_bool({count}, true, positions.device()), radius, true);
+        if (!count || radius <= 0 || max_count <= 0)
+            return Tensor::zeros({count}, positions.device(), DataType::Int32);
+        return core::radius_neighbor_counts(positions, Tensor::full_bool({count}, true, positions.device()), radius, max_count);
     }
 
     namespace {
@@ -131,7 +88,7 @@ namespace lfs::nodes::builtin {
         Tensor evaluate_relative_radius(const Tensor& positions, const Tensor& activated_scale,
                                         float radius_multiple, Evaluate evaluate) {
             const auto count = positions.shape()[0];
-            auto result = Tensor::zeros({count}, positions.device());
+            auto result = Tensor::zeros({count}, positions.device(), DataType::Int32);
             if (!count || radius_multiple <= 0)
                 return result;
 
@@ -155,26 +112,18 @@ namespace lfs::nodes::builtin {
                                                .item<float>();
                 if (level_radius <= 0)
                     continue;
-                result = Tensor::where(level_mask, evaluate(level_radius, level_mask).to(DataType::Float32), result);
+                result = Tensor::where(level_mask, evaluate(level_radius, level_mask), result);
             }
             return result;
         }
     } // namespace
 
     Tensor relative_neighbour_counts(const Tensor& positions, const Tensor& activated_scale,
-                                     float radius_multiple) {
-        return evaluate_relative_radius(positions, activated_scale, radius_multiple, [&](float radius, const Tensor&) {
-            return voxel_neighbour_counts(positions, radius);
-        });
-    }
-
-    Tensor has_relative_neighbour(const Tensor& positions, const Tensor& activated_scale,
-                                  float radius_multiple) {
+                                     float radius_multiple, int32_t max_count) {
         const auto references = Tensor::full_bool({positions.shape()[0]}, true, positions.device());
         return evaluate_relative_radius(positions, activated_scale, radius_multiple, [&](float radius, const Tensor& queries) {
-                   return core::radius_neighbors(positions, references, radius, true, &queries);
-               })
-            .gt(0);
+            return core::radius_neighbor_counts(positions, references, radius, max_count, &queries);
+        });
     }
 
     const core::fused::Kernel& ray_parity_kernel() {
@@ -315,8 +264,9 @@ namespace lfs::nodes::builtin {
         const auto inputs = relative ? std::vector<Field>{position_field(), scale_field()}
                                      : std::vector<Field>{position_field()};
         context.set_output("Count", operation(INT_SOCKET, inputs, [radius, relative](const auto& values) {
-                               return (relative ? relative_neighbour_counts(values[0], values[1], radius)
-                                                : voxel_neighbour_counts(values[0], radius))
+                               constexpr int32_t limit = std::numeric_limits<int32_t>::max();
+                               return (relative ? relative_neighbour_counts(values[0], values[1], radius, limit)
+                                                : neighbour_counts(values[0], radius, limit))
                                    .to(DataType::Int32);
                            }));
     }
@@ -368,7 +318,7 @@ namespace lfs::nodes::builtin {
                                      "Select elements inside a closed mesh using ray parity.",
                                      {in("Mesh", geo)}, {out("Selection", b)}, evaluate_inside_mesh));
         register_type(registry, type("lfs.neighbour_count", "Neighbour Count", "Selection",
-                                     "Estimate neighbour counts using the surrounding voxel cells.",
+                                     "Count neighbours within a Euclidean radius, excluding the point itself.",
                                      {in("Radius", f, 1.0f).minimum(0).step_size(0.01)},
                                      {out("Count", i)}, evaluate_neighbour_count,
                                      {prop("relative_to_size", PropertyKind::Bool, false)}));

@@ -11,6 +11,7 @@ class Posterize:
 
     inputs = [
         lf.nodes.Input("Geometry", "geometry"),
+        lf.nodes.Input("Selection", "float", 1.0, min=0.0, max=1.0, field=True),
         lf.nodes.Input("Levels", "int", 4, min=2, max=32),
     ]
     outputs = [lf.nodes.Output("Geometry", "geometry")]
@@ -20,14 +21,18 @@ class Posterize:
         if geometry is None or geometry.splats is None:
             return {"Geometry": geometry}
         levels = max(2, int(ctx.input("Levels")))
-        sh0 = (geometry.splats.sh0 * float(levels)).floor() / float(levels)
+        splats = geometry.splats
+        weight = ctx.field("Selection", splats).clamp(0.0, 1.0)
+        colour = (splats.sh0 * 0.28209479177387814 + 0.5).clamp(0.0, 1.0)
+        colour = (colour * float(levels - 1)).round() / float(levels - 1)
+        quantized = (colour - 0.5) / 0.28209479177387814
+        sh0 = splats.sh0 + (quantized - splats.sh0) * weight.unsqueeze(1)
+        shn = splats.shN * (1.0 - weight).reshape((-1, 1, 1))
         return {
             "Geometry": geometry.replace(
-                splats=geometry.splats.replace(sh0=sh0),
+                splats=splats.replace(sh0=sh0, shN=shn),
             )
         }
 
 
 lf.nodes.register_node(Posterize)
-Posterize.inputs = None
-Posterize.outputs = None

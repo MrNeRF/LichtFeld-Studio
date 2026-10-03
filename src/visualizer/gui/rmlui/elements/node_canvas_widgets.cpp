@@ -60,6 +60,10 @@ namespace lfs::vis::gui::node_widgets {
         apply(".node-swatch", "width", 62.0f);
         apply(".node-swatch", "height", 16.0f);
         apply(".node-swatch", "min-height", 16.0f);
+        apply(".node-step", "width", 14.0f);
+        apply(".node-step", "min-width", 14.0f);
+        apply(".node-step", "height", 16.0f);
+        apply(".node-step", "line-height", 16.0f);
         apply("input[type=checkbox]", "width", 14.0f);
         apply("input[type=checkbox]", "height", 14.0f);
     }
@@ -145,11 +149,11 @@ namespace lfs::vis::gui::node_widgets {
                    std::format("{}", value) + "\" data-step=\"" + std::format("{}", step) +
                    "\" data-integer=\"" + (integer ? "1" : "0") + "\"" + limits +
                    "><div class=\"scrub-field-fill\" style=\"width:" + std::format("{:.1f}%", fill) +
-                   ";\"></div><span class=\"scrub-field-label\">" + escape(label) +
+                   ";\"></div><button class=\"node-step\" data-step-direction=\"-1\">−</button><span class=\"scrub-field-label\">" + escape(label) +
                    (optional_selection ? "<span class=\"socket-optional\"> ?</span>" : "") +
                    "</span><span class=\"scrub-field-display\">" + number(value, integer) +
                    "</span><input type=\"text\" class=\"scrub-field-input\" value=\"" +
-                   number(value, integer) + "\"" + attributes + "/></div>";
+                   number(value, integer) + "\"" + attributes + "/><button class=\"node-step\" data-step-direction=\"1\">+</button></div>";
         }
     } // namespace
 

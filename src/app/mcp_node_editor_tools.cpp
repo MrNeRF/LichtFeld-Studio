@@ -43,7 +43,8 @@ namespace lfs::app {
                 if (!item && args.contains("tree")) {
                     auto* stack = manager.stack(*host);
                     if (stack) {
-                        const auto found = std::ranges::find(stack->modifiers, args.at("tree").get<std::string>(), &vis::Modifier::tree_uuid);
+                        const auto* graph = tree(scene.modifierManager(), args);
+                        const auto found = std::ranges::find(stack->modifiers, graph ? graph->uuid : std::string{}, &vis::Modifier::tree_uuid);
                         if (found != stack->modifiers.end())
                             item = &*found;
                     }

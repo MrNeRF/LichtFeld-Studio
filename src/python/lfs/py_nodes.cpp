@@ -44,6 +44,19 @@ namespace lfs::python {
             return *value;
         }
 
+        std::string standalone_tree_name(std::string name, std::string_view except = {}) {
+            if (name.empty())
+                name = "Node Graph";
+            std::unordered_set<std::string_view> names;
+            for (const auto& [uuid, tree] : standalone().trees)
+                if (uuid != except)
+                    names.insert(tree->name);
+            const auto base = name;
+            for (int suffix = 2; names.contains(name); ++suffix)
+                name = base + " " + std::to_string(suffix);
+            return name;
+        }
+
         vis::ModifierManager* live_manager() {
             auto* scene_manager = get_scene_manager();
             return scene_manager ? &scene_manager->modifierManager() : nullptr;
@@ -268,6 +281,8 @@ namespace lfs::python {
                                   std::string merge_key = {}) {
             if (auto* manager = live_manager())
                 manager->recordTreeEdit(tree.uuid, std::move(before), std::move(merge_key));
+            else if (tree.name != before.value("name", ""))
+                tree.name = standalone_tree_name(tree.name, tree.uuid);
         }
 
         nlohmann::json modifier_stack_json(const core::Uuid& node_uuid) {
@@ -386,28 +401,28 @@ namespace lfs::python {
                                    ? nb::cast<std::string>(cls.attr("description"))
                                    : std::string{};
             std::unordered_set<std::string> declared;
-            const auto append = [&](const nb::handle value, std::string fallback) {
+            if (!nb::hasattr(cls, "execute") || !PyCallable_Check(cls.attr("execute").ptr()))
+                throw nb::type_error("Node classes must implement execute(self, ctx)");
+            const auto append = [&](const nb::handle value, std::string_view collection) {
                 if (nb::isinstance<PyInputDecl>(value)) {
                     const auto& declaration = nb::cast<const PyInputDecl&>(value);
-                    const auto identifier = declaration.identifier.empty()
-                                                ? std::move(fallback)
-                                                : declaration.identifier;
-                    if (declared.insert("input:" + identifier).second)
-                        info.inputs.push_back({identifier, identifier, declaration.type,
-                                               declaration.default_value, declaration.min,
-                                               declaration.max, std::nullopt, declaration.field});
+                    const auto& identifier = declaration.identifier;
+                    if (collection != "inputs" || identifier.empty() || !declared.insert("input:" + identifier).second)
+                        throw nb::value_error("inputs must contain Input declarations with unique, non-empty identifiers");
+                    info.inputs.push_back({identifier, identifier, declaration.type,
+                                           declaration.default_value, declaration.min,
+                                           declaration.max, std::nullopt, declaration.field});
                 } else if (nb::isinstance<PyOutputDecl>(value)) {
                     const auto& declaration = nb::cast<const PyOutputDecl&>(value);
-                    const auto identifier = declaration.identifier.empty()
-                                                ? std::move(fallback)
-                                                : declaration.identifier;
-                    if (declared.insert("output:" + identifier).second)
-                        info.outputs.push_back({identifier, identifier, declaration.type});
+                    const auto& identifier = declaration.identifier;
+                    if (collection != "outputs" || identifier.empty() || !declared.insert("output:" + identifier).second)
+                        throw nb::value_error("outputs must contain Output declarations with unique, non-empty identifiers");
+                    info.outputs.push_back({identifier, identifier, declaration.type});
                 } else if (nb::isinstance<PyPropertyDecl>(value)) {
                     const auto& declaration = nb::cast<const PyPropertyDecl&>(value);
-                    const auto identifier = declaration.identifier.empty()
-                                                ? std::move(fallback)
-                                                : declaration.identifier;
+                    const auto& identifier = declaration.identifier;
+                    if (collection != "properties" || identifier.empty() || !declared.insert("property:" + identifier).second)
+                        throw nb::value_error("properties must contain Property declarations with unique, non-empty identifiers");
                     PropertyKind kind = PropertyKind::String;
                     if (declaration.type == "bool")
                         kind = PropertyKind::Bool;
@@ -417,21 +432,26 @@ namespace lfs::python {
                         kind = PropertyKind::Float;
                     else if (declaration.type == "enum")
                         kind = PropertyKind::Enum;
-                    if (declared.insert("property:" + identifier).second)
-                        info.properties.push_back({identifier, identifier, kind,
-                                                   declaration.default_value, declaration.items});
+                    info.properties.push_back({identifier, identifier, kind,
+                                               declaration.default_value, declaration.items});
+                } else {
+                    throw nb::type_error("Node declarations must be Input, Output or Property objects in their corresponding lists");
                 }
             };
             for (const auto* collection : {"inputs", "outputs", "properties"}) {
                 if (!nb::hasattr(cls, collection))
                     continue;
-                for (const auto value : nb::cast<nb::sequence>(cls.attr(collection)))
-                    append(value, {});
+                if (!nb::isinstance<nb::list>(cls.attr(collection)))
+                    throw nb::type_error("Node inputs, outputs and properties must be lists");
+                for (const auto value : nb::cast<nb::list>(cls.attr(collection)))
+                    append(value, collection);
             }
-            const auto attributes = nb::cast<nb::dict>(
-                nb::module_::import_("builtins").attr("dict")(cls.attr("__dict__")));
-            for (const auto [key, value] : attributes) {
-                append(value, nb::cast<std::string>(key));
+            for (const auto base : nb::cast<nb::tuple>(cls.attr("__mro__"))) {
+                const auto attributes = nb::cast<nb::dict>(nb::module_::import_("builtins").attr("dict")(base.attr("__dict__")));
+                for (const auto [key, value] : attributes) {
+                    if (nb::isinstance<PyInputDecl>(value) || nb::isinstance<PyOutputDecl>(value) || nb::isinstance<PyPropertyDecl>(value))
+                        throw nb::type_error("Attribute-style node declarations are unsupported; use inputs, outputs and properties lists");
+                }
             }
             const std::string type_id = info.id;
             info.evaluate = [type_id](NodeContext& context) {
@@ -446,9 +466,7 @@ namespace lfs::python {
                 nb::gil_scoped_acquire gil;
                 try {
                     auto instance = (**type)();
-                    const auto callback = nb::hasattr(instance, "execute")
-                                              ? instance.attr("execute")
-                                              : instance.attr("evaluate");
+                    const auto callback = instance.attr("execute");
                     auto result = callback(PyNodeContext{&context});
                     if (!result.is_none()) {
                         if (nb::isinstance<PyGeometry>(result))
@@ -585,14 +603,11 @@ namespace lfs::python {
             .def("replace", &PyGeometry::replace);
 
         nb::class_<PyInputDecl>(module, "Input")
-            .def("__init__", [](PyInputDecl* self, std::string identifier, std::string type, nb::object default_value, std::optional<double> min, std::optional<double> max, bool field) { new (self) PyInputDecl{std::move(identifier), socket_type(std::move(type)), python_to_value(default_value), min, max, field}; }, nb::arg("identifier"), nb::arg("type"), nb::arg("default") = nb::none(), nb::arg("min") = nb::none(), nb::arg("max") = nb::none(), nb::arg("field") = false)
-            .def("__init__", [](PyInputDecl* self, std::string type, nb::object default_value, std::optional<double> min, std::optional<double> max, bool field) { new (self) PyInputDecl{{}, socket_type(std::move(type)), python_to_value(default_value), min, max, field}; }, nb::arg("type"), nb::arg("default") = nb::none(), nb::arg("min") = nb::none(), nb::arg("max") = nb::none(), nb::arg("field") = false);
+            .def("__init__", [](PyInputDecl* self, std::string identifier, std::string type, nb::object default_value, std::optional<double> min, std::optional<double> max, bool field) { new (self) PyInputDecl{std::move(identifier), socket_type(std::move(type)), python_to_value(default_value), min, max, field}; }, nb::arg("identifier"), nb::arg("type"), nb::arg("default") = nb::none(), nb::arg("min") = nb::none(), nb::arg("max") = nb::none(), nb::arg("field") = false);
         nb::class_<PyOutputDecl>(module, "Output")
-            .def("__init__", [](PyOutputDecl* self, std::string identifier, std::string type) { new (self) PyOutputDecl{std::move(identifier), socket_type(std::move(type))}; }, nb::arg("identifier"), nb::arg("type"))
-            .def("__init__", [](PyOutputDecl* self, std::string type) { new (self) PyOutputDecl{{}, socket_type(std::move(type))}; }, nb::arg("type"));
+            .def("__init__", [](PyOutputDecl* self, std::string identifier, std::string type) { new (self) PyOutputDecl{std::move(identifier), socket_type(std::move(type))}; }, nb::arg("identifier"), nb::arg("type"));
         nb::class_<PyPropertyDecl>(module, "Property")
-            .def("__init__", [](PyPropertyDecl* self, std::string identifier, std::string type, nb::object default_value, std::vector<std::string> items) { new (self) PyPropertyDecl{std::move(identifier), std::move(type), python_to_json(default_value), std::move(items)}; }, nb::arg("identifier"), nb::arg("type"), nb::arg("default") = nb::none(), nb::arg("items") = std::vector<std::string>{})
-            .def("__init__", [](PyPropertyDecl* self, std::string type, nb::object default_value, std::vector<std::string> items) { new (self) PyPropertyDecl{{}, std::move(type), python_to_json(default_value), std::move(items)}; }, nb::arg("type"), nb::arg("default") = nb::none(), nb::arg("items") = std::vector<std::string>{});
+            .def("__init__", [](PyPropertyDecl* self, std::string identifier, std::string type, nb::object default_value, std::vector<std::string> items) { new (self) PyPropertyDecl{std::move(identifier), std::move(type), python_to_json(default_value), std::move(items)}; }, nb::arg("identifier"), nb::arg("type"), nb::arg("default") = nb::none(), nb::arg("items") = std::vector<std::string>{});
         nb::class_<PyNodeBase>(module, "Node", nb::dynamic_attr()).def(nb::init<>());
         nb::class_<PyNodeContext>(module, "NodeContext")
             .def("input", &PyNodeContext::input)
@@ -838,7 +853,7 @@ namespace lfs::python {
             const auto uuid = invoke_on_viewer([name = std::move(name)]() mutable {
                 if (auto* manager = live_manager())
                     return manager->newTree(std::move(name)).uuid;
-                auto tree = std::make_unique<NodeTree>(standalone().registry, std::move(name));
+                auto tree = std::make_unique<NodeTree>(standalone().registry, standalone_tree_name(std::move(name)));
                 const auto result = tree->uuid;
                 standalone().trees[result] = std::move(tree);
                 return result;
@@ -883,6 +898,7 @@ namespace lfs::python {
                     return manager->loadTree(json).uuid;
                 auto tree = std::make_unique<NodeTree>(
                     NodeTree::from_json(json, standalone().registry));
+                tree->name = standalone_tree_name(tree->name, tree->uuid);
                 const auto result = tree->uuid;
                 standalone().trees[result] = std::move(tree);
                 return result;
@@ -1026,11 +1042,12 @@ namespace lfs::python {
             if (!error.empty())
                 throw std::runtime_error(error);
         });
-        module.attr("_registry_lifetime") = nb::capsule(
-            reinterpret_cast<void*>(1), [](void*) noexcept {
-                std::lock_guard lock(python_types_mutex());
-                python_types().clear();
-                python_type_modules().clear();
-            });
+        // Release callback classes before Python tears down nanobind's types.
+        // A module capsule runs too late and retains their declaration objects.
+        nb::module_::import_("atexit").attr("register")(nb::cpp_function([] {
+            std::lock_guard lock(python_types_mutex());
+            python_types().clear();
+            python_type_modules().clear();
+        }));
     }
 } // namespace lfs::python

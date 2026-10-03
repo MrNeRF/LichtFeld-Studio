@@ -235,7 +235,7 @@ namespace lfs::app {
                 properties["name"] = stringSchema();
                 required.push_back("name");
             }
-            add(registry, impl, "nodes.tree_" + operation, operation + " a node graph identified by its exact UUID", properties, required, [operation](auto& viewer, const json& args) {
+            add(registry, impl, "nodes.tree_" + operation, operation + " a node graph identified by UUID or unique exact name", properties, required, [operation](auto& viewer, const json& args) {
                     auto& manager = viewer.getSceneManager()->modifierManager();
                     auto* graph = tree(manager, args);
                     if (!graph)

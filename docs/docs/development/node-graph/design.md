@@ -255,8 +255,8 @@ Selection (field producers)
   value min/max, softness),
   **Inside Mesh** (Geometry input carrying a mesh; ray-parity test; tensor
   ops chunked over points × triangles with a bounding-box pre-filter),
-  **Neighbour Count** (radius; approximate count from a dense voxel grid
-  with cell = radius, summed over the 27 surrounding cells).
+  **Neighbour Count** (exact Euclidean radius counts, excluding the point itself;
+  a sparse spatial hash keeps scratch independent of scene extent).
 
 Geometry
 - **Transform Geometry** (translation, rotation degrees XYZ, uniform scale;
@@ -277,7 +277,9 @@ Splat
 - **Set Scale** (selection, scale vector, activated units).
 - **Set SH Degree** (0..3; truncates or zero-pads canonical shN).
 - **Sharpen** (selection, amount 0..0.95, keep coverage).
-- **Scale Clamp** (selection, max aspect).
+- **Scale Clamp** (selection, max aspect = largest/smallest scale axis).
+  Log-scales clamp to the min/max midpoint ± half the log aspect limit, then
+  blend by selection. Fully selected splats satisfy the requested axis ratio.
 
 Colour
 - **Colour Correct** (selection, exposure, black point, white point, midpoint,
@@ -296,18 +298,26 @@ Colour
 Clean-up
 - **Remove Floaters** (selection limits where removal may happen; min
   opacity, max size (0 = off), isolation radius (0 = off), min neighbours;
-  preview: instead of deleting, paint candidates green and opaque). Min
-  neighbours ≤ 1 uses the exact `radius_neighbors` test; larger values use
-  the Neighbour Count grid.
+  preview: show only removal candidates, with all attributes unchanged).
+  Isolation uses `radius_neighbor_counts`, saturated at min neighbours. Relative
+  mode groups query radii into up to eight octave buckets, querying each bucket
+  against all reference points. Zero min neighbours disables isolation removal.
 - **Simplify** (ratio; wraps `simplify_splats`, host side).
 - **Decimate** (selection, keep fraction; keeps the most important selected
   splats by activated opacity times maximum activated scale, while unselected
   splats are always retained).
 
 Conversion
-- **Points to Splats** (radius, 0 = auto from bounding-box density;
-  opacity), **Splats to Points**, **Mesh to Points** (vertices),
-  **Mesh to Splats** (visualizer; wraps `rendering::mesh_to_splat`).
+- **Points to Splats** (radius, 0 = half the mean three-nearest-neighbour distance;
+  per-point radii clamp to 0.25–4 times the median). Distance matrices and Float32
+  row sorts are chunked on device. Above 300,000 points, one radius is estimated
+  from a random 4096-point sample. **Splats to Points**, **Mesh to Points** (vertices).
+- **Mesh to Splats** (core; density per surface unit², max count default 2,000,000,
+  opacity default 0.95, seed). Area-weighted face sampling and uniform barycentrics
+  create flat degree-zero Gaussians oriented to interpolated vertex/face normals.
+  Colours prefer vertex colours, then albedo texture times material base colour,
+  then material base colour, then mid-grey. Textures use the loader's flipped UVs
+  without a second V flip. The Mesh2Splat panel remains a separate renderer tool.
 
 ## 5. Python API (`lichtfeld.nodes`)
 

@@ -9,6 +9,7 @@
 #include "gui/rmlui/elements/node_canvas_widgets.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
 
+#include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/ElementText.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
@@ -50,6 +51,7 @@ namespace lfs::vis::gui {
         if (!field)
             return;
         active_field_ = nullptr;
+        field_step_direction_ = 0;
         bool discard = cancel;
         if (!discard && field->IsClassSet("is-editing")) {
             if (const auto* input = dynamic_cast<Rml::ElementFormControlInput*>(field->QuerySelector("input"))) {
@@ -84,6 +86,28 @@ namespace lfs::vis::gui {
         field_dragged_ = false;
     }
 
+    void NodeCanvasElement::stepField() {
+        if (!active_field_)
+            return;
+        const double step = active_field_->GetAttribute<double>("data-step", 0.01);
+        const double value = active_field_->GetAttribute<double>("data-value", 0.0);
+        updateField(*active_field_, value + field_step_direction_ * field_step_multiplier_ * step);
+        if (auto* input = active_field_->QuerySelector("input"))
+            commitControl(input, nullptr, false);
+    }
+
+    void NodeCanvasElement::repeatFieldStep() {
+        if (!active_field_ || field_step_direction_ == 0)
+            return;
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= field_repeat_at_) {
+            stepField();
+            field_repeat_at_ = now + std::chrono::milliseconds(70);
+        }
+        if (auto* context = GetContext())
+            context->RequestNextUpdate(0.02);
+    }
+
     bool NodeCanvasElement::processFieldEvent(Rml::Event& event) {
         if (!editableMode())
             return true;
@@ -106,7 +130,8 @@ namespace lfs::vis::gui {
         }
         if (pointer_down_ && (type == "mousemove" || type == "mouseup" || type == "drag" || type == "dragend"))
             return false;
-        if (type == "mousedown" && !sidebar && !popup && event.GetParameter("button", 0) == 2)
+        if (type == "mousedown" && !sidebar && !popup &&
+            (event.GetParameter("button", 0) == 2 || isPanPress(event)))
             return false;
         if (type == "mousedown" && !popup && !swatch)
             if (auto* existing = GetElementById("node-colour-popup"))
@@ -131,7 +156,9 @@ namespace lfs::vis::gui {
             event.StopPropagation();
             return true;
         }
-        if (type == "dblclick" && field) {
+        const int key = event.GetParameter("key_identifier", 0);
+        const bool enter = key == Rml::Input::KI_RETURN || key == Rml::Input::KI_NUMPADENTER;
+        if ((type == "dblclick" || (type == "keydown" && enter && !active_field_)) && field && !target->IsClassSet("node-step")) {
             active_field_ = field;
             if (const auto* tree = activeTree())
                 field_before_ = tree->to_json();
@@ -151,10 +178,24 @@ namespace lfs::vis::gui {
             field_start_x_ = localPointer(event).x;
             field_start_value_ = field->GetAttribute<double>("data-value", 0.0);
             field_dragged_ = false;
+            field->Focus();
+            field_step_direction_ = target->GetAttribute<int>("data-step-direction", 0);
+            field_step_multiplier_ = event.GetParameter<int>("shift_key", 0) != 0 ? 10.0 : event.GetParameter<int>("alt_key", 0) != 0 ? 0.1
+                                                                                                                                      : 1.0;
+            if (field_step_direction_ != 0) {
+                stepField();
+                field_repeat_at_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
+                repeatFieldStep();
+            }
+            event.StopPropagation();
             return true;
         }
         if (active_field_ && !active_field_->IsClassSet("is-editing")) {
             if (type == "mousemove" || type == "drag") {
+                if (field_step_direction_ != 0) {
+                    event.StopPropagation();
+                    return true;
+                }
                 const float delta = (localPointer(event).x - field_start_x_) / dp_ratio_;
                 if (std::abs(delta) > 2.0f)
                     field_dragged_ = true;
@@ -170,7 +211,7 @@ namespace lfs::vis::gui {
                 return true;
             }
             if (type == "mouseup" || type == "dragend") {
-                finishFieldEdit(!field_dragged_);
+                finishFieldEdit(!field_dragged_ && field_step_direction_ == 0);
                 event.StopPropagation();
                 return true;
             }

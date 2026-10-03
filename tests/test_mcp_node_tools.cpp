@@ -137,6 +137,25 @@ namespace lfs::vis {
         EXPECT_TRUE(unknown.contains("available_types"));
     }
 
+    TEST_F(McpNodeToolsTest, UniqueNamesResolveToExactIdentitiesAndRenameIsUndoable) {
+        const auto first = call("tree_create", {{"name", "Autumn Lawn"}})["tree"];
+        const auto second = call("tree_create", {{"name", "Autumn Lawn"}})["tree"];
+        EXPECT_EQ(second["name"], "Autumn Lawn 2");
+        EXPECT_EQ(call("tree_export_json", {{"tree", "Autumn Lawn"}})["tree"]["uuid"], first["uuid"]);
+        auto renamed = call("tree_rename", {{"tree", "Autumn Lawn 2"}, {"name", "Autumn Lawn"}});
+        EXPECT_EQ(renamed["tree"]["name"], "Autumn Lawn 2");
+        const auto imported = call("tree_import_json", {{"json", first}})["tree"];
+        EXPECT_EQ(imported["name"], "Autumn Lawn 3");
+        call("node_add", {{"tree", "Autumn Lawn"}, {"type_id", "lfs.value"}, {"name", "Value"}});
+        const auto stack = call("modifier_add", {{"target", "Host"}, {"tree", "Autumn Lawn"}});
+        EXPECT_EQ(stack["target"], target_);
+        EXPECT_EQ(stack["name"], "Host");
+        EXPECT_EQ(stack["modifiers"][0]["tree_name"], "Autumn Lawn");
+        call("tree_rename", {{"tree", "Autumn Lawn 2"}, {"name", "Summer"}});
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(resource("trees/" + second["uuid"].get<std::string>())["name"], "Autumn Lawn 2");
+    }
+
     TEST_F(McpNodeToolsTest, LinksModifiersEvaluateCaptureApplyAndUndo) {
         const auto id = graph();
         call("node_add", {{"tree", id}, {"type_id", "lfs.colour_correct"}, {"name", "Correct"}});

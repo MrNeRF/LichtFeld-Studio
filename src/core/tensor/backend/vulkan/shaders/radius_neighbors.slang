@@ -17,7 +17,7 @@ struct Parameters
     uint count;
     uint bucketMask;
     float radius;
-    uint excludeSelf;
+    uint excludeSelf; // Mode 1: boolean; mode 2: positive count saturation limit.
     uint queryBegin;
     uint queryEnd;
 };
@@ -83,6 +83,37 @@ bool query(Parameters p, uint i)
     return false;
 }
 
+uint queryCount(Parameters p, uint i)
+{
+    if (p.queries != 0 && loadByte(p.queries, i) == 0u) return 0;
+    const float3 point = position(p, i);
+    if (!all(isfinite(point))) return 0;
+    const int3 center = cell(point, p.radius);
+    Ptr<int, Access.Read> heads = (Ptr<int, Access.Read>)p.heads;
+    Ptr<int, Access.Read> next = (Ptr<int, Access.Read>)p.next;
+    uint count = 0;
+    for (int z = -1; z <= 1; ++z)
+    {
+        for (int y = -1; y <= 1; ++y)
+        {
+            for (int x = -1; x <= 1; ++x)
+            {
+                const int3 target = center + int3(x, y, z);
+                for (int j = heads[hashCell(target, p.bucketMask)]; j >= 0; j = next[j])
+                {
+                    const float3 other = position(p, uint(j));
+                    // Checking the actual cell prevents double counts on hash collisions.
+                    if (uint(j) != i && all(cell(other, p.radius) == target) && within(point, other, p.radius))
+                    {
+                        if (++count == p.excludeSelf) return count;
+                    }
+                }
+            }
+        }
+    }
+    return count;
+}
+
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters p)
 {
@@ -102,6 +133,12 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters p)
             InterlockedExchange(heads[bucket], int(i), previous);
             next[i] = previous;
         }
+    }
+    else if (kMode == 2)
+    {
+        Ptr<int, Access.ReadWrite> output = (Ptr<int, Access.ReadWrite>)p.output;
+        for (uint i = p.queryBegin + dispatchThreadId.x; i < p.queryEnd; i += stride)
+            output[i] = int(queryCount(p, i));
     }
     else
     {

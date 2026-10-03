@@ -377,6 +377,91 @@ namespace {
         }
     }
 
+    TEST_F(NodeCanvasWidgets, SidebarFillsColumnAtOneAndTwoDpAcrossResizeAndSelection) {
+        attachGraph();
+        auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        for (const float dp : {1.0f, 2.0f}) {
+            context_->SetDensityIndependentPixelRatio(dp);
+            for (const int height : {380, 750, 420}) {
+                context_->SetDimensions({static_cast<int>(1244 * dp), static_cast<int>(height * dp)});
+                for (const char* name : {"Correct", "Value", "Correct"}) {
+                    ASSERT_TRUE(canvas->selectNodes({name}, std::nullopt));
+                    context_->Update();
+                    context_->Render();
+                    Rml::ElementList sections;
+                    canvas->QuerySelectorAll(sections, ".sidebar-section");
+                    for (auto* section : sections)
+                        EXPECT_GE(section->GetBox().GetSize(Rml::BoxArea::Border).x / dp, 260.0f);
+                    Rml::ElementList fields;
+                    canvas->QuerySelectorAll(fields, "#node-editor-sidebar .node-field-control");
+                    ASSERT_FALSE(fields.empty());
+                    for (auto* field : fields)
+                        EXPECT_GE(field->GetBox().GetSize(Rml::BoxArea::Content).x / dp, 120.0f);
+                    auto* add = canvas->QuerySelector("[data-action=add-modifier]");
+                    ASSERT_NE(add, nullptr);
+                    EXPECT_GE(add->GetBox().GetSize(Rml::BoxArea::Border).x / dp, 230.0f);
+                    auto* section = add->GetParentNode();
+                    const float content_right = section->GetAbsoluteOffset(Rml::BoxArea::Content).x + section->GetBox().GetSize(Rml::BoxArea::Content).x;
+                    const float button_right = add->GetAbsoluteOffset(Rml::BoxArea::Border).x + add->GetBox().GetSize(Rml::BoxArea::Border).x;
+                    EXPECT_LE(button_right, content_right + 1.0f);
+                    auto* rename = canvas->QuerySelector(".modifier-rename");
+                    ASSERT_NE(rename, nullptr);
+                    EXPECT_GE(rename->GetBox().GetSize(Rml::BoxArea::Content).x / dp, 120.0f);
+                    auto* status = canvas->GetElementById("node-inspector-last-run");
+                    ASSERT_NE(status, nullptr);
+                    EXPECT_LE(status->GetBox().GetSize(Rml::BoxArea::Content).y / dp, 30.0f);
+                }
+            }
+        }
+    }
+
+    TEST_F(NodeCanvasWidgets, NumericSteppersRespectModifiersHoldAndUndoOnce) {
+        attachGraph();
+        auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        ASSERT_TRUE(canvas->selectNodes({"Correct"}, std::nullopt));
+        context_->Update();
+        auto* input = canvas->QuerySelector("#node-editor-sidebar input[data-input=Exposure]");
+        ASSERT_NE(input, nullptr);
+        auto* field = input->GetParentNode();
+        auto* increase = field->QuerySelector("[data-step-direction='1']");
+        ASSERT_NE(increase, nullptr);
+        auto& manager = scene_.modifierManager();
+        const double step = field->GetAttribute<double>("data-step", 0.01);
+        const auto pointer = [](Rml::Element* element, const char* type, const char* modifier = "shift_key", int pressed = 0) {
+            Rml::Dictionary parameters;
+            parameters["button"] = 0;
+            parameters[modifier] = pressed;
+            element->DispatchEvent(type, parameters);
+        };
+        lfs::vis::op::undoHistory().clear();
+        pointer(increase, "mousedown", "shift_key", 1);
+        pointer(increase, "mouseup");
+        context_->Update();
+        EXPECT_NEAR(std::get<float>(manager.tree(tree_)->find_node("Correct")->input_values.at("Exposure").data), step * 10, 1e-6);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        context_->Update();
+        input = canvas->QuerySelector("#node-editor-sidebar input[data-input=Exposure]");
+        increase = input->GetParentNode()->QuerySelector("[data-step-direction='1']");
+        pointer(increase, "mousedown", "alt_key", 1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(420));
+        context_->Update();
+        pointer(increase, "mouseup");
+        context_->Update();
+        EXPECT_NEAR(std::get<float>(manager.tree(tree_)->find_node("Correct")->input_values.at("Exposure").data), step * 0.2, 1e-6);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_NEAR(std::get<float>(manager.tree(tree_)->find_node("Correct")->input_values.at("Exposure").data), 0.0, 1e-6);
+    }
+
+    TEST_F(NodeCanvasWidgets, EnterStartsNumericTypingAndEscapeCancels) {
+        field_->Focus();
+        context_->ProcessKeyDown(Rml::Input::KI_RETURN, 0);
+        EXPECT_TRUE(field_->IsClassSet("is-editing"));
+        input_->SetValue("0.8");
+        context_->ProcessKeyDown(Rml::Input::KI_ESCAPE, 0);
+        EXPECT_FALSE(field_->IsClassSet("is-editing"));
+        EXPECT_DOUBLE_EQ(field_->GetAttribute<double>("data-value", 0.0), 0.25);
+    }
+
     TEST_F(NodeCanvasWidgets, DomPatchNeverReplacesPrivateScrollbarChildren) {
         auto* parent = document_->AppendChild(document_->CreateElement("div"));
         parent->SetInnerRML("<div id='first'>First</div>");
