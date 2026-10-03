@@ -609,3 +609,29 @@ TEST_F(TensorStreamTest, ConstantInitializationStaysOnNonBlockingStream) {
     }
     destroyStreamSafely(stream);
 }
+
+TEST_F(TensorStreamTest, FusedSliceReductionOfStreamTensorWaitsForItsResult) {
+    constexpr size_t rows = 5'000'000;
+    cudaStream_t producer;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
+    {
+        Tensor produced;
+        {
+            CUDAStreamGuard guard(producer);
+            produced = (Tensor::full({rows, 3}, 0.25f, Device::CUDA) +
+                        Tensor::from_vector({0.0f, -0.5f, 0.0f}, {1, 3}, Device::CUDA))
+                           .contiguous();
+        }
+        ASSERT_EQ(cudaStreamSynchronize(producer), cudaSuccess);
+        const auto column_gap = [](const Tensor& value) {
+            const auto scaled = value * 0.5f + 0.5f;
+            return (scaled.slice(1, 1, 2).squeeze(1) - scaled.slice(1, 0, 1).squeeze(1)).mean().item<float>();
+        };
+        EXPECT_FLOAT_EQ(column_gap(Tensor::full({rows, 3}, 1.0f, Device::CUDA)), 0.0f);
+
+        // Hold the producer back so an unordered consumer reads unwritten memory.
+        ASSERT_EQ(cudaLaunchHostFunc(producer, [](void*) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); }, nullptr), cudaSuccess);
+        EXPECT_FLOAT_EQ(column_gap(produced), -0.25f);
+    }
+    destroyStreamSafely(producer);
+}
