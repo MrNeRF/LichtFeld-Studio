@@ -14,7 +14,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <thread>
@@ -22,6 +24,23 @@
 
 using namespace lfs::training;
 using namespace lfs::core;
+
+TEST(FastGSSortKeyTest, PreservesFullPositiveFloatDepthPrecision) {
+    using InstanceKey = std::uint64_t;
+    ASSERT_EQ(sizeof(InstanceKey), sizeof(std::uint64_t));
+
+    const float near_depth = 1.0f;
+    const float far_depth = std::nextafter(near_depth, 2.0f);
+    const std::uint32_t near_bits = std::bit_cast<std::uint32_t>(near_depth);
+    const std::uint32_t far_bits = std::bit_cast<std::uint32_t>(far_depth);
+    ASSERT_LT(near_bits, far_bits);
+
+    const InstanceKey near_key = (InstanceKey{7} << 32) | near_bits;
+    const InstanceKey far_key = (InstanceKey{7} << 32) | far_bits;
+    const InstanceKey next_tile_key = (InstanceKey{8} << 32) | near_bits;
+    EXPECT_LT(near_key, far_key);
+    EXPECT_LT(far_key, next_tile_key);
+}
 
 namespace {
 

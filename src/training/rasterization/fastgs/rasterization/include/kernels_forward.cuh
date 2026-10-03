@@ -36,22 +36,13 @@ namespace fast_lfs::rasterization::kernels::forward {
             actual_count);
     }
 
-    __device__ __forceinline__ uint quantize_depth_key(float depth, const uint depth_bits) {
-        if (depth_bits == 0)
-            return 0;
-
-        constexpr uint FLOAT32_FRACTION_BITS = 23;
-        constexpr uint FLOAT32_FRACTION_MASK = (1u << FLOAT32_FRACTION_BITS) - 1u;
-        constexpr uint FLOAT32_BELOW_TWO = 0x3fffffffu;
-
-        float normalized_depth = (2.0f * depth + 1.0f) / (depth + 1.0f);
-        normalized_depth = fminf(fmaxf(normalized_depth, 1.0f), __uint_as_float(FLOAT32_BELOW_TWO));
-        const uint fraction = __float_as_uint(normalized_depth) & FLOAT32_FRACTION_MASK;
-        return fraction >> (FLOAT32_FRACTION_BITS - depth_bits);
+    __device__ __forceinline__ uint depth_sort_key(float depth) {
+        return __float_as_uint(depth);
     }
 
-    __device__ __forceinline__ InstanceKey make_instance_key(const uint tile_key, const uint depth_key, const uint depth_bits) {
-        return (static_cast<InstanceKey>(tile_key) << depth_bits) | static_cast<InstanceKey>(depth_key);
+    __device__ __forceinline__ InstanceKey make_instance_key(const uint tile_key, const uint depth_key) {
+        constexpr uint kDepthBits = 32;
+        return (static_cast<InstanceKey>(tile_key) << kDepthBits) | static_cast<InstanceKey>(depth_key);
     }
 
     __global__ void preprocess_cu(
@@ -304,7 +295,7 @@ namespace fast_lfs::rasterization::kernels::forward {
             primitive_idx, active_sh_bases, sh_layout_slots,
             sh_value_bounds, sh_value_n_cells, sh_value_bits);
         primitive_color[work_idx] = make_float4(sh_color, 0.0f);
-        primitive_depth_keys[work_idx] = quantize_depth_key(depth, depth_bits);
+        primitive_depth_keys[work_idx] = depth_sort_key(depth);
         primitive_depths[work_idx] = depth;
 
         // Camera-space unit normal: rotation column of the smallest axis, oriented toward the camera.
@@ -339,7 +330,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         uint* __restrict__ instance_primitive_indices) {
         for (uint t = span.x; t < span.y && write_at < write_end; t++) {
             const uint tile_key = along_x ? (scan_index * grid_width + t) : (t * grid_width + scan_index);
-            instance_keys[write_at] = make_instance_key(tile_key, depth_key, depth_bits);
+            instance_keys[write_at] = make_instance_key(tile_key, depth_key);
             instance_primitive_indices[write_at] = primitive_idx;
             write_at++;
         }
