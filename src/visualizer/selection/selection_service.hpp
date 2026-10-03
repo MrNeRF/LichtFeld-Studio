@@ -67,6 +67,10 @@ namespace lfs::vis {
         bool colour_from_stored_payload = false;
     };
 
+    // Painting only needs the position; skipping the colour saves a GPU readback per pick.
+    enum class PickReads : std::uint8_t { Position,
+                                          PositionAndColour };
+
     struct ViewportPickError {
         std::string message;
     };
@@ -162,7 +166,8 @@ namespace lfs::vis {
                                                       SelectionFilterState filters = {},
                                                       int camera_index = -1);
         [[nodiscard]] std::expected<ViewportGaussianPick, ViewportPickError>
-        pickAtScreen(float x, float y, int camera_index = -1);
+        pickAtScreen(float x, float y, int camera_index = -1,
+                     PickReads reads = PickReads::PositionAndColour);
         [[nodiscard]] std::expected<float, ViewportPickError>
         worldRadiusAtScreen(float x, float y, const glm::vec3& world_position,
                             float screen_radius) const;

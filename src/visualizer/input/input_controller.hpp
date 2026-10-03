@@ -38,6 +38,7 @@ namespace lfs::vis {
         class AlignTool;
         class SelectionTool;
     } // namespace tools
+    class SceneManager;
     class ToolContext;
     class Visualizer;
 
@@ -219,6 +220,7 @@ namespace lfs::vis {
 
         // Helpers
         bool isInViewport(double x, double y) const;
+        bool appendNodePaintSample(SceneManager& scene_manager, double x, double y);
         bool isPointerOverBlockingUi(double x, double y) const;
         bool isPointerOverUiHover(double x, double y) const;
         bool shouldCameraHandleInput() const;
@@ -402,7 +404,7 @@ namespace lfs::vis {
         SDL_Cursor* hand_cursor_ = nullptr;
         bool node_paint_dragging_ = false;
         bool node_paint_erasing_ = false;
-        std::optional<glm::vec3> node_paint_last_world_;
+        std::optional<glm::vec2> node_paint_last_screen_; // last attempted paint sample
 
         // Double-click detection
         static constexpr double DOUBLE_CLICK_TIME = 0.3;

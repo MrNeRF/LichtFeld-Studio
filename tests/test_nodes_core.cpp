@@ -990,6 +990,18 @@ namespace {
         }
     }
 
+    TEST(NodesCoreMetadata, OnlyAttributeNodesKeepElements) {
+        NodeTypeRegistry registry;
+        register_builtin_nodes(registry);
+        for (const auto* id : {"lfs.set_colour", "lfs.transform_geometry", "lfs.colour_correct", "lfs.group_input", "lfs.group_output",
+                               "lfs.reroute"})
+            EXPECT_TRUE(registry.find(id)->keeps_elements) << id;
+        for (const auto* id : {"lfs.join_geometry", "lfs.separate_geometry", "lfs.delete_geometry",
+                               "lfs.remove_floaters", "lfs.object_info", "lfs.splats_to_points"})
+            if (const auto type = registry.find(id))
+                EXPECT_FALSE(type->keeps_elements) << id;
+    }
+
     TEST(NodesCoreMetadata, Base64RoundTripAndRejectsMalformedData) {
         const std::vector<std::uint8_t> bytes{0, 1, 127, 128, 254, 255, 11};
         EXPECT_EQ(lfs::core::base64_decode(lfs::core::base64_encode(bytes)), bytes);
@@ -1191,6 +1203,101 @@ namespace {
         EXPECT_EQ(selection(nlohmann::json::array({paint, erase, repaint})), (std::vector<float>{1.0f, 0.0f}));
         // Erasing first and painting later is not undone by the earlier erase.
         EXPECT_EQ(selection(nlohmann::json::array({erase, paint})), (std::vector<float>{1.0f, 1.0f}));
+    }
+
+    TEST_P(NodesCore, PaintSelectionChunksMatchBruteForceAcrossDistantStrokes) {
+        // A long stroke spans several sample chunks; the distant stroke widens the strokes' bounds
+        // over every point, so only the per-chunk culling keeps the work local.
+        nlohmann::json strokes = nlohmann::json::array();
+        nlohmann::json line = nlohmann::json::array();
+        for (int index = 0; index < 150; ++index)
+            line.push_back({0.1f * static_cast<float>(index), 0.05f * static_cast<float>(index % 7), 0.0f, 0.3f,
+                            index % 50 == 25 ? 0.0f : 1.0f});
+        strokes.push_back(line);
+        strokes.push_back({{40.0f, 40.0f, 0.0f, 2.0f, 1.0f}, {41.0f, 40.0f, 0.0f, 2.0f, 0.0f}});
+        std::vector<glm::vec3> positions;
+        std::vector<float> flat;
+        for (int x = -2; x < 44; ++x)
+            for (int y = -1; y < 42; y += 3) {
+                const glm::vec3 position(0.37f * static_cast<float>(x), 0.11f * static_cast<float>(y), 0.0f);
+                positions.push_back(position);
+                flat.insert(flat.end(), {position.x, position.y, position.z});
+            }
+        positions.push_back({40.5f, 40.0f, 0.0f});
+        flat.insert(flat.end(), {40.5f, 40.0f, 0.0f});
+        auto geometry = splats(0);
+        geometry.splats->means = tensor(flat, {positions.size(), 3});
+        const auto actual = host<float>(field_result(
+            "lfs.paint_selection", "Selection", FLOAT_SOCKET, geometry, [&](Node& node) {
+                node.properties["data"] = strokes;
+                node.input_values["Softness"] = 0.5f;
+            }));
+        ASSERT_EQ(actual.size(), positions.size());
+        std::size_t selected_count = 0;
+        for (std::size_t point = 0; point < positions.size(); ++point) {
+            float selected = 0.0f;
+            for (const auto& stroke : strokes) {
+                float paint = 0.0f;
+                float erase = 0.0f;
+                for (const auto& sample : stroke) {
+                    const glm::vec3 centre(sample[0].get<float>(), sample[1].get<float>(), sample[2].get<float>());
+                    const float distance = glm::distance(positions[point], centre) / sample[3].get<float>();
+                    const float weight = std::clamp((1.0f - distance) / 0.5f, 0.0f, 1.0f);
+                    if (sample[4].get<float>() == 0.0f)
+                        erase = std::max(erase, weight);
+                    else
+                        paint = std::max(paint, sample[4].get<float>() * weight);
+                }
+                selected = std::min(std::max(selected, paint), 1.0f - erase);
+            }
+            EXPECT_NEAR(actual[point], selected, 1e-5f) << point;
+            selected_count += selected > 0.0f;
+        }
+        EXPECT_GT(selected_count, 20u);
+    }
+
+    TEST_P(NodesCore, CancellationRaisedInsideANodeStopsWithoutAnError) {
+        bool stop = false;
+        NodeTypeInfo info;
+        info.id = "test.cancel";
+        info.inputs.push_back({"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)});
+        info.outputs.push_back({"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)});
+        info.evaluate = [&](NodeContext& context) {
+            stop = true;
+            throw_if_evaluation_cancelled();
+            context.set_output("Geometry", context.input("Geometry"));
+        };
+        ASSERT_TRUE(registry_.register_type(std::move(info)));
+        NodeTree tree(registry_);
+        const Node& node = tree.add_node("test.cancel");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", node.name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"}));
+        EvalCache cache;
+        EvalControl control;
+        control.cancelled = [&] { return stop; };
+        const auto result = evaluate(tree, {splats(), {}, 7}, nullptr, &cache, control);
+        EXPECT_TRUE(result.cancelled);
+        EXPECT_FALSE(result.ok);
+        EXPECT_TRUE(result.errors.empty());
+        EXPECT_FALSE(cache.nodes.contains(node.name));
+        // Outside an evaluation there is nothing to cancel.
+        EXPECT_NO_THROW(throw_if_evaluation_cancelled());
+    }
+
+    TEST_P(NodesCore, ConsumersKeepTheSelectionTheyEvaluated) {
+        NodeTree tree(registry_);
+        Node& box = tree.add_node("lfs.box_selection");
+        box.input_values["Centre"] = glm::vec3(1, 0, 0);
+        box.input_values["Size"] = glm::vec3(0.5f);
+        const Node& opacity = tree.add_node("lfs.set_opacity");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", opacity.name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({box.name, "Selection", opacity.name, "Selection"}));
+        ASSERT_TRUE(tree.add_link({opacity.name, "Geometry", tree.output_node().name, "Geometry"}));
+        EvalCache cache;
+        ASSERT_TRUE(evaluate(tree, {splats(), {}, 7}, nullptr, &cache).ok);
+        const auto& consumer = cache.nodes.at(opacity.name);
+        ASSERT_TRUE(consumer.selection);
+        EXPECT_EQ(consumer.selection->mask.cpu().to_vector_bool(), (std::vector<bool>{false, true, false}));
     }
 
     TEST_P(NodesCore, PaintSelectionSoftnessEndpointsAndInvert) {

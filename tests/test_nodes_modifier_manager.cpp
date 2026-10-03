@@ -47,7 +47,8 @@ namespace {
     std::vector<std::pair<const char*, std::optional<lfs::core::GpuBackend>>> worker_targets() {
         using lfs::core::GpuBackend;
         return {{"Metal", GpuBackend::Metal},
-                {"Vulkan", GpuBackend::Vulkan}};
+                {"Vulkan", GpuBackend::Vulkan},
+                {"CUDA", GpuBackend::CUDA}};
     }
 
     template <typename Run>
@@ -475,6 +476,29 @@ TEST_F(NodesModifierManager, ViewportCoordinatesRoundTripWithHostTransformAndBas
     }
 }
 
+// Fails when the viewport gizmo composes rotations in another order than node evaluation,
+// which draws a rotated box or ellipsoid where it does not select.
+TEST(NodesViewportCoordinates, ComposeUsesTheEvaluatorRotationOrder) {
+    using lfs::vis::nodes::NodeViewportTransform;
+    using lfs::vis::nodes::ViewportCoordinates;
+    const NodeViewportTransform transform{
+        .translation = {1.0f, -2.0f, 0.5f},
+        .rotation_degrees = {30.0f, 45.0f, 60.0f},
+        .scale = {2.0f, 1.0f, 0.5f}};
+    const glm::mat4 expected = glm::translate(glm::mat4(1.0f), transform.translation) *
+                               lfs::nodes::rotation_matrix(transform.rotation_degrees) *
+                               glm::scale(glm::mat4(1.0f), transform.scale);
+    const glm::mat4 composed = ViewportCoordinates::composeLocal(transform);
+    for (int column = 0; column < 4; ++column)
+        for (int row = 0; row < 4; ++row)
+            EXPECT_NEAR(composed[column][row], expected[column][row], 1e-5f) << column << "," << row;
+    const auto decomposed = ViewportCoordinates::decomposeLocal(composed);
+    for (int axis = 0; axis < 3; ++axis) {
+        EXPECT_NEAR(decomposed.rotation_degrees[axis], transform.rotation_degrees[axis], 1e-3f) << axis;
+        EXPECT_NEAR(decomposed.scale[axis], transform.scale[axis], 1e-5f) << axis;
+    }
+}
+
 TEST_F(NodesModifierManager, HsvEyedropperCentresBandsAndKeepsTheirWidthsAtBounds) {
     const auto bands = lfs::vis::centreHsvPickBands({0.2f, 0.8f, 0.4f}, 0.2f, 0.4f);
     EXPECT_NEAR(bands.hue, 1.0f / 3.0f + 1.0f / 18.0f, 1e-5f);
@@ -706,6 +730,46 @@ TEST_F(NodesModifierManager, SelectionPreviewSurvivesAttributeNodes) {
                       (std::vector<bool>{true, false, true, false, false, false}))
                 << name;
         }
+    });
+}
+
+TEST_F(NodesModifierManager, SelectionPreviewHidesWhenAJoinReordersElements) {
+    using namespace lfs::nodes;
+    for_each_worker_target([](const lfs::core::Device device) {
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto id = scene.getScene().addSplat("Host", model(6, device));
+        const auto host = scene.getScene().getNodeUuid(id);
+        auto& manager = scene.modifierManager();
+        auto& tree = manager.newTree("Reorder");
+        auto& stored = tree.add_node("lfs.stored_selection", "Stored");
+        set_stored_selection(stored, selection({true, false, false, false, false, false}));
+        const auto stored_properties = stored.properties;
+        tree.add_node("lfs.separate_geometry", "Separate");
+        tree.add_node("lfs.join_geometry", "Join");
+        ASSERT_TRUE(tree.remove_link(
+            {tree.input_node().name, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Separate", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Stored", "Selection", "Separate", "Selection"}));
+        ASSERT_TRUE(tree.add_link({"Separate", "Inverted", "Join", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Separate", "Selection", "Join", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Join", "Geometry", tree.output_node().name, "Geometry"}));
+        auto& modifier = manager.addModifier(host, tree.uuid, "Reorder");
+        modifier.stored_selections["Stored"] = stored_properties;
+
+        const auto result = manager.evaluate(host);
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
+                                                         : result.errors.begin()->second);
+        ASSERT_TRUE(result.geometry.splats);
+        EXPECT_EQ(result.geometry.splats->means.shape()[0], 6);
+        EXPECT_FALSE(result.rows_follow_source);
+        // The count matches, but displayed row 0 is stored row 1.
+        EXPECT_FALSE(manager.selectionPreview(host, modifier.uuid, "Stored"));
+        EXPECT_FALSE(manager.selectionPreview(host, modifier.uuid, "Separate"));
+        const auto status = result.nodes.find(modifier.uuid + "/Separate");
+        ASSERT_NE(status, result.nodes.end());
+        ASSERT_TRUE(status->second.selected_share);
+        EXPECT_NEAR(*status->second.selected_share, 1.0 / 6.0, 1e-9);
     });
 }
 

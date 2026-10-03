@@ -2694,6 +2694,16 @@ namespace lfs::vis {
             }
         }
 
+        // Graph edits from Python or MCP and finished evaluations must not wait for an unrelated
+        // frame: ticking submits dirty graphs and installs ready results.
+        if (scene_manager_) {
+            const auto& scene = scene_manager_->getScene();
+            const auto generation = scene.renderGeneration();
+            scene_manager_->modifierManager().tick();
+            if (rendering_manager_ && scene.renderGeneration() != generation)
+                rendering_manager_->markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
+        }
+
         if (gui_manager_)
             gui_manager_->prepareLayout();
 

@@ -20,6 +20,7 @@
 #include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "selection_group_mask.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
 #include "visualizer/nodes/viewport_coordinates.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
@@ -1453,7 +1454,8 @@ namespace lfs::vis {
     }
 
     std::expected<ViewportGaussianPick, ViewportPickError>
-    SelectionService::pickAtScreen(const float x, const float y, const int camera_index) {
+    SelectionService::pickAtScreen(const float x, const float y, const int camera_index,
+                                   const PickReads reads) {
         if (!scene_manager_ || !rendering_manager_)
             return std::unexpected(ViewportPickError{"Missing managers"});
         const auto projection = resolveCommandProjectionSnapshot(
@@ -1489,16 +1491,17 @@ namespace lfs::vis {
             return std::unexpected(
                 ViewportPickError{"Hovered gaussian does not map to a visible scene node"});
 
+        // A displayed row is the stored row only while every node kept the element order; equal
+        // counts alone prove nothing.
+        const auto* evaluation = scene_manager_->modifierManager().lastResult(picked_node->uuid);
+        const bool rows_follow_stored =
+            !picked_node->evaluated_model ||
+            (evaluation && evaluation->ok && evaluation->rows_follow_source &&
+             picked_node->model && picked_node->model->size() == effective->size());
         const core::SplatData* colour_source = effective;
         std::optional<std::size_t> stored_index;
         bool stored_colour = false;
-        if (picked_node->model &&
-            static_cast<std::size_t>(picked_node->model->size()) ==
-                static_cast<std::size_t>(effective->size())) {
-            colour_source = picked_node->model.get();
-            stored_index = local_index;
-            stored_colour = true;
-        } else if (!picked_node->evaluated_model && picked_node->model) {
+        if (picked_node->model && rows_follow_stored) {
             colour_source = picked_node->model.get();
             stored_index = local_index;
             stored_colour = true;
@@ -1518,13 +1521,16 @@ namespace lfs::vis {
             return glm::vec3(values[0], values[1], values[2]);
         };
         const auto mean = read_vec3(effective->means_raw());
-        const auto sh0 = read_vec3(colour_source->sh0());
-        if (!mean || !sh0)
+        if (!mean)
             return std::unexpected(ViewportPickError{"Picked gaussian payload is unavailable"});
-
-        constexpr float sh_c0 = 0.28209479177387814f;
-        const glm::vec3 colour = glm::clamp(glm::vec3(0.5f) + *sh0 * sh_c0,
-                                            glm::vec3(0.0f), glm::vec3(1.0f));
+        glm::vec3 colour{0.0f};
+        if (reads == PickReads::PositionAndColour) {
+            const auto sh0 = read_vec3(colour_source->sh0());
+            if (!sh0)
+                return std::unexpected(ViewportPickError{"Picked gaussian payload is unavailable"});
+            constexpr float sh_c0 = 0.28209479177387814f;
+            colour = glm::clamp(glm::vec3(0.5f) + *sh0 * sh_c0, glm::vec3(0.0f), glm::vec3(1.0f));
+        }
         const nodes::ViewportCoordinates coordinates(scene, picked_node->id);
         if (!coordinates.valid())
             return std::unexpected(ViewportPickError{"Picked node transform is not invertible"});

@@ -244,10 +244,39 @@ namespace lfs::vis {
             return context;
         }
 
-        // Attribute nodes replace tensors but keep element order, so tensor identity
-        // would hide every preview behind them. Structural nodes change the count.
-        bool sameElements(const FieldContext& left, const FieldContext& right) {
-            return left.domain == right.domain && left.size() == right.size();
+        // Attribute nodes replace tensors but keep element order, so tensor identity would hide every
+        // preview behind them. Equal counts alone prove nothing: a reordering join keeps the count.
+        bool sameElements(const ModifierHostResult& result, const FieldContext& left, const FieldContext& right) {
+            return result.evaluation.rows_follow_source && left.domain == right.domain &&
+                   left.size() == right.size();
+        }
+
+        const NodeTree* groupTree(const Node& group, const TreeResolver& resolver) {
+            const auto property = group.properties.find("tree");
+            return property != group.properties.end() && property->is_string()
+                       ? resolver(property->get_ref<const std::string&>())
+                       : nullptr;
+        }
+
+        bool keepsElements(const NodeTree& tree, const EvalResult& evaluated, const TreeResolver& resolver) {
+            return std::ranges::all_of(evaluated.nodes, [&](const auto& entry) {
+                // Nodes inside groups report as "Group/Inner".
+                const NodeTree* owner = &tree;
+                std::string_view path = entry.first;
+                for (auto slash = path.find('/'); owner && slash != std::string_view::npos; slash = path.find('/')) {
+                    const auto* group = owner->find_node(path.substr(0, slash));
+                    owner = group ? groupTree(*group, resolver) : nullptr;
+                    path.remove_prefix(slash + 1);
+                }
+                const auto* node = owner ? owner->find_node(path) : nullptr;
+                const auto type = node ? owner->registry().find(node->type_id) : nullptr;
+                if (!type)
+                    return false;
+                return node->muted || type->keeps_elements ||
+                       std::ranges::none_of(type->outputs, [](const SocketDecl& output) {
+                           return output.type == GEOMETRY_SOCKET;
+                       });
+            });
         }
 
         void selectionPreviews(const NodeTree& tree, const EvalCache& cache,
@@ -269,6 +298,7 @@ namespace lfs::vis {
                 const auto inputs = effective_inputs(tree, node, resolver);
                 const auto output = std::ranges::find(outputs, "Selection", &SocketDecl::identifier);
                 const CachedNodeOutput* consumer = nullptr;
+                bool consumed_as_selection = true;
                 if (output != outputs.end() && output->type != GEOMETRY_SOCKET) {
                     socket = output->identifier;
                     const auto link = std::ranges::find_if(tree.links, [&](const Link& item) {
@@ -276,6 +306,7 @@ namespace lfs::vis {
                     });
                     if (link == tree.links.end())
                         continue;
+                    consumed_as_selection = link->to_socket == "Selection";
                     const auto cached_consumer = cache.nodes.find(name_space + link->to_node);
                     if (cached_consumer == cache.nodes.end())
                         continue;
@@ -312,6 +343,13 @@ namespace lfs::vis {
                                         std::to_string(context->identity) + "/" +
                                         std::to_string(context->size());
                 auto found = masks.find(key);
+                if (found == masks.end() && consumed_as_selection && consumer->selection &&
+                    consumer->selection->context == context->identity) {
+                    const auto& mask = consumer->selection->mask;
+                    const auto count = mask.numel();
+                    const double share = count ? static_cast<double>(mask.count_nonzero()) / count : 0.0;
+                    found = masks.emplace(key, std::pair{mask, share}).first;
+                }
                 if (found == masks.end()) {
                     try {
                         const auto* field = value->second.get_if<Field>();
@@ -332,17 +370,11 @@ namespace lfs::vis {
                 if (auto status = result.evaluation.nodes.find(modifier + "/" + name_space + node.name);
                     status != result.evaluation.nodes.end())
                     status->second.selected_share = found->second.second;
-                if (sameElements(*context, *displayed))
+                if (sameElements(result, *context, *displayed))
                     result.previews[modifier + "/" + name_space + node.name] = found->second.first;
             }
             for (const auto& node : tree.nodes) {
-                if (node.type_id != "lfs.group")
-                    continue;
-                const auto property = node.properties.find("tree");
-                const auto* nested = property != node.properties.end() && property->is_string()
-                                         ? resolver(property->get_ref<const std::string&>())
-                                         : nullptr;
-                if (nested)
+                if (const auto* nested = node.type_id == "lfs.group" ? groupTree(node, resolver) : nullptr)
                     selectionPreviews(*nested, cache, modifier, result, cancelled, resolver,
                                       name_space + node.name + "/");
             }
@@ -454,6 +486,9 @@ namespace lfs::vis {
                         result.evaluation.nodes[modifier.uuid + "/" + name] = std::move(status);
                     if (evaluated.cancelled)
                         break;
+                    result.evaluation.rows_follow_source =
+                        result.evaluation.rows_follow_source &&
+                        keepsElements(tree, evaluated, [this](const std::string_view uuid) { return resolveTree(uuid); });
                     if (!evaluated.ok) {
                         result.evaluation.ok = false;
                         for (const auto& [name, error] : evaluated.errors) {

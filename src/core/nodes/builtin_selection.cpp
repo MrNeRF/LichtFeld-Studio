@@ -47,6 +47,14 @@ namespace lfs::nodes::builtin {
             return result;
         }
 
+        // Bool mask of the points inside [minimum, maximum].
+        Tensor inside_box(const Tensor& points, const glm::vec3& minimum, const glm::vec3& maximum) {
+            const auto device = points.device();
+            const auto centre = vector_tensor((minimum + maximum) * 0.5f, device);
+            const auto half = vector_tensor((maximum - minimum) * 0.5f, device);
+            return (half - (points - centre).abs()).min(1).ge(0.0f);
+        }
+
         // Strokes apply in order: painting raises the selection, erasing (value 0) lowers it,
         // so repainting an erased patch selects it again.
         Tensor paint_falloff(const Tensor& positions, const std::vector<PaintStroke>& strokes,
@@ -63,59 +71,83 @@ namespace lfs::nodes::builtin {
                     minimum = glm::min(minimum, sample.position - sample.radius);
                     maximum = glm::max(maximum, sample.position + sample.radius);
                 }
-
-            const auto inside = positions.ge(vector_tensor(minimum, positions.device()))
-                                    .logical_and(positions.le(vector_tensor(maximum, positions.device())))
-                                    .to(DataType::Float32)
-                                    .sum(1)
-                                    .eq(3);
-            const auto eligible = inside.nonzero().reshape({-1}).to(DataType::Int32);
+            const auto eligible = inside_box(positions, minimum, maximum).nonzero().reshape({-1}).to(DataType::Int32);
             if (!eligible.numel())
                 return result;
             const auto candidates = positions.index_select(0, eligible);
 
+            // Each stroke, then each chunk of consecutive samples, is culled to its own bounds, so the
+            // work stays near the brush even when strokes are far apart.
             constexpr std::size_t pair_budget = 8 * 1024 * 1024;
-            constexpr std::size_t sample_tile = 2048;
+            constexpr std::size_t sample_chunk = 64;
+            const auto bounds = [](const PaintStroke& stroke, const std::size_t begin, const std::size_t end) {
+                std::pair<glm::vec3, glm::vec3> box{glm::vec3(std::numeric_limits<float>::max()),
+                                                    glm::vec3(std::numeric_limits<float>::lowest())};
+                for (std::size_t index = begin; index < end; ++index) {
+                    box.first = glm::min(box.first, stroke[index].position - stroke[index].radius);
+                    box.second = glm::max(box.second, stroke[index].position + stroke[index].radius);
+                }
+                return box;
+            };
+            const auto rows_inside = [](const Tensor& points, const std::pair<glm::vec3, glm::vec3>& box) {
+                return inside_box(points, box.first, box.second).nonzero().reshape({-1}).to(DataType::Int32);
+            };
             auto selected = Tensor::zeros({candidates.shape()[0]}, positions.device());
             for (const auto& stroke : strokes) {
-                auto painted = Tensor::zeros_like(selected);
-                auto erased = Tensor::zeros_like(selected);
-                for (std::size_t sample_begin = 0; sample_begin < stroke.size(); sample_begin += sample_tile) {
-                    const std::size_t sample_count = std::min(sample_tile, stroke.size() - sample_begin);
+                throw_if_evaluation_cancelled();
+                const auto stroke_rows = rows_inside(candidates, bounds(stroke, 0, stroke.size()));
+                if (!stroke_rows.numel())
+                    continue;
+                const auto stroke_points = candidates.index_select(0, stroke_rows);
+                auto painted = Tensor::zeros({stroke_rows.numel()}, positions.device());
+                auto erased = Tensor::zeros_like(painted);
+                for (std::size_t sample_begin = 0; sample_begin < stroke.size(); sample_begin += sample_chunk) {
+                    throw_if_evaluation_cancelled();
+                    const std::size_t sample_end = std::min(sample_begin + sample_chunk, stroke.size());
+                    const std::size_t sample_count = sample_end - sample_begin;
+                    const auto rows = rows_inside(stroke_points, bounds(stroke, sample_begin, sample_end));
+                    const std::size_t row_count = rows.numel();
+                    if (!row_count)
+                        continue;
                     std::vector<float> centres;
                     std::vector<float> radii;
                     std::vector<float> values;
                     centres.reserve(sample_count * 3);
                     radii.reserve(sample_count);
                     values.reserve(sample_count);
-                    for (std::size_t index = sample_begin; index < sample_begin + sample_count; ++index) {
-                        centres.insert(centres.end(), {stroke[index].position.x, stroke[index].position.y,
-                                                       stroke[index].position.z});
-                        radii.push_back(stroke[index].radius);
-                        values.push_back(std::clamp(stroke[index].value, 0.0f, 1.0f));
+                    for (std::size_t index = sample_begin; index < sample_end; ++index) {
+                        const auto& sample = stroke[index];
+                        centres.insert(centres.end(), {sample.position.x, sample.position.y, sample.position.z});
+                        radii.push_back(sample.radius);
+                        values.push_back(std::clamp(sample.value, 0.0f, 1.0f));
                     }
+                    const auto points = stroke_points.index_select(0, rows);
                     const auto centre_tensor = Tensor::from_vector(centres, {sample_count, 3}).to(positions.device());
                     const auto radius_tensor = Tensor::from_vector(radii, {1, sample_count}).to(positions.device());
                     const auto value_tensor = Tensor::from_vector(values, {1, sample_count}).to(positions.device());
                     const auto erase_tensor = value_tensor.eq(0).to(DataType::Float32);
+                    auto chunk_painted = Tensor::zeros({row_count}, positions.device());
+                    auto chunk_erased = Tensor::zeros({row_count}, positions.device());
                     const std::size_t element_tile = std::max<std::size_t>(1, pair_budget / sample_count);
-                    for (std::size_t element_begin = 0; element_begin < candidates.shape()[0];
-                         element_begin += element_tile) {
-                        const std::size_t element_count =
-                            std::min(element_tile, candidates.shape()[0] - element_begin);
-                        const auto points = candidates.slice(0, element_begin, element_begin + element_count);
-                        const auto delta = points.unsqueeze(1) - centre_tensor.unsqueeze(0);
+                    for (std::size_t element_begin = 0; element_begin < row_count; element_begin += element_tile) {
+                        const std::size_t element_count = std::min(element_tile, row_count - element_begin);
+                        const auto tile = points.slice(0, element_begin, element_begin + element_count);
+                        const auto delta = tile.unsqueeze(1) - centre_tensor.unsqueeze(0);
                         const auto distance = (delta * delta).sum(2).sqrt() / radius_tensor;
                         const auto weight = softness <= 0.0f
                                                 ? distance.le(1.0f).to(DataType::Float32)
                                                 : ((distance.neg() + 1.0f) / softness).clamp(0, 1);
-                        auto paint_destination = painted.slice(0, element_begin, element_begin + element_count);
-                        auto erase_destination = erased.slice(0, element_begin, element_begin + element_count);
-                        paint_destination.copy_from(paint_destination.maximum((weight * value_tensor).max(1)));
-                        erase_destination.copy_from(erase_destination.maximum((weight * erase_tensor).max(1)));
+                        chunk_painted.slice(0, element_begin, element_begin + element_count)
+                            .copy_from((weight * value_tensor).max(1));
+                        chunk_erased.slice(0, element_begin, element_begin + element_count)
+                            .copy_from((weight * erase_tensor).max(1));
                     }
+                    painted.index_copy_(0, rows, painted.index_select(0, rows).maximum(chunk_painted));
+                    erased.index_copy_(0, rows, erased.index_select(0, rows).maximum(chunk_erased));
                 }
-                selected = selected.maximum(painted).minimum(erased.neg() + 1.0f);
+                // Rows outside the stroke have nothing painted or erased, so they keep their value.
+                selected.index_copy_(0, stroke_rows,
+                                     selected.index_select(0, stroke_rows).maximum(painted).minimum(erased.neg() + 1.0f));
             }
             result.index_add_(0, eligible, selected);
             return result;

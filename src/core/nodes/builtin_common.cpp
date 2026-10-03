@@ -2,6 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "builtin_common.hpp"
 
+#include <array>
+#include <string_view>
+
 namespace lfs::nodes::builtin {
     std::string property_string(const NodeContext& context, std::string_view name, std::string fallback) {
         const auto found = context.properties().find(std::string(name));
@@ -66,8 +69,14 @@ namespace lfs::nodes::builtin {
     core::Tensor selection(const NodeContext& context, std::string_view socket, const FieldContext& domain,
                            bool structural) {
         core::Tensor value = context.evaluate_field(socket, domain, FLOAT_SOCKET);
-        if (structural)
-            return value.ge(0.5f);
+        if (structural) {
+            auto mask = value.ge(0.5f);
+            if (socket == "Selection")
+                context.record_selection(domain, mask);
+            return mask;
+        }
+        if (socket == "Selection")
+            context.record_selection(domain, value.ge(0.5f));
         // NaN (e.g. a negative base raised to a fraction) means unselected, not a NaN blend.
         const auto clamped = value.clamp(0.0f, 1.0f);
         return clamped.where(clamped.isnan().logical_not(), core::Tensor::zeros_like(clamped));
@@ -144,14 +153,6 @@ namespace lfs::nodes::builtin {
             for (int row = 0; row < 3; ++row)
                 rows.push_back(value[column][row]);
         return Tensor::from_vector(rows, {3, 3}, Device::CPU).to(device);
-    }
-
-    glm::mat4 rotation_matrix(glm::vec3 degrees) {
-        const auto angle = glm::radians(degrees);
-        const auto x = glm::rotate(glm::mat4(1), angle.x, glm::vec3(1, 0, 0));
-        const auto y = glm::rotate(glm::mat4(1), angle.y, glm::vec3(0, 1, 0));
-        const auto z = glm::rotate(glm::mat4(1), angle.z, glm::vec3(0, 0, 1));
-        return z * y * x;
     }
 
     Tensor safe_divide(const Tensor& a, const Tensor& b) {
@@ -242,6 +243,12 @@ namespace lfs::nodes::builtin {
     }
 
     void register_type(NodeTypeRegistry& registry, NodeTypeInfo info) {
+        // Geometry nodes that only edit attributes.
+        static constexpr std::array<std::string_view, 14> keeps_elements{
+            "lfs.group_input", "lfs.group_output", "lfs.reroute", "lfs.transform_geometry", "lfs.set_position", "lfs.set_colour",
+            "lfs.set_opacity", "lfs.set_scale", "lfs.set_sh_degree", "lfs.sharpen",
+            "lfs.scale_clamp", "lfs.colour_correct", "lfs.recolour", "lfs.invert_colour"};
+        info.keeps_elements = std::ranges::find(keeps_elements, info.id) != keeps_elements.end();
         set_builtin_node_text(info);
         registry.register_type(std::move(info));
     }
