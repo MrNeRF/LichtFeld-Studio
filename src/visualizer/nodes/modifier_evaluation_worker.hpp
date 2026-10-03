@@ -78,6 +78,9 @@ namespace lfs::vis {
         ModifierWorkerResult evaluate(const ModifierEvaluationRequest& request);
 
         const lfs::nodes::NodeTypeRegistry& registry_;
+        // Declared before everything that holds worker tensors, so it is destroyed after them:
+        // destroying it releases its stream, and a later free must not name that stream.
+        std::unique_ptr<core::TensorWorkQueue> queue_;
         mutable std::mutex mutex_;
         std::condition_variable_any changed_;
         std::optional<ModifierEvaluationRequest> pending_;
@@ -96,7 +99,6 @@ namespace lfs::vis {
         std::unordered_map<core::Uuid, ModifierHostResult> previous_hosts_;
         std::uint64_t source_generation_ = 0;
         lfs::nodes::GeometryDeviceCache source_devices_;
-        std::unique_ptr<core::TensorWorkQueue> queue_;
         std::jthread thread_;
     };
 
