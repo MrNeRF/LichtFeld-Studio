@@ -1410,7 +1410,8 @@ namespace lfs::vis::gui {
         std::vector<lfs::vis::WindowManager::HitTestRect> excluded_rects;
         excluded_rects.reserve(3);
         append_element(excluded_rects, menu_items_);
-        append_element(excluded_rects, menu_toolbar_);
+        if (toolbar_fits_)
+            append_element(excluded_rects, menu_toolbar_);
         append_element(excluded_rects, menu_window_controls_);
         wm->setTitlebarDragRegion(bar_height_px, std::move(excluded_rects));
     }
@@ -1578,7 +1579,7 @@ namespace lfs::vis::gui {
 
         // Portal status and transfer progress can change the right cluster's width.
         // Lay it out before reserving space for the viewport toolbar.
-        if (render_needed_ || screen_w != last_ctx_w_ || dp_ratio != last_dp_ratio_) {
+        if (render_needed_ || screen_w != last_ctx_w_) {
             rml_context_->SetDimensions(Rml::Vector2i(screen_w, std::max(bar_h, last_ctx_h_)));
             rml_context_->Update();
         }
