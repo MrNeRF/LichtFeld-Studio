@@ -32,6 +32,7 @@
 #include "io/project_operations.hpp"
 #include "io/project_recovery.hpp"
 #include "io/splat_path.hpp"
+#include "io/splat_tile_source.hpp"
 #include "training/dataset.hpp"
 
 #include <filesystem>
@@ -1482,6 +1483,8 @@ namespace lfs::python {
 
         m.def("is_ssog_path", &io::is_ssog_path, nb::arg("path"),
               "Check for an SSOG bundle, manifest or directory.");
+        m.def("is_tiles3d_path", &io::is_tiles3d_path, nb::arg("path"),
+              "Check for a 3D Tiles tileset JSON.");
 
         m.def(
             "is_dataset_path",

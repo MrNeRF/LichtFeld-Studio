@@ -1422,7 +1422,8 @@ namespace lfs::io::project {
                     fourcc = FOURCC_MESH;
                 } else if (node.type == "splat" &&
                            binding.fourcc == "REFS" &&
-                           binding.source_kind == "rad" &&
+                           (binding.source_kind == "rad" ||
+                            binding.source_kind == "tiles3d") &&
                            binding.reference_uuid &&
                            *binding.reference_uuid ==
                                binding.instance_uuid &&

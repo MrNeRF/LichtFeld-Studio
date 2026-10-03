@@ -1779,6 +1779,11 @@ namespace lfs::vis::gui {
         splats.reserve(node_names.size());
         for (const auto& name : node_names) {
             const auto* node = scene.getNode(name);
+            if (node && scene_manager->isTileStreamNode(node->uuid)) {
+                // A streamed node holds only the tiles drawn for the current view.
+                publishExportFailureState(format, path, LOC("runtime.tiles3d_export_streamed"));
+                return;
+            }
             if (node && node->type == core::NodeType::SPLAT && node->model) {
                 splats.push_back(ExportSplatSource{
                     .data = node->model.get(),

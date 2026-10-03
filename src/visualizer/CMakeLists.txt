@@ -158,6 +158,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         scene/scene_manager.cpp
         scene/point_cloud_merge.cpp
         scene/selection_state.cpp
+        scene/splat_tile_streamer.cpp
         scene/viewer_splat_quantize.cpp
 
         # Input handling

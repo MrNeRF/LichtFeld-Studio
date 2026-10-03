@@ -31,6 +31,7 @@
 #include "rendering/rendering_manager.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "scene/point_cloud_merge.hpp"
+#include "scene/splat_tile_streamer.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
@@ -57,6 +58,7 @@
 #include <algorithm>
 #include <cctype>
 #include <format>
+#include <glm/gtc/matrix_access.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <limits>
 #include <memory>
@@ -480,6 +482,79 @@ namespace lfs::vis {
             consolidated_compaction_thread_.join();
         }
         clearMeshCpuCache();
+    }
+
+    void SceneManager::updateTileStreams(const glm::mat4& view, const glm::mat4& projection,
+                                         const float viewport_height, const float vfov_radians,
+                                         const std::function<void()>& wake) {
+        constexpr const char* kTileStreamPanel = "lfs.tiles3d";
+        if (open_tile_stream_panel_ && gui::PanelRegistry::instance().get_panel(kTileStreamPanel)) {
+            gui::PanelRegistry::instance().set_panel_enabled(kTileStreamPanel, true);
+            open_tile_stream_panel_ = false;
+        }
+        const auto& settings = tile_stream_settings_;
+        for (auto it = tile_streamers_.begin(); it != tile_streamers_.end();) {
+            const auto* const node = scene_.getNodeByUuid(it->first);
+            if (!node || !node->model || node->model.get() != tile_stream_models_[it->first]) {
+                // Removed, or its model was replaced (project reopen, undo): stop streaming into it.
+                tile_stream_paths_.erase(it->first);
+                tile_stream_models_.erase(it->first);
+                it = tile_streamers_.erase(it);
+                continue;
+            }
+            // The viewport camera lives in visualizer world axes; model data in dataset axes.
+            const glm::mat4 model_to_world =
+                lfs::rendering::dataWorldTransformToVisualizerWorld(scene_.getWorldTransform(node->id));
+            const glm::mat4 clip = projection * view * model_to_world;
+            io::SplatTileView tile_view{
+                .camera = glm::vec3(glm::inverse(view * model_to_world)[3]),
+                .sse_per_error = viewport_height / (2.0f * std::tan(vfov_radians * 0.5f)),
+                .max_sse = settings.max_sse};
+            // Side planes only (Gribb-Hartmann); they meet at the camera, so they also cull behind it.
+            for (int i = 0; settings.cull && i < 4; ++i) {
+                const glm::vec4 row = glm::row(clip, i / 2);
+                const glm::vec4 plane = glm::row(clip, 3) + (i % 2 ? -row : row);
+                tile_view.planes[i] = plane / glm::length(glm::vec3(plane));
+            }
+            if (auto model = it->second->update(tile_view, settings, wake)) {
+                LOG_DEBUG("3D Tiles: '{}' now shows {} splats", node->name, model->size());
+                tile_stream_models_[it->first] = model.get();
+                auto previous = scene_.swapNodeModel(node->name, std::move(model));
+                previous.reset();
+            }
+            ++it;
+        }
+    }
+
+    void SceneManager::attachTileStream(const core::Uuid& node, std::shared_ptr<const io::SplatTileSource> source,
+                                        std::filesystem::path path) {
+        tile_streamers_[node] = std::make_unique<SplatTileStreamer>(std::move(source), makeViewerSplatTensorAllocator());
+        tile_stream_paths_[node] = std::move(path);
+        const auto* const scene_node = scene_.getNodeByUuid(node);
+        tile_stream_models_[node] = scene_node ? scene_node->model.get() : nullptr;
+        open_tile_stream_panel_ = true;
+    }
+
+    std::optional<std::filesystem::path> SceneManager::tileStreamPath(const core::Uuid& uuid) const {
+        const auto it = tile_stream_paths_.find(uuid);
+        if (it == tile_stream_paths_.end() || !tile_streamers_.contains(uuid))
+            return std::nullopt;
+        return it->second;
+    }
+
+    std::optional<SplatTileStreamStats> SceneManager::tileStreamStats() const {
+        if (tile_streamers_.empty())
+            return std::nullopt;
+        return tile_streamers_.begin()->second->stats();
+    }
+
+    std::optional<std::string> SceneManager::tileMode() const {
+        if (!tile_streamers_.empty())
+            return "stream";
+        for (const auto& uuid : flat_tile_nodes_)
+            if (scene_.getNodeByUuid(uuid))
+                return "flat";
+        return std::nullopt;
     }
 
     void SceneManager::setupEventHandlers() {
@@ -975,6 +1050,10 @@ namespace lfs::vis {
                 const auto* const added = scene_.getNodeById(node_id);
                 assert(added);
                 const std::string added_name = added ? added->name : name;
+                if (added && load_result.tile_source)
+                    attachTileStream(added->uuid, std::move(load_result.tile_source), path);
+                else if (added && load_result.is_tileset)
+                    recordFlatTileNode(added->uuid);
 
                 {
                     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -1173,6 +1252,10 @@ namespace lfs::vis {
             const auto* const added = scene_.getNodeById(node_id);
             assert(added);
             const std::string added_name = added ? added->name : name;
+            if (added && load_result.tile_source)
+                attachTileStream(added->uuid, std::move(load_result.tile_source), path);
+            else if (added && load_result.is_tileset)
+                recordFlatTileNode(added->uuid);
 
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);

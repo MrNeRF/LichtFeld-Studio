@@ -457,7 +457,8 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] std::vector<DialogFilter> pointCloudFilters() {
-            return {makeFilter("Point Cloud Files", {".ply", ".sog", ".ssog", ".spz", ".glb", ".rad", ".usd", ".usda", ".usdc", ".usdz"})};
+            // .json admits 3D Tiles tilesets; the loader recognizes them by content.
+            return {makeFilter("Point Cloud Files", {".ply", ".sog", ".ssog", ".spz", ".glb", ".rad", ".usd", ".usda", ".usdc", ".usdz", ".json"})};
         }
 
         [[nodiscard]] std::vector<DialogFilter> meshFilters() {

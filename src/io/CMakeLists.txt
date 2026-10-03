@@ -188,6 +188,8 @@ add_library(lfs_io STATIC
         ply_to_rad_lod.cpp
         formats/spz.hpp
         formats/spz.cpp
+        formats/tiles3d.cpp
+        splat_tile_source.cpp
         formats/usd.hpp
         formats/usd.cpp
         formats/usd_flat/crate.hpp
@@ -218,6 +220,8 @@ add_library(lfs_io STATIC
         loaders/ssog_loader.cpp
         loaders/spz_loader.hpp
         loaders/spz_loader.cpp
+        loaders/tiles3d_loader.hpp
+        loaders/tiles3d_loader.cpp
         loaders/usd_loader.hpp
         loaders/usd_loader.cpp
         loaders/rad_loader.hpp

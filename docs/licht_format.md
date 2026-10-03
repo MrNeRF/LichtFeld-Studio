@@ -81,6 +81,9 @@ crashes happen, and files outlive programs.
 - **Checksummed throughout.** Every record and payload carries a CRC32c to catch corruption.
 - **Organized into chapters.** State is split into typed chapters (model, scene graph, parameters,
   layout, sequencer, camera, …); each chapter is the single source of truth for its fields.
+- **Referenced streaming sources.** A splat node that streams its data (a live RAD file or a
+  3D Tiles tileset) is stored as a `REFS` reference to its source file, never embedded, and
+  reopening streams it again. Edits to such a node are not stored and block the save.
 - The `PROJ` chapter may optionally carry a `license` object with a non-empty `identifier` and an
   optional `notice`; omitted `license` means that no project license is declared.
 - **Autosave & recovery.** A periodic autosave writes to a separate `<project>.licht.autosave`

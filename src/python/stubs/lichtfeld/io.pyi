@@ -913,6 +913,9 @@ def export_html(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans
 def is_ssog_path(path: str | os.PathLike) -> bool:
     """Check for an SSOG bundle, manifest or directory."""
 
+def is_tiles3d_path(path: str | os.PathLike) -> bool:
+    """Check for a 3D Tiles tileset JSON."""
+
 def is_dataset_path(path: str | os.PathLike) -> bool:
     """Check if path is a dataset directory"""
 

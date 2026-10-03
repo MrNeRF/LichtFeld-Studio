@@ -89,6 +89,10 @@ PANEL_SPECS = {
         "Mesh to Splat", "FLOATING", 12, "rmlui/mesh2splat_panel.rml", "CONTENT",
         (420, 0), update_policy="dirty",
     ),
+    "tiles3d": _PanelSpec(
+        "lfs_plugins.tiles3d_panel", "Tiles3dPanel", "lfs.tiles3d", "3D Tiles Viewer Settings",
+        "FLOATING", 95, "rmlui/tiles3d_panel.rml", "CONTENT", (380, 0), has_poll=True, has_draw=True,
+    ),
     "plugin_marketplace": _PanelSpec(
         "lfs_plugins.plugin_marketplace_panel", "PluginMarketplacePanel",
         "lfs.plugin_marketplace", "Plugin Marketplace", "FLOATING", 91,
@@ -323,6 +327,9 @@ def _build_builtin_panel_steps(lf):
     def mesh2splat_panel():
         _register_lazy_panel(lf, "mesh2splat")
 
+    def tiles3d_panel():
+        _register_lazy_panel(lf, "tiles3d")
+
     def plugin_marketplace_panel():
         _register_lazy_panel(lf, "plugin_marketplace")
 
@@ -360,6 +367,7 @@ def _build_builtin_panel_steps(lf):
         ("scripts_panel", scripts_panel),
         ("preferences_panel", preferences_panel),
         ("mesh2splat_panel", mesh2splat_panel),
+        ("tiles3d_panel", tiles3d_panel),
         ("plugin_marketplace_panel", plugin_marketplace_panel),
         ("asset_manager_panel", asset_manager_panel),
         ("overlays", overlays),
