@@ -21,6 +21,8 @@ def test_fps_resize_scale_and_background_updates(tmp_path):
     if not executable:
         pytest.skip("requires LFS_EXECUTABLE and an isolated X display")
     image_grab = pytest.importorskip("PIL.ImageGrab")
+    image_chops = pytest.importorskip("PIL.ImageChops")
+    image = pytest.importorskip("PIL.Image")
     endpoint = f"http://127.0.0.1:{int(os.environ.get('LFS_MCP_PORT', '45696'))}/mcp"
     display = os.environ.get("DISPLAY", ":97")
     port = endpoint.split(":")[-1].split("/")[0]
@@ -57,7 +59,8 @@ def test_fps_resize_scale_and_background_updates(tmp_path):
 
     def editor(code):
         result = _tool(endpoint, "editor_run", {"code": code, "show_console": False})
-        assert result["completed"], result
+        assert result["completed"] and result["success"], result
+        assert "Traceback (most recent call last)" not in result["output"]["text"], result
 
     def xd(*args):
         subprocess.run(["xdotool", *map(str, args)], env=env, check=True)
@@ -83,12 +86,61 @@ def test_fps_resize_scale_and_background_updates(tmp_path):
                 assert time.monotonic() < deadline, "scene never rendered"
                 time.sleep(0.1)
             quiet()
-            window = subprocess.check_output(["xdotool", "search", "--pid", str(app.pid)], env=env, text=True).splitlines()[0]
+            window = subprocess.check_output(
+                ["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)], env=env, text=True
+            ).splitlines()[0]
             xd("windowmove", window, 0, 0)
             xd("windowsize", window, 1600, 1000)
             xd("windowfocus", window)
             xd("mousemove", 0, 1300)
             quiet()
+            # A plugin callback changes its document while the pointer is outside.
+            template = tmp_path / "callback.rml"
+            template.write_text('<rml><head></head><body><div id="value">Waiting</div></body></rml>')
+            module = tmp_path / "callback_probe.py"
+            callback_done = tmp_path / "callback.done"
+            module.write_text(
+                "import lichtfeld as lf\nimport threading\nfrom pathlib import Path\n"
+                "class CallbackPanel(lf.ui.Panel):\n"
+                "    id = 'test.callback'\n    label = 'Callback'\n"
+                "    space = lf.ui.PanelSpace.FLOATING\n    size = (300, 120)\n"
+                f"    template = {str(template)!r}\n"
+                "    def on_mount(self, doc):\n"
+                "        self.doc = doc\n        globals()['panel'] = self\n"
+                "    def finish(self):\n"
+                "        self.doc.get_element_by_id('value').set_inner_rml('Completed')\n"
+                f"        Path({str(callback_done)!r}).touch()\n"
+                "def later():\n"
+                "    threading.Timer(3, lambda: lf.ui.schedule_on_ui_thread(panel.finish)).start()\n"
+            )
+            editor(
+                f"import sys\nsys.path.insert(0, {str(tmp_path)!r})\n"
+                "import lichtfeld as lf\nimport callback_probe as cp\n"
+                "lf.register_class(cp.CallbackPanel)\nlf.ui.set_panel_enabled('test.callback', True)"
+            )
+            quiet()
+            capture("callback-before")
+            editor("assert hasattr(cp, 'panel')\ncp.later()")
+            time.sleep(0.1)
+            before = _ledger(endpoint)
+            deadline = time.monotonic() + 8
+            while not callback_done.exists():
+                assert time.monotonic() < deadline, "plugin callback never ran"
+                time.sleep(0.05)
+            after = quiet()
+            assert after["frames_presented"] > before["frames_presented"]
+            assert after["views_rendered"] == before["views_rendered"]
+            capture("callback-after")
+            # Exclude the FPS/status bar: only the floating panel may differ.
+            panel_rect = (620, 430, 980, 610)
+            with image.open(tmp_path / "callback-before.png") as before_image, image.open(
+                tmp_path / "callback-after.png"
+            ) as after_image:
+                assert image_chops.difference(before_image.crop(panel_rect), after_image.crop(panel_rect)).getbbox()
+            editor("lf.ui.set_panel_enabled('test.callback', False)\nlf.unregister_class(cp.CallbackPanel)")
+            stopped = quiet()
+            time.sleep(1.2)
+            assert _ledger(endpoint)["frames_presented"] == stopped["frames_presented"]
             # A Python callback must reveal the HUD without any unrelated input.
             before = _ledger(endpoint)
             editor("import lichtfeld as lf\nlf.ui.toggle_vram_hud()")
