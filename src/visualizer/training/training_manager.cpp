@@ -2566,14 +2566,6 @@ namespace lfs::vis {
         return params;
     }
 
-    void TrainerManager::importTrainingParams(
-        const lfs::core::param::TrainingParameters& params,
-        ParameterManager& parameter_manager) {
-        parameter_manager.importTrainingParams(params);
-        pending_opt_params_ = params.optimization;
-        pending_dataset_params_ = params.dataset;
-    }
-
     void TrainerManager::applyPendingParams() {
         if (!trainer_)
             return;

@@ -360,6 +360,10 @@ namespace lfs::vis {
 
         if (!import_dataset)
             candidate->dataset = dataset_config_;
+        // Config files change settings, not the loaded dataset or its output destination.
+        candidate->dataset.data_path = dataset_config_.data_path;
+        candidate->dataset.output_path = dataset_config_.output_path;
+        candidate->dataset.output_path_explicit = dataset_config_.output_path_explicit;
         // The upstream parser validates the entire configuration before applying it.
         candidate->optimization.apply_step_scaling();
         importTrainingParams(*candidate);

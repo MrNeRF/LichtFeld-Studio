@@ -44,7 +44,7 @@ namespace lfs::vis {
         // Import params: overwrites both session and current for active strategy
         void importParams(const lfs::core::param::OptimizationParameters& params);
 
-        // Import editable configuration, preserving dataset fields omitted by legacy files.
+        // Import editable configuration, preserving loaded dataset paths and omitted fields.
         std::expected<void, lfs::Error> importConfigFile(const std::filesystem::path& path, bool import_dataset = true);
 
         // Import a fully resolved training configuration (e.g., checkpoint restore).

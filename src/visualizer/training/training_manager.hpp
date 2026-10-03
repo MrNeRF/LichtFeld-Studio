@@ -213,9 +213,6 @@ namespace lfs::vis {
         const lfs::core::param::DatasetConfig& getEditableDatasetParams() const;
         [[nodiscard]] lfs::core::param::TrainingParameters getEditableTrainingParams(
             const ParameterManager& parameter_manager) const;
-        void importTrainingParams(
-            const lfs::core::param::TrainingParameters& params,
-            ParameterManager& parameter_manager);
         void applyPendingParams();
 
     private:

@@ -95,6 +95,52 @@ namespace {
         std::filesystem::remove(path);
     }
 
+    TEST(ParameterManagerTest, ConfigImportFromAnotherDatasetPreservesLoadedPaths) {
+        lfs::vis::ParameterManager source;
+        ASSERT_TRUE(source.ensureLoaded());
+        source.getDatasetConfig().max_width = 800;
+        source.modifyActiveParams([](auto& params) { params.iterations = 1200; });
+        const auto path = unique_temp_config_path();
+        const auto exported = source.createForDataset("dataset_a", "output_a");
+        ASSERT_TRUE(lfs::core::param::save_training_parameters_to_json(exported, path));
+
+        for (const bool import_dataset : {false, true}) {
+            for (const bool output_explicit : {false, true}) {
+                SCOPED_TRACE(std::format("import_dataset={}, output_explicit={}", import_dataset, output_explicit));
+                lfs::vis::ParameterManager target;
+                ASSERT_TRUE(target.ensureLoaded());
+                auto* previous = lfs::vis::services().paramsOrNull();
+                struct RestoreService {
+                    lfs::vis::ParameterManager* previous;
+                    ~RestoreService() { lfs::vis::services().set(previous); }
+                } restore{previous};
+                lfs::vis::services().set(&target);
+                auto& dataset = target.getDatasetConfig();
+                dataset.data_path = "dataset_b";
+                dataset.output_path = "output_b";
+                dataset.output_path_explicit = output_explicit;
+                dataset.max_width = 1600;
+                ASSERT_TRUE(target.importConfigFile(path, import_dataset));
+                EXPECT_EQ(dataset.data_path, std::filesystem::path("dataset_b"));
+                EXPECT_EQ(dataset.output_path, std::filesystem::path("output_b"));
+                EXPECT_EQ(dataset.output_path_explicit, output_explicit);
+                EXPECT_EQ(dataset.max_width, import_dataset ? 800 : 1600);
+                EXPECT_EQ(target.copyActiveParams().iterations, 1200u);
+
+                lfs::vis::TrainerManager trainer_manager;
+                const auto training_params = trainer_manager.getEditableTrainingParams(target);
+                EXPECT_EQ(training_params.dataset.data_path, dataset.data_path);
+                EXPECT_EQ(training_params.dataset.output_path, dataset.output_path);
+                EXPECT_EQ(training_params.dataset.output_path_explicit, output_explicit);
+                EXPECT_EQ(training_params.dataset.max_width, dataset.max_width);
+                const auto saved_dataset = training_params.dataset.to_json();
+                EXPECT_EQ(saved_dataset.at("data_path"), "dataset_b");
+                EXPECT_EQ(saved_dataset.at("output_folder"), "output_b");
+            }
+        }
+        std::filesystem::remove(path);
+    }
+
     TEST(ParameterManagerTest, InvalidDatasetImportDoesNotPartiallyChangeParameters) {
         lfs::vis::ParameterManager manager;
         ASSERT_TRUE(manager.ensureLoaded());
@@ -305,7 +351,7 @@ namespace {
         EXPECT_TRUE(imported->server.tcp_connection);
         EXPECT_EQ(imported->server.tcp_server_connection_port, 12345);
 
-        trainer_manager.importTrainingParams(*imported, parameter_manager);
+        parameter_manager.importTrainingParams(*imported);
         const auto training_params = trainer_manager.getEditableTrainingParams(parameter_manager);
         EXPECT_EQ(training_params.dataset.max_width, 800);
         EXPECT_EQ(training_params.dataset.resize_factor, 2);
