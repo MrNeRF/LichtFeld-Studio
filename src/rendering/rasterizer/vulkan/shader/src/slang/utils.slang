@@ -116,6 +116,16 @@ float3x3 quat_to_rotmat(float4 q) {
 }
 
 
+// A projected UT ellipse approximates a GUT footprint; it is not a
+// conservative bound for the 3D ray alpha test at oblique, thin ellipsoids.
+[ForceInline]
+bool gut_rectilinear_bounds(uint camera_model, uint profile, uint lod_flags) {
+    const uint model = base_camera_model(camera_model);
+    return is_gut_projection_mode(camera_model) && profile == 0u &&
+           (lod_flags & 4u) == 0u &&
+           (model == uint(CameraModel::PINHOLE) || model == uint(CameraModel::ORTHO));
+}
+
 struct Camera : IDifferentiable
 {
     float3x4 world_view_transform;

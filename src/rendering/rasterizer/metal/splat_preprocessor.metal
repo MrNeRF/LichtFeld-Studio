@@ -260,6 +260,8 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     float3 conic;
     float radius;
     float2 panorama_radius=0,portal_axis=0,portal_extent=0,gaussian_support=0;
+    float2 gut_lo=0,gut_hi=float2(frame.extent.xy);
+    bool gut_rect_bounds=false;
     if(primitive_mode==1u) {
         // Independent point path: no covariance, quaternion or Gaussian scale work.
         radius=2.0f;
@@ -353,6 +355,36 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
             const float3 ga=linear*rotate_axis(q,float3(base_scale.x,0,0));
             const float3 gb=linear*rotate_axis(q,float3(0,base_scale.y,0));
             const float3 gc=linear*rotate_axis(q,float3(0,0,base_scale.z));
+            if(!portal && !spark && !equirectangular) {
+                // The UT ellipse does not enclose the actual ray alpha support.
+                // Project the source ellipsoid conservatively, including cropped
+                // cameras; keep the old rectangle as a union for overlays.
+                gut_rect_bounds=true;
+                const float3 rx=float3(ga.x,gb.x,gc.x),ry=float3(ga.y,gb.y,gc.y),rz=float3(ga.z,gb.z,gc.z);
+                const float r2=2.f*(opacity_power(source_alpha,false)+1e-4f);
+                const float denominator=view.z*view.z-r2*dot(rz,rz);
+                float2 bound_center,bound_extent;
+                bool finite_bound=orthographic || (view.z>sqrt(r2*dot(rz,rz))*1.001f+frame.clip_scale.x && denominator>0.f);
+                if(finite_bound) {
+                    if(orthographic) {
+                        bound_center=view.xy;
+                        bound_extent=sqrt(r2*float2(dot(rx,rx),dot(ry,ry)));
+                    } else {
+                        bound_center=(view.xy*view.z-r2*float2(dot(rx,rz),dot(ry,rz)))/denominator;
+                        const float3 tx=view.z*rx-view.x*rz,ty=view.z*ry-view.y*rz;
+                        // Omit a non-negative covariance minor to enlarge the
+                        // tangent bound without subtractive cancellation.
+                        bound_extent=sqrt(r2*float2(dot(tx,tx),dot(ty,ty)))/denominator;
+                    }
+                    bound_center=bound_center*frame.intrinsics.xy+frame.intrinsics.zw-.5f;
+                    bound_extent=bound_extent*frame.intrinsics.xy*1.001f+1.f;
+                    if(all(isfinite(bound_center)) && all(isfinite(bound_extent))) {
+                        gut_lo=bound_center-bound_extent;gut_hi=bound_center+bound_extent;
+                    }
+                }
+                // Near-plane crossings and non-finite tangents retain the
+                // complete viewport; shading still tests each exact 3D ray.
+            }
             const float determinant=dot(ga,cross(gb,gc));
             if(!isfinite(determinant)||abs(determinant)<=1e-30f)return;
             // A Frobenius bound encloses the entire view-space alpha ellipsoid,
@@ -424,6 +456,10 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     const float2 support=equirectangular?panorama_radius:
         (tight_bounds && primitive_mode==0u?gaussian_support:float2(radius));
     float2 lo=clamp(floor(center-support),0.0f,extent),hi=clamp(ceil(center+support),0.0f,extent);
+    if(gut_rect_bounds) {
+        lo=min(lo,clamp(floor(gut_lo),0.f,extent));
+        hi=max(hi,clamp(ceil(gut_hi),0.f,extent));
+    }
     if(equirectangular) {
         const uint2 span=panorama_tile_span(center.x,support.x,frame.panorama.x,frame.extent.x);
         lo.x=float(span.x);hi.x=float(span.y);

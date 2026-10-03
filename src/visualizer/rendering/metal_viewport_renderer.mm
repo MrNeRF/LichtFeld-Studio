@@ -1092,8 +1092,12 @@ namespace lfs::vis {
             const auto camera = request.frame_view.translation;
             projection.camera_local = {camera.x, camera.y, camera.z, 1};
             auto intrinsics = request.frame_view.getCameraIntrinsics();
+            // Rectilinear projection and GUT rays use crop-local pixels.
+            // Preserve full-camera dimensions/origin separately for binning,
+            // overlays, and periodic panorama projection.
             projection.intrinsics = {intrinsics.focal_x, intrinsics.focal_y,
-                                     intrinsics.center_x, intrinsics.center_y};
+                                     intrinsics.center_x - float(request.frame_view.subregion_origin.x),
+                                     intrinsics.center_y - float(request.frame_view.subregion_origin.y)};
             // Viewer raster clipping differs from the desktop projection matrix's
             // near/far planes. Derive the reference near threshold at configure.
             const bool portal = request.splat_render_profile == 1;
@@ -1112,6 +1116,7 @@ namespace lfs::vis {
             projection.panorama = {float(panorama_size.x), float(panorama_size.y), float(request.frame_view.subregion_origin.x), float(request.frame_view.subregion_origin.y)};
             SceneBuffers scene{};
             OverlayBuffers overlay{};
+            overlay.render_origin = {float(request.frame_view.subregion_origin.x), float(request.frame_view.subregion_origin.y), 0, 0};
             if (request.scene.model_transforms && !request.scene.model_transforms->empty()) {
                 const auto& transforms = *request.scene.model_transforms;
                 if (transforms.size() > 1 && (!request.scene.transform_indices || !request.scene.transform_indices->is_valid()))
@@ -1164,7 +1169,7 @@ namespace lfs::vis {
                 allocate(f.selection_colors, sizeof(request.overlay.selection_colors), MTLResourceStorageModeShared);
                 std::memcpy(f.selection_colors.contents, request.overlay.selection_colors.data(), sizeof(request.overlay.selection_colors));
                 overlay = {{f.overlay_parameters, 0}, {f.overlay_flags, 0}, {}, {}, {f.overlay_nodes, 0}, {f.selection_colors, 0}, 207, uint32_t(node_count)};
-                overlay.render_origin = {float(request.frame_view.subregion_origin.x), float(request.frame_view.subregion_origin.y), 0, 0};
+                overlay.render_origin = {projection.panorama.z, projection.panorama.w, 0, 0};
             }
             std::array<const core::Tensor*, 11> tensors{&model.means_raw(), &model.scaling_raw(), &model.rotation_raw(),
                                                         &model.opacity_raw(), &model.sh0_raw(), degree ? &model.shN_raw() : nullptr,

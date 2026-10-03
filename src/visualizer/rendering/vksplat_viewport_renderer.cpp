@@ -8554,8 +8554,14 @@ namespace lfs::vis {
         const bool higs_warmup_frame = higs_candidate && macro_chain_warmup_pending_ &&
                                        !deterministic_export;
         const bool higs_active = higs_candidate && !higs_warmup_frame;
-        if ((higs_active || request.gut) && deterministic_export &&
+        const bool gut_aligned_band = request.gut &&
+            uniforms.render_origin_x % TILE_WIDTH == 0u &&
+            uniforms.render_origin_y % TILE_HEIGHT == 0u;
+        if ((higs_active || gut_aligned_band) && deterministic_export &&
             request.frame_view.subregion_full_size.y > 0) {
+            // GUT remaps full-image tiles into its local grid, which requires
+            // tile-aligned origins. Arbitrary crops use crop-local binning and
+            // retain full-image ray coordinates in the alpha pass.
             // Keep projection and coverage decisions in full-image coordinates.
             // HiGS also retains the full grid: repartitioning its depth waves
             // per band changes half-precision blending and median depth.

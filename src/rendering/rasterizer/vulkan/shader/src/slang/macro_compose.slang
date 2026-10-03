@@ -217,16 +217,19 @@ bool depth_intersects_pixels(Splat_2D_AlphaBlend g, uint2 origin, uint2 maximum,
     [numthreads(HIGS_TILE_WIDTH, HIGS_TILE_HEIGHT, 1)] void main(uint3 groupThreadID : SV_GroupThreadID,
                                                                  uint3 groupID : SV_GroupID,
                                                                  uniform Uniforms uniforms) {
-    const uint2 output_pixel = groupID.xy * uint2(HIGS_TILE_WIDTH, HIGS_TILE_HEIGHT) + groupThreadID.xy;
+    const uint2 tile_size = uint2(HIGS_TILE_WIDTH, HIGS_TILE_HEIGHT);
+    const uint2 render_origin = full_frame_binning(uniforms)
+        ? uint2(uniforms.render_origin_x, uniforms.render_origin_y) : uint2(0u);
+    // Keep each wave on one full-image tile, even for an unaligned crop.
+    // Leading pixels underflow and fail the output bounds check; the indirect
+    // dispatch includes the trailing partial tile as well.
+    const uint2 tile_coord = groupID.xy + render_origin / tile_size;
+    const uint2 pix_coord = tile_coord * tile_size + groupThreadID.xy;
+    const uint2 output_pixel = pix_coord - render_origin;
     const bool is_inside = output_pixel.x < uniforms.image_width && output_pixel.y < uniforms.image_height;
     const bool exact_depth = (uniforms.mip_filter & 2u) != 0u;
     if (!is_inside && !exact_depth)
         return;
-
-    const uint2 render_origin = full_frame_binning(uniforms)
-        ? uint2(uniforms.render_origin_x, uniforms.render_origin_y) : uint2(0u);
-    const uint2 pix_coord = output_pixel + render_origin;
-    const uint2 tile_coord = groupID.xy + render_origin / uint2(HIGS_TILE_WIDTH, HIGS_TILE_HEIGHT);
 
     const uint macro_tile_idx =
         (tile_coord.y / HIGS_MACRO_TILE_HEIGHT_TILES) * higs_macro_grid_width(uniforms.grid_width) +

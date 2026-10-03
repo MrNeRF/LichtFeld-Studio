@@ -477,6 +477,63 @@ float3 rotation_column(float3x3 rotation, uint column) {
     return float3(rotation[0][2], rotation[1][2], rotation[2][2]);
 }
 
+// Conservative projection of the actual 3D alpha-support ellipsoid.
+// Keep UT centers/conics for shading overlays, but never use their approximate
+// ellipse to discard a tile containing a valid 3D ray contribution.
+[ForceInline]
+void gut_support_pixel_bounds(Gaussian_3D g, Camera cam, float3 mean_ws,
+                              StructuredBuffer<float4> model_rows, uint model_base,
+                              bool transformed, out float2 lo, out float2 hi) {
+    const float3x3 rotation = quat_to_rotmat(safe_quat_normalize(g.rotations));
+    const float3 scale = max(g.scales, float3(1e-8f));
+    float3 axes[3];
+    for (uint i = 0u; i < 3u; ++i) {
+        float3 axis = rotation_column(rotation, i) * scale[i];
+        if (transformed) {
+            axis = float3(dot(model_rows[model_base].xyz, axis),
+                          dot(model_rows[model_base + 1u].xyz, axis),
+                          dot(model_rows[model_base + 2u].xyz, axis));
+        }
+        axes[i] = mul(float3x3(cam.world_view_transform), axis);
+    }
+    const float3 mean = geom_transform_points(mean_ws, cam.world_view_transform);
+    const float3 row_x = float3(axes[0].x, axes[1].x, axes[2].x);
+    const float3 row_y = float3(axes[0].y, axes[1].y, axes[2].y);
+    const float3 row_z = float3(axes[0].z, axes[1].z, axes[2].z);
+    const float radius2 = 2.0f * (power_threshold_for_opacity(g.opacities) + 1e-4f);
+    float2 center, extent;
+    if (cam.model == int(CameraModel::ORTHO)) {
+        center = mean.xy;
+        extent = sqrt(radius2 * float2(dot(row_x, row_x), dot(row_y, row_y)));
+    } else {
+        const float zz = dot(row_z, row_z);
+        // Ellipsoids crossing the near plane have unbounded pinhole support.
+        // Preserve them conservatively rather than divide by a small/negative
+        // tangent denominator or let a non-finite bound drop the primitive.
+        const float denominator = mean.z * mean.z - radius2 * zz;
+        if (!(mean.z > sqrt(radius2 * zz) * 1.001f + NEAR_CLIP) ||
+            !isfinite(denominator) || denominator <= 0.0f) {
+            lo = float2(0.0f); hi = float2(cam.W, cam.H);
+            return;
+        }
+        center = (mean.xy * mean.z - radius2 *
+                  float2(dot(row_x, row_z), dot(row_y, row_z))) / denominator;
+        const float3 x_tangent = mean.z * row_x - mean.x * row_z;
+        const float3 y_tangent = mean.z * row_y - mean.y * row_z;
+        // Dropping the non-negative covariance-minor term from the exact
+        // discriminant enlarges the bound and avoids subtractive cancellation.
+        extent = sqrt(radius2 * float2(dot(x_tangent, x_tangent),
+                                       dot(y_tangent, y_tangent))) / denominator;
+    }
+    center = center * float2(cam.fx, cam.fy) + float2(cam.cx, cam.cy) - 0.5f;
+    extent = extent * float2(cam.fx, cam.fy) * 1.001f + 1.0f;
+    if (!all(isfinite(center)) || !all(isfinite(extent))) {
+        lo = float2(0.0f); hi = float2(cam.W, cam.H);
+        return;
+    }
+    lo = center - extent; hi = center + extent;
+}
+
 [ForceInline]
 bool valid_gut_image_point(float3 projected, Camera cam) {
     return projected.z > 0.0f &&
@@ -1020,6 +1077,22 @@ void main(
     rectangle rect_tile_space = equirectangular_camera
         ? get_wrapped_rectangle_tile_space(splat_dist.xyz_vs.xy, radii, grid_height, grid_width)
         : get_rectangle_tile_space(splat_dist.xyz_vs.xy, radii, bin_grid_height, bin_grid_width);
+#if LFS_3DGUT_PROJECTION && EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+    if (gut_rectilinear_bounds(uniforms.camera_model, uniforms.splat_render_profile, uniforms.lod_enabled)) {
+        float2 lo, hi;
+        gut_support_pixel_bounds(gauss, cam, mean_ws, model_transforms,
+                                 model_transform_base, model_transform_enabled, lo, hi);
+        if (!full_frame_binning(uniforms)) {
+            const float2 origin = float2(uniforms.render_origin_x, uniforms.render_origin_y);
+            lo -= origin; hi -= origin;
+        }
+        // Union with the existing UT rectangle also preserves overlay support.
+        rect_tile_space.min_x = min(rect_tile_space.min_x, uint16_t(floor(clamp(lo.x / TILE_WIDTH, 0.0f, float(bin_grid_width)))));
+        rect_tile_space.min_y = min(rect_tile_space.min_y, uint16_t(floor(clamp(lo.y / TILE_HEIGHT, 0.0f, float(bin_grid_height)))));
+        rect_tile_space.max_x = max(rect_tile_space.max_x, uint16_t(ceil(clamp(hi.x / TILE_WIDTH, 0.0f, float(bin_grid_width)))));
+        rect_tile_space.max_y = max(rect_tile_space.max_y, uint16_t(ceil(clamp(hi.y / TILE_HEIGHT, 0.0f, float(bin_grid_height)))));
+    }
+#endif
     const rectangle render_rect = banded_gut ? clip_to_render_grid(rect_tile_space, uniforms) : rect_tile_space;
 
     int32_t n_tiles = int32_t(render_rect.max_x - render_rect.min_x) * int32_t(render_rect.max_y - render_rect.min_y);
@@ -1031,7 +1104,7 @@ void main(
     }
 
   #if TILE_CULLING_MODE == 2
-    if (!equirectangular_camera) {
+    if (!equirectangular_camera && !gut_rectilinear_bounds(uniforms.camera_model, uniforms.splat_render_profile, uniforms.lod_enabled)) {
         n_tiles = no_diff count_ellipse_grid_overlaps(
             splat_dist.xyz_vs.xy, splat_dist.inv_cov_vs_opac.xyz/(extend*extend),
             render_rect,

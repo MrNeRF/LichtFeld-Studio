@@ -340,6 +340,36 @@ if(TARGET lfs_visualizer AND TARGET lfs_vulkan_rasterizer_macos_reference)
                 set_tests_properties(MacViewerParity_${_mode} PROPERTIES
                     LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
             endforeach()
+            foreach(_crop_profile IN ITEMS studio portal gut)
+                foreach(_crop_mode IN ITEMS aligned unaligned unaligned_depth)
+                    set(_crop_args --smoke --subregion --deterministic-reference)
+                    if(NOT _crop_mode STREQUAL "aligned")
+                        list(APPEND _crop_args --unaligned-subregion)
+                    endif()
+                    if(_crop_mode STREQUAL "unaligned_depth")
+                        list(APPEND _crop_args --depth)
+                    endif()
+                    if(NOT _crop_profile STREQUAL "studio")
+                        list(APPEND _crop_args --${_crop_profile})
+                    endif()
+                    add_test(NAME MacViewerParity_subregion_${_crop_profile}_${_crop_mode} COMMAND mac_viewer_backend_benchmark
+                        ${_crop_args} --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-subregion-${_crop_profile}-${_crop_mode}.json")
+                    set_tests_properties(MacViewerParity_subregion_${_crop_profile}_${_crop_mode} PROPERTIES
+                        LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+                endforeach()
+            endforeach()
+            foreach(_tail_mode IN ITEMS pinhole ortho export_scale subregion)
+                set(_tail_args)
+                if(NOT _tail_mode STREQUAL "pinhole")
+                    list(APPEND _tail_args --${_tail_mode})
+                endif()
+                add_test(NAME MacViewerParity_gut_tail_${_tail_mode} COMMAND mac_viewer_backend_benchmark
+                    --gut-tail-fixture --count 4 --width 960 --height 540 --warmup 2 --samples 2
+                    --verify-parity --deterministic-reference ${_tail_args}
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-gut-tail-${_tail_mode}.json")
+                set_tests_properties(MacViewerParity_gut_tail_${_tail_mode} PROPERTIES
+                    LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            endforeach()
             foreach(_gut_mode IN ITEMS mip ortho depth export_scale near saturation)
                 add_test(NAME MacViewerParity_gut_${_gut_mode} COMMAND mac_viewer_backend_benchmark
                     --smoke --gut --${_gut_mode}

@@ -165,7 +165,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
     // only rasterize the macro tiles in this output band.
     const uint macro_y = macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT;
     if (full_frame_binning(uniforms) &&
-        (macro_y < render_origin.y || macro_y >= render_origin.y + uniforms.image_height)) {
+        (macro_y + HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT <= render_origin.y ||
+         macro_y >= render_origin.y + uniforms.image_height)) {
         if (thread_rank == 0u)
             macro_batch_active_mask[macro_batch_idx] = 0u;
         return;
@@ -263,8 +264,10 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             any |= shared_tile_masks[mini_batch * HIGS_MACRO_TILE_SIZE_TILES + thread_rank];
         const uint tile_x = macro_tile_x * HIGS_MACRO_TILE_WIDTH_TILES + (thread_rank % HIGS_MACRO_TILE_WIDTH_TILES);
         const uint tile_y = macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES + (thread_rank / HIGS_MACRO_TILE_WIDTH_TILES);
-        const bool tile_in_image = tile_x * HIGS_TILE_WIDTH - render_origin.x < uniforms.image_width &&
-                                   tile_y * HIGS_TILE_HEIGHT - render_origin.y < uniforms.image_height;
+        const bool tile_in_image = tile_x * HIGS_TILE_WIDTH < render_origin.x + uniforms.image_width &&
+                                   (tile_x + 1u) * HIGS_TILE_WIDTH > render_origin.x &&
+                                   tile_y * HIGS_TILE_HEIGHT < render_origin.y + uniforms.image_height &&
+                                   (tile_y + 1u) * HIGS_TILE_HEIGHT > render_origin.y;
         if (any != 0u && tile_in_image) {
             uint q;
             InterlockedAdd(shared_tile_queue_count, 1u, q);
