@@ -365,6 +365,29 @@ TEST(MetricsEvalMask, SidecarWinsOverAlpha) {
     expect_keep(mask, {kExpectedKeep.begin(), kExpectedKeep.end()}, "sidecar precedence");
 }
 
+// Fails if the evaluation alpha is binarised like a keep mask (soft edges composite wrongly), is not Float32
+// (the composite rejects it and every view is skipped) or if a sidecar mask replaces the image's own alpha.
+TEST(MetricsEvalMask, EvalAlphaKeepsSoftCoverage) {
+    if (!cuda_available())
+        GTEST_SKIP() << "CUDA not available";
+    UniqueTempDir tmp("lfs_eval_alpha_soft");
+    const auto image_path = tmp.path() / "rgba.png";
+    const auto mask_path = tmp.path() / "mask.png";
+    write_rgba_png(image_path, {kBandBytes.begin(), kBandBytes.end()}, kBandH, kBandW);
+    write_gray_png(mask_path, std::vector<uint8_t>(6, 0), kBandH, kBandW);
+    auto cam = make_camera(image_path, mask_path, kBandW, kBandH);
+    cam->set_has_alpha(true);
+
+    const auto alpha = lfs::training::load_eval_alpha(*cam, MetricsMaskLoadConfig{});
+    ASSERT_EQ(alpha.dtype(), DataType::Float32);
+    ASSERT_EQ(alpha.ndim(), 2u);
+    ASSERT_EQ(alpha.shape()[0], static_cast<size_t>(kBandH));
+    ASSERT_EQ(alpha.shape()[1], static_cast<size_t>(kBandW));
+    const auto values = alpha.cpu().to_vector();
+    for (size_t i = 0; i < kBandBytes.size(); ++i)
+        EXPECT_NEAR(values[i], kBandBytes[i] / 255.0f, 1e-6f) << "pixel " << i;
+}
+
 TEST(MetricsEvalMask, InMemoryMaskAndCacheKeying) {
     if (!cuda_available())
         GTEST_SKIP() << "CUDA not available";

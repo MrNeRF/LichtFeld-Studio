@@ -240,3 +240,40 @@ TEST_F(ImageKernelsTest, LanczosRejectsNonPositiveOutputExtentBeforeAllocation) 
     EXPECT_FALSE(lanczos_resize(input, 0, 2, 2, nullptr).is_valid());
     EXPECT_FALSE(lanczos_resize(input, 2, -1, 2, nullptr).is_valid());
 }
+
+// Fails if the target keeps the colour stored under transparent pixels (the render shows the background there),
+// if the per-pixel background is ignored, or if uint8 targets are not normalised.
+TEST_F(ImageKernelsTest, CompositeOverBackgroundShowsBackgroundWhereTransparent) {
+    const std::vector<float> rgb{0.2f, 0.9f, 0.5f, 0.4f, 0.1f, 0.3f, 0.7f, 0.6f, 0.8f, 0.0f, 1.0f, 0.25f};
+    const std::vector<float> alpha{1.0f, 0.0f, 0.5f, 0.25f};
+    const std::vector<float> color{0.1f, 0.2f, 0.3f};
+    std::vector<float> backdrop(12);
+    for (size_t i = 0; i < backdrop.size(); ++i)
+        backdrop[i] = 0.05f * static_cast<float>(i);
+    const auto rgb_gpu = Tensor::from_vector(rgb, {3, 2, 2}, Device::CUDA);
+    const auto alpha_gpu = Tensor::from_vector(alpha, {2, 2}, Device::CUDA);
+
+    const auto solid = composite_over_background(rgb_gpu, alpha_gpu, Tensor::from_vector(color, {3}, Device::CUDA))
+                           .cpu()
+                           .to_vector();
+    const auto image = composite_over_background(rgb_gpu, alpha_gpu, Tensor::from_vector(backdrop, {3, 2, 2}, Device::CUDA))
+                           .cpu()
+                           .to_vector();
+    for (size_t c = 0; c < 3; ++c)
+        for (size_t p = 0; p < 4; ++p) {
+            const size_t i = c * 4 + p;
+            EXPECT_NEAR(solid[i], rgb[i] * alpha[p] + color[c] * (1.0f - alpha[p]), 1e-6f) << i;
+            EXPECT_NEAR(image[i], rgb[i] * alpha[p] + backdrop[i] * (1.0f - alpha[p]), 1e-6f) << i;
+        }
+
+    std::vector<uint8_t> bytes(rgb.size());
+    for (size_t i = 0; i < rgb.size(); ++i)
+        bytes[i] = static_cast<uint8_t>(std::lround(rgb[i] * 255.0f));
+    auto bytes_gpu = Tensor::empty({3, 2, 2}, Device::CUDA, DataType::UInt8);
+    ASSERT_EQ(cudaMemcpy(bytes_gpu.ptr<uint8_t>(), bytes.data(), bytes.size(), cudaMemcpyHostToDevice), cudaSuccess);
+    const auto from_bytes = composite_over_background(bytes_gpu, alpha_gpu, Tensor::from_vector(color, {3}, Device::CUDA))
+                                .cpu()
+                                .to_vector();
+    for (size_t i = 0; i < from_bytes.size(); ++i)
+        EXPECT_NEAR(from_bytes[i], bytes[i] / 255.0f * alpha[i % 4] + color[i / 4] * (1.0f - alpha[i % 4]), 1e-6f) << i;
+}

@@ -9,6 +9,7 @@
 #include "io/cuda/image_format_kernels.cuh"
 #include "training/kernels/mask_preprocess.hpp"
 
+#include <cassert>
 #include <stdexcept>
 #include <utility>
 
@@ -169,6 +170,27 @@ namespace lfs::training {
         const lfs::core::Camera& camera,
         const MetricsMaskLoadConfig& config) {
         return load_rgba_metrics_inputs(camera, config);
+    }
+
+    lfs::core::Tensor load_eval_alpha(
+        const lfs::core::Camera& camera,
+        const MetricsMaskLoadConfig& config) {
+        const bool undistort = camera.is_undistort_prepared() && config.apply_undistortion;
+        const auto rgba = lfs::io::load_rgba_image_cpu_decoded(
+            camera.image_path(),
+            undistort ? 1 : config.resize_factor,
+            undistort ? 0 : config.max_width);
+        assert(rgba.ndim() == 3 && rgba.shape()[0] == 4 && rgba.dtype() == lfs::core::DataType::Float32);
+        auto alpha = rgba.slice(0, 3, 4).squeeze(0).contiguous();
+        if (undistort) {
+            const auto scaled = lfs::core::prepare_undistort_params(
+                camera.undistort_params(),
+                static_cast<int>(rgba.shape()[2]), static_cast<int>(rgba.shape()[1]),
+                config.resize_factor,
+                config.max_width);
+            alpha = lfs::core::undistort_mask_area(alpha, scaled, nullptr);
+        }
+        return alpha;
     }
 
 } // namespace lfs::training

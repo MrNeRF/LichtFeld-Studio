@@ -18,6 +18,7 @@
 #include "training/rasterization/fast_rasterizer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -614,6 +615,63 @@ TEST(MetricsEvaluator, DownscaledGroundTruthMatchesGpuLanczos) {
         const float expected_u8 = std::clamp(expected_values[index], 0.0f, 1.0f) * 255.0f;
         EXPECT_NEAR(static_cast<float>(actual_values[index]), expected_u8, 1.0f) << index;
     }
+
+    std::filesystem::remove_all(tmp);
+}
+
+// Catches an RGBA reference that keeps the colour stored under transparent pixels, a binarised alpha, or a
+// reference composited over the configured colour instead of the background the render uses.
+TEST(MetricsEvaluator, RgbaReferenceShowsTheRenderBackgroundWhereTransparent) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_rgba_eval_reference";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 16;
+    constexpr int kH = 12;
+    constexpr std::array<uint8_t, 3> kColor{200, 100, 50};
+    std::vector<uint8_t> rgba(static_cast<size_t>(kW) * kH * 4);
+    for (size_t pixel = 0; pixel < static_cast<size_t>(kW) * kH; ++pixel) {
+        std::copy(kColor.begin(), kColor.end(), rgba.begin() + pixel * 4);
+        rgba[pixel * 4 + 3] = static_cast<uint8_t>((pixel % kW) * 17);
+    }
+    const auto image_path = tmp / "rgba.png";
+    ASSERT_TRUE(lfs::core::save_png(image_path, rgba.data(), kW, kH, 4, 8, 0));
+
+    auto camera = make_eval_camera(image_path, {}, kW, kH);
+    camera->set_has_alpha(true);
+    auto params = make_eval_params(tmp / "out");
+    ASSERT_EQ(params.optimization.mask_mode, lfs::core::param::MaskMode::None);
+    ASSERT_TRUE(params.optimization.use_alpha_as_mask);
+    params.optimization.bg_color = {0.0f, 0.0f, 0.0f};
+    const std::array<float, 3> render_background{0.25f, 0.5f, 1.0f};
+    const auto background = Tensor::from_vector(
+        std::vector<float>(render_background.begin(), render_background.end()), {3}, Device::CUDA);
+
+    const auto render = [](Camera& render_camera, float)
+        -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        lfs::training::RenderOutput output;
+        output.image = Tensor::zeros({size_t{3}, static_cast<size_t>(render_camera.image_height()),
+                                      static_cast<size_t>(render_camera.image_width())},
+                                     Device::CUDA);
+        return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+    };
+    const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, nullptr, background);
+    ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
+    const auto gt = prepared->inputs.gt_image.to(DataType::Float32).cpu().contiguous();
+    ASSERT_EQ(gt.shape(), lfs::core::TensorShape({3, kH, kW}));
+    const auto values = gt.to_vector();
+    for (int c = 0; c < 3; ++c)
+        for (int y = 0; y < kH; ++y)
+            for (int x = 0; x < kW; ++x) {
+                const float alpha = static_cast<float>(x * 17) / 255.0f;
+                const float expected = kColor[c] / 255.0f * alpha + render_background[c] * (1.0f - alpha);
+                EXPECT_NEAR(values[(static_cast<size_t>(c) * kH + y) * kW + x], expected, 1e-5f)
+                    << "c=" << c << " x=" << x << " y=" << y;
+            }
 
     std::filesystem::remove_all(tmp);
 }

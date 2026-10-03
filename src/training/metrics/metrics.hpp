@@ -198,7 +198,8 @@ namespace lfs::training {
         const EvaluationRenderFn& render,
         const EvaluationViewInputs* cached_inputs = nullptr,
         lfs::io::PipelinedImageLoader* image_loader = nullptr,
-        const EvaluationMesh* mesh = nullptr);
+        const EvaluationMesh* mesh = nullptr,
+        const lfs::core::Tensor& background = {});
 
     [[nodiscard]] std::optional<float> mean_normal_angle_deg(
         const lfs::core::Tensor& rendered_normal,

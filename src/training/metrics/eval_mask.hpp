@@ -66,4 +66,10 @@ namespace lfs::training {
         const lfs::core::Camera& camera,
         const MetricsMaskLoadConfig& config);
 
+    /// Soft Float32 [H, W] alpha of an RGBA camera image at the evaluation size, undistorted like the
+    /// training alpha. Throws when the image cannot be decoded.
+    [[nodiscard]] lfs::core::Tensor load_eval_alpha(
+        const lfs::core::Camera& camera,
+        const MetricsMaskLoadConfig& config);
+
 } // namespace lfs::training

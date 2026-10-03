@@ -18,6 +18,7 @@
 #include "eval_mask.hpp"
 #include "io/loader.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "mesh_mask_kernels.cuh"
 #include <algorithm>
@@ -410,7 +411,8 @@ namespace lfs::training {
         const EvaluationRenderFn& render,
         const EvaluationViewInputs* cached_inputs,
         lfs::io::PipelinedImageLoader* image_loader,
-        const EvaluationMesh* mesh) {
+        const EvaluationMesh* mesh,
+        const lfs::core::Tensor& background) {
         RestoreCameraImageDimensions restore_dimensions{
             camera, camera.image_width(), camera.image_height(), camera.image_size_loaded()};
 
@@ -482,6 +484,22 @@ namespace lfs::training {
                                                camera.has_alpha();
                     inputs.user_mask = lfs::training::load_eval_mask(
                         &camera, inputs.gt_image, alpha_as_mask, mask_config);
+                }
+                if (params.optimization.mask_mode == lfs::core::param::MaskMode::None &&
+                    params.optimization.use_alpha_as_mask && camera.has_alpha()) {
+                    auto alpha_config = metrics_mask_config_from(params);
+                    alpha_config.apply_undistortion = undistorted_reference;
+                    const auto alpha = lfs::training::load_eval_alpha(camera, alpha_config);
+                    if (alpha.numel() != inputs.gt_image.shape()[1] * inputs.gt_image.shape()[2])
+                        return evaluation_error("evaluation alpha does not match the evaluation image",
+                                                LFS_SOURCE_SITE_CURRENT());
+                    const auto& color = params.optimization.bg_color;
+                    inputs.gt_image = kernels::composite_over_background(
+                        inputs.gt_image, alpha,
+                        background.is_valid() ? background
+                                              : lfs::core::Tensor::from_vector(
+                                                    std::vector<float>{color[0], color[1], color[2]}, {3},
+                                                    lfs::core::Device::CUDA));
                 }
             }
 
@@ -1203,7 +1221,8 @@ namespace lfs::training {
                 },
                 nullptr,
                 image_loader,
-                eval_mesh());
+                eval_mesh(),
+                background);
             if (!prepared) {
                 LOG_WARN("Eval: skipping camera '{}' (view preparation failed: {})",
                          cam->image_name(), prepared.error().detail());
