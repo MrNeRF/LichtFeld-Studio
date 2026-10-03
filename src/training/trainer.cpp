@@ -7484,6 +7484,9 @@ namespace lfs::training {
                         tiles_processed++;
                         nvtxRangePop();
 
+                        // The appearance backward only needs its inputs; dropping the corrected image and each
+                        // consumed input keeps one fewer full-resolution image live per stage.
+                        corrected_image = {};
                         lfs::core::Tensor raster_grad = tile_grad;
                         if (exposure_correction) {
                             if (grid_active_this_iter) {
@@ -7491,6 +7494,7 @@ namespace lfs::training {
                                 LFS_VRAM_SCOPE("train.bilateral_grid.backward");
                                 LOG_VRAM_DIFF("train.bilateral_grid.backward");
                                 raster_grad = bilateral_grid_->backward(grid_input, raster_grad, cam->uid());
+                                grid_input = {};
                                 nvtxRangePop();
                             }
                             if (ppisp_on) {
@@ -7511,6 +7515,7 @@ namespace lfs::training {
                                 LOG_VRAM_DIFF("train.ppisp.backward");
                                 raster_grad = ppisp_->backward(
                                     ppisp_input, raster_grad, cam->camera_id(), cam->uid());
+                                ppisp_input = {};
                                 if (ppisp_frozen) {
                                     ppisp_->zero_grad();
                                 }
@@ -7526,8 +7531,12 @@ namespace lfs::training {
                             }
                         }
 
+                        // Summed eagerly in place: the deferred sum materialized inside the rasterizer backward
+                        // with snapshot copies of both operands, three full-resolution images at the step peak.
                         if (tile_grad_raw.is_valid() && tile_grad_raw.numel() > 0) {
-                            raster_grad = raster_grad + tile_grad_raw;
+                            if (raster_grad.data_ptr() == tile_grad.data_ptr())
+                                raster_grad = raster_grad.clone();
+                            raster_grad.add_(tile_grad_raw);
                         }
 
                         current_phase = StepPhase::Backward;
