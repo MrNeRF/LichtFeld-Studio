@@ -237,8 +237,9 @@ void unionComponents(Parameters p, uint i) {
         for (int j = heads[hashCell(target, p.bucketMask)]; j >= 0; j = next[j]) {
             if (uint(j) <= i)
                 continue;
-            const float3 other = position(p, uint(j));
-            if (!all(cell(other, p.radius) == target) || !within(point, other, p.radius))
+            // A candidate from another cell sharing the bucket fails the distance test, and joining
+            // a pair twice changes nothing, so no cell check is needed here.
+            if (!within(point, position(p, uint(j)), p.radius))
                 continue;
             int root = componentRoot(parent, j);
             while (mine != root) {
