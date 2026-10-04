@@ -66,7 +66,7 @@ namespace lfs::nodes::builtin {
             auto color = context.evaluate_field("Colour", fc, COLOUR_SOCKET);
             s.sh0 = blend(s.sh0, (color - 0.5f) / kShC0, w);
             if (property_bool(context, "clear_view_dependent", true) && s.shN.numel() != 0) {
-                s.shN = blend(s.shN, Tensor::zeros_like(s.shN), w);
+                s.shN = blend(s.shN, Tensor::zeros({1, 1, 1}, s.shN.device()), w);
             }
         }
         if (geometry.points) {
@@ -329,7 +329,7 @@ namespace lfs::nodes::builtin {
                 }
                 splats.sh0 = blend(splats.sh0, (target - 0.5f) / kShC0, weight);
                 if (property_bool(context, "fade_view_dependent", true) && splats.shN.numel())
-                    splats.shN = blend(splats.shN, Tensor::zeros_like(splats.shN), weight);
+                    splats.shN = blend(splats.shN, Tensor::zeros({1, 1, 1}, splats.shN.device()), weight);
             }
         }
         context.set_output("Geometry", std::move(geometry));

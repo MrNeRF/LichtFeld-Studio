@@ -2,10 +2,74 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "builtin_common.hpp"
 
+#include "core/tensor_fused.hpp"
+
 #include <array>
+#include <cstdint>
+#include <optional>
 #include <string_view>
+#include <vector>
 
 namespace lfs::nodes::builtin {
+    namespace {
+        core::fused::Kernel make_blend_kernel(const size_t rank) {
+            namespace f = core::fused;
+            f::Builder builder(rank);
+            const auto old_value = builder.input(DataType::Float32, rank).load();
+            const auto new_value = builder.input(DataType::Float32, rank).load();
+            const auto weight = builder.input(DataType::Float32, rank).load();
+            const auto mixed = old_value * (1.0f - weight) + new_value * weight;
+            builder.output(f::where(weight == 0.0f, old_value, f::where(weight == 1.0f, new_value, mixed)),
+                           DataType::Float32);
+            return f::Kernel(builder);
+        }
+
+        // One pass over the payload instead of a kernel and a payload-sized
+        // intermediate per operator; the fused kernel broadcasts the weight.
+        std::optional<core::Tensor> fused_blend(const core::Tensor& old_value, const core::Tensor& new_value,
+                                                const core::Tensor& weight) {
+            constexpr size_t max_rank = 4;
+            const std::array inputs{&old_value, &new_value, &weight};
+            size_t rank = 0;
+            for (const auto* input : inputs) {
+                if (input->device() != core::Device::GPU || input->dtype() != DataType::Float32)
+                    return std::nullopt;
+                rank = std::max(rank, input->ndim());
+            }
+            if (rank == 0 || rank > max_rank)
+                return std::nullopt;
+            std::vector<size_t> domain(rank, 1);
+            for (const auto* input : inputs)
+                for (size_t i = 0; i < input->ndim(); ++i) {
+                    auto& extent = domain[rank - input->ndim() + i];
+                    const size_t size = input->size(i);
+                    if (size != 1 && extent != 1 && size != extent)
+                        return std::nullopt;
+                    extent = size == 1 ? extent : size;
+                }
+            uint64_t count = 1;
+            for (const auto extent : domain)
+                count *= extent;
+            if (count == 0 || count > uint64_t(INT32_MAX))
+                return std::nullopt;
+            std::vector<core::Tensor> aligned;
+            for (const auto* input : inputs) {
+                uint64_t reach = 0;
+                for (size_t i = 0; i < input->ndim(); ++i)
+                    reach += uint64_t(input->stride(i)) * (input->size(i) - 1);
+                if (reach > uint64_t(INT32_MAX))
+                    return std::nullopt;
+                auto value = *input;
+                while (value.ndim() < rank)
+                    value = value.unsqueeze(0);
+                aligned.push_back(std::move(value));
+            }
+            static const std::array kernels{make_blend_kernel(1), make_blend_kernel(2), make_blend_kernel(3),
+                                            make_blend_kernel(4)};
+            return kernels[rank - 1](domain, aligned)[0];
+        }
+    } // namespace
+
     std::string property_string(const NodeContext& context, std::string_view name, std::string fallback) {
         const auto found = context.properties().find(std::string(name));
         if (found != context.properties().end() && found->is_string())
@@ -85,6 +149,8 @@ namespace lfs::nodes::builtin {
     core::Tensor blend(const core::Tensor& old_value, const core::Tensor& new_value, core::Tensor weight) {
         while (weight.ndim() < old_value.ndim())
             weight = weight.unsqueeze(-1);
+        if (auto fused = fused_blend(old_value, new_value, weight))
+            return std::move(*fused);
         const auto mixed = old_value * (weight.neg() + 1.0f) + new_value * weight;
         return core::Tensor::where(weight.eq(0), old_value,
                                    core::Tensor::where(weight.eq(1), new_value, mixed));
