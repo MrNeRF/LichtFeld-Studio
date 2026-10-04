@@ -155,21 +155,6 @@ namespace lfs::core::internal {
         [[nodiscard]] uint64_t submitted_timeline() const noexcept {
             return submitted_timeline_.load(std::memory_order_acquire);
         }
-        // MoltenVK enumerates device-address buffers while encoding a submit.
-        // A buffer between vkCreateBuffer and its memory bind has no Metal
-        // resource yet. Keep that construction interval outside queue submits.
-        using BufferCreationLocks = std::pair<std::unique_lock<std::mutex>, std::unique_lock<std::mutex>>;
-        [[nodiscard]] BufferCreationLocks lock_buffer_creation() {
-#ifdef __APPLE__
-            BufferCreationLocks locks;
-            locks.first = std::unique_lock<std::mutex>(queue_mutex_);
-            if (consumer_queue_mutex_)
-                locks.second = std::unique_lock<std::mutex>(*consumer_queue_mutex_);
-            return locks;
-#else
-            return {};
-#endif
-        }
         // Runs `release` while no submission is in progress or unfinished and
         // returns whether it ran. MoltenVK makes all device memory resident for
         // every submitted command buffer of every queue without keeping it alive,

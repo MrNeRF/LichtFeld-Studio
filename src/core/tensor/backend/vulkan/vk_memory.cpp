@@ -444,7 +444,6 @@ namespace lfs::core::internal {
                 VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
             external_buffer.handleTypes = kVulkanExportMemoryHandleType;
 #endif
-            auto buffer_creation = context_.lock_buffer_creation();
             VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
             buffer_info.size = record->allocated_size;
             buffer_info.usage = kStorageUsage;
@@ -529,7 +528,6 @@ namespace lfs::core::internal {
             VkResult result = vmaCreateBuffer(
                 context_.allocator(), &buffer_info, &allocation_info,
                 &record->buffer, &record->allocation, &mapping_info);
-            buffer_creation = VulkanContext::BufferCreationLocks{};
             if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
                 result == VK_ERROR_OUT_OF_HOST_MEMORY ||
                 result == VK_ERROR_OUT_OF_POOL_MEMORY ||
@@ -540,11 +538,9 @@ namespace lfs::core::internal {
                     collect_retired_locked(context_.completed_timeline());
                     destroy_free_when_idle_locked();
                 }
-                buffer_creation = context_.lock_buffer_creation();
                 result = vmaCreateBuffer(
                     context_.allocator(), &buffer_info, &allocation_info,
                     &record->buffer, &record->allocation, &mapping_info);
-                buffer_creation = VulkanContext::BufferCreationLocks{};
             }
             if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
                 result == VK_ERROR_OUT_OF_HOST_MEMORY ||
