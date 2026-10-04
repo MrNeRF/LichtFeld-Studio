@@ -41,6 +41,9 @@ namespace lfs::vis {
     class VisualizerImplResetTest_AsyncTrainingBindCloseDoesNotStart_Test;
     class VisualizerImplResetTest_AsyncTrainingBindWaitsForAutosave_Test;
     class VisualizerImplResetTest_AsyncTrainingBindTrainerReplacementCancels_Test;
+    class VisualizerImplResetTest_AsyncPausedPreparationCancelPreservesSession_Test;
+    class VisualizerImplResetTest_AsyncPreparationCancelDrainsDeferredLoad_Test;
+    class VisualizerImplResetTest_AsyncPausedExplicitPreparationAdoptsItsSnapshot_Test;
 
     class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
     class VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
@@ -368,6 +371,9 @@ namespace lfs::vis::project {
 
         friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindWaitsForAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindTrainerReplacementCancels_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AsyncPausedPreparationCancelPreservesSession_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AsyncPreparationCancelDrainsDeferredLoad_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AsyncPausedExplicitPreparationAdoptsItsSnapshot_Test;
 
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
         friend class lfs::vis::VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
@@ -786,7 +792,8 @@ namespace lfs::vis::project {
         std::atomic<bool> pending_training_start_active_{false};
         std::function<lfs::Result<void>()> pending_training_start_;
         std::weak_ptr<lfs::io::project::ProjectDocument> pending_training_document_;
-        const lfs::training::Trainer* pending_training_trainer_ = nullptr;
+        std::uint64_t pending_training_trainer_generation_ = 0;
+        bool pending_training_cancel_settlement_ = false;
         std::optional<lfs::Error> pending_training_error_;
         bool pending_training_write_started_ = false;
         int pending_training_bind_attempts_ = 0;

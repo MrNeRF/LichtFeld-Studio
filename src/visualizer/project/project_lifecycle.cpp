@@ -2454,6 +2454,7 @@ namespace lfs::vis::project {
     }
 
     ProjectLifecycle::~ProjectLifecycle() {
+        cancelTrainingStartPreparation();
         if (auto* manager = viewer_.getTrainerManager()) {
             if (auto* trainer = manager->getTrainer()) {
                 trainer->set_live_project_snapshot(
@@ -4530,17 +4531,23 @@ namespace lfs::vis::project {
                               "A project write is already in progress.",
                               "Training preparation cannot replace a manual project write", "project.job");
         }
+        auto* const manager = viewer_.getTrainerManager();
+        manager->beginTrainingStartPreparation();
         if (!busy) {
             if (auto prepared = prepareTrainingStartProject(false); !prepared) {
+                manager->finishTrainingStartPreparation(prepared.error());
                 return prepared;
             }
             if (!project_write_job_) {
-                return on_ready();
+                auto result = on_ready();
+                manager->finishTrainingStartPreparation(
+                    result ? std::nullopt : std::optional{result.error()});
+                return result;
             }
         }
         pending_training_start_ = std::move(on_ready);
         pending_training_document_ = document_;
-        pending_training_trainer_ = viewer_.getTrainer();
+        pending_training_trainer_generation_ = viewer_.getTrainerManager()->trainerGeneration();
         pending_training_write_started_ = !busy;
         pending_training_bind_attempts_ = 0;
         pending_training_error_.reset();
@@ -4556,6 +4563,10 @@ namespace lfs::vis::project {
         pending_training_start_ = {};
         pending_training_start_active_.store(false, std::memory_order_release);
         publishTrainingPreparation(viewer_, false);
+        viewer_.getTrainerManager()->finishTrainingStartPreparation(lifecycleError(
+            lfs::ErrorCode::Cancelled, "Training preparation was canceled.",
+            "The pending training start was canceled before initialization", "project.training"));
+        pending_training_cancel_settlement_ = true;
         if (pending_training_write_started_ && project_write_job_) {
             viewer_.jobs().requestCancel(*project_write_job_);
         }
@@ -4568,7 +4579,7 @@ namespace lfs::vis::project {
         }
         if (application_close_pending_ ||
             pending_training_document_.lock() != document_ ||
-            pending_training_trainer_ != viewer_.getTrainer()) {
+            pending_training_trainer_generation_ != viewer_.getTrainerManager()->trainerGeneration()) {
             cancelTrainingStartPreparation();
             return;
         }
@@ -4580,6 +4591,7 @@ namespace lfs::vis::project {
             pending_training_start_ = {};
             pending_training_start_active_.store(false, std::memory_order_release);
             publishTrainingPreparation(viewer_, false);
+            viewer_.getTrainerManager()->finishTrainingStartPreparation(error);
             LOG_ERROR("Training project preparation failed: {}", developerError(error));
             publishProjectToast(std::move(error), "training.start");
         };
@@ -4608,7 +4620,10 @@ namespace lfs::vis::project {
         auto ready = std::exchange(pending_training_start_, {});
         pending_training_start_active_.store(false, std::memory_order_release);
         publishTrainingPreparation(viewer_, false);
-        if (auto result = ready(); !result) {
+        auto result = ready();
+        viewer_.getTrainerManager()->finishTrainingStartPreparation(
+            result ? std::nullopt : std::optional{result.error()});
+        if (!result) {
             publishProjectToast(std::move(result).error(), "training.start");
         }
     }
@@ -5787,6 +5802,16 @@ namespace lfs::vis::project {
         applyStartupRecoveryScan();
         settleProjectWrite();
         processPendingTrainingStart();
+        if (pending_training_cancel_settlement_ && !pending_training_start_ &&
+            !project_write_job_ && !viewer_.jobs().anyRunning(JobType::DatasetEmbed)) {
+            pending_training_cancel_settlement_ = false;
+            if (viewer_.pending_training_action_ != VisualizerImpl::PendingTrainingAction::None) {
+                if (viewer_.shouldDeferProjectSwitchForTraining())
+                    viewer_.requestStopThenPendingAction();
+                else
+                    viewer_.schedulePendingTrainingAction();
+            }
+        }
         processPendingThumbnailWrite();
         processPendingExplicitSave();
         if (!viewer_.jobs().anyRunning(
@@ -6095,9 +6120,16 @@ namespace lfs::vis::project {
                     .completed_snapshots;
             return {};
         }
+        const bool adopts_pending_preparation = pending_training_start_ &&
+                                                pending_training_write_started_ &&
+                                                project_write_purpose_ == ProjectWritePurpose::TrainingExplicitSave &&
+                                                pending_training_document_.lock() == document_ &&
+                                                pending_training_trainer_generation_ == viewer_.getTrainerManager()->trainerGeneration();
         document_ =
             std::make_shared<ProjectDocument>(
                 std::move(*opened));
+        if (adopts_pending_preparation)
+            pending_training_document_ = document_;
         last_captured_selection_serial_.reset();
         captured_splat_serials_.clear();
         cached_project_info_.reset();

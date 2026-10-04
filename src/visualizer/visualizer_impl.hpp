@@ -293,6 +293,9 @@ namespace lfs::vis {
 
         friend class VisualizerImplResetTest_AsyncTrainingBindWaitsForAutosave_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindTrainerReplacementCancels_Test;
+        friend class VisualizerImplResetTest_AsyncPausedPreparationCancelPreservesSession_Test;
+        friend class VisualizerImplResetTest_AsyncPreparationCancelDrainsDeferredLoad_Test;
+        friend class VisualizerImplResetTest_AsyncPausedExplicitPreparationAdoptsItsSnapshot_Test;
 
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnSave_Test;
         friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;

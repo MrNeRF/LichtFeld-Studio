@@ -9620,6 +9620,10 @@ namespace lfs::vis {
             auto accepted = lifecycle->prepareTrainingStartProjectAsync(ready);
             const auto elapsed = std::chrono::steady_clock::now() - started;
             auto duplicate = lifecycle->prepareTrainingStartProjectAsync(ready);
+            auto waiter = std::async(std::launch::async, [&] {
+                return viewer.getTrainerManager()->waitForInitialization();
+            });
+            EXPECT_EQ(waiter.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
             EXPECT_EQ(app_store().training_state.get(), "preparing");
             lifecycle->updateMaintenance();
             EXPECT_EQ(starts, 0);
@@ -9634,6 +9638,7 @@ namespace lfs::vis {
             lifecycle->processPendingTrainingStart();
             EXPECT_EQ(starts, 1);
             EXPECT_EQ(app_store().training_state.get(), "ready");
+            EXPECT_TRUE(waiter.get());
         }
     }
 
@@ -9658,6 +9663,9 @@ namespace lfs::vis {
         });
         if (accepted)
             std::filesystem::create_directory(lifecycle->project_write_destination_);
+        auto waiter = std::async(std::launch::async, [&] {
+            return viewer.getTrainerManager()->waitForInitialization();
+        });
         write_lock.unlock();
         ASSERT_TRUE(accepted);
         lifecycle->joinPendingWrite();
@@ -9667,6 +9675,7 @@ namespace lfs::vis {
         EXPECT_FALSE(lifecycle->hasSourcePath());
         EXPECT_FALSE(viewer.getTrainer()->trainer_project_save_policy().on_completion);
         EXPECT_EQ(app_store().training_state.get(), "ready");
+        EXPECT_FALSE(waiter.get());
     }
 
     TEST_F(VisualizerImplResetTest, AsyncTrainingBindCancelDoesNotStart) {
@@ -9736,7 +9745,23 @@ namespace lfs::vis {
         EXPECT_FALSE(manager->canStart());
         EXPECT_TRUE(manager->canStop());
         auto duplicate = viewer.startTraining();
-        manager->stopTraining();
+        auto waiter = std::async(std::launch::async, [&] { return manager->waitForInitialization(); });
+        EXPECT_EQ(waiter.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+        auto stop = std::async(std::launch::async, [] {
+            lfs::core::events::cmd::StopTraining{}.emit();
+        });
+        EXPECT_TRUE(waitUntil([&] {
+            std::lock_guard lock(viewer.work_queue_mutex_);
+            return !viewer.work_queue_.empty();
+        }));
+        EXPECT_TRUE(viewer.isTrainingStartPending());
+        EXPECT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            return stop.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;
+        }));
+        stop.get();
+        auto canceled = waiter.get();
+        ASSERT_FALSE(canceled);
+        EXPECT_EQ(canceled.error().code(), lfs::ErrorCode::Cancelled);
         EXPECT_FALSE(viewer.isTrainingStartPending());
         EXPECT_EQ(app_store().training_state.get(), "ready");
         write_lock.unlock();
@@ -9783,7 +9808,7 @@ namespace lfs::vis {
         ASSERT_TRUE(handle);
         lifecycle->project_write_job_ = *handle;
         lifecycle->project_write_purpose_ = project::ProjectLifecycle::ProjectWritePurpose::Autosave;
-        viewer.jobs().work(*handle);
+        std::async(std::launch::async, [&] { viewer.jobs().work(*handle); }).get();
         int starts = 0;
         ASSERT_TRUE(lifecycle->prepareTrainingStartProjectAsync([&]() -> lfs::Result<void> {
             ++starts;
@@ -9792,7 +9817,9 @@ namespace lfs::vis {
         lifecycle->updateMaintenance();
         EXPECT_EQ(starts, 0);
         EXPECT_EQ(lifecycle->project_write_job_, handle);
-        viewer.jobs().finishWork(*handle, false, "Simulated autosave failure", lfs::ErrorCode::Unavailable);
+        std::async(std::launch::async, [&] {
+            viewer.jobs().finishWork(*handle, false, "Simulated autosave failure", lfs::ErrorCode::Unavailable);
+        }).get();
         lifecycle->updateMaintenance();
         lifecycle->joinPendingWrite();
         lifecycle->processPendingTrainingStart();
@@ -9814,12 +9841,134 @@ namespace lfs::vis {
             ++starts;
             return {};
         }));
+        const auto generation = viewer.getTrainerManager()->trainerGeneration();
+        ASSERT_TRUE(viewer.getTrainerManager()->clearTrainer());
         auto replacement = std::make_unique<lfs::training::Trainer>(viewer.getScene());
         viewer.getTrainerManager()->setTrainer(std::move(replacement));
+        EXPECT_GT(viewer.getTrainerManager()->trainerGeneration(), generation);
         lifecycle->joinPendingWrite();
         lifecycle->processPendingTrainingStart();
         EXPECT_EQ(starts, 0);
         EXPECT_FALSE(lifecycle->pending_training_start_);
+    }
+
+    TEST_F(VisualizerImplResetTest, AsyncPausedPreparationCancelPreservesSession) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        ASSERT_TRUE(arm_paused_trainer(viewer));
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        auto* const manager = viewer.getTrainerManager();
+        auto* const trainer = viewer.getTrainer();
+        std::unique_lock write_lock(lifecycle->document_access_mutex_);
+        ASSERT_TRUE(viewer.startTraining());
+        ASSERT_TRUE(viewer.isTrainingStartPending());
+        manager->stopTraining();
+        EXPECT_FALSE(viewer.isTrainingStartPending());
+        EXPECT_TRUE(manager->isPaused());
+        EXPECT_EQ(app_store().training_state.get(), "paused");
+        write_lock.unlock();
+        lifecycle->joinPendingWrite();
+        lifecycle->updateMaintenance();
+        EXPECT_TRUE(manager->isPaused());
+        EXPECT_EQ(viewer.getTrainer(), trainer);
+        EXPECT_FALSE(manager->isCompletionPending());
+    }
+
+    TEST_F(VisualizerImplResetTest, AsyncPreparationCancelDrainsDeferredLoad) {
+        for (const bool paused : {false, true}) {
+            VisualizerImpl viewer(projectOptions());
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+            ASSERT_TRUE(arm_paused_trainer(viewer));
+            if (!paused) {
+                ASSERT_TRUE(viewer.getTrainerManager()->clearTrainer());
+                viewer.getTrainerManager()->setTrainer(std::make_unique<lfs::training::Trainer>(viewer.getScene()));
+            }
+            auto* const lifecycle = viewer.project_lifecycle_.get();
+            const auto path = temporary_.path / (paused ? "paused-deferred" : "ready-deferred");
+            write_transforms_dataset_with_cameras(path, 2);
+            std::unique_lock write_lock(lifecycle->document_access_mutex_);
+            ASSERT_TRUE(viewer.startTraining());
+            ASSERT_TRUE(viewer.isTrainingStartPending());
+            ASSERT_TRUE(viewer.deferLoadFileForTraining(lfs::core::events::cmd::LoadFile{
+                .path = path,
+                .is_dataset = true,
+                .stop_training = true,
+                .discard_changes = true}));
+            EXPECT_FALSE(viewer.isTrainingStartPending());
+            EXPECT_FALSE(viewer.pending_training_action_posted_);
+            EXPECT_EQ(viewer.pending_load_files_.size(), 1u);
+            write_lock.unlock();
+            lifecycle->joinPendingWrite();
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                lifecycle->updateMaintenance();
+                viewer.getGuiManager()->asyncTasks().pollImportCompletion();
+                return viewer.pending_training_action_ == VisualizerImpl::PendingTrainingAction::None &&
+                       viewer.pending_load_files_.empty() &&
+                       !viewer.getTrainerManager()->isCompletionPending() &&
+                       !viewer.jobs().anyRunning(JobType::Import);
+            }));
+            EXPECT_EQ(viewer.getGuiManager()->asyncTasks().getImportPath(), path.filename().string());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest, AsyncPausedExplicitPreparationAdoptsItsSnapshot) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        ASSERT_TRUE(arm_paused_trainer(viewer));
+        auto splat = lfs::test::licht::make_splat(2);
+        auto* const trainer = viewer.getTrainer();
+        const auto model = viewer.getScene().addGroup("Train model");
+        viewer.getScene().setTrainingModelNode(model);
+        trainer->strategy_ = std::make_unique<lfs::training::MCMC>(*splat);
+        trainer->is_paused_.store(true);
+        auto* const manager = viewer.getTrainerManager();
+        manager->completion_pending_.store(true, std::memory_order_release);
+        manager->training_joined_ = false;
+        const auto release_completion = [](TrainerManager* owner) {
+            owner->completion_pending_.store(false, std::memory_order_release);
+            owner->training_joined_ = true;
+        };
+        std::unique_ptr<TrainerManager, decltype(release_completion)> completion_guard(manager, release_completion);
+        auto params = trainer->getParams();
+        params.dataset.output_path = temporary_.path / "paused-explicit";
+        params.dataset.output_path_explicit = true;
+        trainer->setParams(params);
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        const auto original = lifecycle->document_;
+        ASSERT_TRUE(viewer.startTraining());
+        ASSERT_TRUE(viewer.isTrainingStartPending());
+        ASSERT_EQ(lifecycle->project_write_purpose_, project::ProjectLifecycle::ProjectWritePurpose::TrainingExplicitSave);
+        const auto destination = params.dataset.output_path / "project.licht";
+        write_empty_project(destination);
+        {
+            std::lock_guard lock(trainer->project_snapshot_mutex_);
+            trainer->last_project_snapshot_path_ = destination;
+            trainer->last_project_writer_error_.clear();
+            ASSERT_TRUE(trainer->requested_project_request_id_);
+            trainer->last_completed_project_request_id_ = *trainer->requested_project_request_id_;
+            trainer->requested_project_request_id_.reset();
+        }
+        trainer->project_snapshot_service_->testing_advance_completed_snapshots(1);
+        ASSERT_TRUE(lifecycle->adoptCompletedTrainingSnapshot());
+        EXPECT_NE(lifecycle->document_, original);
+        EXPECT_EQ(lifecycle->pending_training_document_.lock(), lifecycle->document_);
+        // The actual lifecycle worker observes and settles the simulated publish.
+        lifecycle->joinPendingWrite();
+        lifecycle->updateMaintenance();
+        EXPECT_FALSE(viewer.isTrainingStartPending());
+        EXPECT_FALSE(viewer.getTrainerManager()->isPaused());
+        EXPECT_TRUE(trainer->trainer_project_save_policy().on_completion);
+        auto waiter = std::async(std::launch::async, [&] {
+            return viewer.getTrainerManager()->waitForInitialization();
+        });
+        EXPECT_TRUE(waiter.get());
+        manager->completion_pending_.store(false, std::memory_order_release);
+        manager->training_joined_ = true;
     }
 
     TEST_F(VisualizerImplResetTest,
