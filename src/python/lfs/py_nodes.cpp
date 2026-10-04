@@ -768,10 +768,18 @@ namespace lfs::python {
         }
 
         struct PyNodeContext {
-            NodeContext* context = nullptr;
+            // Cleared when execute() returns, so a context kept by Python raises instead of reading freed memory.
+            std::shared_ptr<NodeContext*> guard;
+            std::shared_ptr<const std::unordered_map<std::string, std::string>> input_types;
+
+            NodeContext& live() const {
+                if (!guard || !*guard)
+                    throw nb::value_error("This node context is only valid while execute() runs");
+                return **guard;
+            }
 
             nb::object input(const std::string& name) const {
-                return value_to_python(context->input(name));
+                return value_to_python(live().input(name));
             }
 
             PyTensor field(const std::string& name, const PyGeometry& geometry) const {
@@ -793,20 +801,25 @@ namespace lfs::python {
                 // identity 0 reuses fields from earlier, different geometry.
                 // Keep memoization within this field evaluation instead.
                 FieldMemo memo;
-                return PyTensor(context->field(name, FLOAT_SOCKET).evaluate(field_context, memo));
+                std::string type(FLOAT_SOCKET);
+                if (input_types)
+                    if (const auto declared = input_types->find(name); declared != input_types->end())
+                        type = declared->second;
+                return PyTensor(live().field(name, type).evaluate(field_context, memo));
             }
 
             nb::object prop(const std::string& name) const {
-                const auto found = context->properties().find(name);
-                return found == context->properties().end() ? nb::none()
-                                                            : json_to_python(*found);
+                const auto& properties = live().properties();
+                const auto found = properties.find(name);
+                return found == properties.end() ? nb::none()
+                                                 : json_to_python(*found);
             }
 
             void output(const std::string& name, const nb::handle value) const {
                 if (nb::isinstance<PyGeometry>(value))
-                    context->set_output(name, nb::cast<PyGeometry>(value).value);
+                    live().set_output(name, nb::cast<PyGeometry>(value).value);
                 else
-                    context->set_output(name, python_to_value(value));
+                    live().set_output(name, python_to_value(value));
             }
         };
 
@@ -889,7 +902,10 @@ namespace lfs::python {
             const std::string type_id = info.id;
             if (nb::cast<std::string>(cls.attr("__module__")) == "lfs_plugins.node_posterize" && info.id == "lfs.posterize")
                 set_builtin_node_text(info);
-            info.evaluate = [type_id](NodeContext& context) {
+            auto input_types = std::make_shared<std::unordered_map<std::string, std::string>>();
+            for (const auto& input : info.inputs)
+                input_types->emplace(input.identifier, input.type);
+            info.evaluate = [type_id, input_types = std::shared_ptr<const std::unordered_map<std::string, std::string>>(std::move(input_types))](NodeContext& context) {
                 SafeClass type;
                 {
                     std::lock_guard lock(python_types_mutex());
@@ -899,16 +915,22 @@ namespace lfs::python {
                     type = found->second;
                 }
                 nb::gil_scoped_acquire gil;
+                const auto guard = std::make_shared<NodeContext*>(&context);
+                struct Expire {
+                    const std::shared_ptr<NodeContext*>& guard;
+                    ~Expire() { *guard = nullptr; }
+                } expire{guard};
                 try {
                     auto instance = (**type)();
                     const auto callback = instance.attr("execute");
-                    auto result = callback(PyNodeContext{&context});
+                    const PyNodeContext python_context{guard, input_types};
+                    auto result = callback(python_context);
                     if (!result.is_none()) {
                         if (nb::isinstance<PyGeometry>(result))
                             context.set_output("Geometry", nb::cast<PyGeometry>(result).value);
                         else if (nb::isinstance<nb::dict>(result))
                             for (const auto [key, value] : nb::cast<nb::dict>(result))
-                                PyNodeContext{&context}.output(nb::cast<std::string>(key), value);
+                                python_context.output(nb::cast<std::string>(key), value);
                     }
                 } catch (const nb::python_error& error) {
                     LOG_WARN("Python node {} failed:\n{}", type_id, error.what());

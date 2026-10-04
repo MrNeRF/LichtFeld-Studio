@@ -459,6 +459,38 @@ def test_python_node_hot_reload_and_error_containment(lf, numpy, message):
     assert PassThrough.id not in {item["id"] for item in lf.nodes.node_types()}
 
 
+def test_python_node_context_expires_and_fields_keep_their_type(lf, numpy):
+    kept = []
+    seen = {}
+
+    class Probe(lf.nodes.Node):
+        id = "tests.context_probe"
+        label = "Context Probe"
+        category = "Test"
+        inputs = [
+            lf.nodes.Input("Geometry", "geometry"),
+            lf.nodes.Input("Offset", "vector", (1.0, 2.0, 3.0), field=True),
+        ]
+        outputs = [lf.nodes.Output("Result", "geometry")]
+
+        def execute(self, ctx):
+            kept.append(ctx)
+            seen["offset"] = ctx.field("Offset", ctx.input("Geometry").splats).tolist()
+            return {"Result": ctx.input("Geometry")}
+
+    lf.nodes.register_node(Probe)
+    try:
+        tree = lf.nodes.new_tree("Context probe")
+        node = tree.add_node(Probe.id, "Probe")
+        _insert_between(tree, node)
+        lf.nodes.evaluate_tree(tree, _geometry(lf, numpy))
+        assert seen["offset"] == [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]
+        with pytest.raises(ValueError, match="only valid while execute"):
+            kept[0].input("Geometry")
+    finally:
+        lf.nodes.unregister_node(Probe.id)
+
+
 def test_scene_modifier_api_skips_without_scene(lf):
     with pytest.raises(RuntimeError, match="scene manager is unavailable"):
         lf.nodes.evaluate("missing")
