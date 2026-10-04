@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tests for OperatorProperties typed API."""
 
-import os
 import sys
 from pathlib import Path
 
@@ -13,10 +12,9 @@ import pytest
 def lf():
     """Import lichtfeld module."""
     project_root = Path(__file__).parent.parent.parent
-    build_dir = Path(os.environ.get("LFS_TEST_BUILD_DIR", project_root / "build"))
-    build_python = build_dir / "src" / "python"
+    build_python = project_root / "build" / "src" / "python"
     if str(build_python) not in sys.path:
-        sys.path.append(str(build_python))
+        sys.path.insert(0, str(build_python))
 
     try:
         import lichtfeld
@@ -30,10 +28,9 @@ def lf():
 def lfs_types():
     """Import lfs_plugins.types module."""
     project_root = Path(__file__).parent.parent.parent
-    build_dir = Path(os.environ.get("LFS_TEST_BUILD_DIR", project_root / "build"))
-    build_python = build_dir / "src" / "python"
+    build_python = project_root / "build" / "src" / "python"
     if str(build_python) not in sys.path:
-        sys.path.append(str(build_python))
+        sys.path.insert(0, str(build_python))
 
     try:
         from lfs_plugins import types

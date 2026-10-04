@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lfs_plugins import bug_report, bug_report_panel, credential_storage, portal_account
+from lfs_plugins import bug_report, bug_report_panel, portal_account
 
 
 class Value:
@@ -501,8 +501,7 @@ def test_submit_requires_explicit_retry_after_token_refresh(
         (201, success_response()),
     )
     monkeypatch.setattr(portal_account, "urlopen", stub)
-    service = portal_account.PortalAccountService(credentials_path=credentials_path,
-                                                 storage_backend=credential_storage.FileBackend(credentials_path))
+    service = portal_account.PortalAccountService(credentials_path=credentials_path)
     monkeypatch.setattr(bug_report, "lf", make_fake_lf())
     monkeypatch.setattr(bug_report, "get_portal_account_service", lambda: service)
 
@@ -552,8 +551,7 @@ def test_definitive_refresh_failure_signs_out(
         (401, {"error": "invalid_token"}),
     )
     monkeypatch.setattr(portal_account, "urlopen", stub)
-    service = portal_account.PortalAccountService(credentials_path=credentials_path,
-                                                 storage_backend=credential_storage.FileBackend(credentials_path))
+    service = portal_account.PortalAccountService(credentials_path=credentials_path)
     monkeypatch.setattr(bug_report, "lf", make_fake_lf())
     monkeypatch.setattr(bug_report, "get_portal_account_service", lambda: service)
 
@@ -579,8 +577,7 @@ def test_membership_required_switches_state_without_signing_out(
     write_credentials(credentials_path)
     stub = StubUrlopen((403, {"error": "membership_required"}))
     monkeypatch.setattr(portal_account, "urlopen", stub)
-    service = portal_account.PortalAccountService(credentials_path=credentials_path,
-                                                 storage_backend=credential_storage.FileBackend(credentials_path))
+    service = portal_account.PortalAccountService(credentials_path=credentials_path)
     monkeypatch.setattr(bug_report, "lf", make_fake_lf())
     monkeypatch.setattr(bug_report, "get_portal_account_service", lambda: service)
 
@@ -632,8 +629,7 @@ def test_non_json_http_error_maps_to_generic(monkeypatch, fake_runtime, tmp_path
     credentials_path = tmp_path / "account" / "credentials.json"
     write_credentials(credentials_path)
     service = portal_account.PortalAccountService(
-        credentials_path=credentials_path,
-        storage_backend=credential_storage.FileBackend(credentials_path),
+        credentials_path=credentials_path
     )
     monkeypatch.setattr(bug_report, "lf", make_fake_lf())
     monkeypatch.setattr(bug_report, "get_portal_account_service", lambda: service)
@@ -653,8 +649,7 @@ def test_report_invalid_detail_survives_real_http_mapping(monkeypatch, fake_runt
     credentials_path = tmp_path / "account" / "credentials.json"
     write_credentials(credentials_path)
     service = portal_account.PortalAccountService(
-        credentials_path=credentials_path,
-        storage_backend=credential_storage.FileBackend(credentials_path),
+        credentials_path=credentials_path
     )
     monkeypatch.setattr(bug_report, "lf", make_fake_lf())
     monkeypatch.setattr(bug_report, "get_portal_account_service", lambda: service)
