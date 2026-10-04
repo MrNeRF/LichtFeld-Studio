@@ -4,9 +4,11 @@
  */
 
 #include "core/tensor_backend.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "gui/gui_input.hpp"
 #include "gui/rml_status_bar.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/rmlui/rmlui_system_interface.hpp"
 #include "rendering/viewport_artifact_service.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/preferences.hpp"
@@ -293,7 +295,19 @@ namespace {
 
     class StatusBarFitTest : public ::testing::Test {
     protected:
+        static inline lfs::vis::gui::RmlSystemInterface system_interface_{nullptr};
+        static inline bool had_localization_ = false;
+        static inline std::string previous_language_;
+
         static void SetUpTestSuite() {
+            auto& localization = lfs::event::LocalizationManager::getInstance();
+            had_localization_ = localization.hasKey("status_bar.mcp_name");
+            previous_language_ = localization.getCurrentLanguage();
+            if (!had_localization_)
+                ASSERT_TRUE(localization.initialize((std::filesystem::path(PROJECT_ROOT_PATH) /
+                                                    "src/visualizer/gui/resources/locales").string()));
+            ASSERT_TRUE(localization.setLanguage("en"));
+            Rml::SetSystemInterface(&system_interface_);
             ASSERT_TRUE(Rml::Initialise());
             const auto font_path = std::filesystem::path(PROJECT_ROOT_PATH) /
                                    "src/visualizer/gui/assets/fonts/Inter-Regular.ttf";
@@ -305,6 +319,12 @@ namespace {
 
         static void TearDownTestSuite() {
             Rml::Shutdown();
+            Rml::SetSystemInterface(nullptr);
+            auto& localization = lfs::event::LocalizationManager::getInstance();
+            if (had_localization_)
+                EXPECT_TRUE(localization.setLanguage(previous_language_));
+            else
+                localization.reset();
         }
 
         void SetUp() override {
