@@ -2025,12 +2025,35 @@ namespace lfs::core {
 
         DataType out_dtype = promote_types(b.dtype(), c.dtype());
 
-        // Kernel is shape-aware: matched-shape operands need no clone.
-        // Only expand when a true broadcast is required.
-        Tensor a_broadcast, b_broadcast, c_broadcast;
+        if (device_ == Device::CUDA && out_dtype == DataType::Float32) {
+            // The kernel indexes each operand's own broadcast shape, so scalar, row and column
+            // operands stay compact instead of being expanded to the result shape.
+            Tensor condition = contiguous();
+            Tensor x = (b.dtype() == out_dtype ? b : b.to(out_dtype)).contiguous();
+            Tensor y = (c.dtype() == out_dtype ? c : c.to(out_dtype)).contiguous();
+            pin_operands({&condition, &x, &y});
+            auto result = Tensor::empty(shape_abc, device_, out_dtype);
+            prepare_inputs_for_stream({&condition, &x, &y}, result.stream());
+            tensor_ops::launch_where(
+                condition.ptr<unsigned char>(),
+                x.ptr<float>(),
+                y.ptr<float>(),
+                result.ptr<float>(),
+                condition.shape().dims().data(),
+                x.shape().dims().data(),
+                y.shape().dims().data(),
+                result.shape().dims().data(),
+                condition.shape().rank(),
+                x.shape().rank(),
+                y.shape().rank(),
+                result.shape().rank(),
+                result.numel(),
+                result.stream());
+            return result;
+        }
 
-        // where kernels (CUDA shape-indexed OR CPU linear) require dense expanded
-        // storage. broadcast_to is a zero-stride view — materialize.
+        // The host selection reads dense arrays with the full result shape.
+        Tensor a_broadcast, b_broadcast, c_broadcast;
         if (shape_ == shape_abc) {
             a_broadcast = *this;
         } else {
@@ -2054,30 +2077,6 @@ namespace lfs::core {
         LFS_ASSERT_MSG(b_cast.is_valid() && c_cast.is_valid(),
                        std::format("where failed to cast inputs to output dtype {}",
                                    dtype_name(out_dtype)));
-
-        if (device_ == Device::CUDA && out_dtype == DataType::Float32) {
-            pin_operands({&a_broadcast, &b_cast, &c_cast});
-            auto result = Tensor::empty(shape_abc, device_, out_dtype);
-            prepare_inputs_for_stream(
-                {&a_broadcast, &b_cast, &c_cast}, result.stream());
-            tensor_ops::launch_where(
-                a_broadcast.ptr<unsigned char>(),
-                b_cast.ptr<float>(),
-                c_cast.ptr<float>(),
-                result.ptr<float>(),
-                a_broadcast.shape().dims().data(),
-                b_cast.shape().dims().data(),
-                c_cast.shape().dims().data(),
-                result.shape().dims().data(),
-                a_broadcast.shape().rank(),
-                b_cast.shape().rank(),
-                c_cast.shape().rank(),
-                result.shape().rank(),
-                result.numel(),
-                result.stream());
-            // No sync - tensor operation
-            return result;
-        }
 
         Tensor cond_cpu = (a_broadcast.device() == Device::CUDA) ? a_broadcast.to(Device::CPU) : a_broadcast;
         Tensor x_cpu = (b_cast.device() == Device::CUDA) ? b_cast.to(Device::CPU) : b_cast;

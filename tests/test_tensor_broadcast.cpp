@@ -721,3 +721,38 @@ TEST_F(TensorBroadcastTest, NarrowRowReductionsMatchTorch) {
         compare_tensors(values.sum(1, true), reference.sum(1, true), 1e-4f, 1e-5f, "sum keepdim");
     }
 }
+
+// where merges dimensions and picks per-operand full, row, column or scalar access; every mix must
+// match torch.
+TEST_F(TensorBroadcastTest, WhereBroadcastLayoutsMatchTorch) {
+    struct Case {
+        std::vector<int64_t> cond, x, y;
+    };
+    const std::vector<Case> cases = {
+        {{1037, 15, 3}, {1037, 15, 3}, {1037, 15, 3}},
+        {{1037, 1, 1}, {1037, 15, 3}, {1037, 15, 3}},
+        {{1037, 15, 3}, {1, 1, 3}, {1037, 15, 3}},
+        {{1, 1, 1}, {1037, 15, 3}, {1037, 1, 1}},
+        {{1037, 1}, {1037, 3}, {1, 3}},
+        {{1037}, {1037}, {1}},
+        {{1037, 1, 3}, {1, 15, 1}, {1037, 15, 3}},
+        {{7, 1, 5, 1}, {1, 9, 1, 2}, {7, 9, 5, 2}},
+        {{1037, 15, 3}, {3}, {15, 1}},
+        {{15, 1}, {1037, 1, 3}, {1}},
+        {{5, 1}, {2, 1, 4}, {7, 1, 1, 1}}};
+    const auto as_shape = [](const std::vector<int64_t>& shape) {
+        return TensorShape(std::vector<size_t>(shape.begin(), shape.end()));
+    };
+    for (const auto& c : cases) {
+        SCOPED_TRACE(::testing::PrintToString(c.cond) + " " + ::testing::PrintToString(c.x) + " " +
+                     ::testing::PrintToString(c.y));
+        const auto cond_values = create_sequential_tensor(as_shape(c.cond));
+        const auto cond = cond_values.mod(3.0f).lt(1.0f);
+        const auto x = create_sequential_tensor(as_shape(c.x)).mul(2.0f);
+        const auto y = create_sequential_tensor(as_shape(c.y)).neg();
+        const auto cond_torch = torch::fmod(create_torch_sequential(c.cond), 3.0) < 1.0;
+        const auto x_torch = create_torch_sequential(c.x) * 2.0f;
+        const auto y_torch = -create_torch_sequential(c.y);
+        compare_tensors(Tensor::where(cond, x, y), torch::where(cond_torch, x_torch, y_torch), 0.0f, 0.0f, "where");
+    }
+}
