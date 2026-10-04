@@ -59,8 +59,10 @@ namespace {
                 {"CUDA", GpuBackend::CUDA}};
     }
 
+    // Runs on every available GPU backend; a test that ran on none reports a skip rather than a pass.
     template <typename Run>
     void for_each_worker_target(Run run) {
+        int ran = 0;
         for (const auto& [name, backend] : worker_targets()) {
             SCOPED_TRACE(name);
             if (backend && !lfs::core::gpu_backend_available(*backend))
@@ -69,7 +71,10 @@ namespace {
             if (backend)
                 scope.emplace(*backend);
             run(lfs::core::Device::GPU);
+            ++ran;
         }
+        if (ran == 0)
+            GTEST_SKIP() << "No GPU backend is available";
     }
 
     lfs::core::Tensor selection(std::initializer_list<bool> values) {
