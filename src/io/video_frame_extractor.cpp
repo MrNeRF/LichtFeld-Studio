@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "video_frame_extractor.hpp"
+#include "core/image_codecs.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "hdr_libplacebo.hpp"
@@ -23,7 +24,6 @@ extern "C" {
 }
 
 #include <cuda_runtime.h>
-#include <stb_image_write.h>
 
 #include <nlohmann/json.hpp>
 
@@ -367,11 +367,21 @@ namespace lfs::io {
                               const void* data,
                               ImageFormat format,
                               int jpg_quality) {
-            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+            std::string error;
             if (format == ImageFormat::JPG) {
-                return stbi_write_jpg(path_utf8.c_str(), width, height, 3, data, jpg_quality) != 0;
+                const int quality = jpg_quality == 0 ? 90 : std::clamp(jpg_quality, 1, 100);
+                const bool success = lfs::core::image_codecs::write_jpeg(
+                    path, static_cast<const std::uint8_t*>(data), width, height, 3,
+                    quality, std::nullopt, error, quality > 90);
+                if (!success)
+                    LOG_ERROR("{}", error);
+                return success;
             }
-            return stbi_write_png(path_utf8.c_str(), width, height, 3, data, width * 3) != 0;
+            const bool success = lfs::core::image_codecs::write_png(
+                path, data, width, height, 3, 8, 6, std::nullopt, error);
+            if (!success)
+                LOG_ERROR("{}", error);
+            return success;
         }
 
         void write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {

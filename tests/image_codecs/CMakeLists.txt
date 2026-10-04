@@ -15,6 +15,7 @@ find_package(Threads REQUIRED)
 find_package(OpenEXR 3.4.15 CONFIG REQUIRED)
 find_package(JPEG REQUIRED)
 find_package(PNG REQUIRED)
+find_package(ZLIB REQUIRED)
 find_package(TIFF REQUIRED)
 if(NOT TARGET WebP::webp)
     find_package(WebP CONFIG QUIET)
@@ -27,14 +28,16 @@ endif()
 
 add_executable(lichtfeld_image_codec_tests
     ../test_exr_codecs.cpp
+    ../test_image_codec_dependencies.cpp
     ${LFS_CODEC_ROOT}/src/core/image_codecs.cpp
     ${LFS_CODEC_ROOT}/src/core/image_exr.cpp)
 target_compile_features(lichtfeld_image_codec_tests PRIVATE cxx_std_20)
 target_include_directories(lichtfeld_image_codec_tests PRIVATE ${LFS_CODEC_ROOT}/src)
+target_include_directories(lichtfeld_image_codec_tests BEFORE PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_include_directories(lichtfeld_image_codec_tests SYSTEM PRIVATE ${LFS_CODEC_ROOT}/external)
 target_link_libraries(lichtfeld_image_codec_tests PRIVATE
     GTest::gtest_main Threads::Threads OpenEXR::OpenEXRCore OpenEXR::OpenEXR
-    JPEG::JPEG PNG::PNG TIFF::TIFF WebP::webp)
+    JPEG::JPEG PNG::PNG TIFF::TIFF WebP::webp ZLIB::ZLIB)
 if(MSVC)
     target_compile_options(lichtfeld_image_codec_tests PRIVATE /utf-8 /W4)
     target_compile_definitions(lichtfeld_image_codec_tests PRIVATE NOMINMAX)

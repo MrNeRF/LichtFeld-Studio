@@ -50,9 +50,14 @@ namespace lfs::core::image_codecs {
     bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error);
     bool decode_jpeg_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
 
+    // RGB uses 4:2:0 by default; full_chroma selects 4:4:4 for high-quality exports.
     bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
                     int width, int height, int channels, int quality,
                     const std::optional<std::string>& comment, std::string& error);
+    bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
+                    int width, int height, int channels, int quality,
+                    const std::optional<std::string>& comment, std::string& error,
+                    bool full_chroma);
     bool write_png(const std::filesystem::path& path, const void* data,
                    int width, int height, int channels, int bit_depth,
                    int compression_level, const std::optional<std::string>& comment,
