@@ -918,8 +918,13 @@ namespace lfs::python {
                 const auto guard = std::make_shared<NodeContext*>(&context);
                 struct Expire {
                     const std::shared_ptr<NodeContext*>& guard;
-                    ~Expire() { *guard = nullptr; }
-                } expire{guard};
+                    bool outer;
+                    ~Expire() {
+                        *guard = nullptr;
+                        g_in_node_execute = outer;
+                    }
+                } expire{guard, g_in_node_execute};
+                g_in_node_execute = true;
                 try {
                     auto instance = (**type)();
                     const auto callback = instance.attr("execute");

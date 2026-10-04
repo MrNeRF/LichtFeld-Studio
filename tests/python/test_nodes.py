@@ -491,6 +491,29 @@ def test_python_node_context_expires_and_fields_keep_their_type(lf, numpy):
         lf.nodes.unregister_node(Probe.id)
 
 
+def test_python_node_cannot_reach_the_viewer_from_execute(lf, numpy):
+    class Reader(lf.nodes.Node):
+        id = "tests.viewer_reader"
+        label = "Viewer Reader"
+        category = "Test"
+        inputs = [lf.nodes.Input("Geometry", "geometry")]
+        outputs = [lf.nodes.Output("Result", "geometry")]
+
+        def execute(self, ctx):
+            lf.nodes.evaluated("garden")
+            return {"Result": ctx.input("Geometry")}
+
+    lf.nodes.register_node(Reader)
+    try:
+        tree = lf.nodes.new_tree("Viewer reader")
+        node = tree.add_node(Reader.id, "Reader")
+        _insert_between(tree, node)
+        with pytest.raises(ValueError, match=r"failed \(RuntimeError\)"):
+            lf.nodes.evaluate_tree(tree, _geometry(lf, numpy))
+    finally:
+        lf.nodes.unregister_node(Reader.id)
+
+
 def test_scene_modifier_api_skips_without_scene(lf):
     with pytest.raises(RuntimeError, match="scene manager is unavailable"):
         lf.nodes.evaluate("missing")
