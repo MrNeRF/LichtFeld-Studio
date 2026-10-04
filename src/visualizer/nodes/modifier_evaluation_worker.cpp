@@ -907,6 +907,10 @@ namespace lfs::vis {
                     lock.unlock();
                     core::Tensor::release_freed_memory();
                     holding_freed_memory_ = false;
+                    // Once no graph is left to evaluate or publish, return the storage the graphs
+                    // pooled, including payload buffers the renderer imported.
+                    if (caches_.empty() && sources_.empty() && published_.empty())
+                        core::Tensor::trim_memory_pool();
                     continue;
                 }
                 retired.swap(retired_);
