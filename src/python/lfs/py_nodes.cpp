@@ -1714,17 +1714,15 @@ namespace lfs::python {
                     return saved->id;
                 }, std::string{});
             return result; }, nb::arg("tree"), nb::arg("name"), nb::arg("description"), nb::arg("category"));
-        module.def("delete_template", [](const std::string& id) {
-            return invoke_on_viewer([id] {
-                if (!live_manager())
-                    return false;
-                const auto result = live_manager()->deleteTemplate(id);
-                if (!result)
-                    throw std::invalid_argument(result.error().message);
-                return true;
-            },
-                                    false);
-        });
+        module.def("delete_template", [](const std::string& id) { return invoke_on_viewer([id] {
+                                                                      if (!live_manager())
+                                                                          return false;
+                                                                      const auto result = live_manager()->deleteTemplate(id);
+                                                                      if (!result)
+                                                                          throw std::invalid_argument(result.error().message);
+                                                                      return true;
+                                                                  },
+                                                                                          false); }, nb::arg("id"));
         module.def("rename_template", [](const std::string& id, const std::string& name) { return invoke_on_viewer([id, name] {
                                                                                                if (!live_manager())
                                                                                                    throw std::runtime_error("User templates require a running viewer");
