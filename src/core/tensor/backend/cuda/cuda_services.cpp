@@ -321,6 +321,10 @@ namespace lfs::core {
                 threshold_bytes);
         }
 
+        void CudaBackendOps::hold_freed_memory(const bool hold) {
+            CudaMemoryPool::instance().hold_freed_memory(hold);
+        }
+
         MemoryInfo CudaBackendOps::stats() {
             MemoryInfo result;
             LFS_CUDA_CHECK(cudaMemGetInfo(&result.free_bytes, &result.total_bytes));

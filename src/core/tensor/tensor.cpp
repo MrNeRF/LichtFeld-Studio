@@ -956,6 +956,14 @@ namespace lfs::core {
         internal::trim_live_gpu_backends_if_reserved_unused_exceeds(threshold_bytes);
     }
 
+    void Tensor::hold_freed_memory() {
+        internal::hold_freed_gpu_memory(true);
+    }
+
+    void Tensor::release_freed_memory() {
+        internal::hold_freed_gpu_memory(false);
+    }
+
     void Tensor::trim_device_memory_pool() {
         internal::trim_live_gpu_backends();
     }

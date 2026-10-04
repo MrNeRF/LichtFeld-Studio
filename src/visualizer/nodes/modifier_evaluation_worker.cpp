@@ -802,6 +802,12 @@ namespace lfs::vis {
                 }
             }
         };
+        // Graphs free and reallocate payload-sized intermediates between readbacks; keep that memory
+        // pooled until the request is done instead of mapping it again for every node.
+        core::Tensor::hold_freed_memory();
+        struct FreedMemoryRelease {
+            ~FreedMemoryRelease() { core::Tensor::release_freed_memory(); }
+        } freed_memory_release;
         try {
             try {
                 attempt();

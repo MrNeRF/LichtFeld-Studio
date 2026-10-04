@@ -1237,6 +1237,13 @@ namespace lfs::core {
             }
         }
 
+        void hold_freed_gpu_memory(const bool hold) {
+            for (const GpuBackend backend : kGpuBackends) {
+                if (gpu_backend_live(backend))
+                    backend_ops(backend).hold_freed_memory(hold);
+            }
+        }
+
         GpuBackend resolve_new_gpu_storage_backend() {
             const GpuBackend backend = scoped_backend ? *scoped_backend : default_gpu_backend();
             if (!gpu_backend_available(backend)) {

@@ -346,6 +346,8 @@ namespace lfs::core {
             virtual void rehome_stream(StorageRef storage, ExecContext context) = 0;
             virtual void trim() = 0;
             virtual void trim_if_reserved_unused_exceeds(size_t threshold_bytes) = 0;
+            // Nested holds keep freed device memory pooled across synchronizations.
+            virtual void hold_freed_memory(bool) {}
             virtual MemoryInfo stats() = 0;
             virtual void shutdown() = 0;
             virtual void set_allocation_iteration(int iteration) = 0;
@@ -663,6 +665,7 @@ namespace lfs::core {
             void rehome_stream(StorageRef storage, ExecContext context) override;
             void trim() override;
             void trim_if_reserved_unused_exceeds(size_t threshold_bytes) override;
+            void hold_freed_memory(bool hold) override;
             MemoryInfo stats() override;
             void shutdown() override;
             void set_allocation_iteration(int iteration) override;

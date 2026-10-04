@@ -526,6 +526,7 @@ namespace lfs::core {
         // backend that was never initialized is not brought up to be trimmed.
         LFS_LOCAL_SYMBOL void trim_live_gpu_backends();
         LFS_LOCAL_SYMBOL void trim_live_gpu_backends_if_reserved_unused_exceeds(size_t threshold_bytes);
+        LFS_LOCAL_SYMBOL void hold_freed_gpu_memory(bool hold);
         LFS_CORE_API Tensor allocate_like(const Tensor& input,
                                           const TensorShape& shape,
                                           DataType dtype);
@@ -1151,6 +1152,10 @@ namespace lfs::core {
 
         static void trim_memory_pool();
         static void trim_memory_pool_if_reserved_unused_exceeds(size_t threshold_bytes);
+        // While held, freed device memory stays pooled across synchronizations instead of returning to
+        // the system; releasing the last hold trims the pool back. Holds nest and may span threads.
+        static void hold_freed_memory();
+        static void release_freed_memory();
         // CUDA device pool only; leaves the pinned host cache intact.
         static void trim_device_memory_pool();
         static void shutdown_memory_pool();
