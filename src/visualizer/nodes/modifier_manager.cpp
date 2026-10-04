@@ -222,7 +222,7 @@ namespace lfs::vis {
             return {};
         }
 
-        std::string interface_identifier(const lfs::nodes::TreeInterface& interface,
+        std::string interface_identifier(const lfs::nodes::TreeInterface& sockets,
                                          std::string label) {
             if (label.empty())
                 label = "Socket";
@@ -230,10 +230,10 @@ namespace lfs::vis {
                 if (character == '\n' || character == '\r')
                     character = ' ';
             const auto exists = [&](const std::string_view value) {
-                return std::ranges::any_of(interface.inputs, [&](const auto& item) {
+                return std::ranges::any_of(sockets.inputs, [&](const auto& item) {
                            return item.identifier == value;
                        }) ||
-                       std::ranges::any_of(interface.outputs, [&](const auto& item) {
+                       std::ranges::any_of(sockets.outputs, [&](const auto& item) {
                            return item.identifier == value;
                        });
             };
@@ -619,8 +619,8 @@ namespace lfs::vis {
         const auto original_links = outer->links;
         auto nested = std::make_unique<lfs::nodes::NodeTree>(registry_,
                                                              uniqueTreeName(std::move(group_name)));
-        nested->interface.inputs.clear();
-        nested->interface.outputs.clear();
+        nested->group_interface.inputs.clear();
+        nested->group_interface.outputs.clear();
         nested->links.clear();
         const auto input_name = nested->input_node().name;
         const auto output_name = nested->output_node().name;
@@ -692,9 +692,9 @@ namespace lfs::vis {
                             own != target->input_values.end())
                             value = own->second;
                     const auto identifier = interface_identifier(
-                        nested->interface,
+                        nested->group_interface,
                         declaration->label.empty() ? declaration->identifier : declaration->label);
-                    nested->interface.inputs.push_back(
+                    nested->group_interface.inputs.push_back(
                         {identifier, declaration->label.empty() ? declaration->identifier : declaration->label,
                          declaration->type, value, declaration->min, declaration->max, declaration->step});
                     socket = incoming_sockets.emplace(key, identifier).first;
@@ -713,9 +713,9 @@ namespace lfs::vis {
                     if (declaration == outputs.end())
                         continue;
                     const auto identifier = interface_identifier(
-                        nested->interface,
+                        nested->group_interface,
                         declaration->label.empty() ? declaration->identifier : declaration->label);
-                    nested->interface.outputs.push_back(
+                    nested->group_interface.outputs.push_back(
                         {identifier, declaration->label.empty() ? declaration->identifier : declaration->label,
                          declaration->type, declaration->default_value, declaration->min,
                          declaration->max, declaration->step});
@@ -736,7 +736,7 @@ namespace lfs::vis {
         auto& group = outer->add_node("lfs.group", nested_name);
         group.location = {centre_x, centre_y};
         group.properties["tree"] = nested_uuid;
-        for (const auto& socket : tree(nested_uuid)->interface.inputs)
+        for (const auto& socket : tree(nested_uuid)->group_interface.inputs)
             group.input_values[socket.identifier] = socket.default_value;
         const lfs::nodes::TreeResolver outer_resolver = [this](const std::string_view uuid) {
             return tree(uuid);
@@ -897,7 +897,7 @@ namespace lfs::vis {
         const auto before = owner->to_json();
         node->properties["tree"] = referenced->uuid;
         std::unordered_map<std::string, lfs::nodes::Value> values;
-        for (const auto& socket : referenced->interface.inputs) {
+        for (const auto& socket : referenced->group_interface.inputs) {
             const auto existing = node->input_values.find(socket.identifier);
             values[socket.identifier] = existing == node->input_values.end()
                                             ? socket.default_value
@@ -968,12 +968,12 @@ namespace lfs::vis {
         if (!allowed.contains(type))
             return std::unexpected(ModifierError{"Unknown interface socket type"});
         const auto before = toJson(false);
-        const auto identifier = interface_identifier(graph->interface, label);
+        const auto identifier = interface_identifier(graph->group_interface, label);
         if (std::holds_alternative<std::monostate>(default_value.data))
             default_value = default_for_socket(type);
         lfs::nodes::InterfaceSocket socket{identifier, label.empty() ? identifier : std::move(label),
                                            std::move(type), std::move(default_value), min, max, step};
-        auto& sockets = output ? graph->interface.outputs : graph->interface.inputs;
+        auto& sockets = output ? graph->group_interface.outputs : graph->group_interface.inputs;
         sockets.push_back(socket);
         if (!output)
             for (auto& [_, other] : trees_)
@@ -990,7 +990,7 @@ namespace lfs::vis {
         auto* graph = tree(tree_uuid);
         if (!graph)
             return std::unexpected(ModifierError{"Node graph does not exist"});
-        auto& sockets = output ? graph->interface.outputs : graph->interface.inputs;
+        auto& sockets = output ? graph->group_interface.outputs : graph->group_interface.inputs;
         const auto found = std::ranges::find(sockets, identifier,
                                              &lfs::nodes::InterfaceSocket::identifier);
         if (found == sockets.end())
@@ -1034,7 +1034,7 @@ namespace lfs::vis {
         auto* graph = tree(tree_uuid);
         if (!graph)
             return std::unexpected(ModifierError{"Node graph does not exist"});
-        auto& sockets = output ? graph->interface.outputs : graph->interface.inputs;
+        auto& sockets = output ? graph->group_interface.outputs : graph->group_interface.inputs;
         const auto found = std::ranges::find(sockets, identifier,
                                              &lfs::nodes::InterfaceSocket::identifier);
         if (found == sockets.end())
@@ -1064,7 +1064,7 @@ namespace lfs::vis {
         auto* graph = tree(tree_uuid);
         if (!graph)
             return std::unexpected(ModifierError{"Node graph does not exist"});
-        auto& sockets = output ? graph->interface.outputs : graph->interface.inputs;
+        auto& sockets = output ? graph->group_interface.outputs : graph->group_interface.inputs;
         const auto found = std::ranges::find(sockets, identifier,
                                              &lfs::nodes::InterfaceSocket::identifier);
         if (found == sockets.end())

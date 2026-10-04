@@ -31,8 +31,8 @@ namespace lfs::nodes {
                 if (!output)
                     return {};
                 std::vector<SocketDecl> result;
-                result.reserve(tree.interface.inputs.size());
-                for (const auto& item : tree.interface.inputs)
+                result.reserve(tree.group_interface.inputs.size());
+                for (const auto& item : tree.group_interface.inputs)
                     result.push_back(interface_decl(item));
                 return result;
             }
@@ -40,8 +40,8 @@ namespace lfs::nodes {
                 if (output)
                     return {};
                 std::vector<SocketDecl> result;
-                result.reserve(tree.interface.outputs.size());
-                for (const auto& item : tree.interface.outputs)
+                result.reserve(tree.group_interface.outputs.size());
+                for (const auto& item : tree.group_interface.outputs)
                     result.push_back(interface_decl(item));
                 return result;
             }
@@ -52,7 +52,7 @@ namespace lfs::nodes {
                 const NodeTree* referenced = resolver(graph->get_ref<const std::string&>());
                 if (!referenced || referenced->tree_type != tree.tree_type)
                     return {};
-                const auto& sockets = output ? referenced->interface.outputs : referenced->interface.inputs;
+                const auto& sockets = output ? referenced->group_interface.outputs : referenced->group_interface.inputs;
                 std::vector<SocketDecl> result;
                 result.reserve(sockets.size());
                 for (const auto& item : sockets)
@@ -254,8 +254,8 @@ namespace lfs::nodes {
         uuid = core::generate_uuid_v4().to_string();
         name = std::move(tree_name);
         tree_type = std::move(type);
-        interface.inputs.push_back({"Geometry", "Geometry", std::string(GEOMETRY_SOCKET), Geometry{}});
-        interface.outputs.push_back({"Geometry", "Geometry", std::string(GEOMETRY_SOCKET), Geometry{}});
+        group_interface.inputs.push_back({"Geometry", "Geometry", std::string(GEOMETRY_SOCKET), Geometry{}});
+        group_interface.outputs.push_back({"Geometry", "Geometry", std::string(GEOMETRY_SOCKET), Geometry{}});
         add_node("lfs.group_input", "Group Input").location = {-200.0f, 0.0f};
         add_node("lfs.group_output", "Group Output").location = {200.0f, 0.0f};
         add_link({"Group Input", "Geometry", "Group Output", "Geometry"});
@@ -487,8 +487,8 @@ namespace lfs::nodes {
             }
             return result;
         };
-        result["interface"] = {{"inputs", encode_interface(interface.inputs)},
-                               {"outputs", encode_interface(interface.outputs)}};
+        result["interface"] = {{"inputs", encode_interface(group_interface.inputs)},
+                               {"outputs", encode_interface(group_interface.outputs)}};
         return result;
     }
 
@@ -568,16 +568,16 @@ namespace lfs::nodes {
             return result;
         };
         if (json.contains("interface") && json["interface"].is_object()) {
-            tree.interface.inputs =
+            tree.group_interface.inputs =
                 decode_interface(json["interface"].value("inputs", nlohmann::json::array()));
-            tree.interface.outputs =
+            tree.group_interface.outputs =
                 decode_interface(json["interface"].value("outputs", nlohmann::json::array()));
         }
-        if (tree.interface.inputs.empty())
-            tree.interface.inputs.push_back(
+        if (tree.group_interface.inputs.empty())
+            tree.group_interface.inputs.push_back(
                 {"Geometry", "Geometry", std::string(GEOMETRY_SOCKET), Geometry{}});
-        if (tree.interface.outputs.empty())
-            tree.interface.outputs.push_back(
+        if (tree.group_interface.outputs.empty())
+            tree.group_interface.outputs.push_back(
                 {"Geometry", "Geometry", std::string(GEOMETRY_SOCKET), Geometry{}});
         return tree;
     }

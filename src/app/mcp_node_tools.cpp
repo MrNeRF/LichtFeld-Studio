@@ -184,8 +184,8 @@ namespace lfs::app {
                     if (!graph)
                         return failure("The modifier's graph was deleted", "modifier");
                     for (const auto& [id, raw] : args.at("input_overrides").items()) {
-                        const auto socket = std::ranges::find(graph->interface.inputs, id, &lfs::nodes::InterfaceSocket::identifier);
-                        if (socket == graph->interface.inputs.end())
+                        const auto socket = std::ranges::find(graph->group_interface.inputs, id, &lfs::nodes::InterfaceSocket::identifier);
+                        if (socket == graph->group_interface.inputs.end())
                             return failure("Unknown graph interface input: " + id, "input_overrides");
                         if (raw.is_null()) {
                             replacement.input_overrides.erase(id);
@@ -468,7 +468,7 @@ namespace lfs::app {
                         auto* graph = manager.tree(args.at("tree").get<std::string>());
                         if (!graph)
                             return failure("Node graph does not exist", "tree");
-                        auto& sockets = output ? graph->interface.outputs : graph->interface.inputs;
+                        auto& sockets = output ? graph->group_interface.outputs : graph->group_interface.inputs;
                         const auto socket = std::ranges::find(sockets, args.at("identifier").get<std::string>(), &lfs::nodes::InterfaceSocket::identifier);
                         if (socket == sockets.end())
                             return failure("Interface socket does not exist", "identifier");

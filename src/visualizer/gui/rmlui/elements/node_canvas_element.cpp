@@ -1336,8 +1336,8 @@ namespace lfs::vis::gui {
                         html += "<div class=\"interface-add\"><select data-role=\"interface-type\"><option value=\"lfs.geometry\">Geometry</option><option value=\"lfs.float\">Float</option><option value=\"lfs.int\">Int</option><option value=\"lfs.bool\">Bool</option><option value=\"lfs.vector\">Vector</option><option value=\"lfs.colour\">Colour</option><option value=\"lfs.string\">String</option></select><button class=\"btn\" data-action=\"interface-add\" data-side=\"" +
                                 std::string(output ? "output" : "input") + "\">" + escape(LOC(output ? "node_editor.add_output" : "node_editor.add_input")) + "</button></div></div>";
                     };
-                    append_side(false, interface_tree->interface.inputs);
-                    append_side(true, interface_tree->interface.outputs);
+                    append_side(false, interface_tree->group_interface.inputs);
+                    append_side(true, interface_tree->group_interface.outputs);
                 }
                 if (type) {
                     if (!type->help.empty()) {
@@ -2217,8 +2217,8 @@ namespace lfs::vis::gui {
                 const auto identifier = target->GetAttribute<Rml::String>("data-socket", "");
                 auto* input = dynamic_cast<Rml::ElementFormControlInput*>(target);
                 if (interface_tree && input) {
-                    const auto& sockets = output ? interface_tree->interface.outputs
-                                                 : interface_tree->interface.inputs;
+                    const auto& sockets = output ? interface_tree->group_interface.outputs
+                                                 : interface_tree->group_interface.inputs;
                     const auto socket = std::ranges::find(sockets, identifier,
                                                           &lfs::nodes::InterfaceSocket::identifier);
                     if (socket != sockets.end()) {
@@ -2481,7 +2481,7 @@ namespace lfs::vis::gui {
                             if (!result)
                                 file_error_ = result.error().message;
                         } else {
-                            const auto& sockets = output ? interface_tree->interface.outputs : interface_tree->interface.inputs;
+                            const auto& sockets = output ? interface_tree->group_interface.outputs : interface_tree->group_interface.inputs;
                             const auto found = std::ranges::find(sockets, identifier, &lfs::nodes::InterfaceSocket::identifier);
                             if (found != sockets.end()) {
                                 const auto current = static_cast<std::size_t>(std::distance(sockets.begin(), found));
