@@ -100109,25 +100109,39 @@ const initUI = (global) => {
     const readMeasureOverlay = () => {
         const svg = document.getElementById('measureToolSvg');
         if (!svg || svg.classList.contains('hidden')) return null;
-        const lineDef = svg.querySelector('#measureLine');
-        let line = null;
-        if (elementVisible(svg.querySelector('#measureLineTop'))) {
-            const x1 = numAttr(lineDef, 'x1'), y1 = numAttr(lineDef, 'y1');
-            const x2 = numAttr(lineDef, 'x2'), y2 = numAttr(lineDef, 'y2');
-            if (x1 != null && y1 != null && x2 != null && y2 != null) {
-                line = { x1, y1, x2, y2 };
+        // Panel rows are parallel to SVG groups (both in measurement order), so length values pair with lines by index.
+        const lengths = [];
+        const panel = document.getElementById('measurePanel');
+        if (panel && !panel.classList.contains('hidden')) {
+            for (const row of panel.querySelectorAll('.measureRow')) {
+                const input = row.querySelector('.measureLengthInput');
+                lengths.push(!row.classList.contains('hidden') && input ? input.value : '');
             }
         }
-        const points = [];
-        for (const id of ['measureLineStart', 'measureLineEnd']) {
-            const circle = svg.querySelector('#' + id);
-            if (!elementVisible(circle)) continue;
-            const cx = numAttr(circle, 'cx'), cy = numAttr(circle, 'cy');
-            if (cx != null && cy != null) points.push({ x: cx, y: cy });
+        const measurements = [];
+        let visibleCount = 0;
+        for (let i = 0; i < svg.children.length; i++) {
+            const group = svg.children[i];
+            if (group.classList.contains('hidden')) continue;
+            const lineTop = group.querySelector('.measureLineTop');
+            let line = null;
+            if (elementVisible(lineTop)) {
+                const x1 = numAttr(lineTop, 'x1'), y1 = numAttr(lineTop, 'y1');
+                const x2 = numAttr(lineTop, 'x2'), y2 = numAttr(lineTop, 'y2');
+                if (x1 != null && y1 != null && x2 != null && y2 != null) {
+                    line = { x1, y1, x2, y2 };
+                }
+            }
+            const points = [];
+            for (const circle of group.querySelectorAll('.measurePoint')) {
+                if (!elementVisible(circle)) continue;
+                const cx = numAttr(circle, 'cx'), cy = numAttr(circle, 'cy');
+                if (cx != null && cy != null) points.push({ x: cx, y: cy });
+            }
+            measurements.push({ line, points, length: lengths[i] || '' });
+            if (line || points.length) visibleCount++;
         }
-        const lengthInput = document.getElementById('measureLengthInput');
-        const data = { line, points, length: lengthInput ? lengthInput.value : '' };
-        return data.line || data.points.length ? data : null;
+        return visibleCount ? { measurements } : null;
     };
 
     // Snapshot the label overlay's screen-space geometry (leader lines, point markers and text positions).
@@ -100154,42 +100168,44 @@ const initUI = (global) => {
 
     // Draw the snapshotted measurement overlay into capture pixel space. (s) maps current CSS pixels to capture pixels; stroke widths, marker radii and font sizes scale with it so the export matches what is on screen at any resolution.
     const drawMeasureOverlay = (ctx, data, s) => {
-        if (!data) return;
+        if (!data || !data.measurements.length) return;
         ctx.save();
         ctx.lineCap = 'round';
-        if (data.line) {
-            const { x1, y1, x2, y2 } = data.line;
-            ctx.beginPath();
-            ctx.moveTo(x1 * s, y1 * s);
-            ctx.lineTo(x2 * s, y2 * s);
-            ctx.lineWidth = 6 * s;
-            ctx.strokeStyle = '#000';
-            ctx.stroke();
-            ctx.lineWidth = 2 * s;
-            ctx.strokeStyle = '#fff';
-            ctx.stroke();
-        }
-        for (const p of data.points) {
-            ctx.beginPath();
-            ctx.arc(p.x * s, p.y * s, 5 * s, 0, Math.PI * 2);
-            ctx.fillStyle = '#fff';
-            ctx.fill();
-            ctx.lineWidth = 2 * s;
-            ctx.strokeStyle = '#000';
-            ctx.stroke();
-        }
-        if (data.length && data.line) {
-            const mx = ((data.line.x1 + data.line.x2) / 2) * s;
-            const my = (((data.line.y1 + data.line.y2) / 2) - 14) * s;
-            ctx.font = `${14 * s}px Arial, sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.lineJoin = 'round';
-            ctx.lineWidth = 3 * s;
-            ctx.strokeStyle = '#000';
-            ctx.strokeText(`Length: ${data.length}`, mx, my);
-            ctx.fillStyle = '#fff';
-            ctx.fillText(`Length: ${data.length}`, mx, my);
+        for (const m of data.measurements) {
+            if (m.line) {
+                const { x1, y1, x2, y2 } = m.line;
+                ctx.beginPath();
+                ctx.moveTo(x1 * s, y1 * s);
+                ctx.lineTo(x2 * s, y2 * s);
+                ctx.lineWidth = 6 * s;
+                ctx.strokeStyle = '#000';
+                ctx.stroke();
+                ctx.lineWidth = 2 * s;
+                ctx.strokeStyle = '#fff';
+                ctx.stroke();
+            }
+            for (const p of m.points) {
+                ctx.beginPath();
+                ctx.arc(p.x * s, p.y * s, 5 * s, 0, Math.PI * 2);
+                ctx.fillStyle = '#fff';
+                ctx.fill();
+                ctx.lineWidth = 2 * s;
+                ctx.strokeStyle = '#000';
+                ctx.stroke();
+            }
+            if (m.length && m.line) {
+                const mx = ((m.line.x1 + m.line.x2) / 2) * s;
+                const my = (((m.line.y1 + m.line.y2) / 2) - 14) * s;
+                ctx.font = `${14 * s}px Arial, sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.lineJoin = 'round';
+                ctx.lineWidth = 3 * s;
+                ctx.strokeStyle = '#000';
+                ctx.strokeText(`Length: ${m.length}`, mx, my);
+                ctx.fillStyle = '#fff';
+                ctx.fillText(`Length: ${m.length}`, mx, my);
+            }
         }
         ctx.restore();
     };

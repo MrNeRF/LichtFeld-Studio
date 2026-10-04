@@ -8,12 +8,28 @@
  * points are plain world-space Vec3s rather than positions relative to a
  * splat's own transform.
  *
+ * Unlike the original (a single A->B segment), this tool keeps ALL completed
+ * measurements visible at once: each click on empty model space alternates
+ * between placing point A of a new measurement and point B that completes it,
+ * so a series of clicks produces a list of independent segments rendered in
+ * parallel. Completed measurements can be selected (gizmo drag), resized via
+ * the per-measurement length input, or deleted individually.
+ *
  * IMPORTANT: like gizmo.js, this file is NOT self-contained at runtime. It
  * is concatenated (see src/io/formats/html.cpp) after index.js and gizmo.js
  * and wrapped in an IIFE at HTML export time, so it shares index.js's
  * bundled PlayCanvas engine classes and gizmo.js's `Gizmo`/`TranslateGizmo`
  * by closure rather than a real ES import. Do not add real `import`
  * statements here; the trailing `export` below is stripped at export time.
+ *
+ * Interactions (measure mode must be toggled on via the #measure button):
+ *   - click empty model space -> place next point (A of a new measurement,
+ *     then B completing it; repeats for further measurements)
+ *   - click an existing endpoint -> select that measurement (gizmo attached,
+ *     drag to move just that endpoint)
+ *   - right-click an endpoint  -> delete its whole measurement
+ * The #measurePanel lists every completed measurement with an editable length
+ * input and a per-row delete button.
  */
 
 const SCREEN_PICK_TOLERANCE = 8;
@@ -28,8 +44,12 @@ function initMeasureTool(global) {
     const canvas = app.graphicsDevice.canvas;
 
     // ---- state -------------------------------------------------------
-    const points = [];
-    let selection = -1;
+    // Each measurement is { a: Vec3, b: Vec3|null }; while being built it has
+    // only `a` (b === null) and is tracked via openIdx.
+    const measurements = [];
+    let openIdx = -1;      // index of the in-progress measurement (-1 none)
+    let selM = -1;         // selected measurement whose endpoint is gizmored
+    let selEnd = 0;        // which endpoint of selM (0=a, 1=b)
     let active = false;
     let gizmo = null;
     let gizmoLayer = null;
@@ -37,69 +57,139 @@ function initMeasureTool(global) {
     let picker = null;
 
     const _screen = new Vec3();
-    const _dragDir = new Vec3();
-    let _dragStartLength = 0;
+    const _view = new Vec3();
 
-    // ---- SVG overlay (line + endpoint markers) ------------------------
+    // A point behind the camera (positive view-space z, since the camera
+    // looks down -Z) would otherwise still project onto screen via
+    // worldToScreen() and become visible/clickable in the middle of the view
+    // when flying past it.
+    const isBehindCamera = (position) => {
+        camera.camera.viewMatrix.transformPoint(position, _view);
+        return _view.z >= 0;
+    };
+
+    // ---- SVG overlay (per-measurement group: line + endpoint markers) --
     const svgNS = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(svgNS, 'svg');
     svg.setAttribute('id', 'measureToolSvg');
     svg.classList.add('hidden');
-
-    const defs = document.createElementNS(svgNS, 'defs');
-    const lineDef = document.createElementNS(svgNS, 'line');
-    lineDef.setAttribute('id', 'measureLine');
-    defs.appendChild(lineDef);
-
-    const lineBottom = document.createElementNS(svgNS, 'use');
-    lineBottom.setAttribute('id', 'measureLineBottom');
-    lineBottom.setAttribute('href', '#measureLine');
-
-    const lineTop = document.createElementNS(svgNS, 'use');
-    lineTop.setAttribute('id', 'measureLineTop');
-    lineTop.setAttribute('href', '#measureLine');
-
-    const startCircle = document.createElementNS(svgNS, 'circle');
-    startCircle.setAttribute('id', 'measureLineStart');
-
-    const endCircle = document.createElementNS(svgNS, 'circle');
-    endCircle.setAttribute('id', 'measureLineEnd');
-
-    svg.appendChild(defs);
-    svg.appendChild(lineBottom);
-    svg.appendChild(lineTop);
-    svg.appendChild(startCircle);
-    svg.appendChild(endCircle);
     document.getElementById('ui').appendChild(svg);
 
-    // ---- floating length panel -----------------------------------------
+    // One <g> per measurement; each carries its own line pair and endpoint
+    // circles so segments can be positioned independently. (A single shared
+    // line definition cannot serve multiple measurements at once.)
+    const groups = [];   // SVG <g> per measurement, parallel to `measurements`
+
+    const createMeasureGroup = () => {
+        const g = document.createElementNS(svgNS, 'g');
+        g.setAttribute('class', 'measureGroup');
+
+        const lineBottom = document.createElementNS(svgNS, 'line');
+        lineBottom.setAttribute('class', 'measureLineBottom');
+        const lineTop = document.createElementNS(svgNS, 'line');
+        lineTop.setAttribute('class', 'measureLineTop');
+        const startCircle = document.createElementNS(svgNS, 'circle');
+        startCircle.setAttribute('class', 'measurePoint measureStart');
+        const endCircle = document.createElementNS(svgNS, 'circle');
+        endCircle.setAttribute('class', 'measurePoint measureEnd');
+
+        g.appendChild(lineBottom);
+        g.appendChild(lineTop);
+        g.appendChild(startCircle);
+        g.appendChild(endCircle);
+        svg.appendChild(g);
+        return g;
+    };
+
+    // ---- floating measurement list panel -------------------------------
     const panel = document.createElement('div');
     panel.id = 'measurePanel';
     panel.classList.add('hidden');
-
-    const lengthLabel = document.createElement('span');
-    lengthLabel.id = 'measureLengthLabel';
-    lengthLabel.textContent = 'Length';
-
-    const lengthInput = document.createElement('input');
-    lengthInput.id = 'measureLengthInput';
-    lengthInput.type = 'number';
-    lengthInput.step = '0.01';
-    lengthInput.min = '0.0001';
-
-    const clearButton = document.createElement('button');
-    clearButton.id = 'measureClear';
-    clearButton.type = 'button';
-    clearButton.title = 'Clear measurement';
-    clearButton.textContent = '\u00d7';
-
-    panel.appendChild(lengthLabel);
-    panel.appendChild(lengthInput);
-    panel.appendChild(clearButton);
     panel.addEventListener('pointerdown', (e) => e.stopPropagation());
     document.getElementById('ui').appendChild(panel);
 
-    // ---- gizmo (lazily created on first use) ---------------------------
+    const rows = [];       // { row, input, state } per measurement
+    const rowInputs = [];  // length <input> per measurement, parallel to `measurements`
+
+    const createMeasureRow = (index) => {
+        const row = document.createElement('div');
+        row.className = 'measureRow';
+
+        const idxLabel = document.createElement('span');
+        idxLabel.className = 'measureIndex';
+        idxLabel.textContent = String(index + 1);
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.step = '0.01';
+        input.min = '0.0001';
+        input.className = 'measureLengthInput';
+
+        const delButton = document.createElement('button');
+        delButton.type = 'button';
+        delButton.className = 'measureDelete';
+        delButton.title = 'Delete measurement';
+        delButton.textContent = '\u00d7';
+
+        row.appendChild(idxLabel);
+        row.appendChild(input);
+        row.appendChild(delButton);
+        panel.appendChild(row);
+
+        // Per-row drag state: editing a length input moves that measurement's
+        // B endpoint along its own A->B direction. Kept per row (not shared)
+        // so interleaved focus/change events between rows can't cross-wire
+        // directions.
+        const state = { dir: new Vec3(), startLength: 0 };
+
+        input.addEventListener('focus', () => {
+            const m = measurements[index];
+            if (m && m.b) {
+                state.dir.sub2(m.b, m.a);
+                state.startLength = state.dir.length();
+                if (state.startLength > 1e-6) {
+                    state.dir.normalize();
+                }
+            }
+        });
+        input.addEventListener('change', () => {
+            const m = measurements[index];
+            if (!m || !m.b) return;
+            const newLength = parseFloat(input.value);
+            if (!Number.isFinite(newLength) || newLength <= 0) {
+                // Reject 0/empty/negative input instead of silently keeping the
+                // old length or snapping the points together.
+                input.value = state.startLength.toFixed(3);
+                return;
+            }
+            m.b.copy(state.dir).mulScalar(newLength).add(m.a);
+            if (selM === index && selEnd === 1 && pivot) {
+                pivot.setPosition(m.b);
+            }
+            app.renderNextFrame = true;
+            refreshVisuals();
+        });
+        delButton.addEventListener('click', () => removeMeasurement(index));
+
+        return { row, input, state };
+    };
+
+    const rebuildRows = () => {
+        for (const r of rows) {
+            if (r.row.parentNode) {
+                r.row.parentNode.removeChild(r.row);
+            }
+        }
+        rows.length = 0;
+        rowInputs.length = 0;
+        for (let i = 0; i < measurements.length; i++) {
+            const built = createMeasureRow(i);
+            rows.push(built);
+            rowInputs[i] = built.input;
+        }
+    };
+
+    // ---- gizmo (lazily created on first selection) ---------------------
     const ensureGizmo = () => {
         if (gizmo) return;
         gizmoLayer = Gizmo.createLayer(app, 'LfsMeasureGizmo');
@@ -116,9 +206,13 @@ function initMeasureTool(global) {
             app.renderNextFrame = true;
         });
         gizmo.on('transform:move', () => {
-            if (selection >= 0 && selection < points.length) {
-                points[selection].copy(pivot.getPosition());
-                refreshVisuals();
+            if (selM >= 0 && selM < measurements.length) {
+                const m = measurements[selM];
+                const p = selEnd === 0 ? m.a : m.b;
+                if (p) {
+                    p.copy(pivot.getPosition());
+                    refreshVisuals();
+                }
             }
         });
     };
@@ -126,9 +220,13 @@ function initMeasureTool(global) {
     const syncGizmo = () => {
         ensureGizmo();
         gizmo.detach();
-        if (active && selection >= 0 && selection < points.length) {
-            pivot.setPosition(points[selection]);
-            gizmo.attach(pivot);
+        if (active && selM >= 0 && selM < measurements.length) {
+            const m = measurements[selM];
+            const p = selEnd === 0 ? m.a : m.b;
+            if (p) {
+                pivot.setPosition(p);
+                gizmo.attach(pivot);
+            }
         }
         app.renderNextFrame = true;
         refreshVisuals();
@@ -143,134 +241,204 @@ function initMeasureTool(global) {
         }
         svg.classList.remove('hidden');
 
-        lineBottom.setAttribute('visibility', points.length > 1 ? 'visible' : 'hidden');
-        lineTop.setAttribute('visibility', points.length > 1 ? 'visible' : 'hidden');
-
-        for (let i = 0; i < 2; i++) {
-            const circle = i === 0 ? startCircle : endCircle;
-            if (i < points.length) {
-                camera.camera.worldToScreen(points[i], _screen);
-                const x = String(_screen.x);
-                const y = String(_screen.y);
-                if (i === 0) {
-                    lineDef.setAttribute('x1', x);
-                    lineDef.setAttribute('y1', y);
-                } else {
-                    lineDef.setAttribute('x2', x);
-                    lineDef.setAttribute('y2', y);
-                }
-                circle.setAttribute('cx', x);
-                circle.setAttribute('cy', y);
-                circle.setAttribute('visibility', 'visible');
+        for (let i = 0; i < measurements.length; i++) {
+            const m = measurements[i];
+            const g = groups[i];
+            if (!m.b || isBehindCamera(m.a) || isBehindCamera(m.b)) {
+                g.classList.add('hidden');
             } else {
-                circle.setAttribute('visibility', 'hidden');
+                g.classList.remove('hidden');
+                camera.camera.worldToScreen(m.a, _screen);
+                const ax = String(_screen.x), ay = String(_screen.y);
+                camera.camera.worldToScreen(m.b, _screen);
+                const bx = String(_screen.x), by = String(_screen.y);
+                const [lineBottom, lineTop, startCircle, endCircle] = g.childNodes;
+                for (const ln of [lineBottom, lineTop]) {
+                    ln.setAttribute('x1', ax);
+                    ln.setAttribute('y1', ay);
+                    ln.setAttribute('x2', bx);
+                    ln.setAttribute('y2', by);
+                }
+                startCircle.setAttribute('cx', ax);
+                startCircle.setAttribute('cy', ay);
+                endCircle.setAttribute('cx', bx);
+                endCircle.setAttribute('cy', by);
+            }
+
+            const row = rows[i];
+            if (row) {
+                // In-progress measurements (no B yet) keep their row hidden.
+                row.row.classList.toggle('hidden', !m.b);
+                if (m.b && document.activeElement !== row.input) {
+                    row.input.value = m.a.distance(m.b).toFixed(3);
+                }
             }
         }
 
-        if (points.length === 2) {
-            panel.classList.remove('hidden');
-            if (document.activeElement !== lengthInput) {
-                lengthInput.value = points[0].distance(points[1]).toFixed(3);
-            }
-        } else {
-            panel.classList.add('hidden');
-        }
+        panel.classList.toggle('hidden', measurements.every((mm) => !mm.b));
     };
 
-    // ---- length input: dragging point B along the A->B direction --------
-    lengthInput.addEventListener('focus', () => {
-        if (points.length === 2) {
-            _dragDir.sub2(points[1], points[0]);
-            _dragStartLength = _dragDir.length();
-            if (_dragStartLength > 1e-6) {
-                _dragDir.normalize();
+    // ---- measurement CRUD --------------------------------------------------
+    const placePoint = (position) => {
+        let idx;
+        if (openIdx >= 0 && measurements[openIdx] && !measurements[openIdx].b) {
+            // Second click of the current pair: complete it.
+            measurements[openIdx].b = position.clone();
+            idx = openIdx;
+            openIdx = -1;
+        } else {
+            // First click: start a new measurement.
+            measurements.push({ a: position.clone(), b: null });
+            groups.push(createMeasureGroup());
+            idx = measurements.length - 1;
+            openIdx = idx;
+        }
+        selM = idx;
+        selEnd = measurements[idx].b ? 1 : 0;
+        rebuildRows();
+        syncGizmo();
+    };
+
+    const selectEndpoint = (m, end) => {
+        selM = m;
+        selEnd = end;
+        syncGizmo();
+    };
+
+    const removeMeasurement = (index) => {
+        measurements.splice(index, 1);
+        const g = groups.splice(index, 1)[0];
+        if (g && g.parentNode) {
+            g.parentNode.removeChild(g);
+        }
+        if (openIdx === index) {
+            openIdx = -1;
+        } else if (openIdx > index) {
+            openIdx--;
+        }
+        if (selM === index) {
+            selM = -1;
+        } else if (selM > index) {
+            selM--;
+        }
+        rebuildRows();
+        syncGizmo();
+    };
+
+    const replaceMeasurements = (list) => {
+        for (const g of groups) {
+            if (g.parentNode) {
+                g.parentNode.removeChild(g);
             }
         }
-    });
-    lengthInput.addEventListener('change', () => {
-        if (points.length !== 2 || _dragStartLength <= 1e-6) return;
-        const newLength = parseFloat(lengthInput.value);
-        if (!Number.isFinite(newLength) || newLength <= 0) {
-            // Reject 0/empty/negative input instead of silently keeping the
-            // old length or snapping the points together.
-            lengthInput.value = _dragStartLength.toFixed(3);
-            return;
+        groups.length = 0;
+        measurements.length = 0;
+        for (const entry of list) {
+            const a = new Vec3(entry.a[0], entry.a[1], entry.a[2]);
+            const b = new Vec3(entry.b[0], entry.b[1], entry.b[2]);
+            measurements.push({ a, b });
+            groups.push(createMeasureGroup());
         }
-        points[1].copy(_dragDir).mulScalar(newLength).add(points[0]);
-        if (selection === 1 && pivot) {
-            pivot.setPosition(points[1]);
+        openIdx = -1;
+        selM = -1;
+        if (gizmo) {
+            gizmo.detach();
         }
-        app.renderNextFrame = true;
+        rebuildRows();
         refreshVisuals();
-    });
+    };
 
-    clearButton.addEventListener('click', () => {
-        points.length = 0;
-        selection = -1;
-        syncGizmo();
-    });
+    // ---- hit testing ------------------------------------------------------
+    const findEndpointAt = (mx, my) => {
+        for (let i = 0; i < measurements.length; i++) {
+            const m = measurements[i];
+            for (let end = 0; end < 2; end++) {
+                const p = end === 0 ? m.a : m.b;
+                // A point hidden behind the camera must not be clickable
+                // either (it would otherwise still project onto the visible
+                // screen).
+                if (!p || isBehindCamera(p)) {
+                    continue;
+                }
+                camera.camera.worldToScreen(p, _screen);
+                if (Math.abs(_screen.x - mx) <= SCREEN_PICK_TOLERANCE && Math.abs(_screen.y - my) <= SCREEN_PICK_TOLERANCE) {
+                    return { m: i, end };
+                }
+            }
+        }
+        return null;
+    };
 
     // ---- point picking on click (drag = camera navigation, not a pick) --
     const isPrimary = (e) => (e.pointerType === 'mouse' ? e.button === 0 : e.isPrimary);
-    let clicked = false;
+    let tracking = false;
     let picking = false;
+    let rightTracking = false;
     let downX = 0;
     let downY = 0;
 
     const onPointerDown = (e) => {
-        if (active && !clicked && isPrimary(e)) {
-            clicked = true;
+        if (!active) return;
+        if (isPrimary(e)) {
+            tracking = true;
+            downX = e.clientX;
+            downY = e.clientY;
+        } else if (e.pointerType === 'mouse' && e.button === 2) {
+            rightTracking = true;
             downX = e.clientX;
             downY = e.clientY;
         }
     };
     const onPointerMove = (e) => {
-        if (!clicked) return;
-        if (Math.abs(e.clientX - downX) > CLICK_DEADZONE || Math.abs(e.clientY - downY) > CLICK_DEADZONE) {
-            clicked = false;
+        const moved = Math.abs(e.clientX - downX) > CLICK_DEADZONE || Math.abs(e.clientY - downY) > CLICK_DEADZONE;
+        if (tracking && moved) {
+            tracking = false;
+        }
+        if (rightTracking && moved) {
+            rightTracking = false;
         }
     };
     const onPointerUp = async (e) => {
-        if (!active || !clicked || !isPrimary(e)) return;
-        clicked = false;
-        if (picking) return;
+        if (!active || !tracking || !isPrimary(e) || picking) return;
+        tracking = false;
 
-        let closestIdx = -1;
-        for (let i = 0; i < points.length; i++) {
-            camera.camera.worldToScreen(points[i], _screen);
-            if (Math.abs(_screen.x - e.offsetX) < SCREEN_PICK_TOLERANCE && Math.abs(_screen.y - e.offsetY) < SCREEN_PICK_TOLERANCE) {
-                closestIdx = i;
-                break;
-            }
-        }
-
-        if (closestIdx >= 0) {
-            selection = closestIdx;
-            syncGizmo();
+        // Clicking an existing endpoint selects its measurement (gizmo
+        // attached to that endpoint) instead of placing a new point.
+        const hit = findEndpointAt(e.offsetX, e.offsetY);
+        if (hit) {
+            selectEndpoint(hit.m, hit.end);
             return;
         }
 
-        if (points.length < 2) {
-            if (!picker) {
-                picker = new Picker(app, camera);
-            }
-            picking = true;
-            try {
-                const result = await picker.pick(e.offsetX, e.offsetY);
-                if (result && points.length < 2) {
-                    points.push(result.clone());
-                    selection = points.length - 1;
-                    syncGizmo();
-                }
-            } finally {
-                picking = false;
-            }
+        if (!picker) {
+            picker = new Picker(app, camera);
         }
+        picking = true;
+        let result = null;
+        try {
+            result = await picker.pick(e.offsetX, e.offsetY);
+        } finally {
+            picking = false;
+        }
+        if (result) {
+            placePoint(result);
+        }
+    };
+
+    const onContextMenu = (e) => {
+        if (!active || e.button !== 2 || !rightTracking) return;
+        rightTracking = false;
+        const hit = findEndpointAt(e.offsetX, e.offsetY);
+        if (!hit) return;
+        e.preventDefault();
+        e.stopPropagation();
+        removeMeasurement(hit.m);
     };
 
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('pointerup', onPointerUp, true);
+    canvas.addEventListener('contextmenu', onContextMenu);
 
     app.on('postrender', refreshVisuals);
 
@@ -281,7 +449,7 @@ function initMeasureTool(global) {
         button?.classList.toggle('active', active);
         if (!active && gizmo) {
             gizmo.detach();
-        } else if (active && selection >= 0) {
+        } else if (active && selM >= 0) {
             syncGizmo();
         }
         app.renderNextFrame = true;
@@ -305,6 +473,18 @@ function initMeasureTool(global) {
             setActive(false);
         }
     });
+
+    // Hooks consumed by the label tool so a single .labels.json save/load can
+    // round-trip measurements alongside labels.
+    window.__lfsMeasureTool = {
+        get: () => measurements
+            .filter((m) => m.b)
+            .map((m) => ({
+                a: [m.a.x, m.a.y, m.a.z],
+                b: [m.b.x, m.b.y, m.b.z]
+            })),
+        set: (list) => replaceMeasurements(list || [])
+    };
 }
 
 export { initMeasureTool };
