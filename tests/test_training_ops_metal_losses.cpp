@@ -502,9 +502,10 @@ namespace {
         const auto fused_bytes = [&](const Shape4& s) {
             return layout({s.n * s.plane() * 4, s.numel() * 2, s.numel() * 2, s.numel() * 2, s.numel() * 4, 4096, 4});
         };
+        // As LossWorkspaceArena::masked_decoupled_layout_bytes: the raw-render gradient is not an arena field.
         const auto masked_decoupled_bytes = [&](const Shape4& s) {
             return layout({s.n * s.plane() * 4, s.numel() * 2, s.numel() * 2, s.numel() * 2, s.numel() * 2,
-                           s.numel() * 4, s.numel() * 4, 8192, 4, 4});
+                           s.numel() * 4, 8192, 4, 4});
         };
         ops::PhotoSaved saved{.backend = table_->photometric->create()};
         const auto run = [&](const ops::PhotoPath path, const Shape4& s) {

@@ -181,6 +181,8 @@ namespace lfs::training {
                     writes.push_back(ref(s.horizontal));
                 if (derivatives)
                     writes.push_back(ref(s.arena));
+                if (s.raw_gradient.is_valid())
+                    writes.push_back(ref(s.raw_gradient));
                 auto reads = inputs;
                 reads.insert(reads.end(), writes.begin(), writes.end());
                 for (uint32_t stage = 0; stage < 5; ++stage) {

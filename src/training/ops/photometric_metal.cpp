@@ -54,7 +54,7 @@ namespace lfs::training {
                                     Scalar };
 
         struct Views {
-            Tensor ssim_map, dm_mu, dm_sigma1, dm_sigma12, raw_dm_mu, dl_dmap, grad, grad_raw, temp, result, mask_sum;
+            Tensor ssim_map, dm_mu, dm_sigma1, dm_sigma12, raw_dm_mu, dl_dmap, grad, temp, result, mask_sum;
         };
         struct Field {
             Tensor Views::*member;
@@ -69,11 +69,11 @@ namespace lfs::training {
             case Kind::PureSSIM:
                 return {{&V::ssim_map, Slot::Full32}, {&V::dm_mu, Slot::Full16}, {&V::dm_sigma1, Slot::Full16}, {&V::dm_sigma12, Slot::Full16}, {&V::dl_dmap, Slot::Full32}, {&V::grad, Slot::Full32}, {&V::temp, Slot::Temp1024}, {&V::result, Slot::Scalar}};
             case Kind::Decoupled:
-                return {{&V::ssim_map, Slot::Map}, {&V::dm_mu, Slot::Full16}, {&V::raw_dm_mu, Slot::Full16}, {&V::dm_sigma1, Slot::Full16}, {&V::dm_sigma12, Slot::Full16}, {&V::grad, Slot::Full32}, {&V::grad_raw, Slot::Full32}, {&V::temp, Slot::Temp1024}, {&V::result, Slot::Scalar}};
+                return {{&V::ssim_map, Slot::Map}, {&V::dm_mu, Slot::Full16}, {&V::raw_dm_mu, Slot::Full16}, {&V::dm_sigma1, Slot::Full16}, {&V::dm_sigma12, Slot::Full16}, {&V::grad, Slot::Full32}, {&V::temp, Slot::Temp1024}, {&V::result, Slot::Scalar}};
             case Kind::MaskedFused:
                 return {{&V::ssim_map, Slot::Map}, {&V::dm_mu, Slot::Full16}, {&V::dm_sigma1, Slot::Full16}, {&V::dm_sigma12, Slot::Full16}, {&V::grad, Slot::Full32}, {&V::temp, Slot::Temp2048}, {&V::result, Slot::Scalar}, {&V::mask_sum, Slot::Scalar}};
             case Kind::MaskedDecoupled:
-                return {{&V::ssim_map, Slot::Map}, {&V::dm_mu, Slot::Full16}, {&V::raw_dm_mu, Slot::Full16}, {&V::dm_sigma1, Slot::Full16}, {&V::dm_sigma12, Slot::Full16}, {&V::grad, Slot::Full32}, {&V::grad_raw, Slot::Full32}, {&V::temp, Slot::Temp2048}, {&V::result, Slot::Scalar}, {&V::mask_sum, Slot::Scalar}};
+                return {{&V::ssim_map, Slot::Map}, {&V::dm_mu, Slot::Full16}, {&V::raw_dm_mu, Slot::Full16}, {&V::dm_sigma1, Slot::Full16}, {&V::dm_sigma12, Slot::Full16}, {&V::grad, Slot::Full32}, {&V::temp, Slot::Temp2048}, {&V::result, Slot::Scalar}, {&V::mask_sum, Slot::Scalar}};
             case Kind::None:
                 return {};
             }
@@ -172,6 +172,8 @@ namespace lfs::training {
         struct MetalPhotoState : lfs::gpu_ops::BackendState {
             Arena arena;
             Tensor cs_map; // outside the arena, as the CUDA workspaces keep it
+            // Outside the arena too: the CUDA arena leaves the raw-render gradient to add_raw_gradient.
+            Tensor grad_raw;
             Tensor l1_grad, l1_loss, l1_partials;
             Tensor error_ssim_map, error_cs_map;
             // Keeps the last allocating metric's tensors alive until the next call.
@@ -188,9 +190,9 @@ namespace lfs::training {
             saved.cs_map = cs_map;
         }
 
-        void ensure_cs_map(Tensor& cs_map, const Tensor& ssim_map) {
-            if (!cs_map.is_valid() || cs_map.shape() != ssim_map.shape() || !cs_map.is_contiguous())
-                cs_map = Tensor::empty(ssim_map.shape(), Device::GPU);
+        void ensure_like(Tensor& buffer, const Tensor& like) {
+            if (!buffer.is_valid() || buffer.shape() != like.shape() || !buffer.is_contiguous())
+                buffer = Tensor::empty(like.shape(), Device::GPU);
         }
 
         void validate_weight(const float weight) {
@@ -475,7 +477,11 @@ namespace lfs::training {
                               : masked && decoupled                 ? Kind::MaskedDecoupled
                                                                     : Kind::MaskedFused;
             Views& ws = state.arena.ensure(kind, dims(images.prediction));
-            ensure_cs_map(state.cs_map, ws.ssim_map);
+            ensure_like(state.cs_map, ws.ssim_map);
+            if (decoupled)
+                ensure_like(state.grad_raw, ws.grad);
+            else
+                state.grad_raw = {};
 
             const bool pure = kind == Kind::PureSSIM;
             const float weight = pure ? 1.0f : params.ssim_weight;
@@ -500,7 +506,7 @@ namespace lfs::training {
             const Tensor mask_sum = masked ? ws.mask_sum : Tensor{};
             if (decoupled) {
                 ssim_backward(images, images.prediction, ws.dm_mu, {}, {}, mask_sum, ws.grad, weight, padding);
-                ssim_backward(images, images.raw, ws.raw_dm_mu, ws.dm_sigma1, ws.dm_sigma12, mask_sum, ws.grad_raw, 1.f,
+                ssim_backward(images, images.raw, ws.raw_dm_mu, ws.dm_sigma1, ws.dm_sigma12, mask_sum, state.grad_raw, 1.f,
                               padding);
             } else {
                 ssim_backward(images, images.prediction, ws.dm_mu, ws.dm_sigma1, ws.dm_sigma12, mask_sum, ws.grad, weight,
@@ -510,7 +516,7 @@ namespace lfs::training {
             grad_corrected = ws.grad;
             squeeze_like(grad_corrected, corrected);
             if (decoupled) {
-                grad_raw = ws.grad_raw;
+                grad_raw = state.grad_raw;
                 squeeze_like(grad_raw, corrected);
             }
             publish_maps(saved, ws.ssim_map, state.cs_map);
@@ -596,8 +602,10 @@ namespace lfs::training {
         }
 
         void photo_reset(PhotoSaved& saved) {
-            if (saved.backend)
+            if (saved.backend) {
                 state_of(saved).arena.reset();
+                state_of(saved).grad_raw = {};
+            }
         }
     } // namespace
 
