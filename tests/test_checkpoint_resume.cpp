@@ -2363,6 +2363,58 @@ namespace {
     }
 
     TEST_F(ProjectCheckpointTrainerInstall,
+           SaveProjectAtIterationSurvivesEarlierStepSave) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_save_at_iteration_after_step_save";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        // The gap lets the step save's writer finish, so the hook reaches the
+        // prepare path instead of being coalesced behind an active writer.
+        auto params = make_tiny_headless_params(output_path, 300);
+        params.optimization.save_steps = {1};
+        params.save_project_at_iteration = 200;
+        params.save_project_path = output_path / "at_iteration.licht";
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+        ASSERT_TRUE(trainer->initialize(params));
+        lfs::training::grant_headless_project_saves(*trainer, params);
+        auto train = trainer->train();
+        ASSERT_TRUE(train)
+            << lfs::format_for_developer(train.error());
+        trainer->shutdown();
+
+        auto document = lfs::io::project::ProjectDocument::open(
+            params.save_project_path);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(document.error());
+        std::vector<int> iterations;
+        for (const auto& uuid : document->checkpoint_uuids()) {
+            std::optional<lfs::core::CheckpointHeader> header;
+            ASSERT_TRUE(document->find_checkpoint(uuid)->visit_stream(
+                [&](std::istream& stream, const std::uint64_t bytes)
+                    -> lfs::Result<void> {
+                    if (auto parsed =
+                            lfs::core::load_checkpoint_header(stream, bytes);
+                        parsed) {
+                        header = *parsed;
+                    }
+                    return {};
+                }));
+            ASSERT_TRUE(header);
+            iterations.push_back(header->iteration);
+        }
+        EXPECT_NE(std::ranges::find(iterations, 200), iterations.end());
+
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
            UngrantedTrainerNeverWritesProjectFiles) {
         const auto output_path =
             std::filesystem::temp_directory_path() /
