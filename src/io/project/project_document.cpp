@@ -4811,8 +4811,7 @@ namespace lfs::io::project {
                     original_path, temporary,
                     std::filesystem::copy_options::none, error)) {
                 remove_temporary();
-                const bool disk_full = error.category() == std::system_category() &&
-                                       detail::native_disk_full(error.value());
+                const bool disk_full = detail::disk_full(error);
                 return fail<ProjectDocumentSaveReport>(
                     disk_full ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Unavailable,
                     disk_full ? lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE

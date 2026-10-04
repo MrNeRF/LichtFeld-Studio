@@ -198,6 +198,17 @@ namespace lfs::io::project::detail {
 #endif
     }
 
+    bool disk_full(const std::error_code& error) noexcept {
+        if (error == std::errc::no_space_on_device)
+            return true;
+#ifdef _WIN32
+        return error.category() == std::system_category() && native_disk_full(error.value());
+#else
+        return (error.category() == std::system_category() || error.category() == std::generic_category()) &&
+               native_disk_full(error.value());
+#endif
+    }
+
     namespace {
 
         lfs::ErrorCode native_error_code(const int error, const bool writing) noexcept {

@@ -277,6 +277,10 @@ namespace {
         const auto too_large = detail::project_error(lfs::ErrorCode::ResourceExhausted, "The project could not be written.",
                                                      "write failed", "project.licht", 0, "positional_write", file_too_large);
         EXPECT_FALSE(lfs::core::is_disk_space_save_error(too_large.user_message()));
+
+        EXPECT_TRUE(detail::disk_full(std::make_error_code(std::errc::no_space_on_device)));
+        EXPECT_TRUE(detail::disk_full(std::error_code(static_cast<int>(disk_full), std::system_category())));
+        EXPECT_FALSE(detail::disk_full(std::make_error_code(std::errc::file_too_large)));
     }
 
     TEST(ProjectContainerFormat, Crc32cKnownVector) {
