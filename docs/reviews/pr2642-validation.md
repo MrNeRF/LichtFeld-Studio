@@ -100,10 +100,20 @@ selections are outside the reported Python run.
 - M5 Max first frame with default MoltenVK configuration, fresh app profile,
   and the dataset/PLY inputs from the review.
 - Garden pause/cold-path targets and repeatable total-save-time improvement.
-- Independent builds/tests of the prepared dependency stack before scope separation.
+- Actual scope separation using the prepared cumulative dependencies; earlier nine ref binaries are not individually GPU-tested.
 - Hosted CI, stable Xcode 26, physical macOS 26, CUDA and non-Mac production Vulkan.
 - LOD CPU-download follow-up and corresponding issue linkage.
 
 The LOD fallback remains accepted for this viewer change. Production Vulkan
 shader precision is unchanged; the isolated Mac test reference must not be used
 to claim a production-native speedup from its own increased precision cost.
+
+## Isolated cumulative-scope validation
+
+The isolated current runtime/test source `5a3e9183a` matches integration `9b9c03709` except `docs/reviews/pr2642-validation.md`. Production code is unchanged from `d9bd2a680`. Fresh validation: CTest 259/259; Metal 496 pass, 117 skip, 5 disabled; viewer 19/19; Vulkan snapshot/queue/step 22/22; Python 3228 pass, 211 subtests, 1 skip, 67 deselected.
+
+The shared-Metal-timeline readiness fixture fails 99/100 repetitions before its setup correction and passes 100/100 afterward with API/shader validation. The production queue implementation and all completion/data assertions are unchanged. The bounded-command-frame scope additionally passes 66 contracts in each of three repetitions.
+
+Twelve cumulative refs build successfully; CPU checks pass at each ref. Functional GPU/Python coverage is recorded at refs 10/11/12. The earlier nine ref binaries are not claimed individually GPU-tested; actual online scope separation remains pending.
+
+The first Release build is clean. Subsequent refs use the same isolated checkout/build path with CMake regeneration and Ninja dependency checks. The early CPU-labelled checks are SDL smoke coverage; they are not full CPU or GPU suites. Excluded drag/drop and visualizer targets are explicitly built where present.
