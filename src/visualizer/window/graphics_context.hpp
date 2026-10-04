@@ -5,6 +5,7 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_fwd.hpp"
 #include "renderer_terminal_state.hpp"
 
 #include <array>
@@ -27,6 +28,7 @@ namespace lfs::vis {
     };
 
     struct GraphicsCapabilities {
+        bool native_metal = false;
         bool mesh_rendering = false;
         bool wireframe = false;
         bool wide_lines = false;
@@ -34,6 +36,11 @@ namespace lfs::vis {
         float maximum_line_width = 1.0f;
         bool external_memory_interop = false;
         bool external_semaphore_interop = false;
+        bool environment_map = true;
+        bool split_view = true;
+        bool temporal_upscaling = true;
+        bool mesh2splat = true;
+        bool hdr_libplacebo = true;
     };
 
     struct WindowCapture {
@@ -69,6 +76,15 @@ namespace lfs::vis {
         [[nodiscard]] virtual lfs::Result<std::optional<GraphicsFrame>>
         beginFrame(const std::array<float, 4>& clear_color) = 0;
         [[nodiscard]] virtual lfs::Status endFrame() = 0;
+        // The Metal/tensor path renders the complete application frame into
+        // this image. Vulkan's reference path renders into its native
+        // swapchain and therefore returns nullptr until it is migrated.
+        [[nodiscard]] virtual lfs::core::Tensor* finalImageTensor(const GraphicsFrame&) {
+            return nullptr;
+        }
+        [[nodiscard]] virtual const lfs::core::Tensor* finalImageTensor(const GraphicsFrame&) const {
+            return nullptr;
+        }
         [[nodiscard]] virtual bool presentBootstrapFrame(float r, float g, float b, float a) = 0;
         [[nodiscard]] virtual bool hasActiveFrame() const noexcept = 0;
         [[nodiscard]] virtual lfs::Result<WindowCapture> captureFinalFrameRgba() = 0;

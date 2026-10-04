@@ -1,10 +1,33 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "scene_renderer_factory.hpp"
+#ifdef LFS_GRAPHICS_VULKAN
 #include "window/vulkan_graphics_context.hpp"
+#endif
 #include <stdexcept>
-#ifdef __APPLE__
+#include <format>
+
+namespace lfs::vis {
+    namespace {
+        lfs::Error noTensorOutput(std::string_view renderer) {
+            return lfs::make_error({.code = lfs::ErrorCode::Unsupported,
+                                    .domain = lfs::ErrorDomain::Rendering,
+                                    .detail = std::format("This {} renderer has no device-resident tensor output", renderer),
+                                    .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
+    } // namespace
+    lfs::Result<SceneRenderer::OutputTensors> SceneRenderer::readOutputTensors(RenderTargetId) const {
+        return lfs::Result<SceneRenderer::OutputTensors>(noTensorOutput("scene"));
+    }
+    lfs::Result<SceneRenderer::OutputTensors> PointSceneRenderer::readOutputTensors(RenderTargetId) const {
+        return lfs::Result<SceneRenderer::OutputTensors>(noTensorOutput("point"));
+    }
+} // namespace lfs::vis
+
+#ifdef LFS_TENSOR_METAL
+#include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
+#include "core/tensor.hpp"
 #include "metal_viewport_renderer.hpp"
 #include "python/python_runtime.hpp"
 #include <atomic>
@@ -14,8 +37,28 @@
 
 namespace lfs::vis {
     namespace {
+#ifndef LFS_GRAPHICS_VULKAN
+        lfs::Error outputError(std::string detail) {
+            return lfs::make_error({.code = lfs::ErrorCode::Unavailable,
+                                    .domain = lfs::ErrorDomain::Rendering,
+                                    .detail = std::move(detail),
+                                    .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
+        lfs::Result<SceneRenderer::OutputTensors> copyOutputTensors(
+            const MetalViewportRenderer& native, RenderTargetId target) {
+            const auto size = native.size(target);
+            if (size.x <= 0 || size.y <= 0)
+                return lfs::Result<SceneRenderer::OutputTensors>(outputError(std::format("Metal output is unavailable (target={})", target.value)));
+            const core::GpuBackendScope scope(core::GpuBackend::Metal);
+            auto color = std::make_shared<core::Tensor>(core::Tensor::empty({size_t(size.y), size_t(size.x), 4}, core::Device::GPU, core::DataType::UInt8));
+            auto depth = std::make_shared<core::Tensor>(core::Tensor::empty({size_t(size.y), size_t(size.x)}, core::Device::GPU, core::DataType::Float32));
+            if (auto status = native.copyOutputs(target, *color, depth.get()); !status)
+                return lfs::Result<SceneRenderer::OutputTensors>(std::move(status).error());
+            return SceneRenderer::OutputTensors{std::move(color), std::move(depth)};
+        }
+#endif
         class MetalSceneRenderer final : public SceneRenderer {
-            VulkanContext& context_;
+            MetalViewportPresentation& context_;
             mutable std::unique_ptr<MetalViewportRenderer> native_;
             std::shared_ptr<std::atomic_bool> retry_ = std::make_shared<std::atomic_bool>(false);
             std::unordered_set<RenderTargetId, RenderTargetIdHash> outputs_, released_;
@@ -46,7 +89,7 @@ namespace lfs::vis {
             }
 
         public:
-            explicit MetalSceneRenderer(VulkanContext& context) : context_(context) {}
+            explicit MetalSceneRenderer(MetalViewportPresentation& context) : context_(context) {}
             std::expected<RenderResult, std::string> render(const core::SplatData& m,
                                                             const rendering::ViewportRenderRequest& r, bool, RenderTargetId t, bool = false, bool deterministic = false) override {
                 if (!t.valid() || released_.contains(t))
@@ -126,6 +169,13 @@ namespace lfs::vis {
                     return legacyMetalResult(native().buildSelectionMask(context_, m, r));
                 } catch (const std::exception& e) { return std::unexpected(e.what()); }
             }
+#ifndef LFS_GRAPHICS_VULKAN
+            auto readOutputTensors(RenderTargetId t) const -> lfs::Result<OutputTensors> override {
+                if (!hasRenderTarget(t))
+                    return lfs::Result<SceneRenderer::OutputTensors>(outputError(std::format("Metal scene output is unavailable (target={})", t.value)));
+                return copyOutputTensors(native(), t);
+            }
+#endif
             bool hasRenderTarget(RenderTargetId t) const override { return outputs_.contains(t); }
             bool releaseRenderTarget(RenderTargetId t) override {
                 if (native_) {
@@ -156,7 +206,7 @@ namespace lfs::vis {
             GpuLodSelectionStatus gpuLodSelectionStatus(RenderTargetId t) const override { return native_ ? native_->gpuLodSelectionStatus(t) : GpuLodSelectionStatus{}; }
         };
         class MetalPointSceneRenderer final : public PointSceneRenderer {
-            VulkanContext& context_;
+            MetalViewportPresentation& context_;
             std::unique_ptr<MetalViewportRenderer> native_;
             std::shared_ptr<std::atomic_bool> retry_ = std::make_shared<std::atomic_bool>(false);
             struct PointUpload {
@@ -167,7 +217,7 @@ namespace lfs::vis {
             std::unordered_set<RenderTargetId, RenderTargetIdHash> outputs_, released_;
 
         public:
-            explicit MetalPointSceneRenderer(VulkanContext& context) : context_(context) {}
+            explicit MetalPointSceneRenderer(MetalViewportPresentation& context) : context_(context) {}
             auto render(const RenderRequest& r, RenderTargetId t) -> std::expected<RenderResult, std::string> override {
                 if (!t.valid() || released_.contains(t))
                     return std::unexpected(std::format("Invalid or released Metal point target (target={})", t.value));
@@ -240,6 +290,13 @@ namespace lfs::vis {
                     return std::unexpected(ready.error());
                 return std::make_shared<core::Tensor>(std::move(tensor));
             }
+#ifndef LFS_GRAPHICS_VULKAN
+            auto readOutputTensors(RenderTargetId t) const -> lfs::Result<SceneRenderer::OutputTensors> override {
+                if (!hasRenderTarget(t) || !native_)
+                    return lfs::Result<SceneRenderer::OutputTensors>(outputError(std::format("Metal point output is unavailable (target={})", t.value)));
+                return copyOutputTensors(*native_, t);
+            }
+#endif
             bool hasRenderTarget(RenderTargetId t) const override { return outputs_.contains(t); }
             bool releaseRenderTarget(RenderTargetId t) override {
                 if (native_) {
@@ -263,18 +320,31 @@ namespace lfs::vis {
             }
         };
     } // namespace
+#ifdef LFS_GRAPHICS_VULKAN
     std::unique_ptr<SceneRenderer> createSceneRenderer(GraphicsContext& graphics) {
         auto* context = vulkanContextOrNull(&graphics);
         if (!context)
-            throw std::runtime_error("The Phase 1 Metal scene renderer requires Vulkan compositor resources");
+            throw std::runtime_error("The Metal scene renderer requires Vulkan compositor resources");
         return std::make_unique<MetalSceneRenderer>(*context);
     }
     std::unique_ptr<PointSceneRenderer> createPointSceneRenderer(GraphicsContext& graphics) {
         auto* context = vulkanContextOrNull(&graphics);
         if (!context)
-            throw std::runtime_error("The Phase 1 Metal point renderer requires Vulkan compositor resources");
+            throw std::runtime_error("The Metal point renderer requires Vulkan compositor resources");
         return std::make_unique<MetalPointSceneRenderer>(*context);
     }
+#else
+    namespace {
+        // Stateless: tensor-compositor outputs need no graphics resources.
+        MetalViewportPresentation tensor_presentation;
+    } // namespace
+    std::unique_ptr<SceneRenderer> createSceneRenderer(GraphicsContext&) {
+        return std::make_unique<MetalSceneRenderer>(tensor_presentation);
+    }
+    std::unique_ptr<PointSceneRenderer> createPointSceneRenderer(GraphicsContext&) {
+        return std::make_unique<MetalPointSceneRenderer>(tensor_presentation);
+    }
+#endif
     void preloadSceneRenderer() {}
 } // namespace lfs::vis
 #else

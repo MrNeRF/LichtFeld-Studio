@@ -281,11 +281,4 @@ namespace lfs::vis {
 
 #endif
 
-    lfs::core::SplatTensorAllocator makeViewerSplatTensorAllocator(const bool preserve_float_shN) {
-        auto* window = services().windowOrNull();
-        auto* context = window ? vulkanContextOrNull(window->getGraphicsContext()) : nullptr;
-        return context ? context->tensorInterop().splat_allocator(preserve_float_shN)
-                       : lfs::core::SplatTensorAllocator{};
-    }
-
 } // namespace lfs::vis

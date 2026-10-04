@@ -5,12 +5,26 @@
 #include "core/tensor_metal_reader.hpp"
 #include <format>
 #include <map>
+#include <tuple>
 #include <mutex>
 
 namespace lfs::core::internal {
     namespace {
         using Module = GpuKernelModule;
         API_AVAILABLE_BEGIN(macos(26.0))
+
+        // Every program submits on one queue, so a raster attachment can be
+        // shared by all of them: Metal orders a reused texture after its
+        // previous pass on the same queue. Intentionally never destroyed.
+        struct SharedRaster {
+            MetalTensorReader reader;
+            std::mutex mutex;
+            std::map<std::tuple<size_t, size_t, uint64_t>, id<MTLTexture>> attachments;
+        };
+        SharedRaster& shared_raster() {
+            static auto* shared = new SharedRaster;
+            return *shared;
+        }
 
         class Program final : public GpuProgram {
         public:
@@ -62,58 +76,81 @@ namespace lfs::core::internal {
                 submit(arguments, {}, encode);
             }
 
-            void draw(const Module::Draw& draw, const ProgramArguments& arguments) override {
+            void draw(std::span<const Module::Draw> draws, std::span<const ProgramArguments> arguments) override {
                 std::lock_guard lock(mutex_);
-                const auto width = draw.color->size(1), height = draw.color->size(0);
-                const bool bytes = draw.color->dtype() == DataType::UInt8;
+                const auto& first = draws.front();
+                const auto width = first.color->size(1), height = first.color->size(0);
+                const bool bytes = first.color->dtype() == DataType::UInt8;
                 const MTLPixelFormat format = bytes ? MTLPixelFormatRGBA8Unorm : MTLPixelFormatRGBA32Float;
-                const auto color = texture(width, height, format);
-                const auto depth = draw.depth ? texture(width, height, MTLPixelFormatDepth32Float) : nil;
-                const auto pipeline = render_pipeline(draw, format);
-                MTLDepthStencilDescriptor* depth_desc = [MTLDepthStencilDescriptor new];
-                depth_desc.depthCompareFunction = !draw.depth ? MTLCompareFunctionAlways :
-                                                   draw.depth_compare == Module::Compare::Less ? MTLCompareFunctionLess :
-                                                   draw.depth_compare == Module::Compare::LessEqual ? MTLCompareFunctionLessEqual : MTLCompareFunctionAlways;
-                depth_desc.depthWriteEnabled = draw.depth && draw.depth_write;
-                const auto depth_state = [reader_.device() newDepthStencilStateWithDescriptor:depth_desc];
-                std::vector<Tensor*> attachments{draw.color};
-                if (draw.depth) attachments.push_back(draw.depth);
-                submit(arguments, attachments, [&](id<MTLCommandBuffer> command, std::span<const MetalTensorView> reads, std::span<const MetalTensorView> writes) {
-                    const auto color_view = writes[arguments.writes.size()];
-                    const auto depth_view = draw.depth ? writes.back() : MetalTensorView{};
+                // Attachments are reused: every submission shares one queue, so
+                // Metal orders a reused texture after its previous pass.
+                const auto color = attachment(width, height, format);
+                const auto depth = first.depth ? attachment(width, height, MTLPixelFormatDepth32Float) : nil;
+                std::vector<id<MTLRenderPipelineState>> pipelines;
+                std::vector<id<MTLDepthStencilState>> depth_states;
+                pipelines.reserve(draws.size());
+                depth_states.reserve(draws.size());
+                ProgramArguments merged;
+                for (size_t i = 0; i < draws.size(); ++i) {
+                    pipelines.push_back(render_pipeline(draws[i], format));
+                    depth_states.push_back(depth_state(draws[i]));
+                    merged.reads.insert(merged.reads.end(), arguments[i].reads.begin(), arguments[i].reads.end());
+                    merged.writes.insert(merged.writes.end(), arguments[i].writes.begin(), arguments[i].writes.end());
+                }
+                std::vector<Tensor*> attachments{first.color};
+                if (first.depth) attachments.push_back(first.depth);
+                submit(merged, attachments, [&](id<MTLCommandBuffer> command, std::span<const MetalTensorView> reads, std::span<const MetalTensorView> writes) {
+                    const auto color_view = writes[merged.writes.size()];
+                    const auto depth_view = first.depth ? writes.back() : MetalTensorView{};
                     const auto color_row = width * (bytes ? 4 : 16), depth_row = width * 4;
-                    id<MTLBlitCommandEncoder> upload = [command blitCommandEncoder];
-                    if (!draw.clear_color)
-                        [upload copyFromBuffer:color_view.buffer sourceOffset:color_view.offset sourceBytesPerRow:color_row sourceBytesPerImage:color_row * height
-                                    sourceSize:MTLSizeMake(width, height, 1) toTexture:color destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
-                    if (draw.depth && !draw.clear_depth)
-                        [upload copyFromBuffer:depth_view.buffer sourceOffset:depth_view.offset sourceBytesPerRow:depth_row sourceBytesPerImage:depth_row * height
-                                    sourceSize:MTLSizeMake(width, height, 1) toTexture:depth destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
-                    [upload endEncoding];
+                    if (!first.clear_color || (first.depth && !first.clear_depth)) {
+                        id<MTLBlitCommandEncoder> upload = [command blitCommandEncoder];
+                        if (!first.clear_color)
+                            [upload copyFromBuffer:color_view.buffer sourceOffset:color_view.offset sourceBytesPerRow:color_row sourceBytesPerImage:color_row * height
+                                        sourceSize:MTLSizeMake(width, height, 1) toTexture:color destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                        if (first.depth && !first.clear_depth)
+                            [upload copyFromBuffer:depth_view.buffer sourceOffset:depth_view.offset sourceBytesPerRow:depth_row sourceBytesPerImage:depth_row * height
+                                        sourceSize:MTLSizeMake(width, height, 1) toTexture:depth destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                        [upload endEncoding];
+                    }
 
                     MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
                     pass.colorAttachments[0].texture = color;
-                    pass.colorAttachments[0].loadAction = draw.clear_color ? MTLLoadActionClear : MTLLoadActionLoad;
+                    pass.colorAttachments[0].loadAction = first.clear_color ? MTLLoadActionClear : MTLLoadActionLoad;
                     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-                    pass.colorAttachments[0].clearColor = MTLClearColorMake(draw.color_clear[0], draw.color_clear[1], draw.color_clear[2], draw.color_clear[3]);
+                    pass.colorAttachments[0].clearColor = MTLClearColorMake(first.color_clear[0], first.color_clear[1], first.color_clear[2], first.color_clear[3]);
                     if (depth) {
                         pass.depthAttachment.texture = depth;
-                        pass.depthAttachment.loadAction = draw.clear_depth ? MTLLoadActionClear : MTLLoadActionLoad;
+                        pass.depthAttachment.loadAction = first.clear_depth ? MTLLoadActionClear : MTLLoadActionLoad;
                         pass.depthAttachment.storeAction = MTLStoreActionStore;
-                        pass.depthAttachment.clearDepth = draw.depth_clear;
+                        pass.depthAttachment.clearDepth = first.depth_clear;
                     }
                     id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
-                    [encoder setRenderPipelineState:pipeline];
-                    [encoder setDepthStencilState:depth_state];
                     [encoder setCullMode:MTLCullModeNone];
-                    if (!arguments.parameters.empty()) {
-                        [encoder setVertexBytes:arguments.parameters.data() length:arguments.parameters.size() atIndex:0];
-                        [encoder setFragmentBytes:arguments.parameters.data() length:arguments.parameters.size() atIndex:0];
-                    }
                     for (const auto& view : reads) [encoder useResource:view.buffer usage:MTLResourceUsageRead stages:MTLRenderStageVertex | MTLRenderStageFragment];
-                    for (size_t i = 0; i < arguments.writes.size(); ++i)
+                    for (size_t i = 0; i < merged.writes.size(); ++i)
                         [encoder useResource:writes[i].buffer usage:MTLResourceUsageRead | MTLResourceUsageWrite stages:MTLRenderStageVertex | MTLRenderStageFragment];
-                    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:draw.first_vertex vertexCount:draw.vertex_count instanceCount:draw.instance_count];
+                    const MTLScissorRect full{0, 0, static_cast<NSUInteger>(width), static_cast<NSUInteger>(height)};
+                    for (size_t i = 0; i < draws.size(); ++i) {
+                        const auto& draw = draws[i];
+                        if (draw.vertex_count == 0) continue;
+                        const auto viewport = draw.viewport.value_or(Module::Viewport{0, 0, float(width), float(height)});
+                        [encoder setViewport:MTLViewport{viewport.x, viewport.y, viewport.width, viewport.height, 0, 1}];
+                        [encoder setRenderPipelineState:pipelines[i]];
+                        [encoder setDepthStencilState:depth_states[i]];
+                        if (draw.scissor) {
+                            const auto& rect = *draw.scissor;
+                            [encoder setScissorRect:MTLScissorRect{rect.x, rect.y, rect.width, rect.height}];
+                        } else {
+                            [encoder setScissorRect:full];
+                        }
+                        const auto& parameters = arguments[i].parameters;
+                        if (!parameters.empty()) {
+                            [encoder setVertexBytes:parameters.data() length:parameters.size() atIndex:0];
+                            [encoder setFragmentBytes:parameters.data() length:parameters.size() atIndex:0];
+                        }
+                        [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:draw.first_vertex vertexCount:draw.vertex_count instanceCount:draw.instance_count];
+                    }
                     [encoder endEncoding];
 
                     id<MTLBlitCommandEncoder> download = [command blitCommandEncoder];
@@ -136,6 +173,31 @@ namespace lfs::core::internal {
                 } else {
                     (void)reader_.submitWrites(arguments.reads, writes, encode);
                 }
+            }
+
+            id<MTLTexture> attachment(size_t width, size_t height, MTLPixelFormat format) {
+                auto& shared = shared_raster();
+                std::lock_guard lock(shared.mutex);
+                const auto key = std::tuple{width, height, uint64_t(format)};
+                // Resizes leave stale sizes behind; in-flight commands retain theirs.
+                if (!shared.attachments.contains(key) && shared.attachments.size() >= 8)
+                    shared.attachments.clear();
+                auto& cached = shared.attachments[key];
+                if (!cached) cached = texture(width, height, format);
+                return cached;
+            }
+
+            id<MTLDepthStencilState> depth_state(const Module::Draw& draw) {
+                const auto key = std::tuple{draw.depth != nullptr, draw.depth_compare, draw.depth_write};
+                auto& state = depth_states_[key];
+                if (state) return state;
+                MTLDepthStencilDescriptor* desc = [MTLDepthStencilDescriptor new];
+                desc.depthCompareFunction = !draw.depth ? MTLCompareFunctionAlways :
+                                            draw.depth_compare == Module::Compare::Less ? MTLCompareFunctionLess :
+                                            draw.depth_compare == Module::Compare::LessEqual ? MTLCompareFunctionLessEqual : MTLCompareFunctionAlways;
+                desc.depthWriteEnabled = draw.depth && draw.depth_write;
+                state = [reader_.device() newDepthStencilStateWithDescriptor:desc];
+                return state;
             }
 
             id<MTLTexture> texture(size_t width, size_t height, MTLPixelFormat format) {
@@ -168,11 +230,12 @@ namespace lfs::core::internal {
                 return pipeline;
             }
 
-            MetalTensorReader reader_;
+            MetalTensorReader& reader_ = shared_raster().reader;
             std::mutex mutex_;
             std::map<std::pair<std::string, Module::Stage>, id<MTLFunction>> functions_;
             std::map<std::string, id<MTLComputePipelineState>> compute_;
             std::map<std::tuple<std::string, std::string, uint64_t, Module::Blend, bool>, id<MTLRenderPipelineState>> render_;
+            std::map<std::tuple<bool, Module::Compare, bool>, id<MTLDepthStencilState>> depth_states_;
         };
         API_AVAILABLE_END
     } // namespace

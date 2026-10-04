@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -60,6 +61,19 @@ namespace lfs::core {
         enum class Compare : uint8_t { Always,
                                        Less,
                                        LessEqual };
+        struct Scissor {
+            uint32_t x = 0;
+            uint32_t y = 0;
+            uint32_t width = 0;
+            uint32_t height = 0;
+        };
+        // Top-left-origin pixel rectangle that NDC [-1,1] maps to.
+        struct Viewport {
+            float x = 0;
+            float y = 0;
+            float width = 0;
+            float height = 0;
+        };
         struct Draw {
             std::string_view vertex;
             std::string_view fragment;
@@ -72,6 +86,11 @@ namespace lfs::core {
             uint32_t vertex_count = 0;
             uint32_t first_vertex = 0;
             uint32_t instance_count = 1;
+            // Optional top-left-origin pixel rectangle. Clears always affect the
+            // full attachment; the scissor clips rasterized fragments only.
+            std::optional<Scissor> scissor;
+            // Defaults to the whole attachment.
+            std::optional<Viewport> viewport;
             Blend blend = Blend::Opaque;
             Compare depth_compare = Compare::Less;
             bool depth_write = true;
@@ -85,6 +104,10 @@ namespace lfs::core {
             std::span<const Entry> entries, GpuBackend backend = default_gpu_backend());
         [[nodiscard]] Result<void> dispatch(const Dispatch& dispatch);
         [[nodiscard]] Result<void> draw(const Draw& draw);
+        // One submission for draws that share the first draw's color/depth
+        // attachments: one attachment load, every draw in order, one store.
+        // Only the first draw may clear.
+        [[nodiscard]] Result<void> draw_batch(std::span<const Draw> draws);
         [[nodiscard]] bool supports_raster() const;
 
         // Legacy MSL-only training kernels. Kept until the separately scoped

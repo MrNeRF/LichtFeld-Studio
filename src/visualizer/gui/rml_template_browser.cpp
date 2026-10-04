@@ -36,13 +36,21 @@ namespace lfs::vis::gui {
         }
         std::string categoryLabel(const std::string& category) {
             static const std::map<std::string, std::string> keys{
-                {"Clean-up", "cleanup"},
-                {"Colour", "colour"},
-                {"Selection", "selection"},
-                {"Geometry", "geometry"},
-                {"Animation", "animation"}};
+                {"Clean-up", LOC("node_template.category.cleanup")},
+                {"Colour", LOC("node_template.category.colour")},
+                {"Selection", LOC("node_template.category.selection")},
+                {"Geometry", LOC("node_template.category.geometry")},
+                {"Animation", LOC("node_template.category.animation")}};
             const auto found = keys.find(category);
-            return found == keys.end() ? category : LOC("node_template.category." + found->second);
+            return found == keys.end() ? category : found->second;
+        }
+        std::string kindLabel(const std::string& kind) {
+            static const std::map<std::string, std::string> labels{
+                {"splat", LOC("node_template.kind.splat")},
+                {"mesh", LOC("node_template.kind.mesh")},
+                {"points", LOC("node_template.kind.points")}};
+            const auto found = labels.find(kind);
+            return found == labels.end() ? kind : found->second;
         }
     } // namespace
 
@@ -69,6 +77,9 @@ namespace lfs::vis::gui {
             return;
         document_->AddEventListener("click", this);
         document_->AddEventListener("change", this);
+        document_->GetElementById("close-btn")->SetAttribute("aria-label", LOC("common.close"));
+        document_->GetElementById("template-search")->SetAttribute(
+            "aria-label", LOC("node_editor.template_search"));
         document_->Show();
         lfs::python::register_rml_document("node_templates", document_);
         theme_signature_ = 0;
@@ -190,7 +201,7 @@ namespace lfs::vis::gui {
                      escaped(value.adjust) + "\">" + escaped(LOC("node_editor.template_adjust_short")) + " " +
                      escaped(value.adjust) + "</span><div class=\"template-card-bottom\"><div class=\"template-chips\">";
             for (const auto& kind : value.scene_kinds)
-                cards += "<span class=\"template-chip\">" + escaped(LOC("node_template.kind." + kind)) + "</span>";
+                cards += "<span class=\"template-chip\">" + escaped(kindLabel(kind)) + "</span>";
             cards += "</div><button class=\"btn btn--secondary\" data-action=\"add\"><span>" +
                      escaped(LOC("node_editor.template_add")) + "</span></button></div>";
             if (value.id == menu_id_)

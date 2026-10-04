@@ -49,7 +49,13 @@ namespace lfs::vis {
         WindowManager(const std::string& title, int width, int height,
                       int monitor_x = 0, int monitor_y = 0,
                       int monitor_width = 0, int monitor_height = 0,
-                      GraphicsBackend graphics_backend = GraphicsBackend::Vulkan);
+                      GraphicsBackend graphics_backend =
+#ifdef LFS_GRAPHICS_METAL
+                          GraphicsBackend::Metal
+#else
+                          GraphicsBackend::Vulkan
+#endif
+        );
         ~WindowManager();
 
         WindowManager(const WindowManager&) = delete;
@@ -119,7 +125,12 @@ namespace lfs::vis {
 
         SDL_Window* window_ = nullptr;
         std::unique_ptr<GraphicsContext> graphics_context_;
-        GraphicsBackend graphics_backend_ = GraphicsBackend::Vulkan;
+        GraphicsBackend graphics_backend_ =
+#ifdef LFS_GRAPHICS_METAL
+            GraphicsBackend::Metal;
+#else
+            GraphicsBackend::Vulkan;
+#endif
         std::string title_;
         glm::ivec2 window_size_;
         glm::ivec2 framebuffer_size_;

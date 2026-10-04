@@ -9,14 +9,16 @@
 #include "lod_selector.hpp"
 #include "metal_present_source.hpp"
 #include "metal_rad_pager.hpp"
-#include "readback_ticket_ring.hpp"
+#include "generic_readback_ticket_ring.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "scene_overlay_params.hpp"
 #include "selection_query.hpp"
 #include "splat_preprocessor.hpp"
 #include "tile_rasterizer.hpp"
+#ifdef LFS_GRAPHICS_VULKAN
 #include "vulkan_scene_output.hpp"
 #include "window/vulkan_context.hpp"
+#endif
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -29,8 +31,10 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#ifdef LFS_GRAPHICS_VULKAN
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan_metal.h>
+#endif
 
 namespace lfs::vis {
     namespace {
@@ -70,10 +74,12 @@ namespace lfs::vis {
                     return (uint64_t{1} << 63) | (value + 1);
             }
         }
+#ifdef LFS_GRAPHICS_VULKAN
         void check(VkResult r, const char* label) {
             if (r != VK_SUCCESS)
                 throw std::runtime_error(std::string(label) + ": " + std::to_string(r));
         }
+#endif
         simd_float4x4 matrix(const glm::mat4& m) {
             simd_float4x4 result;
             static_assert(sizeof(result) == sizeof(m));
@@ -94,6 +100,7 @@ namespace lfs::vis {
             simd_uint4 counts;
         };
         static_assert(sizeof(PointParameters) == 256);
+#ifdef LFS_GRAPHICS_VULKAN
         struct Image {
             VkDevice device = VK_NULL_HANDLE;
             VmaAllocator allocator = VK_NULL_HANDLE;
@@ -159,6 +166,21 @@ namespace lfs::vis {
                     throw std::runtime_error(context.lastError());
             }
         };
+#else
+        // Native output for the tensor compositor, which copies it into tensors.
+        struct Image {
+            id<MTLTexture> texture;
+            void init(MetalViewportPresentation&, id<MTLDevice> metal, uint32_t w, uint32_t h,
+                      MTLPixelFormat native_format) {
+                auto descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:native_format width:w height:h mipmapped:NO];
+                descriptor.storageMode = MTLStorageModePrivate;
+                descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget;
+                texture = [metal newTextureWithDescriptor:descriptor];
+                if (!texture)
+                    throw lfs::Exception(nativeError(std::format("Metal viewport image allocation failed (extent={}x{}, format={}, allocated={}, recommended={})", w, h, uint64_t(native_format), metal.currentAllocatedSize, metal.recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
+            }
+        };
+#endif
         struct Frame {
             glm::ivec2 size{};
             uint32_t count = 0, capacity = 0;
@@ -181,7 +203,7 @@ namespace lfs::vis {
         };
     } // namespace
     struct MetalViewportRenderer::Impl {
-        VulkanContext* context = nullptr;
+        MetalViewportPresentation* context = nullptr;
         struct NativeLodTree {
             LodTreeBuffers buffers;
             uint64_t signature = 0, last_used = 0;
@@ -205,7 +227,33 @@ namespace lfs::vis {
         id<MTLRenderPipelineState> point_pipeline;
         id<MTLDepthStencilState> point_depth_state;
         id<MTLSharedEvent> event;
+#ifdef LFS_GRAPHICS_VULKAN
         VkSemaphore completion = VK_NULL_HANDLE;
+        // The Vulkan compositor samples published images inside graphics frames.
+        uint64_t consumerSerial() const { return context->lastFrameSubmitSerial() + (context->hasActiveFrame() ? 1 : 0); }
+        uint64_t publishedConsumerSerial() const { return context->lastFrameSubmitSerial(); }
+        uint64_t retiredConsumerSerial() const { return context->retiredFrameSubmitSerial(); }
+        void waitForConsumer(uint64_t serial) const {
+            if (!context->waitForRetiredFrameSubmitSerial(serial))
+                throw std::runtime_error(context->lastError());
+        }
+#else
+        // Tensor copies are the only consumers; they run on the render queue.
+        uint64_t consumerSerial() const { return 0; }
+        uint64_t publishedConsumerSerial() const { return 0; }
+        uint64_t retiredConsumerSerial() const { return std::numeric_limits<uint64_t>::max(); }
+        void waitForConsumer(uint64_t) const {}
+#endif
+        void configurePager(MetalRadPager& pager, const core::SplatData& model) {
+#ifdef LFS_GRAPHICS_VULKAN
+            pager.configure(model, *context, completion, rad_settings);
+#else
+            (void)pager;
+            (void)model;
+            // Page uploads run on a Metal/Vulkan interop queue today.
+            throw lfs::Exception(nativeError("Streaming RAD level-of-detail is not available in the Metal-only build yet; load the scene as a resident splat file instead", lfs::ErrorCode::Unsupported));
+#endif
+        }
         uint64_t serial = 0;
         struct TargetState {
             std::array<std::unique_ptr<Frame>, 3> frames;
@@ -231,13 +279,13 @@ namespace lfs::vis {
             return found == targets.end() ? nullptr : found->second.latest;
         }
         void stampConsumers() {
-            const auto consumer = context->lastFrameSubmitSerial();
+            const auto consumer = publishedConsumerSerial();
             for (auto& [id, state] : targets)
                 if (state.latest)
                     state.latest->consumer_serial = std::max(state.latest->consumer_serial, consumer);
         }
         void drainRetiredTargets() {
-            const auto consumer = context->retiredFrameSubmitSerial();
+            const auto consumer = retiredConsumerSerial();
             std::erase_if(retired_targets, [&](const auto& retired) {
                 if (retired.consumer > consumer)
                     return false;
@@ -254,7 +302,7 @@ namespace lfs::vis {
             if (const auto found = targets.find(id); found != targets.end()) {
                 // Include the recording graphics frame: it may not have a
                 // submission serial yet, but still references these textures.
-                uint64_t consumer = context ? context->lastFrameSubmitSerial() + (context->hasActiveFrame() ? 1 : 0) : 0;
+                uint64_t consumer = context ? consumerSerial() : 0;
                 for (const auto& frame : found->second.frames)
                     if (frame)
                         consumer = std::max(consumer, frame->consumer_serial);
@@ -292,6 +340,7 @@ namespace lfs::vis {
         mutable uint64_t next_readback = 0;
         id<MTLCommandQueue> readback_queue = [reader.device() newCommandQueue];
         id<MTLSharedEvent> readback_event = [reader.device() newSharedEvent];
+#ifdef LFS_GRAPHICS_VULKAN
         ~Impl() {
             // Teardown only: the event covers every native producer before device idle.
             if (context && completion) {
@@ -378,6 +427,69 @@ namespace lfs::vis {
             check(vkCreateSemaphore(ctx.device(), &info, nullptr, &completion), "Native presentation timeline");
             context = &ctx;
         }
+#else
+        ~Impl() {
+            // Teardown only: never destroy textures a submitted command still uses.
+            if (context && event) {
+                try {
+                    wait(serial);
+                } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): leak rather than free textures of an unretired command.
+                    for (auto& [id, state] : targets)
+                        for (auto& frame : state.frames)
+                            (void)frame.release();
+                    for (auto& retired : retired_targets)
+                        for (auto& frame : retired.state.frames)
+                            (void)frame.release();
+                    return;
+                }
+                targets.clear();
+                retired_targets.clear();
+                selection_pager.reset();
+            }
+        }
+        void wait(uint64_t value) const {
+            if (!value)
+                return;
+            if (![event waitUntilSignaledValue:value timeoutMS:5000])
+                throw std::runtime_error(std::format("Native viewport completion timed out after 5 s (value={}, signaled={})", value, event.signaledValue));
+        }
+        void initialize(MetalViewportPresentation& ctx) {
+            if (context) {
+                if (context != &ctx)
+                    throw std::invalid_argument(std::format("Metal viewport context changed without reset (existing_context={:#x}, requested_context={:#x})", reinterpret_cast<uintptr_t>(context), reinterpret_cast<uintptr_t>(&ctx)));
+                return;
+            }
+            NSError* error = nil;
+            auto options = [MTLCompileOptions new];
+            options.languageVersion = MTLLanguageVersion2_4;
+            auto library = [reader.device() newLibraryWithSource:[NSString stringWithUTF8String:kMetalPresentSource] options:options error:&error];
+            if (!library)
+                throw std::runtime_error(std::format("Metal presentation shader compilation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
+            present = [reader.device() newComputePipelineStateWithFunction:[library newFunctionWithName:@"present_viewer"] error:&error];
+            if (!present)
+                throw std::runtime_error(std::format("Metal presentation pipeline creation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
+            auto point_descriptor = [MTLRenderPipelineDescriptor new];
+            point_descriptor.vertexFunction = [library newFunctionWithName:@"point_vertex"];
+            point_descriptor.fragmentFunction = [library newFunctionWithName:@"point_fragment"];
+            point_descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
+            point_descriptor.colorAttachments[1].pixelFormat = MTLPixelFormatR32Float;
+            point_descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+            point_pipeline = [reader.device() newRenderPipelineStateWithDescriptor:point_descriptor error:&error];
+            if (!point_pipeline)
+                throw std::runtime_error(std::format("Metal point pipeline creation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
+            auto depth_descriptor = [MTLDepthStencilDescriptor new];
+            depth_descriptor.depthCompareFunction = MTLCompareFunctionLess;
+            depth_descriptor.depthWriteEnabled = YES;
+            point_depth_state = [reader.device() newDepthStencilStateWithDescriptor:depth_descriptor];
+            if (!point_depth_state)
+                throw std::runtime_error(std::format("Metal point depth state unavailable (device={}, compare_function={}, depth_write={})", reader.device().name.UTF8String, uint32_t(depth_descriptor.depthCompareFunction), bool(depth_descriptor.depthWriteEnabled)));
+            event = [reader.device() newSharedEvent];
+            if (!event)
+                throw lfs::Exception(nativeError(std::format("Metal presentation timeline allocation failed (device={}, allocated={}, recommended={})", reader.device().name.UTF8String, reader.device().currentAllocatedSize, reader.device().recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
+            context = &ctx;
+        }
+#endif
         NativeLodTree& prepareLodTree(const core::SplatData& model) {
             const auto& tree = *model.lod_tree;
             const size_t n = tree.total_nodes(), chunk_size = core::SplatLodTree::kChunkSplats;
@@ -494,8 +606,7 @@ namespace lfs::vis {
                 wait(frame->producer_value);
                 if (frame->command.status == MTLCommandBufferStatusError)
                     throw std::runtime_error(std::format("Metal command failed while acquiring a viewport frame (status={}, producer={}, consumer={}, error_code={}, error={})", long(frame->command.status), frame->producer_value, frame->consumer_serial, long(frame->command.error.code), frame->command.error.localizedDescription.UTF8String ?: "none"));
-                if (!context->waitForRetiredFrameSubmitSerial(frame->consumer_serial))
-                    throw std::runtime_error(context->lastError());
+                waitForConsumer(frame->consumer_serial);
                 if ((frame->raster && frame->raster->busy()) || (frame->gpu_lod && frame->gpu_lod->busy()))
                     [frame->command waitUntilCompleted];
                 const auto status = frame->raster ? frame->raster->status() : RasterStatus{};
@@ -538,8 +649,13 @@ namespace lfs::vis {
                 if (!f.point_depth)
                     throw lfs::Exception(nativeError(std::format("Metal point depth allocation failed (extent={}x{})", f.size.x, f.size.y), lfs::ErrorCode::ResourceExhausted));
             }
+#ifdef LFS_GRAPHICS_VULKAN
             f.color.init(*context, device, f.size.x, f.size.y, MTLPixelFormatRGBA8Unorm, VK_FORMAT_R8G8B8A8_UNORM);
             f.depth.init(*context, device, f.size.x, f.size.y, MTLPixelFormatR32Float, VK_FORMAT_R32_SFLOAT);
+#else
+            f.color.init(*context, device, f.size.x, f.size.y, MTLPixelFormatRGBA8Unorm);
+            f.depth.init(*context, device, f.size.x, f.size.y, MTLPixelFormatR32Float);
+#endif
             // Commit only a fully allocated replacement. Exceptions destroy the
             // unpublished candidate and leave existing slot ownership intact.
             frame = std::move(candidate);
@@ -609,7 +725,7 @@ namespace lfs::vis {
                (indices->is_contiguous() && nativeStorage(*indices) &&
                 indices->dtype() == core::DataType::Int32 && indices->bytes() >= size_t(model.size()) * 4);
     }
-    lfs::Result<core::Tensor> MetalViewportRenderer::buildSelectionMask(VulkanContext& context, const core::SplatData& model,
+    lfs::Result<core::Tensor> MetalViewportRenderer::buildSelectionMask(MetalViewportPresentation& context, const core::SplatData& model,
                                                                         const SceneRenderer::SelectionMaskRequest& request) {
         try {
             auto& i = *impl_;
@@ -722,7 +838,7 @@ namespace lfs::vis {
                 auto& pager = i.selection_pager;
                 if (!pager)
                     pager = std::make_unique<MetalRadPager>(i.reader.device());
-                pager->configure(model, context, i.completion, i.rad_settings);
+                i.configurePager(*pager, model);
                 const auto& prefix = pager->preview(model);
                 tensors[0] = &prefix[0];
                 if (geometry) {
@@ -774,7 +890,7 @@ namespace lfs::vis {
         return count <= std::numeric_limits<uint32_t>::max() && r.size.x > 0 && r.size.y > 0;
     }
     lfs::Result<PointSceneRenderer::RenderResult> MetalViewportRenderer::renderPoints(
-        VulkanContext& context, const PointSceneRenderer::RenderRequest& r, RenderTargetId output) {
+        MetalViewportPresentation& context, const PointSceneRenderer::RenderRequest& r, RenderTargetId output) {
         try {
             if (!supportsPoints(r))
                 throw std::invalid_argument(std::format("Unsupported native Metal point request (extent={}x{}, positions_shape={}, positions_dtype={}, positions_contiguous={}, colors_shape={}, colors_dtype={}, colors_contiguous={})", r.size.x, r.size.y, r.positions ? r.positions->shape().str() : "missing", r.positions ? int(r.positions->dtype()) : -1, r.positions && r.positions->is_contiguous(), r.colors ? r.colors->shape().str() : "missing", r.colors ? int(r.colors->dtype()) : -1, r.colors && r.colors->is_contiguous()));
@@ -812,9 +928,13 @@ namespace lfs::vis {
                              (r.preview_selection_additive ? 128u : 0u) | (uint32_t(r.depth_visualization_mode) == 1 ? 256u : 0u) |
                              (valid(r.deleted_mask) ? 512u : 0u);
             PointParameters p{matrix(r.view_projection), matrix(r.view), matrix(glm::mat4(1)), {}, {}, {r.voxel_size * r.scaling_modifier, r.focal_y, float(r.size.y) / std::max(r.ortho_scale, 1e-5f), float(r.depth_view)}, {uint32_t(nodes), 0, flags, 511}};
+#ifdef LFS_GRAPHICS_VULKAN
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(context.physicalDevice(), &props);
             p.counts.w = uint32_t(std::min(511.f, props.limits.pointSizeRange[1]));
+#else
+            p.counts.w = 511; // Metal clamps point_size to 511
+#endif
             if (r.crop) {
                 p.counts.z |= 1u | (r.crop->inverse ? 2u : 0u) | (r.crop->desaturate ? 4u : 0u);
                 p.crop_to_local = matrix(r.crop->to_local);
@@ -879,9 +999,13 @@ namespace lfs::vis {
             });
             f.producer_value = serial;
             i.serial = serial;
-            f.consumer_serial = context.lastFrameSubmitSerial() + (context.hasActiveFrame() ? 1 : 0);
+            f.consumer_serial = i.consumerSerial();
             i.target(slot).latest = &f;
+#ifndef LFS_GRAPHICS_VULKAN
+            return PointSceneRenderer::RenderResult{.generation = f.generation, .depth_generation = f.generation, .size = f.size, .completion_value = serial, .viewer_backend = rendering::ViewerBackend::Metal};
+#else
             return PointSceneRenderer::RenderResult{.image = sceneImageHandle(f.color.image), .image_view = sceneImageViewHandle(f.color.view), .image_layout = sceneImageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL), .generation = f.generation, .depth_image = sceneImageHandle(f.depth.image), .depth_image_view = sceneImageViewHandle(f.depth.view), .depth_image_layout = sceneImageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL), .depth_generation = f.generation, .size = f.size, .flip_y = false, .completion_semaphore = sceneTimelineHandle(i.completion), .completion_value = serial, .viewer_backend = rendering::ViewerBackend::Metal};
+#endif
         } catch (const std::exception& e) { return nativeError(e); }
     }
     bool MetalViewportRenderer::supports(const core::SplatData& model, const rendering::ViewportRenderRequest& r) {
@@ -919,7 +1043,7 @@ namespace lfs::vis {
                 model.non_sh_attrs_f16());
     }
     lfs::Result<SceneRenderer::RenderResult> MetalViewportRenderer::render(
-        VulkanContext& context, const core::SplatData& model, const rendering::ViewportRenderRequest& request, Slot slot, bool expected_depth, bool wait_for_pages) {
+        MetalViewportPresentation& context, const core::SplatData& model, const rendering::ViewportRenderRequest& request, Slot slot, bool expected_depth, bool wait_for_pages) {
         try {
             auto& i = *impl_;
             std::lock_guard lock(i.readback_mutex);
@@ -955,7 +1079,7 @@ namespace lfs::vis {
                 if (!owner)
                     owner = std::make_unique<MetalRadPager>(i.reader.device());
                 pager = owner.get();
-                pager->configure(model, context, i.completion, i.rad_settings);
+                i.configurePager(*pager, model);
                 const Frame* completed = nullptr;
                 for (const auto& candidate : i.target(slot).frames)
                     if (candidate && candidate->gpu_lod_active && candidate->gpu_lod && !candidate->gpu_lod->busy() &&
@@ -1263,9 +1387,13 @@ namespace lfs::vis {
                 pager->noteRendererCompletion(serial);
             f.producer_value = serial;
             i.serial = serial;
-            f.consumer_serial = context.lastFrameSubmitSerial() + (context.hasActiveFrame() ? 1 : 0);
+            f.consumer_serial = i.consumerSerial();
             i.target(slot).latest = &f;
+#ifndef LFS_GRAPHICS_VULKAN
+            return SceneRenderer::RenderResult{.generation = f.generation, .depth_generation = f.generation, .size = f.size, .alloc_size = f.size, .completion_value = serial, .lod_streaming_active = refine, .viewer_backend = rendering::ViewerBackend::Metal};
+#else
             return SceneRenderer::RenderResult{.image = sceneImageHandle(f.color.image), .image_view = sceneImageViewHandle(f.color.view), .image_layout = sceneImageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL), .generation = f.generation, .depth_image = sceneImageHandle(f.depth.image), .depth_image_view = sceneImageViewHandle(f.depth.view), .depth_image_layout = sceneImageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL), .depth_generation = f.generation, .size = f.size, .alloc_size = f.size, .flip_y = false, .completion_semaphore = sceneTimelineHandle(i.completion), .completion_value = serial, .lod_streaming_active = refine, .viewer_backend = rendering::ViewerBackend::Metal};
+#endif
         } catch (const std::exception& e) { return nativeError(e); }
     }
     glm::ivec2 MetalViewportRenderer::size(Slot slot) const {
@@ -1273,6 +1401,40 @@ namespace lfs::vis {
         auto f = impl_->latestFrame(slot);
         return f ? f->size : glm::ivec2{};
     }
+#ifndef LFS_GRAPHICS_VULKAN
+    lfs::Status MetalViewportRenderer::copyOutputs(Slot slot, core::Tensor& color, core::Tensor* depth) const {
+        try {
+            auto& i = *impl_;
+            std::lock_guard lock(i.readback_mutex);
+            auto f = i.latestFrame(slot);
+            if (!f)
+                throw std::runtime_error(std::format("Metal output copy slot is empty (target={}, targets={})", slot.value, i.targets.size()));
+            const auto width = size_t(f->size.x), height = size_t(f->size.y);
+            if (!color.is_valid() || !nativeStorage(color) || !color.is_contiguous() || color.dtype() != core::DataType::UInt8 ||
+                color.ndim() != 3 || color.size(0) != height || color.size(1) != width || color.size(2) != 4 ||
+                (depth && (!depth->is_valid() || !nativeStorage(*depth) || !depth->is_contiguous() || depth->dtype() != core::DataType::Float32 ||
+                           depth->ndim() != 2 || depth->size(0) != height || depth->size(1) != width)))
+                throw std::invalid_argument(std::format("Metal output copy needs UInt8 [{},{},4] color and Float32 [{},{}] depth (color={}, depth={})",
+                                                        height, width, height, width, color.shape().str(), depth ? depth->shape().str() : "none"));
+            std::array<core::Tensor*, 2> outputs{&color, depth};
+            const std::span<core::Tensor* const> written(outputs.data(), depth ? 2 : 1);
+            // Same queue as the render: Metal orders this blit after it, and a
+            // later render into the recycled texture after this blit.
+            auto command = i.reader.submitWrites({}, written, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView>, std::span<const core::MetalTensorView> out) {
+                auto blit = [command blitCommandEncoder];
+                [blit copyFromTexture:f->color.texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(width, height, 1)
+                             toBuffer:out[0].buffer destinationOffset:out[0].offset destinationBytesPerRow:width * 4 destinationBytesPerImage:width * height * 4];
+                if (depth)
+                    [blit copyFromTexture:f->depth.texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(width, height, 1)
+                                 toBuffer:out[1].buffer destinationOffset:out[1].offset destinationBytesPerRow:width * 4 destinationBytesPerImage:width * height * 4];
+                [blit endEncoding];
+            });
+            if (!command)
+                throw std::runtime_error(std::format("Metal output copy was not submitted (target={}, extent={}x{})", slot.value, width, height));
+            return {};
+        } catch (const std::exception& error) { return lfs::Status::failure(nativeError(error)); }
+    }
+#endif
     lfs::Result<uint64_t> MetalViewportRenderer::submitReadback(
         Slot slot, core::Tensor& destination, int x, int y, bool depth) const {
         try {
@@ -1284,8 +1446,8 @@ namespace lfs::vis {
             // Abandoned commands retain staging until completion but no host pointer.
             std::erase_if(i.readbacks, [](const auto& entry) { return !entry.second.destination &&
                                                                       (entry.second.command.status == MTLCommandBufferStatusCompleted || entry.second.command.status == MTLCommandBufferStatusError); });
-            if (i.readbacks.size() >= ReadbackTicketRing::kRingSize)
-                throw std::runtime_error(std::format("Metal readback ring is full; retire or abandon a ticket (active_tickets={}, capacity={}, target={})", i.readbacks.size(), ReadbackTicketRing::kRingSize, slot.value));
+            if (i.readbacks.size() >= BasicReadbackTicketRing<void*>::kRingSize)
+                throw std::runtime_error(std::format("Metal readback ring is full; retire or abandon a ticket (active_tickets={}, capacity={}, target={})", i.readbacks.size(), BasicReadbackTicketRing<void*>::kRingSize, slot.value));
             if (!destination.is_valid() || destination.device() != core::Device::CPU || !destination.is_contiguous() ||
                 x < 0 || y < 0 || (depth ? (destination.dtype() != core::DataType::Float32 || destination.ndim() != 2 || destination.size(0) != size_t(f->size.y) || destination.size(1) != size_t(f->size.x)) : (destination.ndim() != 3 || destination.size(2) < 3 || destination.size(2) > 4 || size_t(x) + f->size.x > destination.size(1) || size_t(y) + f->size.y > destination.size(0) || (destination.dtype() != core::DataType::Float32 && destination.dtype() != core::DataType::UInt8))))
                 throw std::invalid_argument(std::format("Invalid Metal readback destination (shape={}, dtype={}, device={}, contiguous={}, origin=[{},{}], extent={}x{}, depth={})", destination.shape().str(), int(destination.dtype()), int(destination.device()), destination.is_contiguous(), x, y, f->size.x, f->size.y, depth));

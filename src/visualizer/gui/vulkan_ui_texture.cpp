@@ -1297,6 +1297,9 @@ namespace lfs::vis::gui {
         return impl_ ? impl_->tensor_image : nullptr;
     }
 
+    // The Vulkan renderer tracks preview uploads itself.
+    std::uint64_t uiTextureGeneration() { return 0; }
+
     std::shared_ptr<const lfs::core::Tensor> uiTextureImage(std::uintptr_t id) {
         std::lock_guard lock(texture_images_mutex);
         for (const auto& [key, value] : texture_images) {

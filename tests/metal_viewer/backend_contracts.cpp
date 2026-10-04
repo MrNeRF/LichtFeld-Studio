@@ -10,7 +10,7 @@ int main() {
         return 1;
     if (viewerBackendDisplayName(ViewerBackend::Cuda) != "CUDA")
         return 2;
-#ifdef __APPLE__
+#ifdef LFS_TENSOR_METAL
     if (desktopViewerBackend() != ViewerBackend::Metal)
 #else
     if (desktopViewerBackend() != ViewerBackend::Vulkan)

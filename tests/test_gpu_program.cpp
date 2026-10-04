@@ -117,15 +117,108 @@ namespace {
         auto color = Tensor::zeros({height, width, 4}, Device::GPU, DataType::UInt8);
         const Params params{};
         const std::array bindings{M::Binding{0, &vertices}, M::Binding{8, &vertex_colors}};
-        auto result = (*loaded)->draw({.vertex = "vertexMain", .fragment = "fragmentMain", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .color = &color, .vertex_count = 6, .clear_color = true});
+        constexpr M::Scissor scissor{7, 5, 61, 37};
+        auto result = (*loaded)->draw({.vertex = "vertexMain", .fragment = "fragmentMain", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .color = &color, .vertex_count = 6, .scissor = scissor, .clear_color = true});
         ASSERT_TRUE(result) << result.error().detail();
         loaded->reset();
         const auto pixels = color.to(Device::CPU);
         const std::array<int, 4> expected{64, 128, 191, 255};
-        for (size_t pixel = 0; pixel < width * height; ++pixel)
-            for (size_t channel = 0; channel < 4; ++channel)
-                EXPECT_NEAR(int(pixels.ptr<uint8_t>()[pixel * 4 + channel]), expected[channel], 1)
-                    << pixel << ',' << channel;
+        for (size_t y = 0; y < height; ++y)
+            for (size_t x = 0; x < width; ++x) {
+                const bool inside = x >= scissor.x && x < scissor.x + scissor.width &&
+                                    y >= scissor.y && y < scissor.y + scissor.height;
+                for (size_t channel = 0; channel < 4; ++channel)
+                    EXPECT_NEAR(int(pixels.ptr<uint8_t>()[(y * width + x) * 4 + channel]),
+                                inside ? expected[channel] : 0, 1)
+                        << x << ',' << y << ',' << channel;
+            }
+    }
+
+    TEST_P(Programs, BatchedDrawsMatchSequentialDraws) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        GpuBackendScope scope(GetParam());
+        auto loaded = M::load(program_contract_entries(), GetParam());
+        ASSERT_TRUE(loaded) << loaded.error().detail();
+        if (!(*loaded)->supports_raster())
+            GTEST_SKIP() << "Backend is compute-only";
+        constexpr size_t width = 67, height = 41;
+        std::array<std::array<float, 4>, 6> positions{{{-1, 1, 0.5f, 1}, {1, 1, 0.5f, 1}, {-1, -1, 0.5f, 1}, {-1, -1, 0.5f, 1}, {1, 1, 0.5f, 1}, {1, -1, 0.5f, 1}}};
+        std::array<std::array<float, 4>, 6> first_colors{}, second_colors{};
+        first_colors.fill({0.25f, 0.5f, 0.75f, 0.5f});
+        second_colors.fill({1, 0.25f, 0, 0.75f});
+        auto vertices = Tensor::from_blob(positions.data(), {6, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto first_tensor = Tensor::from_blob(first_colors.data(), {6, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto second_tensor = Tensor::from_blob(second_colors.data(), {6, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+        const Params params{};
+        const std::array first_bindings{M::Binding{0, &vertices}, M::Binding{8, &first_tensor}};
+        const std::array second_bindings{M::Binding{0, &vertices}, M::Binding{8, &second_tensor}};
+        const auto draws = [&](Tensor& target) {
+            return std::array{
+                M::Draw{.vertex = "vertexMain", .fragment = "fragmentMain", .arguments = {std::as_bytes(std::span(&params, 1)), first_bindings}, .color = &target, .vertex_count = 6, .blend = M::Blend::StraightAlpha, .clear_color = true, .color_clear = {0, 0, 0.25f, 1}},
+                M::Draw{.vertex = "vertexMain", .fragment = "fragmentMain", .arguments = {std::as_bytes(std::span(&params, 1)), second_bindings}, .color = &target, .vertex_count = 6, .scissor = M::Scissor{5, 3, 31, 17}, .blend = M::Blend::StraightAlpha},
+                M::Draw{.vertex = "vertexMain", .fragment = "fragmentMain", .arguments = {std::as_bytes(std::span(&params, 1)), first_bindings}, .color = &target, .vertex_count = 6, .scissor = M::Scissor{20, 10, 40, 25}, .blend = M::Blend::PremultipliedAlpha},
+                M::Draw{.vertex = "vertexMain", .fragment = "fragmentMain", .arguments = {std::as_bytes(std::span(&params, 1)), second_bindings}, .color = &target, .vertex_count = 6, .scissor = M::Scissor{0, 0, 0, 0}},
+            };
+        };
+        auto batched = Tensor::zeros({height, width, 4}, Device::GPU, DataType::UInt8);
+        auto sequential = Tensor::zeros({height, width, 4}, Device::GPU, DataType::UInt8);
+        const auto batch = draws(batched);
+        auto result = (*loaded)->draw_batch(batch);
+        ASSERT_TRUE(result) << result.error().detail();
+        for (const auto& draw : draws(sequential)) {
+            result = (*loaded)->draw(draw);
+            ASSERT_TRUE(result) << result.error().detail();
+        }
+        // Clearing after the first draw is a contract violation, not a reorder.
+        auto invalid = draws(batched);
+        invalid[1].clear_color = true;
+        result = (*loaded)->draw_batch(invalid);
+        ASSERT_FALSE(result);
+        EXPECT_EQ(result.error().code(), lfs::ErrorCode::InvalidArgument);
+        loaded->reset();
+        const auto a = batched.to(Device::CPU), b = sequential.to(Device::CPU);
+        size_t differing = 0;
+        for (size_t i = 0; i < a.numel(); ++i)
+            differing += a.ptr<uint8_t>()[i] != b.ptr<uint8_t>()[i];
+        EXPECT_EQ(differing, 0u);
+        // The second draw's scissor region blends over the first.
+        const auto pixel = [&](size_t x, size_t y, size_t c) { return int(a.ptr<uint8_t>()[(y * width + x) * 4 + c]); };
+        EXPECT_NE(pixel(10, 8, 0), pixel(1, 1, 0));
+        EXPECT_EQ(pixel(1, 1, 0), pixel(width - 1, 1, 0));
+    }
+
+    TEST_P(Programs, ViewportMapsNdcToItsPixelRect) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        GpuBackendScope scope(GetParam());
+        auto loaded = M::load(program_contract_entries(), GetParam());
+        ASSERT_TRUE(loaded) << loaded.error().detail();
+        if (!(*loaded)->supports_raster())
+            GTEST_SKIP() << "Backend is compute-only";
+        constexpr size_t width = 64, height = 48;
+        // The upper-left NDC quadrant must land in the viewport's top-left quarter.
+        std::array<std::array<float, 4>, 6> positions{{{-1, 1, 0.5f, 1}, {0, 1, 0.5f, 1}, {-1, 0, 0.5f, 1}, {-1, 0, 0.5f, 1}, {0, 1, 0.5f, 1}, {0, 0, 0.5f, 1}}};
+        std::array<std::array<float, 4>, 6> colors{};
+        colors.fill({1, 1, 1, 1});
+        auto vertices = Tensor::from_blob(positions.data(), {6, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto vertex_colors = Tensor::from_blob(colors.data(), {6, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto color = Tensor::zeros({height, width, 4}, Device::GPU, DataType::UInt8);
+        const Params params{};
+        const std::array bindings{M::Binding{0, &vertices}, M::Binding{8, &vertex_colors}};
+        constexpr M::Viewport viewport{8, 4, 40, 32};
+        auto result = (*loaded)->draw({.vertex = "vertexMain", .fragment = "fragmentMain", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .color = &color, .vertex_count = 6, .viewport = viewport, .clear_color = true});
+        ASSERT_TRUE(result) << result.error().detail();
+        auto invalid = (*loaded)->draw({.vertex = "vertexMain", .fragment = "fragmentMain", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .color = &color, .vertex_count = 6, .viewport = M::Viewport{0, 0, 0, 10}});
+        ASSERT_FALSE(invalid);
+        EXPECT_EQ(invalid.error().code(), lfs::ErrorCode::InvalidArgument);
+        loaded->reset();
+        const auto pixels = color.to(Device::CPU);
+        for (size_t y = 0; y < height; ++y)
+            for (size_t x = 0; x < width; ++x) {
+                const bool inside = x >= 8 && x < 28 && y >= 4 && y < 20;
+                EXPECT_EQ(int(pixels.ptr<uint8_t>()[(y * width + x) * 4 + 3]), inside ? 255 : 0) << x << ',' << y;
+            }
     }
 
     TEST_P(Programs, InvalidBindingsReturnTypedErrors) {

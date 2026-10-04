@@ -33,6 +33,7 @@ namespace lfs::vis {
 
     enum class GraphicsBackend {
         Vulkan,
+        Metal,
     };
 
     enum class ProjectSwitchDisposition {
@@ -172,7 +173,12 @@ namespace lfs::vis {
         bool safe_mode = false;
         std::function<RuntimeServiceStatus()> mcp_status_provider;
         bool gut = false;
-        GraphicsBackend graphics_backend = GraphicsBackend::Vulkan;
+        GraphicsBackend graphics_backend =
+#ifdef LFS_GRAPHICS_METAL
+            GraphicsBackend::Metal;
+#else
+            GraphicsBackend::Vulkan;
+#endif
         int monitor_x = 0; // Monitor hint for window placement
         int monitor_y = 0;
         int monitor_width = 0;

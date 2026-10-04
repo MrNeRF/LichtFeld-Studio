@@ -61,6 +61,7 @@ SEAMS = {
     "src/visualizer/project/project_lifecycle.cpp": "Project loading binds the CUDA trainer thread to its device.",
     "src/visualizer/gui/gui_manager.cpp": "The GUI reports failure of the selected CUDA runtime.",
     "src/visualizer/preferences.cpp": "Preferences select a backend before tensor initialization.",
+    "src/visualizer/window/metal_graphics_context.mm": "The platform presenter owns the final Metal image tensor and selects Metal allocation explicitly.",
 }
 # Exact private-interface exceptions pending ownership changes in other lanes.
 PRIVATE_SEAMS = {

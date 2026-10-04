@@ -24,9 +24,10 @@ namespace lfs::rendering {
         }
         return {};
     }
-    // Scene rendering is fixed by the platform; the compositor remains Vulkan.
+    // Scene rendering is fixed by the build: the native Metal viewer when it is
+    // compiled, otherwise the Vulkan rasterizer.
     [[nodiscard]] constexpr ViewerBackend desktopViewerBackend() {
-#ifdef __APPLE__
+#ifdef LFS_TENSOR_METAL
         return ViewerBackend::Metal;
 #else
         return ViewerBackend::Vulkan;

@@ -2,8 +2,9 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# The Apple rasterizer is a comparison fixture, never a desktop backend.
-if(APPLE)
+# With the native Metal viewer, the Vulkan rasterizer is a comparison fixture,
+# never a desktop backend.
+if(LFS_TENSOR_METAL)
     if(NOT BUILD_TESTS)
         message(FATAL_ERROR "The macOS Vulkan reference rasterizer is test-only")
     endif()

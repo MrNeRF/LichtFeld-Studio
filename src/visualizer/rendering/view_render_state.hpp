@@ -59,6 +59,8 @@ namespace lfs::vis {
         lfs::rendering::ScreenOverlayRenderer screen_overlay_renderer_;
         mutable FramerateController framerate_controller_;
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
+        // Linear view depth matching vulkan_viewport_image_ (tensor compositor).
+        std::shared_ptr<const lfs::core::Tensor> viewport_depth_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
         StaleFrameGuard vksplat_stale_frame_guard_;

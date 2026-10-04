@@ -45,7 +45,6 @@ namespace lfs::core::internal {
         struct RasterResources {
             VkDevice device;
             VkFramebuffer framebuffer = VK_NULL_HANDLE;
-            std::shared_ptr<Pipeline> pipeline;
             std::shared_ptr<Attachment> color, depth;
             ~RasterResources() {
                 if (framebuffer)
@@ -104,7 +103,7 @@ namespace lfs::core::internal {
                     vkCmdDispatch(command, launch.groups[0], launch.groups[1], launch.groups[2]); }, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_WHOLE_SIZE, pipeline);
             }
 
-            void draw(const Module::Draw& draw, const ProgramArguments& arguments) override {
+            void draw(std::span<const Module::Draw> draws, std::span<const ProgramArguments> arguments) override {
                 std::lock_guard lock(mutex_);
                 uint32_t count = 0;
                 vkGetPhysicalDeviceQueueFamilyProperties(context_->physical_device(), &count, nullptr);
@@ -112,28 +111,22 @@ namespace lfs::core::internal {
                 vkGetPhysicalDeviceQueueFamilyProperties(context_->physical_device(), &count, families.data());
                 if (!(families.at(context_->queue_family()).queueFlags & VK_QUEUE_GRAPHICS_BIT))
                     throw Exception(make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::Tensor, .detail = std::format("Tensor queue family {} is compute-only; raster requires a graphics-capable tensor queue", context_->queue_family()), .detection = LFS_SOURCE_SITE_CURRENT()}));
-                const uint32_t width = static_cast<uint32_t>(draw.color->size(1)), height = static_cast<uint32_t>(draw.color->size(0));
-                const auto format = draw.color->dtype() == DataType::UInt8 ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R32G32B32A32_SFLOAT;
-                auto resources = std::make_shared<RasterResources>();
-                resources->device = context_->device();
-                resources->pipeline = raster(draw, format, arguments.parameters.size());
-                resources->color = attachment(width, height, format, VK_IMAGE_ASPECT_COLOR_BIT);
-                if (draw.depth)
-                    resources->depth = attachment(width, height, VK_FORMAT_D32_SFLOAT, VK_IMAGE_ASPECT_DEPTH_BIT);
-                const VkImageView views[]{resources->color->view, resources->depth ? resources->depth->view : VK_NULL_HANDLE};
-                VkFramebufferCreateInfo framebuffer{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-                framebuffer.renderPass = resources->pipeline->pass;
-                framebuffer.attachmentCount = draw.depth ? 2 : 1;
-                framebuffer.pAttachments = views;
-                framebuffer.width = width;
-                framebuffer.height = height;
-                framebuffer.layers = 1;
-                check(vkCreateFramebuffer(context_->device(), &framebuffer, nullptr, &resources->framebuffer), "Create tensor framebuffer");
+                const auto& first = draws.front();
+                const uint32_t width = static_cast<uint32_t>(first.color->size(1)), height = static_cast<uint32_t>(first.color->size(0));
+                const auto format = first.color->dtype() == DataType::UInt8 ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R32G32B32A32_SFLOAT;
+                std::vector<std::shared_ptr<Pipeline>> pipelines;
+                pipelines.reserve(draws.size());
+                for (size_t i = 0; i < draws.size(); ++i)
+                    pipelines.push_back(raster(draws[i], format, arguments[i].parameters.size()));
+                // Every pipeline in a batch has the same attachment formats, so
+                // their render passes are compatible with one framebuffer.
+                auto resources = target(width, height, format, first.depth != nullptr, pipelines.front()->pass);
                 std::vector<StorageRef> reads, writes;
-                accesses(arguments, reads, writes);
-                writes.push_back(storage_ref(*draw.color));
-                if (draw.depth)
-                    writes.push_back(storage_ref(*draw.depth));
+                for (const auto& argument : arguments)
+                    accesses(argument, reads, writes);
+                writes.push_back(storage_ref(*first.color));
+                if (first.depth)
+                    writes.push_back(storage_ref(*first.depth));
                 context_->recorders().record(reads, writes, [&](VkCommandBuffer command) {
                     const auto upload = [&](const Attachment& image, const Tensor& tensor, bool clear) {
                         transition(command, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -144,33 +137,41 @@ namespace lfs::core::internal {
                         transition(command, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    image.aspect == VK_IMAGE_ASPECT_COLOR_BIT ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
                     };
-                    upload(*resources->color, *draw.color, draw.clear_color);
-                    if (draw.depth) upload(*resources->depth, *draw.depth, draw.clear_depth);
+                    upload(*resources->color, *first.color, first.clear_color);
+                    if (first.depth) upload(*resources->depth, *first.depth, first.clear_depth);
                     VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-                    begin.renderPass = resources->pipeline->pass;
+                    begin.renderPass = pipelines.front()->pass;
                     begin.framebuffer = resources->framebuffer;
                     begin.renderArea.extent = {width, height};
                     vkCmdBeginRenderPass(command, &begin, VK_SUBPASS_CONTENTS_INLINE);
                     VkClearAttachment clear[2]{};
                     uint32_t clear_count = 0;
-                    if (draw.clear_color) {
+                    if (first.clear_color) {
                         clear[clear_count].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                        std::copy(draw.color_clear.begin(), draw.color_clear.end(), clear[clear_count++].clearValue.color.float32);
+                        std::copy(first.color_clear.begin(), first.color_clear.end(), clear[clear_count++].clearValue.color.float32);
                     }
-                    if (draw.depth && draw.clear_depth) {
+                    if (first.depth && first.clear_depth) {
                         clear[clear_count].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-                        clear[clear_count++].clearValue.depthStencil = {draw.depth_clear, 0};
+                        clear[clear_count++].clearValue.depthStencil = {first.depth_clear, 0};
                     }
                     const VkClearRect rect{{{0, 0}, {width, height}}, 0, 1};
                     if (clear_count) vkCmdClearAttachments(command, clear_count, clear, 1, &rect);
-                    // Negative height makes NDC +Y point upward, like Metal.
-                    const VkViewport viewport{0, float(height), float(width), -float(height), 0, 1};
-                    const VkRect2D scissor{{0, 0}, {width, height}};
-                    vkCmdSetViewport(command, 0, 1, &viewport);
-                    vkCmdSetScissor(command, 0, 1, &scissor);
-                    vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, resources->pipeline->pipeline);
-                    push(command, *resources->pipeline, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, arguments);
-                    vkCmdDraw(command, draw.vertex_count, draw.instance_count, draw.first_vertex, 0);
+                    for (size_t i = 0; i < draws.size(); ++i) {
+                        const auto& draw = draws[i];
+                        if (draw.vertex_count == 0) continue;
+                        // Negative height makes NDC +Y point upward, like Metal.
+                        const auto rect = draw.viewport.value_or(Module::Viewport{0, 0, float(width), float(height)});
+                        const VkViewport viewport{rect.x, rect.y + rect.height, rect.width, -rect.height, 0, 1};
+                        vkCmdSetViewport(command, 0, 1, &viewport);
+                        const VkRect2D scissor = draw.scissor
+                            ? VkRect2D{{static_cast<int32_t>(draw.scissor->x), static_cast<int32_t>(draw.scissor->y)},
+                                       {draw.scissor->width, draw.scissor->height}}
+                            : VkRect2D{{0, 0}, {width, height}};
+                        vkCmdSetScissor(command, 0, 1, &scissor);
+                        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[i]->pipeline);
+                        push(command, *pipelines[i], VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, arguments[i]);
+                        vkCmdDraw(command, draw.vertex_count, draw.instance_count, draw.first_vertex, 0);
+                    }
                     vkCmdEndRenderPass(command);
                     const auto download = [&](const Attachment& image, const Tensor& tensor) {
                         transition(command, image, image.aspect == VK_IMAGE_ASPECT_COLOR_BIT ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
@@ -178,8 +179,8 @@ namespace lfs::core::internal {
                         auto copy = region(tensor, image.aspect, width, height);
                         vkCmdCopyImageToBuffer(command, image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VulkanMemory::buffer_for(storage_ref(tensor)), 1, &copy);
                     };
-                    download(*resources->color, *draw.color);
-                    if (draw.depth) download(*resources->depth, *draw.depth); }, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_WHOLE_SIZE, resources);
+                    download(*resources->color, *first.color);
+                    if (first.depth) download(*resources->depth, *first.depth); }, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_WHOLE_SIZE, std::make_shared<std::pair<std::shared_ptr<RasterResources>, std::vector<std::shared_ptr<Pipeline>>>>(resources, pipelines));
             }
 
         private:
@@ -200,6 +201,34 @@ namespace lfs::core::internal {
             static void push(VkCommandBuffer command, const Pipeline& pipeline, VkShaderStageFlags stages, const ProgramArguments& arguments) {
                 if (!arguments.parameters.empty())
                     vkCmdPushConstants(command, pipeline.layout, stages, 0, static_cast<uint32_t>(arguments.parameters.size()), arguments.parameters.data());
+            }
+            // A target is reused once the recorder has released it, i.e. after
+            // the GPU finished the submission that last used it.
+            std::shared_ptr<RasterResources> target(uint32_t width, uint32_t height, VkFormat format, bool depth, VkRenderPass pass) {
+                const auto key = std::tuple{width, height, format, depth};
+                auto& pool = targets_[key];
+                for (const auto& cached : pool)
+                    if (cached.use_count() == 1)
+                        return cached;
+                if (targets_.size() > 8) {
+                    std::erase_if(targets_, [&](const auto& entry) { return entry.first != key; });
+                }
+                auto result = std::make_shared<RasterResources>();
+                result->device = context_->device();
+                result->color = attachment(width, height, format, VK_IMAGE_ASPECT_COLOR_BIT);
+                if (depth)
+                    result->depth = attachment(width, height, VK_FORMAT_D32_SFLOAT, VK_IMAGE_ASPECT_DEPTH_BIT);
+                const VkImageView views[]{result->color->view, result->depth ? result->depth->view : VK_NULL_HANDLE};
+                VkFramebufferCreateInfo framebuffer{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+                framebuffer.renderPass = pass;
+                framebuffer.attachmentCount = depth ? 2 : 1;
+                framebuffer.pAttachments = views;
+                framebuffer.width = width;
+                framebuffer.height = height;
+                framebuffer.layers = 1;
+                check(vkCreateFramebuffer(context_->device(), &framebuffer, nullptr, &result->framebuffer), "Create tensor framebuffer");
+                pool.push_back(result);
+                return result;
             }
             std::shared_ptr<Attachment> attachment(uint32_t width, uint32_t height, VkFormat format, VkImageAspectFlags aspect) {
                 auto result = std::make_shared<Attachment>();
@@ -349,6 +378,7 @@ namespace lfs::core::internal {
             std::map<std::pair<std::string, Module::Stage>, std::vector<uint32_t>> sources_;
             std::map<std::pair<std::string, size_t>, std::shared_ptr<Pipeline>> compute_;
             std::map<std::tuple<std::string, std::string, VkFormat, size_t, Module::Blend, bool, Module::Compare, bool>, std::shared_ptr<Pipeline>> raster_;
+            std::map<std::tuple<uint32_t, uint32_t, VkFormat, bool>, std::vector<std::shared_ptr<RasterResources>>> targets_;
         };
     } // namespace
 

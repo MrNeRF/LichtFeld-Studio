@@ -654,7 +654,7 @@ namespace {
         EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar_));
         lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_);
         context_->Update();
-#ifdef __APPLE__
+#ifdef LFS_TENSOR_METAL
         EXPECT_EQ(model_.renderer_value,
                   "Metal");
 #else

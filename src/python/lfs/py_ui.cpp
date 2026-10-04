@@ -5468,6 +5468,11 @@ namespace lfs::python {
             result["force_no_atomic_float"] = state.options.force_no_atomic_float;
             result["cuda_available"] = static_cast<bool>(LFS_HAS_CUDA);
             result["metal_available"] = core::gpu_backend_available(core::GpuBackend::Metal);
+#ifdef LFS_TENSOR_VULKAN
+            result["vulkan_available"] = true;
+#else
+            result["vulkan_available"] = false;
+#endif
             return result; }, "Get saved tensor backend preferences; changes apply after restart");
 
         m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float) {
@@ -5479,6 +5484,10 @@ namespace lfs::python {
                   }
                   if (backend == "metal" && !core::gpu_backend_available(core::GpuBackend::Metal))
                       throw nb::value_error("Metal needs macOS 26 and a Metal 4 GPU");
+#ifndef LFS_TENSOR_VULKAN
+                  if (backend == "vulkan")
+                      throw nb::value_error("Vulkan is not compiled into this Metal-only build");
+#endif
                   if (validation < 0 || validation > 2)
                       throw nb::value_error("Validation must be 0, 1, or 2");
                   const vis::TensorPreferenceState state{

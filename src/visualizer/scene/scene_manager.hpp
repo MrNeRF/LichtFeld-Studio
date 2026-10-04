@@ -260,7 +260,7 @@ namespace lfs::vis {
         std::string addGroupNode(const std::string& name, core::NodeId parent_id);
         std::string addPlySequenceNode(const std::string& name, const std::string& parent_name = "", size_t frame_count = 0);
 
-        // Allocator that backs splat tensors with Vulkan-external interop storage (the
+        // Allocator that backs splat tensors with renderer-visible storage (the
         // form the rasterizer can bind zero-copy). Returns an empty allocator when interop
         // is unavailable. The PLY-sequence streaming player uses this on the main thread to
         // upload background-decoded frames into render-ready storage.
@@ -324,7 +324,7 @@ namespace lfs::vis {
         // Drop the GUI's borrowed scene-image tensor and drain the GPU so no
         // in-flight Vulkan work references model tensors that are about to be
         // freed. Must run before releasing splat models, especially when their
-        // tensors are backed by Vulkan-external storage.
+        // tensors are backed by renderer-visible storage.
         void drainGpuForTensorRelease();
 
     private:

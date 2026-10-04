@@ -229,6 +229,9 @@ namespace lfs::vis {
         }
 
         TEST_F(ViewRenderStateTest, ComparisonTargetsBelongOnlyToTheComparingView) {
+#ifndef LFS_GRAPHICS_VULKAN
+            GTEST_SKIP() << "Split-view render targets are an explicit Phase 3 capability on Metal";
+#endif
             source.editViewSettings(first, [](ViewSettings& settings) { settings.split_view_mode = SplitViewMode::PLYComparison; });
             renderEmpty(first);
             renderEmpty(second);

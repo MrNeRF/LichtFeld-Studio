@@ -2988,9 +2988,33 @@ NB_MODULE(lichtfeld, m) {
         const auto* const context = window != nullptr ? window->getGraphicsContext() : nullptr;
         const auto caps = context != nullptr ? context->capabilities()
                                              : lfs::vis::GraphicsCapabilities{};
+        capabilities["backend"] = caps.native_metal ? "metal" : "vulkan";
         capabilities["mesh_rendering"] = caps.mesh_rendering;
         capabilities["mesh_wireframe"] = caps.wireframe;
         capabilities["wide_lines"] = caps.wide_lines;
+        capabilities["environment_map"] = caps.environment_map;
+        capabilities["split_view"] = caps.split_view;
+        capabilities["temporal_upscaling"] = caps.temporal_upscaling;
+        capabilities["mesh2splat"] = caps.mesh2splat;
+        capabilities["hdr_libplacebo"] = caps.hdr_libplacebo;
+        capabilities["external_memory_interop"] = caps.external_memory_interop;
+        capabilities["external_semaphore_interop"] = caps.external_semaphore_interop;
+        nb::dict unavailable_reasons;
+        if (caps.native_metal) {
+            unavailable_reasons["mesh_rendering"] =
+                "Mesh viewport rendering is not available in the Phase 2 Metal compositor";
+            unavailable_reasons["environment_map"] =
+                "Environment-map backgrounds are planned for the Phase 3 Metal compositor";
+            unavailable_reasons["split_view"] =
+                "Split view is planned for the Phase 3 Metal compositor";
+            unavailable_reasons["temporal_upscaling"] =
+                "Temporal upscaling and FSR are not available on the Metal tensor path";
+            unavailable_reasons["mesh2splat"] =
+                "Mesh2Splat requires the Vulkan rasterizer and is disabled in Metal-only builds";
+            unavailable_reasons["hdr_libplacebo"] =
+                "libplacebo HDR output requires Vulkan and is disabled in Metal-only builds";
+        }
+        capabilities["unavailable_reasons"] = unavailable_reasons;
         return capabilities;
     };
     m.def("get_graphics_capabilities", get_graphics_capabilities,

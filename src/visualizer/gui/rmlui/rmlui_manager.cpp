@@ -30,7 +30,11 @@
 #include "scene/scene_manager.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
 
+#ifdef LFS_GRAPHICS_METAL
+#include "gui/rmlui/rmlui_tensor_backend.hpp"
+#else
 #include "gui/rmlui/rmlui_vk_backend.hpp"
+#endif
 #include "window/graphics_context.hpp"
 
 #include <RmlUi/Core.h>
@@ -179,7 +183,11 @@ namespace lfs::vis::gui {
 
     bool RmlUIManager::initGraphics(SDL_Window* window, lfs::vis::GraphicsContext& graphics,
                                     float dp_ratio) {
+#ifdef LFS_GRAPHICS_METAL
+        auto render_interface = std::make_unique<TensorRmlUiRenderer>();
+#else
         auto render_interface = std::make_unique<RenderInterface_VK>();
+#endif
         auto* const ui_renderer = render_interface.get();
         if (!ui_renderer->initialize(graphics)) {
             LOG_ERROR("Failed to initialize RmlUI graphics renderer");

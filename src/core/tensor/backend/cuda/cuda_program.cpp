@@ -126,7 +126,7 @@ namespace lfs::core::internal {
                 params.record_stream(stream);
                 global.record_stream(stream);
             }
-            void draw(const GpuKernelModule::Draw&, const ProgramArguments&) override {
+            void draw(std::span<const GpuKernelModule::Draw>, std::span<const ProgramArguments>) override {
                 throw Exception(make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::Tensor, .detail = "CUDA tensor programs support compute, not raster", .detection = LFS_SOURCE_SITE_CURRENT()}));
             }
 

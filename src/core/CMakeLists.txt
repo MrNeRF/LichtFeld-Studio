@@ -10,6 +10,8 @@ if(LFS_HAS_CUDA)
     add_subdirectory(tensor)
 endif()
 
+# The application-level default is established before project()/vcpkg. Keep
+# this declaration for standalone core configurations without overriding it.
 option(LFS_TENSOR_VULKAN "Build the Vulkan tensor backend" ON)
 if(LFS_TENSOR_VULKAN)
     include(tensor/backend/vulkan/CMakeLists.txt)
@@ -172,7 +174,7 @@ endif()
 
 # The GPU export driver, shared by the Vulkan and Metal backends. Its host edge
 # refinement uses the same independent double rounding as decimation.
-if(LFS_TENSOR_VULKAN OR APPLE)
+if(LFS_TENSOR_VULKAN OR LFS_TENSOR_METAL)
     list(APPEND TENSOR_SOURCES tensor/backend/export_pipeline.cpp)
     set_source_files_properties(tensor/backend/export_pipeline.cpp PROPERTIES
         COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>")
@@ -180,7 +182,7 @@ endif()
 
 # Metal tensor backend: the kernel sources are embedded and compiled at
 # runtime, so the build needs no Metal toolchain.
-if(APPLE)
+if(LFS_TENSOR_METAL)
     set(_lfs_metal_kernels_cpp ${CMAKE_CURRENT_BINARY_DIR}/lfs_metal_kernels.cpp)
     set(_lfs_metal_sources tensor/backend/metal/kernels.metal tensor/backend/metal/export.metal
                            tensor/backend/metal/nn.metal tensor/backend/metal/raster.metal
@@ -319,7 +321,7 @@ if(LFS_TENSOR_VULKAN)
     target_sources(lfs_core PRIVATE ${LFS_TENSOR_SHADER_TABLE} tensor/backend/vulkan/vk_shared_image_ops.cpp)
     target_compile_definitions(lfs_core PUBLIC LFS_TENSOR_VULKAN=1)
 endif()
-if(APPLE)
+if(LFS_TENSOR_METAL)
     target_compile_definitions(lfs_core PUBLIC LFS_TENSOR_METAL=1)
     target_compile_options(lfs_core PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
     target_link_libraries(lfs_core PRIVATE "-framework Metal" "-framework Foundation")

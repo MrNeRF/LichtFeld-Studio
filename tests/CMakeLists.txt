@@ -3,7 +3,8 @@
 
 # Testing module - comprehensive tests for all components
 
-if(BUILD_TESTS OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS)
+if((BUILD_TESTS OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS) AND
+   (NOT APPLE OR (LFS_GRAPHICS_VULKAN_BUILD AND LFS_TENSOR_METAL)))
     add_subdirectory(metal_viewer)
 endif()
 
@@ -53,15 +54,15 @@ find_package(GTest CONFIG REQUIRED)
 
 # Standalone tensor/training proofs must not pull in the Vulkan window or its
 # test harness when the core Vulkan backend is disabled.
-if(APPLE AND BUILD_TESTS AND NOT LFS_TENSOR_VULKAN)
-    add_executable(metal_tensor_contracts EXCLUDE_FROM_ALL test_tensor_metal.cpp)
+if(LFS_TENSOR_METAL AND BUILD_TESTS AND NOT LFS_TENSOR_VULKAN)
+    add_executable(metal_tensor_contracts test_tensor_metal.cpp)
     target_compile_features(metal_tensor_contracts PRIVATE cxx_std_23)
     target_compile_definitions(metal_tensor_contracts PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
     target_include_directories(metal_tensor_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(metal_tensor_contracts PRIVATE lfs_core GTest::gtest_main)
     add_test(NAME MetalTensorNoVulkanContracts COMMAND metal_tensor_contracts)
     if(LFS_BUILD_TRAINER)
-        add_executable(metal_training_contracts EXCLUDE_FROM_ALL
+        add_executable(metal_training_contracts
             test_training_ops_metal_losses.cpp
             test_training_ops_metal_densify.cpp
             test_training_ops_metal_appearance.cpp
@@ -98,7 +99,7 @@ endif()
 
 if(APPLE AND (BUILD_VISUALIZER_TESTS OR BUILD_TESTS))
     # Cocoa delivers SDL drag events; this contract exercises the bridge without a GPU.
-    add_executable(mac_native_drag_drop_contracts EXCLUDE_FROM_ALL
+    add_executable(mac_native_drag_drop_contracts
         test_mac_native_drag_drop.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/gui/utils/drag_drop_native.cpp)
     target_compile_features(mac_native_drag_drop_contracts PRIVATE cxx_std_23)
@@ -149,7 +150,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
             test_rml_static_style_boundaries.cpp
             test_viewer_gpu_memory.cpp)
     endif()
-    add_executable(lichtfeld_visualizer_tests EXCLUDE_FROM_ALL
+    add_executable(lichtfeld_visualizer_tests
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
     )
     target_compile_features(lichtfeld_visualizer_tests PRIVATE cxx_std_23)
@@ -580,16 +581,6 @@ endfunction()
 if(NOT LFS_HAS_CUDA)
     set(TEST_SOURCES
         test_main.cpp
-        test_tensor_queue_readback.cpp
-        test_tensor_vulkan_runtime.cpp
-        test_tensor_vulkan_allocation_padding.cpp
-        test_tensor_vulkan_adoption.cpp
-        test_tensor_vulkan_pointwise.cpp
-        test_tensor_vulkan_reduce.cpp
-        test_tensor_vulkan_index.cpp
-        test_tensor_vulkan_matrix_nn.cpp
-        test_tensor_vulkan_random.cpp
-        test_tensor_vulkan_buffer.cpp
         test_tensor_backend_semantics.cpp
         test_nodes_core.cpp
         test_nodes_scene.cpp
@@ -603,16 +594,25 @@ if(NOT LFS_HAS_CUDA)
         test_pipelined_loader_backends.cpp
         test_viewer_no_cuda.cpp
     )
+    if(LFS_TENSOR_VULKAN)
+        list(APPEND TEST_SOURCES
+            test_tensor_queue_readback.cpp
+            test_tensor_vulkan_runtime.cpp
+            test_tensor_vulkan_allocation_padding.cpp
+            test_tensor_vulkan_adoption.cpp
+            test_tensor_vulkan_pointwise.cpp
+            test_tensor_vulkan_reduce.cpp
+            test_tensor_vulkan_index.cpp
+            test_tensor_vulkan_matrix_nn.cpp
+            test_tensor_vulkan_random.cpp
+            test_tensor_vulkan_buffer.cpp)
+    endif()
     if(LFS_BUILD_TRAINER)
         list(APPEND TEST_SOURCES
-            test_vulkan_trainer_start.cpp
             test_session_loader_storage.cpp
             test_training_command_masks.cpp
             test_mesh_mask_kernels.cpp
             test_training_ops_parity.cpp
-            test_training_ops_vulkan_gsplat.cpp
-            test_tensor_vulkan_training_fault.cpp
-            test_training_pair_sort.cpp
             test_training_ops_metal_densify.cpp
             test_training_ops_metal_appearance.cpp
             test_training_ops_metal_gsplat.cpp
@@ -621,6 +621,13 @@ if(NOT LFS_HAS_CUDA)
             test_training_ops_metal_fast.cpp
             test_training_snapshot_service.cpp
             test_ppisp_regularizer_portable.cpp)
+        if(LFS_TENSOR_VULKAN)
+            list(APPEND TEST_SOURCES
+                test_vulkan_trainer_start.cpp
+                test_training_ops_vulkan_gsplat.cpp
+                test_tensor_vulkan_training_fault.cpp
+                test_training_pair_sort.cpp)
+        endif()
     endif()
     if(APPLE)
         list(APPEND TEST_SOURCES test_video_videotoolbox.cpp test_mcp_render_capture_utils.cpp)
@@ -663,8 +670,10 @@ if(NOT LFS_HAS_CUDA)
         lfs_io
         lfs_visualizer
         GTest::gtest
-        Vulkan::Vulkan
     )
+    if(LFS_TENSOR_VULKAN)
+        target_link_libraries(lichtfeld_tests PRIVATE Vulkan::Vulkan)
+    endif()
     if(LFS_BUILD_TRAINER)
         target_link_libraries(lichtfeld_tests PRIVATE lfs_training)
         if(APPLE)
@@ -676,11 +685,15 @@ if(NOT LFS_HAS_CUDA)
             target_link_libraries(lichtfeld_tests PRIVATE lfs_python_embed)
         endif()
     endif()
-    add_test(NAME lichtfeld_tests COMMAND lichtfeld_tests --tensor-backend=vulkan)
+    if(LFS_TENSOR_VULKAN)
+        add_test(NAME lichtfeld_tests COMMAND lichtfeld_tests --tensor-backend=vulkan)
+    else()
+        add_test(NAME lichtfeld_tests COMMAND lichtfeld_tests --tensor-backend=metal)
+    endif()
     set_tests_properties(lichtfeld_tests PROPERTIES TIMEOUT 300)
 
     # Metal vs Vulkan tensor benchmark, built on demand and not registered with ctest.
-    if(APPLE)
+    if(LFS_TENSOR_METAL AND LFS_TENSOR_VULKAN)
         add_executable(bench_tensor_metal_vulkan EXCLUDE_FROM_ALL bench_tensor_metal_vulkan.cpp)
         target_compile_features(bench_tensor_metal_vulkan PRIVATE cxx_std_23)
         target_include_directories(bench_tensor_metal_vulkan PRIVATE ${LFS_CORE_ABI_INCLUDE_DIR})

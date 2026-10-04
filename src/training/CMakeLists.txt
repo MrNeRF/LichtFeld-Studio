@@ -92,7 +92,8 @@ set(TRAINING_NEW_SOURCES
     optimizer/scheduler.cpp
     losses/regularization.cpp
     ops/registry.cpp
-    ops/table_vulkan.cpp
+    $<$<BOOL:${LFS_TENSOR_VULKAN}>:ops/table_vulkan.cpp>
+    $<$<NOT:$<BOOL:${LFS_TENSOR_VULKAN}>>:ops/table_backend_unavailable.cpp>
     ops/requirements.cpp
     ops/fast_services.cpp
     ops/gsplat_services.cpp
@@ -153,7 +154,7 @@ endif()
 
 # Metal trainer kernels are embedded as MSL and compiled at runtime, so the
 # build needs no Metal toolchain. common.metal comes first.
-if(APPLE)
+if(LFS_TENSOR_METAL)
     set(LFS_TRAINING_METAL_KERNELS
         kernels/metal/common.metal
         kernels/metal/joint_adam.metal

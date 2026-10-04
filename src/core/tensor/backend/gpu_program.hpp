@@ -19,7 +19,9 @@ namespace lfs::core::internal {
         virtual bool supports_raster() const = 0;
         virtual uint64_t address(const Tensor&) = 0;
         virtual void dispatch(const GpuKernelModule::Dispatch&, const ProgramArguments&) = 0;
-        virtual void draw(const GpuKernelModule::Draw&, const ProgramArguments&) = 0;
+        // draws[i] binds arguments[i]; every draw shares draws[0]'s attachments.
+        virtual void draw(std::span<const GpuKernelModule::Draw> draws,
+                          std::span<const ProgramArguments> arguments) = 0;
     };
 
     std::unique_ptr<GpuProgram> make_vulkan_program(std::span<const GpuKernelModule::Entry>);

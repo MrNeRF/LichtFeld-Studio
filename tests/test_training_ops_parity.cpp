@@ -2403,9 +2403,9 @@ namespace {
     }
 
     TEST(TrainingOpsFastParity, NonzeroImageGradientAndFusedAdamVulkan) {
-        ASSERT_NE(lfs::training::training_ops(GpuBackend::Vulkan).fast, nullptr);
         if (!lfs::core::gpu_backend_available(GpuBackend::CUDA) || !lfs::core::gpu_backend_available(GpuBackend::Vulkan))
             GTEST_SKIP() << "CUDA and Vulkan devices required";
+        ASSERT_NE(lfs::training::training_ops(GpuBackend::Vulkan).fast, nullptr);
         for (int degree : {0, 1, 2, 3})
             for (bool mip : {false, true})
                 for (bool old_momentum : {false, true}) {

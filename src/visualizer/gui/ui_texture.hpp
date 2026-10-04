@@ -82,5 +82,8 @@ namespace lfs::vis::gui {
     // retain the tensor itself, never the legacy Rml texture identifier.
     [[nodiscard]] LFS_VIS_API std::shared_ptr<const lfs::core::Tensor>
     uiTextureImage(std::uintptr_t legacy_id);
+    // Changes whenever a UiTexture publishes new content; cached UI that drew
+    // a texture re-renders when it differs.
+    [[nodiscard]] LFS_VIS_API std::uint64_t uiTextureGeneration();
 
 } // namespace lfs::vis::gui

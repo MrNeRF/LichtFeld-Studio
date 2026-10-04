@@ -1262,6 +1262,7 @@ namespace lfs::app {
             // Training reaches Trainer::initialize, which names any missing families.
             if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Metal))
                 return true;
+#ifndef LFS_GRAPHICS_METAL
             if (viewer_only) {
                 if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan) &&
                     lfs::core::set_default_gpu_backend(lfs::core::GpuBackend::Vulkan).has_value()) {
@@ -1270,9 +1271,14 @@ namespace lfs::app {
                     return true;
                 }
             }
+#endif
             reportFatalStartupError(
                 "LichtFeld Studio - No usable GPU",
+#ifdef LFS_GRAPHICS_METAL
+                "This Metal-only build requires macOS 26 and a Metal 4 GPU. Vulkan fallback is not compiled into this application.",
+#else
                 "The selected Metal tensor backend requires macOS 26 and a Metal 4 GPU; only the viewer can fall back to Vulkan.",
+#endif
                 show_dialog);
             return false;
         }
@@ -1505,7 +1511,12 @@ namespace lfs::app {
                 return std::make_unique<lfs::io::video::VideoEncoder>();
             });
 
-            constexpr auto graphics_backend = lfs::vis::GraphicsBackend::Vulkan;
+            constexpr auto graphics_backend =
+#ifdef LFS_GRAPHICS_METAL
+                lfs::vis::GraphicsBackend::Metal;
+#else
+                lfs::vis::GraphicsBackend::Vulkan;
+#endif
             mcp::McpHttpServer mcp_http({.enable_resources = true});
             const auto mcp_preferences = vis::loadMcpPreferences();
             const auto mcp_port_override = params->mcp_port;

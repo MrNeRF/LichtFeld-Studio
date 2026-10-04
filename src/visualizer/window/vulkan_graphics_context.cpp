@@ -9,7 +9,9 @@
 #include <utility>
 
 namespace lfs::vis {
+#ifndef LFS_GRAPHICS_METAL
     std::unique_ptr<GraphicsContext> createGraphicsContext() { return std::make_unique<VulkanGraphicsContext>(); }
+#endif
     namespace {
         lfs::Error graphicsError(const lfs::ErrorCode code, std::string detail) {
             return lfs::make_error({
@@ -120,6 +122,7 @@ namespace lfs::vis {
     void VulkanGraphicsContext::noteFailure(const std::exception& exception) { context_.noteFailure(exception); }
     GraphicsCapabilities VulkanGraphicsContext::capabilities() const noexcept {
         return {
+            .native_metal = false,
             .mesh_rendering = true,
             .wireframe = context_.hasFillModeNonSolid(),
             .wide_lines = context_.hasWideLines(),

@@ -33,7 +33,9 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
         libswscale
         libavutil
 )
-pkg_check_modules(LIBPLACEBO REQUIRED IMPORTED_TARGET libplacebo)
+if(LFS_USE_VULKAN)
+    pkg_check_modules(LIBPLACEBO REQUIRED IMPORTED_TARGET libplacebo)
+endif()
 
 add_library(lfs_video STATIC
         include/io/video/video_encoder_interface.hpp
@@ -49,11 +51,14 @@ add_library(lfs_video STATIC
         hdr_tonemap.hpp
         hdr_tonemap.cpp
         hdr_libplacebo.hpp
-        hdr_libplacebo.cpp
-        hdr_libplacebo_av.c
         video_player.hpp
         video_player.cpp
 )
+if(LFS_USE_VULKAN)
+    target_sources(lfs_video PRIVATE hdr_libplacebo.cpp hdr_libplacebo_av.c)
+else()
+    target_sources(lfs_video PRIVATE hdr_libplacebo_unavailable.cpp)
+endif()
 if(LFS_HAS_CUDA)
     target_sources(lfs_video PRIVATE
         video/color_convert.cuh
@@ -88,13 +93,13 @@ target_link_libraries(lfs_video
 # libplacebo's static pkg-config dependency chain includes shaderc and
 # SPIR-V Tools. GNU ld resolves static archives left-to-right, so rescan the
 # complete chain on ELF platforms.
-if(UNIX AND NOT APPLE)
+if(LFS_USE_VULKAN AND UNIX AND NOT APPLE)
     target_link_libraries(lfs_video PRIVATE
             "-Wl,--start-group"
             PkgConfig::LIBPLACEBO
             "-Wl,--end-group"
     )
-else()
+elseif(LFS_USE_VULKAN)
     target_link_libraries(lfs_video PRIVATE PkgConfig::LIBPLACEBO)
 endif()
 

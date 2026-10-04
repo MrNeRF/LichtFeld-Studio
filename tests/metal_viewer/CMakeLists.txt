@@ -11,6 +11,10 @@ endif()
 add_executable(viewer_backend_contracts backend_contracts.cpp)
 target_compile_features(viewer_backend_contracts PRIVATE cxx_std_20)
 target_include_directories(viewer_backend_contracts PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../src/rendering/include")
+# Header-only: the viewer choice follows the build's LFS_TENSOR_METAL.
+if(LFS_TENSOR_METAL)
+    target_compile_definitions(viewer_backend_contracts PRIVATE LFS_TENSOR_METAL=1)
+endif()
 add_test(NAME ViewerBackendSelectionContracts COMMAND viewer_backend_contracts)
 set_tests_properties(ViewerBackendSelectionContracts PROPERTIES LABELS "viewer;cpu" TIMEOUT 30)
 
