@@ -48,6 +48,7 @@
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "training/training_setup.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer_impl.hpp"
 
 #include <nlohmann/json.hpp>
@@ -83,6 +84,20 @@
 namespace lfs::vis::project {
 
     namespace {
+        void publishTrainingPreparation(VisualizerImpl& viewer, const bool preparing) {
+            auto& presentation = app_store().training_state;
+            if (preparing) {
+                presentation.set("preparing");
+            } else if (presentation.get() == "preparing") {
+                // Preparation only accepts a fresh start or an ungranted resume.
+                // Do not overwrite a state already published by a replaced trainer.
+                const auto* manager = viewer.getTrainerManager();
+                presentation.set(manager && manager->isPaused()                           ? "paused"
+                                 : manager && manager->getState() == TrainingState::Ready ? "ready"
+                                                                                          : "idle");
+            }
+        }
+
         [[nodiscard]] size_t errorFieldBytes(const lfs::Error& error, const std::string_view key) {
             for (const auto& frame : error.frames())
                 for (const auto& entry : frame.fields.entries())
@@ -4530,6 +4545,7 @@ namespace lfs::vis::project {
         pending_training_bind_attempts_ = 0;
         pending_training_error_.reset();
         pending_training_start_active_.store(true, std::memory_order_release);
+        publishTrainingPreparation(viewer_, true);
         return {};
     }
 
@@ -4539,6 +4555,7 @@ namespace lfs::vis::project {
         }
         pending_training_start_ = {};
         pending_training_start_active_.store(false, std::memory_order_release);
+        publishTrainingPreparation(viewer_, false);
         if (pending_training_write_started_ && project_write_job_) {
             viewer_.jobs().requestCancel(*project_write_job_);
         }
@@ -4562,6 +4579,7 @@ namespace lfs::vis::project {
         const auto fail_pending = [this](lfs::Error error) {
             pending_training_start_ = {};
             pending_training_start_active_.store(false, std::memory_order_release);
+            publishTrainingPreparation(viewer_, false);
             LOG_ERROR("Training project preparation failed: {}", developerError(error));
             publishProjectToast(std::move(error), "training.start");
         };
@@ -4589,6 +4607,7 @@ namespace lfs::vis::project {
         // lifecycle through training events. The project is durable and bound.
         auto ready = std::exchange(pending_training_start_, {});
         pending_training_start_active_.store(false, std::memory_order_release);
+        publishTrainingPreparation(viewer_, false);
         if (auto result = ready(); !result) {
             publishProjectToast(std::move(result).error(), "training.start");
         }

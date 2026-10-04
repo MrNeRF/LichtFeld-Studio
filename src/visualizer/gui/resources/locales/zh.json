@@ -1154,6 +1154,7 @@
     "instructions": "Enter: 提交选择 | Ctrl+C: 复制内容"
   },
   "training_panel": {
+    "preparing_training": "正在准备训练…",
     "start_training": "开始训练",
     "resume_training": "继续训练",
     "pause": "暂停",

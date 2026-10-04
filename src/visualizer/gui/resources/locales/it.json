@@ -1154,6 +1154,7 @@
     "instructions": "Invio: conferma selezione | Ctrl+C: copia contenuto"
   },
   "training_panel": {
+    "preparing_training": "Preparazione del training…",
     "start_training": "Avvia Training",
     "resume_training": "Riprendi Training",
     "pause": "Pausa",

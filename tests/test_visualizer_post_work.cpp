@@ -9620,6 +9620,7 @@ namespace lfs::vis {
             auto accepted = lifecycle->prepareTrainingStartProjectAsync(ready);
             const auto elapsed = std::chrono::steady_clock::now() - started;
             auto duplicate = lifecycle->prepareTrainingStartProjectAsync(ready);
+            EXPECT_EQ(app_store().training_state.get(), "preparing");
             lifecycle->updateMaintenance();
             EXPECT_EQ(starts, 0);
             EXPECT_TRUE(viewer.jobs().anyRunning(JobType::ProjectWrite));
@@ -9632,6 +9633,7 @@ namespace lfs::vis {
             lifecycle->processPendingTrainingStart();
             lifecycle->processPendingTrainingStart();
             EXPECT_EQ(starts, 1);
+            EXPECT_EQ(app_store().training_state.get(), "ready");
         }
     }
 
@@ -9664,6 +9666,7 @@ namespace lfs::vis {
         EXPECT_FALSE(lifecycle->pending_training_start_);
         EXPECT_FALSE(lifecycle->hasSourcePath());
         EXPECT_FALSE(viewer.getTrainer()->trainer_project_save_policy().on_completion);
+        EXPECT_EQ(app_store().training_state.get(), "ready");
     }
 
     TEST_F(VisualizerImplResetTest, AsyncTrainingBindCancelDoesNotStart) {
@@ -9729,11 +9732,13 @@ namespace lfs::vis {
         std::unique_lock write_lock(lifecycle->document_access_mutex_);
         auto accepted = viewer.startTraining();
         EXPECT_TRUE(viewer.isTrainingStartPending());
+        EXPECT_EQ(app_store().training_state.get(), "preparing");
         EXPECT_FALSE(manager->canStart());
         EXPECT_TRUE(manager->canStop());
         auto duplicate = viewer.startTraining();
         manager->stopTraining();
         EXPECT_FALSE(viewer.isTrainingStartPending());
+        EXPECT_EQ(app_store().training_state.get(), "ready");
         write_lock.unlock();
         ASSERT_TRUE(accepted);
         ASSERT_TRUE(duplicate);

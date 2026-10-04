@@ -37,6 +37,40 @@ body {
     flex-shrink: 0;
 }
 
+.training-preparation-status {
+    display: flex;
+    align-items: center;
+    padding: 10dp 8dp;
+    margin-bottom: 6dp;
+    border-radius: 4dp;
+    background-color: #89b4fa14;
+}
+
+.training-preparation-label {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    white-space: normal;
+    text-align: left;
+    color: #cdd6f4;
+    font-size: 12dp;
+}
+
+.training-preparation-indicator {
+    width: 8dp;
+    height: 8dp;
+    flex-shrink: 0;
+    margin-right: 8dp;
+    border-radius: 4dp;
+    background-color: #89b4fa;
+    animation: training-preparation-pulse 0.8s quadratic-in-out infinite alternate;
+}
+
+@keyframes training-preparation-pulse {
+    from { opacity: 1; }
+    to { opacity: 0.35; }
+}
+
 #training-search-container {
     display: flex;
     align-items: center;
