@@ -63,6 +63,9 @@ body {
     margin-right: 8dp;
     border-radius: 4dp;
     background-color: #89b4fa;
+}
+
+.training-preparation-indicator.is-active {
     animation: training-preparation-pulse 0.8s quadratic-in-out infinite alternate;
 }
 
