@@ -95,9 +95,12 @@ jobs:
           df -h .
 
       - name: Build application and tests
+        id: build
         run: cmake --build --preset macos-release
 
+      # Independent checks still run after another test fails; failures remain fatal.
       - name: Verify macOS deployment baseline
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           python3 - <<'PYTHON'
           from pathlib import Path
@@ -119,29 +122,36 @@ jobs:
           PYTHON
 
       - name: Check native Finder drag-and-drop event bridge (no GPU)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           cmake --build build-macos-release --target mac_native_drag_drop_contracts --parallel 4
           ctest --test-dir build-macos-release -R '^MacNativeDragDropContracts$' --no-tests=error --output-on-failure
 
       - name: Run GPU and VideoToolbox tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
           test -f "$icd"
           VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release -R '^lichtfeld_tests$' --no-tests=error --verbose
 
       - name: Check Vulkan HiGS depth independently of Metal tensors
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
           test -f "$icd"
           VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release \
             -R '^VulkanDepthContracts$' --no-tests=error --output-on-failure
 
-      - name: Run CPU viewer contracts
+      - name: Run CPU application and viewer contracts
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
-          ctest --test-dir build-macos-release -L 'viewer|viewer-profile' -LE gpu \
+          cmake --build build-macos-release --target lichtfeld_visualizer_tests --parallel 4
+          SDL_VIDEODRIVER=dummy ctest --test-dir build-macos-release -LE gpu \
+            -E '^(lichtfeld_tests|VulkanDepthContracts)$' \
             --no-tests=error --output-on-failure
 
       - name: Run shared Vulkan viewer contracts
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
           test -f "$icd"
@@ -149,7 +159,7 @@ jobs:
             --no-tests=error --output-on-failure
 
       - name: Run native viewer contracts with Metal validation
-        if: steps.metal.outputs.metal4 == 'true'
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.metal.outputs.metal4 == 'true' }}
         run: |
           icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
           test -f "$icd"
@@ -157,7 +167,7 @@ jobs:
             ctest --test-dir build-macos-release -L viewer --no-tests=error --output-on-failure
 
       - name: Check native Metal versus Vulkan benchmark
-        if: steps.metal.outputs.metal4 == 'true'
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.metal.outputs.metal4 == 'true' }}
         run: |
           icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
           test -f "$icd"
@@ -165,7 +175,7 @@ jobs:
             -R '^MacViewer(BackendBenchmarkSmoke|Parity_.*)$' --no-tests=error --output-on-failure
 
       - name: Report native GPU coverage unavailable
-        if: steps.metal.outputs.metal4 != 'true'
+        if: ${{ !cancelled() && steps.metal.outcome == 'success' && steps.metal.outputs.metal4 != 'true' }}
         run: |
           echo '::notice::This runner exposes no Metal 4 device. Native GPU contracts and parity benchmarks were not executed; compilation and CPU/Vulkan checks do not qualify native Metal behavior.'
           echo 'Native Metal GPU validation: **not executed** (no Metal 4 device). A physical Metal 4 Mac run is required.' >> "$GITHUB_STEP_SUMMARY"
