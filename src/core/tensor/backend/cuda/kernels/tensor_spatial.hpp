@@ -28,6 +28,9 @@ namespace lfs::core::tensor_ops {
     void launch_radius_connected_components(const float* points, const uint8_t* references, int32_t* heads,
                                             int32_t* next, int32_t* labels, size_t count, size_t buckets, float radius,
                                             cudaStream_t stream);
+    void launch_point_tree_components(const float* points, const float* sorted, const float* boxes, const float* box_radii,
+                                      const int32_t* visit, const float* sorted_radii, const float* radii, int32_t* labels,
+                                      const internal::PointTreeProgram& tree, cudaStream_t stream);
     void launch_point_tree_counts(const float* points, const float* sorted, const float* boxes, const int32_t* visit,
                                   const float* radii, const uint8_t* queries, int32_t* output,
                                   const internal::PointTreeProgram& tree, cudaStream_t stream);

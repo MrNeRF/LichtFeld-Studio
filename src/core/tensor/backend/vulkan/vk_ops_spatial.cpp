@@ -234,13 +234,9 @@ namespace lfs::core::internal {
         return true;
     }
 
-    bool VulkanBackendOps::point_tree_counts(const StorageRef points, const StorageRef sorted, const StorageRef boxes,
-                                             const StorageRef visit, const StorageRef radii,
-                                             const std::optional<StorageRef> queries, const StorageRef output,
-                                             const PointTreeProgram& program, ExecContext) {
-        LFS_FACADE_TRACE(point_tree_counts);
-        struct Push {
-            uint64_t points, sorted, boxes, visit, radii, queries, output;
+    namespace {
+        struct PointTreePush {
+            uint64_t points, sorted, boxes, visit, radii, queries, output, box_radii, sorted_radii;
             uint32_t count, references, levels;
             int32_t max_count;
             float radius;
@@ -248,26 +244,37 @@ namespace lfs::core::internal {
             uint32_t level_offset[kPointTreeMaxLevels];
             uint32_t level_count[kPointTreeMaxLevels];
         };
-        static_assert(sizeof(Push) == 144);
-        Push push{
-            .points = vk::address(points),
-            .sorted = vk::address(sorted),
-            .boxes = vk::address(boxes),
-            .visit = vk::address(visit),
-            .radii = vk::address(radii),
-            .queries = queries ? vk::address(*queries) : 0,
-            .output = vk::address(output),
-            .count = program.points,
-            .references = program.references,
-            .levels = program.levels,
-            .max_count = program.max_count,
-            .radius = program.radius,
-            .pad0 = 0,
-        };
-        std::copy_n(program.level_offset, kPointTreeMaxLevels, push.level_offset);
-        std::copy_n(program.level_count, kPointTreeMaxLevels, push.level_count);
+        static_assert(sizeof(PointTreePush) == 160);
+
+        PointTreePush point_tree_push(const PointTreeProgram& program) {
+            PointTreePush push{};
+            push.count = program.points;
+            push.references = program.references;
+            push.levels = program.levels;
+            push.max_count = program.max_count;
+            push.radius = program.radius;
+            std::copy_n(program.level_offset, kPointTreeMaxLevels, push.level_offset);
+            std::copy_n(program.level_count, kPointTreeMaxLevels, push.level_count);
+            return push;
+        }
+    } // namespace
+
+    bool VulkanBackendOps::point_tree_counts(const StorageRef points, const StorageRef sorted, const StorageRef boxes,
+                                             const StorageRef visit, const StorageRef radii,
+                                             const std::optional<StorageRef> queries, const StorageRef output,
+                                             const PointTreeProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(point_tree_counts);
+        auto push = point_tree_push(program);
+        push.points = vk::address(points);
+        push.sorted = vk::address(sorted);
+        push.boxes = vk::address(boxes);
+        push.visit = vk::address(visit);
+        push.radii = vk::address(radii);
+        push.queries = queries ? vk::address(*queries) : 0;
+        push.output = vk::address(output);
         const auto context = acquire_vulkan_context();
-        const auto& pipeline = context->pipelines().specialized("point_tree", sizeof(push), {});
+        const std::array constants{0u};
+        const auto& pipeline = context->pipelines().specialized("point_tree", sizeof(push), constants);
         std::vector<StorageRef> reads{points, sorted, boxes, visit, radii};
         if (queries)
             reads.push_back(*queries);
@@ -275,6 +282,57 @@ namespace lfs::core::internal {
         context->recorders().record(reads, writes, [&](const VkCommandBuffer command) {
             vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
             vkCmdPushConstants(command, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+            vkCmdDispatch(command, vk::dispatch_groups(*context, program.points), 1, 1);
+        });
+        return true;
+    }
+
+    bool VulkanBackendOps::point_tree_components(const StorageRef points, const StorageRef sorted, const StorageRef boxes,
+                                                 const StorageRef box_radii, const StorageRef visit,
+                                                 const StorageRef sorted_radii, const StorageRef radii,
+                                                 const StorageRef labels, const PointTreeProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(point_tree_components);
+        auto push = point_tree_push(program);
+        push.points = vk::address(points);
+        push.sorted = vk::address(sorted);
+        push.boxes = vk::address(boxes);
+        push.visit = vk::address(visit);
+        push.radii = vk::address(radii);
+        push.output = vk::address(labels);
+        push.box_radii = vk::address(box_radii);
+        push.sorted_radii = vk::address(sorted_radii);
+        const auto context = acquire_vulkan_context();
+        const std::array constants{1u};
+        const auto& join = context->pipelines().specialized("point_tree", sizeof(push), constants);
+        const std::array reads{points, sorted, boxes, box_radii, visit, sorted_radii, radii, labels};
+        const std::array writes{labels};
+        context->recorders().record(reads, writes, [&](const VkCommandBuffer command) {
+            vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, join.pipeline);
+            vkCmdPushConstants(command, join.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+            vkCmdDispatch(command, vk::dispatch_groups(*context, program.references), 1, 1);
+        });
+        // The radius-neighbour shader's flatten pass writes each point's final root.
+        const RadiusPush flatten{
+            .points = 0,
+            .references = 0,
+            .heads = 0,
+            .next = 0,
+            .output = vk::address(labels),
+            .queries = 0,
+            .values = 0,
+            .count = program.points,
+            .bucket_mask = 0,
+            .radius = 0,
+            .exclude_self = 0,
+            .query_begin = 0,
+            .query_end = program.points,
+        };
+        const std::array flatten_constants{7u};
+        const auto& roots = context->pipelines().specialized("radius_neighbors", sizeof(flatten), flatten_constants);
+        const std::array labels_only{labels};
+        context->recorders().record(labels_only, labels_only, [&](const VkCommandBuffer command) {
+            vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, roots.pipeline);
+            vkCmdPushConstants(command, roots.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(flatten), &flatten);
             vkCmdDispatch(command, vk::dispatch_groups(*context, program.points), 1, 1);
         });
         return true;

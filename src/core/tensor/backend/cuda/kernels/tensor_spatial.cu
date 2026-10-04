@@ -259,6 +259,45 @@ namespace lfs::core::tensor_ops {
         }
     } // namespace
 
+    namespace {
+        __global__ void point_tree_union(const float* points, const float* sorted, const float* boxes,
+                                         const float* box_radii, const int32_t* visit, const float* sorted_radii,
+                                         const float* radii, int32_t* parent, const PointTreeProgram tree) {
+            const size_t t = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (t >= tree.references)
+                return;
+            const int32_t self = visit[t];
+            int32_t mine = componentRoot(parent, self);
+            pointTreeMutualNeighbors(sorted, boxes, box_radii, sorted_radii, tree, points + static_cast<size_t>(self) * 3,
+                                     static_cast<int64_t>(t), radii[self], [&](const uint64_t j) {
+                                         int32_t other = componentRoot(parent, visit[j]);
+                                         while (mine != other) {
+                                             if (mine < other) {
+                                                 const int32_t seen = atomicCAS(parent + other, other, mine);
+                                                 if (seen == other)
+                                                     break;
+                                                 other = seen;
+                                             } else {
+                                                 const int32_t seen = atomicCAS(parent + mine, mine, other);
+                                                 if (seen == mine)
+                                                     break;
+                                                 mine = seen;
+                                             }
+                                         }
+                                     });
+        }
+    } // namespace
+
+    void launch_point_tree_components(const float* points, const float* sorted, const float* boxes, const float* box_radii,
+                                      const int32_t* visit, const float* sorted_radii, const float* radii, int32_t* labels,
+                                      const PointTreeProgram& tree, const cudaStream_t stream) {
+        point_tree_union<<<(tree.references + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+            points, sorted, boxes, box_radii, visit, sorted_radii, radii, labels, tree);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.point_tree_components.union");
+        flatten_components<<<(tree.points + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(labels, tree.points);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.point_tree_components.flatten");
+    }
+
     void launch_point_tree_counts(const float* points, const float* sorted, const float* boxes, const int32_t* visit,
                                   const float* radii, const uint8_t* queries, int32_t* output,
                                   const PointTreeProgram& tree, const cudaStream_t stream) {

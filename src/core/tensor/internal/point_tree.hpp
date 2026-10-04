@@ -89,4 +89,56 @@ namespace lfs::core::internal {
         }
         return static_cast<int32_t>(found);
     }
+
+    // Visits every reference after sorted position rank whose distance from p is within both radius and its
+    // own radius (sorted_radii), passing its sorted position. box_radii holds the largest radius under each
+    // box: a box whose near distance exceeds the smaller of that and radius holds no such point.
+    template <typename Visit>
+    LFS_POINT_HD inline void pointTreeMutualNeighbors(const float* sorted, const float* boxes, const float* box_radii,
+                                                      const float* sorted_radii, const PointTreeProgram& tree,
+                                                      const float* p, const int64_t rank, const float radius,
+                                                      Visit&& visit) {
+        if (!(radius > 0.0f) || !pointFinite(radius) || tree.references == 0)
+            return;
+        uint32_t next[kPointTreeMaxLevels];
+        uint32_t end[kPointTreeMaxLevels];
+        const uint32_t top = tree.levels - 1;
+        uint32_t level = top;
+        next[top] = 0;
+        end[top] = tree.level_count[top];
+        while (true) {
+            if (next[level] == end[level]) {
+                if (level == top)
+                    return;
+                ++level;
+                continue;
+            }
+            const uint32_t node = next[level]++;
+            const unsigned shift = kPointTreeFanoutBits * (level + 1);
+            const uint64_t first = static_cast<uint64_t>(node) << shift;
+            const uint64_t last = first + (uint64_t(1) << shift) < tree.references ? first + (uint64_t(1) << shift)
+                                                                                   : tree.references;
+            if (static_cast<int64_t>(last) <= rank + 1)
+                continue;
+            const size_t index = static_cast<size_t>(tree.level_offset[level]) + node;
+            const float reach_radius = fminf(radius, box_radii[index]);
+            if (!(reach_radius > 0.0f))
+                continue;
+            const BoxReach reach = boxReach(p, boxes + index * 6, reach_radius);
+            if (reach.near > reach.limit)
+                continue;
+            if (level != 0) {
+                --level;
+                next[level] = node << kPointTreeFanoutBits;
+                const uint32_t children = (node << kPointTreeFanoutBits) + kPointTreeFanout;
+                end[level] = children < tree.level_count[level] ? children : tree.level_count[level];
+                continue;
+            }
+            for (uint64_t j = first > static_cast<uint64_t>(rank + 1) ? first : static_cast<uint64_t>(rank + 1); j < last; ++j) {
+                const float* q = sorted + j * 3;
+                if (within(p, q, radius) && within(p, q, sorted_radii[j]))
+                    visit(j);
+            }
+        }
+    }
 } // namespace lfs::core::internal

@@ -163,6 +163,13 @@ namespace lfs::core {
     LFS_CORE_API Tensor radius_connected_components(const Tensor& points, float radius);
     LFS_CORE_API Tensor radius_connected_components(const Tensor& points, float radius, const Tensor& selected);
 
+    // Connected components where two points join when their distance is within
+    // both of their radii (Float32 [N] on the points' device), i.e. within the
+    // smaller one. Int32 [N] labels, each the smallest index in its component.
+    // Nonfinite points and points whose radius is not positive and finite are
+    // their own component. One pass over a point tree; no iteration cap.
+    LFS_CORE_API Tensor mutual_radius_components(const Tensor& points, const Tensor& radii);
+
     // Exact nearest target for each Float32 [N,3] query. Int32 [N] indices,
     // ties choose the first target; empty targets/nonfinite queries return -1.
     // A sparse grid searches expanding shells and falls back to an exact scan

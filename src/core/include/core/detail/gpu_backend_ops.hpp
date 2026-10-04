@@ -183,6 +183,15 @@ namespace lfs::core {
                                            const PointTreeProgram& /*program*/, ExecContext /*context*/) {
                 return false;
             }
+            // mutual_radius_components over a point tree: labels holds each point's own index on entry.
+            // box_radii is the largest radius under each box, sorted_radii the radii in tree order. Returns
+            // false, writing nothing, when the backend has no kernel for it.
+            virtual bool point_tree_components(StorageRef /*points*/, StorageRef /*sorted*/, StorageRef /*boxes*/,
+                                               StorageRef /*box_radii*/, StorageRef /*visit*/, StorageRef /*sorted_radii*/,
+                                               StorageRef /*radii*/, StorageRef /*labels*/,
+                                               const PointTreeProgram& /*program*/, ExecContext /*context*/) {
+                return false;
+            }
             virtual void point_neighbor_spacing(StorageRef points, StorageRef references,
                                                 StorageRef heads, StorageRef next, StorageRef output,
                                                 size_t count, size_t buckets, float cell_width, ExecContext context) = 0;
@@ -517,6 +526,9 @@ namespace lfs::core {
             bool point_tree_counts(StorageRef points, StorageRef sorted, StorageRef boxes, StorageRef visit,
                                    StorageRef radii, std::optional<StorageRef> queries, StorageRef output,
                                    const PointTreeProgram& program, ExecContext context) override;
+            bool point_tree_components(StorageRef points, StorageRef sorted, StorageRef boxes, StorageRef box_radii,
+                                       StorageRef visit, StorageRef sorted_radii, StorageRef radii, StorageRef labels,
+                                       const PointTreeProgram& program, ExecContext context) override;
             void point_neighbor_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                         size_t, size_t, float, ExecContext) override;
             void project_points(StorageRef points, StorageRef output, size_t count,

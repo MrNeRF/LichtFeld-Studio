@@ -217,6 +217,18 @@ namespace lfs::core {
             return tree;
         }
 
+        // The largest of values (in tree order) under each box, stored like the boxes.
+        Tensor box_maxima(const PointTree& tree, const Tensor& sorted_values) {
+            std::vector<Tensor> levels;
+            auto groups = fanout_groups(sorted_values.unsqueeze(1));
+            levels.push_back(groups.max(1).squeeze(1));
+            for (uint32_t level = 1; level < tree.program.levels; ++level) {
+                groups = fanout_groups(levels.back().unsqueeze(1));
+                levels.push_back(groups.max(1).squeeze(1));
+            }
+            return Tensor::cat(levels, 0).contiguous();
+        }
+
         void point_tree_counts_cpu(const Tensor& points, const PointTree& tree, const Tensor& radii,
                                    const Tensor& queries, Tensor& output) {
             const auto xyz = points.contiguous();
@@ -479,6 +491,69 @@ namespace lfs::core {
 
     Tensor radius_connected_components(const Tensor& points, const float radius) {
         return radius_connected_components(points, radius, Tensor{});
+    }
+
+    Tensor mutual_radius_components(const Tensor& points, const Tensor& radii) {
+        LFS_ASSERT_MSG(points.is_valid() && points.ndim() == 2 && points.size(1) == 3 && points.dtype() == DataType::Float32,
+                       "mutual_radius_components requires Float32 [N,3] points");
+        const size_t count = points.size(0);
+        LFS_ASSERT_MSG(count <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+                       "mutual_radius_components point count exceeds int32");
+        LFS_ASSERT_MSG(radii.is_valid() && radii.ndim() == 1 && radii.numel() == count && radii.dtype() == DataType::Float32 &&
+                           radii.device() == points.device(),
+                       "mutual_radius_components requires Float32 [N] radii on the points' device");
+        internal::require_same_gpu_backend(points, radii, "mutual_radius_components");
+        auto labels = (internal::allocate_like(points, TensorShape{count}, DataType::Int32, 1.0f).cumsum(0) - 1)
+                          .to(DataType::Int32)
+                          .contiguous();
+        if (!count)
+            return labels;
+        const auto usable = radii.isfinite().logical_and(radii.gt(0.0f));
+        const auto tree = build_point_tree(points, usable);
+        if (tree.program.references == 0)
+            return labels;
+        const auto positions = points.contiguous();
+        const auto own_radii = Tensor::where(usable, radii, Tensor::zeros_like(radii)).contiguous();
+        const auto sorted_radii = own_radii.index_select(0, tree.visit.slice(0, 0, tree.program.references)).contiguous();
+        const auto box_radii = box_maxima(tree, sorted_radii);
+        if (points.device() == Device::GPU) {
+            pin_operands({&positions, &tree.sorted, &tree.boxes, &box_radii, &tree.visit, &sorted_radii, &own_radii, &labels});
+            const auto stream = prepare_inputs_for_stream({&positions, &tree.sorted, &tree.boxes, &box_radii, &tree.visit,
+                                                           &sorted_radii, &own_radii},
+                                                          labels.stream());
+            if (internal::backend_ops_for(positions).point_tree_components(
+                    internal::storage_ref(positions), internal::storage_ref(tree.sorted), internal::storage_ref(tree.boxes),
+                    internal::storage_ref(box_radii), internal::storage_ref(tree.visit), internal::storage_ref(sorted_radii),
+                    internal::storage_ref(own_radii), internal::storage_ref(labels), tree.program, internal::ExecContext{stream}))
+                return labels;
+            // No kernel on this backend: join on the host.
+            const auto host = mutual_radius_components(positions.cpu(), radii.cpu());
+            GpuBackendScope scope(gpu_backend_of(positions).value());
+            return host.to(Device::GPU);
+        }
+        const auto* xyz = positions.ptr<float>();
+        const auto* sorted = tree.sorted.ptr<float>();
+        const auto* boxes = tree.boxes.ptr<float>();
+        const auto* reach = box_radii.ptr<float>();
+        const auto* sorted_reach = sorted_radii.ptr<float>();
+        const auto* visit = tree.visit.ptr<int32_t>();
+        const auto* radius = own_radii.ptr<float>();
+        auto* parent = labels.ptr<int32_t>();
+        for (uint32_t t = 0; t < tree.program.references; ++t) {
+            const auto self = visit[t];
+            pointTreeMutualNeighbors(sorted, boxes, reach, sorted_reach, tree.program, xyz + size_t(self) * 3, t,
+                                     radius[self], [&](const uint64_t j) {
+                                         const int32_t a = componentRoot(parent, self);
+                                         const int32_t b = componentRoot(parent, visit[j]);
+                                         if (a < b)
+                                             parent[b] = a;
+                                         else if (b < a)
+                                             parent[a] = b;
+                                     });
+        }
+        for (size_t i = 0; i < count; ++i)
+            parent[i] = componentRoot(parent, static_cast<int32_t>(i));
+        return labels;
     }
 
     Tensor point_neighbor_spacing(const Tensor& points, const float cell_width) {

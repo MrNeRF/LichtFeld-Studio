@@ -29,46 +29,16 @@ namespace lfs::nodes::builtin {
             return core::point_neighbor_spacing(positions, width);
         }
 
-        struct Components {
-            Tensor labels;
-            Tensor sizes;
-            int iterations = 0;
-        };
-
-        Components connected_components(const Tensor& positions, float multiple, int minimum_size) {
+        // Size of each point's component, joining points within the smaller of their local radii.
+        Tensor component_sizes(const Tensor& positions, float multiple) {
             const size_t count = positions.shape()[0];
             // Three local neighbours keep isolated small groups local. A distant
             // eighth neighbour could otherwise inflate their radii into a surface.
             const auto radii = (local_spacing(positions) * multiple).clamp_min(1e-6f);
-            const int first_octave = static_cast<int>(std::ceil(std::log2(radii.min().item<float>())));
-            const int last_octave = static_cast<int>(std::ceil(std::log2(radii.max().item<float>())));
-            auto labels = (Tensor::ones({count}, positions.device(), DataType::Int32).cumsum(0) - 1)
-                              .to(DataType::Int32);
-            const auto ones = Tensor::ones({count}, positions.device(), DataType::Int32);
-            Tensor sizes;
-            int iterations = 0;
-            constexpr int maximum_iterations = 64;
-            for (; iterations < maximum_iterations; ++iterations) {
-                auto next = labels;
-                for (int octave = first_octave; octave <= last_octave; ++octave)
-                    next = next.minimum(core::radius_neighbor_min(positions, labels, std::ldexp(1.0f, octave), &radii));
-                next = next.minimum(next.index_select(0, next.clamp_min(0)));
-                auto histogram = Tensor::zeros({count + 1}, positions.device(), DataType::Int32);
-                histogram.index_add_(0, next + 1, ones);
-                sizes = histogram.index_select(0, next + 1);
-                // Once a connected subset reaches Min Size its exact root no
-                // longer matters. Propagate -1 to certify the rest of that
-                // component, avoiding convergence across an entire large scene.
-                next = Tensor::where(next.lt(0).logical_or(sizes.ge(minimum_size)),
-                                     Tensor::full({count}, -1, positions.device(), DataType::Int32), next);
-                const bool stable = next.ne(labels).count_nonzero() == 0;
-                labels = std::move(next);
-                if (stable) {
-                    ++iterations;
-                    break;
-                }
-            }
-            return {labels, Tensor::where(labels.lt(0), Tensor::full({count}, minimum_size, positions.device(), DataType::Int32), sizes), iterations};
+            const auto labels = core::mutual_radius_components(positions, radii);
+            auto sizes = Tensor::zeros({count}, positions.device(), DataType::Int32);
+            sizes.index_add_(0, labels, Tensor::ones({count}, positions.device(), DataType::Int32));
+            return sizes.index_select(0, labels);
         }
 
         Field captured_selection(Tensor mask) {
@@ -158,8 +128,7 @@ namespace lfs::nodes::builtin {
             const size_t count = component.means.shape()[0];
             remove = Tensor::full_bool({count}, false, component.means.device());
             if (count && radius_multiple > 0) {
-                const auto components = connected_components(component.means, radius_multiple, minimum_size);
-                remove = components.sizes.lt(minimum_size).logical_and(selection(context, "Selection", field_context(component), true));
+                remove = component_sizes(component.means, radius_multiple).lt(minimum_size).logical_and(selection(context, "Selection", field_context(component), true));
                 if (property_bool(context, "delete", true))
                     component = filter_splats(component, remove.logical_not());
             }
@@ -168,8 +137,7 @@ namespace lfs::nodes::builtin {
             const size_t count = component.positions.shape()[0];
             remove = Tensor::full_bool({count}, false, component.positions.device());
             if (count && radius_multiple > 0) {
-                const auto components = connected_components(component.positions, radius_multiple, minimum_size);
-                remove = components.sizes.lt(minimum_size).logical_and(selection(context, "Selection", field_context(component), true));
+                remove = component_sizes(component.positions, radius_multiple).lt(minimum_size).logical_and(selection(context, "Selection", field_context(component), true));
                 if (property_bool(context, "delete", true))
                     component = filter_points(component, remove.logical_not());
             }

@@ -82,6 +82,8 @@ namespace lfs::core::internal {
                                          float, ExecContext) override;
         bool point_tree_counts(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, std::optional<StorageRef>,
                                StorageRef, const PointTreeProgram&, ExecContext) override;
+        bool point_tree_components(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
+                                   StorageRef, const PointTreeProgram&, ExecContext) override;
         void point_neighbor_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                     size_t, size_t, float, ExecContext) override;
         void mark_points_2d(StorageRef, StorageRef, size_t, const PointRegion2D&,

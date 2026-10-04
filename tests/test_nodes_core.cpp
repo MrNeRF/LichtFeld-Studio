@@ -27,6 +27,7 @@
 #include <numeric>
 #include <optional>
 #include <random>
+#include <set>
 #include <string_view>
 
 namespace {
@@ -1866,6 +1867,70 @@ namespace {
         // No usable reference at all.
         const auto none = Tensor::zeros({count}, device(), lfs::core::DataType::Bool);
         EXPECT_EQ(host<int>(lfs::core::radius_neighbor_counts(points, none, radius_tensor, 4)), std::vector<int>(count, 0));
+    }
+
+    TEST_P(NodesCore, MutualRadiusComponentsMatchBruteForce) {
+        // Clusters of different density with radii from a fraction of their spacing to far beyond it, so tree
+        // boxes are skipped for their largest radius as well as for the query's.
+        std::mt19937 random(4417);
+        std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+        std::normal_distribution<float> normal(0.0f, 1.0f);
+        constexpr size_t count = 3000;
+        std::vector<float> xyz(count * 3), radii(count);
+        for (size_t i = 0; i < count; ++i) {
+            const float pick = unit(random);
+            const float spread = pick < 0.6f ? 0.05f : pick < 0.9f ? 1.0f
+                                                                   : 8.0f;
+            for (int axis = 0; axis < 3; ++axis)
+                xyz[i * 3 + axis] = (axis == 0 && pick >= 0.9f ? 20.0f : 0.0f) + spread * normal(random);
+            radii[i] = std::exp(std::log(2e-3f) + unit(random) * (std::log(6.0f) - std::log(2e-3f)));
+        }
+        std::copy_n(xyz.begin() + 3, 3, xyz.begin() + 9);
+        xyz[30] = std::numeric_limits<float>::infinity();
+        radii[4] = 0.0f;
+        radii[5] = -1.0f;
+        radii[6] = std::numeric_limits<float>::quiet_NaN();
+        const auto within = [](const float* a, const float* b, const float radius) {
+            volatile float x = a[0] - b[0], y = a[1] - b[1], z = a[2] - b[2];
+            volatile float limit = radius * radius;
+            if (limit < std::numeric_limits<float>::min() || !std::isfinite(limit)) {
+                x = x / radius;
+                y = y / radius;
+                z = z / radius;
+                limit = 1.0f;
+            }
+            volatile float xx = x * x, yy = y * y, zz = z * z;
+            volatile float partial = xx + yy;
+            volatile float total = partial + zz;
+            return total <= limit;
+        };
+        const auto usable = [&](size_t i) {
+            return std::isfinite(xyz[i * 3]) && std::isfinite(xyz[i * 3 + 1]) && std::isfinite(xyz[i * 3 + 2]) &&
+                   radii[i] > 0.0f && std::isfinite(radii[i]);
+        };
+        std::vector<int> parent(count);
+        std::iota(parent.begin(), parent.end(), 0);
+        const auto root = [&](int x) {
+            while (parent[x] != x)
+                x = parent[x] = parent[parent[x]];
+            return x;
+        };
+        for (size_t i = 0; i < count; ++i)
+            for (size_t j = i + 1; j < count; ++j)
+                if (usable(i) && usable(j) && within(&xyz[i * 3], &xyz[j * 3], radii[i]) &&
+                    within(&xyz[i * 3], &xyz[j * 3], radii[j])) {
+                    const int a = root(int(i)), b = root(int(j));
+                    parent[std::max(a, b)] = std::min(a, b);
+                }
+        std::vector<int> expected(count);
+        for (size_t i = 0; i < count; ++i)
+            expected[i] = root(int(i));
+        const auto labels = lfs::core::mutual_radius_components(tensor(xyz, {count, 3}), tensor(radii, {count}));
+        EXPECT_EQ(labels.device(), device());
+        EXPECT_EQ(labels.dtype(), lfs::core::DataType::Int32);
+        EXPECT_EQ(host<int>(labels), expected);
+        EXPECT_GT(std::set<int>(expected.begin(), expected.end()).size(), 10u);
+        EXPECT_LT(std::set<int>(expected.begin(), expected.end()).size(), count / 2);
     }
 
     TEST_P(NodesCore, RadiusConnectedComponentsMatchBruteForce) {
