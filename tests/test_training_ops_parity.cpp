@@ -2864,6 +2864,45 @@ namespace {
         return losses;
     }
 
+    class LpipsPoolRegionContract : public ::testing::TestWithParam<GpuBackend> {};
+
+    // Pool reduce reads the mask weights at every scored pixel, so a region outside the features or
+    // a mask that does not cover it must fail before launching.
+    TEST_P(LpipsPoolRegionContract, RejectsRegionsOutsideTheFeaturesOrMask) {
+        const GpuBackend backend = GetParam();
+        const auto* table = lfs::training::training_ops(backend).lpips;
+        if (!table)
+            GTEST_SKIP() << backend_name(backend) << " has no LPIPS ops";
+        if (!lfs::core::gpu_backend_available(backend))
+            GTEST_SKIP() << backend_name(backend) << " device unavailable";
+        const lfs::test::DefaultGpuBackendForTesting session(backend);
+        ASSERT_TRUE(session.switched());
+        const auto x = pattern({1, 64, 4, 6}, 1.f, 1).to(DataType::Float16);
+        const auto y = pattern({1, 64, 4, 6}, 1.f, 2).to(DataType::Float16);
+        const auto w = pattern({1, 64, 1, 1}, 1.f, 3).to(DataType::Float16);
+        auto score = Tensor::zeros({1}, Device::GPU);
+        Tensor absent;
+        const auto mask = Tensor::ones({5, 8}, Device::GPU);
+        const auto half_mask = mask.to(DataType::Float16);
+        const auto run = [&](const ops::PoolReduceParams& p) { table->pool_reduce(x, y, w, score, absent, absent, p); };
+        EXPECT_NO_THROW(run({0, 4, 0, 6, 1.f, &mask, 8, 1, 2}));
+        EXPECT_NO_THROW(run({2, 2, 0, 6, 1.f, &mask, 8, 100, 100}));
+        EXPECT_THROW(run({0, 5, 0, 6, 1.f}), std::exception);
+        EXPECT_THROW(run({0, 4, 0, 7, 1.f}), std::exception);
+        EXPECT_THROW(run({-1, 4, 0, 6, 1.f}), std::exception);
+        EXPECT_THROW(run({0, 4, 0, 6, 1.f, &mask, 8, 2, 2}), std::exception);
+        EXPECT_THROW(run({0, 4, 0, 6, 1.f, &mask, 7, 1, 2}), std::exception);
+        EXPECT_THROW(run({0, 4, 0, 6, 1.f, &mask, 8, 1, -1}), std::exception);
+        EXPECT_THROW(run({0, 4, 0, 6, 1.f, &half_mask, 8, 1, 2}), std::exception);
+        EXPECT_THROW(run({2, 2, 0, 6, 1.f, &half_mask, 8, 1, 2}), std::exception);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, LpipsPoolRegionContract,
+                             ::testing::Values(GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal),
+                             [](const ::testing::TestParamInfo<GpuBackend>& info) {
+                                 return std::string(backend_name(info.param));
+                             });
+
     class TrainingOpsLossCurveParity : public ::testing::TestWithParam<GpuBackend> {};
 
     TEST_P(TrainingOpsLossCurveParity, SyntheticLossCurve) {

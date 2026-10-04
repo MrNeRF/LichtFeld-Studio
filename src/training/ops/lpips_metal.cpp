@@ -127,6 +127,8 @@ namespace lfs::training {
                 require(is_half(pooled_y) && pooled_y.numel() == pooled,
                         "pool reduce needs a float16 [N, C, H/2, W/2] pool", pooled_y);
             }
+            if (auto error = gpu_ops::pool_reduce_region_error(x, p); !error.empty())
+                throw std::invalid_argument(std::move(error));
             const PoolParams params{mk::address(x), mk::address(y), mk::address(weight), mk::address(score),
                                     pool ? mk::address(pooled_x) : 0, pool ? mk::address(pooled_y) : 0,
                                     static_cast<int32_t>(n), static_cast<int32_t>(c), static_cast<int32_t>(h),

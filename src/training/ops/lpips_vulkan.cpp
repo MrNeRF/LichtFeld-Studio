@@ -237,6 +237,8 @@ namespace lfs::training {
         void pool_reduce(const Tensor& x, const Tensor& y, const Tensor& weight, Tensor& score, Tensor& pooled_x, Tensor& pooled_y, const PoolReduceParams& params) {
             if (x.ndim() != 4 || y.shape() != x.shape() || x.dtype() != DataType::Float16 || y.dtype() != DataType::Float16 || weight.dtype() != DataType::Float16 || x.size(1) % 8 != 0)
                 throw std::invalid_argument("LPIPS pool_reduce expects matching fp16 NCHW tensors and channels divisible by eight");
+            if (auto error = gpu_ops::pool_reduce_region_error(x, params); !error.empty())
+                throw std::invalid_argument(std::move(error));
             const auto context = acquire_vulkan_context();
             Push p{};
             p.a = vk::address(storage_ref(x));
