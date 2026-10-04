@@ -360,6 +360,10 @@ namespace {
         EXPECT_NE(independent.native_handle(), legacy.native_handle());
         EXPECT_EQ(borrowed.native_handle(), independent.native_handle());
         EXPECT_EQ(implicit.native_handle(), nullptr);
+        // Metal queues share a submission timeline. Drain work left by earlier
+        // tests before asserting idle readiness; a fresh handle does not imply
+        // an independent, already-completed GPU timeline.
+        implicit.wait();
         EXPECT_TRUE(fence.ready());
         EXPECT_TRUE(independent.ready());
         independent.record(fence);
