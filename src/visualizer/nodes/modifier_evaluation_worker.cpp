@@ -54,12 +54,12 @@ namespace lfs::vis {
         }
 
         Geometry transform_geometry(Geometry geometry, const glm::mat4& matrix) {
-            if (geometry.splats) {
-                auto attributes = geometry.splats->attributes;
-                auto data = lfs::nodes::splat_data_from_geometry(geometry);
-                core::transform(*data, matrix);
-                geometry.splats = lfs::nodes::geometry_from_splat_data(*data).splats;
-                geometry.splats->attributes = std::move(attributes);
+            if (geometry.splats && geometry.splats->means.shape()[0] != 0) {
+                auto& splats = *geometry.splats;
+                if (const float scale = core::transform_canonical(splats.means, splats.rotation, splats.scaling, splats.sh0,
+                                                                  splats.shN, splats.sh_degree, matrix);
+                    scale > 0.0f)
+                    splats.scene_scale *= scale;
             }
             const auto transform_positions = [&](const core::Tensor& positions) {
                 return positions.matmul(matrix_tensor(glm::mat3(matrix), positions.device())) +

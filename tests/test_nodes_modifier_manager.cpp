@@ -4,6 +4,7 @@
 #include "core/camera.hpp"
 #include "core/nodes/nodes.hpp"
 #include "core/services.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
 #include "scene/scene_manager.hpp"
@@ -18,6 +19,7 @@
 #include "visualizer/nodes/viewport_coordinates.hpp"
 #include "visualizer/operation/undo_history.hpp"
 
+#include <cmath>
 #include <cstring>
 #include <future>
 #include <glm/gtc/matrix_transform.hpp>
@@ -559,6 +561,65 @@ TEST_F(NodesModifierManager, ObjectInfoUploadsCpuMeshBeforeTransformAndJoin) {
     EXPECT_EQ(result.geometry.splats->means.device(), Device::GPU);
     EXPECT_EQ(result.geometry.splats->means.shape()[0], 13);
     EXPECT_EQ(mesh->vertices.device(), Device::CPU);
+}
+
+// Relative space moves the target into the host's frame and rotates its SH as transform() does.
+TEST_F(NodesModifierManager, ObjectInfoRelativeSpaceMatchesSplatTransform) {
+    using namespace lfs::nodes;
+    using lfs::core::Device;
+    using lfs::core::Tensor;
+    for_each_worker_target([](const Device device) {
+        const auto values = [&](const std::vector<std::size_t>& shape, const float scale, const int seed) {
+            std::size_t count = 1;
+            for (const auto extent : shape)
+                count *= extent;
+            std::vector<float> data(count);
+            for (std::size_t i = 0; i < count; ++i)
+                data[i] = scale * std::sin(0.7f * static_cast<float>(i) + static_cast<float>(seed));
+            return Tensor::from_vector(data, lfs::core::TensorShape(shape), Device::CPU).to(device);
+        };
+        const auto reference = [&] {
+            return std::make_unique<lfs::core::SplatData>(
+                1, values({5, 3}, 2.0f, 1), values({5, 1, 3}, 0.5f, 2), values({5, 3, 3}, 0.3f, 3),
+                values({5, 3}, 0.2f, 4), values({5, 4}, 1.0f, 5), values({5, 1}, 1.0f, 6), 1.0f);
+        };
+        const glm::mat4 world = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)) *
+                                glm::rotate(glm::mat4(1.0f), 0.7f, glm::normalize(glm::vec3(0.3f, 0.5f, 0.8f))) *
+                                glm::scale(glm::mat4(1.0f), glm::vec3(1.5f));
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto host = scene.getScene().getNodeUuid(scene.getScene().addSplat("Host", model(6, device)));
+        scene.getScene().addSplat("Reference", reference());
+        scene.getScene().setNodeTransform("Reference", world);
+        auto& manager = scene.modifierManager();
+        auto& tree = manager.newTree("Relative reference");
+        auto& info = tree.add_node("lfs.object_info", "Object Info");
+        info.properties["object"] = "Reference";
+        info.properties["transform_space"] = "relative";
+        ASSERT_TRUE(tree.remove_link(
+            {tree.input_node().name, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Object Info", "Geometry", tree.output_node().name, "Geometry"}));
+        manager.addModifier(host, tree.uuid);
+
+        const auto result = manager.evaluate(host);
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
+                                                         : result.errors.begin()->second);
+        ASSERT_TRUE(result.geometry.splats);
+        auto expected = reference();
+        lfs::core::transform(*expected, world);
+        const auto& actual = *result.geometry.splats;
+        const auto expect_near = [](const Tensor& a, const Tensor& b, const char* name) {
+            const auto x = a.cpu().contiguous().to_vector();
+            const auto y = b.cpu().contiguous().to_vector();
+            ASSERT_EQ(x.size(), y.size()) << name;
+            for (std::size_t i = 0; i < x.size(); ++i)
+                ASSERT_NEAR(x[i], y[i], 1e-4f) << name << " element " << i;
+        };
+        expect_near(actual.means, expected->means_raw(), "means");
+        expect_near(actual.rotation, expected->rotation_raw(), "rotation");
+        expect_near(actual.scaling, expected->scaling_raw(), "scaling");
+        expect_near(actual.shN, expected->shN_canonical(), "shN");
+    });
 }
 
 TEST_F(NodesModifierManager, ObjectInfoReportsNamedDependencyCycleAtTheNode) {
