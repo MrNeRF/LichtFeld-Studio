@@ -186,3 +186,100 @@ Pause samples are **147.710, 254.332 and 193.359 ms**, against the unchanged cal
 Three complete repetitions of all **25 original PR configurations**, 100 warmup pairs and 40 samples/backend/configuration/repetition (**120 aggregated samples**), with matched scenes/cameras/modes/storage and all **75 image comparisons passing unchanged numerical gates**. Power logs confirm full wake **13:13:17–13:16:04**; profiling and validation are off and other builds/training/GPU tests have ended.
 
 9 Metal medians improve relative to the historical PR table; 16 increase, with a maximum **+2.10%**. Worst aggregate p95 increase is **+6.34%** (User PLY Depth). The large earlier Raccoon front SH0 spike is not reproduced in these three current series; its earlier GPU-stage slowdown remains unexplained. These historical/current measurements do not isolate a code effect or establish zero regression. Every raw sample and unfavorable row is retained.
+
+## Integration with dev
+
+The branch incorporates `dev` through `b96cc1a37`. The tested Release runtime is `0e2028ae3`. It retains upstream frame-demand scheduling, idle scratch release, node modifier evaluation, responsive training preparation, codec/build fixes and separate UI/view FPS. Native Metal scene factories and the existing snapshot ownership contracts remain in place. The 20 restored out-of-scope files match this base; training-kernel/dispatch resizes, the MoltenVK creation lock, screen-session correction and unrelated Python fixture changes remain excluded.
+
+Integration fixes schedule renderer refinements through frame demand, use the production localization adapter in the narrow status-bar fixture, and prevent unchanged render-setting bindings from publishing scene/settings edits. The latter preserves conversion, validation, fresh-setting rebasing and notifications for real edits. Six echo cases fail before that guard; the final runtime passes all **8** publication/idle/live-edit tests. Upstream's conditional node-gizmo overlay update also contributes to avoiding needless redraw; the recovery is not attributed to the binding guard alone.
+
+## Current validation
+
+M4 Pro, 24 GiB; macOS 27.2 beta, Xcode 27.2 beta 2, SDK 26.5; Release, trainer enabled, CUDA disabled, FSR enabled. The app/default targets and excluded visualizer target build. The app and eight first-party dylibs declare exactly macOS **26.0**. CI requires macOS 26+, keeps the offline Metal kernel compilation, and probes hosted Metal 4 support: native Metal GPU coverage is explicitly not executed when that capability is absent. Shared/CPU contracts remain enabled.
+
+- CTest: **262/262**.
+- Ordinary portable Metal: **894 passed, 131 skipped, 5 disabled**.
+- Viewer/shared/profile with API and shader validation: **19/19**.
+- Vulkan snapshot/step/queue/project contracts with validation: **22/22**.
+- Render-setting publication and idle/live-edit integration: **8/8**.
+- Python ordinary selection: **3307 passed, 8 failed, 10 skipped, 88 deselected; 213 subtests passed**.
+- Neutrality, error census, I/O discipline, locales, tool tests (50), CI shell syntax and changed-source whitespace checks pass.
+
+The full portable suite with API/shader validation **aborts**. Concurrent Vulkan readback produces a nil MoltenVK resource in **3/3 fresh processes on each revision**; the Metal photometric test requests **36,448 > 32,768 bytes** of threadgroup memory on each revision. Controls use separately compiled pristine `dev` at `cd85ea4ad`; the affected sources are unchanged through `b96cc1a37`. These failures are not counted as passes. All **8** Python failures reproduce using pristine `b96cc1a37` Python source/tests with the same compiled primary bindings and environment. This isolates Python source/fixtures, not a complete native build of that control. No failing test or numerical gate is weakened.
+
+## Garden snapshots and training
+
+Fresh profile, Garden **5M**, **four views**, default MoltenVK; project copies and executable on the internal SSD, source project/dataset read-only. Timing runs have no validation/profiling/memory overrides or concurrent builds/GPU tests.
+
+| Active save | Pre 100-step mean, ms | Post 100-step mean, ms | Change | Existing <=10% gate |
+|---|---:|---:|---:|---|
+| native / 1 | 139.507 | 142.752 | +2.326% | PASS |
+| native / 2 | 143.731 | 141.691 | -1.419% | PASS |
+| FSR quality / 3 | 131.676 | 131.204 | -0.358% | PASS |
+
+All three saves pass consistency and real host-RSS gates. Generation 8 reopens and its optimizer advances 20 steps with 5M Gaussians and finite loss. Ten captures during training, fifty paused FSR Quality captures, a one-view probe and target retirement/recreation complete without fallback. The app closes normally; the original SHA-256 `2f664b9124524e279a3a12c6232b03b8d473034a8ad291c7edd9c850c66f58b0` is unchanged. Sampled loss is not a cross-run photographic-quality comparison.
+
+The earlier integrated runtime `a41ef8625` reproduced a slowdown from the exact pre-merge control's **138.153/139.271 ms** to **365.334/366.118 ms**. The table above records the final revision after both redraw guards; the unfavorable intermediate results remain in the local raw record.
+
+| Snapshot | Pause, ms | Cold path, ms | Calibrated gate, ms | Pause / cold | Real RSS |
+|---|---:|---:|---:|---|---|
+| 1 | 142.840 | 143.144 | 36.166 | FAIL / FAIL | PASS |
+| 2 | 353.683 | 353.683 | 36.166 | FAIL / FAIL | PASS |
+| 3 | 349.401 | 349.401 | 36.166 | FAIL / FAIL | PASS |
+
+Pause/cold acceptance and repeatable end-to-end save-time improvement remain open where the table fails. These thresholds are unchanged.
+
+## Viewer benchmark
+
+Three repetitions of all **25 original PR configurations**, 100 warmup pairs and 40 samples/backend/configuration per repetition (**120 aggregated samples**), matched scene/camera/mode/storage, default MoltenVK, profiling/validation off. Benchmark SHA-256: `70618838abe0cf196452fc0fc127aa69e1ecd037a5e28a24067ef7d8dd38aefd`. All **75** image comparisons pass the unchanged gates. 11 Metal medians improve versus the historical PR table; 14 increase. Maximum median increase is **+2.15%** (Raccoon SPZ — wide, SH3); worst p95 increase is **+34.86%** (Raccoon SPZ — wide, SH3). Unfavorable samples and earlier intermittent spikes are retained.
+
+The metric includes encoding, submission and GPU completion; it excludes loading, warmup, CPU image comparison, desktop composition and frame pipelining. Vulkan is the isolated Mac test reference; its additional precision cost is not a native speedup.
+
+| Scene / mode | SH | Metal median / p95, ms | Vulkan reference median / p95, ms | Metal median vs original PR | Max RGB error /255 |
+|---|---:|---:|---:|---:|---:|
+| User PLY — Gaussian | 0 | 6.786 / 6.851 | 5.963 / 6.051 | +0.1% | 2.00 |
+| Bicycle SOG — Gaussian | 0 | 6.750 / 6.817 | 5.554 / 5.666 | -0.1% | 1.00 |
+| Bicycle SOG — Gaussian | 3 | 7.265 / 8.471 | 6.311 / 9.135 | -8.8% | 2.00 |
+| Lizard SPZ — front | 0 | 5.156 / 5.574 | 4.523 / 4.970 | -0.1% | 2.00 |
+| Lizard SPZ — front | 3 | 5.511 / 5.587 | 5.005 / 5.119 | -0.0% | 2.00 |
+| Lizard SPZ — back | 0 | 4.138 / 4.321 | 4.347 / 4.445 | -13.5% | 2.00 |
+| Lizard SPZ — back | 3 | 4.510 / 4.568 | 4.830 / 4.965 | -12.0% | 2.00 |
+| Lizard SPZ — wide | 0 | 5.910 / 5.972 | 5.491 / 5.579 | +0.5% | 1.00 |
+| Lizard SPZ — wide | 3 | 6.295 / 6.368 | 6.047 / 6.173 | +1.1% | 1.00 |
+| Raccoon SPZ — front | 0 | 6.106 / 6.184 | 5.205 / 5.300 | +0.1% | 2.00 |
+| Raccoon SPZ — front | 3 | 6.564 / 6.628 | 5.826 / 5.942 | +0.6% | 4.00 |
+| Raccoon SPZ — back | 0 | 3.544 / 3.620 | 3.519 / 3.631 | -18.4% | 2.00 |
+| Raccoon SPZ — back | 3 | 3.872 / 3.943 | 3.973 / 4.075 | -41.8% | 3.00 |
+| Raccoon SPZ — wide | 0 | 5.615 / 5.696 | 6.084 / 6.252 | +1.4% | 2.00 |
+| Raccoon SPZ — wide | 3 | 6.104 / 8.132 | 6.797 / 10.879 | +2.1% | 2.00 |
+| Apartment SOG — Gaussian | 0 | 4.479 / 4.550 | 4.613 / 4.706 | -0.6% | 1.00 |
+| User PLY — transparent | 0 | 7.118 / 7.211 | 9.418 / 9.513 | -14.0% | 136.00 |
+| User PLY — 3DGUT | 0 | 12.234 / 12.957 | 24.472 / 29.704 | +0.9% | 1.00 |
+| User PLY — Depth | 0 | 7.030 / 7.180 | 11.845 / 12.194 | +1.5% | 2.00 |
+| Flowers PLY — Gaussian | 0 | 3.285 / 3.366 | 4.258 / 4.336 | -0.8% | 2.00 |
+| Flowers PLY — Gaussian | 3 | 3.584 / 3.685 | 4.707 / 4.817 | +0.3% | 2.00 |
+| Flowers PLY — Depth | 0 | 3.394 / 3.524 | 9.483 / 9.849 | +0.3% | 1.00 |
+| Flowers PLY — Depth | 3 | 3.685 / 3.791 | 9.927 / 10.335 | +1.6% | 1.00 |
+| Flowers PLY — 3DGUT | 0 | 10.780 / 11.114 | 15.244 / 17.775 | +0.6% | 1.00 |
+| Flowers PLY — 3DGUT | 3 | 11.216 / 11.563 | 15.932 / 18.382 | +1.6% | 1.00 |
+
+The transparent User PLY whole-frame RGB maximum occurs at negligible alpha; valid-alpha and composited comparisons retain their independent existing gates. A passing gate does not mean bit-identical output.
+
+A bounded alternating control reruns exact pre-merge `265dddf2e` and current binaries in **pre/current/current/pre** order on the two previously unstable back cameras, 100 warmup pairs and 400 samples/backend per invocation. All 16 image comparisons pass. The following aggregates contain 800 Metal samples per revision/case:
+
+| Scene | SH | Pre-merge median / p95, ms | Current median / p95, ms | Median change | p95 change |
+|---|---:|---:|---:|---:|---:|
+| Raccoon SPZ — back | 0 | 4.059 / 5.209 | 3.551 / 3.638 | -12.52% | -30.16% |
+| Raccoon SPZ — back | 3 | 3.896 / 3.975 | 4.858 / 12.471 | +24.71% | +213.77% |
+| Lizard SPZ — back | 0 | 4.187 / 11.330 | 4.144 / 4.603 | -1.03% | -59.37% |
+| Lizard SPZ — back | 3 | 6.192 / 11.426 | 4.522 / 4.593 | -26.97% | -59.80% |
+
+Thermals and GPU frequencies are not independently controlled. Historical/current measurements and this bounded control do not establish zero regressions or a universal speedup.
+
+## Remaining verification
+
+- M5 Max first frame using a fresh profile and default MoltenVK configuration.
+- Garden calibrated pause/cold targets and repeatable total-save-time improvement.
+- Intermittent viewer tail latency and its cause.
+- Hosted CI, stable Xcode 26, physical macOS 26, CUDA and non-Mac production Vulkan.
+- The accepted cold-path LOD CPU metadata fallback remains; replacing full means/scales downloads and the requested tracking issue remain follow-up work.
