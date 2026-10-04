@@ -10578,7 +10578,7 @@ namespace lfs::vis {
             ASSERT_TRUE(paths);
             ASSERT_TRUE(paths->ensureDirectories());
             std::ofstream(paths->preferencesFile())
-                << R"({"working_directory":")" << legacy_root.string() << R"("})";
+                << nlohmann::json{{"working_directory", legacy_root.string()}}.dump();
         }
         const auto scratch = lfs::io::project::scratch_autosave_path(
             legacy_root / "tmp", lfs::core::generate_uuid_v4());
