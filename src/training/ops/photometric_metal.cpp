@@ -30,7 +30,7 @@ namespace lfs::training {
         namespace mk = metal;
 
         constexpr uint32_t kMaxGroups = 1024;
-        constexpr uint32_t kTile = 8;
+        constexpr uint32_t kTile = 16;
         // Forward partial-sum modes (kPhotoLossMode in photometric.metal).
         enum : uint32_t { kLossNone = 0,
                           kLossSsimMean = 1,
@@ -57,7 +57,7 @@ namespace lfs::training {
             Tensor ssim_map, dm_mu, dm_sigma1, dm_sigma12, raw_dm_mu, dl_dmap, grad, grad_raw, temp, result, mask_sum;
         };
         struct Field {
-            Tensor Views::* member;
+            Tensor Views::*member;
             Slot slot;
         };
 

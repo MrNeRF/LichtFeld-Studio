@@ -20,9 +20,8 @@ constant float kSsimGauss[11] = {
     0.21300552785396576f,  0.26601171493530273f,   0.21300552785396576f,  0.10936068743467331f,
     0.036000773310661316f, 0.0075987582094967365f, 0.001028380123898387f};
 
-// 8x8 output tiles retain the 5-pixel filter halo and fit the device
-// threadgroup memory limit with shader validation enabled.
-constant constexpr int kPhotoTile = 8;
+// 16x16 output tiles with a 5-pixel halo, as the CUDA kernels.
+constant constexpr int kPhotoTile = 16;
 constant constexpr int kPhotoHalo = 5;
 constant constexpr int kPhotoSpan = kPhotoTile + 2 * kPhotoHalo;
 constant constexpr uint kPhotoSpanCells = uint(kPhotoSpan * kPhotoSpan);

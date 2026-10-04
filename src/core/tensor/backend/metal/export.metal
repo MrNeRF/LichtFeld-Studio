@@ -426,9 +426,7 @@ static uint kmeans_norm_bound(constant ExportScreenParams& p, float value, bool 
     return lo;
 }
 
-// Four SIMD groups retain the same exact argmin while leaving headroom for
-// Metal shader validation's instrumented threadgroup storage on 32 KiB GPUs.
-constant uint kScreenSimdgroups = 128u / 32u;
+constant uint kScreenSimdgroups = kExportWidth / 32u;
 
 kernel void export_kmeans_screen(constant ExportScreenParams& p [[buffer(0)]],
                                  uint gid [[threadgroup_position_in_grid]], uint groups [[threadgroups_per_grid]],

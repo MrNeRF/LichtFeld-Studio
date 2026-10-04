@@ -182,9 +182,7 @@ kernel void bilateral_slice_backward_rgb(constant BilateralSliceParams& p [[buff
 constant constexpr int kBilateralTile = 32;
 constant constexpr int kBilateralFootprint = 3;
 constant constexpr int kBilateralStrideX = 4;
-// Larger depth grids use the existing device-atomic fallback. This bound
-// keeps the shared histogram below the limit under shader validation.
-constant constexpr int kBilateralMaxL = 16;
+constant constexpr int kBilateralMaxL = 32;
 constant constexpr int kBilateralSlots = 12 * kBilateralMaxL * kBilateralFootprint * kBilateralStrideX;
 
 static void bilateral_group_add(threadgroup atomic_uint* slot, const float value) {

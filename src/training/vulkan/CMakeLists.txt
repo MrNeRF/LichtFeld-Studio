@@ -314,11 +314,6 @@ add_custom_command(
     VERBATIM)
 
 # Separate filter compilations bound optimizer memory; keep their tap loops rolled.
-if(APPLE)
-    set(_photometric_tile_size 8)
-else()
-    set(_photometric_tile_size 16)
-endif()
 foreach(_variant IN ITEMS photometric_fused photometric_fused_gradient)
     if(_variant STREQUAL "photometric_fused")
         set(_moments 1)
@@ -329,7 +324,7 @@ foreach(_variant IN ITEMS photometric_fused photometric_fused_gradient)
         OUTPUT "${LFS_TRAINING_SPV_DIR}/${_variant}.spv" "${LFS_TRAINING_SPV_DIR}/${_variant}.json"
         COMMAND ${LFS_TENSOR_SLANGC} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/photometric_fused.slang"
                 -entry main -stage compute -O -fp-mode precise -line-directive-mode none
-                -target spirv -profile glsl_460 -emit-spirv-directly -D PHOTO_MOMENTS=${_moments} -D PHOTO_TILE_SIZE=${_photometric_tile_size}
+                -target spirv -profile glsl_460 -emit-spirv-directly -D PHOTO_MOMENTS=${_moments}
                 -o "${LFS_TRAINING_SPV_DIR}/${_variant}.raw.spv"
         COMMAND lfs_tensor_spirv_finalize "${LFS_TRAINING_SPV_DIR}/${_variant}.raw.spv"
                 "${LFS_TRAINING_SPV_DIR}/${_variant}.spv" "${LFS_TRAINING_SPV_DIR}/${_variant}.json"

@@ -184,13 +184,8 @@ namespace lfs::training {
                     if ((stage == 0 || stage == 2 || stage == 4) || (!derivatives && (stage == 2 || stage == 3)))
                         continue;
                     p.stage = stage;
-#ifdef __APPLE__
-                    constexpr size_t tile_size = 8;
-#else
-                    constexpr size_t tile_size = 16;
-#endif
-                    const size_t tiles = ((size_t(p.width) + tile_size - 1) / tile_size) *
-                                         ((size_t(p.height) + tile_size - 1) / tile_size) * p.batch * p.channels;
+                    const size_t tiles = ((size_t(p.width) + 15) / 16) *
+                                         ((size_t(p.height) + 15) / 16) * p.batch * p.channels;
                     vulkan::dispatch(stage == 1 ? "photometric_fused" : "photometric_fused_gradient", p, reads, writes, vulkan::groups(tiles * 256), p.stage | (p.path << 3));
                 }
                 if (options.path == PhotoPath::SSIM) {

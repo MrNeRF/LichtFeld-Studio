@@ -167,12 +167,11 @@ static float canny_value(constant CannyParams& p, const int index) {
     return static_cast<device const float*>(p.input)[index];
 }
 
-// 16x16 groups preserve the CUDA 4-pixel halo and each convolution order,
-// with room for shader-validation storage on 32 KiB Metal devices.
+// 32x32 threadgroups with a 4-pixel halo, as the CUDA kernel.
 kernel void training_image_canny(constant CannyParams& p [[buffer(0)]],
                                  uint2 group [[threadgroup_position_in_grid]],
                                  uint2 local [[thread_position_in_threadgroup]]) {
-    constexpr int kBlock = 16;
+    constexpr int kBlock = 32;
     constexpr int kHalo = 4;
     constexpr int kHalo1 = 2;
     constexpr int kHalo2 = 1;

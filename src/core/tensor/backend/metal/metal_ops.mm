@@ -1486,11 +1486,10 @@ namespace lfs::core::internal {
                         const size_t work) override {
                 std::vector<StorageRef> uses(reads.begin(), reads.end());
                 uses.insert(uses.end(), writes.begin(), writes.end());
-                const size_t width = std::string_view(module) == "export_kmeans_screen" ? 128 : kThreadgroupWidth;
                 context_->dispatch(uses, {.pipeline = context_->pipeline(module, {{0, phase}}),
                                           .params = params,
-                                          .grid = MTLSizeMake((work + width - 1) / width, 1, 1),
-                                          .group_size = MTLSizeMake(width, 1, 1)});
+                                          .grid = thread_groups(work),
+                                          .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
             }
 
             void submit() override { context_->flush(); }
