@@ -28,7 +28,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -36,6 +38,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -155,6 +158,47 @@ namespace {
                 expect_close(op(x, y), op(x_cpu, y_cpu));
             }
         }
+    }
+
+    // Fails if sinh or tanh loses relative accuracy near zero or overflows before the float limit, on the eager
+    // kernels, lazy chains and fused expressions.
+    TEST_F(TensorMetal, HyperbolicFunctionsKeepRelativeAccuracyNearZero) {
+        constexpr float inf = std::numeric_limits<float>::infinity();
+        const std::vector<float> values{1e-30f, -1e-30f, 1e-12f, 3e-8f, -3e-8f, 1e-4f, -2e-3f, 0.3f, -0.9f, 0.999f,
+                                        1.0f, -1.5f, 4.0f, 9.5f, -11.0f, 40.0f, 88.0f, 89.0f, -89.0f, 0.0f, -0.0f,
+                                        inf, -inf, std::numeric_limits<float>::quiet_NaN()};
+        const size_t n = values.size();
+        const Tensor metal = to_metal(Tensor::from_vector(values, {n}, Device::CPU));
+        const auto check = [&](std::string_view name, const Tensor& actual, double (*reference)(double)) {
+            SCOPED_TRACE(name);
+            const auto result = actual.cpu().to_vector();
+            ASSERT_EQ(result.size(), n);
+            for (size_t i = 0; i < n; ++i) {
+                const double expected = reference(double(values[i]));
+                if (std::isnan(expected)) {
+                    EXPECT_TRUE(std::isnan(result[i])) << "x=" << values[i];
+                } else if (std::isinf(expected) || expected == 0.0) {
+                    EXPECT_EQ(std::bit_cast<std::uint32_t>(result[i]), std::bit_cast<std::uint32_t>(float(expected)))
+                        << "x=" << values[i];
+                } else {
+                    const double x = std::abs(double(values[i]));
+                    const double ulps = x < 1.0 ? 4.0 : 5.0 + 2.0 * x;
+                    EXPECT_LE(std::abs(result[i] - expected) / std::abs(expected), ulps * 0x1p-23) << "x=" << values[i];
+                }
+            }
+        };
+        const auto fused_kernel = [&](fused::Expr (*op)(const fused::Expr&)) {
+            fused::Builder builder(1);
+            builder.output(op(builder.input(DataType::Float32, 1).load()), DataType::Float32);
+            GpuBackendScope scope(GpuBackend::Metal);
+            return fused::Kernel(builder)({n}, {metal})[0];
+        };
+        check("sinh", metal.sinh(), [](double x) { return std::sinh(x); });
+        check("tanh", metal.tanh(), [](double x) { return std::tanh(x); });
+        check("chained sinh", metal.neg().sinh().neg(), [](double x) { return std::sinh(x); });
+        check("chained tanh", metal.neg().tanh().neg(), [](double x) { return std::tanh(x); });
+        check("fused sinh", fused_kernel(fused::sinh), [](double x) { return std::sinh(x); });
+        check("fused tanh", fused_kernel(fused::tanh), [](double x) { return std::tanh(x); });
     }
 
     TEST_F(TensorMetal, ComparisonsAndIntegersMatchCpu) {
