@@ -102,7 +102,7 @@ jobs:
               assert versions, f"Missing deployment version: {binary}"
               for major, minor, patch in versions:
                   version = (int(major), int(minor), int(patch or 0))
-                  assert version <= (26, 0, 0), f"Requires newer macOS: {binary}: {version}"
+                  assert version == (26, 0, 0), f"Expected macOS 26.0 deployment target: {binary}: {version}"
               print(f"{binary.name}: macOS deployment baseline verified")
           PYTHON
 
