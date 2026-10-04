@@ -200,55 +200,6 @@ namespace lfs::training {
         cropbox_lr_scale_ = scale;
     }
 
-    void AdamOptimizer::set_per_splat_mean_step(const bool enabled,
-                                                const float median_extent,
-                                                const float r_min,
-                                                const float r_max) {
-        per_splat_mean_step_ = enabled;
-        mean_step_median_extent_ = median_extent;
-        mean_step_r_min_ = r_min;
-        mean_step_r_max_ = r_max;
-        if (!enabled) {
-            set_mean_step_far_mask({});
-        }
-    }
-
-    void AdamOptimizer::set_mean_step_far_mask(lfs::core::Tensor mask) {
-        if (!mask.is_valid() || mask.numel() == 0) {
-            mean_step_far_mask_ = nullptr;
-            mean_step_far_mask_n_ = 0;
-            mean_step_far_mask_storage_ = {};
-            return;
-        }
-        LFS_ASSERT_MSG(mask.dtype() == lfs::core::DataType::Bool && mask.ndim() == 1,
-                       "AdamOptimizer mean-step far mask must be a 1D bool tensor");
-        LFS_ASSERT_MSG(mask.numel() <= static_cast<size_t>(std::numeric_limits<int>::max()),
-                       "AdamOptimizer mean-step far mask exceeds the supported row count");
-        // Retain owned, contiguous device storage for the raw mask pointer.
-        auto uploaded = mask.device() == lfs::core::Device::CUDA ? mask : mask.cuda();
-        auto storage = uploaded.is_contiguous() && uploaded.owns_memory()
-                           ? uploaded
-                           : uploaded.clone();
-        const auto* pointer = storage.ptr<bool>();
-        LFS_VALIDATE_CUDA_DEVICE_POINTER(pointer, "mean_step_far_mask");
-        // A raw pointer alone cannot keep a replaced strategy tensor alive.
-        mean_step_far_mask_storage_ = std::move(storage);
-        mean_step_far_mask_ = pointer;
-        mean_step_far_mask_n_ = static_cast<int>(mean_step_far_mask_storage_.numel());
-    }
-
-    void AdamOptimizer::validate_mean_step_far_mask() {
-        const auto& means = splat_data_.means();
-        const size_t n = means.is_valid() && means.ndim() > 0 ? means.shape()[0] : 0;
-        if (mean_step_far_mask_ != nullptr &&
-            (mean_step_far_mask_n_ < 0 || static_cast<size_t>(mean_step_far_mask_n_) != n)) {
-            LOG_WARN("AdamOptimizer: mean_step_far_mask row-count mismatch (mask={}, means={}); "
-                     "ignoring binding until the strategy republishes it",
-                     mean_step_far_mask_n_, n);
-            set_mean_step_far_mask({});
-        }
-    }
-
     void AdamOptimizer::set_screen_share_cap(const float* max_share, const int n,
                                              const float limit, const float penalty) {
         screen_share_max_ = max_share;
@@ -272,7 +223,6 @@ namespace lfs::training {
 
     void AdamOptimizer::step(const int iteration) {
         LFS_TRACE("kernel.adam.step");
-        validate_mean_step_far_mask();
         refresh_screen_share_buffer();
         if (fused_step_iteration_ == iteration) {
             last_step_zeroed_gradients_ = true;
@@ -283,8 +233,6 @@ namespace lfs::training {
         fast_lfs::optimizer::JointContiguousBatchEntry entries[5];
         int n_entries = 0;
         cudaStream_t batch_stream = nullptr;
-        const float* batch_mean_step_scale_raw = nullptr;
-        int batch_mean_step_scale_n = 0;
         const ParamType contiguous[] = {
             ParamType::Means, ParamType::Sh0, ParamType::Scaling,
             ParamType::Rotation, ParamType::Opacity};
@@ -340,15 +288,6 @@ namespace lfs::training {
             e.lr = param_lr;
             e.bias_correction1_rcp = static_cast<float>(bias_correction1_rcp);
             e.bias_correction2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
-            if (type == ParamType::Means && per_splat_mean_step_) {
-                auto& scaling = splat_data_.scaling_raw();
-                if (scaling.is_valid() && scaling.numel() > 0) {
-                    lfs::core::waitForCUDAStream(batch_stream, scaling.stream());
-                    batch_mean_step_scale_raw = scaling.ptr<float>();
-                    batch_mean_step_scale_n = static_cast<int>(scaling.numel());
-                    e.apply_mean_step = 1;
-                }
-            }
             if (type == ParamType::Scaling) {
                 e.apply_screen_share = 1;
             }
@@ -362,9 +301,6 @@ namespace lfs::training {
             prepare_contiguous(type);
         }
         if (n_entries > 0) {
-            if (mean_step_far_mask_storage_.is_valid()) {
-                mean_step_far_mask_storage_.sync_to_stream(batch_stream);
-            }
             if (frozen_mask_.is_valid()) {
                 lfs::core::waitForCUDAStream(batch_stream, frozen_mask_.stream());
             }
@@ -379,9 +315,6 @@ namespace lfs::training {
                 static_cast<float>(config_.beta2),
                 static_cast<float>(config_.eps),
                 batch_stream,
-                batch_mean_step_scale_raw, batch_mean_step_scale_n,
-                mean_step_median_extent_, mean_step_r_min_, mean_step_r_max_,
-                mean_step_far_mask_, mean_step_far_mask_n_,
                 screen_share_max_, screen_share_n_, screen_share_limit_, screen_share_penalty_);
         }
         step_param(ParamType::ShN, iteration);
@@ -826,19 +759,6 @@ namespace lfs::training {
                 throw std::runtime_error("Optimizer state desync: " + name);
             }
             const size_t feature_dim = param_live.numel() / param_size;
-            if (mean_step_far_mask_storage_.is_valid()) {
-                mean_step_far_mask_storage_.sync_to_stream(execution_stream);
-            }
-            const float* mean_step_scale_raw = nullptr;
-            int mean_step_scale_n = 0;
-            if (type == ParamType::Means && per_splat_mean_step_) {
-                auto& scaling = splat_data_.scaling_raw();
-                if (scaling.is_valid() && scaling.numel() > 0) {
-                    lfs::core::waitForCUDAStream(execution_stream, scaling.stream());
-                    mean_step_scale_raw = scaling.ptr<float>();
-                    mean_step_scale_n = static_cast<int>(scaling.numel());
-                }
-            }
             const float* share_max = nullptr;
             int share_n = 0;
             float share_limit = 0.0f;
@@ -870,13 +790,6 @@ namespace lfs::training {
                 static_cast<float>(bias_correction1_rcp),
                 static_cast<float>(bias_correction2_sqrt_rcp),
                 execution_stream,
-                mean_step_scale_raw,
-                mean_step_scale_n,
-                mean_step_median_extent_,
-                mean_step_r_min_,
-                mean_step_r_max_,
-                mean_step_far_mask_,
-                mean_step_far_mask_n_,
                 share_max,
                 share_n,
                 share_limit,
@@ -896,10 +809,6 @@ namespace lfs::training {
     FastGSFusedAdamState AdamOptimizer::prepare_fastgs_fused_adam(
         const int iteration,
         const cudaStream_t execution_stream) {
-        validate_mean_step_far_mask();
-        if (mean_step_far_mask_storage_.is_valid()) {
-            mean_step_far_mask_storage_.sync_to_stream(execution_stream);
-        }
         if (crop_damping_mask_.is_valid()) {
             crop_damping_mask_.sync_to_stream(execution_stream);
         }
@@ -1114,12 +1023,6 @@ namespace lfs::training {
         fused.scaling.screen_share_penalty = screen_share_penalty_;
         fused.rotation = prepare_param(ParamType::Rotation, 4, true);
         fused.opacity = prepare_param(ParamType::Opacity, 1, true);
-        fused.per_splat_mean_step = per_splat_mean_step_;
-        fused.mean_step_median_extent = mean_step_median_extent_;
-        fused.mean_step_r_min = mean_step_r_min_;
-        fused.mean_step_r_max = mean_step_r_max_;
-        fused.mean_step_far_mask = mean_step_far_mask_;
-        fused.mean_step_far_mask_n = mean_step_far_mask_n_;
 
         fused.enabled = fused.means.enabled || fused.sh0.enabled || fused.shN.enabled ||
                         fused.scaling.enabled || fused.rotation.enabled || fused.opacity.enabled;

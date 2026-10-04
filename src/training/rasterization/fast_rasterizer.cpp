@@ -76,18 +76,6 @@ namespace lfs::training {
         fused_adam.opacity = convert_param(optimizer_fused.opacity);
         fused_adam.sh0 = convert_param(optimizer_fused.sh0);
         fused_adam.shN = convert_param(optimizer_fused.shN);
-        fused_adam.per_splat_mean_step = optimizer_fused.per_splat_mean_step;
-        fused_adam.mean_step_median_extent = optimizer_fused.mean_step_median_extent;
-        fused_adam.mean_step_r_min = optimizer_fused.mean_step_r_min;
-        fused_adam.mean_step_r_max = optimizer_fused.mean_step_r_max;
-        // The kernel compares an unsigned row index with this count. Reject
-        // nonpositive counts and limit the mask to live mean rows.
-        if (optimizer_fused.mean_step_far_mask != nullptr &&
-            optimizer_fused.mean_step_far_mask_n > 0 && optimizer_fused.means.n_primitives > 0) {
-            fused_adam.mean_step_far_mask = optimizer_fused.mean_step_far_mask;
-            fused_adam.mean_step_far_mask_n = std::min(
-                optimizer_fused.mean_step_far_mask_n, optimizer_fused.means.n_primitives);
-        }
         return fused_adam;
     }
 
@@ -845,8 +833,6 @@ namespace lfs::training {
             bwd_shN_bounds_ptr,
             bwd_shN_n_cells,
             bwd_shN_bits,
-            fused_adam.mean_step_far_mask,
-            fused_adam.mean_step_far_mask_n,
             fused_extra_gradients.edge_weight_map,
             fused_extra_gradients.edge_score_out);
 

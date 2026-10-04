@@ -150,8 +150,6 @@ namespace fast_lfs::rasterization {
         const float* shN_value_bounds_ptr = nullptr,
         unsigned shN_value_n_cells = 0u,
         unsigned shN_value_bits = 0u,
-        const bool* mean_step_far_mask = nullptr,
-        int mean_step_far_mask_n = 0,
         const float* edge_weight_map = nullptr,
         float* edge_score_out = nullptr);
 
