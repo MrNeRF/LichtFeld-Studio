@@ -5385,10 +5385,10 @@ namespace lfs::vis {
     TEST(ImportErrorTest, CapturesVulkanErrorsWithoutInterruptingCleanup) {
         std::string outer;
         {
-            VulkanImportErrorScope validation(outer);
+            GraphicsImportErrorScope validation(outer);
             std::string inner;
             {
-                VulkanImportErrorScope upload(inner);
+                GraphicsImportErrorScope upload(inner);
                 EXPECT_FALSE(vk_try_bool(VK_ERROR_OUT_OF_DEVICE_MEMORY, "allocate", "test upload"));
                 EXPECT_TRUE(gui::isImportOutOfMemory(inner));
             }
@@ -5396,7 +5396,7 @@ namespace lfs::vis {
         }
         EXPECT_TRUE(gui::isImportOutOfMemory(outer));
         std::string direct;
-        VulkanImportErrorScope validation(direct);
+        GraphicsImportErrorScope validation(direct);
         const auto message = formatVkCheckFailure("allocate", VK_ERROR_OUT_OF_DEVICE_MEMORY, "direct log");
         EXPECT_EQ(direct, message);
     }
