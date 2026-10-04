@@ -5,6 +5,7 @@
 
 #include "../../internal/tensor_impl.hpp"
 #include "core/assert.hpp"
+#include "kernels/simplify_merge.hpp"
 #include "kernels/tensor_point_region.hpp"
 #include "kernels/tensor_projection.hpp"
 #include "kernels/tensor_spatial.hpp"
@@ -121,6 +122,19 @@ namespace lfs::core::internal {
         tensor_ops::launch_triangle_tree_parity(cuda_pointer<const float>(points), cuda_pointer<const int32_t>(visit),
                                                 cuda_pointer<const float>(triangles), cuda_pointer<const float>(boxes),
                                                 cuda_pointer<int32_t>(output), program, context.cuda_stream);
+        return true;
+    }
+
+    bool CudaBackendOps::simplify_merge(const std::array<StorageRef, 5>& rows, const StorageRef offsets,
+                                        const StorageRef members, const std::array<StorageRef, 5>& outputs,
+                                        const SimplifyMergeProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(simplify_merge);
+        tensor_ops::launch_simplify_merge(
+            cuda_pointer<const float>(rows[0]), cuda_pointer<const float>(rows[1]), cuda_pointer<const float>(rows[2]),
+            cuda_pointer<const float>(rows[3]), cuda_pointer<const float>(rows[4]), cuda_pointer<const int32_t>(offsets),
+            cuda_pointer<const int32_t>(members), cuda_pointer<float>(outputs[0]), cuda_pointer<float>(outputs[1]),
+            cuda_pointer<float>(outputs[2]), cuda_pointer<float>(outputs[3]), cuda_pointer<float>(outputs[4]),
+            program.groups, program.app_dim, context.cuda_stream);
         return true;
     }
 

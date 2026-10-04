@@ -220,6 +220,13 @@ namespace lfs::core {
             int32_t max_count = 0;
         };
 
+        // Splat simplification merges groups of rows (means, activated scales, unit rotations, opacities as
+        // alpha, appearance of app_dim floats) into one row each.
+        struct SimplifyMergeProgram {
+            uint32_t groups = 0;
+            uint32_t app_dim = 0;
+        };
+
         struct PoolProgram {
             int batch = 0;
             int channels = 0;

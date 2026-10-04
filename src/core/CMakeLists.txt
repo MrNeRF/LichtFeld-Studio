@@ -90,6 +90,7 @@ set(TENSOR_SOURCES
         tensor/tensor_masking_ops.cpp
         tensor/tensor_advanced_ops.cpp
         tensor/tensor_spatial.cpp
+        tensor/tensor_simplify.cpp
         tensor/tensor_proximity.cpp
         tensor/tensor_procedural.cpp
         tensor/tensor_projection.cpp

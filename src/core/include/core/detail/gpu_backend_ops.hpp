@@ -207,6 +207,15 @@ namespace lfs::core {
                                               const PointTreeProgram& /*program*/, ExecContext /*context*/) {
                 return false;
             }
+            // One merged row per group, as splat_simplify.cpp merges a voxel group: rows and outputs are
+            // (means, scales, rotation, opacity, appearance); members are Int32, ascending within each
+            // group, and Int32 [G+1] offsets delimit the groups. Returns false, writing nothing, when the
+            // backend has no kernel for it.
+            virtual bool simplify_merge(const std::array<StorageRef, 5>& /*rows*/, StorageRef /*offsets*/,
+                                        StorageRef /*members*/, const std::array<StorageRef, 5>& /*outputs*/,
+                                        const SimplifyMergeProgram& /*program*/, ExecContext /*context*/) {
+                return false;
+            }
             virtual void point_neighbor_spacing(StorageRef points, StorageRef references,
                                                 StorageRef heads, StorageRef next, StorageRef output,
                                                 size_t count, size_t buckets, float cell_width, ExecContext context) = 0;
@@ -548,6 +557,9 @@ namespace lfs::core {
                                       StorageRef output, const PointTreeProgram& program, ExecContext context) override;
             bool point_tree_spacing(StorageRef points, StorageRef sorted, StorageRef boxes, StorageRef visit,
                                     StorageRef output, const PointTreeProgram& program, ExecContext context) override;
+            bool simplify_merge(const std::array<StorageRef, 5>& rows, StorageRef offsets, StorageRef members,
+                                const std::array<StorageRef, 5>& outputs, const SimplifyMergeProgram& program,
+                                ExecContext context) override;
             void point_neighbor_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                         size_t, size_t, float, ExecContext) override;
             void project_points(StorageRef points, StorageRef output, size_t count,

@@ -296,6 +296,42 @@ namespace lfs::core::internal {
         return true;
     }
 
+    namespace {
+        struct SimplifyMergePush {
+            uint64_t rows[5];
+            uint64_t offsets, members;
+            uint64_t outputs[5];
+            uint32_t groups, app_dim;
+        };
+        static_assert(sizeof(SimplifyMergePush) == 104);
+    } // namespace
+
+    bool VulkanBackendOps::simplify_merge(const std::array<StorageRef, 5>& rows, const StorageRef offsets,
+                                          const StorageRef members, const std::array<StorageRef, 5>& outputs,
+                                          const SimplifyMergeProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(simplify_merge);
+        if (program.groups == 0)
+            return true;
+        SimplifyMergePush push{};
+        for (size_t i = 0; i < 5; ++i) {
+            push.rows[i] = vk::address(rows[i]);
+            push.outputs[i] = vk::address(outputs[i]);
+        }
+        push.offsets = vk::address(offsets);
+        push.members = vk::address(members);
+        push.groups = program.groups;
+        push.app_dim = program.app_dim;
+        const auto context = acquire_vulkan_context();
+        const auto& pipeline = context->pipelines().specialized("simplify_merge", sizeof(push), {});
+        const std::array reads{rows[0], rows[1], rows[2], rows[3], rows[4], offsets, members};
+        context->recorders().record(reads, outputs, [&](const VkCommandBuffer command) {
+            vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+            vkCmdPushConstants(command, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+            vkCmdDispatch(command, vk::dispatch_groups(*context, program.groups), 1, 1);
+        });
+        return true;
+    }
+
     bool VulkanBackendOps::point_tree_counts(const StorageRef points, const StorageRef sorted, const StorageRef boxes,
                                              const StorageRef visit, const StorageRef radii,
                                              const std::optional<StorageRef> queries, const StorageRef output,
