@@ -471,6 +471,7 @@ set(TEST_FILES
     test_tensor_uint8_masking.cpp
     test_tensor_serialization.cpp
     test_tensor_cat_reduction_bug.cpp
+    test_percentile_bounds.cpp
     test_tensor_inplace_capacity.cpp
     test_sog_format.cpp
     test_ssog_format.cpp

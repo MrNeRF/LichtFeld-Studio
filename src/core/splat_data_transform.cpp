@@ -28,6 +28,42 @@ namespace lfs::core {
 
     namespace {
 
+        // Bounds between the 1st and 99th percentile of every axis of [N, 3] positions. Host positions use selection
+        // instead of a full sort: the same order statistics without the seconds a sort of millions of points takes.
+        void percentile_bounds(const Tensor& means, glm::vec3& min_bounds, glm::vec3& max_bounds, const float padding) {
+            LFS_ASSERT(means.ndim() == 2 && means.size(1) == 3 && means.dtype() == DataType::Float32);
+            const int64_t n = means.size(0);
+            const int64_t lo = n / 100;
+            const int64_t hi = n - 1 - lo;
+            if (means.device() == Device::CUDA) {
+                for (int i = 0; i < 3; ++i) {
+                    const auto sorted = means.slice(1, i, i + 1).squeeze(1).sort(0, false).first;
+                    min_bounds[i] = sorted[lo].item() - padding;
+                    max_bounds[i] = sorted[hi].item() + padding;
+                }
+                return;
+            }
+            const auto host = means.contiguous();
+            const float* const data = host.ptr<float>();
+            // NaN orders last so the comparison stays a strict weak ordering.
+            const auto less = [](const float a, const float b) { return a < b || (!std::isnan(a) && std::isnan(b)); };
+            std::array<std::vector<float>, 3> columns;
+            for (auto& column : columns)
+                column.resize(static_cast<size_t>(n));
+#pragma omp parallel for num_threads(3) if (n > 100000)
+            for (int axis = 0; axis < 3; ++axis) {
+                auto& column = columns[static_cast<size_t>(axis)];
+                for (int64_t row = 0; row < n; ++row)
+                    column[static_cast<size_t>(row)] = data[row * 3 + axis];
+                const auto lower = column.begin() + lo;
+                const auto upper = column.begin() + hi;
+                std::nth_element(column.begin(), lower, column.end(), less);
+                std::nth_element(lower + 1, upper, column.end(), less);
+                min_bounds[axis] = *lower - padding;
+                max_bounds[axis] = *upper + padding;
+            }
+        }
+
         constexpr double SH_C1 = 0.48860251190291987;
         constexpr double SH_C2_0 = 1.0925484305920792;
         constexpr double SH_C2_2 = 0.31539156525251999;
@@ -894,14 +930,7 @@ namespace lfs::core {
         const int64_t n = visible_means.size(0);
 
         if (use_percentile && n > 100) {
-            // Exclude 2% outliers (1% each end)
-            const int64_t lo = n / 100;
-            const int64_t hi = n - 1 - lo;
-            for (int i = 0; i < 3; ++i) {
-                const auto sorted = visible_means.slice(1, i, i + 1).squeeze(1).sort(0, false).first;
-                min_bounds[i] = sorted[lo].item() - padding;
-                max_bounds[i] = sorted[hi].item() + padding;
-            }
+            percentile_bounds(visible_means, min_bounds, max_bounds, padding);
         } else {
             for (int i = 0; i < 3; ++i) {
                 const auto col = visible_means.slice(1, i, i + 1).squeeze(1);
@@ -926,14 +955,7 @@ namespace lfs::core {
         const int64_t n = means.size(0);
 
         if (use_percentile && n > 100) {
-            // Exclude 2% outliers (1% each end)
-            const int64_t lo = n / 100;
-            const int64_t hi = n - 1 - lo;
-            for (int i = 0; i < 3; ++i) {
-                const auto sorted = means.slice(1, i, i + 1).squeeze(1).sort(0, false).first;
-                min_bounds[i] = sorted[lo].item() - padding;
-                max_bounds[i] = sorted[hi].item() + padding;
-            }
+            percentile_bounds(means, min_bounds, max_bounds, padding);
         } else {
             for (int i = 0; i < 3; ++i) {
                 const auto col = means.slice(1, i, i + 1).squeeze(1);
