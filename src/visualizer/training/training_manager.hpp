@@ -6,6 +6,7 @@
 
 #include "core/camera.hpp"
 #include "core/error_latch.hpp"
+#include "core/event_bridge/event_bridge.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_exportable_storage.hpp"
@@ -25,6 +26,8 @@
 #include <optional>
 #include <stop_token>
 #include <thread>
+#include <typeindex>
+#include <utility>
 #include <vector>
 
 namespace lfs::core {
@@ -298,6 +301,8 @@ namespace lfs::vis {
         bool initialization_main_step_failed_ = false;
         std::atomic<bool> initialization_pause_requested_{false};
         std::jthread completion_reaper_;
+        // Handlers capture this, so the destructor removes them from the process-wide bridge.
+        std::vector<std::pair<std::type_index, lfs::event::HandlerId>> event_handlers_;
         VisualizerImpl* viewer_ = nullptr;
         core::Scene* scene_ = nullptr;
         std::function<bool(std::function<void()>, std::function<void()>)> test_scene_owner_poster_;
