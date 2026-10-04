@@ -210,8 +210,10 @@ namespace lfs::vis {
 
     ModifierEvaluation ModifierManager::evaluate(const core::Uuid& node_uuid) {
         tick();
-        if (requested_generation_ == output_generation_ && worker_->progress().busy) {
-            // Explicit synchronous Python/API request only; canvas code never calls this.
+        // Explicit synchronous Python/API request only; canvas code never calls this. Wait even when the worker
+        // looks idle: a small graph can finish between tick() and a busy check, and its result still needs
+        // installing.
+        if (requested_generation_ == output_generation_) {
             worker_->wait(requested_generation_);
             installReady();
         }
