@@ -811,6 +811,37 @@ namespace {
             EXPECT_TRUE(std::isfinite(value));
     }
 
+    TEST_P(NodesCore, TriangleRayIndexFindsPointsInsideAClosedMesh) {
+        const auto mesh = torus(48, 24);
+        const lfs::core::TriangleRayIndex index(mesh->vertices, mesh->indices);
+        std::mt19937 random(5);
+        std::uniform_real_distribution<float> across(-2.2f, 2.2f), along(-0.7f, 0.7f);
+        std::vector<float> points;
+        std::vector<bool> expected;
+        // Away from the faceted surface, the smooth torus decides inside.
+        while (expected.size() < 20000) {
+            const float x = across(random), y = across(random), z = along(random);
+            const float ring = std::sqrt(x * x + y * y) - 1.5f;
+            const float distance = std::sqrt(ring * ring + z * z);
+            if (std::abs(distance - 0.5f) < 0.03f)
+                continue;
+            points.insert(points.end(), {x, y, z});
+            expected.push_back(distance < 0.5f);
+        }
+        points.insert(points.end(), {std::numeric_limits<float>::quiet_NaN(), 0, 0, 1e30f, 0, 0});
+        expected.insert(expected.end(), {false, false});
+        const auto queries = tensor(points, {expected.size(), 3});
+        const auto inside = index.odd_crossings(queries);
+        EXPECT_EQ(inside.device(), device());
+        EXPECT_EQ(inside.cpu().to_vector_bool(), expected);
+        // Batches answer like one query.
+        const auto first = index.odd_crossings(queries.slice(0, 0, 777));
+        EXPECT_EQ(first.cpu().to_vector_bool(), std::vector<bool>(expected.begin(), expected.begin() + 777));
+
+        const lfs::core::TriangleRayIndex empty(mesh->vertices, ints({}, {0, 3}));
+        EXPECT_EQ(empty.odd_crossings(queries).cpu().to_vector_bool(), std::vector<bool>(expected.size(), false));
+    }
+
     TEST_P(NodesCore, DeleteSeparateAndStoredSelectionCarryAttributes) {
         NodeTree tree(registry_);
         Node &stored = tree.add_node("lfs.stored_selection"),

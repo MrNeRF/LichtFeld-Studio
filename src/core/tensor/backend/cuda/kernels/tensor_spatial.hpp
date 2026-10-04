@@ -34,4 +34,7 @@ namespace lfs::core::tensor_ops {
     void launch_point_tree_counts(const float* points, const float* sorted, const float* boxes, const int32_t* visit,
                                   const float* radii, const uint8_t* queries, int32_t* output,
                                   const internal::PointTreeProgram& tree, cudaStream_t stream);
+    void launch_triangle_tree_parity(const float* points, const int32_t* visit, const float* triangles,
+                                     const float* boxes, int32_t* output, const internal::PointTreeProgram& tree,
+                                     cudaStream_t stream);
 } // namespace lfs::core::tensor_ops

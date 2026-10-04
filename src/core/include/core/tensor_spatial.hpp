@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <utility>
 
 namespace lfs::core {
@@ -169,6 +170,24 @@ namespace lfs::core {
     // Nonfinite points and points whose radius is not positive and finite are
     // their own component. One pass over a point tree; no iteration cap.
     LFS_CORE_API Tensor mutual_radius_components(const Tensor& points, const Tensor& radii);
+
+    // Triangles prepared for inside tests: a ray from a point along one fixed direction crosses a closed
+    // surface an odd number of times exactly when the point is inside it. A tree over the triangles'
+    // bounds across the ray means each query tests only the triangles its ray can reach. Build once per
+    // mesh and query in any number of batches.
+    class LFS_CORE_API TriangleRayIndex {
+    public:
+        // Float32 [V,3] vertices and Int32 [F,3] indices on one device; triangles with a nonfinite
+        // vertex are left out.
+        TriangleRayIndex(const Tensor& vertices, const Tensor& indices);
+        // Bool [N] on the points' device: whether the ray from each Float32 [N,3] point crosses an odd
+        // number of triangles. Nonfinite points are outside. Points must be on the index's device.
+        [[nodiscard]] Tensor odd_crossings(const Tensor& points) const;
+
+    private:
+        struct Tree;
+        std::shared_ptr<const Tree> tree_;
+    };
 
     // Exact nearest target for each Float32 [N,3] query. Int32 [N] indices,
     // ties choose the first target; empty targets/nonfinite queries return -1.

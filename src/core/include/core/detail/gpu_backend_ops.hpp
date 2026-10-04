@@ -192,6 +192,14 @@ namespace lfs::core {
                                                const PointTreeProgram& /*program*/, ExecContext /*context*/) {
                 return false;
             }
+            // Int32 [N] 0/1 ray-crossing parity over a triangle tree (see TriangleRayIndex): triangles are
+            // [F,9] (a, b - a, c - a) and boxes their bounds in the ray frame, both in tree order. visit
+            // orders the queries. Returns false, writing nothing, when the backend has no kernel for it.
+            virtual bool triangle_tree_parity(StorageRef /*points*/, StorageRef /*visit*/, StorageRef /*triangles*/,
+                                              StorageRef /*boxes*/, StorageRef /*output*/,
+                                              const PointTreeProgram& /*program*/, ExecContext /*context*/) {
+                return false;
+            }
             virtual void point_neighbor_spacing(StorageRef points, StorageRef references,
                                                 StorageRef heads, StorageRef next, StorageRef output,
                                                 size_t count, size_t buckets, float cell_width, ExecContext context) = 0;
@@ -529,6 +537,8 @@ namespace lfs::core {
             bool point_tree_components(StorageRef points, StorageRef sorted, StorageRef boxes, StorageRef box_radii,
                                        StorageRef visit, StorageRef sorted_radii, StorageRef radii, StorageRef labels,
                                        const PointTreeProgram& program, ExecContext context) override;
+            bool triangle_tree_parity(StorageRef points, StorageRef visit, StorageRef triangles, StorageRef boxes,
+                                      StorageRef output, const PointTreeProgram& program, ExecContext context) override;
             void point_neighbor_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                         size_t, size_t, float, ExecContext) override;
             void project_points(StorageRef points, StorageRef output, size_t count,

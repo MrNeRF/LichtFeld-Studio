@@ -7,6 +7,7 @@
 #include "internal/point_spatial.hpp"
 #include "internal/point_tree.hpp"
 #include "internal/tensor_impl.hpp"
+#include "internal/triangle_tree.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -554,6 +555,126 @@ namespace lfs::core {
         for (size_t i = 0; i < count; ++i)
             parent[i] = componentRoot(parent, static_cast<int32_t>(i));
         return labels;
+    }
+
+    struct TriangleRayIndex::Tree {
+        Tensor triangles; // Float32 [F,9]: a, b - a, c - a in tree order
+        Tensor boxes;     // Float32 [nodes,6]: low and high in the ray frame
+        PointTreeProgram program;
+    };
+
+    TriangleRayIndex::TriangleRayIndex(const Tensor& vertices, const Tensor& indices) {
+        LFS_ASSERT_MSG(vertices.is_valid() && vertices.ndim() == 2 && vertices.size(1) == 3 &&
+                           vertices.dtype() == DataType::Float32,
+                       "TriangleRayIndex requires Float32 [V,3] vertices");
+        LFS_ASSERT_MSG(indices.is_valid() && indices.ndim() == 2 && indices.size(1) == 3 &&
+                           indices.dtype() == DataType::Int32 && indices.device() == vertices.device(),
+                       "TriangleRayIndex requires Int32 [F,3] indices on the vertices' device");
+        internal::require_same_gpu_backend(vertices, indices, "TriangleRayIndex");
+        LFS_ASSERT_MSG(indices.size(0) <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+                       "TriangleRayIndex triangle count exceeds int32");
+        auto tree = std::make_shared<Tree>();
+        const size_t faces = indices.size(0);
+        if (faces == 0 || vertices.size(0) == 0) {
+            tree_ = std::move(tree);
+            return;
+        }
+        auto corners = vertices.index_select(0, indices.flatten()).reshape({-1, 3, 3});
+        const auto kept = corners.isfinite().reshape({-1, 9}).all(1).nonzero().reshape({-1}).to(DataType::Int32);
+        tree->program.references = static_cast<uint32_t>(kept.numel());
+        if (tree->program.references == 0) {
+            tree_ = std::move(tree);
+            return;
+        }
+        corners = corners.index_select(0, kept);
+        // Row vectors times the transposed frame give (U, V, D) coordinates.
+        std::vector<float> frame(9);
+        for (int row = 0; row < 3; ++row)
+            for (int column = 0; column < 3; ++column)
+                frame[column * 3 + row] = kRayFrame[row * 3 + column];
+        const auto projected =
+            corners.reshape({-1, 3})
+                .matmul(Tensor::from_vector(frame, {3, 3}, Device::CPU).to(vertices.device()))
+                .reshape({-1, 3, 3});
+        // Widened by more than the rounding of the projection and of the crossing test.
+        const auto margin = (projected.abs().max() + 1.0f) * 1e-5f;
+        const auto low = projected.min(1) - margin;
+        const auto high = projected.max(1) + margin;
+        // Tree order follows the box centres across the ray, the plane the queries search.
+        const auto centres = (low + high) * Tensor::from_vector({0.5f, 0.5f, 0.0f}, {1, 3}, Device::CPU).to(vertices.device());
+        const auto order = vertices.device() == Device::GPU ? morton30_order(centres)
+                                                            : morton_sort_indices(centres).to(DataType::Int32);
+        const auto a = corners.slice(1, 0, 1).squeeze(1);
+        tree->triangles = Tensor::cat({a, corners.slice(1, 1, 2).squeeze(1) - a, corners.slice(1, 2, 3).squeeze(1) - a}, 1)
+                              .index_select(0, order)
+                              .contiguous();
+        std::vector<Tensor> levels;
+        auto grouped = fanout_groups(Tensor::cat({low, high}, 1).index_select(0, order));
+        do {
+            levels.push_back(Tensor::cat({grouped.slice(2, 0, 3).min(1), grouped.slice(2, 3, 6).max(1)}, 1));
+            if (levels.back().size(0) <= kPointTreeFanout)
+                break;
+            grouped = fanout_groups(levels.back());
+        } while (true);
+        LFS_ASSERT_MSG(levels.size() <= kPointTreeMaxLevels, "triangle tree exceeds its level limit");
+        tree->program.levels = static_cast<uint32_t>(levels.size());
+        uint32_t offset = 0;
+        for (size_t level = 0; level < levels.size(); ++level) {
+            tree->program.level_offset[level] = offset;
+            tree->program.level_count[level] = static_cast<uint32_t>(levels[level].size(0));
+            offset += tree->program.level_count[level];
+        }
+        tree->boxes = Tensor::cat(levels, 0).contiguous();
+        tree_ = std::move(tree);
+    }
+
+    Tensor TriangleRayIndex::odd_crossings(const Tensor& points) const {
+        LFS_ASSERT_MSG(points.is_valid() && points.ndim() == 2 && points.size(1) == 3 && points.dtype() == DataType::Float32,
+                       "odd_crossings requires Float32 [N,3] points");
+        const size_t count = points.size(0);
+        LFS_ASSERT_MSG(count <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+                       "odd_crossings point count exceeds int32");
+        auto output = internal::allocate_like(points, TensorShape{count}, DataType::Int32, 0.0f);
+        const auto& tree = *tree_;
+        if (count == 0 || tree.program.references == 0)
+            return output.ne(0);
+        LFS_ASSERT_MSG(points.device() == tree.triangles.device(), "odd_crossings requires points on the index's device");
+        internal::require_same_gpu_backend(points, tree.triangles, "odd_crossings");
+        auto program = tree.program;
+        program.points = static_cast<uint32_t>(count);
+        const auto positions = points.contiguous();
+        if (points.device() == Device::GPU) {
+            // Neighbouring queries walk the same branches.
+            const auto visit = count >= 4096 ? morton30_order(positions)
+                                             : (Tensor::ones({count}, points.device(), DataType::Int32).cumsum(0) - 1)
+                                                   .to(DataType::Int32)
+                                                   .contiguous();
+            pin_operands({&positions, &visit, &tree.triangles, &tree.boxes, &output});
+            const auto stream = prepare_inputs_for_stream({&positions, &visit, &tree.triangles, &tree.boxes},
+                                                          output.stream());
+            if (internal::backend_ops_for(positions).triangle_tree_parity(
+                    internal::storage_ref(positions), internal::storage_ref(visit), internal::storage_ref(tree.triangles),
+                    internal::storage_ref(tree.boxes), internal::storage_ref(output), program,
+                    internal::ExecContext{stream}))
+                return output.ne(0);
+        }
+        // CPU, or no kernel on this backend: traverse on the host.
+        const auto host_points = positions.cpu();
+        const auto host_triangles = tree.triangles.cpu();
+        const auto host_boxes = tree.boxes.cpu();
+        auto parity = Tensor::zeros({count}, Device::CPU, DataType::Int32);
+        const auto* p = host_points.ptr<float>();
+        const auto* triangles = host_triangles.ptr<float>();
+        const auto* boxes = host_boxes.ptr<float>();
+        auto* result = parity.ptr<int32_t>();
+        const auto total = static_cast<int64_t>(count);
+#pragma omp parallel for schedule(dynamic, 256)
+        for (int64_t i = 0; i < total; ++i)
+            result[i] = triangleTreeParity(triangles, boxes, program, p + i * 3);
+        if (points.device() == Device::CPU)
+            return parity.ne(0);
+        GpuBackendScope scope(gpu_backend_of(positions).value());
+        return parity.to(Device::GPU).ne(0);
     }
 
     Tensor point_neighbor_spacing(const Tensor& points, const float cell_width) {

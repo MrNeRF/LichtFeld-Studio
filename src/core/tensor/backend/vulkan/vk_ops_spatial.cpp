@@ -259,6 +259,43 @@ namespace lfs::core::internal {
         }
     } // namespace
 
+    namespace {
+        struct TriangleTreePush {
+            uint64_t points, visit, triangles, boxes, output;
+            uint32_t count, references, levels, pad0;
+            uint32_t level_offset[kPointTreeMaxLevels];
+            uint32_t level_count[kPointTreeMaxLevels];
+        };
+        static_assert(sizeof(TriangleTreePush) == 120);
+    } // namespace
+
+    bool VulkanBackendOps::triangle_tree_parity(const StorageRef points, const StorageRef visit,
+                                                const StorageRef triangles, const StorageRef boxes,
+                                                const StorageRef output, const PointTreeProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(triangle_tree_parity);
+        TriangleTreePush push{};
+        push.points = vk::address(points);
+        push.visit = vk::address(visit);
+        push.triangles = vk::address(triangles);
+        push.boxes = vk::address(boxes);
+        push.output = vk::address(output);
+        push.count = program.points;
+        push.references = program.references;
+        push.levels = program.levels;
+        std::copy_n(program.level_offset, kPointTreeMaxLevels, push.level_offset);
+        std::copy_n(program.level_count, kPointTreeMaxLevels, push.level_count);
+        const auto context = acquire_vulkan_context();
+        const auto& pipeline = context->pipelines().specialized("triangle_tree", sizeof(push), {});
+        const std::array reads{points, visit, triangles, boxes};
+        const std::array writes{output};
+        context->recorders().record(reads, writes, [&](const VkCommandBuffer command) {
+            vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+            vkCmdPushConstants(command, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+            vkCmdDispatch(command, vk::dispatch_groups(*context, program.points), 1, 1);
+        });
+        return true;
+    }
+
     bool VulkanBackendOps::point_tree_counts(const StorageRef points, const StorageRef sorted, const StorageRef boxes,
                                              const StorageRef visit, const StorageRef radii,
                                              const std::optional<StorageRef> queries, const StorageRef output,

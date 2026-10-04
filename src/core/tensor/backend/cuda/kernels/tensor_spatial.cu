@@ -5,6 +5,7 @@
 #include "internal/nearest_point.hpp"
 #include "internal/point_spatial.hpp"
 #include "internal/point_tree.hpp"
+#include "internal/triangle_tree.hpp"
 #include "tensor_spatial.hpp"
 
 #include <algorithm>
@@ -304,6 +305,25 @@ namespace lfs::core::tensor_ops {
         point_tree_counts<<<(tree.points + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
             points, sorted, boxes, visit, radii, queries, output, tree);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.point_tree_counts");
+    }
+
+    namespace {
+        __global__ void triangle_tree_parity(const float* points, const int32_t* visit, const float* triangles,
+                                             const float* boxes, int32_t* output, const PointTreeProgram tree) {
+            const size_t t = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (t >= tree.points)
+                return;
+            const auto i = static_cast<size_t>(visit[t]);
+            output[i] = triangleTreeParity(triangles, boxes, tree, points + i * 3);
+        }
+    } // namespace
+
+    void launch_triangle_tree_parity(const float* points, const int32_t* visit, const float* triangles,
+                                     const float* boxes, int32_t* output, const PointTreeProgram& tree,
+                                     const cudaStream_t stream) {
+        triangle_tree_parity<<<(tree.points + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+            points, visit, triangles, boxes, output, tree);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.triangle_tree_parity");
     }
 
     void launch_nearest_point_indices(const float* queries, const float* targets, int32_t* heads, int32_t* next, int32_t* output,

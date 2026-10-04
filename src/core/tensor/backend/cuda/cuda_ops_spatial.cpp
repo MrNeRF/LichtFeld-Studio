@@ -104,6 +104,16 @@ namespace lfs::core::internal {
         return true;
     }
 
+    bool CudaBackendOps::triangle_tree_parity(const StorageRef points, const StorageRef visit, const StorageRef triangles,
+                                              const StorageRef boxes, const StorageRef output,
+                                              const PointTreeProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(triangle_tree_parity);
+        tensor_ops::launch_triangle_tree_parity(cuda_pointer<const float>(points), cuda_pointer<const int32_t>(visit),
+                                                cuda_pointer<const float>(triangles), cuda_pointer<const float>(boxes),
+                                                cuda_pointer<int32_t>(output), program, context.cuda_stream);
+        return true;
+    }
+
     void CudaBackendOps::nearest_point_indices(StorageRef q, StorageRef t, StorageRef h, StorageRef n, StorageRef o,
                                                size_t nq, size_t nt, size_t buckets, float width, ExecContext context) {
         LFS_FACADE_TRACE(nearest_point_indices);

@@ -3,7 +3,10 @@
 #include "builtin_common.hpp"
 #include "core/tensor_fused.hpp"
 #include "core/tensor_spatial.hpp"
+
 #include <limits>
+#include <list>
+#include <mutex>
 namespace lfs::nodes::builtin {
 
     namespace {
@@ -257,84 +260,34 @@ namespace lfs::nodes::builtin {
                                             Tensor::where(usable, radii, Tensor::zeros_like(radii)), max_count, queries);
     }
 
-    const core::fused::Kernel& ray_parity_kernel() {
-        static const auto kernel = [] {
-            namespace f = core::fused;
-            f::Builder builder(2);
-            const auto points = builder.input(DataType::Float32, 2);
-            const auto vertices = builder.input(DataType::Float32, 2);
-            const auto edge1 = builder.input(DataType::Float32, 2);
-            const auto edge2 = builder.input(DataType::Float32, 2);
-            const auto point = builder.iota(0);
-            const auto triangle = builder.iota(1);
-            const auto component = [&](const f::Input& input, int axis) {
-                return input.gather({triangle, builder.constant(axis)});
-            };
-            const auto ax = component(vertices, 0);
-            const auto ay = component(vertices, 1);
-            const auto az = component(vertices, 2);
-            const auto e1x = component(edge1, 0);
-            const auto e1y = component(edge1, 1);
-            const auto e1z = component(edge1, 2);
-            const auto e2x = component(edge2, 0);
-            const auto e2y = component(edge2, 1);
-            const auto e2z = component(edge2, 2);
-            // Non-axis-aligned direction avoids the shared edges of axis-aligned boxes.
-            const auto px = 0.37139067f * e2z - 0.52911311f * e2y;
-            const auto py = 0.52911311f * e2x - e2z;
-            const auto pz = e2y - 0.37139067f * e2x;
-            const auto determinant = e1x * px + e1y * py + e1z * pz;
-            const auto inverse = 1.0f / determinant;
-            const auto tx = points.gather({point, builder.constant(0)}) - ax;
-            const auto ty = points.gather({point, builder.constant(1)}) - ay;
-            const auto tz = points.gather({point, builder.constant(2)}) - az;
-            const auto u = (tx * px + ty * py + tz * pz) * inverse;
-            const auto qx = ty * e1z - tz * e1y;
-            const auto qy = tz * e1x - tx * e1z;
-            const auto qz = tx * e1y - ty * e1x;
-            const auto v = (qx + 0.37139067f * qy + 0.52911311f * qz) * inverse;
-            const auto distance = (e2x * qx + e2y * qy + e2z * qz) * inverse;
-            const auto hit = (f::abs(determinant) > 1e-8f) && (u >= 0.0f) && (u <= 1.0f) && (v >= 0.0f) &&
-                             (u + v <= 1.0f) && (distance > 1e-7f);
-            builder.output(builder.fold(f::Fold::Count, hit, 1), DataType::Int32);
-            return f::Kernel(builder);
-        }();
-        return kernel;
-    }
+    namespace {
+        // The triangle index of one Inside Mesh field, built on first use on each device it is evaluated on.
+        class InsideMeshIndex {
+        public:
+            explicit InsideMeshIndex(std::shared_ptr<const core::MeshData> mesh) : mesh_(std::move(mesh)) {}
 
-    Tensor ray_hits(const Tensor& points, const Tensor& a, const Tensor& edge1, const Tensor& edge2) {
-        if (points.device() == Device::GPU)
-            return ray_parity_kernel()({points.shape()[0], a.shape()[0]}, {points, a, edge1, edge2})[0];
-        // CPU tensors use the same broadcast equations through public tensor ops;
-        // fused::Kernel requires at least one GPU input.
-        const auto e1x = channel(edge1, 0).unsqueeze(0);
-        const auto e1y = channel(edge1, 1).unsqueeze(0);
-        const auto e1z = channel(edge1, 2).unsqueeze(0);
-        const auto e2x = channel(edge2, 0).unsqueeze(0);
-        const auto e2y = channel(edge2, 1).unsqueeze(0);
-        const auto e2z = channel(edge2, 2).unsqueeze(0);
-        const auto px = e2z * 0.37139067f - e2y * 0.52911311f;
-        const auto py = e2x * 0.52911311f - e2z;
-        const auto pz = e2y - e2x * 0.37139067f;
-        const auto determinant = e1x * px + e1y * py + e1z * pz;
-        const auto tx = channel(points, 0).unsqueeze(1) - channel(a, 0).unsqueeze(0);
-        const auto ty = channel(points, 1).unsqueeze(1) - channel(a, 1).unsqueeze(0);
-        const auto tz = channel(points, 2).unsqueeze(1) - channel(a, 2).unsqueeze(0);
-        const auto u = (tx * px + ty * py + tz * pz) / determinant;
-        const auto qx = ty * e1z - tz * e1y;
-        const auto qy = tz * e1x - tx * e1z;
-        const auto qz = tx * e1y - ty * e1x;
-        const auto v = (qx + qy * 0.37139067f + qz * 0.52911311f) / determinant;
-        const auto distance = (e2x * qx + e2y * qy + e2z * qz) / determinant;
-        const auto hit = determinant.abs()
-                             .gt(1e-8f)
-                             .logical_and(u.ge(0))
-                             .logical_and(u.le(1))
-                             .logical_and(v.ge(0))
-                             .logical_and((u + v).le(1))
-                             .logical_and(distance.gt(1e-7f));
-        return hit.to(DataType::Float32).sum(1).to(DataType::Int32);
-    }
+            const core::TriangleRayIndex& on(const Tensor& positions) {
+                const std::lock_guard lock(mutex_);
+                const auto backend = core::gpu_backend_of(positions);
+                for (const auto& entry : built_)
+                    if (entry.device == positions.device() && entry.backend == backend)
+                        return entry.index;
+                const auto vertices = mesh_->vertices.to(positions.device());
+                const auto indices = mesh_->indices.to(positions.device()).to(DataType::Int32);
+                return built_.emplace_back(Entry{positions.device(), backend, core::TriangleRayIndex(vertices, indices)}).index;
+            }
+
+        private:
+            struct Entry {
+                Device device;
+                std::optional<core::GpuBackend> backend;
+                core::TriangleRayIndex index;
+            };
+            std::shared_ptr<const core::MeshData> mesh_;
+            std::mutex mutex_;
+            std::list<Entry> built_;
+        };
+    } // namespace
 
     void evaluate_inside_mesh(NodeContext& context) {
         const auto geometry = geometry_input(context, "Mesh");
@@ -343,50 +296,35 @@ namespace lfs::nodes::builtin {
         const auto mesh = geometry.mesh->mesh;
         context.set_output(
             "Selection",
-            operation(BOOL_SOCKET, {position_field()}, [mesh](const std::vector<Tensor>& values) {
-                const auto& positions = values[0];
-                const auto count = positions.shape()[0];
-                const auto device = positions.device();
-                auto result = Tensor::zeros({count}, device);
-                const auto triangles = mesh->indices.shape()[0];
-                if (!triangles || !count)
-                    return result.ne(0);
-                const auto vertices = mesh->vertices.to(device);
-                const auto indices = mesh->indices.to(device).to(DataType::Int32);
-                const auto minimum = vertices.min(0);
-                const auto maximum = vertices.max(0);
-                const auto in_bounds = positions.ge(minimum)
-                                           .logical_and(positions.le(maximum))
-                                           .to(DataType::Float32)
-                                           .sum(1)
-                                           .eq(3);
-                const auto eligible = in_bounds.nonzero().reshape({-1}).to(DataType::Int32);
-                if (!eligible.numel())
-                    return result.ne(0);
-                const auto candidates = positions.index_select(0, eligible);
-                const auto a = vertices.index_select(0, channel(indices, 0));
-                const auto edge1 = vertices.index_select(0, channel(indices, 1)) - a;
-                const auto edge2 = vertices.index_select(0, channel(indices, 2)) - a;
-                auto parity = Tensor::zeros({eligible.numel()}, device, DataType::Int32);
-                // Broadcast points against triangles in bounded tiles; fused reduction
-                // never materialises the point-by-triangle intermediates.
-                constexpr std::size_t pair_budget = 8 * 1024 * 1024;
-                for (std::size_t face = 0; face < triangles; face += 4096) {
-                    const auto faces = std::min<std::size_t>(4096, triangles - face);
-                    const auto points_per_chunk = std::max<std::size_t>(1, pair_budget / faces);
-                    for (std::size_t point = 0; point < eligible.numel(); point += points_per_chunk) {
-                        const auto points = std::min(points_per_chunk, eligible.numel() - point);
-                        auto hits = ray_hits(
-                            candidates.slice(0, point, point + points), a.slice(0, face, face + faces),
-                            edge1.slice(0, face, face + faces), edge2.slice(0, face, face + faces));
-                        auto destination = parity.slice(0, point, point + points);
-                        destination.copy_from(destination + hits);
-                    }
-                }
-                const auto hits = parity.to(DataType::Float32);
-                result.index_add_(0, eligible, hits - (hits / 2).floor() * 2);
-                return result.ne(0);
-            }));
+            operation(BOOL_SOCKET, {position_field()},
+                      [mesh, index = std::make_shared<InsideMeshIndex>(mesh)](const std::vector<Tensor>& values) {
+                          const auto& positions = values[0];
+                          const auto count = positions.shape()[0];
+                          const auto device = positions.device();
+                          auto result = Tensor::zeros({count}, device);
+                          if (!mesh->indices.numel() || !mesh->vertices.numel() || !count)
+                              return result.ne(0);
+                          const auto vertices = mesh->vertices.to(device);
+                          const auto in_bounds = positions.ge(vertices.min(0))
+                                                     .logical_and(positions.le(vertices.max(0)))
+                                                     .all(1);
+                          const auto eligible = in_bounds.nonzero().reshape({-1}).to(DataType::Int32);
+                          if (!eligible.numel())
+                              return result.ne(0);
+                          const auto candidates = positions.index_select(0, eligible).contiguous();
+                          const auto& triangles = index->on(positions);
+                          // Batches bound each launch so cancellation is noticed between them.
+                          constexpr std::size_t batch = std::size_t(1) << 20;
+                          std::vector<Tensor> inside;
+                          for (std::size_t first = 0; first < eligible.numel(); first += batch) {
+                              throw_if_evaluation_cancelled();
+                              inside.push_back(triangles.odd_crossings(
+                                  candidates.slice(0, first, std::min(first + batch, eligible.numel()))));
+                          }
+                          const auto hits = inside.size() == 1 ? inside.front() : Tensor::cat(inside, 0);
+                          result.index_add_(0, eligible, hits.to(DataType::Float32));
+                          return result.ne(0);
+                      }));
     }
 
     void evaluate_neighbour_count(NodeContext& context) {
