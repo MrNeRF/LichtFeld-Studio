@@ -28,6 +28,7 @@
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/event_bridge/control_boundary.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
@@ -2371,11 +2372,9 @@ namespace {
         std::filesystem::remove_all(output_path, ec);
         std::filesystem::create_directories(output_path);
 
-        // The gap lets the step save's writer finish, so the hook reaches the
-        // prepare path instead of being coalesced behind an active writer.
-        auto params = make_tiny_headless_params(output_path, 300);
+        auto params = make_tiny_headless_params(output_path, 4);
         params.optimization.save_steps = {1};
-        params.save_project_at_iteration = 200;
+        params.save_project_at_iteration = 3;
         params.save_project_path = output_path / "at_iteration.licht";
 
         lfs::core::Scene scene;
@@ -2384,10 +2383,35 @@ namespace {
         auto trainer = std::make_unique<lfs::training::Trainer>(scene);
         ASSERT_TRUE(trainer->initialize(params));
         lfs::training::grant_headless_project_saves(*trainer, params);
+
+        // The hook prepares at the step before its target. Waiting for the step
+        // save's writer there keeps the hook on the prepare path instead of
+        // coalescing it behind an active writer.
+        const auto step_save_path = output_path / "project.licht";
+        const auto step_save_written = [&](const lfs::training::Trainer& t) {
+            const auto metrics = t.get_project_snapshot_metrics();
+            return metrics.last_path == step_save_path && !metrics.writer_in_flight;
+        };
+        bool step_save_writer_finished = false;
+        auto& boundary = lfs::training::ControlBoundary::instance();
+        const auto handle = boundary.register_callback(
+            lfs::training::ControlHook::PostStep,
+            [&](const lfs::training::HookContext& ctx) {
+                if (ctx.iteration != 2 || !ctx.trainer)
+                    return;
+                const auto deadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(60);
+                while (!step_save_written(*ctx.trainer) &&
+                       std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                step_save_writer_finished = step_save_written(*ctx.trainer);
+            });
         auto train = trainer->train();
+        boundary.unregister_callback(lfs::training::ControlHook::PostStep, handle);
         ASSERT_TRUE(train)
             << lfs::format_for_developer(train.error());
         trainer->shutdown();
+        ASSERT_TRUE(step_save_writer_finished);
 
         auto document = lfs::io::project::ProjectDocument::open(
             params.save_project_path);
@@ -2409,7 +2433,7 @@ namespace {
             ASSERT_TRUE(header);
             iterations.push_back(header->iteration);
         }
-        EXPECT_NE(std::ranges::find(iterations, 200), iterations.end());
+        EXPECT_NE(std::ranges::find(iterations, 3), iterations.end());
 
         std::filesystem::remove_all(output_path, ec);
     }
