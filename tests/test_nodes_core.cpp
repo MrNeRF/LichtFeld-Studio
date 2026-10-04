@@ -2263,6 +2263,62 @@ namespace {
         EXPECT_TRUE(std::ranges::any_of(capped.errors, [](const auto& entry) { return entry.second.find("50 million") != std::string::npos; }));
     }
 
+    TEST_P(NodesCore, InstanceOnPointsKeepsShBeyondTheDegreeAndMatchesTheCpu) {
+        // Degree 1 with eight stored coefficients: the five beyond band 1 pass through unchanged, and a
+        // collapsed scale axis leaves every coefficient alone, on every device as on the CPU.
+        for (const glm::vec3 size : {glm::vec3(0.6f, 1.3f, 0.9f), glm::vec3(0.0f, 1.0f, 1.0f)}) {
+            SCOPED_TRACE(size.x);
+            const auto make = [&](const Device target) {
+                auto source = splats(1);
+                std::vector<float> sh(3 * 8 * 3);
+                for (size_t i = 0; i < sh.size(); ++i)
+                    sh[i] = 0.01f * float(i % 29) - 0.1f;
+                source.splats->shN = Tensor::from_vector(sh, {3, 8, 3}, Device::CPU).to(target);
+                source.splats->sh_degree = 1;
+                for (auto* value : {&source.splats->means, &source.splats->sh0, &source.splats->scaling,
+                                    &source.splats->rotation, &source.splats->opacity})
+                    *value = value->to(target);
+                for (auto& [_, value] : source.splats->attributes)
+                    value = value.to(target);
+                Geometry anchors;
+                anchors.points = PointsComponent{Tensor::from_vector(std::vector<float>{2, 3, 4, -1, 4, 2, 0, 0, 1}, {3, 3}, Device::CPU).to(target),
+                                                 Tensor::ones({3, 3}, target),
+                                                 {}};
+                NodeTree tree(registry_);
+                auto& node = tree.add_node("lfs.instance_on_points", "Scatter");
+                node.input_values["Points"] = anchors;
+                node.input_values["Instance"] = source;
+                node.input_values["Rotation"] = glm::vec3(23, -31, 47);
+                node.input_values["Scale"] = size;
+                tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"});
+                const auto result = evaluate(tree, {{}, {}, 1, target});
+                EXPECT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
+                return std::pair{result.geometry.splats, sh};
+            };
+            const auto [actual, sh] = make(device());
+            const auto [expected, unused] = make(Device::CPU);
+            (void)unused;
+            ASSERT_TRUE(actual && expected);
+            const auto shn = host<float>(actual->shN);
+            ASSERT_EQ(shn.size(), 3u * sh.size());
+            for (size_t copy = 0; copy < 3; ++copy)
+                for (size_t row = 0; row < 3; ++row)
+                    for (size_t k = 3; k < 8; ++k)
+                        for (size_t c = 0; c < 3; ++c)
+                            EXPECT_EQ(shn[((copy * 3 + row) * 8 + k) * 3 + c], sh[(row * 8 + k) * 3 + c]);
+            if (size.x == 0)
+                EXPECT_EQ(shn, host<float>(expected->shN));
+            for (const auto& pair : {std::pair{actual->means, expected->means}, std::pair{actual->shN, expected->shN},
+                                     std::pair{actual->scaling, expected->scaling}, std::pair{actual->rotation, expected->rotation}}) {
+                const auto got = host<float>(pair.first), want = host<float>(pair.second);
+                ASSERT_EQ(got.size(), want.size());
+                for (size_t i = 0; i < want.size(); ++i)
+                    if (std::isfinite(want[i]) || std::isfinite(got[i]))
+                        EXPECT_NEAR(got[i], want[i], 2e-5f) << i;
+            }
+        }
+    }
+
     TEST_P(NodesCore, InstanceOnPointsSupportsReflectionsAndCollapsedAxes) {
         for (const auto size : {glm::vec3(-1, 0.5f, 2), glm::vec3(0, 1, 2)}) {
             const auto source = splats(3);
