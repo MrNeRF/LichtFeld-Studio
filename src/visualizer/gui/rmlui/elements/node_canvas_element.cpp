@@ -983,7 +983,7 @@ namespace lfs::vis::gui {
                 element->SetClass("selected", selected_nodes_.contains(visual.interaction.id));
                 element->SetClass("muted", visual.muted);
                 element->SetClass("failed", !visual.error.empty());
-                element->SetClass("evaluating", busy_node_ == visual.interaction.id);
+                element->SetClass("is-evaluating", busy_node_ == visual.interaction.id);
                 element->SetAttribute("data-node", visual.interaction.id);
                 if (!visual.error.empty())
                     element->SetAttribute("title", visual.error);

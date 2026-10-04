@@ -342,11 +342,11 @@ namespace {
     LFS_FREEZE(T::stack, T (*)(const std::vector<T>&, int));
     LFS_FREEZE(T::rand, T (*)(S, Device, DataType));
     LFS_FREEZE(T::randn, T (*)(S, Device, DataType));
-    LFS_FREEZE(T::uniform, T (*)(S, float, float, Device, DataType));
+    LFS_FREEZE(T::uniform, T (*)(S, float, float, Device, DataType, std::optional<uint64_t>));
     LFS_FREEZE(T::normal, T (*)(S, float, float, Device, DataType));
     LFS_FREEZE(T::randint, T (*)(S, int, int, Device, DataType));
     LFS_FREEZE(T::bernoulli, T (*)(S, float, Device, DataType));
-    LFS_FREEZE(T::multinomial, T (*)(const T&, int, bool));
+    LFS_FREEZE(T::multinomial, T (*)(const T&, int, bool, std::optional<uint64_t>));
     LFS_FREEZE(T::rand_like, T (*)(const T&));
     LFS_FREEZE(T::randn_like, T (*)(const T&));
     LFS_FREEZE(T::manual_seed, void (*)(uint64_t));
@@ -796,7 +796,7 @@ namespace {
         t.div_(1.0f);
         ct + ct;
         ct - ct;
-        ct* ct;
+        ct * ct;
         ct / ct;
         ct % ct;
         ct == ct;
@@ -805,7 +805,7 @@ namespace {
         ct <= ct;
         ct > ct;
         ct >= ct;
-        ct&& ct;
+        ct && ct;
         ct || ct;
         ct | ct;
     };
@@ -1153,9 +1153,9 @@ namespace {
         TensorLeaf(t).stream_hint();
         TensorLeaf(t).snapshot();
         TensorLeaf(t).map(operation);
-        ct.template apply([](const X& value) { return value; });
+        ct.template apply([](const X & value) { return value; });
         t.template inplace([](X&) {});
-        ct.template timed("", [](const X& value) { return value; });
+        ct.template timed("", [](const X & value) { return value; });
     };
 
     using LeafExpr = TensorLeaf;
@@ -1258,7 +1258,7 @@ namespace {
         row = 1.0f;
         const_row - const_row;
         const_row + const_row;
-        const_row* const_row;
+        const_row * const_row;
         const_row / const_row;
         const_row - 1.0f;
         const_row + 1.0f;

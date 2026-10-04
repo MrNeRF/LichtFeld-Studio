@@ -314,8 +314,9 @@ APPEARANCE_RUNS = _basic_runs(
     _run("appearance_tuning", "ppisp_lr", "ppisp_reg_weight", "ppisp_warmup_steps",
          visibility_condition_id="dep_ppisp_params"),
 )
-EVALUATION_RUNS = tuple(run for run in DATASET_RUNS if run.id in {"dataset_eval", "dataset_eval_train", "dataset_eval_space"})
-DATASET_RUNS = tuple(run for run in DATASET_RUNS if run.id not in {"dataset_eval", "dataset_eval_train", "dataset_eval_space"})
+_EVALUATION_RUN_IDS = {"dataset_eval", "dataset_eval_train", "dataset_eval_space", "dataset_eval_mask_invert"}
+EVALUATION_RUNS = tuple(run for run in DATASET_RUNS if run.id in _EVALUATION_RUN_IDS)
+DATASET_RUNS = tuple(run for run in DATASET_RUNS if run.id not in _EVALUATION_RUN_IDS)
 
 SECTIONS = (
     SectionSpec("basic_params", "training.section.method", METHOD_RUNS),

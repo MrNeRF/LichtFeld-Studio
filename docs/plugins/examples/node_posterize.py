@@ -38,9 +38,9 @@ class PosterizeExample(lf.nodes.Node):
         }
 
 
-def register():
+def on_load():
     lf.nodes.register_node(PosterizeExample)
 
 
-def unregister():
+def on_unload():
     lf.nodes.unregister_node(PosterizeExample.id)

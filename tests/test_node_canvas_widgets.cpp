@@ -971,13 +971,13 @@ namespace {
         const auto link_count = canvas->viewState()["links"];
         manager.tick();
         context_->Update();
-        EXPECT_FALSE(card->IsClassSet("evaluating"));
+        EXPECT_FALSE(card->IsClassSet("is-evaluating"));
         for (int attempt = 0; attempt < 100 && manager.progress().node != "Correct"; ++attempt)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         std::this_thread::sleep_for(std::chrono::milliseconds(90));
         context_->Update();
         context_->Render();
-        EXPECT_TRUE(card->IsClassSet("evaluating"));
+        EXPECT_TRUE(card->IsClassSet("is-evaluating"));
         EXPECT_EQ(canvas->viewState()["nodes"].size(), node_count);
         EXPECT_EQ(canvas->viewState()["links"], link_count);
         pointer("mousedown", 600, 65);
@@ -993,7 +993,7 @@ namespace {
         EXPECT_EQ(canvas->QuerySelector(".node-box[data-node=Correct]"), card);
         EXPECT_EQ(canvas->viewState()["nodes"].size(), node_count);
         EXPECT_EQ(canvas->viewState()["links"], link_count);
-        EXPECT_FALSE(card->IsClassSet("evaluating"));
+        EXPECT_FALSE(card->IsClassSet("is-evaluating"));
     }
 
     TEST_F(NodeCanvasWidgets, InspectorKeepsFullWidthAcrossPatches) {

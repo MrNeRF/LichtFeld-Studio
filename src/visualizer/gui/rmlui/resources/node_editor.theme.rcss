@@ -163,7 +163,7 @@
 .node-progress {
     background-color: @{primary};
 }
-.node-box.evaluating {
+.node-box.is-evaluating {
     border-color: @{primary};
 }
 .node-box.queued {
