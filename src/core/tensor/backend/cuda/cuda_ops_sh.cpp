@@ -21,6 +21,10 @@ namespace lfs::core::internal {
             if (p.source_format == ShFormat::Q16)
                 sh_value_quant::encode_shN_u16_gathered(data<uint16_t>(source), data<float>(*program.source_bounds), ids,
                                                         data<uint16_t>(destination), data<float>(*program.destination_bounds), p.count, p.source_rows, p.source_rest, stream);
+            else if (p.source_format == ShFormat::Canonical)
+                sh_value_quant::encode_shN_canonical_to_u16(src + p.source_offset * p.source_rest * 3, data<uint16_t>(destination),
+                                                            data<float>(*program.destination_bounds), p.count, p.source_rest,
+                                                            p.destination_rest, stream);
             else
                 sh_value_quant::encode_shN_float4_to_u16(src, data<uint16_t>(destination), data<float>(*program.destination_bounds), p.count, p.source_rest, stream);
         } else if (p.source_format == ShFormat::Q16) {

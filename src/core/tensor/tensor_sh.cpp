@@ -152,10 +152,12 @@ namespace lfs::core {
                     sh_codec(tmp, destination, next, indices ? &ids : nullptr, nullptr, destination_bounds);
                     return;
                 }
-                if (p.destination_format == ShFormat::Q16 &&
-                    !(p.source_rest == p.destination_rest && !p.scatter &&
-                      ((p.source_format == ShFormat::Q16 && indices) ||
-                       (p.source_format == ShFormat::Float32 && !indices && p.source_offset == 0)))) {
+                const bool direct_q16 =
+                    !p.scatter && ((p.source_format == ShFormat::Canonical && !indices) ||
+                                   (p.source_rest == p.destination_rest &&
+                                    ((p.source_format == ShFormat::Q16 && indices) ||
+                                     (p.source_format == ShFormat::Float32 && !indices && p.source_offset == 0))));
+                if (p.destination_format == ShFormat::Q16 && !direct_q16) {
                     Tensor tmp = internal::allocate_zeros_like(source, {sh_swizzled_float_count(p.count, p.destination_rest)}, DataType::Float32);
                     auto next = p;
                     next.destination_format = ShFormat::Float32;
