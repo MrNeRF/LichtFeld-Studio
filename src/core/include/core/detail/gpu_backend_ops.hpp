@@ -166,6 +166,15 @@ namespace lfs::core {
                                              StorageRef heads, StorageRef next, StorageRef output,
                                              size_t count, size_t buckets, float radius,
                                              std::optional<StorageRef> radii, ExecContext context) = 0;
+            // Writes the radius-graph component of every referenced point into labels, which holds each point's
+            // own index on entry: the smallest index of its component. Returns false, writing nothing, when the
+            // backend has no kernel for it.
+            virtual bool radius_connected_components(StorageRef /*points*/, StorageRef /*references*/,
+                                                     StorageRef /*heads*/, StorageRef /*next*/, StorageRef /*labels*/,
+                                                     size_t /*count*/, size_t /*buckets*/, float /*radius*/,
+                                                     ExecContext /*context*/) {
+                return false;
+            }
             virtual void point_neighbor_spacing(StorageRef points, StorageRef references,
                                                 StorageRef heads, StorageRef next, StorageRef output,
                                                 size_t count, size_t buckets, float cell_width, ExecContext context) = 0;
@@ -494,6 +503,9 @@ namespace lfs::core {
                                      StorageRef heads, StorageRef next, StorageRef output,
                                      size_t count, size_t buckets, float radius,
                                      std::optional<StorageRef> radii, ExecContext context) override;
+            bool radius_connected_components(StorageRef points, StorageRef references, StorageRef heads,
+                                             StorageRef next, StorageRef labels, size_t count, size_t buckets,
+                                             float radius, ExecContext context) override;
             void point_neighbor_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                         size_t, size_t, float, ExecContext) override;
             void project_points(StorageRef points, StorageRef output, size_t count,

@@ -194,6 +194,107 @@ namespace lfs::core {
         return output;
     }
 
+    namespace {
+        // Minimum-label propagation, shortcut to a fixed point after every round, for backends without a
+        // connected-components kernel. Labels only move within a component and every round lowers or keeps
+        // them, so a round that changes nothing leaves each component on its smallest index.
+        Tensor propagate_components(const Tensor& points, const Tensor& own, const Tensor& selected, const float radius) {
+            // Unselected points carry a label above every index, so they never lower a selected one.
+            const auto sentinel = Tensor::full({own.numel()}, 1'000'000'000.0f, own.device(), DataType::Int32);
+            auto labels = selected.is_valid() ? Tensor::where(selected, own, sentinel) : own;
+            for (;;) {
+                auto next = radius_neighbor_min(points, labels, radius);
+                if (selected.is_valid())
+                    next = Tensor::where(selected, next, sentinel);
+                for (;;) {
+                    const auto index = selected.is_valid() ? Tensor::where(selected, next, own) : next;
+                    auto jumped = next.index_select(0, index);
+                    if (jumped.ne(next).count_nonzero() == 0)
+                        break;
+                    next = std::move(jumped);
+                }
+                if (next.ne(labels).count_nonzero() == 0)
+                    return selected.is_valid() ? Tensor::where(selected, next, own) : next;
+                labels = std::move(next);
+            }
+        }
+    } // namespace
+
+    Tensor radius_connected_components(const Tensor& points, const float radius, const Tensor& selected) {
+        LFS_ASSERT_MSG(points.is_valid() && points.ndim() == 2 && points.size(1) == 3 &&
+                           points.dtype() == DataType::Float32,
+                       std::format("radius_connected_components requires Float32 [N,3] points (valid={}, rank={}, columns={}, dtype={})",
+                                   points.is_valid(), points.ndim(), points.ndim() == 2 ? points.size(1) : 0,
+                                   points.is_valid() ? static_cast<int>(points.dtype()) : -1));
+        LFS_ASSERT_MSG(std::isnormal(radius) && radius > 0.0f,
+                       std::format("radius_connected_components radius must be positive, finite and normal (radius={})", radius));
+        const size_t count = points.size(0);
+        LFS_ASSERT_MSG(count <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+                       std::format("radius_connected_components point count exceeds int32 (count={})", count));
+        if (selected.is_valid()) {
+            LFS_ASSERT_MSG(selected.ndim() == 1 && selected.numel() == count && selected.dtype() == DataType::Bool &&
+                               selected.device() == points.device(),
+                           "radius_connected_components selection must be a Bool [N] tensor on the points' device");
+            internal::require_same_gpu_backend(points, selected, "radius_connected_components");
+        }
+        auto labels = (internal::allocate_like(points, TensorShape{count}, DataType::Int32, 1.0f).cumsum(0) - 1)
+                          .to(DataType::Int32)
+                          .contiguous();
+        if (!count)
+            return labels;
+        const auto positions = points.contiguous();
+        const auto references = selected.is_valid()
+                                    ? selected.contiguous()
+                                    : internal::allocate_like(points, TensorShape{count}, DataType::Bool, 1.0f);
+        const size_t buckets = std::bit_ceil(count);
+        const auto bucket_mask = static_cast<uint32_t>(buckets - 1);
+        if (points.device() == Device::GPU) {
+            auto heads = internal::allocate_like(points, TensorShape{buckets}, DataType::Int32, -1.0f);
+            auto next = internal::allocate_like(points, TensorShape{count}, DataType::Int32);
+            pin_operands({&positions, &references, &heads, &next, &labels});
+            const auto stream = prepare_inputs_for_stream({&positions, &references, &heads, &next}, labels.stream());
+            if (internal::backend_ops_for(positions).radius_connected_components(
+                    internal::storage_ref(positions), internal::storage_ref(references), internal::storage_ref(heads),
+                    internal::storage_ref(next), internal::storage_ref(labels), count, buckets, radius,
+                    internal::ExecContext{stream}))
+                return labels;
+            return propagate_components(positions, labels, selected, radius);
+        }
+        const auto* xyz = positions.ptr<float>();
+        const auto* use = references.ptr<bool>();
+        std::vector<int32_t> heads(buckets, -1), next(count, -1);
+        for (size_t i = 0; i < count; ++i) {
+            const auto* p = xyz + i * 3;
+            if (!use[i] || !finite_point(p))
+                continue;
+            const auto bucket = hash_cell(cell(p[0], radius), cell(p[1], radius), cell(p[2], radius), bucket_mask);
+            next[i] = heads[bucket];
+            heads[bucket] = static_cast<int32_t>(i);
+        }
+        auto* parent = labels.ptr<int32_t>();
+        for (size_t i = 0; i < count; ++i) {
+            if (!use[i])
+                continue;
+            forEachRadiusNeighbor(xyz, heads.data(), next.data(), i, bucket_mask, radius, [&](const int32_t j) {
+                if (static_cast<size_t>(j) <= i)
+                    return;
+                const int32_t a = componentRoot(parent, static_cast<int32_t>(i));
+                const int32_t b = componentRoot(parent, j);
+                if (a < b)
+                    parent[b] = a;
+                else if (b < a)
+                    parent[a] = b;
+            });
+        }
+        for (size_t i = 0; i < count; ++i)
+            parent[i] = componentRoot(parent, static_cast<int32_t>(i));
+        return labels;
+    }
+
+    Tensor radius_connected_components(const Tensor& points, const float radius) {
+        return radius_connected_components(points, radius, Tensor{});
+    }
+
     Tensor point_neighbor_spacing(const Tensor& points, const float cell_width) {
         LFS_ASSERT_MSG(points.is_valid() && points.ndim() == 2,
                        std::format("point_neighbor_spacing requires rank-2 points (valid={}, rank={})", points.is_valid(), points.ndim()));

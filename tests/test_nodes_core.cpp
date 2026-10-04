@@ -24,6 +24,7 @@
 #include <iostream>
 #include <limits>
 #include <numbers>
+#include <numeric>
 #include <optional>
 #include <random>
 #include <string_view>
@@ -1728,6 +1729,79 @@ namespace {
         EXPECT_THROW(lfs::core::radius_neighbor_counts(points, references, 1.0f, 0), std::exception);
         const auto empty = lfs::core::radius_neighbor_counts(Tensor::empty({0, 3}, device()), Tensor::full_bool({0}, true, device()), 1.0f, 3);
         EXPECT_EQ(empty.numel(), 0u);
+    }
+
+    // Fails if components are cut short (the old label propagation stopped after 64 rounds, splitting long chains),
+    // if a point outside the selection still bridges two components, or if a backend labels differently.
+    // Fails if the indexed spacing query differs from the full one at the same points, or skips duplicates.
+    TEST_P(NodesCore, RadiusConnectedComponentsMatchBruteForce) {
+        const auto reference = [](const std::vector<float>& xyz, const std::vector<bool>& selected, const float radius) {
+            const size_t count = xyz.size() / 3;
+            std::vector<int> parent(count);
+            std::iota(parent.begin(), parent.end(), 0);
+            const auto root = [&](int x) {
+                while (parent[x] != x)
+                    x = parent[x] = parent[parent[x]];
+                return x;
+            };
+            for (size_t i = 0; i < count; ++i) {
+                if (!selected[i] || !std::isfinite(xyz[i * 3]) || !std::isfinite(xyz[i * 3 + 1]) || !std::isfinite(xyz[i * 3 + 2]))
+                    continue;
+                for (size_t j = i + 1; j < count; ++j) {
+                    if (!selected[j])
+                        continue;
+                    float squared = 0;
+                    for (int axis = 0; axis < 3; ++axis) {
+                        const float delta = xyz[i * 3 + axis] - xyz[j * 3 + axis];
+                        squared += delta * delta;
+                    }
+                    if (squared <= radius * radius) {
+                        const int a = root(int(i)), b = root(int(j));
+                        parent[std::max(a, b)] = std::min(a, b);
+                    }
+                }
+            }
+            std::vector<int> labels(count);
+            for (size_t i = 0; i < count; ++i)
+                labels[i] = root(int(i));
+            return labels;
+        };
+        const auto check = [&](const std::vector<float>& xyz, const std::vector<bool>& selected, const float radius) {
+            const size_t count = xyz.size() / 3;
+            const auto points = tensor(xyz, {count, 3});
+            const bool all = std::ranges::all_of(selected, [](bool value) { return value; });
+            std::vector<float> mask(selected.begin(), selected.end());
+            const auto actual = all ? lfs::core::radius_connected_components(points, radius)
+                                    : lfs::core::radius_connected_components(points, radius, tensor(mask, {count}).to(lfs::core::DataType::Bool));
+            EXPECT_EQ(actual.device(), device());
+            EXPECT_EQ(actual.dtype(), lfs::core::DataType::Int32);
+            EXPECT_EQ(host<int>(actual), reference(xyz, selected, radius));
+        };
+        std::mt19937 random(5171);
+        std::uniform_real_distribution<float> coordinate(-2.0f, 2.0f);
+        constexpr size_t count = 1500;
+        std::vector<float> xyz(count * 3);
+        for (auto& value : xyz)
+            value = coordinate(random);
+        std::copy_n(xyz.begin(), 3, xyz.begin() + 3);
+        xyz[30] = std::numeric_limits<float>::quiet_NaN();
+        std::vector<bool> every(count, true), some(count);
+        for (size_t i = 0; i < count; ++i)
+            some[i] = i % 7 != 0;
+        for (const float radius : {0.05f, 0.3f, 0.6f}) {
+            check(xyz, every, radius);
+            check(xyz, some, radius);
+        }
+        // A chain far longer than any fixed number of propagation rounds, cut once by the selection.
+        constexpr size_t chain = 5000;
+        std::vector<float> line(chain * 3, 0.0f);
+        for (size_t i = 0; i < chain; ++i)
+            line[i * 3] = 0.009f * static_cast<float>(chain - 1 - i);
+        std::vector<bool> cut(chain, true);
+        cut[2500] = false;
+        check(line, std::vector<bool>(chain, true), 0.01f);
+        check(line, cut, 0.01f);
+        EXPECT_EQ(lfs::core::radius_connected_components(Tensor::empty({0, 3}, device()), 1.0f).numel(), 0u);
     }
 
     TEST_P(NodesCore, RadiusNeighborMinMatchesBruteForceForFloatAndInt) {

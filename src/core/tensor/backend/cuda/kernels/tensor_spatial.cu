@@ -61,6 +61,39 @@ namespace lfs::core::tensor_ops {
             if (i < count)
                 output[i] = pointNeighborMin(points, values, heads, next, i, bucket_mask, radius, radii);
         }
+        // Hooks the larger root under the smaller one for every neighbour pair (lock-free union-find). A failed
+        // exchange returns the root's new, smaller parent, so each retry climbs and the loop ends.
+        __global__ void union_components(const float* points, const uint8_t* references, const int32_t* heads,
+                                         const int32_t* next, int32_t* parent, const size_t count,
+                                         const uint32_t bucket_mask, const float radius) {
+            const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (i >= count || !references[i])
+                return;
+            int32_t mine = componentRoot(parent, static_cast<int32_t>(i));
+            forEachRadiusNeighbor(points, heads, next, i, bucket_mask, radius, [&](const int32_t j) {
+                if (static_cast<size_t>(j) <= i)
+                    return;
+                int32_t other = componentRoot(parent, j);
+                while (mine != other) {
+                    if (mine < other) {
+                        const int32_t seen = atomicCAS(parent + other, other, mine);
+                        if (seen == other)
+                            break;
+                        other = seen;
+                    } else {
+                        const int32_t seen = atomicCAS(parent + mine, mine, other);
+                        if (seen == mine)
+                            break;
+                        mine = seen;
+                    }
+                }
+            });
+        }
+        __global__ void flatten_components(int32_t* parent, const size_t count) {
+            const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (i < count)
+                parent[i] = finalComponentRoot(parent, static_cast<int32_t>(i));
+        }
         __global__ void query_spacing(const float* points, const int32_t* heads, const int32_t* next,
                                       float* output, size_t count, uint32_t bucket_mask, float radius) {
             const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -220,6 +253,19 @@ namespace lfs::core::tensor_ops {
                                                          static_cast<int32_t*>(output), count, bucket_mask, radius, radii);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_neighbor_min.query_int");
         }
+    }
+
+    void launch_radius_connected_components(const float* points, const uint8_t* references, int32_t* heads,
+                                            int32_t* next, int32_t* labels, const size_t count, const size_t buckets,
+                                            const float radius, const cudaStream_t stream) {
+        const auto bucket_mask = static_cast<uint32_t>(buckets - 1);
+        const auto blocks = static_cast<unsigned int>((count + kBlockSize - 1) / kBlockSize);
+        build<<<blocks, kBlockSize, 0, stream>>>(points, references, heads, next, count, bucket_mask, radius, 0);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_connected_components.build");
+        union_components<<<blocks, kBlockSize, 0, stream>>>(points, references, heads, next, labels, count, bucket_mask, radius);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_connected_components.union");
+        flatten_components<<<blocks, kBlockSize, 0, stream>>>(labels, count);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_connected_components.flatten");
     }
 
     void launch_radius_neighbors(const float* points, const uint8_t* references, int32_t* heads,

@@ -297,7 +297,7 @@ namespace lfs::nodes::builtin {
             }
             mesh->vertices = core::Tensor::cat(verts, 0);
             mesh->indices = core::Tensor::cat(idx, 0);
-            const auto join_vertex_data = [&](Tensor core::MeshData::*member, size_t channels,
+            const auto join_vertex_data = [&](Tensor core::MeshData::* member, size_t channels,
                                               float fallback) {
                 if (!std::ranges::any_of(meshes, [&](const auto& source) {
                         return (source.get()->*member).is_valid();
@@ -344,23 +344,7 @@ namespace lfs::nodes::builtin {
     }
 
     Tensor selected_component_labels(const Tensor& positions, const Tensor& selected, float radius) {
-        const size_t count = positions.shape()[0];
-        const auto indices = integer_range(count, positions.device());
-        // Keep the sentinel exactly representable as Float32 because Tensor::full takes a float scalar.
-        const auto sentinel = Tensor::full({count}, 1'000'000'000.0f,
-                                           positions.device(), DataType::Int32);
-        auto labels = Tensor::where(selected, indices, sentinel);
-        for (int iteration = 0; iteration < 64; ++iteration) {
-            auto next = core::radius_neighbor_min(positions, labels, radius);
-            const auto safe = Tensor::where(selected, next, indices);
-            next = next.minimum(labels.index_select(0, safe));
-            next = Tensor::where(selected, next, sentinel);
-            const bool stable = next.ne(labels).count_nonzero() == 0;
-            labels = std::move(next);
-            if (stable)
-                break;
-        }
-        return Tensor::where(selected, labels, indices).to(DataType::Int32);
+        return core::radius_connected_components(positions, radius, selected.to(DataType::Bool));
     }
 
     Tensor cluster_average(const Tensor& values, const Tensor& labels, const Tensor& leaders) {
@@ -439,19 +423,11 @@ namespace lfs::nodes::builtin {
             const auto opacity_order = splats.opacity.sort(0, true).second.to(DataType::Int32);
             auto ranks = Tensor::zeros({count}, splats.means.device(), DataType::Int32);
             ranks.scatter_(0, opacity_order, integer_range(count, splats.means.device()));
-            const auto indices = integer_range(count, splats.means.device());
-            const auto sentinel = Tensor::full({count}, 1'000'000'000.0f,
-                                               splats.means.device(), DataType::Int32);
-            auto best = Tensor::where(selected, ranks, sentinel);
-            for (int iteration = 0; iteration < 64; ++iteration) {
-                auto next = core::radius_neighbor_min(splats.means, best, radius);
-                next = Tensor::where(selected, next, sentinel);
-                const bool stable = next.ne(best).count_nonzero() == 0;
-                best = std::move(next);
-                if (stable)
-                    break;
-            }
-            const auto keep = selected.logical_not().logical_or(ranks.eq(best));
+            // In opacity order, each component's smallest index is its most opaque splat.
+            const auto labels = core::radius_connected_components(splats.means.index_select(0, opacity_order), radius,
+                                                                  selected.to(DataType::Bool).index_select(0, opacity_order));
+            const auto leaders = labels.eq(integer_range(count, splats.means.device())).index_select(0, ranks);
+            const auto keep = selected.logical_not().logical_or(leaders);
             splats = filter_splats(splats, keep);
         }
         context.set_output("Geometry", std::move(geometry));

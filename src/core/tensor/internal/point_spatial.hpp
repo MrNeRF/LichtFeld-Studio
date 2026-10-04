@@ -124,6 +124,53 @@ namespace lfs::core::internal {
         }
         return result;
     }
+    // Calls visit(j) for every point j within radius of point i, including i itself.
+    template <class Visit>
+    LFS_POINT_HD inline void forEachRadiusNeighbor(const float* points, const int32_t* heads, const int32_t* next,
+                                                   const size_t i, const uint32_t bucket_mask, const float radius,
+                                                   Visit&& visit) {
+        const float* p = points + i * 3;
+        if (!finite_point(p))
+            return;
+        const int cx = cell(p[0], radius), cy = cell(p[1], radius), cz = cell(p[2], radius);
+        for (int dz = -1; dz <= 1; ++dz) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int tx = cx + dx, ty = cy + dy, tz = cz + dz;
+                    for (int32_t j = heads[hash_cell(tx, ty, tz, bucket_mask)]; j >= 0; j = next[j]) {
+                        const float* q = points + static_cast<size_t>(j) * 3;
+                        if (cell(q[0], radius) == tx && cell(q[1], radius) == ty && cell(q[2], radius) == tz &&
+                            within(p, q, radius))
+                            visit(j);
+                    }
+                }
+            }
+        }
+    }
+
+    // Union-find over a forest whose parents never exceed their children, so every root is the smallest index
+    // in its tree. Path halving only writes smaller ancestors, so concurrent finds stay valid.
+    LFS_POINT_HD inline int32_t componentRoot(int32_t* parent, const int32_t node) {
+        int32_t current = parent[node];
+        if (current != node) {
+            int32_t ancestor = 0, previous = node;
+            while (current > (ancestor = parent[current])) {
+                parent[previous] = ancestor;
+                previous = current;
+                current = ancestor;
+            }
+        }
+        return current;
+    }
+
+    // The root without path halving, for the final labels: halving there could overwrite a label another
+    // thread already finished with an older ancestor.
+    LFS_POINT_HD inline int32_t finalComponentRoot(const int32_t* parent, int32_t node) {
+        for (int32_t ancestor = parent[node]; ancestor != node; ancestor = parent[node])
+            node = ancestor;
+        return node;
+    }
+
     LFS_POINT_HD inline float pointNeighborSpacing(const float* points, const int32_t* heads,
                                                    const int32_t* next, size_t i, uint32_t bucket_mask,
                                                    float radius) {

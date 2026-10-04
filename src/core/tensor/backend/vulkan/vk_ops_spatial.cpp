@@ -192,6 +192,47 @@ namespace lfs::core::internal {
                     std::nullopt, 0, false, values, radii);
     }
 
+    bool VulkanBackendOps::radius_connected_components(const StorageRef points, const StorageRef references,
+                                                       const StorageRef heads, const StorageRef next,
+                                                       const StorageRef labels, const size_t count,
+                                                       const size_t buckets, const float radius, ExecContext) {
+        LFS_FACADE_TRACE(radius_connected_components);
+        const auto context = acquire_vulkan_context();
+        const RadiusPush push{
+            .points = vk::address(points),
+            .references = vk::address(references),
+            .heads = vk::address(heads),
+            .next = vk::address(next),
+            .output = vk::address(labels),
+            .queries = 0,
+            .values = 0,
+            .count = static_cast<uint32_t>(count),
+            .bucket_mask = static_cast<uint32_t>(buckets - 1),
+            .radius = radius,
+            .exclude_self = 0,
+            .query_begin = 0,
+            .query_end = static_cast<uint32_t>(count),
+        };
+        const auto dispatch = [&](const uint32_t mode, const std::span<const StorageRef> reads,
+                                  const std::span<const StorageRef> writes) {
+            const std::array constants{mode};
+            const auto& pipeline = context->pipelines().specialized("radius_neighbors", sizeof(push), constants);
+            context->recorders().record(reads, writes, [&](const VkCommandBuffer command) {
+                vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+                vkCmdPushConstants(command, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+                vkCmdDispatch(command, vk::dispatch_groups(*context, count), 1, 1);
+            });
+        };
+        const std::array build_reads{points, references, heads};
+        const std::array build_writes{heads, next};
+        dispatch(0, build_reads, build_writes);
+        const std::array union_reads{points, references, heads, next, labels};
+        const std::array labels_only{labels};
+        dispatch(6, union_reads, labels_only);
+        dispatch(7, labels_only, labels_only);
+        return true;
+    }
+
     void VulkanBackendOps::rasterize_points(const PointRasterProgram& program, ExecContext) {
         LFS_FACADE_TRACE(rasterize_points);
         const auto context = acquire_vulkan_context();

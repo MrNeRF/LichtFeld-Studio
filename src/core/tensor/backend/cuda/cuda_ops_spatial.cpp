@@ -65,6 +65,18 @@ namespace lfs::core::internal {
             count, buckets, radius, radii ? cuda_pointer<const float>(*radii) : nullptr, context.cuda_stream);
     }
 
+    bool CudaBackendOps::radius_connected_components(const StorageRef points, const StorageRef references,
+                                                     const StorageRef heads, const StorageRef next,
+                                                     const StorageRef labels, const size_t count,
+                                                     const size_t buckets, const float radius,
+                                                     const ExecContext context) {
+        LFS_FACADE_TRACE(radius_connected_components);
+        tensor_ops::launch_radius_connected_components(
+            cuda_pointer<const float>(points), cuda_pointer<const uint8_t>(references), cuda_pointer<int32_t>(heads),
+            cuda_pointer<int32_t>(next), cuda_pointer<int32_t>(labels), count, buckets, radius, context.cuda_stream);
+        return true;
+    }
+
     void CudaBackendOps::nearest_point_indices(StorageRef q, StorageRef t, StorageRef h, StorageRef n, StorageRef o,
                                                size_t nq, size_t nt, size_t buckets, float width, ExecContext context) {
         LFS_FACADE_TRACE(nearest_point_indices);

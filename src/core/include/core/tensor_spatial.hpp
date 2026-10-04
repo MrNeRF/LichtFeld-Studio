@@ -149,6 +149,13 @@ namespace lfs::core {
     LFS_CORE_API Tensor radius_neighbor_min(const Tensor& points, const Tensor& values, float radius,
                                             const Tensor* radii = nullptr);
 
+    // Connected components of the inclusive radius graph over Float32 [N,3]
+    // points. Int32 [N] labels; each label is the smallest index in its
+    // component. Points outside the optional Bool [N] selection, and
+    // nonfinite points, are their own component and connect nothing.
+    LFS_CORE_API Tensor radius_connected_components(const Tensor& points, float radius);
+    LFS_CORE_API Tensor radius_connected_components(const Tensor& points, float radius, const Tensor& selected);
+
     // Exact nearest target for each Float32 [N,3] query. Int32 [N] indices,
     // ties choose the first target; empty targets/nonfinite queries return -1.
     // A sparse grid searches expanding shells and falls back to an exact scan
