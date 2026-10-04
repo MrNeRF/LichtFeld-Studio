@@ -3260,6 +3260,29 @@ namespace {
         EXPECT_EQ(limited.geometry.splats->means.shape()[0], 31u);
     }
 
+    TEST_P(NodesCore, MeshToSplatsPlacesTheSameSamplesOnEveryBackend) {
+        const auto mesh = torus(24, 12);
+        NodeTree tree(registry_);
+        Node& node = tree.add_node("lfs.mesh_to_splats");
+        node.input_values["Density"] = 200.0f;
+        node.properties["seed"] = 1234567;
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", node.name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"}));
+        const auto here = evaluate(tree, {geometry_from_mesh(mesh), {}, 1});
+        const auto cpu = lfs::nodes::evaluate(tree, {geometry_from_mesh(mesh), {}, 1, Device::CPU});
+        ASSERT_TRUE(here.ok && cpu.ok);
+        ASSERT_TRUE(here.geometry.splats && cpu.geometry.splats);
+        EXPECT_EQ(here.geometry.splats->means.device(), device());
+        const auto actual = host<float>(here.geometry.splats->means);
+        const auto expected = host<float>(cpu.geometry.splats->means);
+        ASSERT_EQ(actual.size(), expected.size());
+        ASSERT_GT(actual.size(), 3 * 4000u);
+        size_t mismatches = 0;
+        for (size_t i = 0; i < actual.size(); ++i)
+            mismatches += std::abs(actual[i] - expected[i]) > 1e-5f;
+        EXPECT_EQ(mismatches, 0u);
+    }
+
     TEST_P(NodesCore, MeshToSplatsUsesVertexMaterialAndTextureColours) {
         auto mesh = std::make_shared<lfs::core::MeshData>(
             tensor({0, 0, 0, 1, 0, 0, 0, 1, 0, 3, 0, 0, 4, 0, 0, 3, 1, 0}, {6, 3}),
