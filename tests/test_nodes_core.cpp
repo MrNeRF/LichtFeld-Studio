@@ -1038,7 +1038,7 @@ namespace {
         NodeTypeRegistry registry;
         register_builtin_nodes(registry);
         for (const auto* id : {"lfs.set_colour", "lfs.transform_geometry", "lfs.colour_correct", "lfs.group_input", "lfs.group_output",
-                               "lfs.reroute"})
+                               "lfs.reroute", "lfs.rgb_curves", "lfs.store_named_attribute"})
             EXPECT_TRUE(registry.find(id)->keeps_elements) << id;
         for (const auto* id : {"lfs.join_geometry", "lfs.separate_geometry", "lfs.delete_geometry",
                                "lfs.remove_floaters", "lfs.object_info", "lfs.splats_to_points"})

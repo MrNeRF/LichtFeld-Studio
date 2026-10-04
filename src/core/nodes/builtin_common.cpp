@@ -244,10 +244,11 @@ namespace lfs::nodes::builtin {
 
     void register_type(NodeTypeRegistry& registry, NodeTypeInfo info) {
         // Geometry nodes that only edit attributes.
-        static constexpr std::array<std::string_view, 14> keeps_elements{
+        static constexpr std::array<std::string_view, 16> keeps_elements{
             "lfs.group_input", "lfs.group_output", "lfs.reroute", "lfs.transform_geometry", "lfs.set_position", "lfs.set_colour",
             "lfs.set_opacity", "lfs.set_scale", "lfs.set_sh_degree", "lfs.sharpen",
-            "lfs.scale_clamp", "lfs.colour_correct", "lfs.recolour", "lfs.invert_colour"};
+            "lfs.scale_clamp", "lfs.colour_correct", "lfs.recolour", "lfs.invert_colour", "lfs.rgb_curves",
+            "lfs.store_named_attribute"};
         info.keeps_elements = std::ranges::find(keeps_elements, info.id) != keeps_elements.end();
         set_builtin_node_text(info);
         registry.register_type(std::move(info));
