@@ -72,21 +72,8 @@ namespace lfs::vis {
             };
             if (geometry.points)
                 geometry.points->positions = transform_positions(geometry.points->positions);
-            if (geometry.mesh && geometry.mesh->mesh) {
-                const auto& source = *geometry.mesh->mesh;
-                auto result = std::make_shared<core::MeshData>();
-                result->vertices = transform_positions(source.vertices);
-                result->indices = source.indices;
-                result->normals = source.normals;
-                result->tangents = source.tangents;
-                result->texcoords = source.texcoords;
-                result->colors = source.colors;
-                result->materials = source.materials;
-                result->submeshes = source.submeshes;
-                result->texture_images = source.texture_images;
-                geometry.mesh = lfs::nodes::MeshComponent{std::move(result), geometry.mesh->textures,
-                                                          geometry.mesh->attributes};
-            }
+            if (geometry.mesh && geometry.mesh->mesh)
+                geometry.mesh->mesh = lfs::nodes::transform_mesh(*geometry.mesh->mesh, matrix);
             return geometry;
         }
 

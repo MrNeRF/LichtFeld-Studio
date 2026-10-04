@@ -95,6 +95,10 @@ namespace lfs::nodes {
     // The first of splats, points and mesh.
     LFS_CORE_API std::optional<FieldContext> field_context(const Geometry&);
 
+    // Positions by the transform, normals by its inverse transpose and tangents by its linear part, both
+    // renormalised; a mirroring transform flips the tangent handedness.
+    LFS_CORE_API std::shared_ptr<core::MeshData> transform_mesh(const core::MeshData&, const glm::mat4& matrix);
+
     class Field;
 
     struct LFS_CORE_API FieldMemo {

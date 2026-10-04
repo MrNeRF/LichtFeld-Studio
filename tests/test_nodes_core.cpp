@@ -781,6 +781,36 @@ namespace {
         EXPECT_EQ(host<float>(attributes.at("copy")), (std::vector<float>{7, 7, 7, 0, 0, 0}));
     }
 
+    TEST_P(NodesCore, MeshTransformsCarryNormalsAndTangents) {
+        auto source = std::make_shared<lfs::core::MeshData>(tensor({0, 0, 0, 1, 0, 0, 0, 1, 0}, {3, 3}),
+                                                            ints({0, 1, 2}, {1, 3}));
+        const float diagonal = std::sqrt(0.5f);
+        source->normals = tensor({0, 0, 1, 0, 0, 1, diagonal, diagonal, 0}, {3, 3});
+        source->tangents = tensor({1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, -1}, {3, 4});
+        const auto close = [](const std::vector<float>& actual, const std::vector<float>& expected) {
+            ASSERT_EQ(actual.size(), expected.size());
+            for (size_t i = 0; i < actual.size(); ++i)
+                EXPECT_NEAR(actual[i], expected[i], 1e-5f) << "element " << i;
+        };
+
+        // A quarter turn about Y takes +Z to +X and +X to -Z.
+        const auto turned = transform_mesh(*source, rotation_matrix(glm::vec3(0, 90, 0)));
+        close(host<float>(turned->normals), {1, 0, 0, 1, 0, 0, 0, diagonal, -diagonal});
+        close(host<float>(turned->tangents), {0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, -1});
+
+        // A stretching mirror: normals by the inverse transpose, tangent handedness flipped.
+        const auto mirrored = transform_mesh(*source, glm::scale(glm::mat4(1), glm::vec3(-2, 1, 1)));
+        const float x = -0.5f / std::sqrt(1.25f), y = 1.0f / std::sqrt(1.25f);
+        close(host<float>(mirrored->vertices), {0, 0, 0, -2, 0, 0, 0, 1, 0});
+        close(host<float>(mirrored->normals), {0, 0, 1, 0, 0, 1, x, y, 0});
+        close(host<float>(mirrored->tangents), {-1, 0, 0, -1, -1, 0, 0, -1, -1, 0, 0, 1});
+
+        // Flattening keeps normals finite.
+        const auto flat = transform_mesh(*source, glm::scale(glm::mat4(1), glm::vec3(1, 1, 0)));
+        for (const float value : host<float>(flat->normals))
+            EXPECT_TRUE(std::isfinite(value));
+    }
+
     TEST_P(NodesCore, DeleteSeparateAndStoredSelectionCarryAttributes) {
         NodeTree tree(registry_);
         Node &stored = tree.add_node("lfs.stored_selection"),
