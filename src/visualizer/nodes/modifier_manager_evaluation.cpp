@@ -28,6 +28,7 @@ namespace lfs::vis {
         request.frames_per_second = export_time_ ? export_fps_ : controller ? controller->framesPerSecond()
                                                                             : 24.0f;
         request.inputs_ready = std::make_shared<core::TensorCompletion>();
+        request.splat_allocator = scene_manager_->makeExternalSplatAllocator();
         const auto include = [&](const core::Tensor& tensor) {
             if (tensor.is_valid())
                 request.inputs_ready->include(tensor);
@@ -120,6 +121,7 @@ namespace lfs::vis {
                                             .mesh = node->evaluated_mesh,
                                             .previews = std::move(state.previews)});
             state.evaluation = std::move(result.evaluation);
+            state.shown = result.enabled;
             state.previews = std::move(result.previews);
             if (!result.enabled && state.evaluation.ok)
                 scene.clearNodeEvaluatedPayload(node->id);
@@ -240,8 +242,11 @@ namespace lfs::vis {
     }
 
     std::optional<lfs::nodes::Geometry> ModifierManager::evaluated(const core::Uuid& node_uuid) const {
-        const auto* result = lastResult(node_uuid);
-        return result && result->ok ? std::optional{result->geometry} : std::nullopt;
+        const auto found = runtime_.find(node_uuid);
+        // Without visible modifiers there is no evaluated geometry, only the stored payload.
+        return found != runtime_.end() && found->second.shown && found->second.evaluation.ok
+                   ? std::optional{found->second.evaluation.geometry}
+                   : std::nullopt;
     }
 
     std::optional<core::Tensor> ModifierManager::selectionPreview(const core::Uuid& node_uuid,

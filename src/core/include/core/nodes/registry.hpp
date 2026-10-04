@@ -105,6 +105,8 @@ namespace lfs::nodes {
         std::function<void(NodeContext&)> evaluate;
         std::function<nlohmann::json(nlohmann::json, int)> upgrade;
         bool uses_host = false;
+        // Geometry outputs keep the input's elements in their order, so rows still match the source.
+        bool keeps_elements = false;
     };
 
     class LFS_CORE_API TreeTypeRegistry {

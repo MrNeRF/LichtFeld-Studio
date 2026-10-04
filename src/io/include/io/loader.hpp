@@ -95,8 +95,11 @@ namespace lfs::io {
     // The loader runs this for file imports; in-memory callers (e.g. the Python API) must too.
     [[nodiscard]] LFS_IO_API bool splatTensorsRendererReady(const SplatData& model);
 
+    // trim_pool returns the replaced storage to the driver; repeated callers keep it pooled.
+    // propagate_out_of_memory rethrows core::MemoryAllocationError for callers that free memory and retry.
     [[nodiscard]] LFS_IO_API Result<void> migrateSplatTensorsToAllocator(
-        SplatData& model, const SplatTensorAllocator& allocator);
+        SplatData& model, const SplatTensorAllocator& allocator, bool trim_pool = true,
+        bool propagate_out_of_memory = false);
 
     [[nodiscard]] inline bool is_load_cancel_requested(const LoadOptions& options) {
         return options.cancel_requested && options.cancel_requested();

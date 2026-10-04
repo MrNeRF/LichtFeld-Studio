@@ -99,6 +99,12 @@ namespace lfs::vis {
         void set_evaluation_weights_preparer(
             std::function<std::optional<std::filesystem::path>(bool allow_download)> preparer) override;
         std::expected<void, std::string> startTraining() override;
+        [[nodiscard]] bool isTrainingStartPending() const {
+            return project_lifecycle_ && project_lifecycle_->isTrainingStartPending();
+        }
+        bool cancelTrainingStartPreparation() {
+            return project_lifecycle_ && project_lifecycle_->cancelTrainingStartPreparation();
+        }
         [[nodiscard]] ProjectTrainingSessionState
         projectTrainingSessionState() const override;
         lfs::Result<void>
@@ -304,6 +310,19 @@ namespace lfs::vis {
         friend class DepthWindowGtHookTest;
         friend class P5SessionCaptureTestAccess;
         friend class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
+        friend class VisualizerImplResetTest_AsyncTrainingBindReturnsBeforeSlowWriteAndCoalescesStarts_Test;
+        friend class VisualizerImplResetTest_AsyncTrainingBindFailureDoesNotStart_Test;
+        friend class VisualizerImplResetTest_AsyncTrainingBindCloseDoesNotStart_Test;
+        friend class VisualizerImplResetTest_AsyncViewerTrainingStartCanBeCanceledBeforeInitialization_Test;
+        friend class VisualizerImplResetTest_AsyncTrainingBindCancelDoesNotStart_Test;
+        friend class VisualizerImplResetTest_AsyncTrainingBoundProjectPropagatesStartRejection_Test;
+
+        friend class VisualizerImplResetTest_AsyncTrainingBindWaitsForAutosave_Test;
+        friend class VisualizerImplResetTest_AsyncTrainingBindTrainerReplacementCancels_Test;
+        friend class VisualizerImplResetTest_AsyncPausedPreparationCancelPreservesSession_Test;
+        friend class VisualizerImplResetTest_AsyncPreparationCancelDrainsDeferredLoad_Test;
+        friend class VisualizerImplResetTest_AsyncPausedExplicitPreparationAdoptsItsSnapshot_Test;
+
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnSave_Test;
         friend class VisualizerImplResetTest_StartWhileProjectIsLoadingReturnsRetryReason_Test;
         friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;

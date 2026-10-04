@@ -95,6 +95,26 @@ namespace {
                 }
             }
     }
+    // Canonical rows encode straight to Q16 on every backend, including rows with fewer coefficients
+    // than the destination, whose missing coefficients encode as zero, and rows with more.
+    TEST_P(ShCodecOps, CanonicalRowsEncodeToQ16) {
+        for (const auto [n, source_rest, rest] : {std::tuple{size_t{1}, 3u, 3u}, std::tuple{size_t{256}, 8u, 8u},
+                                                  std::tuple{size_t{513}, 15u, 15u}, std::tuple{size_t{300}, 3u, 8u},
+                                                  std::tuple{size_t{300}, 15u, 3u}}) {
+            SCOPED_TRACE(testing::Message() << "n=" << n << " source_rest=" << source_rest << " rest=" << rest);
+            const auto host = canonical(n, source_rest);
+            auto expected = storage(n, rest, ShFormat::Q16, Device::CPU);
+            auto expected_bounds = Tensor::zeros({sh_value_quant::n_bounds_for_prims(n) * 2}, Device::CPU);
+            const ShCodec codec{.source_format = ShFormat::Canonical, .destination_format = ShFormat::Q16, .source_rows = n, .destination_rows = n, .count = n, .source_rest = source_rest, .destination_rest = rest};
+            sh_codec(host, expected, codec, nullptr, nullptr, &expected_bounds);
+            auto actual = upload(storage(n, rest, ShFormat::Q16, Device::CPU));
+            auto actual_bounds = upload(Tensor::zeros({sh_value_quant::n_bounds_for_prims(n) * 2}, Device::CPU));
+            sh_codec(upload(host), actual, codec, nullptr, nullptr, &actual_bounds);
+            equal(actual_bounds, expected_bounds);
+            equal_quantized(actual, expected);
+        }
+    }
+
     TEST_P(ShCodecOps, GatherAndCopyAcrossLayoutsAndBlocks) {
         constexpr size_t n = 513, m = 257;
         for (uint32_t rest : {3u, 8u, 15u}) {

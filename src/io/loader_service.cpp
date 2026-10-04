@@ -4,6 +4,7 @@
 
 #include "io/loader_service.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
@@ -76,7 +77,9 @@ namespace lfs::io {
     }
 
     Result<void> migrateSplatTensorsToAllocator(lfs::core::SplatData& model,
-                                                const SplatTensorAllocator& allocator) {
+                                                const SplatTensorAllocator& allocator,
+                                                const bool trim_pool,
+                                                const bool propagate_out_of_memory) {
         if (!allocator) {
             return {};
         }
@@ -120,8 +123,16 @@ namespace lfs::io {
                 return {};
             }
 
+            // Tensors already in renderer storage, such as attributes republished unchanged, stay as they are.
+            // Q16 codes and bounds move as a pair so they keep one storage generation.
+            const bool q16_pair_ready = !model.shN_value_quantized() ||
+                                        (splat_tensor_renderer_ready(model.shN_raw()) &&
+                                         splat_tensor_renderer_ready(model.shN_value_bounds()));
             const auto copy_to_allocator =
-                [&](const lfs::core::Tensor& source, const std::string_view name) -> lfs::core::Tensor {
+                [&](const lfs::core::Tensor& source, const std::string_view name, const bool keep_ready = true) -> lfs::core::Tensor {
+                if (keep_ready && source.is_valid() && source.numel() > 0 && source.is_contiguous() &&
+                    splat_tensor_renderer_ready(source))
+                    return source;
                 lfs::core::Tensor source_contiguous = source.is_contiguous() ? source : source.contiguous();
                 const auto& shape = source_contiguous.shape();
                 const size_t capacity = shape.rank() > 0 ? shape[0] : source_contiguous.numel();
@@ -159,12 +170,12 @@ namespace lfs::io {
                         shN = shN.to(*destination_backend);
 #endif
                 } else {
-                    shN = copy_to_allocator(shN_src, "SplatData.shN");
+                    shN = copy_to_allocator(shN_src, "SplatData.shN", q16_pair_ready);
                 }
             }
             if (shN_q16) {
                 shN_bounds = copy_to_allocator(
-                    model.shN_value_bounds(), "SplatData.shN_value_bounds");
+                    model.shN_value_bounds(), "SplatData.shN_value_bounds", q16_pair_ready);
             }
             lfs::core::SplatData migrated(max_sh,
                                           #if defined(__APPLE__)
@@ -190,7 +201,13 @@ namespace lfs::io {
             if (encode_q16) {
                 (void)model.apply_shN_value_quant();
             }
-            lfs::core::Tensor::trim_memory_pool();
+            if (trim_pool)
+                lfs::core::Tensor::trim_memory_pool();
+        } catch (const lfs::core::MemoryAllocationError& e) {
+            if (propagate_out_of_memory)
+                throw;
+            return make_error(ErrorCode::RESOURCE_EXHAUSTED,
+                              std::format("Out of memory migrating splat tensors to renderer storage: {}", e.what()));
         } catch (const std::exception& e) {
             return make_error(ErrorCode::CORRUPTED_DATA,
                               std::format("Failed to migrate splat tensors to renderer storage: {}", e.what()));

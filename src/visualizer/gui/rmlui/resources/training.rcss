@@ -149,6 +149,24 @@ body {
     white-space: nowrap;
 }
 
+.training-preparation-indicator {
+    display: inline-block;
+    width: 6dp;
+    height: 6dp;
+    flex-shrink: 0;
+    margin-right: 5dp;
+    border-radius: 3dp;
+}
+
+.training-status-badge.is-preparing .training-preparation-indicator {
+    animation: training-preparation-pulse 0.8s quadratic-in-out infinite alternate;
+}
+
+@keyframes training-preparation-pulse {
+    from { opacity: 1; }
+    to { opacity: 0.35; }
+}
+
 #training-search-container {
     display: flex;
     align-items: center;

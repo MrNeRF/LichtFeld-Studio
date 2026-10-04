@@ -1215,6 +1215,7 @@
     "instructions": "Enter: selectie bevestigen | Ctrl+C: inhoud kopiëren"
   },
   "training_panel": {
+    "preparing_training": "Training voorbereiden…",
     "start_training": "Training starten",
     "resume_training": "Hervat Training",
     "pause": "Pauzeren",

@@ -182,6 +182,18 @@ namespace lfs::core {
         }
     }
 
+    SplatPublication splat_publication(const GpuBackend backend) {
+        switch (backend) {
+        case GpuBackend::Vulkan:
+            return SplatPublication::Shared;
+        case GpuBackend::CUDA:
+            return SplatPublication::RendererStorage;
+        default:
+            // Metal storage readiness includes its readers.
+            return SplatPublication::Copied;
+        }
+    }
+
     std::function<Tensor(TensorShape, size_t, DataType, std::string_view)>
     TensorVulkanInterop::splat_allocator(bool preserve_float_shN) {
         const auto backend = internal::resolve_new_gpu_storage_backend();
@@ -1243,6 +1255,13 @@ namespace lfs::core {
             for (const GpuBackend backend : kGpuBackends) {
                 if (gpu_backend_live(backend))
                     backend_ops(backend).trim_if_reserved_unused_exceeds(threshold_bytes);
+            }
+        }
+
+        void hold_freed_gpu_memory(const bool hold) {
+            for (const GpuBackend backend : kGpuBackends) {
+                if (gpu_backend_live(backend))
+                    backend_ops(backend).hold_freed_memory(hold);
             }
         }
 

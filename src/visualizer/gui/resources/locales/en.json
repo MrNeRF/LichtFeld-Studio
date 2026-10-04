@@ -1213,6 +1213,7 @@
     "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   },
   "training_panel": {
+    "preparing_training": "Preparing training…",
     "start_training": "Start Training",
     "resume_training": "Resume Training",
     "pause": "Pause",

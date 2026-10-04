@@ -91,11 +91,10 @@ namespace lfs::nodes::builtin {
         const auto matrix =
             glm::translate(glm::mat4(1), translation) * rotation * glm::scale(glm::mat4(1), glm::vec3(scale));
         if (geometry.splats && geometry.splats->means.shape()[0] != 0) {
-            auto attributes = geometry.splats->attributes;
-            auto data = splat_data_from_geometry(geometry);
-            core::transform(*data, matrix);
-            geometry.splats = geometry_from_splat_data(*data).splats;
-            geometry.splats->attributes = std::move(attributes);
+            auto& splats = *geometry.splats;
+            (void)core::transform_canonical(splats.means, splats.rotation, splats.scaling, splats.sh0, splats.shN,
+                                            splats.sh_degree, matrix);
+            splats.scene_scale *= std::abs(scale);
         }
         const auto positions = [&](const Tensor& value) {
             return value.matmul(matrix_tensor(glm::mat3(matrix), value.device())) +
@@ -298,7 +297,7 @@ namespace lfs::nodes::builtin {
             }
             mesh->vertices = core::Tensor::cat(verts, 0);
             mesh->indices = core::Tensor::cat(idx, 0);
-            const auto join_vertex_data = [&](Tensor core::MeshData::*member, size_t channels,
+            const auto join_vertex_data = [&](Tensor core::MeshData::* member, size_t channels,
                                               float fallback) {
                 if (!std::ranges::any_of(meshes, [&](const auto& source) {
                         return (source.get()->*member).is_valid();

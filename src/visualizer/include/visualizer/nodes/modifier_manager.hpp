@@ -65,6 +65,8 @@ namespace lfs::vis {
         std::unordered_map<std::string, double> time_ms;
         double total_time_ms = 0.0;
         std::unordered_map<std::string, lfs::nodes::NodeEvaluation> nodes;
+        // Every geometry node kept its input's elements in order: evaluated rows are the stored rows.
+        bool rows_follow_source = true;
     };
 
     struct PasteNodesResult {
@@ -257,6 +259,7 @@ namespace lfs::vis {
     private:
         struct RuntimeState {
             ModifierEvaluation evaluation;
+            bool shown = false; // visible modifiers produced evaluation.geometry
             bool dirty = true;
             std::unordered_map<std::string, core::Tensor> previews;
         };

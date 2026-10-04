@@ -5,6 +5,8 @@
 
 #include "visualizer/nodes/viewport_coordinates.hpp"
 
+#include "core/nodes/types.hpp"
+
 #include "visualizer/scene_coordinate_utils.hpp"
 
 #include <cmath>
@@ -47,9 +49,8 @@ namespace lfs::vis::nodes {
     }
 
     glm::mat4 ViewportCoordinates::composeLocal(const NodeViewportTransform& transform) {
-        const glm::vec3 radians = glm::radians(transform.rotation_degrees);
         return glm::translate(glm::mat4(1.0f), transform.translation) *
-               glm::eulerAngleXYZ(radians.x, radians.y, radians.z) *
+               lfs::nodes::rotation_matrix(transform.rotation_degrees) *
                glm::scale(glm::mat4(1.0f), transform.scale);
     }
 
@@ -67,7 +68,8 @@ namespace lfs::vis::nodes {
             rotation[2] = -rotation[2];
         }
         glm::vec3 radians(0.0f);
-        glm::extractEulerAngleXYZ(rotation, radians.x, radians.y, radians.z);
+        // Inverse of rotation_matrix: R = Rz * Ry * Rx.
+        glm::extractEulerAngleZYX(rotation, radians.z, radians.y, radians.x);
         result.rotation_degrees = glm::degrees(radians);
         return result;
     }

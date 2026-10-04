@@ -392,7 +392,10 @@ class TrainingPanel(Panel):
         model.bind_func("label_status_stopped", lambda: tr("status.stopped"))
         model.bind_func("label_status_error", lambda: tr("status.error"))
         model.bind_func("label_status_stopping", lambda: tr("status.stopping"))
-        model.bind_func("label_status_starting", lambda: tr("runtime.task_starting"))
+        model.bind_func(
+            "label_status_starting", lambda: tr("training_panel.preparing_training")
+        )
+        model.bind_func("label_cancel_preparation", lambda: tr("common.cancel"))
         model.bind_func(
             "label_save_project", lambda: tr("training_panel.save_project")
         )
@@ -729,6 +732,7 @@ class TrainingPanel(Panel):
 
         for state_name in [
             "ready",
+            "preparing",
             "starting",
             "running",
             "paused",
@@ -1332,6 +1336,8 @@ class TrainingPanel(Panel):
             it = RuntimeState.iteration.value
             labels = {
                 "idle": tr("training_panel.idle"),
+                "preparing": tr("training_panel.preparing_training"),
+                "starting": tr("training_panel.preparing_training"),
                 "ready": tr("status.ready") if it == 0 else tr("training_panel.resume"),
                 "restoring": tr("training.status_restoring"),
                 "starting": tr("runtime.task_starting"),
@@ -1701,7 +1707,8 @@ class TrainingPanel(Panel):
             return False
         actions = {
             "ready": ("start", "reset", "clear") if RuntimeState.iteration.value > 0 else ("start", "clear"),
-            "starting": ("pause", "stop"),
+            "preparing": ("cancel_preparation",),
+            "starting": ("pause", "cancel_preparation"),
             "running": ("pause", "save_project"),
             "paused": ("resume", "save_project", "reset", "stop"),
             "completed": ("start_new", "switch_edit", "reset", "clear"),

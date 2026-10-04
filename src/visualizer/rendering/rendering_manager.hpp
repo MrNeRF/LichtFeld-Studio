@@ -681,19 +681,30 @@ namespace lfs::vis {
         }
         void setCropboxGizmoActive(bool active) { gizmo_state_.cropbox_active = active; }
         void setEllipsoidGizmoActive(bool active) { gizmo_state_.ellipsoid_active = active; }
-        void setNodeBoxGizmoState(bool active, const glm::mat4& transform,
+        // Return whether the drawn state changed, so callers redraw only then.
+        bool setNodeBoxGizmoState(bool active, const glm::mat4& transform,
                                   const glm::mat4& falloff_transform, bool has_falloff) {
+            const bool changed = gizmo_state_.node_box_active != active ||
+                                 (active && (gizmo_state_.node_box_transform != transform ||
+                                             gizmo_state_.node_box_falloff_transform != falloff_transform ||
+                                             gizmo_state_.node_box_has_falloff != has_falloff));
             gizmo_state_.node_box_active = active;
             gizmo_state_.node_box_transform = transform;
             gizmo_state_.node_box_falloff_transform = falloff_transform;
             gizmo_state_.node_box_has_falloff = has_falloff;
+            return changed;
         }
-        void setNodeEllipsoidGizmoState(bool active, const glm::mat4& transform,
+        bool setNodeEllipsoidGizmoState(bool active, const glm::mat4& transform,
                                         const glm::mat4& falloff_transform, bool has_falloff) {
+            const bool changed = gizmo_state_.node_ellipsoid_active != active ||
+                                 (active && (gizmo_state_.node_ellipsoid_transform != transform ||
+                                             gizmo_state_.node_ellipsoid_falloff_transform != falloff_transform ||
+                                             gizmo_state_.node_ellipsoid_has_falloff != has_falloff));
             gizmo_state_.node_ellipsoid_active = active;
             gizmo_state_.node_ellipsoid_transform = transform;
             gizmo_state_.node_ellipsoid_falloff_transform = falloff_transform;
             gizmo_state_.node_ellipsoid_has_falloff = has_falloff;
+            return changed;
         }
         [[nodiscard]] GizmoState getGizmoState() const { return gizmo_state_; }
 

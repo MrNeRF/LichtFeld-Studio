@@ -25,7 +25,7 @@ namespace lfs::nodes::builtin {
     Geometry geometry_input(const NodeContext&, std::string_view socket = "Geometry");
     Tensor vector_tensor(glm::vec3, Device);
     Tensor matrix_tensor(const glm::mat3&, Device);
-    glm::mat4 rotation_matrix(glm::vec3 degrees);
+    using lfs::nodes::rotation_matrix;
     FieldContext field_context(const SplatsComponent&);
     FieldContext field_context(const PointsComponent&);
     FieldContext field_context(const MeshComponent&);

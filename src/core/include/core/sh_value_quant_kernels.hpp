@@ -25,6 +25,17 @@ namespace lfs::core::sh_value_quant {
         std::uint32_t coeffs_rest,
         cudaStream_t stream = nullptr);
 
+    /// Encode canonical [N, source_rest, 3] rows into u16 + bounds with coeffs_rest coefficients;
+    /// coefficients past source_rest encode as zero.
+    void encode_shN_canonical_to_u16(
+        const float* src_canonical,
+        std::uint16_t* dst_u16,
+        float* bounds_float2,
+        std::size_t n_primitives,
+        std::uint32_t source_rest,
+        std::uint32_t coeffs_rest,
+        cudaStream_t stream = nullptr);
+
     /// Decode u16 + bounds into float4-swizzled (zeros float4 tail pad).
     void decode_shN_u16_to_float4(
         const std::uint16_t* src_u16,

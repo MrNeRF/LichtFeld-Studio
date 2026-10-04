@@ -12,6 +12,7 @@
 #include "core/sh_value_quant.hpp"
 #include "core/sh_value_quant_kernels.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cub/device/device_scan.cuh>
 #include <cuda_fp16.h>
@@ -95,6 +96,53 @@ namespace lfs::core::sh_value_quant {
                 dst_u16[lfs::core::sh_value::shAtU16(p, c, n_cells_per_prim)] =
                     DC::encode(cells[c], mm.x, mm.y);
             }
+        }
+
+        // Canonical rows hold each primitive's cells in order, so this reads them directly instead of
+        // packing them into float4 slots first. The block's rows are one contiguous range, loaded together
+        // into shared memory; an odd row length keeps the per-thread reads free of bank conflicts.
+        __global__ void encode_canonical_to_u16_block_kernel(
+            const float* __restrict__ src,
+            std::uint16_t* __restrict__ dst_u16,
+            float2* __restrict__ bounds,
+            std::uint32_t n_primitives,
+            std::uint32_t source_stride,
+            std::uint32_t source_cells,
+            std::uint32_t n_cells_per_prim) {
+            extern __shared__ float rows[];
+            const std::uint32_t quant_block = blockIdx.x;
+            const std::uint32_t lane = threadIdx.x;
+            const std::uint32_t first = quant_block * 256u;
+            const std::uint32_t p = first + lane;
+            const bool in_range = p < n_primitives;
+            const std::uint32_t block_rows = min(256u, n_primitives - first);
+            for (std::uint32_t index = lane; index < block_rows * n_cells_per_prim; index += 256u) {
+                const std::uint32_t row = index / n_cells_per_prim;
+                const std::uint32_t c = index - row * n_cells_per_prim;
+                rows[index] = c < source_cells
+                                  ? src[static_cast<std::size_t>(first + row) * source_stride + c]
+                                  : 0.0f;
+            }
+            __syncthreads();
+
+            float local_lo = 1e30f, local_hi = -1e30f;
+            const float* row = rows + lane * n_cells_per_prim;
+            if (in_range) {
+                for (std::uint32_t c = 0; c < n_cells_per_prim; ++c) {
+                    local_lo = fminf(local_lo, row[c]);
+                    local_hi = fmaxf(local_hi, row[c]);
+                }
+            }
+
+            const float2 mm = reduce_quant_block_minmax(lane, in_range, local_lo, local_hi);
+            if (lane == 0) {
+                bounds[quant_block] = mm;
+            }
+            __syncthreads();
+
+            if (!in_range)
+                return;
+            encode_prim_u16_cells(dst_u16, mm, p, n_cells_per_prim, n_cells_per_prim, row);
         }
 
         // One CUDA block of 256 threads per quant-block of prims.
@@ -707,6 +755,30 @@ namespace lfs::core::sh_value_quant {
             slots,
             n_cells);
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "encode_shN_float4_to_u16");
+    }
+
+    void encode_shN_canonical_to_u16(
+        const float* src_canonical,
+        std::uint16_t* dst_u16,
+        float* bounds_float2,
+        std::size_t n_primitives,
+        std::uint32_t source_rest,
+        std::uint32_t coeffs_rest,
+        cudaStream_t stream) {
+        if (n_primitives == 0 || coeffs_rest == 0)
+            return;
+        const auto n_cells = lfs::core::sh_value_quant::n_value_cells_per_prim(coeffs_rest);
+        const auto n_bounds = lfs::core::sh_value_quant::n_bounds_for_prims(n_primitives);
+        const auto shared_bytes = static_cast<std::size_t>(256u) * n_cells * sizeof(float);
+        encode_canonical_to_u16_block_kernel<<<static_cast<unsigned>(n_bounds), 256, shared_bytes, stream>>>(
+            src_canonical,
+            dst_u16,
+            reinterpret_cast<float2*>(bounds_float2),
+            static_cast<std::uint32_t>(n_primitives),
+            source_rest * 3u,
+            std::min(source_rest, coeffs_rest) * 3u,
+            n_cells);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "encode_shN_canonical_to_u16");
     }
 
     void decode_shN_u16_gathered_to_float4(

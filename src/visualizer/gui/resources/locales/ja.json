@@ -1215,6 +1215,7 @@
     "instructions": "Enter: 選択を確定 | Ctrl+C: 内容をコピー"
   },
   "training_panel": {
+    "preparing_training": "トレーニングを準備中…",
     "start_training": "トレーニングを開始",
     "resume_training": "トレーニングを再開",
     "pause": "一時停止",

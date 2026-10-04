@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/nodes/evaluator.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_execution.hpp"
 
@@ -83,6 +84,28 @@ namespace lfs::nodes {
 
     } // namespace
 
+    namespace {
+        thread_local const EvalControl* active_control = nullptr;
+
+        class ActiveControl {
+        public:
+            explicit ActiveControl(const EvalControl& control) : previous_(active_control) {
+                active_control = &control;
+            }
+            ~ActiveControl() { active_control = previous_; }
+            ActiveControl(const ActiveControl&) = delete;
+            ActiveControl& operator=(const ActiveControl&) = delete;
+
+        private:
+            const EvalControl* previous_;
+        };
+    } // namespace
+
+    void throw_if_evaluation_cancelled() {
+        if (active_control && active_control->cancelled && active_control->cancelled())
+            throw EvaluationCancelled();
+    }
+
     const Value& NodeContext::input(std::string_view identifier) const {
         static const Value empty;
         auto found = inputs_.find(std::string(identifier));
@@ -122,10 +145,16 @@ namespace lfs::nodes {
         outputs_[std::move(identifier)] = std::move(value);
     }
 
+    void NodeContext::record_selection(const FieldContext& context, const core::Tensor& mask) const {
+        if (!selection_)
+            selection_ = ConsumedSelection{context.identity, mask};
+    }
+
     EvalResult evaluate(const NodeTree& tree, EvalInputs inputs, EvalHost* host, EvalCache* cache,
                         const EvalControl& control) {
         const auto backend = geometry_backend(inputs.geometry).value_or(core::TensorExecutionTarget::current().backend());
         core::GpuBackendScope execution_scope(backend);
+        const ActiveControl active_control_scope(control);
         const auto device = inputs.device.value_or(evaluation_device());
         GeometryDeviceCache local_devices;
         auto& devices = cache ? cache->devices : local_devices;
@@ -426,8 +455,17 @@ namespace lfs::nodes {
                 }
                 evaluation.outputs = std::move(context.outputs_);
                 evaluation.ok = true;
+            } catch (const EvaluationCancelled&) {
+                result.cancelled = true;
+                evaluation.ok = false;
             } catch (const FieldNodeError& exception) {
                 result.errors[exception.node()] = exception.what();
+                result.ok = false;
+                evaluation.ok = false;
+            } catch (const core::MemoryAllocationError& exception) {
+                if (control.propagate_out_of_memory)
+                    throw;
+                result.errors[node.name] = exception.what();
                 result.ok = false;
                 evaluation.ok = false;
             } catch (const std::exception& exception) {
@@ -442,7 +480,7 @@ namespace lfs::nodes {
                 result.time_ms[node.name] = elapsed;
             if (evaluation.ok) {
                 output_cache[cache_name] = CachedNodeOutput{key, evaluation.outputs, elapsed,
-                                                            std::move(geometry_input)};
+                                                            std::move(geometry_input), std::move(context.selection_)};
                 report(node.name, output_cache.at(cache_name), false);
             }
             active.erase(node.name);
@@ -465,6 +503,13 @@ namespace lfs::nodes {
                     }
                 }
             }
+        } catch (const EvaluationCancelled&) {
+            result.cancelled = true;
+        } catch (const core::MemoryAllocationError& exception) {
+            if (control.propagate_out_of_memory)
+                throw;
+            result.errors["Group Output"] = exception.what();
+            result.ok = false;
         } catch (const std::exception& exception) {
             // LFS-CENSUS-OK(empty-catch): normalize graph-boundary failures into EvalResult.
             result.errors["Group Output"] = exception.what();

@@ -1215,6 +1215,7 @@
     "instructions": "Enter: 선택 확정 | Ctrl+C: 내용 복사"
   },
   "training_panel": {
+    "preparing_training": "학습 준비 중…",
     "start_training": "학습 시작",
     "resume_training": "학습 재개",
     "pause": "일시정지",

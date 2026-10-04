@@ -4,8 +4,10 @@
 #include "core/camera.hpp"
 #include "core/nodes/nodes.hpp"
 #include "core/services.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 #include "scene/scene_manager.hpp"
 #include "sequencer/interpolation.hpp"
 #include "sequencer/sequencer_controller.hpp"
@@ -18,6 +20,7 @@
 #include "visualizer/nodes/viewport_coordinates.hpp"
 #include "visualizer/operation/undo_history.hpp"
 
+#include <cmath>
 #include <cstring>
 #include <future>
 #include <glm/gtc/matrix_transform.hpp>
@@ -47,7 +50,8 @@ namespace {
     std::vector<std::pair<const char*, std::optional<lfs::core::GpuBackend>>> worker_targets() {
         using lfs::core::GpuBackend;
         return {{"Metal", GpuBackend::Metal},
-                {"Vulkan", GpuBackend::Vulkan}};
+                {"Vulkan", GpuBackend::Vulkan},
+                {"CUDA", GpuBackend::CUDA}};
     }
 
     template <typename Run>
@@ -475,6 +479,29 @@ TEST_F(NodesModifierManager, ViewportCoordinatesRoundTripWithHostTransformAndBas
     }
 }
 
+// Fails when the viewport gizmo composes rotations in another order than node evaluation,
+// which draws a rotated box or ellipsoid where it does not select.
+TEST(NodesViewportCoordinates, ComposeUsesTheEvaluatorRotationOrder) {
+    using lfs::vis::nodes::NodeViewportTransform;
+    using lfs::vis::nodes::ViewportCoordinates;
+    const NodeViewportTransform transform{
+        .translation = {1.0f, -2.0f, 0.5f},
+        .rotation_degrees = {30.0f, 45.0f, 60.0f},
+        .scale = {2.0f, 1.0f, 0.5f}};
+    const glm::mat4 expected = glm::translate(glm::mat4(1.0f), transform.translation) *
+                               lfs::nodes::rotation_matrix(transform.rotation_degrees) *
+                               glm::scale(glm::mat4(1.0f), transform.scale);
+    const glm::mat4 composed = ViewportCoordinates::composeLocal(transform);
+    for (int column = 0; column < 4; ++column)
+        for (int row = 0; row < 4; ++row)
+            EXPECT_NEAR(composed[column][row], expected[column][row], 1e-5f) << column << "," << row;
+    const auto decomposed = ViewportCoordinates::decomposeLocal(composed);
+    for (int axis = 0; axis < 3; ++axis) {
+        EXPECT_NEAR(decomposed.rotation_degrees[axis], transform.rotation_degrees[axis], 1e-3f) << axis;
+        EXPECT_NEAR(decomposed.scale[axis], transform.scale[axis], 1e-5f) << axis;
+    }
+}
+
 TEST_F(NodesModifierManager, HsvEyedropperCentresBandsAndKeepsTheirWidthsAtBounds) {
     const auto bands = lfs::vis::centreHsvPickBands({0.2f, 0.8f, 0.4f}, 0.2f, 0.4f);
     EXPECT_NEAR(bands.hue, 1.0f / 3.0f + 1.0f / 18.0f, 1e-5f);
@@ -535,6 +562,75 @@ TEST_F(NodesModifierManager, ObjectInfoUploadsCpuMeshBeforeTransformAndJoin) {
     EXPECT_EQ(result.geometry.splats->means.device(), Device::GPU);
     EXPECT_EQ(result.geometry.splats->means.shape()[0], 13);
     EXPECT_EQ(mesh->vertices.device(), Device::CPU);
+}
+
+// Relative space moves the target into the host's frame and rotates its SH as transform() does.
+TEST_F(NodesModifierManager, ObjectInfoRelativeSpaceMatchesSplatTransform) {
+    using namespace lfs::nodes;
+    using lfs::core::Device;
+    using lfs::core::Tensor;
+    for_each_worker_target([](const Device device) {
+        const auto values = [&](const std::vector<std::size_t>& shape, const float scale, const int seed) {
+            std::size_t count = 1;
+            for (const auto extent : shape)
+                count *= extent;
+            std::vector<float> data(count);
+            for (std::size_t i = 0; i < count; ++i)
+                data[i] = scale * std::sin(0.7f * static_cast<float>(i) + static_cast<float>(seed));
+            return Tensor::from_vector(data, lfs::core::TensorShape(shape), Device::CPU).to(device);
+        };
+        const auto reference = [&] {
+            return std::make_unique<lfs::core::SplatData>(
+                1, values({5, 3}, 2.0f, 1), values({5, 1, 3}, 0.5f, 2), values({5, 3, 3}, 0.3f, 3),
+                values({5, 3}, 0.2f, 4), values({5, 4}, 1.0f, 5), values({5, 1}, 1.0f, 6), 1.0f);
+        };
+        const glm::mat4 world = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)) *
+                                glm::rotate(glm::mat4(1.0f), 0.7f, glm::normalize(glm::vec3(0.3f, 0.5f, 0.8f))) *
+                                glm::scale(glm::mat4(1.0f), glm::vec3(1.5f));
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto host = scene.getScene().getNodeUuid(scene.getScene().addSplat("Host", model(6, device)));
+        scene.getScene().addSplat("Reference", reference());
+        scene.getScene().setNodeTransform("Reference", world);
+        auto& manager = scene.modifierManager();
+        auto& tree = manager.newTree("Relative reference");
+        auto& info = tree.add_node("lfs.object_info", "Object Info");
+        info.properties["object"] = "Reference";
+        info.properties["transform_space"] = "relative";
+        ASSERT_TRUE(tree.remove_link(
+            {tree.input_node().name, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Object Info", "Geometry", tree.output_node().name, "Geometry"}));
+        manager.addModifier(host, tree.uuid);
+
+        const auto result = manager.evaluate(host);
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
+                                                         : result.errors.begin()->second);
+        ASSERT_TRUE(result.geometry.splats);
+        auto expected = reference();
+        lfs::core::transform(*expected, world);
+        const auto& actual = *result.geometry.splats;
+        const auto expect_near = [](const Tensor& a, const Tensor& b, const char* name) {
+            const auto x = a.cpu().contiguous().to_vector();
+            const auto y = b.cpu().contiguous().to_vector();
+            ASSERT_EQ(x.size(), y.size()) << name;
+            for (std::size_t i = 0; i < x.size(); ++i)
+                ASSERT_NEAR(x[i], y[i], 1e-4f) << name << " element " << i;
+        };
+        expect_near(actual.means, expected->means_raw(), "means");
+        expect_near(actual.rotation, expected->rotation_raw(), "rotation");
+        expect_near(actual.scaling, expected->scaling_raw(), "scaling");
+        expect_near(actual.shN, expected->shN_canonical(), "shN");
+
+        // A transform that is not a similarity measures the scene scale again, as transform() does.
+        const glm::mat4 stretch = glm::scale(glm::mat4(1.0f), glm::vec3(10.0f, 1.0f, 1.0f));
+        scene.getScene().setNodeTransform("Reference", stretch);
+        manager.markDirty(host);
+        const auto stretched = manager.evaluate(host);
+        ASSERT_TRUE(stretched.ok);
+        auto stretched_expected = reference();
+        lfs::core::transform(*stretched_expected, stretch);
+        EXPECT_FLOAT_EQ(stretched.geometry.splats->scene_scale, stretched_expected->get_scene_scale());
+    });
 }
 
 TEST_F(NodesModifierManager, ObjectInfoReportsNamedDependencyCycleAtTheNode) {
@@ -706,6 +802,188 @@ TEST_F(NodesModifierManager, SelectionPreviewSurvivesAttributeNodes) {
                       (std::vector<bool>{true, false, true, false, false, false}))
                 << name;
         }
+    });
+}
+
+// Nodes inside groups report as "Group/Inner"; attribute-only groups and reroutes keep rows.
+TEST_F(NodesModifierManager, SelectionPreviewSurvivesGroupsAndReroutes) {
+    using namespace lfs::nodes;
+    for_each_worker_target([](const lfs::core::Device device) {
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto id = scene.getScene().addSplat("Host", model(6, device));
+        const auto host = scene.getScene().getNodeUuid(id);
+        auto& manager = scene.modifierManager();
+        const auto resolver = [&](const std::string_view uuid) { return manager.tree(uuid); };
+        auto& inner = manager.newTree("Tint group");
+        inner.add_node("lfs.set_colour", "Tint");
+        ASSERT_TRUE(inner.remove_link(
+            {inner.input_node().name, "Geometry", inner.output_node().name, "Geometry"}));
+        ASSERT_TRUE(inner.add_link({inner.input_node().name, "Geometry", "Tint", "Geometry"}));
+        ASSERT_TRUE(inner.add_link({"Tint", "Geometry", inner.output_node().name, "Geometry"}));
+
+        auto& tree = manager.newTree("Grouped");
+        auto& stored = tree.add_node("lfs.stored_selection", "Stored");
+        set_stored_selection(stored, selection({true, false, true, false, false, false}));
+        const auto stored_properties = stored.properties;
+        tree.add_node("lfs.reroute", "Route");
+        tree.add_node("lfs.group", "Group");
+        tree.add_node("lfs.set_opacity", "Opacity").input_values["Opacity"] = 0.25f;
+        ASSERT_TRUE(manager.setGroupGraph(tree.uuid, "Group", inner.uuid));
+        ASSERT_TRUE(tree.remove_link(
+            {tree.input_node().name, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Route", "Input"}, nullptr, resolver));
+        ASSERT_TRUE(tree.add_link({"Route", "Output", "Group", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(tree.add_link({"Group", "Geometry", "Opacity", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(tree.add_link({"Stored", "Selection", "Opacity", "Selection"}));
+        ASSERT_TRUE(tree.add_link({"Opacity", "Geometry", tree.output_node().name, "Geometry"}));
+        auto& modifier = manager.addModifier(host, tree.uuid, "Grouped");
+        modifier.stored_selections["Stored"] = stored_properties;
+
+        const auto result = manager.evaluate(host);
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
+                                                         : result.errors.begin()->second);
+        EXPECT_NE(result.nodes.find(modifier.uuid + "/Group/Tint"), result.nodes.end());
+        EXPECT_TRUE(result.rows_follow_source);
+        const auto preview = manager.selectionPreview(host, modifier.uuid, "Opacity");
+        ASSERT_TRUE(preview);
+        EXPECT_EQ(preview->cpu().to_vector_bool(), (std::vector<bool>{true, false, true, false, false, false}));
+    });
+}
+
+// A group served from the cache reports only itself; its inner Separate and Join still break the
+// row correspondence.
+TEST_F(NodesModifierManager, CachedGroupWithStructuralNodesKeepsRowsUnproven) {
+    using namespace lfs::nodes;
+    for_each_worker_target([](const lfs::core::Device device) {
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto host = scene.getScene().getNodeUuid(scene.getScene().addSplat("Host", model(6, device)));
+        auto& manager = scene.modifierManager();
+        const auto resolver = [&](const std::string_view uuid) { return manager.tree(uuid); };
+        auto& inner = manager.newTree("Split and rejoin");
+        inner.add_node("lfs.separate_geometry", "Separate");
+        inner.add_node("lfs.join_geometry", "Join");
+        ASSERT_TRUE(inner.remove_link(
+            {inner.input_node().name, "Geometry", inner.output_node().name, "Geometry"}));
+        ASSERT_TRUE(inner.add_link({inner.input_node().name, "Geometry", "Separate", "Geometry"}));
+        ASSERT_TRUE(inner.add_link({"Separate", "Inverted", "Join", "Geometry"}));
+        ASSERT_TRUE(inner.add_link({"Separate", "Selection", "Join", "Geometry"}));
+        ASSERT_TRUE(inner.add_link({"Join", "Geometry", inner.output_node().name, "Geometry"}));
+        auto& tree = manager.newTree("Grouped split");
+        tree.add_node("lfs.group", "Group");
+        tree.add_node("lfs.set_opacity", "Opacity").input_values["Opacity"] = 0.25f;
+        ASSERT_TRUE(manager.setGroupGraph(tree.uuid, "Group", inner.uuid));
+        ASSERT_TRUE(tree.remove_link(
+            {tree.input_node().name, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Group", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(tree.add_link({"Group", "Geometry", "Opacity", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(tree.add_link({"Opacity", "Geometry", tree.output_node().name, "Geometry"}));
+        manager.addModifier(host, tree.uuid);
+        ASSERT_TRUE(manager.evaluate(host).ok);
+        EXPECT_FALSE(manager.evaluate(host).rows_follow_source);
+
+        const auto before = tree.to_json();
+        tree.find_node("Opacity")->input_values["Opacity"] = 0.75f;
+        manager.recordTreeEdit(tree.uuid, before);
+        const auto result = manager.evaluate(host);
+        ASSERT_TRUE(result.ok);
+        EXPECT_FALSE(result.rows_follow_source);
+    });
+}
+
+// A node may return a differently strided view of its input's storage; it must not be mistaken for the
+// untouched input when publishing.
+TEST_F(NodesModifierManager, TransposedShNViewIsPublishedAsChanged) {
+    using namespace lfs::nodes;
+    using lfs::core::Device;
+    using lfs::core::Tensor;
+    for_each_worker_target([](const Device device) {
+        std::vector<float> sh(7 * 3 * 3);
+        for (std::size_t i = 0; i < sh.size(); ++i)
+            sh[i] = 0.01f * static_cast<float>(i);
+        const auto on_device = [&](Tensor value) { return value.to(device); };
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto id = scene.getScene().addSplat(
+            "Host", std::make_unique<lfs::core::SplatData>(
+                        1, on_device(Tensor::zeros({7, 3}, Device::CPU)), on_device(Tensor::zeros({7, 1, 3}, Device::CPU)),
+                        on_device(Tensor::from_vector(sh, {7, 3, 3}, Device::CPU)),
+                        on_device(Tensor::zeros({7, 3}, Device::CPU)),
+                        on_device(Tensor::cat({Tensor::ones({7, 1}, Device::CPU), Tensor::zeros({7, 3}, Device::CPU)}, 1)),
+                        on_device(Tensor::zeros({7, 1}, Device::CPU)), 1.0f));
+        const auto host = scene.getScene().getNodeUuid(id);
+        auto& manager = scene.modifierManager();
+        NodeTypeInfo transpose;
+        transpose.id = "test.transpose_shn";
+        transpose.inputs = {{"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)}};
+        transpose.outputs = transpose.inputs;
+        transpose.evaluate = [](NodeContext& context) {
+            auto geometry = *context.input("Geometry").get_if<Geometry>();
+            geometry.splats->shN = geometry.splats->shN.transpose(1, 2);
+            context.set_output("Geometry", std::move(geometry));
+        };
+        manager.registry().register_type(std::move(transpose));
+        auto& tree = manager.newTree("Transpose");
+        tree.add_node("test.transpose_shn", "Transpose").muted = true;
+        ASSERT_TRUE(tree.remove_link(
+            {tree.input_node().name, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Transpose", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Transpose", "Geometry", tree.output_node().name, "Geometry"}));
+        manager.addModifier(host, tree.uuid);
+        ASSERT_TRUE(manager.evaluate(host).ok);
+
+        const auto before = tree.to_json();
+        tree.find_node("Transpose")->muted = false;
+        manager.recordTreeEdit(tree.uuid, before);
+        ASSERT_TRUE(manager.evaluate(host).ok);
+        const auto* node = scene.getScene().getNodeById(id);
+        ASSERT_NE(node->evaluated_model, nullptr);
+        const auto expected = Tensor::from_vector(sh, {7, 3, 3}, Device::CPU).transpose(1, 2).contiguous().to_vector();
+        const auto actual = node->evaluated_model->shN_canonical().cpu().contiguous().to_vector();
+        ASSERT_EQ(actual.size(), expected.size());
+        for (std::size_t i = 0; i < actual.size(); ++i)
+            ASSERT_NEAR(actual[i], expected[i], 1e-3f) << i;
+    });
+}
+
+TEST_F(NodesModifierManager, SelectionPreviewHidesWhenAJoinReordersElements) {
+    using namespace lfs::nodes;
+    for_each_worker_target([](const lfs::core::Device device) {
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto id = scene.getScene().addSplat("Host", model(6, device));
+        const auto host = scene.getScene().getNodeUuid(id);
+        auto& manager = scene.modifierManager();
+        auto& tree = manager.newTree("Reorder");
+        auto& stored = tree.add_node("lfs.stored_selection", "Stored");
+        set_stored_selection(stored, selection({true, false, false, false, false, false}));
+        const auto stored_properties = stored.properties;
+        tree.add_node("lfs.separate_geometry", "Separate");
+        tree.add_node("lfs.join_geometry", "Join");
+        ASSERT_TRUE(tree.remove_link(
+            {tree.input_node().name, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Separate", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Stored", "Selection", "Separate", "Selection"}));
+        ASSERT_TRUE(tree.add_link({"Separate", "Inverted", "Join", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Separate", "Selection", "Join", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Join", "Geometry", tree.output_node().name, "Geometry"}));
+        auto& modifier = manager.addModifier(host, tree.uuid, "Reorder");
+        modifier.stored_selections["Stored"] = stored_properties;
+
+        const auto result = manager.evaluate(host);
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
+                                                         : result.errors.begin()->second);
+        ASSERT_TRUE(result.geometry.splats);
+        EXPECT_EQ(result.geometry.splats->means.shape()[0], 6);
+        EXPECT_FALSE(result.rows_follow_source);
+        // The count matches, but displayed row 0 is stored row 1.
+        EXPECT_FALSE(manager.selectionPreview(host, modifier.uuid, "Stored"));
+        EXPECT_FALSE(manager.selectionPreview(host, modifier.uuid, "Separate"));
+        const auto status = result.nodes.find(modifier.uuid + "/Separate");
+        ASSERT_NE(status, result.nodes.end());
+        ASSERT_TRUE(status->second.selected_share);
+        EXPECT_NEAR(*status->second.selected_share, 1.0 / 6.0, 1e-9);
     });
 }
 
@@ -1479,6 +1757,68 @@ TEST_F(NodesModifierManager, CachedRequestReusesPublishedPayloadWithoutSharingWo
     EXPECT_TRUE(cached.unchanged);
     EXPECT_EQ(node->evaluated_model, payload);
     EXPECT_TRUE(manager.performance()["node_runs"].empty());
+}
+
+// An edit that changes only opacity republishes the other attributes from the previous payload's
+// storage where the payload is shared with the renderer, and every published value stays exact.
+TEST_F(NodesModifierManager, OpacityEditRepublishesUntouchedAttributes) {
+    using lfs::core::Device;
+    using lfs::core::Tensor;
+    for_each_worker_target([](const Device device) {
+        const auto values = [&](const std::vector<std::size_t>& shape, const float scale, const int seed) {
+            std::size_t count = 1;
+            for (const auto extent : shape)
+                count *= extent;
+            std::vector<float> data(count);
+            for (std::size_t i = 0; i < count; ++i)
+                data[i] = scale * std::sin(0.37f * static_cast<float>(i) + static_cast<float>(seed));
+            return Tensor::from_vector(data, lfs::core::TensorShape(shape), Device::CPU).to(device);
+        };
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto id = scene.getScene().addSplat(
+            "Host", std::make_unique<lfs::core::SplatData>(
+                        1, values({7, 3}, 2.0f, 1), values({7, 1, 3}, 0.5f, 2), values({7, 3, 3}, 0.3f, 3),
+                        values({7, 3}, 0.2f, 4), values({7, 4}, 1.0f, 5), values({7, 1}, 1.0f, 6), 1.0f));
+        const auto uuid = scene.getScene().getNodeUuid(id);
+        auto& manager = scene.modifierManager();
+        auto& tree = manager.newTree("Opacity");
+        tree.add_node("lfs.set_opacity", "Opacity").input_values["Opacity"] = 0.25f;
+        ASSERT_TRUE(tree.remove_link(
+            {tree.input_node().name, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Opacity", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Opacity", "Geometry", tree.output_node().name, "Geometry"}));
+        manager.addModifier(uuid, tree.uuid);
+        ASSERT_TRUE(manager.evaluate(uuid).ok);
+        const auto* node = scene.getScene().getNodeById(id);
+        const auto first = node->evaluated_model;
+        ASSERT_NE(first, nullptr);
+
+        const auto before = tree.to_json();
+        tree.find_node("Opacity")->input_values["Opacity"] = 0.75f;
+        manager.recordTreeEdit(tree.uuid, before);
+        const auto result = manager.evaluate(uuid);
+        ASSERT_TRUE(result.ok);
+        const auto second = node->evaluated_model;
+        ASSERT_NE(second, nullptr);
+        ASSERT_NE(second, first);
+        const auto backend = lfs::core::gpu_backend_of(second->means_raw());
+        if (backend && lfs::core::splat_publication(*backend) == lfs::core::SplatPublication::Shared) {
+            EXPECT_EQ(second->means_raw().data_ptr(), first->means_raw().data_ptr());
+            EXPECT_EQ(second->shN_raw().data_ptr(), first->shN_raw().data_ptr());
+            EXPECT_NE(second->opacity_raw().data_ptr(), first->opacity_raw().data_ptr());
+        }
+        const auto expected = lfs::nodes::splat_data_from_geometry(result.geometry);
+        const auto expect_equal = [](const Tensor& actual, const Tensor& wanted, const char* name) {
+            EXPECT_EQ(actual.cpu().contiguous().to_vector(), wanted.cpu().contiguous().to_vector()) << name;
+        };
+        expect_equal(second->means_raw(), expected->means_raw(), "means");
+        expect_equal(second->sh0_raw(), expected->sh0_raw(), "sh0");
+        expect_equal(second->shN_canonical(), expected->shN_canonical(), "shN");
+        expect_equal(second->scaling_raw(), expected->scaling_raw(), "scaling");
+        expect_equal(second->rotation_raw(), expected->rotation_raw(), "rotation");
+        expect_equal(second->opacity_raw(), expected->opacity_raw(), "opacity");
+    });
 }
 
 TEST_F(NodesModifierManager, WorkerDiscardsSupersededResultsAndInstallsOnViewer) {

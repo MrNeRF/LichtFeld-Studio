@@ -21,6 +21,7 @@
       <span id="measure-switch_edit" class="btn training-toolbar-action training-toolbar-action--primary"><img src="../icon/adjustments.png" /><span>{{label_toolbar_edit}}</span></span>
       <span id="measure-reset" class="btn training-toolbar-action"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></span>
       <span id="measure-stop" class="btn training-toolbar-action"><img src="../icon/sequencer/stop.png" /><span>{{label_toolbar_stop}}</span></span>
+      <span id="measure-cancel_preparation" class="btn training-toolbar-action"><img src="../icon/sequencer/stop.png" /><span>{{label_cancel_preparation}}</span></span>
       <span id="measure-clear" class="btn training-toolbar-action"><img src="../icon/scene/trash.png" /><span>{{label_clear}}</span></span>
       <span id="measure-save_project" class="btn training-toolbar-action training-toolbar-action--save"><img src="../icon/archive.png" /><span>{{label_toolbar_save}}</span></span>
       <span id="measure-action-gap"></span><span id="measure-action-max"></span>
@@ -35,10 +36,15 @@
         <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_clear" data-attr-aria-label="label_clear" data-attr-title="label_clear" data-event-click="action('clear')"><img src="../icon/scene/trash.png" /><span>{{label_clear}}</span></button>
       </div>
     </div>
+    <div class="training-actions-group" data-if="show_ctrl_preparing">
+      <div class="training-action-row">
+        <button class="btn btn--secondary training-toolbar-action" data-attr-aria-label="label_cancel_preparation" data-attr-title="label_cancel_preparation" data-event-click="action('stop')"><img src="../icon/sequencer/stop.png" /><span>{{label_cancel_preparation}}</span></button>
+      </div>
+    </div>
     <div class="training-actions-group" data-if="show_ctrl_starting">
       <div class="training-action-row">
         <button class="btn btn--warning training-toolbar-action training-toolbar-action--primary" data-attr-aria-label="label_pause" data-tooltip="training.tooltip.btn_pause" data-event-click="action('pause')"><img src="../icon/sequencer/pause.png" /><span>{{label_pause}}</span></button>
-        <button class="btn btn--error training-toolbar-action" data-tooltip="training.tooltip.btn_stop" data-attr-aria-label="label_stop" data-attr-title="label_stop" data-event-click="action('stop')"><img src="../icon/sequencer/stop.png" /><span>{{label_toolbar_stop}}</span></button>
+        <button class="btn btn--secondary training-toolbar-action" data-attr-aria-label="label_cancel_preparation" data-attr-title="label_cancel_preparation" data-event-click="action('stop')"><img src="../icon/sequencer/stop.png" /><span>{{label_cancel_preparation}}</span></button>
       </div>
     </div>
     <div class="training-actions-group" data-if="show_ctrl_running">
@@ -79,7 +85,8 @@
     </div>
     <div id="training-controls-header" class="training-state-line">
       <span class="training-status-badge is-ready" data-if="show_ctrl_ready"><span class="training-status-badge-label">@tr:status.ready</span></span>
-      <span class="training-status-badge is-active" data-if="show_ctrl_starting"><span class="training-status-badge-label">@tr:runtime.task_starting</span></span>
+      <span class="training-status-badge is-active is-preparing" data-if="show_ctrl_preparing"><span class="training-preparation-indicator"></span><span class="training-status-badge-label">@tr:training_panel.preparing_training</span></span>
+      <span class="training-status-badge is-active is-preparing" data-if="show_ctrl_starting"><span class="training-preparation-indicator"></span><span class="training-status-badge-label">@tr:training_panel.preparing_training</span></span>
       <span class="training-status-badge is-active" data-if="show_ctrl_running"><span class="training-status-badge-label">@tr:training_panel.running</span></span>
       <span class="training-status-badge is-paused" data-if="show_ctrl_paused"><span class="training-status-badge-label">@tr:status.paused</span></span>
       <span class="training-status-badge is-complete" data-if="show_ctrl_completed"><span class="training-status-badge-label">@tr:status.complete</span></span>

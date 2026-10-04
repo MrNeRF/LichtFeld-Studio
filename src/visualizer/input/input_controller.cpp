@@ -642,7 +642,7 @@ namespace lfs::vis {
         if (auto* const scene_manager = services().sceneOrNull())
             scene_manager->modifierManager().cancelViewportMode();
         node_paint_dragging_ = false;
-        node_paint_last_world_.reset();
+        node_paint_last_screen_.reset();
         if (current_cursor_ != CursorType::Default) {
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
@@ -799,7 +799,7 @@ namespace lfs::vis {
             if (auto* const scene_manager = services().sceneOrNull())
                 scene_manager->modifierManager().endPaintStroke(false);
             node_paint_dragging_ = false;
-            node_paint_last_world_.reset();
+            node_paint_last_screen_.reset();
             return;
         }
 
@@ -826,26 +826,12 @@ namespace lfs::vis {
                         if (node_paint_dragging_)
                             modifiers.endPaintStroke(false);
                         node_paint_dragging_ = false;
-                        node_paint_last_world_.reset();
+                        node_paint_last_screen_.reset();
                         return;
                     }
                     if (action == input::ACTION_PRESS && selection && modifiers.beginPaintStroke()) {
                         node_paint_erasing_ = (mods & input::KEYMOD_ALT) != 0;
-                        if (const auto picked = selection->pickAtScreen(
-                                static_cast<float>(x), static_cast<float>(y));
-                            picked) {
-                            const auto world_radius = selection->worldRadiusAtScreen(
-                                static_cast<float>(x), static_cast<float>(y),
-                                picked->world_position, modifiers.paintRadius());
-                            const PaintStrokeSample sample{
-                                .position = picked->world_position,
-                                .radius = world_radius.value_or(0.0f),
-                                .value = node_paint_erasing_ ? 0.0f : 1.0f,
-                            };
-                            node_paint_dragging_ = modifiers.appendPaintSample(sample, true);
-                            if (node_paint_dragging_)
-                                node_paint_last_world_ = sample.position;
-                        }
+                        node_paint_dragging_ = appendNodePaintSample(*scene_manager, x, y);
                         if (!node_paint_dragging_)
                             modifiers.endPaintStroke(true);
                     }
@@ -1469,28 +1455,13 @@ namespace lfs::vis {
                 }
                 if (modifiers.paintModeActive()) {
                     current_cursor_ = CursorType::Paint;
-                    if (node_paint_dragging_) {
-                        if (auto* const selection = scene_manager->getSelectionService()) {
-                            if (const auto picked = selection->pickAtScreen(
-                                    static_cast<float>(x), static_cast<float>(y));
-                                picked) {
-                                const auto world_radius = selection->worldRadiusAtScreen(
-                                    static_cast<float>(x), static_cast<float>(y),
-                                    picked->world_position, modifiers.paintRadius());
-                                const float spacing = world_radius.value_or(0.0f) / 3.0f;
-                                if (!node_paint_last_world_ ||
-                                    glm::distance(*node_paint_last_world_, picked->world_position) >= spacing) {
-                                    const PaintStrokeSample sample{
-                                        .position = picked->world_position,
-                                        .radius = world_radius.value_or(0.0f),
-                                        .value = node_paint_erasing_ ? 0.0f : 1.0f,
-                                    };
-                                    if (modifiers.appendPaintSample(sample, true))
-                                        node_paint_last_world_ = sample.position;
-                                }
-                            }
-                        }
-                    }
+                    // Space samples a third of the brush apart on screen before picking: each pick
+                    // waits on the GPU.
+                    if (node_paint_dragging_ &&
+                        (!node_paint_last_screen_ ||
+                         glm::distance(*node_paint_last_screen_, glm::vec2(x, y)) >=
+                             modifiers.paintRadius() / 3.0f))
+                        (void)appendNodePaintSample(*scene_manager, x, y);
                     last_mouse_pos_ = current_pos;
                     return;
                 }
@@ -1966,7 +1937,7 @@ namespace lfs::vis {
                     (modifiers.paintModeActive() || modifiers.colourPickActive())) {
                     modifiers.cancelViewportMode();
                     node_paint_dragging_ = false;
-                    node_paint_last_world_.reset();
+                    node_paint_last_screen_.reset();
                     SDL_SetCursor(SDL_GetDefaultCursor());
                     current_cursor_ = CursorType::Default;
                     return;
@@ -3213,6 +3184,27 @@ namespace lfs::vis {
     // Helpers
     bool InputController::isInViewport(double x, double y) const {
         return views_.viewAt(static_cast<float>(x), static_cast<float>(y)).valid();
+    }
+
+    bool InputController::appendNodePaintSample(SceneManager& scene_manager, const double x, const double y) {
+        auto* const selection = scene_manager.getSelectionService();
+        if (!selection)
+            return false;
+        // A miss also counts, so empty space is not picked again on every move.
+        node_paint_last_screen_ = glm::vec2(x, y);
+        const auto picked = selection->pickAtScreen(static_cast<float>(x), static_cast<float>(y), -1,
+                                                    PickReads::Position);
+        if (!picked)
+            return false;
+        auto& modifiers = scene_manager.modifierManager();
+        const auto world_radius = selection->worldRadiusAtScreen(
+            static_cast<float>(x), static_cast<float>(y), picked->world_position, modifiers.paintRadius());
+        const PaintStrokeSample sample{
+            .position = picked->world_position,
+            .radius = world_radius.value_or(0.0f),
+            .value = node_paint_erasing_ ? 0.0f : 1.0f,
+        };
+        return modifiers.appendPaintSample(sample, true);
     }
 
     void InputController::activateViewAt(const double x, const double y) {

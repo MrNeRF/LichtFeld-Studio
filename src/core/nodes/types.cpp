@@ -3,6 +3,8 @@
 
 #include "core/nodes/types.hpp"
 
+#include <glm/gtc/matrix_transform.hpp>
+
 #include "core/assert.hpp"
 #include "core/tensor_backend.hpp"
 
@@ -220,6 +222,14 @@ namespace lfs::nodes {
         return convert_field(constant_field(value, from_type), to_type);
     }
 
+    glm::mat4 rotation_matrix(const glm::vec3 degrees) {
+        const auto angle = glm::radians(degrees);
+        const auto x = glm::rotate(glm::mat4(1), angle.x, glm::vec3(1, 0, 0));
+        const auto y = glm::rotate(glm::mat4(1), angle.y, glm::vec3(0, 1, 0));
+        const auto z = glm::rotate(glm::mat4(1), angle.z, glm::vec3(0, 0, 1));
+        return z * y * x;
+    }
+
     Geometry geometry_from_splat_data(const core::SplatData& data) {
         SplatsComponent component;
         core::Tensor keep;
@@ -269,7 +279,6 @@ namespace lfs::nodes {
         auto result =
             std::make_unique<core::SplatData>(s.sh_degree, s.means, sh0, s.shN, s.scaling, s.rotation,
                                               opacity, s.scene_scale, core::SplatData::ShNLayout::Canonical);
-        result->shN_set_from_canonical(s.shN);
         result->set_active_sh_degree(s.sh_degree);
         return result;
     }

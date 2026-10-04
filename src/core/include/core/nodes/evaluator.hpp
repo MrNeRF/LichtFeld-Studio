@@ -72,10 +72,22 @@ namespace lfs::nodes {
         std::optional<double> selected_share;
     };
 
+    // Thrown by node work that stops because its evaluation was cancelled.
+    class LFS_CORE_API EvaluationCancelled : public std::runtime_error {
+    public:
+        EvaluationCancelled() : std::runtime_error("Evaluation cancelled") {}
+    };
+
+    // Long node work calls this between chunks; it does nothing outside an evaluation.
+    LFS_CORE_API void throw_if_evaluation_cancelled();
+
     struct EvalControl {
         std::function<bool()> cancelled;
         std::function<void(const Node&)> started;
         std::function<void(const std::string&, const NodeEvaluation&)> finished;
+        // Rethrow device out-of-memory instead of reporting it as a node error,
+        // for hosts that can release memory and retry.
+        bool propagate_out_of_memory = false;
     };
 
     struct EvalResult {
@@ -88,11 +100,18 @@ namespace lfs::nodes {
         bool cancelled = false;
     };
 
+    struct ConsumedSelection {
+        std::uint64_t context = 0; // FieldContext::identity
+        core::Tensor mask;         // Bool
+    };
+
     struct CachedNodeOutput {
         std::size_t key = 0;
         std::unordered_map<std::string, Value> outputs;
         double time_ms = 0;
         std::optional<Geometry> geometry_input;
+        // The Selection input as the node consumed it, so previews need not evaluate it again.
+        std::optional<ConsumedSelection> selection;
     };
 
     struct EvalCache {
@@ -120,12 +139,15 @@ namespace lfs::nodes {
         [[nodiscard]] float seconds() const noexcept { return seconds_; }
         [[nodiscard]] float frame() const noexcept { return seconds_ * frames_per_second_; }
         void set_output(std::string identifier, Value value);
+        // Keeps the first Selection mask a node evaluates, for viewport previews.
+        void record_selection(const FieldContext& context, const core::Tensor& mask) const;
 
     private:
         friend EvalResult evaluate(const NodeTree&, EvalInputs, EvalHost*, EvalCache*, const EvalControl&);
         const Node* node_ = nullptr;
         std::unordered_map<std::string, std::vector<Value>> inputs_;
         std::unordered_map<std::string, Value> outputs_;
+        mutable std::optional<ConsumedSelection> selection_;
         FieldMemo* memo_ = nullptr;
         EvalHost* host_ = nullptr;
         float seconds_ = 0.0f;

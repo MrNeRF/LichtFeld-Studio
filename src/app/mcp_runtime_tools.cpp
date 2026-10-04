@@ -418,14 +418,15 @@ namespace lfs::app {
                     "Trainer manager is not initialized");
             }
 
-            const auto state = trainer->getState();
+            const bool preparing = viewer.isTrainingStartPending();
+            const auto state = preparing ? vis::TrainingState::Starting : trainer->getState();
             const int total_iterations = trainer->getTotalIterations();
             const int current_iteration = trainer->getCurrentIteration();
             json payload{
                 {"id", "training.main"},
                 {"label", "Training"},
                 {"kind", "training"},
-                {"active", trainer->isTrainingActive()},
+                {"active", preparing || trainer->isTrainingActive()},
                 {"status",
                  state == vis::TrainingState::Finished && !trainer->getLastError().empty()
                      ? "failed"

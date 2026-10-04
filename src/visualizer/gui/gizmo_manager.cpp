@@ -1946,9 +1946,12 @@ namespace lfs::vis::gui {
                          : std::optional<NodeViewportGizmo>{};
         if (!render_manager || !state) {
             if (render_manager) {
-                render_manager->setNodeBoxGizmoState(false, glm::mat4(1.0f), glm::mat4(1.0f), false);
-                render_manager->setNodeEllipsoidGizmoState(false, glm::mat4(1.0f), glm::mat4(1.0f), false);
-                render_manager->updateSettings(render_manager->getSettings(), DirtyFlag::OVERLAY);
+                const bool box_changed =
+                    render_manager->setNodeBoxGizmoState(false, glm::mat4(1.0f), glm::mat4(1.0f), false);
+                const bool ellipsoid_changed =
+                    render_manager->setNodeEllipsoidGizmoState(false, glm::mat4(1.0f), glm::mat4(1.0f), false);
+                if (box_changed || ellipsoid_changed)
+                    render_manager->updateSettings(render_manager->getSettings(), DirtyFlag::OVERLAY);
             }
             if (node_graph_gizmo_active_ && scene_manager)
                 scene_manager->modifierManager().endViewportNodeGizmoDrag(true);
@@ -2076,17 +2079,20 @@ namespace lfs::vis::gui {
                 transform_gizmo_view_ = kNoView;
         }
         auto& manager = scene_manager->modifierManager();
-        if (using_gizmo && !node_graph_gizmo_active_) {
-            node_graph_gizmo_active_ = manager.beginViewportNodeGizmoDrag();
-        }
-        if (changed && node_graph_gizmo_active_ && manager.updateViewportNodeGizmo(gizmo_matrix)) {
-            state = manager.viewportNodeGizmo();
-            if (state)
-                gizmo_matrix = state->world_transform;
-        }
-        if (!using_gizmo && node_graph_gizmo_active_) {
-            manager.endViewportNodeGizmoDrag(false);
-            node_graph_gizmo_active_ = false;
+        // Only the view that owns the drag starts, updates and ends its transaction.
+        if (interactive_view) {
+            if (using_gizmo && !node_graph_gizmo_active_) {
+                node_graph_gizmo_active_ = manager.beginViewportNodeGizmoDrag();
+            }
+            if (changed && node_graph_gizmo_active_ && manager.updateViewportNodeGizmo(gizmo_matrix)) {
+                state = manager.viewportNodeGizmo();
+                if (state)
+                    gizmo_matrix = state->world_transform;
+            }
+            if (!using_gizmo && node_graph_gizmo_active_) {
+                manager.endViewportNodeGizmoDrag(false);
+                node_graph_gizmo_active_ = false;
+            }
         }
 
         glm::mat4 falloff_transform = gizmo_matrix;
@@ -2109,10 +2115,12 @@ namespace lfs::vis::gui {
         }
         const bool box = state->kind == NodeViewportGizmoKind::Box;
         const bool ellipsoid = state->kind == NodeViewportGizmoKind::Ellipsoid;
-        render_manager->setNodeBoxGizmoState(box, gizmo_matrix, falloff_transform,
-                                             box && has_falloff);
-        render_manager->setNodeEllipsoidGizmoState(ellipsoid, gizmo_matrix, falloff_transform,
-                                                   ellipsoid && has_falloff);
+        const bool box_changed = render_manager->setNodeBoxGizmoState(box, gizmo_matrix, falloff_transform,
+                                                                      box && has_falloff);
+        const bool ellipsoid_changed = render_manager->setNodeEllipsoidGizmoState(
+            ellipsoid, gizmo_matrix, falloff_transform, ellipsoid && has_falloff);
+        if (box_changed || ellipsoid_changed)
+            render_manager->updateSettings(render_manager->getSettings(), DirtyFlag::OVERLAY);
         overlay_drawlist.PopClipRect();
     }
 

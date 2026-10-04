@@ -150,6 +150,8 @@ namespace lfs::nodes {
     LFS_CORE_API Value convert_value(const Value& value, std::string_view from_type,
                                      std::string_view to_type);
 
+    // Node rotation inputs in degrees, applied X, then Y, then Z (R = Rz * Ry * Rx).
+    LFS_CORE_API glm::mat4 rotation_matrix(glm::vec3 degrees);
     LFS_CORE_API Geometry geometry_from_splat_data(const core::SplatData& data);
     LFS_CORE_API std::unique_ptr<core::SplatData> splat_data_from_geometry(const Geometry& geometry);
     LFS_CORE_API Geometry geometry_from_point_cloud(const core::PointCloud& points);

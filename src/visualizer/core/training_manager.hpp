@@ -52,8 +52,11 @@ namespace lfs::vis {
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
     class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+    class VisualizerImplResetTest_AsyncPausedExplicitPreparationAdoptsItsSnapshot_Test;
 
     class LFS_VIS_API TrainerManager {
+        friend class VisualizerImplResetTest_AsyncPausedExplicitPreparationAdoptsItsSnapshot_Test;
+
     public:
         // Legacy State enum for backwards compatibility
         // Use TrainingState from training_state.hpp for new code
@@ -77,6 +80,9 @@ namespace lfs::vis {
 #endif
         [[nodiscard]] bool clearTrainer();
         bool hasTrainer() const;
+        [[nodiscard]] std::uint64_t trainerGeneration() const {
+            return trainer_generation_.load(std::memory_order_acquire);
+        }
         [[nodiscard]] bool isDatasetEditable() const;
 
         // Link to viewer for notifications
@@ -102,6 +108,8 @@ namespace lfs::vis {
         // Wait for the off-thread initialization phase. Callers must not be the
         // viewer thread; the GUI start path intentionally returns in Starting.
         [[nodiscard]] lfs::Result<void> waitForInitialization();
+        void beginTrainingStartPreparation();
+        void finishTrainingStartPreparation(std::optional<lfs::Error> error = std::nullopt);
         void pauseTraining();
         lfs::Status resumeTraining();
         void stopTraining();
@@ -311,6 +319,7 @@ namespace lfs::vis {
         std::mutex initialization_mutex_;
         std::condition_variable initialization_cv_;
         bool initialization_complete_ = true;
+        bool training_preparation_pending_ = false;
         std::optional<lfs::Error> initialization_error_;
         std::mutex initialization_gate_mutex_;
         std::condition_variable initialization_gate_cv_;
@@ -333,6 +342,7 @@ namespace lfs::vis {
         core::ErrorLatch last_training_error_;
         mutable std::mutex state_mutex_;
         mutable std::mutex trainer_lifetime_mutex_;
+        std::atomic<std::uint64_t> trainer_generation_{0};
 
         // Synchronization
         std::condition_variable completion_cv_;

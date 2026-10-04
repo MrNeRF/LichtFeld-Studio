@@ -377,7 +377,8 @@ TEST_F(ShValueStorageTest, ViewerExternalBindRehomesDegradedQ16BoundsAsPair) {
         splat, counting_viewer_allocator(allocation_calls));
 
     ASSERT_TRUE(result.has_value()) << result.error().format();
-    EXPECT_EQ(allocation_calls, 7);
+    // Attributes already in renderer storage stay; the codes and bounds move together.
+    EXPECT_EQ(allocation_calls, 2);
     ASSERT_TRUE(splat.shN_value_quantized());
     EXPECT_EQ(splat.shN_raw().external_storage_kind(), "vulkan_external_buffer");
     EXPECT_EQ(splat.shN_value_bounds().external_storage_kind(), "vulkan_external_buffer");
@@ -397,7 +398,8 @@ TEST_F(ShValueStorageTest, ViewerExternalBindRehomesDegradedQ16CodesAsPair) {
         splat, counting_viewer_allocator(allocation_calls));
 
     ASSERT_TRUE(result.has_value()) << result.error().format();
-    EXPECT_EQ(allocation_calls, 7);
+    // Attributes already in renderer storage stay; the codes and bounds move together.
+    EXPECT_EQ(allocation_calls, 2);
     ASSERT_TRUE(splat.shN_value_quantized());
     EXPECT_EQ(splat.shN_raw().external_storage_kind(), "vulkan_external_buffer");
     EXPECT_EQ(splat.shN_value_bounds().external_storage_kind(), "vulkan_external_buffer");

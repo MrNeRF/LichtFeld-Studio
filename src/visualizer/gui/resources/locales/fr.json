@@ -1215,6 +1215,7 @@
     "instructions": "Entrée : valider la sélection | Ctrl+C : copier le contenu"
   },
   "training_panel": {
+    "preparing_training": "Préparation de l’entraînement…",
     "start_training": "Démarrer l'Entraînement",
     "resume_training": "Reprendre l'Entraînement",
     "pause": "Pause",

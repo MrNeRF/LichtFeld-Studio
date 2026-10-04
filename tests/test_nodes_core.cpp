@@ -419,6 +419,50 @@ namespace {
         }
     }
 
+    // Scale Clamp shortens the longest axis to Max Aspect times the middle one and leaves splats that
+    // already comply untouched.
+    TEST_P(NodesCore, ScaleClampBoundsLongestOverMiddleAndKeepsCompliantSplats) {
+        constexpr std::size_t count = 4096;
+        std::mt19937 random(5);
+        std::uniform_real_distribution<float> log_scale(-6.0f, 2.0f);
+        std::vector<float> values(count * 3);
+        for (auto& value : values)
+            value = log_scale(random);
+        // Splats exactly at the limit, which rounding in the middle axis must not clip.
+        const float limit = std::log(16.0f);
+        for (std::size_t row = 0; row < 64; ++row) {
+            const float middle = -6.2713494f + 0.01f * static_cast<float>(row);
+            values[row * 3] = middle;
+            values[row * 3 + 1] = middle + limit;
+            values[row * 3 + 2] = middle - 1.3950546f;
+        }
+        SplatsComponent component;
+        component.means = tensor(std::vector<float>(count * 3, 0.0f), {count, 3});
+        component.sh0 = tensor(std::vector<float>(count * 3, 0.0f), {count, 3});
+        component.shN = tensor(std::vector<float>(count * 9, 0.0f), {count, 3, 3});
+        component.scaling = tensor(values, {count, 3});
+        std::vector<float> identity(count * 4, 0.0f);
+        for (std::size_t row = 0; row < count; ++row)
+            identity[row * 4] = 1.0f;
+        component.rotation = tensor(std::move(identity), {count, 4});
+        component.opacity = tensor(std::vector<float>(count, 0.0f), {count});
+        component.sh_degree = 1;
+        Geometry input{std::move(component), std::nullopt, std::nullopt};
+        const auto clamped = single("lfs.scale_clamp", input, [](Node& node) { node.input_values["Max Aspect"] = 16.0f; });
+        ASSERT_TRUE(clamped.ok);
+        const auto after = host<float>(clamped.geometry.splats->scaling);
+        for (std::size_t row = 0; row < count; ++row) {
+            std::array<float, 3> before_row{values[row * 3], values[row * 3 + 1], values[row * 3 + 2]};
+            std::array<float, 3> after_row{after[row * 3], after[row * 3 + 1], after[row * 3 + 2]};
+            std::ranges::sort(before_row);
+            std::ranges::sort(after_row);
+            ASSERT_LE(after_row[2] - after_row[1], limit + 1e-5f) << "row " << row;
+            if (before_row[2] - before_row[1] <= limit)
+                for (std::size_t axis = 0; axis < 3; ++axis)
+                    ASSERT_EQ(after[row * 3 + axis], values[row * 3 + axis]) << "row " << row;
+        }
+    }
+
     TEST_P(NodesCore, ColourCorrectGammaTouchesOnlyDCAndAffineTouchesEverySHCoefficient) {
         Geometry input = splats(1);
         const auto original_shn = host<float>(input.splats->shN);
@@ -990,6 +1034,18 @@ namespace {
         }
     }
 
+    TEST(NodesCoreMetadata, OnlyAttributeNodesKeepElements) {
+        NodeTypeRegistry registry;
+        register_builtin_nodes(registry);
+        for (const auto* id : {"lfs.set_colour", "lfs.transform_geometry", "lfs.colour_correct", "lfs.group_input", "lfs.group_output",
+                               "lfs.reroute", "lfs.rgb_curves", "lfs.store_named_attribute"})
+            EXPECT_TRUE(registry.find(id)->keeps_elements) << id;
+        for (const auto* id : {"lfs.join_geometry", "lfs.separate_geometry", "lfs.delete_geometry",
+                               "lfs.remove_floaters", "lfs.object_info", "lfs.splats_to_points"})
+            if (const auto type = registry.find(id))
+                EXPECT_FALSE(type->keeps_elements) << id;
+    }
+
     TEST(NodesCoreMetadata, Base64RoundTripAndRejectsMalformedData) {
         const std::vector<std::uint8_t> bytes{0, 1, 127, 128, 254, 255, 11};
         EXPECT_EQ(lfs::core::base64_decode(lfs::core::base64_encode(bytes)), bytes);
@@ -1191,6 +1247,101 @@ namespace {
         EXPECT_EQ(selection(nlohmann::json::array({paint, erase, repaint})), (std::vector<float>{1.0f, 0.0f}));
         // Erasing first and painting later is not undone by the earlier erase.
         EXPECT_EQ(selection(nlohmann::json::array({erase, paint})), (std::vector<float>{1.0f, 1.0f}));
+    }
+
+    TEST_P(NodesCore, PaintSelectionChunksMatchBruteForceAcrossDistantStrokes) {
+        // A long stroke spans several sample chunks; the distant stroke widens the strokes' bounds
+        // over every point, so only the per-chunk culling keeps the work local.
+        nlohmann::json strokes = nlohmann::json::array();
+        nlohmann::json line = nlohmann::json::array();
+        for (int index = 0; index < 150; ++index)
+            line.push_back({0.1f * static_cast<float>(index), 0.05f * static_cast<float>(index % 7), 0.0f, 0.3f,
+                            index % 50 == 25 ? 0.0f : 1.0f});
+        strokes.push_back(line);
+        strokes.push_back({{40.0f, 40.0f, 0.0f, 2.0f, 1.0f}, {41.0f, 40.0f, 0.0f, 2.0f, 0.0f}});
+        std::vector<glm::vec3> positions;
+        std::vector<float> flat;
+        for (int x = -2; x < 44; ++x)
+            for (int y = -1; y < 42; y += 3) {
+                const glm::vec3 position(0.37f * static_cast<float>(x), 0.11f * static_cast<float>(y), 0.0f);
+                positions.push_back(position);
+                flat.insert(flat.end(), {position.x, position.y, position.z});
+            }
+        positions.push_back({40.5f, 40.0f, 0.0f});
+        flat.insert(flat.end(), {40.5f, 40.0f, 0.0f});
+        auto geometry = splats(0);
+        geometry.splats->means = tensor(flat, {positions.size(), 3});
+        const auto actual = host<float>(field_result(
+            "lfs.paint_selection", "Selection", FLOAT_SOCKET, geometry, [&](Node& node) {
+                node.properties["data"] = strokes;
+                node.input_values["Softness"] = 0.5f;
+            }));
+        ASSERT_EQ(actual.size(), positions.size());
+        std::size_t selected_count = 0;
+        for (std::size_t point = 0; point < positions.size(); ++point) {
+            float selected = 0.0f;
+            for (const auto& stroke : strokes) {
+                float paint = 0.0f;
+                float erase = 0.0f;
+                for (const auto& sample : stroke) {
+                    const glm::vec3 centre(sample[0].get<float>(), sample[1].get<float>(), sample[2].get<float>());
+                    const float distance = glm::distance(positions[point], centre) / sample[3].get<float>();
+                    const float weight = std::clamp((1.0f - distance) / 0.5f, 0.0f, 1.0f);
+                    if (sample[4].get<float>() == 0.0f)
+                        erase = std::max(erase, weight);
+                    else
+                        paint = std::max(paint, sample[4].get<float>() * weight);
+                }
+                selected = std::min(std::max(selected, paint), 1.0f - erase);
+            }
+            EXPECT_NEAR(actual[point], selected, 1e-5f) << point;
+            selected_count += selected > 0.0f;
+        }
+        EXPECT_GT(selected_count, 20u);
+    }
+
+    TEST_P(NodesCore, CancellationRaisedInsideANodeStopsWithoutAnError) {
+        bool stop = false;
+        NodeTypeInfo info;
+        info.id = "test.cancel";
+        info.inputs.push_back({"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)});
+        info.outputs.push_back({"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)});
+        info.evaluate = [&](NodeContext& context) {
+            stop = true;
+            throw_if_evaluation_cancelled();
+            context.set_output("Geometry", context.input("Geometry"));
+        };
+        ASSERT_TRUE(registry_.register_type(std::move(info)));
+        NodeTree tree(registry_);
+        const Node& node = tree.add_node("test.cancel");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", node.name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"}));
+        EvalCache cache;
+        EvalControl control;
+        control.cancelled = [&] { return stop; };
+        const auto result = evaluate(tree, {splats(), {}, 7}, nullptr, &cache, control);
+        EXPECT_TRUE(result.cancelled);
+        EXPECT_FALSE(result.ok);
+        EXPECT_TRUE(result.errors.empty());
+        EXPECT_FALSE(cache.nodes.contains(node.name));
+        // Outside an evaluation there is nothing to cancel.
+        EXPECT_NO_THROW(throw_if_evaluation_cancelled());
+    }
+
+    TEST_P(NodesCore, ConsumersKeepTheSelectionTheyEvaluated) {
+        NodeTree tree(registry_);
+        Node& box = tree.add_node("lfs.box_selection");
+        box.input_values["Centre"] = glm::vec3(1, 0, 0);
+        box.input_values["Size"] = glm::vec3(0.5f);
+        const Node& opacity = tree.add_node("lfs.set_opacity");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", opacity.name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({box.name, "Selection", opacity.name, "Selection"}));
+        ASSERT_TRUE(tree.add_link({opacity.name, "Geometry", tree.output_node().name, "Geometry"}));
+        EvalCache cache;
+        ASSERT_TRUE(evaluate(tree, {splats(), {}, 7}, nullptr, &cache).ok);
+        const auto& consumer = cache.nodes.at(opacity.name);
+        ASSERT_TRUE(consumer.selection);
+        EXPECT_EQ(consumer.selection->mask.cpu().to_vector_bool(), (std::vector<bool>{false, true, false}));
     }
 
     TEST_P(NodesCore, PaintSelectionSoftnessEndpointsAndInvert) {
@@ -1568,6 +1719,10 @@ namespace {
                 EXPECT_EQ(host<int>(lfs::core::radius_neighbor_counts(points, references.gt(0), radius, limit, &queries)), masked);
             }
         }
+        // Cell indices clamp far from the origin; coincident points there still count each other.
+        const auto far = tensor({1e9f, 0, 0, 1e9f, 0, 0, 1e9f, 0, 0}, {3, 3});
+        EXPECT_EQ(host<int>(lfs::core::radius_neighbor_counts(far, Tensor::full_bool({3}, true, device()), 1.0f, 2)),
+                  (std::vector<int>{2, 2, 2}));
         EXPECT_THROW(lfs::core::radius_neighbor_counts(points, references, 1.0f, 0), std::exception);
         const auto empty = lfs::core::radius_neighbor_counts(Tensor::empty({0, 3}, device()), Tensor::full_bool({0}, true, device()), 1.0f, 3);
         EXPECT_EQ(empty.numel(), 0u);
