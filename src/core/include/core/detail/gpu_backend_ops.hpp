@@ -192,6 +192,13 @@ namespace lfs::core {
                                                const PointTreeProgram& /*program*/, ExecContext /*context*/) {
                 return false;
             }
+            // Float32 [N] point_neighbor_spacing over a point tree of every finite point (program.radius is the
+            // cell width). Returns false, writing nothing, when the backend has no kernel for it.
+            virtual bool point_tree_spacing(StorageRef /*points*/, StorageRef /*sorted*/, StorageRef /*boxes*/,
+                                            StorageRef /*visit*/, StorageRef /*output*/,
+                                            const PointTreeProgram& /*program*/, ExecContext /*context*/) {
+                return false;
+            }
             // Int32 [N] 0/1 ray-crossing parity over a triangle tree (see TriangleRayIndex): triangles are
             // [F,9] (a, b - a, c - a) and boxes their bounds in the ray frame, both in tree order. visit
             // orders the queries. Returns false, writing nothing, when the backend has no kernel for it.
@@ -539,6 +546,8 @@ namespace lfs::core {
                                        const PointTreeProgram& program, ExecContext context) override;
             bool triangle_tree_parity(StorageRef points, StorageRef visit, StorageRef triangles, StorageRef boxes,
                                       StorageRef output, const PointTreeProgram& program, ExecContext context) override;
+            bool point_tree_spacing(StorageRef points, StorageRef sorted, StorageRef boxes, StorageRef visit,
+                                    StorageRef output, const PointTreeProgram& program, ExecContext context) override;
             void point_neighbor_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                         size_t, size_t, float, ExecContext) override;
             void project_points(StorageRef points, StorageRef output, size_t count,

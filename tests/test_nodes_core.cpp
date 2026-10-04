@@ -3207,6 +3207,61 @@ namespace {
         }
     }
 
+    TEST_P(NodesCore, PointNeighbourSpacingMatchesBruteForceWithinItsCells) {
+        std::mt19937 random(17);
+        std::normal_distribution<float> spread(0.0f, 0.02f);
+        std::uniform_real_distribution<float> anywhere(-1.0f, 1.0f);
+        std::vector<float> xyz;
+        // Dense clusters, sparse points between them, duplicates and a non-finite point.
+        for (int cluster = 0; cluster < 20; ++cluster) {
+            const float cx = anywhere(random), cy = anywhere(random), cz = anywhere(random);
+            for (int i = 0; i < 120; ++i)
+                xyz.insert(xyz.end(), {cx + spread(random), cy + spread(random), cz + spread(random)});
+        }
+        for (int i = 0; i < 400; ++i)
+            xyz.insert(xyz.end(), {anywhere(random), anywhere(random), anywhere(random)});
+        xyz.insert(xyz.end(), {xyz[0], xyz[1], xyz[2], std::numeric_limits<float>::quiet_NaN(), 0, 0});
+        const size_t count = xyz.size() / 3;
+        const float width = 0.05f;
+        const auto cell = [&](const float value) {
+            return static_cast<int>(std::clamp(std::floor(value / width), -268435456.0f, 268435456.0f));
+        };
+        std::vector<float> expected(count, 0.0f);
+        for (size_t i = 0; i < count; ++i) {
+            const float* p = &xyz[i * 3];
+            if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]))
+                continue;
+            std::vector<float> near, ring;
+            for (size_t j = 0; j < count; ++j) {
+                const float* q = &xyz[j * 3];
+                if (j == i || !std::isfinite(q[0]) || !std::isfinite(q[1]) || !std::isfinite(q[2]))
+                    continue;
+                int reach = 0;
+                for (int axis = 0; axis < 3; ++axis)
+                    reach = std::max(reach, std::abs(cell(q[axis]) - cell(p[axis])));
+                const float dx = p[0] - q[0], dy = p[1] - q[1], dz = p[2] - q[2];
+                const float distance = dx * dx + dy * dy + dz * dz;
+                if (reach <= 1)
+                    near.push_back(distance);
+                else if (reach == 2)
+                    ring.push_back(distance);
+            }
+            auto& candidates = near;
+            if (near.size() < 3)
+                candidates.insert(candidates.end(), ring.begin(), ring.end());
+            std::ranges::sort(candidates);
+            const size_t found = std::min<size_t>(3, candidates.size());
+            float sum = 0;
+            for (size_t k = 0; k < found; ++k)
+                sum += std::sqrt(candidates[k]);
+            expected[i] = found ? sum / static_cast<float>(found) : width * 4;
+        }
+        const auto actual = host<float>(lfs::core::point_neighbor_spacing(tensor(xyz, {count, 3}), width));
+        ASSERT_EQ(actual.size(), count);
+        for (size_t i = 0; i < count; ++i)
+            ASSERT_NEAR(actual[i], expected[i], 1e-6f + 1e-5f * expected[i]) << "point " << i;
+    }
+
     TEST_P(NodesCore, PointNeighbourSpacingExpandsAndHandlesEmptyInputs) {
         const auto points = tensor({0, 0, 0, 1.8f, 0, 0, 1.9f, 0, 0, 2, 0, 0}, {4, 3});
         const auto spacing = lfs::core::point_neighbor_spacing(points, 1.0f);

@@ -8,7 +8,8 @@ static const uint kFanoutBits = 5;
 static const uint kFanout = 32;
 static const uint kMaxLevels = 8;
 
-// 0 neighbour counts, 1 join each point with its mutual neighbours (labels in output).
+// 0 neighbour counts, 1 join each point with its mutual neighbours (labels in output), 2 neighbour
+// spacing (Float32 output, cell width in radius).
 [SpecializationConstant] const uint kMode = 0;
 
 struct Parameters {
@@ -213,6 +214,83 @@ void joinMutual(Parameters p, uint rank) {
     }
 }
 
+int spacingCell(float value, float width) {
+    return int(min(268435456.0f, max(-268435456.0f, floor(roundedDiv(value, width)))));
+}
+
+// Mean distance to the nearest three others whose cells lie within one cell of q's (two when those hold
+// fewer than three); mirrors pointTreeSpacing in internal/point_tree.hpp.
+float treeSpacing(Parameters p, float3 q, int rank, float width) {
+    Ptr<float, Access.Read> boxes = (Ptr<float, Access.Read>)p.boxes;
+    const int3 centre = int3(spacingCell(q.x, width), spacingCell(q.y, width), spacingCell(q.z, width));
+    float best[3] = { 1.0f / 0.0f, 1.0f / 0.0f, 1.0f / 0.0f };
+    int found = 0;
+    for (int extent = 1; extent <= 2 && found < 3; ++extent) {
+        const uint top = p.levels - 1u;
+        uint level = top;
+        uint node = 0u;
+        bool climbing = false;
+        while (true) {
+            if (!climbing) {
+                const uint64_t box = (uint64_t(p.levelOffset[level]) + node) * 6;
+                const float3 low = float3(boxes[box], boxes[box + 1], boxes[box + 2]);
+                const float3 high = float3(boxes[box + 3], boxes[box + 4], boxes[box + 5]);
+                bool open = spacingCell(high.x, width) >= centre.x - extent && spacingCell(low.x, width) <= centre.x + extent &&
+                            spacingCell(high.y, width) >= centre.y - extent && spacingCell(low.y, width) <= centre.y + extent &&
+                            spacingCell(high.z, width) >= centre.z - extent && spacingCell(low.z, width) <= centre.z + extent;
+                if (open && found == 3) {
+                    const float3 near = float3(max(0.0f, max(roundedSub(low.x, q.x), roundedSub(q.x, high.x))),
+                                               max(0.0f, max(roundedSub(low.y, q.y), roundedSub(q.y, high.y))),
+                                               max(0.0f, max(roundedSub(low.z, q.z), roundedSub(q.z, high.z))));
+                    open = dotRounded(near, near) < best[2];
+                }
+                if (open && level != 0u) {
+                    --level;
+                    node <<= kFanoutBits;
+                    continue;
+                }
+                if (open) {
+                    const uint64_t first = uint64_t(node) << kFanoutBits;
+                    const uint64_t last = min(first + kFanout, uint64_t(p.references));
+                    for (uint64_t j = first; j < last; ++j) {
+                        if (int64_t(j) == int64_t(rank))
+                            continue;
+                        const float3 other = load3(p.sorted, j);
+                        const int3 offset = int3(spacingCell(other.x, width), spacingCell(other.y, width),
+                                                 spacingCell(other.z, width)) - centre;
+                        const bool inRange = all(offset >= int3(-extent)) && all(offset <= int3(extent));
+                        const bool inner = all(offset >= int3(-1)) && all(offset <= int3(1));
+                        if (!inRange || (extent == 2 && inner))
+                            continue;
+                        const float3 d = float3(q.x - other.x, q.y - other.y, q.z - other.z);
+                        const float distance = dotRounded(d, d);
+                        if (distance < best[2]) {
+                            best[2] = max(best[1], distance);
+                            best[1] = max(best[0], min(best[1], distance));
+                            best[0] = min(best[0], distance);
+                        }
+                        found = found < 3 ? found + 1 : found;
+                    }
+                }
+            }
+            climbing = false;
+            ++node;
+            if (level == top) {
+                if (node >= p.levelCount[top])
+                    break;
+            } else if ((node & (kFanout - 1u)) == 0u || node >= p.levelCount[level]) {
+                node = (node - 1u) >> kFanoutBits;
+                ++level;
+                climbing = true;
+            }
+        }
+    }
+    float sum = 0.0f;
+    for (int k = 0; k < found; ++k)
+        sum += sqrt(best[k]);
+    return found > 0 ? sum / float(found) : width * 4.0f;
+}
+
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)] void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters p) {
     const uint3 numWorkgroups = spirv_asm {
 result:
@@ -222,6 +300,16 @@ result:
     if (kMode == 1) {
         for (uint t = dispatchThreadId.x; t < p.references; t += stride)
             joinMutual(p, t);
+        return;
+    }
+    if (kMode == 2) {
+        Ptr<int, Access.Read> order = (Ptr<int, Access.Read>)p.visit;
+        Ptr<float, Access.ReadWrite> spacing = (Ptr<float, Access.ReadWrite>)p.output;
+        for (uint t = dispatchThreadId.x; t < p.count; t += stride) {
+            const uint i = uint(order[t]);
+            const float3 q = load3(p.points, i);
+            spacing[i] = all(isfinite(q)) ? treeSpacing(p, q, t < p.references ? int(t) : -1, p.radius) : 0.0f;
+        }
         return;
     }
     Ptr<int, Access.Read> visit = (Ptr<int, Access.Read>)p.visit;

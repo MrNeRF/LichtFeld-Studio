@@ -299,6 +299,25 @@ namespace lfs::core::tensor_ops {
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.point_tree_components.flatten");
     }
 
+    namespace {
+        __global__ void point_tree_spacing(const float* points, const float* sorted, const float* boxes,
+                                           const int32_t* visit, float* output, const PointTreeProgram tree) {
+            const size_t t = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (t >= tree.points)
+                return;
+            const auto i = static_cast<size_t>(visit[t]);
+            output[i] = pointTreeSpacing(sorted, boxes, tree, points + i * 3,
+                                         t < tree.references ? static_cast<int64_t>(t) : -1, tree.radius);
+        }
+    } // namespace
+
+    void launch_point_tree_spacing(const float* points, const float* sorted, const float* boxes, const int32_t* visit,
+                                   float* output, const PointTreeProgram& tree, const cudaStream_t stream) {
+        point_tree_spacing<<<(tree.points + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+            points, sorted, boxes, visit, output, tree);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.point_tree_spacing");
+    }
+
     void launch_point_tree_counts(const float* points, const float* sorted, const float* boxes, const int32_t* visit,
                                   const float* radii, const uint8_t* queries, int32_t* output,
                                   const PointTreeProgram& tree, const cudaStream_t stream) {

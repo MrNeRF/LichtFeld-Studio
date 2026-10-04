@@ -104,6 +104,16 @@ namespace lfs::core::internal {
         return true;
     }
 
+    bool CudaBackendOps::point_tree_spacing(const StorageRef points, const StorageRef sorted, const StorageRef boxes,
+                                            const StorageRef visit, const StorageRef output,
+                                            const PointTreeProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(point_tree_spacing);
+        tensor_ops::launch_point_tree_spacing(cuda_pointer<const float>(points), cuda_pointer<const float>(sorted),
+                                              cuda_pointer<const float>(boxes), cuda_pointer<const int32_t>(visit),
+                                              cuda_pointer<float>(output), program, context.cuda_stream);
+        return true;
+    }
+
     bool CudaBackendOps::triangle_tree_parity(const StorageRef points, const StorageRef visit, const StorageRef triangles,
                                               const StorageRef boxes, const StorageRef output,
                                               const PointTreeProgram& program, const ExecContext context) {

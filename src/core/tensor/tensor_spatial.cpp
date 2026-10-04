@@ -680,6 +680,44 @@ namespace lfs::core {
     Tensor point_neighbor_spacing(const Tensor& points, const float cell_width) {
         LFS_ASSERT_MSG(points.is_valid() && points.ndim() == 2,
                        std::format("point_neighbor_spacing requires rank-2 points (valid={}, rank={})", points.is_valid(), points.ndim()));
-        return radius_query(points, internal::allocate_like(points, {points.size(0)}, DataType::Bool, 1.0f), cell_width, true, nullptr, 0, true);
+        const auto everything = internal::allocate_like(points, {points.size(0)}, DataType::Bool, 1.0f);
+        const auto grid = [&] { return radius_query(points, everything, cell_width, true, nullptr, 0, true); };
+        LFS_ASSERT_MSG(points.size(1) == 3 && points.dtype() == DataType::Float32 && std::isnormal(cell_width) && cell_width > 0.0f,
+                       std::format("point_neighbor_spacing requires Float32 [N,3] points and a positive normal cell width (width={})",
+                                   cell_width));
+        const size_t count = points.size(0);
+        LFS_ASSERT_MSG(count <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+                       "point_neighbor_spacing point count exceeds int32");
+        auto output = internal::allocate_like(points, TensorShape{count}, DataType::Float32, 0.0f);
+        if (count == 0)
+            return output;
+        auto tree = build_point_tree(points, everything);
+        if (tree.program.references == 0)
+            return output;
+        tree.program.radius = cell_width;
+        const auto positions = points.contiguous();
+        if (points.device() == Device::GPU) {
+            pin_operands({&positions, &tree.sorted, &tree.boxes, &tree.visit, &output});
+            const auto stream = prepare_inputs_for_stream({&positions, &tree.sorted, &tree.boxes, &tree.visit}, output.stream());
+            if (internal::backend_ops_for(positions).point_tree_spacing(
+                    internal::storage_ref(positions), internal::storage_ref(tree.sorted), internal::storage_ref(tree.boxes),
+                    internal::storage_ref(tree.visit), internal::storage_ref(output), tree.program,
+                    internal::ExecContext{stream}))
+                return output;
+            return grid();
+        }
+        const auto* xyz = positions.ptr<float>();
+        const auto* sorted = tree.sorted.ptr<float>();
+        const auto* boxes = tree.boxes.ptr<float>();
+        const auto* visit = tree.visit.ptr<int32_t>();
+        auto* result = output.ptr<float>();
+        const auto references = static_cast<int64_t>(tree.program.references);
+        const auto total = static_cast<int64_t>(count);
+#pragma omp parallel for schedule(dynamic, 1024)
+        for (int64_t t = 0; t < total; ++t) {
+            const auto i = static_cast<size_t>(visit[t]);
+            result[i] = pointTreeSpacing(sorted, boxes, tree.program, xyz + i * 3, t < references ? t : -1, cell_width);
+        }
+        return output;
     }
 } // namespace lfs::core

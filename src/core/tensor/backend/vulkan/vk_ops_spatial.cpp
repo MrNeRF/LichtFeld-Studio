@@ -324,6 +324,29 @@ namespace lfs::core::internal {
         return true;
     }
 
+    bool VulkanBackendOps::point_tree_spacing(const StorageRef points, const StorageRef sorted, const StorageRef boxes,
+                                              const StorageRef visit, const StorageRef output,
+                                              const PointTreeProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(point_tree_spacing);
+        auto push = point_tree_push(program);
+        push.points = vk::address(points);
+        push.sorted = vk::address(sorted);
+        push.boxes = vk::address(boxes);
+        push.visit = vk::address(visit);
+        push.output = vk::address(output);
+        const auto context = acquire_vulkan_context();
+        const std::array constants{2u};
+        const auto& pipeline = context->pipelines().specialized("point_tree", sizeof(push), constants);
+        const std::array reads{points, sorted, boxes, visit};
+        const std::array writes{output};
+        context->recorders().record(reads, writes, [&](const VkCommandBuffer command) {
+            vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+            vkCmdPushConstants(command, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+            vkCmdDispatch(command, vk::dispatch_groups(*context, program.points), 1, 1);
+        });
+        return true;
+    }
+
     bool VulkanBackendOps::point_tree_components(const StorageRef points, const StorageRef sorted, const StorageRef boxes,
                                                  const StorageRef box_radii, const StorageRef visit,
                                                  const StorageRef sorted_radii, const StorageRef radii,
