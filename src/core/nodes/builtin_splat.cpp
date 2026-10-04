@@ -185,7 +185,8 @@ namespace lfs::nodes::builtin {
                 // sum - min - max subtracts infinities and produces NaN.
                 auto middle = x.minimum(y).maximum(x.maximum(y).minimum(z)).unsqueeze(1);
                 middle = Tensor::where(middle.isfinite(), middle, largest);
-                clamped = splats.scaling.minimum(middle + limit);
+                // Clamping only past the limit leaves a splat exactly at it untouched despite rounding.
+                clamped = Tensor::where((largest - middle).gt(limit), splats.scaling.minimum(middle + limit), splats.scaling);
             }
             splats.scaling = blend(splats.scaling, clamped, weight);
         }

@@ -419,6 +419,50 @@ namespace {
         }
     }
 
+    // Scale Clamp shortens the longest axis to Max Aspect times the middle one and leaves splats that
+    // already comply untouched.
+    TEST_P(NodesCore, ScaleClampBoundsLongestOverMiddleAndKeepsCompliantSplats) {
+        constexpr std::size_t count = 4096;
+        std::mt19937 random(5);
+        std::uniform_real_distribution<float> log_scale(-6.0f, 2.0f);
+        std::vector<float> values(count * 3);
+        for (auto& value : values)
+            value = log_scale(random);
+        // Splats exactly at the limit, which rounding in the middle axis must not clip.
+        const float limit = std::log(16.0f);
+        for (std::size_t row = 0; row < 64; ++row) {
+            const float middle = -6.2713494f + 0.01f * static_cast<float>(row);
+            values[row * 3] = middle;
+            values[row * 3 + 1] = middle + limit;
+            values[row * 3 + 2] = middle - 1.3950546f;
+        }
+        SplatsComponent component;
+        component.means = tensor(std::vector<float>(count * 3, 0.0f), {count, 3});
+        component.sh0 = tensor(std::vector<float>(count * 3, 0.0f), {count, 3});
+        component.shN = tensor(std::vector<float>(count * 9, 0.0f), {count, 3, 3});
+        component.scaling = tensor(values, {count, 3});
+        std::vector<float> identity(count * 4, 0.0f);
+        for (std::size_t row = 0; row < count; ++row)
+            identity[row * 4] = 1.0f;
+        component.rotation = tensor(std::move(identity), {count, 4});
+        component.opacity = tensor(std::vector<float>(count, 0.0f), {count});
+        component.sh_degree = 1;
+        Geometry input{std::move(component), std::nullopt, std::nullopt};
+        const auto clamped = single("lfs.scale_clamp", input, [](Node& node) { node.input_values["Max Aspect"] = 16.0f; });
+        ASSERT_TRUE(clamped.ok);
+        const auto after = host<float>(clamped.geometry.splats->scaling);
+        for (std::size_t row = 0; row < count; ++row) {
+            std::array<float, 3> before_row{values[row * 3], values[row * 3 + 1], values[row * 3 + 2]};
+            std::array<float, 3> after_row{after[row * 3], after[row * 3 + 1], after[row * 3 + 2]};
+            std::ranges::sort(before_row);
+            std::ranges::sort(after_row);
+            ASSERT_LE(after_row[2] - after_row[1], limit + 1e-5f) << "row " << row;
+            if (before_row[2] - before_row[1] <= limit)
+                for (std::size_t axis = 0; axis < 3; ++axis)
+                    ASSERT_EQ(after[row * 3 + axis], values[row * 3 + axis]) << "row " << row;
+        }
+    }
+
     TEST_P(NodesCore, ColourCorrectGammaTouchesOnlyDCAndAffineTouchesEverySHCoefficient) {
         Geometry input = splats(1);
         const auto original_shn = host<float>(input.splats->shN);
