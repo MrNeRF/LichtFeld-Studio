@@ -157,7 +157,7 @@ namespace {
 
         Tensor field_result(std::string_view id, std::string_view socket, std::string_view socket_type,
                             Geometry geometry, std::function<void(Node&)> configure = {}, EvalHost* eval_host = nullptr,
-                            std::optional<Device> execution_device = {}) {
+                            std::optional<Device> execution_device = {}, const bool round_trip = false) {
             Tensor value;
             NodeTypeInfo capture;
             capture.id = "test.capture";
@@ -180,6 +180,8 @@ namespace {
             EXPECT_TRUE(tree.add_link({"Field", std::string(socket), "Capture", "Value"}));
             EXPECT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Capture", "Geometry"}));
             EXPECT_TRUE(tree.add_link({"Capture", "Geometry", tree.output_node().name, "Geometry"}));
+            if (round_trip)
+                tree = NodeTree::from_json(tree.to_json(), registry_);
             const auto result = lfs::nodes::evaluate(tree, {geometry, {}, 1, execution_device.value_or(device())}, eval_host);
             if (!result.ok)
                 for (const auto& [name, message] : result.errors)
@@ -2595,6 +2597,17 @@ namespace {
         ASSERT_EQ(golden.size(), bits.size());
         for (size_t i = 0; i < bits.size(); ++i)
             EXPECT_EQ(std::bit_cast<uint32_t>(golden[i]), bits[i]) << i;
+    }
+
+    // Fails if serializing a graph drops an unconnected input's runtime default: Noise then samples an empty
+    // vector instead of the position, and the worker serializes graphs for every evaluation.
+    TEST_P(NodesCore, NoiseKeepsItsPositionDefaultThroughSerialization) {
+        auto geometry = splats();
+        geometry.splats->means = tensor({0, 0, 0, .123f, .27f, .38f, 1.5f, -2.25f, .75f}, {3, 3});
+        const auto direct = host<float>(field_result("lfs.noise_texture", "Fac", FLOAT_SOCKET, geometry));
+        const auto loaded = host<float>(field_result("lfs.noise_texture", "Fac", FLOAT_SOCKET, geometry, {}, nullptr, {}, true));
+        EXPECT_EQ(loaded, direct);
+        EXPECT_NE(direct[0], direct[1]);
     }
 
     TEST_P(NodesCore, FusedPreciseDivisionMatchesCpu) {

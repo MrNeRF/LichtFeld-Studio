@@ -521,8 +521,10 @@ namespace lfs::nodes {
                     if (node.type_id != "lfs.group" && node.type_id != "lfs.reroute") {
                         std::unordered_map<std::string, Value> inputs;
                         for (const auto& declaration : type->inputs) {
+                            // Runtime defaults such as the Position field serialize as placeholders that load
+                            // empty; those take the declared default again.
                             if (const auto value = node.input_values.find(declaration.identifier);
-                                value != node.input_values.end())
+                                value != node.input_values.end() && !std::holds_alternative<std::monostate>(value->second.data))
                                 inputs.emplace(declaration.identifier, value->second);
                             else
                                 inputs.emplace(declaration.identifier, declaration.default_value);
