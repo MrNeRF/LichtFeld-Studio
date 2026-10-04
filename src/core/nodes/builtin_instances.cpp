@@ -65,12 +65,9 @@ namespace lfs::nodes::builtin {
             splats.opacity = splats.opacity.index_select(0, source);
             for (auto& [_, value] : splats.attributes)
                 value = value.index_select(0, source);
-            auto attributes = std::move(splats.attributes);
+            // Canonical tensors keep CPU evaluation on the CPU and skip the renderer SH layout entirely.
+            core::transform_canonical(splats.means, splats.rotation, splats.scaling, splats.shN, splats.sh_degree, transforms, anchor);
             result.splats = std::move(splats);
-            auto data = splat_data_from_geometry(result);
-            core::transform(*data, transforms, anchor);
-            result = geometry_from_splat_data(*data);
-            result.splats->attributes = std::move(attributes);
             context.set_output("Geometry", std::move(result));
         }
     } // namespace

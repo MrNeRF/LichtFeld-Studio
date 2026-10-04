@@ -458,23 +458,23 @@ namespace lfs::core {
         return transform(data, matrices, index);
     }
 
-    SplatData& transform(SplatData& data, const Tensor& matrices, const Tensor& matrix_index) {
-        const size_t count = data.means().size(0);
+    void transform_canonical(Tensor& means_in, Tensor& rotation_in, Tensor& scaling_in, Tensor& shN_in,
+                             const int degree, const Tensor& matrices, const Tensor& matrix_index) {
+        const size_t count = means_in.size(0);
         LFS_ASSERT_MSG(matrices.ndim() == 3 && matrices.size(1) == 4 && matrices.size(2) == 4 &&
-                           matrices.dtype() == DataType::Float32 && matrices.device() == data.means().device(),
+                           matrices.dtype() == DataType::Float32 && matrices.device() == means_in.device(),
                        std::format("Splat transforms require Float32 [M,4,4] (shape={}, dtype={}, device={}, data_device={})",
-                                   matrices.shape().str(), int(matrices.dtype()), int(matrices.device()), int(data.means().device())));
+                                   matrices.shape().str(), int(matrices.dtype()), int(matrices.device()), int(means_in.device())));
         LFS_ASSERT_MSG(matrix_index.ndim() == 1 && matrix_index.numel() == count && matrix_index.dtype() == DataType::Int32 &&
-                           matrix_index.device() == data.means().device(),
+                           matrix_index.device() == means_in.device(),
                        std::format("Splat transform indices require Int32 [N] (shape={}, dtype={}, count={})",
                                    matrix_index.shape().str(), int(matrix_index.dtype()), count));
         if (!count)
-            return data;
-        const auto device = data.means().device();
+            return;
+        const auto device = means_in.device();
         const size_t matrix_count = matrices.size(0);
         const auto linear = matrices.slice(1, 0, 3).slice(2, 0, 3).contiguous();
         const auto translation = matrices.slice(1, 0, 3).slice(2, 3, 4).squeeze(2).contiguous();
-        const int degree = data.get_max_sh_degree();
         LFS_ASSERT_MSG(degree <= 3, std::format("Per-splat SH transforms support degrees 0..3 (degree={})", degree));
         // SH rotations depend only on the matrix: fit them once per matrix, not once per splat.
         std::vector<Tensor> band_rotations;
@@ -523,16 +523,19 @@ namespace lfs::core {
             }
         }
         auto means = Tensor::empty({count, 3}, device), scales = Tensor::empty({count, 3}, device), rotations = Tensor::empty({count, 4}, device);
-        auto sh = degree ? data.shN_canonical().to(device) : Tensor{};
-        auto result_sh = degree ? Tensor::empty(sh.shape(), device) : Tensor{};
+        const auto& sh = shN_in;
+        // Coefficients beyond the transformed bands keep their values.
+        const auto needed = static_cast<size_t>((degree + 1) * (degree + 1) - 1);
+        auto result_sh = !degree ? Tensor{} : sh.size(1) == needed ? Tensor::empty(sh.shape(), device)
+                                                                   : sh.clone();
         // Rows gather their matrix; chunks bound the gathered [rows,k,k] SH rotations.
         for (size_t begin = 0; begin < count; begin += size_t{1} << 20) {
             const size_t end = std::min(count, begin + (size_t{1} << 20)), n = end - begin;
             const auto index = matrix_index.slice(0, begin, end);
             const auto row_linear = linear.index_select(0, index);
-            means.slice(0, begin, end).copy_from(row_linear.bmm(data.means().slice(0, begin, end).unsqueeze(2)).squeeze(2) + translation.index_select(0, index));
+            means.slice(0, begin, end).copy_from(row_linear.bmm(means_in.slice(0, begin, end).unsqueeze(2)).squeeze(2) + translation.index_select(0, index));
             auto out_s = scales.slice(0, begin, end), out_q = rotations.slice(0, begin, end);
-            affine_splat_geometry(row_linear.reshape({int(n), 9}), data.scaling_raw().slice(0, begin, end), data.rotation_raw().slice(0, begin, end), out_s, out_q);
+            affine_splat_geometry(row_linear.reshape({int(n), 9}), scaling_in.slice(0, begin, end), rotation_in.slice(0, begin, end), out_s, out_q);
             if (!degree)
                 continue;
             const auto row_valid = valid_rotation.index_select(0, index);
@@ -542,11 +545,25 @@ namespace lfs::core {
                 result_sh.slice(0, begin, end).slice(1, offset, offset + k).copy_from(Tensor::where(row_valid, band_rotations[band - 1].index_select(0, index).bmm(original), original));
             }
         }
-        data.means_raw() = std::move(means);
-        data.scaling_raw() = std::move(scales);
-        data.rotation_raw() = std::move(rotations);
+        means_in = std::move(means);
+        scaling_in = std::move(scales);
+        rotation_in = std::move(rotations);
         if (degree)
-            data.shN_set_from_canonical(result_sh, count);
+            shN_in = std::move(result_sh);
+    }
+
+    SplatData& transform(SplatData& data, const Tensor& matrices, const Tensor& matrix_index) {
+        if (!data.means().size(0))
+            return data;
+        const int degree = data.get_max_sh_degree();
+        auto means = data.means(), rotation = data.rotation_raw(), scaling = data.scaling_raw();
+        auto shN = degree ? data.shN_canonical().to(means.device()) : Tensor{};
+        transform_canonical(means, rotation, scaling, shN, degree, matrices, matrix_index);
+        data.means_raw() = std::move(means);
+        data.scaling_raw() = std::move(scaling);
+        data.rotation_raw() = std::move(rotation);
+        if (degree)
+            data.shN_set_from_canonical(shN, data.means().size(0));
         return data;
     }
 

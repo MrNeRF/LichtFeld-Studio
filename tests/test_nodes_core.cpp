@@ -2142,9 +2142,12 @@ namespace {
         node.input_values["Rotation"] = glm::vec3(23, -31, 47);
         node.input_values["Scale"] = glm::vec3(0.7f, 1.2f, 1.8f);
         tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"});
-        const auto result = evaluate(tree, {{}, {}, 1});
+        const auto result = evaluate(tree, {{}, {}, 1, device()});
         ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
         ASSERT_TRUE(result.geometry.splats);
+        // CPU evaluation stays on the CPU; GPU evaluation stays on its backend.
+        EXPECT_EQ(result.geometry.splats->means.device(), device());
+        EXPECT_EQ(result.geometry.splats->shN.device(), device());
         EXPECT_EQ(result.geometry.splats->means.size(0), 6u);
         const glm::vec3 positions[] = {glm::vec3(2, 3, 4), glm::vec3(-1, 4, 2)};
         const auto rotation = glm::rotate(glm::mat4(1), glm::radians(47.0f), glm::vec3(0, 0, 1)) * glm::rotate(glm::mat4(1), glm::radians(-31.0f), glm::vec3(0, 1, 0)) * glm::rotate(glm::mat4(1), glm::radians(23.0f), glm::vec3(1, 0, 0));
