@@ -4212,6 +4212,66 @@ namespace {
         EXPECT_FALSE(cancelled.nodes.contains("Group/Move 4"));
     }
 
+    // Fails if one cache serves stale geometry after a mute toggle, after a cancelled run, or once the graphs
+    // are reloaded from JSON.
+    TEST_P(NodesCore, GroupCachesStayCorrectAcrossMutingCancellationAndReload) {
+        auto inner = std::make_unique<NodeTree>(registry_, "Inner");
+        auto middle = std::make_unique<NodeTree>(registry_, "Middle");
+        auto outer = std::make_unique<NodeTree>(registry_, "Outer");
+        const TreeResolver resolver = [&](std::string_view uuid) -> const NodeTree* {
+            for (const auto* tree : {inner.get(), middle.get(), outer.get()})
+                if (tree->uuid == uuid)
+                    return tree;
+            return nullptr;
+        };
+        std::string previous = inner->input_node().name;
+        for (int step = 0; step < 3; ++step) {
+            const std::string name = "Move " + std::to_string(step);
+            inner->add_node("lfs.transform_geometry", name).input_values["Translation"] = glm::vec3(1, 0, 0);
+            ASSERT_TRUE(inner->add_link({previous, "Geometry", name, "Geometry"}));
+            previous = name;
+        }
+        ASSERT_TRUE(inner->add_link({previous, "Geometry", inner->output_node().name, "Geometry"}));
+        middle->add_node("lfs.group", "Inner").properties["tree"] = inner->uuid;
+        ASSERT_TRUE(middle->add_link({middle->input_node().name, "Geometry", "Inner", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(middle->add_link({"Inner", "Geometry", middle->output_node().name, "Geometry"}, nullptr, resolver));
+        outer->add_node("lfs.group", "Middle").properties["tree"] = middle->uuid;
+        ASSERT_TRUE(outer->add_link({outer->input_node().name, "Geometry", "Middle", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(outer->add_link({"Middle", "Geometry", outer->output_node().name, "Geometry"}, nullptr, resolver));
+        EvalCache cache;
+        const auto run = [&](const EvalControl& control = {}) {
+            return evaluate(*outer, {.geometry = splats(), .device = device(), .tree_resolver = resolver}, nullptr, &cache,
+                            control);
+        };
+        const auto x = [&] {
+            const auto result = run();
+            EXPECT_TRUE(result.ok);
+            return result.ok ? host<float>(result.geometry.splats->means)[0] : -1.0f;
+        };
+        EXPECT_FLOAT_EQ(x(), 3.0f);
+        middle->find_node("Inner")->muted = true;
+        EXPECT_FLOAT_EQ(x(), 0.0f);
+        middle->find_node("Inner")->muted = false;
+        EXPECT_FLOAT_EQ(x(), 3.0f);
+
+        // A run cancelled inside the innermost graph leaves nothing that a later run reuses as complete.
+        inner->find_node("Move 2")->input_values["Translation"] = glm::vec3(5, 0, 0);
+        int checks = 0;
+        EXPECT_TRUE(run({.cancelled = [&] { return ++checks > 2; }}).cancelled);
+        EXPECT_FLOAT_EQ(x(), 7.0f);
+        const auto unchanged = run();
+        ASSERT_TRUE(unchanged.ok);
+        EXPECT_TRUE(unchanged.nodes.at("Middle").cached);
+
+        // The reloaded graphs evaluate like the originals, and edits to them reach the result.
+        inner = std::make_unique<NodeTree>(NodeTree::from_json(inner->to_json(), registry_));
+        middle = std::make_unique<NodeTree>(NodeTree::from_json(middle->to_json(), registry_));
+        outer = std::make_unique<NodeTree>(NodeTree::from_json(outer->to_json(), registry_));
+        EXPECT_FLOAT_EQ(x(), 7.0f);
+        inner->find_node("Move 0")->input_values["Translation"] = glm::vec3(-1, 0, 0);
+        EXPECT_FLOAT_EQ(x(), 5.0f);
+    }
+
     TEST(NodesGraphEditing, ForcedJsonGroupCycleReportsNamedNodeError) {
         NodeTypeRegistry registry;
         register_builtin_nodes(registry);
