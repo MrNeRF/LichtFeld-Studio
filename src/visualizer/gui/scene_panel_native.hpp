@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/logger.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
@@ -29,10 +30,12 @@ namespace lfs::vis::gui {
     class RmlUIManager;
     class SceneGraphElement;
 
-    class NativeScenePanel : public IPanel {
+    class LFS_VIS_API NativeScenePanel : public IPanel {
     public:
         explicit NativeScenePanel(RmlUIManager* manager);
         ~NativeScenePanel() override;
+        NativeScenePanel(const NativeScenePanel&) = delete;
+        NativeScenePanel& operator=(const NativeScenePanel&) = delete;
 
         void draw(const PanelDrawContext& ctx) override;
         void preload(const PanelDrawContext& ctx) override;
