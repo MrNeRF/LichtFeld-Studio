@@ -279,7 +279,6 @@ namespace lfs::nodes {
         auto result =
             std::make_unique<core::SplatData>(s.sh_degree, s.means, sh0, s.shN, s.scaling, s.rotation,
                                               opacity, s.scene_scale, core::SplatData::ShNLayout::Canonical);
-        result->shN_set_from_canonical(s.shN);
         result->set_active_sh_degree(s.sh_degree);
         return result;
     }
