@@ -1097,46 +1097,73 @@ namespace {
         }
     }
 
-    TEST_P(NodesCore, EveryGeometryBuiltinPassesEmptySplatsCleanly) {
-        Geometry empty;
-        empty.splats = SplatsComponent{Tensor::empty({0, 3}, device()),
-                                       Tensor::empty({0, 3}, device()),
-                                       Tensor::empty({0, 3, 3}, device()),
-                                       Tensor::empty({0, 3}, device()),
-                                       Tensor::empty({0, 4}, device()),
-                                       Tensor::empty({0}, device()),
-                                       1,
-                                       1,
-                                       {{"weight", Tensor::empty({0}, device())}}};
+    TEST_P(NodesCore, EveryGeometryBuiltinPassesEmptyGeometryCleanly) {
+        const auto empty_splats = [&](const int degree) {
+            const size_t rest = static_cast<size_t>((degree + 1) * (degree + 1) - 1);
+            return SplatsComponent{Tensor::empty({0, 3}, device()),
+                                   Tensor::empty({0, 3}, device()),
+                                   Tensor::empty({0, rest, 3}, device()),
+                                   Tensor::empty({0, 3}, device()),
+                                   Tensor::empty({0, 4}, device()),
+                                   Tensor::empty({0}, device()),
+                                   degree,
+                                   1,
+                                   {{"weight", Tensor::empty({0}, device())}}};
+        };
+        const PointsComponent empty_points{Tensor::empty({0, 3}, device()), Tensor::empty({0, 3}, device()), {{"weight", Tensor::empty({0}, device())}}};
+        MeshComponent empty_mesh{std::make_shared<lfs::core::MeshData>(Tensor::empty({0, 3}, device()),
+                                                                       Tensor::empty({0, 3}, device(), lfs::core::DataType::Int32))};
+        empty_mesh.attributes["weight"] = Tensor::empty({0}, device());
+        std::vector<std::pair<std::string, Geometry>> cases;
+        for (int degree = 0; degree <= 3; ++degree)
+            cases.emplace_back("splats degree " + std::to_string(degree), Geometry{empty_splats(degree), std::nullopt, std::nullopt});
+        cases.emplace_back("points", Geometry{std::nullopt, empty_points, std::nullopt});
+        cases.emplace_back("mesh", Geometry{std::nullopt, std::nullopt, empty_mesh});
+        cases.emplace_back("mixed", Geometry{empty_splats(2), empty_points, empty_mesh});
+        // Instance on Points takes splats as its instance whatever its points are.
+        NodeTypeInfo instance_type;
+        instance_type.id = "test.empty_splats";
+        instance_type.outputs.push_back({"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)});
+        instance_type.evaluate = [instance = Geometry{empty_splats(1), std::nullopt, std::nullopt}](NodeContext& context) {
+            context.set_output("Geometry", instance);
+        };
+        registry_.unregister_type(instance_type.id);
+        ASSERT_TRUE(registry_.register_type(std::move(instance_type)));
 
-        for (const auto& builtin : registry_.list()) {
-            if (!builtin->id.starts_with("lfs.") || builtin->id == "lfs.group_input" ||
-                builtin->id == "lfs.group_output")
-                continue;
-            const auto input = std::ranges::find(builtin->inputs, GEOMETRY_SOCKET, &SocketDecl::type);
-            const auto output = std::ranges::find(builtin->outputs, GEOMETRY_SOCKET, &SocketDecl::type);
-            if (input == builtin->inputs.end() || output == builtin->outputs.end())
-                continue;
-            SCOPED_TRACE(builtin->id);
-            NodeTree tree(registry_);
-            tree.add_node(builtin->id, "Builtin");
-            ASSERT_TRUE(tree.add_link(
-                {tree.input_node().name, "Geometry", "Builtin", input->identifier}));
-            if (builtin->id == "lfs.instance_on_points")
-                ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Builtin", "Instance"}));
-            ASSERT_TRUE(tree.add_link(
-                {"Builtin", output->identifier, tree.output_node().name, "Geometry"}));
-            const auto result = evaluate(tree, {empty, {}, 1});
-            ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
-                                                             : result.errors.begin()->second);
-            expect_finite(result.geometry);
-            if (result.geometry.splats)
-                EXPECT_EQ(result.geometry.splats->means.shape()[0], 0u);
-            if (result.geometry.points)
-                EXPECT_EQ(result.geometry.points->positions.shape()[0], 0u);
-            if (result.geometry.mesh && result.geometry.mesh->mesh)
-                EXPECT_EQ(result.geometry.mesh->mesh->vertex_count(), 0);
+        for (const auto& [label, empty] : cases) {
+            SCOPED_TRACE(label);
+            for (const auto& builtin : registry_.list()) {
+                if (!builtin->id.starts_with("lfs.") || builtin->id == "lfs.group_input" ||
+                    builtin->id == "lfs.group_output")
+                    continue;
+                const auto input = std::ranges::find(builtin->inputs, GEOMETRY_SOCKET, &SocketDecl::type);
+                const auto output = std::ranges::find(builtin->outputs, GEOMETRY_SOCKET, &SocketDecl::type);
+                if (input == builtin->inputs.end() || output == builtin->outputs.end())
+                    continue;
+                SCOPED_TRACE(builtin->id);
+                NodeTree tree(registry_);
+                tree.add_node(builtin->id, "Builtin");
+                ASSERT_TRUE(tree.add_link(
+                    {tree.input_node().name, "Geometry", "Builtin", input->identifier}));
+                if (builtin->id == "lfs.instance_on_points") {
+                    tree.add_node("test.empty_splats", "Instance");
+                    ASSERT_TRUE(tree.add_link({"Instance", "Geometry", "Builtin", "Instance"}));
+                }
+                ASSERT_TRUE(tree.add_link(
+                    {"Builtin", output->identifier, tree.output_node().name, "Geometry"}));
+                const auto result = evaluate(tree, {empty, {}, 1});
+                ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
+                                                                 : result.errors.begin()->second);
+                expect_finite(result.geometry);
+                if (result.geometry.splats)
+                    EXPECT_EQ(result.geometry.splats->means.shape()[0], 0u);
+                if (result.geometry.points)
+                    EXPECT_EQ(result.geometry.points->positions.shape()[0], 0u);
+                if (result.geometry.mesh && result.geometry.mesh->mesh)
+                    EXPECT_EQ(result.geometry.mesh->mesh->vertex_count(), 0);
+            }
         }
+        registry_.unregister_type("test.empty_splats");
     }
 
     TEST(NodesCoreMetadata, OnlyAttributeNodesKeepElements) {
