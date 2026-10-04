@@ -42,20 +42,23 @@ jobs:
           cmake --version
           ninja --version
 
-      - name: Require macOS 26 and Metal 4
+      - name: Require macOS 26 and detect Metal capabilities
+        id: metal
         run: |
           sw_vers
           xcodebuild -version
           swift -e '
             import Metal
             guard #available(macOS 26.0, *) else {
-              fatalError("Native viewer contracts require macOS 26 or newer")
+              fatalError("Native viewer builds require macOS 26 or newer")
             }
-            guard let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.metal4) else {
-              fatalError("Native viewer contracts require a Metal 4 device")
+            guard let device = MTLCreateSystemDefaultDevice() else {
+              fatalError("The Vulkan test backend requires a Metal device")
             }
-            print("Metal 4 device: \(device.name)")
-          '
+            print("Metal device: \(device.name)")
+            print("metal4=\(device.supportsFamily(.metal4))")
+          ' | tee "$RUNNER_TEMP/metal-capabilities.txt"
+          grep '^metal4=' "$RUNNER_TEMP/metal-capabilities.txt" >> "$GITHUB_OUTPUT"
 
       - name: Compile Metal training kernels
         # The Metal backend compiles its kernels at runtime and needs a Metal 4 GPU, which this
@@ -133,7 +136,20 @@ jobs:
           VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release \
             -R '^VulkanDepthContracts$' --no-tests=error --output-on-failure
 
+      - name: Run CPU viewer contracts
+        run: |
+          ctest --test-dir build-macos-release -L 'viewer|viewer-profile' -LE gpu \
+            --no-tests=error --output-on-failure
+
+      - name: Run shared Vulkan viewer contracts
+        run: |
+          icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          test -f "$icd"
+          VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release -L viewer-shared \
+            --no-tests=error --output-on-failure
+
       - name: Run native viewer contracts with Metal validation
+        if: steps.metal.outputs.metal4 == 'true'
         run: |
           icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
           test -f "$icd"
@@ -141,11 +157,18 @@ jobs:
             ctest --test-dir build-macos-release -L viewer --no-tests=error --output-on-failure
 
       - name: Check native Metal versus Vulkan benchmark
+        if: steps.metal.outputs.metal4 == 'true'
         run: |
           icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
           test -f "$icd"
           VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release \
             -R '^MacViewer(BackendBenchmarkSmoke|Parity_.*)$' --no-tests=error --output-on-failure
+
+      - name: Report native GPU coverage unavailable
+        if: steps.metal.outputs.metal4 != 'true'
+        run: |
+          echo '::notice::This runner exposes no Metal 4 device. Native GPU contracts and parity benchmarks were not executed; compilation and CPU/Vulkan checks do not qualify native Metal behavior.'
+          echo 'Native Metal GPU validation: **not executed** (no Metal 4 device). A physical Metal 4 Mac run is required.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test diagnostics
         if: always()
