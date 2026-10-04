@@ -17,28 +17,29 @@ The application's regression tracker selects contiguous windows of 100 steady
 steps before and after each snapshot. Refinement boundaries reset the candidate
 post-snapshot window; iteration counts alone do not establish a valid window.
 FSR is warmed before capture, and its pre-window must start after the renderer
-switch. Two independent processes produced the following native results; the
-second also provides a complete FSR window:
+switch. Temporary power assertions hold the system/display awake; system power
+logs confirm full wake with no sleep transition during the final process:
 
-| Process | Rendering | Pre mean, ms | Post mean, ms | Change | Existing <=10% gate |
-|---|---|---:|---:|---:|---|
-| A | Native, save 1 | 136.408 | 138.040 | +1.196% | PASS |
-| A | Native, save 2 | 138.040 | 139.945 | +1.379% | PASS |
-| B | Native, save 1 | 135.797 | 137.135 | +0.986% | PASS |
-| B | Native, save 2 | 137.135 | 136.260 | -0.638% | PASS |
-| B | FSR Quality, save 3 | 130.642 | 128.392 | -1.722% | PASS |
+| Rendering | Pre mean, ms | Post mean, ms | Change | Existing <=10% gate |
+|---|---:|---:|---:|---|
+| Native, save 1 | 135.660 | 139.380 | +2.742% | PASS |
+| Native, save 2 | 138.518 | 139.705 | +0.857% | PASS |
+| FSR Quality, save 3 | 130.223 | 130.546 | +0.248% | PASS |
 
-Process A's FSR pre-window overlaps the renderer switch by one step and is
-excluded from the FSR comparison. Passing the existing gate does not prove
-zero slowdown, nor does this short-run sampling establish long-run performance.
+Earlier runs retained historical observations but used an uncontrolled DarkWake
+power state. One also overlapped the FSR switch by a single step in its pre-window.
+They are superseded by this full-wake process for performance claims. Passing
+the existing gate does not prove zero slowdown or long-run performance.
 
-Each process completes three saves during active training, retains 5M Gaussians,
+The final process completes three saves during active training, retains 5M Gaussians,
 passes snapshot consistency and host-RSS gates, and reopens committed generation 8.
-The saved optimizer advances at least twenty further steps with finite loss.
+The saved optimizer advances twenty further steps with finite loss.
 Those sampled losses are not a quality comparison between training runs.
 
-Pause and cold-path gates remain unmet. In process B, pause samples are
-152.843, 117.050 and 143.893 ms against a calibrated 36.156 ms gate.
+Pause and cold-path gates remain unmet. Pause samples are
+125.099, 113.060 and 136.873 ms against a calibrated 35.894 ms gate.
+Initial synchronization accounts for 48.518, 77.064 and 74.210 ms respectively;
+serialization/issue accounts for 75.491, 34.843 and 61.372 ms.
 The limit remains `checkpoint_bytes / measured_pinned_D2H_bytes_per_second * 1.12`;
 it is not replaced with a slower-device allowance. Capture correctness, final
 device fences, complete byte coverage and immutable-reader lifetime are retained.
@@ -46,13 +47,31 @@ An end-to-end project-write speedup is not established by capture-time gains.
 
 ## Metal and FSR lifecycle
 
-On the same runtime source, both processes complete forty four-view FSR Quality
+On the same runtime source, the full-wake process completes forty four-view FSR Quality
 captures with camera movement, retire three view targets, recreate four views,
 and complete ten further captures. Per-view reconstruction status reports FSR
-Quality with no fallback. Representative images are visually checked.
-Each process also completes ten captures while training is active. The app exits
+Quality with no fallback. An intermediate one-view capture also verifies the
+retired-target state. Representative images are visually checked.
+The process also completes ten captures while training is active. The app exits
 normally after saved-optimizer restoration and a final clean project reopen.
 The timing comparison itself excludes these capture/lifecycle operations.
+
+## Project storage and discarded runs
+
+In one matched full-wake pair, three paused saves per process have total-write
+medians of 3.262 s on external USB storage and 2.034 s on the internal SSD.
+Only project location changes; executable, dataset and shaders remain external.
+This preliminary pair is not the planned three-pair campaign. Cross-volume file
+copy versus APFS cloning and cache effects also limit capture-pause conclusions;
+no cold-disk or cache-flush condition is claimed.
+
+Two interrupted trials are excluded. A long system sleep coincides with a GPU
+wait quarantine in one trial. In another, kernel logs confirm disappearance of
+the external medium, EIO and an unclean-unmount remount; the app reports pwrite
+EIO followed by SIGBUS. These incidents are not normal-operation timing evidence.
+The original project's SHA-256 is unchanged after the disconnect, Git connectivity
+passes, and the integration working tree remains clean. Further storage comparison
+requires a stable connection; no filesystem repair or power-policy override is used.
 
 ## Automated coverage
 
