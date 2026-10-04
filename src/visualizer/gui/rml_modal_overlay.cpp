@@ -134,7 +134,7 @@ namespace lfs::vis::gui {
         if (Rml::GetSystemInterface())
             text_input_revert_.clear();
         if (rml_manager_ && rml_manager_->isInitialized())
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         if (rml_context_ && rml_manager_ && rml_manager_->isInitialized())
             rml_manager_->destroyContext("modal_overlay");
     }
@@ -272,7 +272,7 @@ namespace lfs::vis::gui {
         width_ = 0;
         height_ = 0;
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         render_needed_ = true;
         dialog_position_valid_ = false;
         last_mouse_valid_ = false;
@@ -646,7 +646,7 @@ namespace lfs::vis::gui {
         if (!active_)
             return;
 
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
 
         rml_manager_->trackContextFrame(rml_context_, 0, 0);
@@ -712,7 +712,7 @@ namespace lfs::vis::gui {
         const bool refresh_cache = needs_update || position_changed || direct_cache_.texture == 0;
         render_needed_ = false;
         LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.queue");
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = w,
@@ -729,7 +729,7 @@ namespace lfs::vis::gui {
 
     void RmlModalOverlay::releaseRendererResources() {
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
     }
 
     void RmlModalOverlay::OverlayEventListener::ProcessEvent(Rml::Event& event) {

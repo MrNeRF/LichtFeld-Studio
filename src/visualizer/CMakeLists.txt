@@ -43,6 +43,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Window management
         window/window_manager.cpp
+        window/vulkan_graphics_context.cpp
+        rendering/viewport_reference_renderer.cpp
         window/vulkan_context.cpp
         window/vulkan_image_barrier_tracker.cpp
         window/gpu_object_census.cpp
@@ -371,7 +373,6 @@ target_include_directories(lfs_visualizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/g
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/screen_quad.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/screen_quad.vert.spv.h" kScreenQuadVertSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene.frag.spv.h" kSceneFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_spatial.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_spatial.frag.spv.h" kSceneSpatialFragSpv)
-compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vignette.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vignette.frag.spv.h" kVignetteFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/grid.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/grid.vert.spv.h" kGridVertSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/grid.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/grid.frag.spv.h" kGridFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/overlay.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/overlay.vert.spv.h" kOverlayVertSpv)

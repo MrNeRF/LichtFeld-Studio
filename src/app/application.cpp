@@ -63,7 +63,7 @@
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include "visualizer/input/input_bindings.hpp"
 #include "visualizer/preferences.hpp"
-#include "window/vulkan_context.hpp"
+#include "window/graphics_context.hpp"
 #include <cmath>
 #include <condition_variable>
 #if LFS_HAS_CUDA
@@ -1087,19 +1087,14 @@ namespace lfs::app {
         int runHeadlessRender(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
             const auto& cfg = *params->render_path;
 
-            vis::VulkanContext context;
-            if (!context.initHeadless()) {
+            auto graphics_context = vis::createGraphicsContext();
+            auto& context = *graphics_context;
+            if (!context.initializeHeadless()) {
                 LOG_ERROR("Off-screen renderer initialization failed: {}", context.lastError());
                 return 1;
             }
-            struct BackendLifetime {
-                ~BackendLifetime() {
-                    if (auto result = core::shutdown_gpu_backend(core::GpuBackend::Vulkan); !result)
-                        LOG_WARN("Failed to shut down tensor backend: {}", result.error().detail());
-                }
-            } backend_lifetime;
             auto renderer = vis::createSceneRenderer(context);
-            const auto splat_allocator = context.tensorInterop().splat_allocator(true);
+            const auto splat_allocator = context.splatTensorAllocator(true);
 
             // Pipeline creation does not read the scene. Overlap it with the load.
             auto loading = std::async(std::launch::async, [&]() -> std::expected<std::shared_ptr<core::SplatData>, std::string> {

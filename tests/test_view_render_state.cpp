@@ -33,7 +33,7 @@ namespace lfs::vis {
                 auto& camera = source.view3D(id)->camera;
                 camera.frameBufferSize = {640, 480};
                 const auto settings = rendering.settingsForView(id);
-                rendering.renderVulkanFrame({.view = id, .viewport = camera, .settings = settings, .logical_screen_size = {640, 480}});
+                rendering.renderFrame({.view = id, .viewport = camera, .settings = settings, .logical_screen_size = {640, 480}});
             }
         };
 

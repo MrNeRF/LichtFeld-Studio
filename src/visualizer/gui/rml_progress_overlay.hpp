@@ -127,7 +127,7 @@ namespace lfs::vis::gui {
         bool last_mouse_valid_ = false;
         int last_mouse_x_ = 0;
         int last_mouse_y_ = 0;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
         bool render_needed_ = true;
     };
 

@@ -543,7 +543,7 @@ namespace lfs::vis::gui {
         if (!ensureContextReady() || texture_src.empty())
             return;
 
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface() ||
+        if (!rml_manager_ || !rml_manager_->getUiRenderer() ||
             !el_preview_window_ || !el_preview_title_ || !el_preview_image_)
             return;
 
@@ -717,7 +717,7 @@ namespace lfs::vis::gui {
         if (!ensureContextReady())
             return;
 
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
 
         rml_manager_->trackContextFrame(rml_context_, 0, 0);
@@ -735,7 +735,7 @@ namespace lfs::vis::gui {
         }
 
         rml_context_->Update();
-        rml_manager_->queueVulkanContext(rml_context_, 0.0f, 0.0f, true);
+        rml_manager_->queueContext(rml_context_, 0.0f, 0.0f, true);
     }
 
     void RmlSequencerOverlay::destroyGraphicsResources() {

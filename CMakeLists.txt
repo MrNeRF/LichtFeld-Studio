@@ -207,6 +207,19 @@ add_custom_target(lfs_git_version ALL
 
 include(CMakeDependentOption)
 option(LFS_BUILD_TRAINER "Include training in the full LichtFeld Studio application" ON)
+set(LFS_GRAPHICS_BACKEND "Vulkan" CACHE STRING
+    "Desktop graphics backend (Phase 1 application implementation: Vulkan)")
+set_property(CACHE LFS_GRAPHICS_BACKEND PROPERTY STRINGS Vulkan Metal)
+if(NOT LFS_GRAPHICS_BACKEND STREQUAL "Vulkan" AND
+   NOT LFS_GRAPHICS_BACKEND STREQUAL "Metal")
+    message(FATAL_ERROR
+        "LFS_GRAPHICS_BACKEND must be Vulkan or Metal, got '${LFS_GRAPHICS_BACKEND}'")
+endif()
+if(LFS_GRAPHICS_BACKEND STREQUAL "Metal" AND NOT APPLE)
+    message(FATAL_ERROR "LFS_GRAPHICS_BACKEND=Metal is supported only on Apple platforms")
+endif()
+message(STATUS
+    "Graphics backend selection: ${LFS_GRAPHICS_BACKEND} (Phase 1 keeps the desktop application on Vulkan; Metal currently applies only to core tensor/training targets)")
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_PANEL_LAYOUT_TESTS "Build focused panel layout and registry tests" OFF)
 option(BUILD_VISUALIZER_TESTS "Build CPU-only visualizer tests without LibTorch" OFF)

@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "generic_output_slot_ring.hpp"
 #include "render_target_id.hpp"
 #include "window/vulkan_context.hpp"
 #include <unordered_map>
@@ -43,51 +44,6 @@ namespace lfs::vis {
         std::uint64_t completion_value = 0;
     };
 
-    // Each target owns three images. Submission indices remain unique even after
-    // release, so a late readback cannot pin another target's transient storage.
-    class LFS_VIS_API OutputSlotRing {
-    public:
-        static constexpr std::size_t kFrameRingSize = 3;
-        using TimelineCompleteFn = std::function<bool(std::uint64_t)>;
-        using TimelineWaitFn = std::function<lfs::Status(std::uint64_t)>;
-        using PerSlotFn = std::function<void(OutputImageSlot&)>;
-        struct Column {
-            std::array<OutputImageSlot, kFrameRingSize> slots{};
-            std::size_t base = 0;
-            std::size_t cursor = 0;
-            std::size_t latest = 0;
-            std::uint64_t generation = 0;
-        };
-        using Table = std::unordered_map<RenderTargetId, Column, RenderTargetIdHash>;
-        [[nodiscard]] std::size_t acquire(RenderTargetId target);
-        [[nodiscard]] std::size_t acquireTransient(const TimelineCompleteFn& complete);
-        [[nodiscard]] lfs::Status waitUntilReusable(std::size_t cell, std::string_view reason,
-                                                    const TimelineCompleteFn& complete,
-                                                    const TimelineWaitFn& wait);
-        void publishCompletion(std::size_t cell, std::uint64_t value) noexcept;
-        void clearSlotCompletion(RenderTargetId target, std::size_t cell);
-        void markLatest(RenderTargetId target, std::size_t cell);
-        [[nodiscard]] std::uint64_t bumpGeneration(RenderTargetId target);
-        [[nodiscard]] OutputImageSlot& slotAt(RenderTargetId target, std::size_t cell);
-        [[nodiscard]] const OutputImageSlot& slotAt(RenderTargetId target, std::size_t cell) const;
-        [[nodiscard]] std::size_t latestRingSlot(RenderTargetId target) const;
-        [[nodiscard]] OutputImageSlot& latestSlot(RenderTargetId target);
-        [[nodiscard]] const OutputImageSlot& latestSlot(RenderTargetId target) const;
-        void clearLogical(RenderTargetId target, const PerSlotFn& release);
-        bool releaseRenderTarget(RenderTargetId target, const PerSlotFn& release);
-        [[nodiscard]] bool released(RenderTargetId target) const { return released_.contains(target); }
-        [[nodiscard]] bool contains(RenderTargetId target) const { return slots_.contains(target); }
-        [[nodiscard]] std::size_t submissionCount() const { return completions_.size(); }
-        void reset() noexcept;
-        [[nodiscard]] std::uint64_t ringCompletionValue(std::size_t cell) const noexcept;
-        [[nodiscard]] std::uint64_t generation(RenderTargetId target) const noexcept;
-        [[nodiscard]] const Table& table() const noexcept { return slots_; }
-
-    private:
-        Table slots_;
-        std::unordered_set<RenderTargetId, RenderTargetIdHash> released_;
-        std::vector<std::uint64_t> completions_;
-        std::vector<std::size_t> transient_cells_;
-    };
+    using OutputSlotRing = BasicOutputSlotRing<OutputImageSlot>;
 
 } // namespace lfs::vis

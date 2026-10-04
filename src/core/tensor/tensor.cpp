@@ -1100,8 +1100,10 @@ namespace lfs::core {
 
 #if LFS_HAS_CUDA
         constexpr GpuBackend storage_less_backend = GpuBackend::CUDA;
-#else
+#elif defined(LFS_TENSOR_VULKAN)
         constexpr GpuBackend storage_less_backend = GpuBackend::Vulkan;
+#else
+        constexpr GpuBackend storage_less_backend = GpuBackend::Metal;
 #endif
         const GpuBackend backend = device_ == Device::GPU && storage_meta_
                                        ? storage_meta_->backend

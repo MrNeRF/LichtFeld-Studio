@@ -5,7 +5,7 @@
 #include "py_tensor.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
-#include "core/tensor_backend.hpp"
+#include "core/tensor_backend_vulkan.hpp"
 #include "core/tensor_completion.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "python/python_runtime.hpp"

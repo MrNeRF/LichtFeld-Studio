@@ -102,7 +102,7 @@ namespace lfs::vis::gui {
         bool has_theme_signature_ = false;
         int width_ = 0;
         int height_ = 0;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
         bool render_needed_ = true;
         bool last_mouse_valid_ = false;
         int last_mouse_x_ = 0;

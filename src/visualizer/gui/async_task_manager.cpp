@@ -35,9 +35,9 @@
 #include "rendering/environment_image.hpp"
 #include "rendering/mesh2splat.hpp"
 #include "rendering/mesh_offscreen_renderer.hpp"
-#include "rendering/passes/vulkan_mesh_pass.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/viewport_draw_types.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
 #include "sequencer/keyframe.hpp"
@@ -46,7 +46,7 @@
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
-#include "window/vulkan_context.hpp"
+#include "window/graphics_context.hpp"
 #include "window/window_manager.hpp"
 #include <algorithm>
 #include <bit>
@@ -556,7 +556,7 @@ namespace lfs::vis::gui {
         rendering::RenderingEngine& engine,
         VideoExportEnvironmentState& environment_state,
         VideoExportMeshRendererState* mesh_renderer_state,
-        VulkanContext* vulkan_context,
+        GraphicsContext* graphics_context,
         const VideoExportSceneSnapshot& snapshot,
         const RenderSettings& render_settings,
         const lfs::sequencer::CameraState& cam_state,
@@ -692,9 +692,9 @@ namespace lfs::vis::gui {
                 return std::unexpected(
                     "Failed to render GPU mesh layer: renderer state is unavailable");
             }
-            if (vulkan_context == nullptr) {
+            if (graphics_context == nullptr) {
                 return std::unexpected(
-                    "Failed to render GPU mesh layer: no Vulkan context is available");
+                    "Failed to render GPU mesh layer: no graphics context is available");
             }
 
             try {
@@ -703,7 +703,7 @@ namespace lfs::vis::gui {
                 }
 
                 const glm::mat4 projection = viewport.getProjectionMatrix();
-                VulkanMeshPassParams mesh_params{
+                ViewportMeshPassDesc mesh_params{
                     .view_projection = projection * viewport.getViewMatrix(),
                     .camera_position = viewport.translation,
                     .items = {},
@@ -720,7 +720,7 @@ namespace lfs::vis::gui {
 
                     const auto options = makeVideoExportMeshOptions(
                         render_settings, any_selected, mesh_snapshot.is_selected);
-                    mesh_params.items.push_back(VulkanMeshDrawItem{
+                    mesh_params.items.push_back(ViewportMeshDrawItem{
                         .mesh = mesh_snapshot.mesh.get(),
                         .model = mesh_snapshot.transform,
                         .light_dir = options.light_dir,
@@ -739,10 +739,10 @@ namespace lfs::vis::gui {
                 }
 
                 auto mesh_layer = mesh_renderer_state->renderer->render(
-                    *vulkan_context, mesh_params, projection, width, height);
+                    *graphics_context, mesh_params, projection, width, height);
                 if (!mesh_layer) {
                     return std::unexpected(std::format(
-                        "Failed to render GPU mesh layer: {}", mesh_layer.error()));
+                        "Failed to render GPU mesh layer: {}", mesh_layer.error().detail()));
                 }
                 if (!isValidVideoExportMeshLayer(*mesh_layer, width, height)) {
                     return std::unexpected(
@@ -3258,14 +3258,14 @@ namespace lfs::vis::gui {
                                 return std::unexpected(snapshot.error());
                             *snapshot_ptr = std::move(*snapshot);
                             auto* const window_manager = viewer->getWindowManager();
-                            auto* const vulkan_context =
-                                window_manager != nullptr ? window_manager->getVulkanContext() : nullptr;
+                            auto* const graphics_context =
+                                window_manager != nullptr ? window_manager->getGraphicsContext() : nullptr;
                             return renderVideoExportFrame(
                                 *rendering_manager,
                                 *engine,
                                 *environment_state,
                                 mesh_renderer_state,
-                                vulkan_context,
+                                graphics_context,
                                 *snapshot_ptr,
                                 render_settings,
                                 cam_state,

@@ -51,6 +51,51 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+# Standalone tensor/training proofs must not pull in the Vulkan window or its
+# test harness when the core Vulkan backend is disabled.
+if(APPLE AND BUILD_TESTS AND NOT LFS_TENSOR_VULKAN)
+    add_executable(metal_tensor_contracts EXCLUDE_FROM_ALL test_tensor_metal.cpp)
+    target_compile_features(metal_tensor_contracts PRIVATE cxx_std_23)
+    target_compile_definitions(metal_tensor_contracts PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
+    target_include_directories(metal_tensor_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(metal_tensor_contracts PRIVATE lfs_core GTest::gtest_main)
+    add_test(NAME MetalTensorNoVulkanContracts COMMAND metal_tensor_contracts)
+    if(LFS_BUILD_TRAINER)
+        add_executable(metal_training_contracts EXCLUDE_FROM_ALL
+            test_training_ops_metal_losses.cpp
+            test_training_ops_metal_densify.cpp
+            test_training_ops_metal_appearance.cpp
+            test_training_ops_metal_gsplat.cpp)
+        target_compile_features(metal_training_contracts PRIVATE cxx_std_23)
+        target_link_libraries(metal_training_contracts PRIVATE lfs_training lfs_python_embed GTest::gtest_main)
+        find_package(Python REQUIRED COMPONENTS Development.Embed)
+        target_link_options(metal_training_contracts PRIVATE "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+        add_test(NAME MetalTrainingNoVulkanContracts COMMAND metal_training_contracts)
+    endif()
+endif()
+
+if(BUILD_TESTS)
+    if(LFS_TENSOR_VULKAN)
+        add_executable(ui_texture_tensor_contracts test_ui_texture_tensor.cpp)
+        target_compile_features(ui_texture_tensor_contracts PRIVATE cxx_std_23)
+        target_include_directories(ui_texture_tensor_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
+        target_link_libraries(ui_texture_tensor_contracts PRIVATE lfs_visualizer lfs_core GTest::gtest_main lfs_python_embed)
+        if(APPLE)
+            target_link_options(ui_texture_tensor_contracts PRIVATE "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+        endif()
+        add_test(NAME UiTextureTensorContracts COMMAND ui_texture_tensor_contracts)
+        set_tests_properties(UiTextureTensorContracts PROPERTIES LABELS "gpu;ui" TIMEOUT 120)
+    endif()
+    add_executable(gpu_program_contracts test_gpu_program.cpp test_gpu_bookkeeping.cpp)
+    target_include_directories(gpu_program_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
+    target_link_libraries(gpu_program_contracts PRIVATE lfs_core GTest::gtest_main)
+    target_compile_features(gpu_program_contracts PRIVATE cxx_std_23)
+    lfs_add_gpu_program(gpu_program_contracts program_contract SOURCE shaders/program_contract.slang
+        COMPUTE transform VERTEX vertexMain FRAGMENT fragmentMain)
+    add_test(NAME GpuProgramContracts COMMAND gpu_program_contracts)
+    set_tests_properties(GpuProgramContracts PROPERTIES LABELS "tensor;gpu" TIMEOUT 120)
+endif()
+
 if(APPLE AND (BUILD_VISUALIZER_TESTS OR BUILD_TESTS))
     # Cocoa delivers SDL drag events; this contract exercises the bridge without a GPU.
     add_executable(mac_native_drag_drop_contracts EXCLUDE_FROM_ALL

@@ -3,11 +3,11 @@
 #include "core/tensor_execution.hpp"
 
 #include "backend/metal/metal_queue.hpp"
-#include "backend/vulkan/vk_context.hpp"
 #ifdef LFS_TENSOR_VULKAN
+#include "backend/vulkan/vk_context.hpp"
 #include "backend/vulkan/vk_memory.hpp"
-#endif
 #include "backend/vulkan/vk_recorder.hpp"
+#endif
 #include "core/tensor_upload.hpp"
 #include "internal/tensor_impl.hpp"
 
@@ -23,6 +23,7 @@ namespace lfs::core {
 
     TensorExecutionTarget::Scope::Scope(TensorExecutionTarget target)
         : backend_scope_(target.backend()), previous_target_(getCurrentCUDAStream()) {
+#ifdef LFS_TENSOR_VULKAN
         if (target.backend() == GpuBackend::Vulkan && target.native_handle() != nullptr) {
             const auto id = reinterpret_cast<uint64_t>(target.native_handle());
             auto context = internal::acquire_vulkan_context();
@@ -32,6 +33,7 @@ namespace lfs::core {
             rebound_vulkan_ = true;
             return;
         }
+#endif
         if (target.backend() == GpuBackend::Metal) {
             // Metal queues share one timeline; there is nothing to bind.
             if (!internal::metal_queue::valid(reinterpret_cast<uint64_t>(target.native_handle())))
@@ -42,11 +44,13 @@ namespace lfs::core {
     }
 
     TensorExecutionTarget::Scope::~Scope() {
+#ifdef LFS_TENSOR_VULKAN
         if (rebound_vulkan_) {
             if (const auto context = internal::try_live_vulkan_context())
                 context->recorders().unbind_queue();
             return;
         }
+#endif
         setCurrentCUDAStream(static_cast<cudaStream_t>(previous_target_));
     }
 
@@ -58,12 +62,14 @@ namespace lfs::core {
     void TensorExecutionTarget::wait_for(TensorExecutionTarget producer) const {
         if (backend_ != producer.backend_)
             throw std::invalid_argument("Tensor queue bridge backend mismatch");
+#ifdef LFS_TENSOR_VULKAN
         if (backend_ == GpuBackend::Vulkan) {
             internal::acquire_vulkan_context()->recorders().bridge_queues(
                 reinterpret_cast<uint64_t>(target_),
                 reinterpret_cast<uint64_t>(producer.target_));
             return;
         }
+#endif
         if (backend_ == GpuBackend::Metal) {
             // Later Metal batches already follow every submitted batch.
             if (!internal::metal_queue::valid(reinterpret_cast<uint64_t>(target_)) ||

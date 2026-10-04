@@ -41,6 +41,7 @@
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
+#include "rendering/vulkan_view_render_state.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
@@ -58,6 +59,7 @@
 #include "visualizer/project/session_state.hpp"
 #include "visualizer/visualizer_impl.hpp"
 #include "window/vulkan_context.hpp"
+#include "window/vulkan_graphics_context.hpp"
 #include "window/vulkan_result.hpp"
 #include <vk_mem_alloc.h>
 
@@ -5186,7 +5188,7 @@ namespace lfs::vis {
             GTEST_SKIP() << "CUDA device unavailable";
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getWindowManager()->init());
-        auto* context = viewer.getWindowManager()->getVulkanContext();
+        auto* context = vulkanContextOrNull(viewer.getWindowManager()->getGraphicsContext());
         core::MeshData mesh(
             core::Tensor::zeros({1000000, 3}, core::Device::CPU),
             core::Tensor::zeros({1000000, 3}, core::Device::CPU, core::DataType::Int32));
@@ -5252,19 +5254,21 @@ namespace lfs::vis {
         rendering->updateSettings(settings);
         Viewport viewport(640, 480);
         viewport.frameBufferSize = {640, 480};
-        auto* context = viewer.getWindowManager()->getVulkanContext();
+        auto* graphics = viewer.getWindowManager()->getGraphicsContext();
         const RenderingManager::RenderContext displayed{
             .view = rendering->activeViewId(),
             .viewport = viewport,
             .settings = settings,
             .scene_manager = viewer.getSceneManager(),
-            .vulkan_context = context,
+            .graphics_context = graphics,
             .preparing_import = false};
         rendering->markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
-        static_cast<void>(rendering->renderVulkanFrame(displayed));
+        static_cast<void>(rendering->renderFrame(displayed));
         const auto info = rendering->getSplitViewInfo();
         ASSERT_TRUE(info.enabled);
-        const auto frame = rendering->viewState(rendering->activeViewId()).vulkan_mesh_frame_;
+        const auto frame = vulkanViewRenderState(
+                               rendering->viewState(rendering->activeViewId()))
+                               .mesh_frame;
         ASSERT_NE(frame.split_view.left.external_image_view, VK_NULL_HANDLE);
         const auto image = rendering->captureViewportImage();
         ASSERT_TRUE(image);
@@ -5283,7 +5287,7 @@ namespace lfs::vis {
             .viewport = viewport,
             .settings = settings,
             .scene_manager = viewer.getSceneManager(),
-            .vulkan_context = context,
+            .graphics_context = graphics,
             .provisional_import_node = uuid};
         const auto result = rendering->pollImportRenderCheck(validation, [&] {
             EXPECT_EQ(rendering->getSplitViewInfo().right_name, "provisional-large");
@@ -5291,7 +5295,9 @@ namespace lfs::vis {
         ASSERT_TRUE(result.has_value());
         ASSERT_TRUE(result->empty()) << *result;
         EXPECT_EQ(rendering->getSplitViewInfo(), info);
-        const auto restored = rendering->viewState(rendering->activeViewId()).vulkan_mesh_frame_;
+        const auto restored = vulkanViewRenderState(
+                                  rendering->viewState(rendering->activeViewId()))
+                                  .mesh_frame;
         EXPECT_EQ(restored.split_view.left.external_image_view, frame.split_view.left.external_image_view);
         EXPECT_EQ(restored.split_view.right.external_image_view, frame.split_view.right.external_image_view);
         const auto capture = rendering->captureViewportImage();
@@ -5304,7 +5310,7 @@ namespace lfs::vis {
         ASSERT_EQ(cudaMemGetInfo(&free_after, &total), cudaSuccess);
         // Driver pipeline bookkeeping may remain; model-sized render scratch must not.
         EXPECT_LE(free_before > free_after ? free_before - free_after : 0, 16u * 1024 * 1024);
-        static_cast<void>(rendering->renderVulkanFrame(validation));
+        static_cast<void>(rendering->renderFrame(validation));
         EXPECT_EQ(rendering->getSplitViewInfo(), info);
     }
 

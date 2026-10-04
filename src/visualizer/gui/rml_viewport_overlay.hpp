@@ -169,7 +169,7 @@ namespace lfs::vis::gui {
         void applyProjectDragOverlay();
         void syncNodePreviewBanner();
         bool applyFrameTooltip();
-        void queueCachedVulkanContext(bool refresh_cache);
+        void queueCachedContext(bool refresh_cache);
         enum class RenderReason : std::uint32_t {
             Initial = 1u << 0,
             Reload = 1u << 1,
@@ -253,7 +253,7 @@ namespace lfs::vis::gui {
         int last_mouse_y_ = 0;
         int last_render_w_ = 0;
         int last_render_h_ = 0;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
         SplitDividerOverlayState split_divider_overlay_;
         GTMetricsOverlayState gt_metrics_overlay_;
         LodStatsOverlayState lod_stats_overlay_;

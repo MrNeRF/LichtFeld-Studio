@@ -49,7 +49,7 @@ namespace lfs::vis {
     // Forward declarations
     class VisualizerImpl;
     class ParameterManager;
-    class VulkanExternalTensorStorage;
+    class GraphicsExternalTensorStorage;
     class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
     class VisualizerImplResetTest_NewProjectWhileCompletionPendingStillErrors_Test;
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
@@ -336,7 +336,7 @@ namespace lfs::vis {
         core::Scene* scene_ = nullptr;
         std::function<bool(std::function<void()>, std::function<void()>)> test_scene_owner_poster_;
         std::optional<lfs::core::SplatExportableStorage> splat_storage_;
-        std::shared_ptr<VulkanExternalTensorStorage> splat_interop_parent_;
+        std::shared_ptr<GraphicsExternalTensorStorage> splat_interop_parent_;
         lfs::core::SplatTensorAllocator splat_interop_allocator_;
         // Nesting depth for densify-window Vulkan exclusion.
         int exportable_densify_barrier_depth_ = 0;

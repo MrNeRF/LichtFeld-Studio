@@ -28,8 +28,8 @@
 #include "python/python_runtime.hpp"
 #include "rendering/appearance_tensor_model.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/graphics_external_tensor.hpp"
 #include "rendering/rendering_manager.hpp"
-#include "rendering/vulkan_external_tensor.hpp"
 #include "scene/point_cloud_merge.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
@@ -53,7 +53,7 @@
 #include "visualizer/rendering/model_renderability.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer_impl.hpp"
-#include "window/vulkan_context.hpp"
+#include "window/graphics_context.hpp"
 #include "window/window_manager.hpp"
 #include <algorithm>
 #include <cctype>
@@ -1383,14 +1383,14 @@ namespace lfs::vis {
 
     void SceneManager::drainGpuForTensorRelease() {
         if (auto* const rendering = services().renderingOrNull()) {
-            rendering->viewportInterop().setSceneImage(nullptr, glm::ivec2(0, 0), false, 0);
+            rendering->clearViewportSceneImage();
             // Stop asynchronous page decoding and uploads before device idle
             // and before the scene releases the model and its mapped metadata.
             rendering->releaseSceneModelResources();
         }
         if (auto* const window_mgr = services().windowOrNull()) {
-            if (auto* const vulkan_ctx = window_mgr->getVulkanContext()) {
-                (void)vulkan_ctx->deviceWaitIdle();
+            if (auto* const graphics = window_mgr->getGraphicsContext()) {
+                (void)graphics->waitIdle();
             }
         }
     }

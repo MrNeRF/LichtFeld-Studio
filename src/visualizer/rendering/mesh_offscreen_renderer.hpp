@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "viewport_draw_types.hpp"
+#include <core/error.hpp>
 #include <core/export.hpp>
 #include <core/tensor.hpp>
 #include <rendering/rendering.hpp>
@@ -15,8 +17,7 @@
 
 namespace lfs::vis {
 
-    class VulkanContext;
-    struct VulkanMeshPassParams;
+    class GraphicsContext;
 
     // Owned by the rendering layer, which is what consumes it during the composite.
     using MeshLayer = lfs::rendering::MeshLayer;
@@ -35,9 +36,9 @@ namespace lfs::vis {
         MeshOffscreenRenderer(MeshOffscreenRenderer&&) noexcept;
         MeshOffscreenRenderer& operator=(MeshOffscreenRenderer&&) noexcept;
 
-        [[nodiscard]] std::expected<MeshLayer, std::string> render(
-            VulkanContext& context,
-            const VulkanMeshPassParams& params,
+        [[nodiscard]] lfs::Result<MeshLayer> render(
+            GraphicsContext& context,
+            const ViewportMeshPassDesc& params,
             const glm::mat4& projection,
             int width,
             int height);

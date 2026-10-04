@@ -634,7 +634,8 @@ namespace lfs::core::internal {
             if (!fallback) {
                 fallback = index;
             }
-            if ((queues[index].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) {
+            // Tensor programs share one timeline for compute and raster work.
+            if ((queues[index].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
                 queue_family_ = index;
                 return;
             }

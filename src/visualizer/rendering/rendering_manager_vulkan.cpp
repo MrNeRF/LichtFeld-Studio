@@ -34,12 +34,15 @@
 #include "training/trainer.hpp"
 #endif
 #include "core/training_manager.hpp"
+#include "graphics_external_tensor.hpp"
 #include "viewport_appearance_correction.hpp"
 #include "viewport_interop_service.hpp"
 #include "viewport_region_utils.hpp"
 #include "viewport_request_builder.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
-#include "vulkan_external_tensor.hpp"
+#include "vulkan_view_render_state.hpp"
+#include "vulkan_viewport_frame_resources.hpp"
+#include "window/vulkan_graphics_context.hpp"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -65,6 +68,39 @@ namespace lfs::vis {
         constexpr double kGpuLodRenderCapacityOverhead = 1.20;
         constexpr float kInteractiveResizeRenderScale = 0.33f;
         constexpr auto kTrainingOutputResizeStableDelay = std::chrono::milliseconds(500);
+
+        void setVulkanMeshFrame(ViewRenderState& view, VulkanMeshFrame frame) {
+            auto& native = vulkanViewRenderState(view);
+            std::lock_guard lock(native.mesh_frame_mutex);
+            native.mesh_frame = std::move(frame);
+        }
+
+        void clearVulkanMeshFrame(ViewRenderState& view) {
+            auto& native = vulkanViewRenderState(view);
+            std::lock_guard lock(native.mesh_frame_mutex);
+            native.mesh_frame = {};
+        }
+
+        std::shared_ptr<const lfs::core::Tensor> publishVulkanFrameResources(
+            ViewRenderState& state, std::shared_ptr<const lfs::core::Tensor> tensor,
+            const VkImage image = VK_NULL_HANDLE,
+            const VkImageView view = VK_NULL_HANDLE,
+            const VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED,
+            const std::uint64_t generation = 0,
+            const VkSemaphore completion = VK_NULL_HANDLE,
+            const std::uint64_t completion_value = 0,
+            std::vector<ViewportInteropService::FrameCompletion> additional = {}) {
+            auto resources = std::make_shared<VulkanViewportFrameResources>();
+            resources->external_image = image;
+            resources->external_image_view = view;
+            resources->external_image_layout = layout;
+            resources->external_image_generation = generation;
+            resources->completion_semaphore = completion;
+            resources->completion_value = completion_value;
+            resources->additional_completions = std::move(additional);
+            vulkanViewRenderState(state).pending_frame_resources = std::move(resources);
+            return tensor;
+        }
 
         [[nodiscard]] std::optional<LfsSceneUpscalerOptimalSettingsV1> pluginOptimalSettings(
             SceneUpscalerPlugin& plugin, const glm::ivec2 output_extent, const std::uint32_t quality) {
@@ -506,12 +542,39 @@ namespace lfs::vis {
             return panels;
         }
 
+        [[nodiscard]] SplitViewCpuPanelDesc cpuPanelDesc(
+            const VulkanSplitViewPanel& panel) {
+            return {
+                .image = panel.image,
+                .start_position = panel.start_position,
+                .end_position = panel.end_position,
+                .normalize_x_to_panel = panel.normalize_x_to_panel,
+                .flip_y = panel.flip_y,
+                .uv_scale = panel.uv_scale,
+                .uv_clamp_max = panel.uv_clamp_max,
+                .spatial_filter = panel.spatial_filter,
+            };
+        }
+
+        [[nodiscard]] SplitViewCpuDesc cpuSplitViewDesc(
+            const VulkanSplitViewParams& params) {
+            return {
+                .loss_visualization = params.loss_visualization,
+                .left = cpuPanelDesc(params.left),
+                .right = cpuPanelDesc(params.right),
+                .split_position = params.split_position,
+                .content_rect = params.content_rect,
+                .coordinate_extent = params.coordinate_extent,
+                .background = params.background,
+            };
+        }
+
         // CPU split-view composite kept ONLY for capture/screenshot â€” runs lazily on
         // demand when captureViewportImage() is called, never per-frame. Mirrors the
         // pixel-for-pixel result of the Vulkan split_view.frag shader so screenshots
         // match what the user sees on screen.
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> composeSplitViewCpuImpl(
-            const VulkanSplitViewParams& params,
+            const SplitViewCpuDesc& params,
             const glm::ivec2& output_size) {
             const auto load_panel = [](const std::shared_ptr<const lfs::core::Tensor>& image)
                 -> std::optional<std::tuple<lfs::core::Tensor, int, int, int>> {
@@ -552,9 +615,9 @@ namespace lfs::vis {
             // CPU readback tensors are tight (exactly valid-size). Panel
             // uv_scale/uv_clamp_max were authored for padded GPU pool textures
             // and would crop/zoom any panel whose size is not a 64-px bucket.
-            VulkanSplitViewPanel left_panel = params.left;
-            VulkanSplitViewPanel right_panel = params.right;
-            const auto apply_tight_cpu_uv = [](VulkanSplitViewPanel& panel, const int w, const int h) {
+            SplitViewCpuPanelDesc left_panel = params.left;
+            SplitViewCpuPanelDesc right_panel = params.right;
+            const auto apply_tight_cpu_uv = [](SplitViewCpuPanelDesc& panel, const int w, const int h) {
                 const int tex_w = std::max(w, 1);
                 const int tex_h = std::max(h, 1);
                 panel.uv_scale = {1.0f, 1.0f};
@@ -626,7 +689,7 @@ namespace lfs::vis {
                 output[pixel_count + idx] = c.g;
                 output[2 * pixel_count + idx] = c.b;
             };
-            const auto sample_panel_color = [&](const VulkanSplitViewPanel& panel,
+            const auto sample_panel_color = [&](const SplitViewCpuPanelDesc& panel,
                                                 const auto& data,
                                                 const float u,
                                                 const float v) {
@@ -895,7 +958,7 @@ namespace lfs::vis {
     } // namespace
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::composeSplitViewCpu(
-        const VulkanSplitViewParams& params, const glm::ivec2& output_size) {
+        const SplitViewCpuDesc& params, const glm::ivec2& output_size) {
         return composeSplitViewCpuImpl(params, output_size);
     }
 
@@ -1422,7 +1485,7 @@ namespace lfs::vis {
         if (!lfs::rendering::isVkSplatBackend(settings.raster_backend)) {
             return std::unexpected("Scene selection query is available only when a Scene backend is active");
         }
-        if (!last_vulkan_context_) {
+        if (!last_graphics_context_) {
             return std::unexpected("Scene selection query requires an active Vulkan context");
         }
         // Point-cloud mode renders with a separate graphics pipeline, but selection
@@ -1445,7 +1508,7 @@ namespace lfs::vis {
         }
 
         if (!scene_renderer_) {
-            scene_renderer_ = createSceneRenderer(*last_vulkan_context_);
+            scene_renderer_ = createSceneRenderer(*last_graphics_context_);
         }
 
         const auto map_shape = [](const VksplatSelectionMaskShape value) {
@@ -1598,7 +1661,7 @@ namespace lfs::vis {
         auto restore = [&](void*) {
             auto& probe = *view_states_.at(id);
             probe.viewport_artifact_service_.clearViewportOutput();
-            probe.viewport_interop_.shutdown(context.vulkan_context);
+            vulkanViewRenderState(probe).viewport_interop_.shutdown(vulkanContextOrNull(context.graphics_context));
             scene_renderer_.reset();
             releaseViewTargets(probe);
             view_states_[id] = std::move(saved_view);
@@ -1629,13 +1692,13 @@ namespace lfs::vis {
             .viewport = viewport,
             .settings = context.settings,
             .scene_manager = context.scene_manager,
-            .vulkan_context = context.vulkan_context,
+            .graphics_context = context.graphics_context,
             .preparing_import = true,
             .provisional_import_node = context.provisional_import_node};
         try {
             for (unsigned slot = 0; slot < OutputSlotRing::kFrameRingSize && !import_render_result_; ++slot) {
                 markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
-                static_cast<void>(renderVulkanFrame(preparation));
+                static_cast<void>(renderFrame(preparation));
             }
         } catch (const std::exception& error) {
             LOG_ERROR("Import render preparation failed: {}", error.what());
@@ -1666,9 +1729,10 @@ namespace lfs::vis {
             markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
     }
 
-    RenderingManager::VulkanFrameResult
-    RenderingManager::renderVulkanFrame(const RenderContext& context) {
+    ViewportFrameResult RenderingManager::renderFrame(const RenderContext& context) {
+        auto* const vulkan_context = vulkanContextOrNull(context.graphics_context);
         auto& view_state = viewState(context.view);
+        vulkanViewRenderState(view_state).pending_frame_resources.reset();
         if (!view_state.main_render_target_.valid())
             view_state.main_render_target_ = render_targets_.allocate();
         if (context.settings.split_view_mode != SplitViewMode::Disabled) {
@@ -1742,8 +1806,8 @@ namespace lfs::vis {
             rendererTrainingInterop(*scene_renderer_).setLiveSubmitCallback({});
             rendererTrainingInterop(*scene_renderer_).cancelArenaHandoff();
         }
-        if (context.vulkan_context) {
-            last_vulkan_context_ = context.vulkan_context;
+        if (context.graphics_context) {
+            last_graphics_context_ = context.graphics_context;
         }
         if (!is_training && scene_renderer_ &&
             vksplat_terminal_release_pending_.exchange(false, std::memory_order_acq_rel)) {
@@ -1787,18 +1851,19 @@ namespace lfs::vis {
         initialized_ = true;
 
         std::shared_ptr<void> frame_tensor_scope;
-        const auto cached_frame_result = [this, current_size, &view_state]() -> VulkanFrameResult {
+        const auto cached_frame_result = [this, current_size, &view_state]() -> ViewportFrameResult {
             if (!view_state.vksplat_stale_frame_guard_.canUseCachedFrame()) {
                 return {};
             }
-            if (view_state.vulkan_external_viewport_image_ != VK_NULL_HANDLE) {
-                return {.image = {},
-                        .external_image = view_state.vulkan_external_viewport_image_,
-                        .external_image_view = view_state.vulkan_external_viewport_image_view_,
-                        .external_image_layout = view_state.vulkan_external_viewport_image_layout_,
-                        .external_image_generation =
-                            view_state.vulkan_external_viewport_image_generation_,
-                        .additional_completions = {view_state.viewport_interop_.frameCompletions().begin(), view_state.viewport_interop_.frameCompletions().end()},
+            if (vulkanViewRenderState(view_state).external_viewport_image != VK_NULL_HANDLE) {
+                return {.image = publishVulkanFrameResources(view_state, {},
+                                                             vulkanViewRenderState(view_state).external_viewport_image,
+                                                             vulkanViewRenderState(view_state).external_viewport_image_view,
+                                                             vulkanViewRenderState(view_state).external_viewport_image_layout,
+                                                             vulkanViewRenderState(view_state).external_viewport_image_generation,
+                                                             VK_NULL_HANDLE, 0,
+                                                             {vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().begin(),
+                                                              vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().end()}),
                         .image_generation = view_state.vulkan_viewport_image_generation_,
                         .size = view_state.vulkan_viewport_image_size_,
                         .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
@@ -1807,8 +1872,11 @@ namespace lfs::vis {
                             view_state.vulkan_viewport_coordinate_size_ == current_size};
             }
             if (!view_state.vulkan_viewport_image_) {
-                return {.image = {},
-                        .additional_completions = {view_state.viewport_interop_.frameCompletions().begin(), view_state.viewport_interop_.frameCompletions().end()},
+                return {.image = publishVulkanFrameResources(view_state, {},
+                                                             VK_NULL_HANDLE, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED, 0,
+                                                             VK_NULL_HANDLE, 0,
+                                                             {vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().begin(),
+                                                              vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().end()}),
                         .image_generation = view_state.split_view_image_generation_,
                         .size = view_state.vulkan_viewport_image_size_,
                         .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
@@ -1816,8 +1884,11 @@ namespace lfs::vis {
                         .matches_viewport_extent =
                             view_state.vulkan_viewport_coordinate_size_ == current_size};
             }
-            return {.image = view_state.vulkan_viewport_image_,
-                    .additional_completions = {view_state.viewport_interop_.frameCompletions().begin(), view_state.viewport_interop_.frameCompletions().end()},
+            return {.image = publishVulkanFrameResources(view_state, view_state.vulkan_viewport_image_,
+                                                         VK_NULL_HANDLE, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED, 0,
+                                                         VK_NULL_HANDLE, 0,
+                                                         {vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().begin(),
+                                                          vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().end()}),
                     .image_generation = view_state.vulkan_viewport_image_generation_,
                     .size = view_state.vulkan_viewport_image_size_,
                     .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
@@ -1841,7 +1912,7 @@ namespace lfs::vis {
                 // Reset alone still needs arena access on the next render.
                 // Hide the old publication until fresh output is available;
                 // the renderer retains its output allocations and GPU fences.
-                clearVulkanViewportImageState(view_state);
+                clearViewportImageState(view_state);
                 clearVulkanMeshFrame(view_state);
                 view_state.viewport_artifact_service_.clearViewportOutput();
             }
@@ -1852,12 +1923,12 @@ namespace lfs::vis {
             }
 
             const float split_position = std::clamp(frame_settings.split_position, 0.0f, 1.0f);
-            std::lock_guard lock(view_state.vulkan_mesh_frame_mutex_);
-            if (!view_state.vulkan_mesh_frame_.split_view.enabled) {
+            std::lock_guard lock(vulkanViewRenderState(view_state).mesh_frame_mutex);
+            if (!vulkanViewRenderState(view_state).mesh_frame.split_view.enabled) {
                 return false;
             }
 
-            auto& split = view_state.vulkan_mesh_frame_.split_view;
+            auto& split = vulkanViewRenderState(view_state).mesh_frame.split_view;
             // PLY panels are rendered with a 12.5%-viewport-width overlap around
             // the cached splitter. A drag inside that overlap only changes the
             // composite divider; leaving it is the point where panel renders must
@@ -1871,9 +1942,9 @@ namespace lfs::vis {
                 split.split_position != split_position ||
                 split.left.end_position != split_position ||
                 split.right.start_position != split_position ||
-                (view_state.vulkan_mesh_frame_.panels.size() == 2 &&
-                 (view_state.vulkan_mesh_frame_.panels[0].end_position != split_position ||
-                  view_state.vulkan_mesh_frame_.panels[1].start_position != split_position));
+                (vulkanViewRenderState(view_state).mesh_frame.panels.size() == 2 &&
+                 (vulkanViewRenderState(view_state).mesh_frame.panels[0].end_position != split_position ||
+                  vulkanViewRenderState(view_state).mesh_frame.panels[1].start_position != split_position));
             if (!split_position_changed) {
                 return !require_position_change;
             }
@@ -1886,12 +1957,12 @@ namespace lfs::vis {
                 split.right.end_position = 1.0f;
             }
 
-            if (view_state.vulkan_mesh_frame_.panels.size() == 2 &&
+            if (vulkanViewRenderState(view_state).mesh_frame.panels.size() == 2 &&
                 !splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
-                view_state.vulkan_mesh_frame_.panels[0].start_position = 0.0f;
-                view_state.vulkan_mesh_frame_.panels[0].end_position = split_position;
-                view_state.vulkan_mesh_frame_.panels[1].start_position = split_position;
-                view_state.vulkan_mesh_frame_.panels[1].end_position = 1.0f;
+                vulkanViewRenderState(view_state).mesh_frame.panels[0].start_position = 0.0f;
+                vulkanViewRenderState(view_state).mesh_frame.panels[0].end_position = split_position;
+                vulkanViewRenderState(view_state).mesh_frame.panels[1].start_position = split_position;
+                vulkanViewRenderState(view_state).mesh_frame.panels[1].end_position = 1.0f;
             }
             view_state.viewport_artifact_service_.invalidateCapturedImage();
             return true;
@@ -1901,8 +1972,8 @@ namespace lfs::vis {
                 view_state.vulkan_viewport_image_size_.y <= 0) {
                 return false;
             }
-            std::lock_guard lock(view_state.vulkan_mesh_frame_mutex_);
-            return view_state.vulkan_mesh_frame_.split_view.enabled;
+            std::lock_guard lock(vulkanViewRenderState(view_state).mesh_frame_mutex);
+            return vulkanViewRenderState(view_state).mesh_frame.split_view.enabled;
         };
 
         const auto ensure_auxiliary_rendering_engine =
@@ -2055,7 +2126,7 @@ namespace lfs::vis {
             view_state.camera_settle_deadline_ = now + kCameraSettle;
         }
         if (rest_only && view_state.camera_settle_pending_ && now < view_state.camera_settle_deadline_ &&
-            (view_state.vulkan_external_viewport_image_ != VK_NULL_HANDLE || view_state.vulkan_viewport_image_)) {
+            (vulkanViewRenderState(view_state).external_viewport_image != VK_NULL_HANDLE || view_state.vulkan_viewport_image_)) {
             static bool warned = false;
             if (!warned) {
                 warned = true;
@@ -2203,15 +2274,15 @@ namespace lfs::vis {
                 std::lock_guard lock(views_mutex_);
                 for (auto& [id, view] : view_states_) {
                     view->vulkan_viewport_image_.reset();
-                    view->vulkan_external_viewport_image_ = VK_NULL_HANDLE;
-                    view->vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
-                    view->vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-                    view->vulkan_external_viewport_image_generation_ = 0;
+                    vulkanViewRenderState(*view).external_viewport_image = VK_NULL_HANDLE;
+                    vulkanViewRenderState(*view).external_viewport_image_view = VK_NULL_HANDLE;
+                    vulkanViewRenderState(*view).external_viewport_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    vulkanViewRenderState(*view).external_viewport_image_generation = 0;
                     view->vulkan_viewport_image_size_ = {};
-                    view->vulkan_mesh_frame_ = {};
-                    view->viewport_interop_.setSceneImage({}, {}, false, 0);
-                    view->viewport_interop_.clearSplitRightImage();
-                    view->viewport_interop_.clearDepthBlitImage();
+                    vulkanViewRenderState(*view).mesh_frame = {};
+                    vulkanViewRenderState(*view).viewport_interop_.setSceneImage({}, {}, false, 0);
+                    vulkanViewRenderState(*view).viewport_interop_.clearSplitRightImage();
+                    vulkanViewRenderState(*view).viewport_interop_.clearDepthBlitImage();
                     view->viewport_artifact_service_.clearViewportOutput();
                     view->gt_async_depth_ticket_ = 0;
                     view->gt_async_depth_dest_ = {};
@@ -2223,7 +2294,7 @@ namespace lfs::vis {
                 }
             }
             if (view_state.frame_lifecycle_service_.handleModelChange(model_ptr, view_state.viewport_artifact_service_, model_source).changed) {
-                clearVulkanViewportImageState(view_state);
+                clearViewportImageState(view_state);
                 view_state.last_logged_vksplat_render_error_.clear();
                 view_state.viewport_artifact_service_.clearViewportOutput();
                 markViewDirty(context.view, DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
@@ -2241,14 +2312,14 @@ namespace lfs::vis {
                 view_state.vulkan_viewport_image_size_.y <= 0) {
                 return false;
             }
-            std::lock_guard lock(view_state.vulkan_mesh_frame_mutex_);
-            return view_state.vulkan_mesh_frame_.split_view.enabled ||
-                   !view_state.vulkan_mesh_frame_.items.empty() ||
-                   view_state.vulkan_mesh_frame_.environment.enabled;
+            std::lock_guard lock(vulkanViewRenderState(view_state).mesh_frame_mutex);
+            return vulkanViewRenderState(view_state).mesh_frame.split_view.enabled ||
+                   !vulkanViewRenderState(view_state).mesh_frame.items.empty() ||
+                   vulkanViewRenderState(view_state).mesh_frame.environment.enabled;
         }();
         const bool has_cached_viewport_output =
             view_state.vulkan_viewport_image_ != nullptr ||
-            view_state.vulkan_external_viewport_image_ != VK_NULL_HANDLE ||
+            vulkanViewRenderState(view_state).external_viewport_image != VK_NULL_HANDLE ||
             has_cached_gpu_only_frame;
         LOG_PERF("renderVulkanFrame.resize deferring={} render={} interactive_scale={} completed={} render_scale={:.2f} render_size={}x{} current_size={}x{}",
                  resize_deferring,
@@ -2382,7 +2453,7 @@ namespace lfs::vis {
         if (!has_render_content) {
             if (scene_manager)
                 noteImportRenderFrame(scene_manager->getScene().renderGeneration());
-            clearVulkanViewportImageState(view_state);
+            clearViewportImageState(view_state);
             view_state.vulkan_viewport_coordinate_size_ = current_size;
             view_state.last_logged_vksplat_render_error_.clear();
             view_state.viewport_artifact_service_.clearViewportOutput();
@@ -2422,7 +2493,7 @@ namespace lfs::vis {
 
         const bool vksplat_viewport_resize =
             is_training &&
-            context.vulkan_context != nullptr &&
+            vulkan_context != nullptr &&
             scene_renderer_ != nullptr &&
             scene_renderer_->nextOutputImagesNeedResize(
                 render_size, view_state.main_render_target_) &&
@@ -2445,8 +2516,8 @@ namespace lfs::vis {
                 render_lock.reset();
                 return cached_frame_result();
             }
-            if (context.vulkan_context)
-                context.vulkan_context->tensorInterop().drain(lfs::core::default_gpu_backend());
+            if (vulkan_context)
+                vulkan_context->tensorInterop().drain(lfs::core::default_gpu_backend());
             LOG_DEBUG("Scene output resize to {}x{} (viewer-side quiesce; training continues)",
                       render_size.x,
                       render_size.y);
@@ -2466,18 +2537,18 @@ namespace lfs::vis {
         // Only a frame that will perform renderer work may join the trainer's
         // read epoch. Cached frames must not enqueue a legacy-stream wait or
         // publish a reader edge that serializes the next training step.
-        if (is_training && context.vulkan_context &&
+        if (is_training && vulkan_context &&
             lfs::rendering::isVkSplatBackend(frame_settings.raster_backend)) {
             if (!scene_renderer_) {
-                scene_renderer_ = createSceneRenderer(*context.vulkan_context);
+                scene_renderer_ = createSceneRenderer(*context.graphics_context);
             }
             if (const auto ok = rendererTrainingInterop(*scene_renderer_).ensureHandshakeReady(); !ok) {
                 LOG_WARN("Scene handshake pre-init skipped: {}", ok.error());
             }
         }
         frame_tensor_scope.reset();
-        if (context.vulkan_context)
-            frame_tensor_scope = context.vulkan_context->tensorInterop().execution_scope(
+        if (vulkan_context)
+            frame_tensor_scope = vulkan_context->tensorInterop().execution_scope(
                 lfs::core::default_gpu_backend());
 #if LFS_BUILD_TRAINER
         lfs::training::Trainer* live_trainer = nullptr;
@@ -2510,7 +2581,7 @@ namespace lfs::vis {
             model_read_lock.emplace(std::move(candidate));
         }
         if (live_trainer) {
-            live_trainer->setViewerReleaseFence(context.vulkan_context->device(),
+            live_trainer->setViewerReleaseFence(vulkan_context->device(),
                                                 {rendererTrainingInterop(*scene_renderer_).renderCompleteTimeline(), 0, {}});
             live_trainer->beginModelRead(lfs::core::TensorExecutionTarget::current());
             lfs::training::Trainer* const trainer = live_trainer;
@@ -2624,16 +2695,16 @@ namespace lfs::vis {
                     .detection = LFS_SOURCE_SITE_CURRENT(),
                 });
             };
-            if (!context.vulkan_context) {
+            if (!vulkan_context) {
                 return fail("Point-cloud viewing requires an active Vulkan context");
             }
             if ((frame_dirty & DirtyFlag::SELECTION) != 0) {
                 ++point_cloud_preview_selection_revision_;
             }
             if (!point_scene_renderer_) {
-                point_scene_renderer_ = createPointSceneRenderer(*context.vulkan_context);
+                point_scene_renderer_ = createPointSceneRenderer(*context.graphics_context);
             }
-            point_cloud_last_frame_serial_ = context.vulkan_context->lastFrameSubmitSerial() + 1;
+            point_cloud_last_frame_serial_ = vulkan_context->lastFrameSubmitSerial() + 1;
 
             lfs::core::Tensor splat_positions;
             const lfs::core::Tensor* positions_ptr = nullptr;
@@ -3043,11 +3114,11 @@ namespace lfs::vis {
 
             const bool vksplat_panel_supported =
                 vksplat_target.has_value() &&
-                context.vulkan_context != nullptr &&
+                vulkan_context != nullptr &&
                 lfs::rendering::isVkSplatBackend(request.raster_backend);
             if (vksplat_panel_supported) {
                 if (!scene_renderer_) {
-                    scene_renderer_ = createSceneRenderer(*context.vulkan_context);
+                    scene_renderer_ = createSceneRenderer(*context.graphics_context);
                 }
                 const bool force_input_upload =
                     (frame_dirty & DirtyFlag::SPLATS) != 0 && !vksplat_inputs_forced_this_frame;
@@ -3107,7 +3178,7 @@ namespace lfs::vis {
                 return std::unexpected(result.error());
             }
 
-            if (!context.vulkan_context) {
+            if (!vulkan_context) {
                 return std::unexpected("Scene split-view panel requires an active Vulkan context");
             }
             return std::unexpected("Scene comparison panel did not receive a render target");
@@ -3477,7 +3548,7 @@ namespace lfs::vis {
                                     }
                                     view_state.gt_async_held_display_.reset();
                                     view_state.gt_async_held_view_.reset();
-                                } else if (!context.vulkan_context) {
+                                } else if (!vulkan_context) {
                                     compare_error = "Normal/depth GT comparison requires an active Vulkan context";
                                 } else if (!render_camera) {
                                     compare_error = "Normal/depth GT comparison could not build the GT render camera";
@@ -3486,7 +3557,7 @@ namespace lfs::vis {
                                     compare_error = "Normal GT comparison requires pinhole camera intrinsics";
                                 } else {
                                     if (!scene_renderer_) {
-                                        scene_renderer_ = createSceneRenderer(*context.vulkan_context);
+                                        scene_renderer_ = createSceneRenderer(*context.graphics_context);
                                     }
                                     if (const auto ready = apply_gt_async_ready(); !ready) {
                                         compare_error = ready.error();
@@ -3682,7 +3753,7 @@ namespace lfs::vis {
                                         compare_panel.external_image_view != VK_NULL_HANDLE &&
                                         frame_settings.apply_appearance_correction &&
                                         scene_renderer_ &&
-                                        context.vulkan_context) {
+                                        vulkan_context) {
                                         auto image = scene_renderer_->readOutputImage(view_state.split_right_render_target_);
                                         if (image && *image) {
                                             compare_panel.image = applyViewportAppearanceCorrection(
@@ -3969,8 +4040,8 @@ namespace lfs::vis {
                 frame_ctx, render_size, *transforms_for_request);
             // Vulkan-native path: skip CUDA staging, drive an external VkImage
             // straight through the same plumbing the VkSplat backend uses.
-            auto try_vulkan = [&]() -> std::optional<VulkanFrameResult> {
-                if (!context.vulkan_context) {
+            auto try_vulkan = [&]() -> std::optional<ViewportFrameResult> {
+                if (!vulkan_context) {
                     return std::nullopt;
                 }
                 auto render_result = render_native_point_cloud(
@@ -3982,11 +4053,11 @@ namespace lfs::vis {
 
                 render_lock.reset();
                 view_state.vksplat_stale_frame_guard_.onSuccess();
-                clearVulkanViewportImageState(view_state, render_result->size, render_result->flip_y);
-                view_state.vulkan_external_viewport_image_ = vulkanSceneImage(render_result->image);
-                view_state.vulkan_external_viewport_image_view_ = vulkanSceneImageView(render_result->image_view);
-                view_state.vulkan_external_viewport_image_layout_ = vulkanSceneImageLayout(render_result->image_layout);
-                view_state.vulkan_external_viewport_image_generation_ = render_result->generation;
+                clearViewportImageState(view_state, render_result->size, render_result->flip_y);
+                vulkanViewRenderState(view_state).external_viewport_image = vulkanSceneImage(render_result->image);
+                vulkanViewRenderState(view_state).external_viewport_image_view = vulkanSceneImageView(render_result->image_view);
+                vulkanViewRenderState(view_state).external_viewport_image_layout = vulkanSceneImageLayout(render_result->image_layout);
+                vulkanViewRenderState(view_state).external_viewport_image_generation = render_result->generation;
 
                 lfs::rendering::FrameMetadata metadata{};
                 metadata.valid = true;
@@ -3995,7 +4066,7 @@ namespace lfs::vis {
                 view_state.viewport_artifact_service_.clearViewportOutput();
                 view_state.viewport_artifact_service_.setLazyCapture(
                     [this, &view_state]() -> std::shared_ptr<lfs::core::Tensor> {
-                        if (!point_scene_renderer_ || !last_vulkan_context_) {
+                        if (!point_scene_renderer_ || !last_graphics_context_) {
                             return {};
                         }
                         auto image = point_scene_renderer_->readOutputImage(view_state.main_render_target_);
@@ -4039,15 +4110,14 @@ namespace lfs::vis {
                 }
 
                 view_state.vulkan_viewport_coordinate_size_ = current_size;
-                return VulkanFrameResult{
-                    .image = {},
-                    .external_image = view_state.vulkan_external_viewport_image_,
-                    .external_image_view = view_state.vulkan_external_viewport_image_view_,
-                    .external_image_layout = view_state.vulkan_external_viewport_image_layout_,
-                    .external_image_generation =
-                        view_state.vulkan_external_viewport_image_generation_,
-                    .completion_semaphore = vulkanSceneTimeline(render_result->completion_semaphore),
-                    .completion_value = render_result->completion_value,
+                return ViewportFrameResult{
+                    .image = publishVulkanFrameResources(view_state, {},
+                                                         vulkanViewRenderState(view_state).external_viewport_image,
+                                                         vulkanViewRenderState(view_state).external_viewport_image_view,
+                                                         vulkanViewRenderState(view_state).external_viewport_image_layout,
+                                                         vulkanViewRenderState(view_state).external_viewport_image_generation,
+                                                         vulkanSceneTimeline(render_result->completion_semaphore),
+                                                         render_result->completion_value),
                     .size = view_state.vulkan_viewport_image_size_,
                     .flip_y = view_state.vulkan_viewport_image_flip_y_,
                     .matches_viewport_extent = true,
@@ -4059,7 +4129,7 @@ namespace lfs::vis {
                 return *vk_result;
             }
 
-            if (!context.vulkan_context) {
+            if (!vulkan_context) {
                 render_error = "Point-cloud viewer rendering requires an active Vulkan context";
             } else {
                 render_error = "Point-cloud Vulkan render failed";
@@ -4071,9 +4141,9 @@ namespace lfs::vis {
             request.gut = lfs::rendering::isGutBackend(request.raster_backend);
             std::vector<std::uint32_t> lod_touched_chunks;
             if (lfs::rendering::isVkSplatBackend(request.raster_backend) &&
-                context.vulkan_context &&
+                vulkan_context &&
                 !scene_renderer_) {
-                scene_renderer_ = createSceneRenderer(*context.vulkan_context);
+                scene_renderer_ = createSceneRenderer(*context.graphics_context);
             }
 
             const bool has_lod_tree = model && model->lod_tree && model->lod_tree->has_tree();
@@ -4276,13 +4346,13 @@ namespace lfs::vis {
             }
 
             if (lfs::rendering::isVkSplatBackend(request.raster_backend)) {
-                if (!context.vulkan_context) {
+                if (!vulkan_context) {
                     render_error = "Scene backend requires an active Vulkan context";
                 } else {
                     if (!scene_renderer_) {
-                        scene_renderer_ = createSceneRenderer(*context.vulkan_context);
+                        scene_renderer_ = createSceneRenderer(*context.graphics_context);
                     }
-                    const auto publish_vksplat_result = [&](const SceneRenderer::RenderResult& render_result) -> VulkanFrameResult {
+                    const auto publish_vksplat_result = [&](const SceneRenderer::RenderResult& render_result) -> ViewportFrameResult {
                         // Passive previews already advanced the refresh clock
                         // when requested. Resetting it again after a parked
                         // retry adds that delay to every subsequent interval.
@@ -4426,10 +4496,10 @@ namespace lfs::vis {
                                     if (view_state.vulkan_viewport_image_generation_ == 0) {
                                         ++view_state.vulkan_viewport_image_generation_;
                                     }
-                                    view_state.vulkan_external_viewport_image_ = VK_NULL_HANDLE;
-                                    view_state.vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
-                                    view_state.vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-                                    view_state.vulkan_external_viewport_image_generation_ = 0;
+                                    vulkanViewRenderState(view_state).external_viewport_image = VK_NULL_HANDLE;
+                                    vulkanViewRenderState(view_state).external_viewport_image_view = VK_NULL_HANDLE;
+                                    vulkanViewRenderState(view_state).external_viewport_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+                                    vulkanViewRenderState(view_state).external_viewport_image_generation = 0;
                                     view_state.vulkan_viewport_image_size_ = render_result.size;
                                     view_state.vulkan_viewport_image_alloc_size_ = render_result.size;
                                     view_state.vulkan_viewport_image_flip_y_ = render_result.flip_y;
@@ -4502,18 +4572,18 @@ namespace lfs::vis {
                             }
                         }
 
-                        clearVulkanViewportImageState(view_state, render_result.size,
-                                                      render_result.flip_y,
-                                                      render_result.alloc_size);
-                        view_state.vulkan_external_viewport_image_ = vulkanSceneImage(render_result.image);
-                        view_state.vulkan_external_viewport_image_view_ = vulkanSceneImageView(render_result.image_view);
-                        view_state.vulkan_external_viewport_image_layout_ = vulkanSceneImageLayout(render_result.image_layout);
-                        view_state.vulkan_external_viewport_image_generation_ = render_result.generation;
+                        clearViewportImageState(view_state, render_result.size,
+                                                render_result.flip_y,
+                                                render_result.alloc_size);
+                        vulkanViewRenderState(view_state).external_viewport_image = vulkanSceneImage(render_result.image);
+                        vulkanViewRenderState(view_state).external_viewport_image_view = vulkanSceneImageView(render_result.image_view);
+                        vulkanViewRenderState(view_state).external_viewport_image_layout = vulkanSceneImageLayout(render_result.image_layout);
+                        vulkanViewRenderState(view_state).external_viewport_image_generation = render_result.generation;
                         const auto capture_composite_request = make_capture_composite_request();
                         view_state.viewport_artifact_service_.setLazyCapture(
                             [this, transparent_viewer_compositing, capture_composite_request, metadata, render_size = render_result.size, &view_state]()
                                 -> std::shared_ptr<lfs::core::Tensor> {
-                                if (!scene_renderer_ || !last_vulkan_context_) {
+                                if (!scene_renderer_ || !last_graphics_context_) {
                                     return {};
                                 }
                                 auto image = transparent_viewer_compositing
@@ -4569,15 +4639,13 @@ namespace lfs::vis {
                             view_state.temporal_convergence_.cancelSettle();
 
                         view_state.vulkan_viewport_coordinate_size_ = current_size;
-                        return {.image = {},
-                                .external_image = view_state.vulkan_external_viewport_image_,
-                                .external_image_view = view_state.vulkan_external_viewport_image_view_,
-                                .external_image_layout =
-                                    view_state.vulkan_external_viewport_image_layout_,
-                                .external_image_generation =
-                                    view_state.vulkan_external_viewport_image_generation_,
-                                .completion_semaphore = vulkanSceneTimeline(render_result.completion_semaphore),
-                                .completion_value = render_result.completion_value,
+                        return {.image = publishVulkanFrameResources(view_state, {},
+                                                                     vulkanViewRenderState(view_state).external_viewport_image,
+                                                                     vulkanViewRenderState(view_state).external_viewport_image_view,
+                                                                     vulkanViewRenderState(view_state).external_viewport_image_layout,
+                                                                     vulkanViewRenderState(view_state).external_viewport_image_generation,
+                                                                     vulkanSceneTimeline(render_result.completion_semaphore),
+                                                                     render_result.completion_value),
                                 .size = view_state.vulkan_viewport_image_size_,
                                 .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
                                 .flip_y = view_state.vulkan_viewport_image_flip_y_,
@@ -4595,7 +4663,7 @@ namespace lfs::vis {
                         (frame_dirty & DirtyFlag::SELECTION) != 0 &&
                         (frame_dirty == DirtyFlag::SELECTION ||
                          (is_training && (non_overlay_dirty & ~DirtyFlag::SPLATS) == 0)) &&
-                        view_state.vulkan_external_viewport_image_ != VK_NULL_HANDLE &&
+                        vulkanViewRenderState(view_state).external_viewport_image != VK_NULL_HANDLE &&
                         view_state.vulkan_viewport_image_size_ == render_size &&
                         !view_state.split_view_service_.isActive(frame_settings);
                     if (can_rerender_selection_overlay) {
@@ -4741,7 +4809,7 @@ namespace lfs::vis {
             if (pending_split_view.enabled || render_error.empty()) {
                 view_state.vksplat_stale_frame_guard_.onSuccess();
             }
-            clearVulkanViewportImageState(view_state, render_size, false);
+            clearViewportImageState(view_state, render_size, false);
             view_state.vulkan_gt_comparison_content_size_ =
                 rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
             if (rendered_image_contains_ground_truth) {
@@ -4762,14 +4830,14 @@ namespace lfs::vis {
                         -> std::shared_ptr<lfs::core::Tensor> {
                         VulkanSplitViewParams capture_params = params;
                         {
-                            std::lock_guard lock(view_state.vulkan_mesh_frame_mutex_);
-                            if (view_state.vulkan_mesh_frame_.split_view.enabled) {
-                                capture_params = view_state.vulkan_mesh_frame_.split_view;
+                            std::lock_guard lock(vulkanViewRenderState(view_state).mesh_frame_mutex);
+                            if (vulkanViewRenderState(view_state).mesh_frame.split_view.enabled) {
+                                capture_params = vulkanViewRenderState(view_state).mesh_frame.split_view;
                             }
                         }
                         const auto read_panel = [this](const RenderTargetId target)
                             -> std::shared_ptr<lfs::core::Tensor> {
-                            if (!scene_renderer_ || !last_vulkan_context_) {
+                            if (!scene_renderer_ || !last_graphics_context_) {
                                 return {};
                             }
                             auto image = scene_renderer_->readOutputImage(
@@ -4787,7 +4855,7 @@ namespace lfs::vis {
                         }
                         if (!capture_params.right.image &&
                             capture_params.right.external_image_view != VK_NULL_HANDLE) {
-                            if (gt_native_point_cloud_panel && point_scene_renderer_ && last_vulkan_context_) {
+                            if (gt_native_point_cloud_panel && point_scene_renderer_ && last_graphics_context_) {
                                 auto image = point_scene_renderer_->readOutputImage(view_state.split_right_render_target_);
                                 if (image) {
                                     capture_params.right.image = std::move(*image);
@@ -4827,7 +4895,7 @@ namespace lfs::vis {
                                 left, top, std::max(right - left, 1), std::max(bottom - top, 1)};
                             capture_params.coordinate_extent = current_size;
                         }
-                        return composeSplitViewCpu(capture_params, current_size);
+                        return composeSplitViewCpu(cpuSplitViewDesc(capture_params), current_size);
                     },
                     rendered_metadata,
                     current_size);
@@ -4839,7 +4907,7 @@ namespace lfs::vis {
             // image interop covers the left panel and a parallel slot covers the right.
             // Both arrive in the viewport pass as external Vulkan image views; the
             // CPU staging path stays as a fallback for any frame where interop fails.
-            VulkanFrameResult result{};
+            ViewportFrameResult result{};
             result.image_generation = ++view_state.split_view_image_generation_;
             if (result.image_generation == 0) {
                 result.image_generation = ++view_state.split_view_image_generation_;
@@ -4849,9 +4917,10 @@ namespace lfs::vis {
                 (pending_split_view.left.external_image_view != VK_NULL_HANDLE ||
                  pending_split_view.right.external_image_view != VK_NULL_HANDLE);
             if (split_uses_external_image) {
-                result.completion_semaphore = latest_scene_completion_semaphore;
-                result.completion_value = latest_scene_completion_value;
-                result.additional_completions = point_completions;
+                result.image = publishVulkanFrameResources(view_state, result.image,
+                                                           VK_NULL_HANDLE, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED, 0,
+                                                           latest_scene_completion_semaphore, latest_scene_completion_value,
+                                                           point_completions);
             }
             result.size = view_state.vulkan_viewport_image_size_;
             result.flip_y = view_state.vulkan_viewport_image_flip_y_;
@@ -4979,7 +5048,7 @@ namespace lfs::vis {
                                       render_error.empty() ? "missing image payload" : render_error);
             LOG_ERROR("Failed to render Vulkan viewport image: {}",
                       render_error.empty() ? "missing image payload" : render_error);
-            clearVulkanViewportImageState(view_state);
+            clearViewportImageState(view_state);
             return {};
         }
 
@@ -4989,10 +5058,10 @@ namespace lfs::vis {
         ++view_state.vulkan_viewport_image_generation_;
         if (view_state.vulkan_viewport_image_generation_ == 0)
             ++view_state.vulkan_viewport_image_generation_;
-        view_state.vulkan_external_viewport_image_ = VK_NULL_HANDLE;
-        view_state.vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
-        view_state.vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-        view_state.vulkan_external_viewport_image_generation_ = 0;
+        vulkanViewRenderState(view_state).external_viewport_image = VK_NULL_HANDLE;
+        vulkanViewRenderState(view_state).external_viewport_image_view = VK_NULL_HANDLE;
+        vulkanViewRenderState(view_state).external_viewport_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        vulkanViewRenderState(view_state).external_viewport_image_generation = 0;
         view_state.vulkan_viewport_image_size_ = render_size;
         view_state.vulkan_viewport_image_alloc_size_ = render_size;
         view_state.vulkan_viewport_coordinate_size_ = current_size;
@@ -5031,8 +5100,53 @@ namespace lfs::vis {
                 .rendered = true};
     }
 
+    void RenderingManager::publishFrameToInterop(const ViewId view_id,
+                                                 const ViewportFrameResult& frame) {
+        auto& view = viewState(view_id);
+        auto& interop = vulkanViewRenderState(view).viewport_interop_;
+        const auto resources = std::exchange(vulkanViewRenderState(view).pending_frame_resources, {});
+        const VkSemaphore completion = resources ? resources->completion_semaphore : VK_NULL_HANDLE;
+        const std::uint64_t completion_value = resources ? resources->completion_value : 0;
+        if (resources && resources->external_image != VK_NULL_HANDLE) {
+            interop.setExternalSceneImage(
+                resources->external_image, resources->external_image_view,
+                resources->external_image_layout, frame.size, frame.flip_y,
+                resources->external_image_generation, completion, completion_value,
+                frame.alloc_size);
+        } else {
+            interop.setSceneImage(
+                frame.image, frame.size, frame.flip_y,
+                frame.split_left_image_generation != 0
+                    ? frame.split_left_image_generation
+                    : frame.image_generation,
+                completion, completion_value);
+        }
+        if (resources)
+            interop.addFrameCompletions(resources->additional_completions);
+        if (frame.split_right_image) {
+            interop.setSplitRightImage(frame.split_right_image, frame.split_right_size,
+                                       frame.split_right_flip_y,
+                                       frame.split_right_image_generation);
+        } else {
+            interop.clearSplitRightImage();
+        }
+
+        const auto mesh_frame = vulkanViewRenderState(view).mesh_frame;
+        if (mesh_frame.depth_blit.depth && mesh_frame.depth_blit.depth->is_valid() &&
+            mesh_frame.depth_blit.depth->ndim() == 3 &&
+            mesh_frame.depth_blit.depth->size(0) == 1) {
+            const auto& depth = *mesh_frame.depth_blit.depth;
+            interop.setDepthBlitImage(mesh_frame.depth_blit.depth,
+                                      {static_cast<int>(depth.size(2)),
+                                       static_cast<int>(depth.size(1))},
+                                      frame.image_generation);
+        } else {
+            interop.clearDepthBlitImage();
+        }
+    }
+
     std::expected<void, std::string> RenderingManager::ensureVksplatTrainingSharedScratchReady(
-        VulkanContext& context,
+        GraphicsContext& context,
         const lfs::core::SplatData& model,
         glm::ivec2 viewport_size) {
         const RenderSettings settings = getSettings();
@@ -5055,8 +5169,9 @@ namespace lfs::vis {
     }
 
     lfs::io::SplatTensorAllocator RenderingManager::makeSplatTensorAllocator() const {
-        return last_vulkan_context_ ? last_vulkan_context_->tensorInterop().splat_allocator(true)
-                                    : lfs::io::SplatTensorAllocator{};
+        auto* const context = vulkanContextOrNull(last_graphics_context_);
+        return context ? context->tensorInterop().splat_allocator(true)
+                       : lfs::io::SplatTensorAllocator{};
     }
 
 } // namespace lfs::vis

@@ -8,7 +8,6 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
-#include "core/tensor_backend.hpp"
 #include "gui/gui_manager.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"
@@ -16,7 +15,7 @@
 #ifdef __APPLE__
 #include "preferences.hpp"
 #endif
-#include "vulkan_context.hpp"
+#include "vulkan_graphics_context.hpp"
 #include "vulkan_loader_probe.hpp"
 #include "window_state_utils.hpp"
 #include <SDL3/SDL.h>
@@ -550,8 +549,9 @@ namespace lfs::vis {
             g_x11_error_owner = nullptr;
         }
 #endif
-        releaseTensorBackendDevice();
-        vulkan_context_.reset();
+        if (graphics_context_)
+            graphics_context_->disconnectTensorBackend();
+        graphics_context_.reset();
         if (window_) {
             SDL_DestroyWindow(window_);
         }
@@ -794,20 +794,20 @@ namespace lfs::vis {
         SDL_GetWindowSizeInPixels(window_, &fb_w, &fb_h);
         framebuffer_size_ = glm::ivec2(fb_w, fb_h);
 
-        vulkan_context_ = std::make_unique<VulkanContext>();
-        if (!vulkan_context_->init(window_, framebuffer_size_.x, framebuffer_size_.y)) {
-            std::cerr << "Failed to initialize Vulkan context: " << vulkan_context_->lastError() << std::endl;
-            vulkan_context_.reset();
+        graphics_context_ = std::make_unique<VulkanGraphicsContext>();
+        if (!graphics_context_->initialize(window_, framebuffer_size_.x, framebuffer_size_.y)) {
+            std::cerr << "Failed to initialize graphics context: " << graphics_context_->lastError() << std::endl;
+            graphics_context_.reset();
             SDL_DestroyWindow(window_);
             window_ = nullptr;
             SDL_Quit();
             return false;
         }
-        adoptTensorBackendDevice();
-        if (!vulkan_context_->presentBootstrapFrame(0.11f, 0.11f, 0.14f, 1.0f)) {
-            std::cerr << "Failed to present Vulkan bootstrap frame: " << vulkan_context_->lastError() << std::endl;
-            releaseTensorBackendDevice();
-            vulkan_context_.reset();
+        graphics_context_->connectTensorBackend();
+        if (!graphics_context_->presentBootstrapFrame(0.11f, 0.11f, 0.14f, 1.0f)) {
+            std::cerr << "Failed to present graphics bootstrap frame: " << graphics_context_->lastError() << std::endl;
+            graphics_context_->disconnectTensorBackend();
+            graphics_context_.reset();
             SDL_DestroyWindow(window_);
             window_ = nullptr;
             SDL_Quit();
@@ -870,16 +870,16 @@ namespace lfs::vis {
 
         window_size_ = next_window_size;
         framebuffer_size_ = next_framebuffer_size;
-        if (vulkan_context_ && framebuffer_size_changed) {
+        if (graphics_context_ && framebuffer_size_changed) {
             const ResizeIntent effective_intent =
                 intent == ResizeIntent::Interactive && (is_fullscreen_ || isMaximized())
                     ? ResizeIntent::Exact
                     : intent;
-            const auto vulkan_resize_intent =
+            const auto graphics_resize_intent =
                 effective_intent == ResizeIntent::Interactive
-                    ? VulkanContext::ResizeIntent::Interactive
-                    : VulkanContext::ResizeIntent::Exact;
-            vulkan_context_->notifyFramebufferResized(fbW, fbH, vulkan_resize_intent);
+                    ? GraphicsResizeIntent::Interactive
+                    : GraphicsResizeIntent::Exact;
+            graphics_context_->notifyFramebufferResized(fbW, fbH, graphics_resize_intent);
         }
         if (size_changed) {
             lfs::core::events::ui::WindowResized{.width = fbW, .height = fbH}.emit();
@@ -965,9 +965,9 @@ namespace lfs::vis {
         input::finishInjectedPointerFrame();
         frame_input_.beginFrame();
         SDL_Event event;
-        if (vulkan_context_ &&
-            vulkan_context_->hasPendingSwapchainResize()) {
-            const double resize_wait = vulkan_context_->secondsUntilPendingSwapchainResizeReady();
+        if (graphics_context_ &&
+            graphics_context_->hasPendingResize()) {
+            const double resize_wait = graphics_context_->secondsUntilPendingResizeReady();
             const double resize_deadline = resize_wait > 0.0
                                                ? std::max(kPendingResizeMinWaitSeconds, resize_wait)
                                                : 0.0;
@@ -1963,56 +1963,6 @@ namespace lfs::vis {
 
         pending_titlebar_double_click_ = false;
         toggleMaximized();
-    }
-
-    void WindowManager::adoptTensorBackendDevice() {
-        if (!lfs::core::tensor_backend_shares_vulkan_device())
-            return;
-        const auto& device = vulkan_context_->tensorBackendDevice();
-        if (!device.complete) {
-            LOG_INFO("Tensor Vulkan backend keeps its own device: the window device has no spare compute queue or lacks a required feature");
-            return;
-        }
-        const lfs::core::VulkanDeviceHandles handles{
-            .instance = vulkan_context_->instance(),
-            .physical_device = vulkan_context_->physicalDevice(),
-            .device = vulkan_context_->device(),
-            .queue = device.queue,
-            .queue_family = device.queue_family,
-            .sharing_queue_families = {vulkan_context_->graphicsQueueFamily(), vulkan_context_->computeQueueFamily(), device.queue_family},
-            .sharing_queue_family_count = 3,
-            .shader_atomic_float = device.shader_atomic_float,
-            .memory_budget = false,
-            .shader_float64 = device.shader_float64,
-            .shader_float16 = device.shader_float16,
-            .vulkan_memory_model = device.vulkan_memory_model,
-            .vulkan_memory_model_device_scope = device.vulkan_memory_model_device_scope,
-            .cooperative_matrix = device.cooperative_matrix,
-            .external_memory = vulkan_context_->externalMemoryInteropEnabled(),
-            .external_semaphore = vulkan_context_->externalSemaphoreInteropEnabled(),
-#ifdef __APPLE__
-            .metal_objects = vulkan_context_->metalObjectsInteropEnabled(),
-#endif
-            .consumer_queue = vulkan_context_->graphicsQueue(),
-            .consumer_queue_mutex = &vulkan_context_->graphicsQueueMutex(),
-        };
-        if (const auto status = lfs::core::adopt_vulkan_device(handles); !status) {
-            LOG_WARN("Tensor Vulkan backend keeps its own device: {}", lfs::format_for_developer(status.error()));
-            return;
-        }
-        tensor_backend_adopted_ = true;
-        LOG_INFO("Tensor Vulkan backend runs on the window device (queue family {})", device.queue_family);
-    }
-
-    void WindowManager::releaseTensorBackendDevice() {
-        if (!tensor_backend_adopted_) {
-            return;
-        }
-        tensor_backend_adopted_ = false;
-        if (const auto status = lfs::core::shutdown_gpu_backend(lfs::core::GpuBackend::Vulkan); !status) {
-            LOG_WARN("Tensor Vulkan backend shutdown failed before the window device is destroyed: {}",
-                     lfs::format_for_developer(status.error()));
-        }
     }
 
 } // namespace lfs::vis

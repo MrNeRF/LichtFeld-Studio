@@ -18,6 +18,7 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
 #endif
 
+#include "gui/ui_renderer.hpp"
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
@@ -50,7 +51,7 @@
 // Your specified API version. Ideally, this will be dynamic in the future.
 #define RMLUI_VK_API_VERSION VK_API_VERSION_1_3
 
-class RenderInterface_VK : public Rml::RenderInterface {
+class RenderInterface_VK : public lfs::vis::gui::UiRenderer {
 public:
     static constexpr uint32_t kSwapchainBackBufferCount = 3;
     // Retained panel geometry plus three in-flight generations of canvas meshes.
@@ -58,6 +59,35 @@ public:
 
     RenderInterface_VK();
     ~RenderInterface_VK();
+
+    [[nodiscard]] bool initialize(lfs::vis::GraphicsContext& graphics) override;
+    void shutdown() override { ShutdownExternal(); }
+    [[nodiscard]] bool beginFrame(const lfs::vis::GraphicsFrame& frame) override;
+    void endFrame() override { EndExternalFrame(); }
+    void resetContextRenderState() override { ResetContextRenderState(); }
+    void setContextOffset(float x, float y) override { SetContextOffset(x, y); }
+    void setContextClipRect(float x1, float y1, float x2, float y2) override {
+        SetContextClipRect(x1, y1, x2, y2);
+    }
+    void renderTextureQuad(Rml::TextureHandle texture, float x, float y,
+                           float width, float height) override {
+        RenderTextureQuad(texture, x, y, width, height);
+    }
+    [[nodiscard]] bool renderFrostedGlass(
+        std::span<const lfs::vis::gui::UiFrostedGlassRegion> regions) override;
+    void beginCacheCapture(int x, int y, int width, int height) override {
+        BeginCacheCapture(x, y, width, height);
+    }
+    void endCacheCapture() override { EndCacheCapture(); }
+    [[nodiscard]] Rml::TextureHandle saveLayerRegionAsTexture(
+        lfs::vis::gui::UiPixelRect region,
+        Rml::TextureHandle reuse_texture) override;
+    void setTextureDebugName(Rml::TextureHandle texture,
+                             std::string_view name) const override {
+        SetTextureDebugName(texture, name);
+    }
+    [[nodiscard]] lfs::vis::gui::UiRendererMemoryStatistics
+    memoryStatistics() const override;
 
     struct ExternalContext {
         VkInstance instance = VK_NULL_HANDLE;
@@ -131,10 +161,10 @@ public:
 
     /// Called by RmlUi when a texture is required by the library.
     Rml::TextureHandle LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) override;
-    [[nodiscard]] uint64_t previewTextureGeneration() const {
+    [[nodiscard]] uint64_t previewTextureGeneration() const override {
         return m_preview_texture_generation.load(std::memory_order_acquire);
     }
-    [[nodiscard]] bool currentContextUsedPreviewTexture() const {
+    [[nodiscard]] bool currentContextUsedPreviewTexture() const override {
         return m_current_context_used_preview_texture;
     }
     /// Called by RmlUi when a texture is required to be built from an internally-generated sequence of pixels.
@@ -172,6 +202,7 @@ public:
     void SetTransform(const Rml::Matrix4f* transform) override;
 
 private:
+    lfs::vis::GraphicsContext* m_graphics_context = nullptr;
     enum class shader_type_t : int { Vertex,
                                      Fragment,
                                      Unknown = -1 };

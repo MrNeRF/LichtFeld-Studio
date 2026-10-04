@@ -106,7 +106,7 @@
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
-#include "visualizer/window/vulkan_context.hpp"
+#include "visualizer/window/graphics_context.hpp"
 #include "visualizer/window/window_manager.hpp"
 
 #include <atomic>
@@ -386,7 +386,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -2982,18 +2982,21 @@ NB_MODULE(lichtfeld, m) {
             return wm ? wm->isFullscreen() : false;
         },
         "Check if the window is in fullscreen mode");
-    m.def(
-        "get_vulkan_capabilities", []() {
-            nb::dict capabilities;
-            const auto* const window = lfs::vis::services().windowOrNull();
-            const auto* const context = window != nullptr ? window->getVulkanContext() : nullptr;
-            capabilities["mesh_wireframe"] =
-                context != nullptr && context->hasFillModeNonSolid();
-            capabilities["wide_lines"] =
-                context != nullptr && context->hasWideLines();
-            return capabilities;
-        },
-        "Return Vulkan device capabilities used to gate rendering controls");
+    const auto get_graphics_capabilities = []() {
+        nb::dict capabilities;
+        const auto* const window = lfs::vis::services().windowOrNull();
+        const auto* const context = window != nullptr ? window->getGraphicsContext() : nullptr;
+        const auto caps = context != nullptr ? context->capabilities()
+                                             : lfs::vis::GraphicsCapabilities{};
+        capabilities["mesh_rendering"] = caps.mesh_rendering;
+        capabilities["mesh_wireframe"] = caps.wireframe;
+        capabilities["wide_lines"] = caps.wide_lines;
+        return capabilities;
+    };
+    m.def("get_graphics_capabilities", get_graphics_capabilities,
+          "Return graphics capabilities used to gate rendering controls");
+    m.def("get_vulkan_capabilities", get_graphics_capabilities,
+          "Deprecated alias for get_graphics_capabilities");
     m.def(
         "toggle_ui", []() { lfs::core::events::ui::ToggleUI{}.emit(); },
         "Toggle UI overlay visibility");

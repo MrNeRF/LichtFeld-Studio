@@ -6,7 +6,10 @@
 
 #include "config.h"
 #include "core/logger.hpp"
+#include "core/tensor_vignette.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "gui/ui_texture.hpp"
+#include "gui/vulkan_ui_texture.hpp"
 #include "rendering/output_image_pool.hpp"
 #include "rendering/scene_upscaler_plugin.hpp"
 #include "rendering/vulkan_wait.hpp"
@@ -33,7 +36,6 @@
 #include "viewport/shape_overlay.vert.spv.h"
 #include "viewport/textured_overlay.frag.spv.h"
 #include "viewport/textured_overlay.vert.spv.h"
-#include "viewport/vignette.frag.spv.h"
 
 #include <algorithm>
 #include <array>
@@ -82,11 +84,6 @@ namespace lfs::vis {
             std::int32_t y = 0;
             std::uint32_t width = 0;
             std::uint32_t height = 0;
-        };
-
-        struct VignettePush {
-            glm::vec4 viewport_intensity_radius{0.0f};
-            glm::vec4 softness_padding{0.0f};
         };
 
         struct GridUniform {
@@ -277,8 +274,8 @@ namespace lfs::vis {
         std::optional<SceneUpscalerSelection> logged_scene_upscaler_selection;
         std::string temporal_failure;
         std::string plugin_failure;
-        VkPipelineLayout vignette_pipeline_layout = VK_NULL_HANDLE;
-        VkPipeline vignette_pipeline = VK_NULL_HANDLE;
+        gui::UiTexture vignette_texture;
+        std::optional<std::tuple<uint32_t, uint32_t, float, float, float>> vignette_key;
         VkPipelineLayout grid_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline grid_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout overlay_pipeline_layout = VK_NULL_HANDLE;
@@ -485,7 +482,7 @@ namespace lfs::vis {
             addGraphPass(
                 "vignette", P::Effect,
                 [this](const VulkanViewportPassParams& p) {
-                    return p.vignette_enabled && vignette_pipeline != VK_NULL_HANDLE;
+                    return p.vignette_enabled && scene_pipeline != VK_NULL_HANDLE;
                 },
                 [this, rect_of](const ViewportRecordContext& c, const VulkanViewportPassParams& p) {
                     recordVignettePass(c.cmd, rect_of(c), p);
@@ -1602,10 +1599,6 @@ namespace lfs::vis {
             grid_push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             grid_push.offset = 0;
             grid_push.size = sizeof(GridPush);
-            VkPushConstantRange vignette_push{};
-            vignette_push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-            vignette_push.offset = 0;
-            vignette_push.size = sizeof(VignettePush);
             VkPushConstantRange pivot_push{};
             pivot_push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             pivot_push.offset = 0;
@@ -1631,9 +1624,6 @@ namespace lfs::vis {
             return createPipeline(kScreenQuadVertSpv, kSceneFragSpv, "scene",
                                   scene_descriptor_layout, &scene_push, true, PipelineVertexLayout::ScreenQuad,
                                   scene_pipeline_layout, scene_pipeline) &&
-                   createPipeline(kScreenQuadVertSpv, kVignetteFragSpv, "vignette",
-                                  VK_NULL_HANDLE, &vignette_push, true, PipelineVertexLayout::ScreenQuad,
-                                  vignette_pipeline_layout, vignette_pipeline) &&
                    createPipeline(kGridVertSpv, kGridFragSpv, "grid",
                                   grid_descriptor_layout, &grid_push, true, PipelineVertexLayout::PositionOnly,
                                   grid_pipeline_layout, grid_pipeline, VK_NULL_HANDLE, /*depth_test=*/true) &&
@@ -2865,11 +2855,11 @@ namespace lfs::vis {
             }
             std::uint32_t first_vertex = 0;
             for (const auto& overlay : overlays) {
-                if (overlay.texture_id == 0 || first_vertex + 6u > resource.count) {
+                if (!overlay.image || first_vertex + 6u > resource.count) {
                     first_vertex += 6u;
                     continue;
                 }
-                const VkDescriptorSet descriptor_set = descriptorSetFromId(overlay.texture_id);
+                const VkDescriptorSet descriptor_set = gui::referenceUiTextureDescriptor(*overlay.image);
                 if (descriptor_set == VK_NULL_HANDLE) {
                     first_vertex += 6u;
                     continue;
@@ -3027,26 +3017,27 @@ namespace lfs::vis {
 
         void recordVignettePass(VkCommandBuffer command_buffer, const FramebufferRect& rect,
                                 const VulkanViewportPassParams& params) {
-            LFS_VK_DEBUG_ASSERT(
-                params.vignette_enabled && vignette_pipeline != VK_NULL_HANDLE,
-                "Viewport vignette pass must be enabled and have a valid pipeline (frame_slot={}, enabled={}, pipeline={:#x}, intensity={}, radius={}, softness={})",
-                params.frame_slot,
-                params.vignette_enabled,
-                vkHandleValue(vignette_pipeline),
-                params.vignette_intensity,
-                params.vignette_radius,
-                params.vignette_softness);
-            VignettePush push{};
-            push.viewport_intensity_radius = {
-                static_cast<float>(rect.width),
-                static_cast<float>(rect.height),
-                params.vignette_intensity,
-                params.vignette_radius,
-            };
-            push.softness_padding = {params.vignette_softness, 0.0f, 0.0f, 0.0f};
-            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vignette_pipeline);
+            const auto key = std::tuple{rect.width, rect.height, params.vignette_intensity,
+                                        params.vignette_radius, params.vignette_softness};
+            if (vignette_key != key) {
+                auto image = lfs::core::vignette_image(rect.width, rect.height, params.vignette_intensity,
+                                                       params.vignette_radius, params.vignette_softness);
+                if (!image)
+                    throw lfs::Exception(std::move(image).error());
+                auto uploaded = vignette_texture.uploadLinearRgba(*image);
+                if (!uploaded)
+                    throw lfs::Exception(std::move(uploaded).error());
+                vignette_key = key;
+            }
+            // The effect is already evaluated by the tensor program. The legacy
+            // reference only samples/blends its cached, full-precision image.
+            const auto descriptor = descriptorSetFromId(vignette_texture.textureId());
+            const ScenePush push{};
+            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_pipeline);
+            vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_pipeline_layout,
+                                    0, 1, &descriptor, 0, nullptr);
             vkCmdPushConstants(command_buffer,
-                               vignette_pipeline_layout,
+                               scene_pipeline_layout,
                                VK_SHADER_STAGE_FRAGMENT_BIT,
                                0,
                                sizeof(push),
@@ -3152,8 +3143,8 @@ namespace lfs::vis {
                     vkDestroyPipeline(device, scene_pipeline, nullptr);
                 if (scene_spatial_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_spatial_pipeline, nullptr);
-                if (vignette_pipeline != VK_NULL_HANDLE)
-                    vkDestroyPipeline(device, vignette_pipeline, nullptr);
+                vignette_texture.reset();
+                vignette_key.reset();
                 if (grid_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, grid_pipeline, nullptr);
                 if (overlay_pipeline != VK_NULL_HANDLE)
@@ -3170,8 +3161,6 @@ namespace lfs::vis {
                     vkDestroyPipelineLayout(device, scene_pipeline_layout, nullptr);
                 if (scene_spatial_pipeline_layout != VK_NULL_HANDLE)
                     vkDestroyPipelineLayout(device, scene_spatial_pipeline_layout, nullptr);
-                if (vignette_pipeline_layout != VK_NULL_HANDLE)
-                    vkDestroyPipelineLayout(device, vignette_pipeline_layout, nullptr);
                 if (grid_pipeline_layout != VK_NULL_HANDLE)
                     vkDestroyPipelineLayout(device, grid_pipeline_layout, nullptr);
                 if (overlay_pipeline_layout != VK_NULL_HANDLE)
@@ -3257,7 +3246,7 @@ namespace lfs::vis {
     void VulkanViewportPass::prepareImport(VulkanContext& context, const VulkanViewportPassParams& params,
                                            VulkanViewportPass* resident_mesh_resources) {
         std::string error;
-        VulkanImportErrorScope capture(error);
+        GraphicsImportErrorScope capture(error);
         if (!init(context) || (resident_mesh_resources && !resident_mesh_resources->init(context)))
             throw std::runtime_error(error.empty() ? "Could not prepare the viewport" : error);
         if (!context.waitForSubmittedFrames())

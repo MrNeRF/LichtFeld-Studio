@@ -49,7 +49,7 @@ namespace lfs::vis::gui {
         core::Uuid target_;
         Rml::Context* context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
-        CachedVulkanContextRender cache_;
+        CachedUiContextRender cache_;
         RmlTooltipController tooltip_;
         std::vector<NodeGraphTemplate> templates_;
         std::string category_ = "all";

@@ -170,7 +170,7 @@ namespace lfs::vis::gui {
 
     RmlPanelHost::~RmlPanelHost() {
         if (manager_ && manager_->isInitialized()) {
-            manager_->releaseCachedVulkanContext(direct_cache_);
+            manager_->releaseCachedContext(direct_cache_);
             manager_->destroyContext(context_name_);
         }
         rml_context_ = nullptr;
@@ -179,7 +179,7 @@ namespace lfs::vis::gui {
 
     void RmlPanelHost::releaseRendererResources() {
         if (manager_ && manager_->isInitialized())
-            manager_->releaseCachedVulkanContext(direct_cache_);
+            manager_->releaseCachedContext(direct_cache_);
         direct_cache_dirty_ = true;
     }
 
@@ -306,7 +306,7 @@ namespace lfs::vis::gui {
         content_dirty_ = true;
         direct_cache_dirty_ = true;
         if (manager_ && manager_->isInitialized())
-            manager_->releaseCachedVulkanContext(direct_cache_);
+            manager_->releaseCachedContext(direct_cache_);
         last_forwarded_mx_ = -1;
         last_forwarded_my_ = -1;
         last_forwarded_mods_ = 0;
@@ -500,7 +500,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlPanelHost::renderIfDirty(int pw, int ph, float& display_h) {
-        if (!manager_ || !manager_->getVulkanRenderInterface())
+        if (!manager_ || !manager_->getUiRenderer())
             return;
 
         const bool theme_dirty = syncThemeProperties();
@@ -704,7 +704,7 @@ namespace lfs::vis::gui {
         renderIfDirty(w, h, display_h);
         trackFrame(pos_x, pos_y);
 
-        if (!manager_ || !manager_->getVulkanRenderInterface())
+        if (!manager_ || !manager_->getUiRenderer())
             return;
 
         const float screen_origin_x = input_ ? input_->screen_x : 0.0f;
@@ -715,15 +715,15 @@ namespace lfs::vis::gui {
         const float clip_y2 = pos_y + display_h;
         if (clip_x2 <= clip_x1 || clip_y2 <= clip_y1)
             return;
-        manager_->queueVulkanContext(rml_context_,
-                                     pos_x - screen_origin_x,
-                                     pos_y - screen_origin_y,
-                                     foreground_,
-                                     true,
-                                     clip_x1 - screen_origin_x,
-                                     clip_y1 - screen_origin_y,
-                                     clip_x2 - screen_origin_x,
-                                     clip_y2 - screen_origin_y);
+        manager_->queueContext(rml_context_,
+                               pos_x - screen_origin_x,
+                               pos_y - screen_origin_y,
+                               foreground_,
+                               true,
+                               clip_x1 - screen_origin_x,
+                               clip_y1 - screen_origin_y,
+                               clip_x2 - screen_origin_x,
+                               clip_y2 - screen_origin_y);
     }
 
     void RmlPanelHost::resolveDirectRenderHeight(float requested_h, int& ph, float& display_h) const {
@@ -1049,7 +1049,7 @@ namespace lfs::vis::gui {
 
     void RmlPanelHost::compositeDirectToScreen(const float x, const float y,
                                                const float w, const float h) {
-        if (!input_ || !manager_ || !manager_->getVulkanRenderInterface() ||
+        if (!input_ || !manager_ || !manager_->getUiRenderer() ||
             w <= 0.0f || h <= 0.0f)
             return;
 
@@ -1074,15 +1074,15 @@ namespace lfs::vis::gui {
         const float screen_clip_x2 = clip_x2 - input_->screen_x;
         const float screen_clip_y2 = clip_y2 - input_->screen_y;
         if (animation_active_) {
-            manager_->queueVulkanContext(rml_context_,
-                                         screen_x,
-                                         screen_y,
-                                         foreground_,
-                                         true,
-                                         screen_clip_x1,
-                                         screen_clip_y1,
-                                         screen_clip_x2,
-                                         screen_clip_y2);
+            manager_->queueContext(rml_context_,
+                                   screen_x,
+                                   screen_y,
+                                   foreground_,
+                                   true,
+                                   screen_clip_x1,
+                                   screen_clip_y1,
+                                   screen_clip_x2,
+                                   screen_clip_y2);
             direct_cache_dirty_ = true;
         } else {
             const float draw_w =
@@ -1093,7 +1093,7 @@ namespace lfs::vis::gui {
                 last_fbo_h_ > 0
                     ? static_cast<float>(last_fbo_h_ + 2 * last_fbo_padding_)
                     : h;
-            manager_->queueCachedVulkanContext({
+            manager_->queueCachedContext({
                 .context = rml_context_,
                 .cache = &direct_cache_,
                 .cache_width = last_fbo_w_ + 2 * last_fbo_padding_,
@@ -1141,7 +1141,7 @@ namespace lfs::vis::gui {
     bool RmlPanelHost::forwardInput(float panel_x, float panel_y) {
         assert(rml_context_);
 
-        if (!input_ || !manager_ || !manager_->getVulkanRenderInterface())
+        if (!input_ || !manager_ || !manager_->getUiRenderer())
             return false;
 
         if (manager_->routeInput(rml_context_, *input_, [this, panel_x, panel_y](const PanelInputState& event) {

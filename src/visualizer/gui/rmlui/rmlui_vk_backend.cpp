@@ -12,6 +12,7 @@
 #include "internal/resource_paths.hpp"
 #include "io/project_container.hpp"
 #include "python/python_runtime.hpp"
+#include "window/vulkan_graphics_context.hpp"
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/FileInterface.h>
 #include <RmlUi/Core/Log.h>
@@ -305,6 +306,61 @@ RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
                                            m_render_layer_stack_size{} {
     m_context_transform = Rml::Matrix4f::Identity();
     m_rml_transform = Rml::Matrix4f::Identity();
+}
+
+bool RenderInterface_VK::initialize(lfs::vis::GraphicsContext& graphics) {
+    m_graphics_context = &graphics;
+    auto* const vulkan = lfs::vis::vulkanContextOrNull(&graphics);
+    if (!vulkan)
+        return false;
+    ExternalContext context{};
+    context.instance = vulkan->instance();
+    context.physical_device = vulkan->physicalDevice();
+    context.device = vulkan->device();
+    context.pipeline_cache = vulkan->pipelineCache();
+    context.graphics_queue = vulkan->graphicsQueue();
+    context.graphics_queue_family = vulkan->graphicsQueueFamily();
+    context.color_format = vulkan->swapchainFormat();
+    context.depth_stencil_format = vulkan->depthStencilFormat();
+    context.extent = vulkan->framebufferExtent();
+    context.host_image_copy = vulkan->hasHostImageCopy();
+    return InitializeExternal(context);
+}
+
+bool RenderInterface_VK::beginFrame(const lfs::vis::GraphicsFrame& frame) {
+    const auto* native_frame = lfs::vis::vulkanFrameOrNull(m_graphics_context, frame);
+    if (!native_frame)
+        return false;
+    const auto& native = *native_frame;
+    if (native.command_buffer == VK_NULL_HANDLE ||
+        native.swapchain_image_view == VK_NULL_HANDLE ||
+        native.depth_stencil_image_view == VK_NULL_HANDLE)
+        return false;
+    BeginExternalFrame(native.command_buffer, native.extent, native.swapchain_image,
+                       native.swapchain_image_view, native.depth_stencil_image_view,
+                       native.frame_slot);
+    return true;
+}
+
+bool RenderInterface_VK::renderFrostedGlass(
+    const std::span<const lfs::vis::gui::UiFrostedGlassRegion> regions) {
+    static_assert(sizeof(lfs::vis::gui::UiFrostedGlassRegion) == sizeof(FrostedGlassRegion));
+    return RenderFrostedGlass({reinterpret_cast<const FrostedGlassRegion*>(regions.data()),
+                               regions.size()});
+}
+
+Rml::TextureHandle RenderInterface_VK::saveLayerRegionAsTexture(
+    const lfs::vis::gui::UiPixelRect region,
+    const Rml::TextureHandle reuse_texture) {
+    return SaveLayerRegionAsTexture(
+        VkRect2D{{region.x, region.y}, {region.width, region.height}}, reuse_texture);
+}
+
+lfs::vis::gui::UiRendererMemoryStatistics
+RenderInterface_VK::memoryStatistics() const {
+    const auto stats = QueryVmaStatistics();
+    return {static_cast<std::size_t>(stats.block_bytes),
+            static_cast<std::size_t>(stats.allocation_bytes)};
 }
 
 RenderInterface_VK::~RenderInterface_VK() {

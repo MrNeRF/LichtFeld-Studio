@@ -58,6 +58,7 @@ set(TENSOR_SOURCES
         tensor/backend/facade_trace.cpp
         tensor/backend/cuda/cuda_ops_pointwise.cpp
         tensor/backend/cuda/cuda_ops_expression.cpp
+        tensor/backend/cuda/cuda_program.cpp
         tensor/backend/cuda/cuda_ops_reduce.cpp
         tensor/backend/cuda/cuda_ops_scan_sort.cpp
         tensor/backend/cuda/cuda_ops_matrix_nn.cpp
@@ -75,7 +76,6 @@ set(TENSOR_SOURCES
         tensor/backend/cuda/cuda_ops_index_mask.cpp
         tensor/backend/cuda/cuda_ops_movement.cpp
         tensor/backend/cuda/cuda_services.cpp
-        tensor/backend/vulkan/vma_implementation.cpp
         tensor/tensor.cpp
         tensor/tensor_method_bodies.cpp
         tensor/tensor_serialization.cpp
@@ -136,6 +136,8 @@ endif()
 
 if(LFS_TENSOR_VULKAN)
     list(APPEND TENSOR_SOURCES
+        tensor/backend/vulkan/vma_implementation.cpp
+        tensor/backend/vulkan/vk_program.cpp
         tensor/backend/vulkan/vk_context.cpp
         tensor/backend/vulkan/vk_memory.cpp
         tensor/backend/vulkan/vk_recorder.cpp
@@ -200,6 +202,7 @@ if(APPLE)
         tensor/backend/metal/metal_ops.mm
         tensor/backend/metal/metal_shared_image.mm
         tensor/backend/metal/metal_module.mm
+        tensor/backend/metal/metal_program.mm
         tensor/backend/metal/metal_tensor_reader.mm
         ${_lfs_metal_kernels_cpp}
     )
@@ -304,6 +307,9 @@ if(NOT LFS_HAS_CUDA)
 endif()
 
 add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES} shared_image_ops.cpp)
+include(${CMAKE_SOURCE_DIR}/cmake/GpuPrograms.cmake)
+target_sources(lfs_core PRIVATE tensor/tensor_vignette.cpp)
+lfs_add_gpu_program(lfs_core vignette_program SOURCE tensor/programs/vignette.slang COMPUTE vignette)
 if(LFS_HAS_CUDA)
     target_sources(lfs_core PRIVATE cuda/shared_image_cuda.cpp)
 endif()
@@ -311,10 +317,10 @@ endif()
 if(LFS_TENSOR_VULKAN)
     add_dependencies(lfs_core lfs_tensor_vulkan_shaders)
     target_sources(lfs_core PRIVATE ${LFS_TENSOR_SHADER_TABLE} tensor/backend/vulkan/vk_shared_image_ops.cpp)
-    target_compile_definitions(lfs_core PRIVATE LFS_TENSOR_VULKAN=1)
+    target_compile_definitions(lfs_core PUBLIC LFS_TENSOR_VULKAN=1)
 endif()
 if(APPLE)
-    target_compile_definitions(lfs_core PRIVATE LFS_TENSOR_METAL=1)
+    target_compile_definitions(lfs_core PUBLIC LFS_TENSOR_METAL=1)
     target_compile_options(lfs_core PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
     target_link_libraries(lfs_core PRIVATE "-framework Metal" "-framework Foundation")
 endif()
@@ -405,8 +411,8 @@ target_link_libraries(lfs_core
         $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
         $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::curand>
         spdlog::spdlog
-        Vulkan::Vulkan
-        GPUOpen::VulkanMemoryAllocator
+        $<$<BOOL:${LFS_TENSOR_VULKAN}>:Vulkan::Vulkan>
+        $<$<BOOL:${LFS_TENSOR_VULKAN}>:GPUOpen::VulkanMemoryAllocator>
     PRIVATE
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_core_cuda>
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_shared_image_cuda>

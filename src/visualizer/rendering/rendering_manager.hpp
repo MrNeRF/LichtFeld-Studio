@@ -20,10 +20,6 @@
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
 #include "io/loader.hpp"
-#include "passes/vulkan_depth_blit_pass.hpp"
-#include "passes/vulkan_environment_pass.hpp"
-#include "passes/vulkan_mesh_pass.hpp"
-#include "passes/vulkan_split_view_pass.hpp"
 #include "render_animation_state.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/scene_temporal_resolve.hpp"
@@ -32,13 +28,14 @@
 #include "rendering/temporal_frame_tracker.hpp"
 #include "rendering_types.hpp"
 #include "spark_lod_controller.hpp"
+#include "split_view_cpu_desc.hpp"
 #include "split_view_service.hpp"
 #include "stale_frame_guard.hpp"
 #include "viewport_appearance_correction.hpp"
 #include "viewport_artifact_service.hpp"
 #include "viewport_frame_lifecycle_service.hpp"
+#include "viewport_frame_result.hpp"
 #include "viewport_interaction_context.hpp"
-#include "viewport_interop_service.hpp"
 #include "viewport_overlay_service.hpp"
 #include <algorithm>
 #include <atomic>
@@ -58,7 +55,6 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include <vulkan/vulkan.h>
 
 class PythonIntegrationTest_ParkedGtPanelWindowRequestsAreAtomicallyRefused_Test;
 
@@ -86,10 +82,9 @@ namespace lfs::vis::op {
 }
 
 namespace lfs::vis {
-    class VulkanContext;
+    class GraphicsContext;
     class SceneRenderer;
     class PointSceneRenderer;
-    struct VulkanViewportPassParams;
 
     class SceneManager;
     struct SceneRenderState;
@@ -109,42 +104,9 @@ namespace lfs::vis {
             glm::ivec2 logical_screen_size{0, 0};
             const ViewportRegion* viewport_region = nullptr;
             SceneManager* scene_manager = nullptr;
-            VulkanContext* vulkan_context = nullptr;
+            GraphicsContext* graphics_context = nullptr;
             bool preparing_import = false;
             core::Uuid provisional_import_node;
-        };
-
-        struct VulkanFrameResult {
-            std::shared_ptr<const lfs::core::Tensor> image = {};
-            VkImage external_image = VK_NULL_HANDLE;
-            VkImageView external_image_view = VK_NULL_HANDLE;
-            VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-            std::uint64_t external_image_generation = 0;
-            VkSemaphore completion_semaphore = VK_NULL_HANDLE;
-            std::uint64_t completion_value = 0;
-            // Mixed panels may come from independent native command queues.
-            std::vector<ViewportInteropService::FrameCompletion> additional_completions;
-            // Bumps only when the underlying image content changes (fresh render).
-            // Cache-HIT frames keep the previous value so downstream consumers
-            // (e.g. CUDA→Vulkan interop upload) can skip work by generation.
-            std::uint64_t image_generation = 0;
-            std::uint64_t split_left_image_generation = 0;
-            glm::ivec2 size{0, 0};       // valid/logical viewport extent
-            glm::ivec2 alloc_size{0, 0}; // bucketed image extent (0 = treat as size)
-            bool flip_y = false;
-            // True only when this output was rendered for the logical viewport
-            // extent in the current request. Internal reconstruction resolution
-            // may differ from that extent.
-            bool matches_viewport_extent = false;
-            bool rendered = false; // Fresh output; cached and deferred results stay false.
-
-            // Split-view right panel. The left panel reuses the `image` slot above
-            // (rideshares the existing scene-image interop). When this is set, the
-            // gui-side split interop slot uploads it in parallel to the left panel.
-            std::shared_ptr<const lfs::core::Tensor> split_right_image{};
-            std::uint64_t split_right_image_generation = 0;
-            glm::ivec2 split_right_size{0, 0};
-            bool split_right_flip_y = false;
         };
 
         explicit RenderingManager(ViewSource& views);
@@ -163,9 +125,10 @@ namespace lfs::vis {
         void cancelImportRenderCheck();
 
         // Main render function
-        VulkanFrameResult renderVulkanFrame(const RenderContext& context);
+        ViewportFrameResult renderFrame(const RenderContext& context);
+        void publishFrameToInterop(ViewId view, const ViewportFrameResult& frame);
         [[nodiscard]] std::expected<void, std::string> ensureVksplatTrainingSharedScratchReady(
-            VulkanContext& context,
+            GraphicsContext& context,
             const lfs::core::SplatData& model,
             glm::ivec2 viewport_size);
         // Called by the viewer loop at idle cadence. Releases private viewer
@@ -547,7 +510,7 @@ namespace lfs::vis {
         std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
         std::shared_ptr<lfs::core::Tensor> captureViewportImage();
         [[nodiscard]] static std::shared_ptr<lfs::core::Tensor> composeSplitViewCpu(
-            const VulkanSplitViewParams& params, const glm::ivec2& output_size);
+            const SplitViewCpuDesc& params, const glm::ivec2& output_size);
 
         // Where the 3D viewport sat inside the window framebuffer on the last frame,
         // top-left origin. Lets callers crop a full-window readback down to the viewport
@@ -630,18 +593,6 @@ namespace lfs::vis {
             return this->state().viewport_overlay_service_.lassoTracksCursor();
         }
 
-        // Vulkan mesh frame — populated by `renderVulkanFrame` when there are meshes in
-        // the scene, consumed by gui_manager to feed `vulkan_viewport_pass.mesh_items`.
-
-        void setVulkanMeshFrame(ViewRenderState& view, VulkanMeshFrame frame) {
-            std::lock_guard lock(view.vulkan_mesh_frame_mutex_);
-            view.vulkan_mesh_frame_ = std::move(frame);
-        }
-        void clearVulkanMeshFrame(ViewRenderState& view) {
-            std::lock_guard lock(view.vulkan_mesh_frame_mutex_);
-            view.vulkan_mesh_frame_ = {};
-        }
-
         // Preview selection
         void setPreviewSelection(lfs::core::Tensor* preview, bool add_mode = true) {
             this->state().viewport_overlay_service_.setPreviewSelection(preview, add_mode);
@@ -719,9 +670,8 @@ namespace lfs::vis {
             return false;
         }
 
-        [[nodiscard]] ViewportInteropService& viewportInterop();
-        [[nodiscard]] const ViewportInteropService& viewportInterop() const;
-        void shutdownViewportInterop(VulkanContext* context = nullptr);
+        void clearViewportSceneImage();
+        void shutdownViewportInterop(GraphicsContext* context = nullptr);
         [[nodiscard]] bool hasPendingViewportResizeSettle() const {
             std::lock_guard lock(views_mutex_);
             for (const auto& [id, view] : view_states_)
@@ -782,9 +732,9 @@ namespace lfs::vis {
         [[nodiscard]] static PreviewImageReadbackConfig previewImageReadbackConfig(
             PreviewImageReadback readback,
             bool has_background_color_override);
-        void clearVulkanViewportImageState(ViewRenderState& view, glm::ivec2 size = {0, 0},
-                                           bool flip_y = false,
-                                           glm::ivec2 alloc_size = {0, 0});
+        void clearViewportImageState(ViewRenderState& view, glm::ivec2 size = {0, 0},
+                                     bool flip_y = false,
+                                     glm::ivec2 alloc_size = {0, 0});
         [[nodiscard]] float exportRasterizationScale(int target_height, int reference_height) const;
         [[nodiscard]] std::optional<float> exportOrthoScale(std::optional<float> scale, int target_height, int reference_height) const;
 
@@ -973,7 +923,7 @@ namespace lfs::vis {
         std::uint64_t point_cloud_last_frame_serial_ = 0;
         std::uint64_t point_cloud_data_revision_ = 0;
         std::uint64_t point_cloud_preview_selection_revision_ = 0;
-        VulkanContext* last_vulkan_context_ = nullptr;
+        GraphicsContext* last_graphics_context_ = nullptr;
         std::atomic<bool> vksplat_terminal_release_pending_{false};
         ViewportFrameLifecycleService::ModelSource renderer_model_source_ = ViewportFrameLifecycleService::ModelSource::Scene;
 

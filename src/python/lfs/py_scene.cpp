@@ -16,7 +16,7 @@
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
-#include "visualizer/rendering/vulkan_external_tensor.hpp"
+#include "visualizer/rendering/graphics_external_tensor.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include <algorithm>
 #include <nanobind/ndarray.h>

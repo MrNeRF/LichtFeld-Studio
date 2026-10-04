@@ -57,7 +57,7 @@
 #include "visualizer/app_store.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
 #include "visualizer_impl.hpp"
-#include "window/vulkan_context.hpp"
+#include "window/graphics_context.hpp"
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_messagebox.h>
 #include <SDL3/SDL_video.h>
@@ -361,7 +361,7 @@ namespace lfs::vis {
         // (point-cloud / VkSplat / interop). Release those sets before the
         // views are destroyed below.
         if (gui_manager_) {
-            gui_manager_->shutdownVulkanViewportPass();
+            gui_manager_->shutdownViewportCompositors();
         }
         if (rendering_manager_) {
             rendering_manager_->releaseSceneModelResources();
@@ -399,10 +399,7 @@ namespace lfs::vis {
         // the window/Vulkan context is still alive. Belt-and-braces again in
         // ~RenderingManager once already shut down.
         if (rendering_manager_) {
-            VulkanContext* context = nullptr;
-            if (window_manager_) {
-                context = window_manager_->getVulkanContext();
-            }
+            GraphicsContext* context = window_manager_ ? window_manager_->getGraphicsContext() : nullptr;
             rendering_manager_->shutdownViewportInterop(context);
         }
         LOG_DEBUG("Visualizer destroyed");
@@ -1341,7 +1338,7 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::publishRendererDeadModal(const RendererTerminalState cause) noexcept {
-        auto* const ctx = window_manager_ ? window_manager_->getVulkanContext() : nullptr;
+        auto* const ctx = window_manager_ ? window_manager_->getGraphicsContext() : nullptr;
         std::string detail = ctx ? ctx->lastError() : std::string{};
         const bool device_lost = cause == RendererTerminalState::DeviceLost;
         const lfs::ErrorCode code =
@@ -1369,8 +1366,8 @@ namespace lfs::vis {
 
     void VisualizerImpl::onFrameCompleted() noexcept {
         frame_state_.on_frame_success();
-        if (auto* const ctx = window_manager_ ? window_manager_->getVulkanContext() : nullptr) {
-            applyFrameStateEffects(frame_state_.on_renderer_terminal(ctx->rendererTerminalState()));
+        if (auto* const ctx = window_manager_ ? window_manager_->getGraphicsContext() : nullptr) {
+            applyFrameStateEffects(frame_state_.on_renderer_terminal(ctx->terminalState()));
         }
         if (frame_state_.state() != FrameStateMachine::State::RendererDead)
             lfs::core::MemoryPressureCoordinator::instance().maybe_recover();
@@ -2216,8 +2213,8 @@ namespace lfs::vis {
 
         if (pipeline_cache_flush_due_ && update_started_at >= *pipeline_cache_flush_due_) {
             pipeline_cache_flush_due_.reset();
-            if (auto* const context = window_manager_->getVulkanContext();
-                context && context->rendererTerminalState() == RendererTerminalState::Running)
+            if (auto* const context = window_manager_->getGraphicsContext();
+                context && context->terminalState() == RendererTerminalState::Running)
                 context->flushPipelineCache();
         }
 
@@ -2489,10 +2486,10 @@ namespace lfs::vis {
         demand.input_event = inputFrameRequestsRender();
         demand.render_work = hasPendingRenderWork();
         demand.store_dirty = drained_store_dirty || app_store().store().has_dirty();
-        if (auto* vulkan_context = window_manager_ ? window_manager_->getVulkanContext() : nullptr) {
-            demand.swapchain_resize_pending = vulkan_context->hasPendingSwapchainResize();
+        if (auto* graphics_context = window_manager_ ? window_manager_->getGraphicsContext() : nullptr) {
+            demand.swapchain_resize_pending = graphics_context->hasPendingResize();
             demand.swapchain_resize_ready = demand.swapchain_resize_pending &&
-                                            vulkan_context->pendingSwapchainResizeReady();
+                                            graphics_context->pendingResizeReady();
         }
 #if defined(__linux__)
         if (window_manager_) {
@@ -2624,8 +2621,8 @@ namespace lfs::vis {
 
     void VisualizerImpl::render() {
 
-        if (auto* const ctx = window_manager_ ? window_manager_->getVulkanContext() : nullptr)
-            applyFrameStateEffects(frame_state_.on_renderer_terminal(ctx->rendererTerminalState()));
+        if (auto* const ctx = window_manager_ ? window_manager_->getGraphicsContext() : nullptr)
+            applyFrameStateEffects(frame_state_.on_renderer_terminal(ctx->terminalState()));
         if (frame_state_.state() == FrameStateMachine::State::RendererDead) {
             // Keep the CPU event and MCP queues responsive without issuing another GPU frame.
             processRenderWorkQueue();
@@ -2923,8 +2920,8 @@ namespace lfs::vis {
                     .logical_screen_size = camera.frameBufferSize,
                     .viewport_region = &region,
                     .scene_manager = scene_manager_.get(),
-                    .vulkan_context = window_manager_->getVulkanContext()};
-                const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
+                    .graphics_context = window_manager_->getGraphicsContext()};
+                const auto viewport_frame = rendering_manager_->renderFrame(context);
                 auto& view = rendering_manager_->viewState(id);
                 if (!view.parked_arena_retry_) {
                     rendering_manager_->retainVksplatScratch();
@@ -2935,50 +2932,9 @@ namespace lfs::vis {
                 }
                 if (gui_manager_ && id == screen_service_.activeView()) {
                     gui_manager_->commitUiVisibilityTransitionIfFrameReady(
-                        vulkan_frame.matches_viewport_extent);
+                        viewport_frame.matches_viewport_extent);
                 }
-                {
-                    auto& interop = rendering_manager_->viewState(id).viewport_interop_;
-                    if (vulkan_frame.external_image != VK_NULL_HANDLE) {
-                        interop.setExternalSceneImage(
-                            vulkan_frame.external_image, vulkan_frame.external_image_view,
-                            vulkan_frame.external_image_layout, vulkan_frame.size,
-                            vulkan_frame.flip_y, vulkan_frame.external_image_generation,
-                            vulkan_frame.completion_semaphore, vulkan_frame.completion_value,
-                            vulkan_frame.alloc_size);
-                    } else {
-                        interop.setSceneImage(
-                            vulkan_frame.image, vulkan_frame.size, vulkan_frame.flip_y,
-                            vulkan_frame.split_left_image_generation != 0
-                                ? vulkan_frame.split_left_image_generation
-                                : vulkan_frame.image_generation,
-                            vulkan_frame.completion_semaphore, vulkan_frame.completion_value);
-                    }
-                    interop.addFrameCompletions(vulkan_frame.additional_completions);
-                    if (vulkan_frame.split_right_image) {
-                        interop.setSplitRightImage(vulkan_frame.split_right_image,
-                                                   vulkan_frame.split_right_size,
-                                                   vulkan_frame.split_right_flip_y,
-                                                   vulkan_frame.split_right_image_generation);
-                    } else {
-                        interop.clearSplitRightImage();
-                    }
-
-                    // Splat depth -> R32_SFLOAT interop slot for the depth-blit pass.
-                    const auto mesh_frame = rendering_manager_->viewState(id).vulkan_mesh_frame_;
-                    if (mesh_frame.depth_blit.depth &&
-                        mesh_frame.depth_blit.depth->is_valid() &&
-                        mesh_frame.depth_blit.depth->ndim() == 3 &&
-                        mesh_frame.depth_blit.depth->size(0) == 1) {
-                        const auto& d = *mesh_frame.depth_blit.depth;
-                        interop.setDepthBlitImage(mesh_frame.depth_blit.depth,
-                                                  glm::ivec2(static_cast<int>(d.size(2)),
-                                                             static_cast<int>(d.size(1))),
-                                                  vulkan_frame.image_generation);
-                    } else {
-                        interop.clearDepthBlitImage();
-                    }
-                }
+                rendering_manager_->publishFrameToInterop(id, viewport_frame);
             }
             if (preview_refresh_only && rendering_manager_->hasParkedArenaRetry()) {
                 waitForNextEvent(is_training);
@@ -3080,8 +3036,8 @@ namespace lfs::vis {
         // Every autonomous frame waits for its actual animation cadence. Input and
         // worker events wake the same blocking wait immediately.
         if (presented_gui_frame) {
-            if (auto* const vulkan_context = window_manager_->getVulkanContext())
-                static_cast<void>(vulkan_context->waitForNextFrameSlot());
+            if (auto* const graphics_context = window_manager_->getGraphicsContext())
+                static_cast<void>(graphics_context->waitForNextFrameSlot());
         }
         waitForNextEvent(is_training, next_demand.needsContinuousLoop());
     }

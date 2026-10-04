@@ -4,10 +4,12 @@
 
 #include "mesh_offscreen_renderer.hpp"
 
+#include "core/guarded_task.hpp"
 #include "passes/vulkan_mesh_pass.hpp"
 #include "rendering/vulkan_result.hpp"
 #include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_context.hpp"
+#include "window/vulkan_graphics_context.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -565,22 +567,26 @@ namespace lfs::vis {
     MeshOffscreenRenderer::MeshOffscreenRenderer(MeshOffscreenRenderer&&) noexcept = default;
     MeshOffscreenRenderer& MeshOffscreenRenderer::operator=(MeshOffscreenRenderer&&) noexcept = default;
 
-    std::expected<MeshLayer, std::string> MeshOffscreenRenderer::render(
-        VulkanContext& context,
-        const VulkanMeshPassParams& params,
+    lfs::Result<MeshLayer> MeshOffscreenRenderer::render(
+        GraphicsContext& graphics,
+        const ViewportMeshPassDesc& params,
         const glm::mat4& projection,
         const int width,
         const int height) {
-        if (!impl_) {
-            impl_ = std::make_unique<Impl>();
-        }
         try {
-            return impl_->render(context, params, projection, width, height);
-        } catch (const std::exception& error) {
-            return std::unexpected(std::format(
-                "Mesh offscreen rendering threw an exception: {}", error.what()));
+            auto* context = vulkanContextOrNull(&graphics);
+            if (!context)
+                return lfs::make_error({.code = lfs::ErrorCode::Unsupported, .domain = lfs::ErrorDomain::Core, .detail = "The reference mesh renderer requires its presentation context", .detection = LFS_SOURCE_SITE_CURRENT()});
+            if (!impl_)
+                impl_ = std::make_unique<Impl>();
+            auto result = impl_->render(*context, params, projection, width, height);
+            if (!result)
+                return lfs::make_error({.code = lfs::ErrorCode::Internal, .domain = lfs::ErrorDomain::Core, .detail = std::move(result.error()), .detection = LFS_SOURCE_SITE_CURRENT()});
+            return std::move(*result);
         } catch (...) {
-            return std::unexpected("Mesh offscreen rendering threw an unknown exception");
+            // LFS-CENSUS-OK(empty-catch): translate the legacy reference renderer at the typed facade boundary.
+            return lfs::core::detail::task_failure_from_current_exception<MeshLayer>(
+                {.name = "mesh.reference.render", .domain = lfs::ErrorDomain::Core, .site = LFS_SOURCE_SITE_CURRENT()});
         }
     }
 

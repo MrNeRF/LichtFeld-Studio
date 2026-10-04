@@ -52,7 +52,7 @@ namespace lfs::vis::gui {
     RmlTemplateBrowser::~RmlTemplateBrowser() {
         lfs::python::unregister_rml_document("node_templates");
         if (rml_.isInitialized()) {
-            rml_.releaseCachedVulkanContext(cache_);
+            rml_.releaseCachedContext(cache_);
             if (context_)
                 rml_.destroyContext("node_templates");
         }
@@ -110,7 +110,7 @@ namespace lfs::vis::gui {
         if (!context_)
             return;
         lfs::python::unregister_rml_document("node_templates");
-        rml_.releaseCachedVulkanContext(cache_);
+        rml_.releaseCachedContext(cache_);
         rml_.destroyContext("node_templates");
         context_ = nullptr;
         document_ = nullptr;
@@ -495,7 +495,7 @@ namespace lfs::vis::gui {
         if (dirty_)
             context_->Update();
         rml_.trackContextFrame(context_, 0, 0);
-        rml_.queueCachedVulkanContext({.context = context_, .cache = &cache_, .cache_width = width, .cache_height = height, .offset_x = 0, .offset_y = 0, .draw_width = static_cast<float>(width), .draw_height = static_cast<float>(height), .refresh = dirty_ || cache_.texture == 0, .foreground = true, .clip = {}});
+        rml_.queueCachedContext({.context = context_, .cache = &cache_, .cache_width = width, .cache_height = height, .offset_x = 0, .offset_y = 0, .draw_width = static_cast<float>(width), .draw_height = static_cast<float>(height), .refresh = dirty_ || cache_.texture == 0, .foreground = true, .clip = {}});
         dirty_ = false;
     }
 } // namespace lfs::vis::gui

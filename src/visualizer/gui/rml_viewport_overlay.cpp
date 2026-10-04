@@ -237,7 +237,7 @@ namespace lfs::vis::gui {
         if (vram_hud_)
             vram_hud_->onDocumentDestroyed();
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("viewport_overlay");
         rml_context_ = nullptr;
@@ -262,7 +262,7 @@ namespace lfs::vis::gui {
         doc_registered_ = false;
 
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
 
         if (document_) {
             resetToolbarDragListeners();
@@ -1299,14 +1299,14 @@ namespace lfs::vis::gui {
                               static_cast<int>(vp_size_.y));
     }
 
-    void RmlViewportOverlay::queueCachedVulkanContext(const bool refresh_cache) {
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+    void RmlViewportOverlay::queueCachedContext(const bool refresh_cache) {
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
         const float x = vp_pos_.x - screen_origin_.x;
         const float y = vp_pos_.y - screen_origin_.y;
         const int w = static_cast<int>(vp_size_.x);
         const int h = static_cast<int>(vp_size_.y);
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = w,
@@ -1330,11 +1330,11 @@ namespace lfs::vis::gui {
     void RmlViewportOverlay::renderFrostedGlass() {
         if (viewport_chrome_style_ != "frosted" || !document_ || !rml_manager_)
             return;
-        auto* const renderer = rml_manager_->getVulkanRenderInterface();
+        auto* const renderer = rml_manager_->getUiRenderer();
         if (!renderer)
             return;
 
-        std::vector<RenderInterface_VK::FrostedGlassRegion> regions;
+        std::vector<UiFrostedGlassRegion> regions;
         const auto is_visible = [](Rml::Element* element) {
             for (auto* node = element; node; node = node->GetParentNode()) {
                 if (node->GetDisplay() == Rml::Style::Display::None)
@@ -1388,7 +1388,8 @@ namespace lfs::vis::gui {
         if (regions.empty())
             return;
 
-        const bool rendered = renderer->RenderFrostedGlass({regions.data(), regions.size()});
+        const bool rendered = renderer->renderFrostedGlass(
+            {regions.data(), regions.size()});
         if (!rml_theme::setFrostedGlassAvailable(rendered))
             return;
 
@@ -1434,7 +1435,7 @@ namespace lfs::vis::gui {
                                             static_cast<int>(vp_pos_.y - screen_origin_.y));
             rml_context_->SetDimensions(Rml::Vector2i(w, h));
             rml_context_->Update();
-            queueCachedVulkanContext(true);
+            queueCachedContext(true);
             const double next_delay = rml_context_->GetNextUpdateDelay();
             next_update_delay_ = next_delay;
             animation_active_ = (next_delay == 0.0);
@@ -1453,9 +1454,9 @@ namespace lfs::vis::gui {
             return;
         }
 
-        queueCachedVulkanContext(direct_cache_.texture == 0 ||
-                                 direct_cache_.width != w ||
-                                 direct_cache_.height != h);
+        queueCachedContext(direct_cache_.texture == 0 ||
+                           direct_cache_.width != w ||
+                           direct_cache_.height != h);
     }
 
     void RmlViewportOverlay::render() {
@@ -1470,7 +1471,7 @@ namespace lfs::vis::gui {
             doc_registered_ = true;
         }
 
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
 
         const bool theme_changed = updateTheme();
@@ -1528,9 +1529,9 @@ namespace lfs::vis::gui {
                                   theme_changed || size_changed || dpi_changed || toolbar_changed ||
                                   tooltip_changed || had_data_model_binding_dirty;
         if (!needs_render) {
-            queueCachedVulkanContext(direct_cache_.texture == 0 ||
-                                     direct_cache_.width != w ||
-                                     direct_cache_.height != h);
+            queueCachedContext(direct_cache_.texture == 0 ||
+                               direct_cache_.width != w ||
+                               direct_cache_.height != h);
             return;
         }
 
@@ -1569,7 +1570,7 @@ namespace lfs::vis::gui {
             }
         }
 
-        queueCachedVulkanContext(true);
+        queueCachedContext(true);
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.next_delay", 0.25);
             const double next_delay = rml_context_->GetNextUpdateDelay();

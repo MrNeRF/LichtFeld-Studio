@@ -17,8 +17,10 @@
 namespace lfs::vis {
 
     class VulkanContext;
-    struct VulkanMeshDrawItem;
-    struct VulkanEnvironmentParams;
+    struct ViewportMeshDrawItem;
+    struct ViewportEnvironment;
+    using VulkanMeshDrawItem = ViewportMeshDrawItem;
+    using VulkanEnvironmentParams = ViewportEnvironment;
 
     // Shared mesh/material and environment resources. Per-view descriptors,
     // light buffers, shadow maps, and pipelines remain on the individual passes.

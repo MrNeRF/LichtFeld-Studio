@@ -12,7 +12,10 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <format>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <string>
@@ -28,6 +31,29 @@ namespace {
 
     constexpr float kInf = std::numeric_limits<float>::infinity();
     constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+
+    TEST(TensorProcessConfigurationDeathTest, BackendAndExecutionOptionsSurviveReexec) {
+        const auto configuration = [] {
+            const auto options = lfs::core::tensor_backend_options();
+            return std::format("tensor-config: {} {} {} {}\n",
+                               lfs::core::gpu_backend_name(lfs::core::configured_gpu_backend()),
+                               options.vulkan_validation, options.force_fp32_half,
+                               options.force_no_atomic_float);
+        };
+        // The matcher is evaluated by the parent. Recompute the configuration
+        // inside the re-executed child so a lost selector cannot pass silently
+        // on machines where the harness's default CUDA backend is also built.
+        const auto expected = configuration();
+        const auto style = GTEST_FLAG_GET(death_test_style);
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(
+            {
+                std::cerr << configuration() << std::flush;
+                std::_Exit(0);
+            },
+            testing::ExitedWithCode(0), expected);
+        GTEST_FLAG_SET(death_test_style, style);
+    }
 
     struct Target {
         const char* name;

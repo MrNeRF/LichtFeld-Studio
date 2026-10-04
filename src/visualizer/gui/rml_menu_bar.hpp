@@ -241,7 +241,7 @@ namespace lfs::vis::gui {
         int last_ctx_w_ = 0;
         int last_ctx_h_ = 0;
         int last_document_h_ = 0;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
 
         float bar_height_ = 30.0f;
     };

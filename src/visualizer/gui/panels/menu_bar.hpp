@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "gui/vulkan_ui_texture.hpp"
+#include "gui/ui_texture.hpp"
 #include "python/python_runtime.hpp"
 
 #include <cstdint>
@@ -42,7 +42,7 @@ namespace lfs::vis::gui {
 
     private:
         struct Thumbnail {
-            std::unique_ptr<VulkanUiTexture> texture;
+            std::unique_ptr<UiTexture> texture;
             enum class State { PENDING,
                                LOADING,
                                READY,

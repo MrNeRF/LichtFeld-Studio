@@ -142,7 +142,7 @@ namespace lfs::vis::gui {
 
     RmlProgressOverlay::~RmlProgressOverlay() {
         if (rml_manager_ && rml_manager_->isInitialized())
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         if (rml_context_ && rml_manager_ && rml_manager_->isInitialized())
             rml_manager_->destroyContext("progress_overlay");
     }
@@ -357,7 +357,7 @@ namespace lfs::vis::gui {
                 return;
         }
         if (!document_ || !elements_cached_ || !rml_manager_ ||
-            !rml_manager_->getVulkanRenderInterface())
+            !rml_manager_->getUiRenderer())
             return;
         if (screen_w <= 0 || screen_h <= 0)
             return;
@@ -428,7 +428,7 @@ namespace lfs::vis::gui {
 
         const bool refresh_cache = needs_update || direct_cache_.texture == 0;
         render_needed_ = false;
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = width_,
@@ -475,7 +475,7 @@ namespace lfs::vis::gui {
         dialog_position_valid_ = false;
         last_mouse_valid_ = false;
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         render_needed_ = true;
 
         try {
@@ -501,7 +501,7 @@ namespace lfs::vis::gui {
 
     void RmlProgressOverlay::releaseRendererResources() {
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
     }
 
 } // namespace lfs::vis::gui

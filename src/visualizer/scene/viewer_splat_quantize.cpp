@@ -10,6 +10,7 @@
 #include "core/shareable_allocation_limit.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 
 #include <algorithm>
 #include <cctype>

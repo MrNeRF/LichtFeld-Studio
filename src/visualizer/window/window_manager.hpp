@@ -22,7 +22,7 @@ union SDL_Event;
 namespace lfs::vis {
 
     class InputController;
-    class VulkanContext;
+    class GraphicsContext;
 
     class LFS_VIS_API WindowManager {
     public:
@@ -74,7 +74,7 @@ namespace lfs::vis {
         [[nodiscard]] unsigned manualResizeEdgeMask() const;
 
         SDL_Window* getWindow() const { return window_; }
-        VulkanContext* getVulkanContext() const { return vulkan_context_.get(); }
+        GraphicsContext* getGraphicsContext() const { return graphics_context_.get(); }
         glm::ivec2 getWindowSize() const { return window_size_; }
         glm::ivec2 getFramebufferSize() const { return framebuffer_size_; }
         [[nodiscard]] bool hasRecentWindowSizeChange(std::chrono::steady_clock::duration max_age) const;
@@ -89,7 +89,6 @@ namespace lfs::vis {
         [[nodiscard]] bool usesEventDrivenTitlebarDrag() const { return native_titlebar_move_available_; }
         void setFullscreen(bool fullscreen);
         GraphicsBackend graphicsBackend() const { return graphics_backend_; }
-        bool isVulkan() const { return true; }
 
         void setCallbackHandler(void* handler) { callback_handler_ = handler; }
         void setInputController(InputController* ic);
@@ -119,8 +118,7 @@ namespace lfs::vis {
         };
 
         SDL_Window* window_ = nullptr;
-        std::unique_ptr<VulkanContext> vulkan_context_;
-        bool tensor_backend_adopted_ = false;
+        std::unique_ptr<GraphicsContext> graphics_context_;
         GraphicsBackend graphics_backend_ = GraphicsBackend::Vulkan;
         std::string title_;
         glm::ivec2 window_size_;
@@ -183,8 +181,6 @@ namespace lfs::vis {
         [[nodiscard]] bool titlebarDragMovedEnough() const;
         [[nodiscard]] bool isTitlebarDragAtDisplayTop() const;
         void flushPendingTitlebarDoubleClick();
-        void adoptTensorBackendDevice();
-        void releaseTensorBackendDevice();
     };
 
 } // namespace lfs::vis

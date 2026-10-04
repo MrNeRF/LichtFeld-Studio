@@ -3,8 +3,10 @@
 
 #include "core/tensor_readback.hpp"
 #include "backend/readback_buffer.hpp"
+#ifdef LFS_TENSOR_VULKAN
 #include "backend/vulkan/vk_context.hpp"
 #include "backend/vulkan/vk_recorder.hpp"
+#endif
 #include "core/device_fault.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_upload.hpp"
@@ -190,6 +192,7 @@ namespace lfs::core {
             // Metal runs batches in submission order, so its copy already
             // follows the source's producer.
             if (*s.backend == GpuBackend::Vulkan) {
+#ifdef LFS_TENSOR_VULKAN
                 const uint64_t recorder = storage.meta == nullptr
                                               ? 0
                                               : storage.meta->pending_recorder.load(std::memory_order_acquire);
@@ -205,6 +208,9 @@ namespace lfs::core {
                 *s.producer = TensorFence::adopt(GpuBackend::Vulkan,
                                                  reinterpret_cast<void*>(static_cast<uintptr_t>(value)));
                 queue.wait_for(*s.producer);
+#else
+                throw std::runtime_error("Vulkan tensor readback is unavailable in this build");
+#endif
             }
             const TensorWorkQueue::Scope scope(queue);
             try {

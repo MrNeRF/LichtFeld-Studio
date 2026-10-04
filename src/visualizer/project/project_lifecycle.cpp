@@ -45,8 +45,8 @@
 #include "preferences.hpp"
 #include "project/project_switch_error.hpp"
 #include "project/session_state.hpp"
+#include "rendering/graphics_external_tensor.hpp"
 #include "rendering/image_layout.hpp"
-#include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #if LFS_BUILD_TRAINER

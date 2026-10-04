@@ -39,7 +39,7 @@ namespace lfs::vis::gui {
         items_.clear();
         pending_items_.clear();
         if (mgr_ && mgr_->isInitialized())
-            mgr_->releaseCachedVulkanContext(direct_cache_);
+            mgr_->releaseCachedContext(direct_cache_);
         if (ctx_ && mgr_)
             mgr_->destroyContext("global_context_menu");
     }
@@ -129,7 +129,7 @@ namespace lfs::vis::gui {
         render_needed_ = true;
         last_mouse_valid_ = false;
         if (mgr_)
-            mgr_->releaseCachedVulkanContext(direct_cache_);
+            mgr_->releaseCachedContext(direct_cache_);
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/global_context_menu.rml");
@@ -354,7 +354,7 @@ namespace lfs::vis::gui {
         if (w <= 0 || h <= 0)
             return;
 
-        if (!mgr_ || !mgr_->getVulkanRenderInterface())
+        if (!mgr_ || !mgr_->getUiRenderer())
             return;
 
         const float dp = std::max(mgr_->getDpRatio(), 1.0f);
@@ -408,7 +408,7 @@ namespace lfs::vis::gui {
         }
 
         render_needed_ = false;
-        mgr_->queueCachedVulkanContext({
+        mgr_->queueCachedContext({
             .context = ctx_,
             .cache = &direct_cache_,
             .cache_width = w,
@@ -425,7 +425,7 @@ namespace lfs::vis::gui {
 
     void GlobalContextMenu::releaseRendererResources() {
         if (mgr_)
-            mgr_->releaseCachedVulkanContext(direct_cache_);
+            mgr_->releaseCachedContext(direct_cache_);
     }
 
     void GlobalContextMenu::EventListener::ProcessEvent(Rml::Event& event) {

@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+# SPDX-License-Identifier: GPL-3.0-or-later
+include_guard(GLOBAL)
+find_program(LFS_GPU_SLANGC NAMES slangc
+    HINTS "${VCPKG_INSTALLED_DIR}/${VCPKG_HOST_TRIPLET}/tools/shader-slang"
+          "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/shader-slang"
+    PATH_SUFFIXES tools/shader-slang REQUIRED)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+# One Slang module, any number of compute entries, and optional raster entries.
+# Artifacts are embedded, so installed builds never depend on source/build paths.
+# MSL is generated at build time; Metal loads it using the system compiler. This
+# works with Command Line Tools, without the optional offline Metal Toolchain.
+function(lfs_add_gpu_program target name)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    cmake_parse_arguments(PROGRAM "" "SOURCE" "COMPUTE;VERTEX;FRAGMENT" ${ARGN})
+    get_filename_component(source "${PROGRAM_SOURCE}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    set(directory "${CMAKE_CURRENT_BINARY_DIR}/gpu_programs/${name}")
+    file(MAKE_DIRECTORY "${directory}")
+    set(outputs)
+    set(embed_args)
+    foreach(stage IN ITEMS COMPUTE VERTEX FRAGMENT)
+        string(TOLOWER "${stage}" slang_stage)
+        if(stage STREQUAL "COMPUTE")
+            set(cpp_stage Compute)
+        elseif(stage STREQUAL "VERTEX")
+            set(cpp_stage Vertex)
+        else()
+            set(cpp_stage Fragment)
+        endif()
+        foreach(entry IN LISTS PROGRAM_${stage})
+            if(LFS_TENSOR_VULKAN)
+                set(output "${directory}/${entry}.spv")
+                add_custom_command(OUTPUT "${output}" "${output}.json"
+                    COMMAND "${LFS_GPU_SLANGC}" "${source}" -entry "${entry}" -stage "${slang_stage}"
+                        -target spirv -profile glsl_460 -emit-spirv-directly -fvk-use-entrypoint-name
+                        -fvk-use-scalar-layout -fp-mode precise -line-directive-mode none -o "${output}" -reflection-json "${output}.json"
+                    DEPENDS "${source}" "${LFS_GPU_SLANGC}" VERBATIM)
+                list(APPEND outputs "${output}" "${output}.json")
+                list(APPEND embed_args Vulkan "${cpp_stage}" "${entry}" "${output}" "${output}.json")
+            endif()
+            if(APPLE)
+                set(output "${directory}/${entry}.metal")
+                add_custom_command(OUTPUT "${output}" "${output}.json"
+                    COMMAND "${LFS_GPU_SLANGC}" "${source}" -entry "${entry}" -stage "${slang_stage}"
+                        -target metal -fp-mode precise -line-directive-mode none -o "${output}" -reflection-json "${output}.json"
+                    DEPENDS "${source}" "${LFS_GPU_SLANGC}" VERBATIM)
+                list(APPEND outputs "${output}" "${output}.json")
+                list(APPEND embed_args Metal "${cpp_stage}" "${entry}" "${output}" "${output}.json")
+            endif()
+            if(LFS_HAS_CUDA AND stage STREQUAL "COMPUTE")
+                set(cuda_source "${directory}/${entry}.cu")
+                set(output "${directory}/${entry}.ptx")
+                add_custom_command(OUTPUT "${output}" "${output}.json" BYPRODUCTS "${cuda_source}"
+                    COMMAND "${LFS_GPU_SLANGC}" "${source}" -entry "${entry}" -stage compute
+                        -target cuda -fp-mode precise -line-directive-mode none -o "${cuda_source}" -reflection-json "${output}.json"
+                    COMMAND "${CMAKE_CUDA_COMPILER}" --ptx --std=c++17 --fmad=false
+                        "${cuda_source}" -o "${output}"
+                    DEPENDS "${source}" "${LFS_GPU_SLANGC}" VERBATIM)
+                list(APPEND outputs "${output}" "${output}.json")
+                list(APPEND embed_args CUDA Compute "${entry}" "${output}" "${output}.json")
+            endif()
+        endforeach()
+    endforeach()
+    add_custom_command(OUTPUT "${directory}/${name}.cpp" "${directory}/${name}.hpp"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/embed_gpu_program.py"
+            "${directory}" "${name}" ${embed_args}
+        DEPENDS ${outputs} "${CMAKE_SOURCE_DIR}/tools/embed_gpu_program.py" VERBATIM)
+    target_sources(${target} PRIVATE "${directory}/${name}.cpp")
+    target_include_directories(${target} PRIVATE "${directory}")
+endfunction()

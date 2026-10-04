@@ -18,7 +18,7 @@
 #include "core/training_manager.hpp"
 #include "scene_renderer.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
-#include "window/vulkan_context.hpp"
+#include "window/graphics_context.hpp"
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -467,7 +467,7 @@ namespace lfs::vis {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview depth render dimensions");
         }
-        if (!last_vulkan_context_) {
+        if (!last_graphics_context_) {
             return std::unexpected("no Vulkan context is available");
         }
         if (!hasRenderableGaussians(&model)) {
@@ -484,7 +484,7 @@ namespace lfs::vis {
         // force the legacy per-pixel chain for the depth-capture render so the
         // readback matches the image resolution.
         if (!scene_renderer_) {
-            scene_renderer_ = createSceneRenderer(*last_vulkan_context_);
+            scene_renderer_ = createSceneRenderer(*last_graphics_context_);
         }
         scene_renderer_->setDepthCaptureMode(true, expected_depth);
         struct DepthCaptureModeGuard {
@@ -890,8 +890,8 @@ namespace lfs::vis {
                                          request.orthographic_override,
                                          request.ortho_scale_override,
                                          request.reference_height);
-        if (last_vulkan_context_ &&
-            last_vulkan_context_->rendererTerminalState() != RendererTerminalState::Running) {
+        if (last_graphics_context_ &&
+            last_graphics_context_->terminalState() != RendererTerminalState::Running) {
             return std::unexpected("renderer is unavailable after a GPU failure; restart LichtFeld Studio");
         }
         releasePreviewImageResources();
@@ -1032,10 +1032,10 @@ namespace lfs::vis {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview render dimensions");
         }
-        if (!last_vulkan_context_) {
+        if (!last_graphics_context_) {
             return std::unexpected("no Vulkan context is available");
         }
-        if (last_vulkan_context_->rendererTerminalState() != RendererTerminalState::Running) {
+        if (last_graphics_context_->terminalState() != RendererTerminalState::Running) {
             return std::unexpected("renderer is unavailable after a GPU failure; restart LichtFeld Studio");
         }
         if (!hasRenderableGaussians(&model)) {
@@ -1103,7 +1103,7 @@ namespace lfs::vis {
         }
 
         if (!scene_renderer_) {
-            scene_renderer_ = createSceneRenderer(*last_vulkan_context_);
+            scene_renderer_ = createSceneRenderer(*last_graphics_context_);
         }
 
         // Preview/export uses the renderer's exact two-batch count gate; one
@@ -1267,7 +1267,7 @@ namespace lfs::vis {
             return cached_depth;
         }
 
-        if (!scene_renderer_ || !last_vulkan_context_) {
+        if (!scene_renderer_ || !last_graphics_context_) {
             return -1.0f;
         }
 

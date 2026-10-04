@@ -8,6 +8,7 @@
 #include "core/tensor/backend/vulkan/vk_memory.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_upload.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 
 #include <gtest/gtest.h>
 

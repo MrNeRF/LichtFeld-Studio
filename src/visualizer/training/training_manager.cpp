@@ -27,13 +27,13 @@
 #include "lfs/training/ops/registry.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
-#include "rendering/vulkan_external_tensor.hpp"
+#include "rendering/graphics_external_tensor.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/visualizer_impl.hpp"
-#include "window/vulkan_context.hpp"
+#include "window/graphics_context.hpp"
 #include "window/window_manager.hpp"
 
 #include <algorithm>
@@ -111,12 +111,12 @@ namespace lfs::vis {
             thread.join();
         }
 
-        [[nodiscard]] lfs::core::SplatTensorAllocator makeVulkanTrainingTensorAllocator(VisualizerImpl* viewer) {
+        [[nodiscard]] lfs::core::SplatTensorAllocator makeGraphicsTrainingTensorAllocator(VisualizerImpl* viewer) {
             if (!viewer || !viewer->getWindowManager()) {
                 return {};
             }
-            auto* const context = viewer->getWindowManager()->getVulkanContext();
-            if (!context || !context->externalMemoryInteropEnabled()) {
+            auto* const context = viewer->getWindowManager()->getGraphicsContext();
+            if (!context || !context->capabilities().external_memory_interop) {
                 return {};
             }
 
@@ -136,18 +136,19 @@ namespace lfs::vis {
                         pooled.set_name(debug_name);
                         return pooled;
                     }
-                    auto tensor = makeVulkanExternalTensor(
+                    auto tensor = makeGraphicsExternalTensor(
                         *context,
                         std::move(shape),
                         dtype,
                         capacity,
                         debug_name.c_str());
                     if (!tensor) {
+                        const auto error_text = tensor.error().user_message();
                         const auto message = std::format(
                             "Vulkan-external training tensor allocation failed for '{}': {}",
                             debug_name,
-                            tensor.error());
-                        if (lfs::core::is_shareable_allocation_limit_message(tensor.error())) {
+                            error_text);
+                        if (lfs::core::is_shareable_allocation_limit_message(error_text)) {
                             throw lfs::core::ShareableAllocationLimitError(message);
                         }
                         throw lfs::core::TensorError(message);
@@ -373,12 +374,12 @@ namespace lfs::vis {
                      sh_degree);
         }
 
-        VulkanContext* vk_ctx = nullptr;
+        GraphicsContext* graphics_context = nullptr;
         if (viewer_ && viewer_->getWindowManager()) {
-            vk_ctx = viewer_->getWindowManager()->getVulkanContext();
+            graphics_context = viewer_->getWindowManager()->getGraphicsContext();
         }
         const bool vulkan_interop_available =
-            vk_ctx && vk_ctx->externalMemoryInteropEnabled();
+            graphics_context && graphics_context->capabilities().external_memory_interop;
 
         if (exportable_capacity > 0 &&
             (vulkan_interop_available ||
@@ -398,9 +399,9 @@ namespace lfs::vis {
                              sh_degree,
                              splat_storage_->block->committed_bytes >> 20);
                 } else {
-                    auto make_interop_allocator = [this, vk_ctx] {
+                    auto make_interop_allocator = [this, graphics_context] {
                         return makeSplatExportableInteropAllocator(
-                            *vk_ctx, *splat_storage_, &splat_interop_parent_);
+                            *graphics_context, *splat_storage_, &splat_interop_parent_);
                     };
                     auto interop_alloc_result = viewer_ && !viewer_->isOnViewerThread()
                                                     ? post_work_and_wait(
@@ -459,7 +460,7 @@ namespace lfs::vis {
         }
 
         if (!tensor_allocator && lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
-            tensor_allocator = makeVulkanTrainingTensorAllocator(viewer_);
+            tensor_allocator = makeGraphicsTrainingTensorAllocator(viewer_);
             if (tensor_allocator) {
                 LOG_INFO("Training model tensors will use Vulkan-external CUDA storage");
             }
@@ -1211,19 +1212,19 @@ namespace lfs::vis {
                 if (viewer_) {
                     auto* const rendering_manager = viewer_->getRenderingManager();
                     auto* const window_manager = viewer_->getWindowManager();
-                    auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
+                    auto* const graphics_context = window_manager ? window_manager->getGraphicsContext() : nullptr;
                     std::shared_lock scene_lock(trainer_->getRenderMutex(), std::defer_lock);
                     if (scene_) {
                         scene_lock.lock();
                     }
                     auto* const model = scene_ ? scene_->getTrainingModel() : nullptr;
-                    if (rendering_manager && vulkan_context && model) {
+                    if (rendering_manager && graphics_context && model) {
                         glm::ivec2 prime_size = rendering_manager->getRenderedSize();
                         if (prime_size.x <= 0 || prime_size.y <= 0) {
                             prime_size = window_manager ? window_manager->getWindowSize() : glm::ivec2{1280, 720};
                         }
                         if (auto ok = rendering_manager->ensureVksplatTrainingSharedScratchReady(
-                                *vulkan_context, *model, prime_size);
+                                *graphics_context, *model, prime_size);
                             !ok) {
                             LOG_WARN("VkSplat training shared-scratch pre-start prime skipped: {}", ok.error());
                         }

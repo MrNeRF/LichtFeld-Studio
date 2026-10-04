@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "scene_renderer_factory.hpp"
+#include "window/vulkan_graphics_context.hpp"
+#include <stdexcept>
 #ifdef __APPLE__
 #include "core/logger.hpp"
 #include "metal_viewport_renderer.hpp"
@@ -261,16 +263,36 @@ namespace lfs::vis {
             }
         };
     } // namespace
-    std::unique_ptr<SceneRenderer> createSceneRenderer(VulkanContext& context) { return std::make_unique<MetalSceneRenderer>(context); }
-    std::unique_ptr<PointSceneRenderer> createPointSceneRenderer(VulkanContext& context) { return std::make_unique<MetalPointSceneRenderer>(context); }
+    std::unique_ptr<SceneRenderer> createSceneRenderer(GraphicsContext& graphics) {
+        auto* context = vulkanContextOrNull(&graphics);
+        if (!context)
+            throw std::runtime_error("The Phase 1 Metal scene renderer requires Vulkan compositor resources");
+        return std::make_unique<MetalSceneRenderer>(*context);
+    }
+    std::unique_ptr<PointSceneRenderer> createPointSceneRenderer(GraphicsContext& graphics) {
+        auto* context = vulkanContextOrNull(&graphics);
+        if (!context)
+            throw std::runtime_error("The Phase 1 Metal point renderer requires Vulkan compositor resources");
+        return std::make_unique<MetalPointSceneRenderer>(*context);
+    }
     void preloadSceneRenderer() {}
 } // namespace lfs::vis
 #else
 #include "vksplat_viewport_renderer.hpp"
 #include "vulkan_scene_renderer_factory.hpp"
 namespace lfs::vis {
-    std::unique_ptr<SceneRenderer> createSceneRenderer(VulkanContext& context) { return createVulkanSceneRenderer(context); }
-    std::unique_ptr<PointSceneRenderer> createPointSceneRenderer(VulkanContext& context) { return createVulkanPointSceneRenderer(context); }
+    std::unique_ptr<SceneRenderer> createSceneRenderer(GraphicsContext& graphics) {
+        auto* context = vulkanContextOrNull(&graphics);
+        if (!context)
+            throw std::runtime_error("Vulkan scene rendering requires Vulkan graphics resources");
+        return createVulkanSceneRenderer(*context);
+    }
+    std::unique_ptr<PointSceneRenderer> createPointSceneRenderer(GraphicsContext& graphics) {
+        auto* context = vulkanContextOrNull(&graphics);
+        if (!context)
+            throw std::runtime_error("Vulkan point rendering requires Vulkan graphics resources");
+        return createVulkanPointSceneRenderer(*context);
+    }
     void preloadSceneRenderer() { preloadVkSplatSpirvFiles(); }
 } // namespace lfs::vis
 #endif

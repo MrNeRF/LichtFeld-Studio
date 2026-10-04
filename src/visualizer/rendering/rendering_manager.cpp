@@ -20,6 +20,8 @@
 #include "scene_renderer_factory.hpp"
 #include "scene_training_interop.hpp"
 #include "theme/theme.hpp"
+#include "viewport_reference_renderer.hpp"
+#include "window/graphics_context.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
 #endif
@@ -272,22 +274,16 @@ namespace lfs::vis {
         lfs::rendering::releaseEnvironmentMapCaches();
     }
 
-    ViewportInteropService& RenderingManager::viewportInterop() {
-
-        return this->state().viewport_interop_;
+    void RenderingManager::clearViewportSceneImage() {
+        clearViewportReference(this->state());
     }
 
-    const ViewportInteropService& RenderingManager::viewportInterop() const {
-
-        return this->state().viewport_interop_;
-    }
-
-    void RenderingManager::shutdownViewportInterop(VulkanContext* context) {
+    void RenderingManager::shutdownViewportInterop(GraphicsContext* context) {
         std::lock_guard lock(views_mutex_);
         for (auto& [id, view] : view_states_)
-            view->viewport_interop_.shutdown(context);
+            shutdownViewportReference(*view, context);
         for (auto& view : retired_view_states_)
-            view->viewport_interop_.shutdown(context);
+            shutdownViewportReference(*view, context);
     }
 
     void RenderingManager::setWakeCallback(std::function<void()> callback) {
@@ -480,7 +476,7 @@ namespace lfs::vis {
         std::erase_if(retired_view_states_, [&](auto& view) {
             if (!releaseViewTargets(*view))
                 return false;
-            view->viewport_interop_.shutdown(last_vulkan_context_);
+            shutdownViewportReference(*view, last_graphics_context_);
             return true;
         });
     }
@@ -620,14 +616,11 @@ namespace lfs::vis {
         }
     }
 
-    void RenderingManager::clearVulkanViewportImageState(ViewRenderState& view, const glm::ivec2 size,
-                                                         const bool flip_y,
-                                                         const glm::ivec2 alloc_size) {
+    void RenderingManager::clearViewportImageState(ViewRenderState& view, const glm::ivec2 size,
+                                                   const bool flip_y,
+                                                   const glm::ivec2 alloc_size) {
         view.vulkan_viewport_image_.reset();
-        view.vulkan_external_viewport_image_ = VK_NULL_HANDLE;
-        view.vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
-        view.vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-        view.vulkan_external_viewport_image_generation_ = 0;
+        clearViewportReferenceOutput(view);
         view.vulkan_viewport_image_size_ = size;
         view.vulkan_viewport_image_alloc_size_ = alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
         view.vulkan_viewport_image_flip_y_ = flip_y;

@@ -23,7 +23,9 @@
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_readback.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "graphics_external_tensor.hpp"
 #include "io/formats/rad.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rasterizer/vulkan/src/indirect_layout.h"
@@ -34,7 +36,6 @@
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
 #include "vksplat_shared_scratch_install.hpp"
-#include "vulkan_external_tensor.hpp"
 #include "window/vulkan_result.hpp"
 
 #include <algorithm>
