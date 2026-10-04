@@ -1082,7 +1082,7 @@ namespace lfs::io {
             options.max_num_cpu_threads,
             nullptr,
             options.device_id,
-            0,
+            options.create_eagerly ? 1 : 0,
             0,
             0,
             nullptr};

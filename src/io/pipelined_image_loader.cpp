@@ -339,7 +339,8 @@ namespace lfs::io {
             return instances;
         }
 
-        std::shared_ptr<NvCodecImageLoader> acquire_nvcodec_loader(size_t decoder_pool_size) {
+        std::shared_ptr<NvCodecImageLoader> acquire_nvcodec_loader(size_t decoder_pool_size,
+                                                                   const bool create_eagerly = false) {
             std::lock_guard<std::mutex> lock(get_nvcodec_mutex());
             auto& instances = get_nvcodec_loader_cache();
             const size_t requested_pool_size = normalize_nvcodec_pool_size(decoder_pool_size);
@@ -349,11 +350,12 @@ namespace lfs::io {
                 return it->second.instance;
             }
 
-            auto instance = [&requested_pool_size] {
+            auto instance = [&requested_pool_size, create_eagerly] {
                 NvCodecImageLoader::Options opts;
                 opts.device_id = 0;
                 opts.decoder_pool_size = requested_pool_size;
                 opts.enable_fallback = true;
+                opts.create_eagerly = create_eagerly;
                 return std::make_shared<NvCodecImageLoader>(opts);
             }();
 
@@ -724,6 +726,24 @@ namespace lfs::io {
 
     PipelinedImageLoader::~PipelinedImageLoader() {
         shutdown();
+    }
+
+    ImageDecoderWarmup::ImageDecoderWarmup(const size_t decoder_pool_size)
+        : decoder_pool_size_(decoder_pool_size) {
+        if (!is_nvcodec_available())
+            return;
+        retain_nvcodec_loader_cache(decoder_pool_size_);
+        retained_ = true;
+        try {
+            acquire_nvcodec_loader(decoder_pool_size_, true);
+        } catch (const std::exception& error) {
+            LOG_WARN("[PipelinedImageLoader] Image decoder warm-up failed: {}", error.what());
+        }
+    }
+
+    ImageDecoderWarmup::~ImageDecoderWarmup() {
+        if (retained_)
+            release_nvcodec_loader_cache(decoder_pool_size_);
     }
 
     void PipelinedImageLoader::shutdown() {

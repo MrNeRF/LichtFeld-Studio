@@ -46,6 +46,8 @@ namespace lfs::io {
             int max_num_cpu_threads = 0;
             bool enable_fallback = true;
             size_t decoder_pool_size = 8;
+            // Create every codec handle in the constructor instead of on the first decode and encode.
+            bool create_eagerly = false;
             // Experimental opt-in only; all production call sites leave this false.
             // RTX 4090 bicycle gate measured +35 MiB net and 3.5x dl_wait enabled.
             // A failed cudaFreeAsync stays budget-charged because the allocation

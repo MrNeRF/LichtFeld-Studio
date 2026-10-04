@@ -162,6 +162,33 @@ TEST_F(PipelinedImageLoaderTest, LoadsRealImageAndMaskWithExpectedContract) {
     EXPECT_LE(ready.mask->max().item<float>(), 1.0f);
 }
 
+// Fails if the warm-up and the loaders sharing its decoders mishandle ownership: whichever is destroyed
+// first, the others must keep decoding the same image.
+TEST_F(PipelinedImageLoaderTest, DecoderWarmupSharesDecodersInEitherLifetimeOrder) {
+    const auto decode = [this](PipelinedImageLoader& loader, const size_t sequence_id) {
+        loader.prefetch({request(sequence_id, 0, false)});
+        return loader.get().tensor.to(DataType::Float32).cpu().to_vector();
+    };
+    std::vector<float> reference;
+    {
+        PipelinedImageLoader loader(config());
+        reference = decode(loader, 0);
+    }
+    {
+        auto warmup = std::make_unique<ImageDecoderWarmup>(config().decoder_pool_size);
+        PipelinedImageLoader loader(config());
+        warmup.reset();
+        EXPECT_EQ(decode(loader, 1), reference);
+    }
+    {
+        ImageDecoderWarmup warmup(config().decoder_pool_size);
+        for (size_t run = 0; run < 2; ++run) {
+            PipelinedImageLoader loader(config());
+            EXPECT_EQ(decode(loader, 2 + run), reference);
+        }
+    }
+}
+
 TEST_F(PipelinedImageLoaderTest, OriginalJpegUsesDirectDecodeWithoutColdReencoding) {
     for (const bool high_precision : {false, true}) {
         SCOPED_TRACE(high_precision);

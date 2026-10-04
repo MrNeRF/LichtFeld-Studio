@@ -115,6 +115,9 @@ namespace lfs::training {
         constexpr float CAMERA_LOSS_EMA_ALPHA = 0.2f;
         constexpr int CAMERA_LOSS_PUBLISH_INTERVAL = 16;
         constexpr int INVISIBLE_ITERATION_LIMIT = 1000;
+        // Datasets with at most this share of non-JPEG images take the JPEG hot path.
+        constexpr float NON_JPEG_THRESHOLD = 0.1f;
+        constexpr size_t JPEG_HOT_DECODER_POOL_SIZE = 2;
 
         [[nodiscard]] std::optional<std::string_view> first_non_finite_parameter(
             const lfs::core::SplatData& model) {
@@ -910,9 +913,7 @@ namespace lfs::training {
                 return config;
             }
 
-            constexpr float NON_JPEG_THRESHOLD = 0.1f;
             constexpr size_t JPEG_HOT_OUTPUT_QUEUE_SIZE = 2;
-            constexpr size_t JPEG_HOT_DECODER_POOL_SIZE = 2;
             const float non_jpeg_ratio = dataset ? dataset->get_non_jpeg_ratio() : 0.0f;
             if (non_jpeg_ratio <= NON_JPEG_THRESHOLD) {
                 if (config.output_queue_size > JPEG_HOT_OUTPUT_QUEUE_SIZE) {
@@ -3151,6 +3152,15 @@ namespace lfs::training {
 
     Trainer::~Trainer() {
         shutdown();
+    }
+
+    void Trainer::prewarm_image_decoders() {
+        if (image_decoder_warmup_.valid() || !scene_ ||
+            non_jpeg_ratio(scene_->getActiveCameras()) > NON_JPEG_THRESHOLD)
+            return;
+        image_decoder_warmup_ = std::async(std::launch::async, [] {
+            return std::make_unique<lfs::io::ImageDecoderWarmup>(JPEG_HOT_DECODER_POOL_SIZE);
+        });
     }
 
     std::shared_ptr<lfs::io::PipelinedImageLoader> Trainer::getActiveImageLoader() const {
@@ -8400,7 +8410,6 @@ namespace lfs::training {
             pipelined_config.use_16bit_color = params_.dataset.loading_params.use_16bit_color;
 
             // Non-JPEG images (PNG, WebP) need CPU decoding - use more threads until cache warms
-            constexpr float NON_JPEG_THRESHOLD = 0.1f;
             constexpr size_t MIN_COLD_THREADS = 4;
             constexpr size_t COLD_PREFETCH_COUNT = 16;
             const float non_jpeg_ratio = train_dataset_->get_non_jpeg_ratio();
@@ -8615,6 +8624,7 @@ namespace lfs::training {
             auto active_image_loader_guard = makeScopeGuard([this]() {
                 clearActiveImageLoader();
             });
+            image_decoder_warmup_ = {};
             updateGTLoadConfigSnapshot();
             setActiveImageLoader(train_dataloader->get_loader_shared());
             strategy_->set_image_loader(train_dataloader->get_loader());
