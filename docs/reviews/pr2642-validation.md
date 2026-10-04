@@ -1,6 +1,9 @@
 # Native macOS viewer integration validation
 
-Runtime source: `d9bd2a680ea92169ac1c2fe0ef9c3b6ae99b81c3`.
+Historical integrated runtime source: `d9bd2a680ea92169ac1c2fe0ef9c3b6ae99b81c3`.
+The sections below retain their original source attribution. Current primary-PR
+results after scope cleanup are in the final section; historical passing counts
+do not imply the full validation suite passes after restoring upstream kernels/locks.
 These measurements cover an M4 Pro with 24 GiB RAM, macOS 27.2 beta,
 Xcode 27.2 beta 2, SDK 26.5 and a macOS 26.0 deployment target.
 They do not substitute for the reported M5 Max reproduction or other platforms.
@@ -155,3 +158,31 @@ wait alone, but does not identify its cause or rule out code regressions.
 No production fix is claimed from the profiling run, and it does not replace
 the unfavorable 25-case measurements. Driver, competing GPU load and GPU
 frequencies are not independently controlled.
+
+## Primary PR after scope cleanup
+
+The primary branch removes the four out-of-scope areas requested in re-review: training dispatch/kernel resizes, the MoltenVK buffer-creation lock, the retained screen-session correction and unrelated Python fixture rework. Only those 25 files change in the four removal commits; viewer and snapshot sources are unchanged. Separate refs preserve the proposals. The deployment CI assertion additionally requires exactly macOS 26.0, verified on the app and eight first-party dylibs.
+
+Current runtime `a4c7bf552`: Release application/default targets and excluded visualizer/drag-drop targets build successfully. CTest **259/259**; ordinary portable Metal **496 passed, 117 skipped, 5 disabled**; viewer/shared/profile with API and shader validation **19/19**; Vulkan snapshot/queue/step with validation **22/22**. Neutrality, error census, I/O discipline, locales and whitespace pass. App and eight first-party dylibs declare macOS **26.0** in their load commands. CI now checks that exact deployment baseline.
+
+The full portable suite with API/shader validation aborts, so it is not reported as passing. With a canonical temporary directory, Python has **3200 passed, 28 failed, 211 subtests passed, one skipped, 67 deselected**. Skipped/disabled cases are exclusions, not successes; CUDA and Python GPU/slow/integration selections are outside these counts.
+
+The two validation aborts also reproduce on a separately built, pristine `dev` (`dee7d8925`) with the same Xcode/SDK/driver: `TensorVulkanReduce.ReadbacksStayOrderedBehindTheirProducersAcrossThreads` aborts on a nil MoltenVK resource in **3/3 fresh processes on each revision**; `Backends/PortableLosses.PhotometricPathsMatchReference/Metal` exceeds the shader-validation threadgroup limit (**36,448 > 32,768 bytes**) on both revisions. The removed lock/kernel changes had addressed these local failures; their fixes are preserved for separate review rather than retained in the viewer diff.
+
+The same 28 Python failures reproduce using pristine `dev` Python source/tests with the same compiled bindings and environment. This is a Python-only control, not a complete native `dev` Python build. They concern legacy file-credential expectations in bug-report/gallery/portal fixtures. The first Python attempts additionally have 13 `/var` versus `/private/var` temporary-path failures; using canonical `TMPDIR` removes those without modifying the restored fixtures or hiding Keychain. No failing test is converted to a skip.
+
+Garden 5M, four views, fresh app profile, default MoltenVK, no memory/argument-buffer/validation overrides for timing. The project copy and executable are on the internal SSD; the original project and dataset inputs are read-only. The power log confirms uninterrupted full wake from **13:08:57 to 13:12:42 on 2026-10-04**.
+
+| Active save | Pre 100-step mean, ms | Post 100-step mean, ms | Change | Existing <=10% gate |
+|---|---:|---:|---:|---|
+| native / 1 | 139.811 | 142.665 | +2.041% | PASS |
+| native / 2 | 141.780 | 140.555 | -0.864% | PASS |
+| FSR quality / 3 | 128.365 | 129.294 | +0.724% | PASS |
+
+Three saves during active training pass snapshot consistency and real RSS gates. Generation 8 reopens and its restored optimizer advances 21 steps with 5M Gaussians and finite loss. Fifty paused FSR Quality captures plus a one-view probe, target retirement/recreation, and ten captures during training complete without fallback. Representative images are inspected; the app closes normally and the original SHA-256 is unchanged. Sampled loss is not a cross-run quality comparison.
+
+Pause samples are **147.710, 254.332 and 193.359 ms**, against the unchanged calibrated formula yielding **33.605 ms** in this run. Initial sync is **67.305, 74.749 and 75.278 ms**; serialization/issue is **78.914, 178.338 and 116.971 ms**. Pause/cold gates remain **FAIL**. Total-save times on this internal project copy are not a controlled code A/B or a completed storage comparison.
+
+Three complete repetitions of all **25 original PR configurations**, 100 warmup pairs and 40 samples/backend/configuration/repetition (**120 aggregated samples**), with matched scenes/cameras/modes/storage and all **75 image comparisons passing unchanged numerical gates**. Power logs confirm full wake **13:13:17–13:16:04**; profiling and validation are off and other builds/training/GPU tests have ended.
+
+9 Metal medians improve relative to the historical PR table; 16 increase, with a maximum **+2.10%**. Worst aggregate p95 increase is **+6.34%** (User PLY Depth). The large earlier Raccoon front SH0 spike is not reproduced in these three current series; its earlier GPU-stage slowdown remains unexplained. These historical/current measurements do not isolate a code effect or establish zero regression. Every raw sample and unfavorable row is retained.
