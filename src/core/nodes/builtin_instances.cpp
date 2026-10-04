@@ -68,7 +68,7 @@ namespace lfs::nodes::builtin {
             auto attributes = std::move(splats.attributes);
             result.splats = std::move(splats);
             auto data = splat_data_from_geometry(result);
-            core::transform(*data, transforms.index_select(0, anchor));
+            core::transform(*data, transforms, anchor);
             result = geometry_from_splat_data(*data);
             result.splats->attributes = std::move(attributes);
             context.set_output("Geometry", std::move(result));

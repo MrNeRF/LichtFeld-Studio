@@ -118,6 +118,26 @@ namespace {
         EXPECT_EQ(host<float>(batched), std::vector<float>(6, 0.f));
     }
 
+    // Fails if a batch beyond one launch's z dimension (65535 on CUDA and typical Vulkan devices) is rejected or
+    // its tail batches are computed with the wrong operands.
+    TEST_P(TensorBackendSemantics, BatchedMatmulHandlesBatchesBeyondOneLaunch) {
+        constexpr size_t batch = 70001, m = 3, k = 3, n = 2;
+        std::vector<float> a(batch * m * k), b(batch * k * n);
+        for (size_t i = 0; i < a.size(); ++i)
+            a[i] = static_cast<float>(i % 13) - 6.0f;
+        for (size_t i = 0; i < b.size(); ++i)
+            b[i] = static_cast<float>(i % 7) * 0.5f;
+        std::vector<float> want(batch * m * n, 0.0f);
+        for (size_t p = 0; p < batch; ++p)
+            for (size_t r = 0; r < m; ++r)
+                for (size_t c = 0; c < n; ++c)
+                    for (size_t j = 0; j < k; ++j)
+                        want[(p * m + r) * n + c] += a[(p * m + r) * k + j] * b[(p * k + j) * n + c];
+        const Tensor product = make<float>(DataType::Float32, {batch, m, k}, a).bmm(make<float>(DataType::Float32, {batch, k, n}, b));
+        EXPECT_EQ(product.shape(), TensorShape({batch, m, n}));
+        expect_floats(host<float>(product), want);
+    }
+
     TEST_P(TensorBackendSemantics, FloatPowFollowsC) {
         const Tensor base = make<float>(DataType::Float32, {7}, {-2.f, -3.f, 0.f, -kInf, 0.f, kNan, -8.f});
         const Tensor exponent = make<float>(DataType::Float32, {7}, {3.f, -1.f, 0.f, 2.5f, -1.f, 0.f, 1.f / 3.f});

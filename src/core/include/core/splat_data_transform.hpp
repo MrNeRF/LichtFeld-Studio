@@ -28,6 +28,9 @@ namespace lfs::core {
     // Per-splat row-major Float32 [N,4,4] TRS transforms. Shares the affine
     // covariance factorization and SH basis/least-squares convention above.
     LFS_CORE_API SplatData& transform(SplatData& splat_data, const Tensor& transform_matrices);
+    // Row i uses transform_matrices[matrix_index[i]]: Float32 [M,4,4] and Int32 [N]. SH rotations are fitted
+    // once per matrix, so many rows sharing a matrix cost little more than the copy.
+    LFS_CORE_API SplatData& transform(SplatData& splat_data, const Tensor& transform_matrices, const Tensor& matrix_index);
 
     /**
      * @brief transform() for attributes held with canonical SH (sh0 [N,3] or [N,1,3], shN [N,K,3])

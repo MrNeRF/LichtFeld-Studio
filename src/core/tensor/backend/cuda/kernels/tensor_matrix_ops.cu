@@ -452,20 +452,25 @@ namespace lfs::core::tensor_ops {
         constexpr int T = 16;
         dim3 block(T, T);
         const size_t max_rows_per_launch = MAX_GRID_Y_DIM * static_cast<size_t>(T);
-        for (size_t row_offset = 0; row_offset < m; row_offset += max_rows_per_launch) {
-            const size_t rows_this_launch = std::min(max_rows_per_launch, m - row_offset);
-            dim3 grid((n + T - 1) / T, (rows_this_launch + T - 1) / T, batch);
-            sgemm_batched_kernel<T><<<grid, block, 0, stream>>>(
-                a + row_offset * k,
-                b,
-                c + row_offset * n,
-                rows_this_launch,
-                n,
-                k,
-                m * k,
-                k * n,
-                m * n);
-            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.sgemm_batched");
+        // The batch rides on grid z, which is limited to 65535.
+        constexpr size_t max_batch_per_launch = 65535;
+        for (size_t batch_offset = 0; batch_offset < batch; batch_offset += max_batch_per_launch) {
+            const size_t batch_this_launch = std::min(max_batch_per_launch, batch - batch_offset);
+            for (size_t row_offset = 0; row_offset < m; row_offset += max_rows_per_launch) {
+                const size_t rows_this_launch = std::min(max_rows_per_launch, m - row_offset);
+                dim3 grid((n + T - 1) / T, (rows_this_launch + T - 1) / T, batch_this_launch);
+                sgemm_batched_kernel<T><<<grid, block, 0, stream>>>(
+                    a + batch_offset * m * k + row_offset * k,
+                    b + batch_offset * k * n,
+                    c + batch_offset * m * n + row_offset * n,
+                    rows_this_launch,
+                    n,
+                    k,
+                    m * k,
+                    k * n,
+                    m * n);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.sgemm_batched");
+            }
         }
     }
 

@@ -454,73 +454,99 @@ namespace lfs::core {
 
     SplatData& transform(SplatData& data, const Tensor& matrices) {
         const size_t count = data.means().size(0);
-        LFS_ASSERT_MSG(matrices.ndim() == 3 && matrices.size(0) == count && matrices.size(1) == 4 && matrices.size(2) == 4 &&
+        const auto index = (Tensor::ones({count}, data.means().device(), DataType::Int32).cumsum(0) - 1).to(DataType::Int32);
+        return transform(data, matrices, index);
+    }
+
+    SplatData& transform(SplatData& data, const Tensor& matrices, const Tensor& matrix_index) {
+        const size_t count = data.means().size(0);
+        LFS_ASSERT_MSG(matrices.ndim() == 3 && matrices.size(1) == 4 && matrices.size(2) == 4 &&
                            matrices.dtype() == DataType::Float32 && matrices.device() == data.means().device(),
-                       std::format("Per-splat transforms require Float32 [N,4,4] (shape={}, dtype={}, device={}, count={}, data_device={})",
-                                   matrices.shape().str(), int(matrices.dtype()), int(matrices.device()), count, int(data.means().device())));
+                       std::format("Splat transforms require Float32 [M,4,4] (shape={}, dtype={}, device={}, data_device={})",
+                                   matrices.shape().str(), int(matrices.dtype()), int(matrices.device()), int(data.means().device())));
+        LFS_ASSERT_MSG(matrix_index.ndim() == 1 && matrix_index.numel() == count && matrix_index.dtype() == DataType::Int32 &&
+                           matrix_index.device() == data.means().device(),
+                       std::format("Splat transform indices require Int32 [N] (shape={}, dtype={}, count={})",
+                                   matrix_index.shape().str(), int(matrix_index.dtype()), count));
         if (!count)
             return data;
         const auto device = data.means().device();
-        auto means = Tensor::empty({count, 3}, device), scales = Tensor::empty({count, 3}, device), rotations = Tensor::empty({count, 4}, device);
-        auto sh = data.shN_canonical().to(device);
-        auto result_sh = Tensor::empty(sh.shape(), device);
+        const size_t matrix_count = matrices.size(0);
+        const auto linear = matrices.slice(1, 0, 3).slice(2, 0, 3).contiguous();
+        const auto translation = matrices.slice(1, 0, 3).slice(2, 3, 4).squeeze(2).contiguous();
         const int degree = data.get_max_sh_degree();
         LFS_ASSERT_MSG(degree <= 3, std::format("Per-splat SH transforms support degrees 0..3 (degree={})", degree));
-        const auto sample_dirs = fibonacci_sphere_dirs(SH_FIT_SAMPLE_COUNT);
-        std::vector<float> directions;
-        for (const auto& d : sample_dirs)
-            directions.insert(directions.end(), {float(d.x), float(d.y), float(d.z)});
-        const auto samples = Tensor::from_vector(directions, {size_t(SH_FIT_SAMPLE_COUNT), 3}, device);
-        std::vector<Tensor> projectors;
-        for (int band = 1; band <= degree; ++band) {
-            const int k = 2 * band + 1;
-            std::vector<double> gram(k * k, 0), rhs(k * SH_FIT_SAMPLE_COUNT, 0);
-            for (int s = 0; s < SH_FIT_SAMPLE_COUNT; ++s) {
-                const auto basis = eval_sh_band_basis(band, sample_dirs[s]);
-                for (int i = 0; i < k; ++i) {
-                    rhs[i * SH_FIT_SAMPLE_COUNT + s] = basis[i];
-                    for (int j = 0; j < k; ++j)
-                        gram[i * k + j] += basis[i] * basis[j];
+        // SH rotations depend only on the matrix: fit them once per matrix, not once per splat.
+        std::vector<Tensor> band_rotations;
+        Tensor valid_rotation;
+        if (degree) {
+            const auto sample_dirs = fibonacci_sphere_dirs(SH_FIT_SAMPLE_COUNT);
+            std::vector<float> directions;
+            for (const auto& d : sample_dirs)
+                directions.insert(directions.end(), {float(d.x), float(d.y), float(d.z)});
+            const auto samples = Tensor::from_vector(directions, {size_t(SH_FIT_SAMPLE_COUNT), 3}, device);
+            std::vector<Tensor> projectors;
+            for (int band = 1; band <= degree; ++band) {
+                const int k = 2 * band + 1;
+                std::vector<double> gram(k * k, 0), rhs(k * SH_FIT_SAMPLE_COUNT, 0);
+                for (int s = 0; s < SH_FIT_SAMPLE_COUNT; ++s) {
+                    const auto basis = eval_sh_band_basis(band, sample_dirs[s]);
+                    for (int i = 0; i < k; ++i) {
+                        rhs[i * SH_FIT_SAMPLE_COUNT + s] = basis[i];
+                        for (int j = 0; j < k; ++j)
+                            gram[i * k + j] += basis[i] * basis[j];
+                    }
                 }
+                LFS_ASSERT_MSG(solve_linear_system(gram, rhs, k, SH_FIT_SAMPLE_COUNT), std::format("SH projector solve failed (band={}, samples={})", band, SH_FIT_SAMPLE_COUNT));
+                projectors.push_back(Tensor::from_vector(std::vector<float>(rhs.begin(), rhs.end()), {size_t(k), size_t(SH_FIT_SAMPLE_COUNT)}, device));
+                band_rotations.push_back(Tensor::empty({matrix_count, size_t(k), size_t(k)}, device));
             }
-            LFS_ASSERT_MSG(solve_linear_system(gram, rhs, k, SH_FIT_SAMPLE_COUNT), std::format("SH projector solve failed (band={}, samples={})", band, SH_FIT_SAMPLE_COUNT));
-            projectors.push_back(Tensor::from_vector(std::vector<float>(rhs.begin(), rhs.end()), {size_t(k), size_t(SH_FIT_SAMPLE_COUNT)}, device));
-        }
-        // Chunk scratch is independent of the number of generated instances.
-        for (size_t begin = 0; begin < count; begin += 4096) {
-            const size_t end = std::min(count, begin + 4096), n = end - begin;
-            const auto matrix = matrices.slice(0, begin, end);
-            const auto linear = matrix.slice(1, 0, 3).slice(2, 0, 3).contiguous();
-            const auto translation = matrix.slice(1, 0, 3).slice(2, 3, 4).squeeze(2);
-            means.slice(0, begin, end).copy_from(linear.bmm(data.means().slice(0, begin, end).unsqueeze(2)).squeeze(2) + translation);
-            auto out_s = scales.slice(0, begin, end), out_q = rotations.slice(0, begin, end);
-            affine_splat_geometry(linear.reshape({int(n), 9}), data.scaling_raw().slice(0, begin, end), data.rotation_raw().slice(0, begin, end), out_s, out_q);
-            if (!degree)
-                continue;
             const auto norm = (linear * linear).sum(1, true).sqrt();
             const auto rotation = linear / norm.maximum(1e-8f);
-            const auto valid_rotation = norm.min(2).gt(1e-8f).unsqueeze(2);
-            const auto pulled = samples.matmul(rotation);
-            const auto x = pulled.slice(2, 0, 1).squeeze(2), y = pulled.slice(2, 1, 2).squeeze(2), z = pulled.slice(2, 2, 3).squeeze(2);
-            const auto xx = x * x, yy = y * y, zz = z * z;
+            valid_rotation = norm.min(2).gt(1e-8f).unsqueeze(2);
+            // Chunk scratch is independent of the number of matrices.
+            for (size_t begin = 0; begin < matrix_count; begin += 4096) {
+                const size_t end = std::min(matrix_count, begin + 4096);
+                const auto pulled = samples.matmul(rotation.slice(0, begin, end));
+                const auto x = pulled.slice(2, 0, 1).squeeze(2), y = pulled.slice(2, 1, 2).squeeze(2), z = pulled.slice(2, 2, 3).squeeze(2);
+                const auto xx = x * x, yy = y * y, zz = z * z;
+                for (int band = 1; band <= degree; ++band) {
+                    std::vector<Tensor> basis;
+                    if (band == 1)
+                        basis = {y * float(-SH_C1), z * float(SH_C1), x * float(-SH_C1)};
+                    if (band == 2)
+                        basis = {x * y * float(SH_C2_0), y * z * float(-SH_C2_0), (zz * 2 - xx - yy) * float(SH_C2_2), x * z * float(-SH_C2_0), (xx - yy) * float(SH_C2_3)};
+                    if (band == 3)
+                        basis = {y * (yy - xx * 3) * float(SH_C3_0), x * y * z * float(SH_C3_1), y * (xx + yy - zz * 4) * float(SH_C3_2), z * (zz * 2 - xx * 3 - yy * 3) * float(SH_C3_3), x * (xx + yy - zz * 4) * float(SH_C3_2), z * (xx - yy) * float(SH_C3_4), x * (yy * 3 - xx) * float(SH_C3_0)};
+                    band_rotations[band - 1].slice(0, begin, end).copy_from(projectors[band - 1].matmul(Tensor::stack(basis, 2)));
+                }
+            }
+        }
+        auto means = Tensor::empty({count, 3}, device), scales = Tensor::empty({count, 3}, device), rotations = Tensor::empty({count, 4}, device);
+        auto sh = degree ? data.shN_canonical().to(device) : Tensor{};
+        auto result_sh = degree ? Tensor::empty(sh.shape(), device) : Tensor{};
+        // Rows gather their matrix; chunks bound the gathered [rows,k,k] SH rotations.
+        for (size_t begin = 0; begin < count; begin += size_t{1} << 20) {
+            const size_t end = std::min(count, begin + (size_t{1} << 20)), n = end - begin;
+            const auto index = matrix_index.slice(0, begin, end);
+            const auto row_linear = linear.index_select(0, index);
+            means.slice(0, begin, end).copy_from(row_linear.bmm(data.means().slice(0, begin, end).unsqueeze(2)).squeeze(2) + translation.index_select(0, index));
+            auto out_s = scales.slice(0, begin, end), out_q = rotations.slice(0, begin, end);
+            affine_splat_geometry(row_linear.reshape({int(n), 9}), data.scaling_raw().slice(0, begin, end), data.rotation_raw().slice(0, begin, end), out_s, out_q);
+            if (!degree)
+                continue;
+            const auto row_valid = valid_rotation.index_select(0, index);
             for (int band = 1; band <= degree; ++band) {
-                std::vector<Tensor> basis;
-                if (band == 1)
-                    basis = {y * float(-SH_C1), z * float(SH_C1), x * float(-SH_C1)};
-                if (band == 2)
-                    basis = {x * y * float(SH_C2_0), y * z * float(-SH_C2_0), (zz * 2 - xx - yy) * float(SH_C2_2), x * z * float(-SH_C2_0), (xx - yy) * float(SH_C2_3)};
-                if (band == 3)
-                    basis = {y * (yy - xx * 3) * float(SH_C3_0), x * y * z * float(SH_C3_1), y * (xx + yy - zz * 4) * float(SH_C3_2), z * (zz * 2 - xx * 3 - yy * 3) * float(SH_C3_3), x * (xx + yy - zz * 4) * float(SH_C3_2), z * (xx - yy) * float(SH_C3_4), x * (yy * 3 - xx) * float(SH_C3_0)};
                 const int offset = sh_band_offset_in_rest(band), k = 2 * band + 1;
-                const auto coefficients = projectors[band - 1].matmul(Tensor::stack(basis, 2));
                 const auto original = sh.slice(0, begin, end).slice(1, offset, offset + k);
-                result_sh.slice(0, begin, end).slice(1, offset, offset + k).copy_from(Tensor::where(valid_rotation, coefficients.bmm(original), original));
+                result_sh.slice(0, begin, end).slice(1, offset, offset + k).copy_from(Tensor::where(row_valid, band_rotations[band - 1].index_select(0, index).bmm(original), original));
             }
         }
         data.means_raw() = std::move(means);
         data.scaling_raw() = std::move(scales);
         data.rotation_raw() = std::move(rotations);
-        data.shN_set_from_canonical(result_sh, count);
+        if (degree)
+            data.shN_set_from_canonical(result_sh, count);
         return data;
     }
 
