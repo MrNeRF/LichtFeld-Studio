@@ -104,8 +104,8 @@ TEST_F(PanelRegistryDefaultClosedTest,
     EXPECT_TRUE(PanelRegistry::instance().is_panel_enabled("test.default_open"));
 }
 
-// Fails if a panel labelled with a localization key keeps the text of the language it was registered in, which
-// left hidden tabs in the previous language, or if a literal label is rewritten by a language switch.
+// Fails if a panel labelled with a localization key keeps the text of the language it was registered in (which
+// left hidden tabs in the previous language) or ignores a runtime override, or if a literal label is rewritten.
 TEST_F(PanelRegistryDefaultClosedTest, KeyLabelsFollowTheLanguage) {
     using namespace lfs::vis::gui;
     auto& locale = lfs::event::LocalizationManager::getInstance();
@@ -123,5 +123,12 @@ TEST_F(PanelRegistryDefaultClosedTest, KeyLabelsFollowTheLanguage) {
     PanelRegistry::instance().refresh_localized_labels();
     EXPECT_EQ(label("test.keyed"), translated);
     EXPECT_EQ(label("test.literal"), "Training notes");
+
+    locale.setOverride("window.training", "Preview");
+    PanelRegistry::instance().refresh_localized_labels();
+    EXPECT_EQ(label("test.keyed"), "Preview");
+    locale.clearOverride("window.training");
+    PanelRegistry::instance().refresh_localized_labels();
+    EXPECT_EQ(label("test.keyed"), translated);
     EXPECT_TRUE(locale.setLanguage("en"));
 }
