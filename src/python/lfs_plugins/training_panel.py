@@ -187,7 +187,7 @@ BG_COLOR_TEXT_KEYS = tuple(key for key, _index in BG_COLOR_CHANNELS) + (
 
 class TrainingPanel(Panel):
     id = "lfs.training"
-    label = "Training"
+    label = "window.training"
     space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 20
     template = "rmlui/training.rml"
@@ -239,7 +239,6 @@ class TrainingPanel(Panel):
         self._psnr_tick_max = ""
         self._psnr_tick_mid = ""
         self._psnr_tick_min = ""
-        self._last_panel_label = ""
         self._last_language_generation = -1
         self._reactive_binding = PanelStateBinding()
         self._deferred_update_pending = False
@@ -316,18 +315,10 @@ class TrainingPanel(Panel):
         self._handle = model.get_handle()
         for binding in self._pv_bindings:
             binding.attach_handle(self._handle)
-        self._sync_panel_label()
 
         params = lf.optimization_params()
         if params and params.has_params() and params.enable_eval:
             self._sync_eval_steps_with_save_steps(params)
-
-    def _sync_panel_label(self):
-        label = tr("window.training")
-        if not label or label == self._last_panel_label:
-            return
-        if lf.ui.set_panel_label(self.id, label):
-            self._last_panel_label = label
 
     def _bind_labels(self, model):
         model.bind_func(
@@ -1281,7 +1272,6 @@ class TrainingPanel(Panel):
 
     def on_mount(self, doc):
         self._doc = doc
-        self._sync_panel_label()
         self._popup_el = doc.get_element_by_id("color-picker-popup")
         if self._popup_el:
             self._popup_el.add_event_listener("click", self._on_popup_click)
@@ -1435,7 +1425,6 @@ class TrainingPanel(Panel):
     def on_update(self, doc):
         if not self._handle:
             return False
-        self._sync_panel_label()
         self._sync_auto_scale_markers()
 
         dirty = self._flush_pv_publish()

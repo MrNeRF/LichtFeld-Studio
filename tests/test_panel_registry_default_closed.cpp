@@ -2,10 +2,13 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/event_bridge/localization_manager.hpp"
+
 #include <gtest/gtest.h>
 
 #include <visualizer/gui/panel_registry.hpp>
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
@@ -40,10 +43,11 @@ namespace {
         static void registerPanel(std::string id,
                                   lfs::vis::gui::PanelSpace space,
                                   uint32_t options = 0,
-                                  bool enabled = true) {
+                                  bool enabled = true,
+                                  std::string label = {}) {
             lfs::vis::gui::PanelInfo info;
             info.id = std::move(id);
-            info.label = info.id;
+            info.label = label.empty() ? info.id : std::move(label);
             info.space = space;
             info.options = options;
             info.enabled = enabled;
@@ -98,4 +102,26 @@ TEST_F(PanelRegistryDefaultClosedTest,
     ASSERT_TRUE(after_reset.has_value());
     EXPECT_TRUE(after_reset->enabled);
     EXPECT_TRUE(PanelRegistry::instance().is_panel_enabled("test.default_open"));
+}
+
+// Fails if a panel labelled with a localization key keeps the text of the language it was registered in, which
+// left hidden tabs in the previous language, or if a literal label is rewritten by a language switch.
+TEST_F(PanelRegistryDefaultClosedTest, KeyLabelsFollowTheLanguage) {
+    using namespace lfs::vis::gui;
+    auto& locale = lfs::event::LocalizationManager::getInstance();
+    ASSERT_TRUE(locale.initialize(
+        (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+    ASSERT_TRUE(locale.setLanguage("en"));
+    registerPanel("test.keyed", PanelSpace::MainPanelTab, 0, true, "window.training");
+    registerPanel("test.literal", PanelSpace::MainPanelTab, 0, true, "Training notes");
+    const auto label = [](const char* id) { return PanelRegistry::instance().get_panel(id)->label; };
+    EXPECT_EQ(label("test.keyed"), std::string(locale.get("window.training")));
+
+    ASSERT_TRUE(locale.setLanguage("zh"));
+    const std::string translated = locale.get("window.training");
+    ASSERT_NE(translated, "Training");
+    PanelRegistry::instance().refresh_localized_labels();
+    EXPECT_EQ(label("test.keyed"), translated);
+    EXPECT_EQ(label("test.literal"), "Training notes");
+    EXPECT_TRUE(locale.setLanguage("en"));
 }

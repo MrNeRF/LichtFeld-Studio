@@ -124,6 +124,8 @@ namespace lfs::vis::gui {
     namespace {
         std::mutex g_preferences_section_mutex;
         std::string g_preferences_section_request;
+        // Focus by id: the tab label is translated.
+        constexpr const char* TRAINING_PANEL_ID = "lfs.training";
     } // namespace
 
     void openPreferencesPanel(std::string section) {
@@ -6099,6 +6101,7 @@ namespace lfs::vis::gui {
             sdl_input.window_event || hasPointerActivity(sdl_input) || hasKeyboardActivity(sdl_input);
 
         auto& reg = PanelRegistry::instance();
+        reg.refresh_localized_labels();
         const bool has_side_panel_plugins = reg.has_panels(PanelSpace::SidePanel);
         const bool has_floating_panels = reg.has_panels(PanelSpace::Floating);
         const bool has_status_bar_panels = reg.has_panels(PanelSpace::StatusBar);
@@ -8069,7 +8072,7 @@ namespace lfs::vis::gui {
         });
 
         ui::FocusTrainingPanel::when([this](const auto&) {
-            focus_panel_name_ = "Training";
+            focus_panel_name_ = TRAINING_PANEL_ID;
             lfs::python::request_redraw();
         });
 
@@ -8252,7 +8255,7 @@ namespace lfs::vis::gui {
 
         state::DatasetLoadCompleted::when([this](const auto& e) {
             if (e.success) {
-                focus_panel_name_ = "Training";
+                focus_panel_name_ = TRAINING_PANEL_ID;
             }
         });
 
@@ -8296,7 +8299,7 @@ namespace lfs::vis::gui {
         });
 
         internal::TrainerReady::when([this](const auto&) {
-            focus_panel_name_ = "Training";
+            focus_panel_name_ = TRAINING_PANEL_ID;
             lfs::python::request_redraw();
         });
     }
