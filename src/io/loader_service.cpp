@@ -107,9 +107,14 @@ namespace lfs::io {
             }
 
             // Tensors already in renderer storage, such as attributes republished unchanged, stay as they are.
+            // Q16 codes and bounds move as a pair so they keep one storage generation.
+            const bool q16_pair_ready = !model.shN_value_quantized() ||
+                                        (splat_tensor_renderer_ready(model.shN_raw()) &&
+                                         splat_tensor_renderer_ready(model.shN_value_bounds()));
             const auto copy_to_allocator =
-                [&](const lfs::core::Tensor& source, const std::string_view name) -> lfs::core::Tensor {
-                if (source.is_valid() && source.numel() > 0 && source.is_contiguous() && splat_tensor_renderer_ready(source))
+                [&](const lfs::core::Tensor& source, const std::string_view name, const bool keep_ready = true) -> lfs::core::Tensor {
+                if (keep_ready && source.is_valid() && source.numel() > 0 && source.is_contiguous() &&
+                    splat_tensor_renderer_ready(source))
                     return source;
                 lfs::core::Tensor source_contiguous = source.is_contiguous() ? source : source.contiguous();
                 const auto& shape = source_contiguous.shape();
@@ -137,12 +142,12 @@ namespace lfs::io {
                     // rest buffer just to throw it away.
                     shN = shN_src;
                 } else {
-                    shN = copy_to_allocator(shN_src, "SplatData.shN");
+                    shN = copy_to_allocator(shN_src, "SplatData.shN", q16_pair_ready);
                 }
             }
             if (shN_q16) {
                 shN_bounds = copy_to_allocator(
-                    model.shN_value_bounds(), "SplatData.shN_value_bounds");
+                    model.shN_value_bounds(), "SplatData.shN_value_bounds", q16_pair_ready);
             }
             lfs::core::SplatData migrated(max_sh,
                                           copy_to_allocator(model.means_raw(), "SplatData.means"),
