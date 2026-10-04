@@ -815,8 +815,11 @@ TEST_F(PanelLayoutRenderDemandTest, FloatingToolbarStaysOutsideTheDockResizeBand
 }
 
 TEST(ScenePanelLogDemandTest, BackgroundLogsWakeOnlyTheActiveLogTab) {
-    lfs::vis::gui::NativeScenePanel panel(nullptr);
     auto& logger = lfs::core::Logger::get();
+    // The CPU-only visualizer test binary runs gtest's own main, which leaves the logger uninitialized.
+    if (!logger.is_ready())
+        logger.init(lfs::core::LogLevel::Info);
+    lfs::vis::gui::NativeScenePanel panel(nullptr);
     const auto previous_level = logger.level();
     logger.set_level(lfs::core::LogLevel::Info);
     panel.setProjectActiveTab("logging");
