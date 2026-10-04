@@ -174,6 +174,8 @@ namespace lfs::nodes::builtin {
                     size_t n;
                     if constexpr (std::is_same_v<Component, SplatsComponent>)
                         n = c->means.shape()[0];
+                    else if constexpr (std::is_same_v<Component, MeshComponent>)
+                        n = static_cast<size_t>(c->mesh->vertex_count());
                     else
                         n = c->positions.shape()[0];
                     auto dimensions = shape.dims();
@@ -210,13 +212,16 @@ namespace lfs::nodes::builtin {
         std::vector<const SplatsComponent*> splats;
         std::vector<const PointsComponent*> points;
         std::vector<std::shared_ptr<const core::MeshData>> meshes;
+        std::vector<const MeshComponent*> mesh_components;
         for (auto& g : values) {
             if (g.splats)
                 splats.push_back(&*g.splats);
             if (g.points)
                 points.push_back(&*g.points);
-            if (g.mesh && g.mesh->mesh)
+            if (g.mesh && g.mesh->mesh) {
                 meshes.push_back(g.mesh->mesh);
+                mesh_components.push_back(&*g.mesh);
+            }
         }
         if (!splats.empty()) {
             int degree = 0;
@@ -318,10 +323,11 @@ namespace lfs::nodes::builtin {
             mesh->tangents = join_vertex_data(&core::MeshData::tangents, 4, 0);
             mesh->texcoords = join_vertex_data(&core::MeshData::texcoords, 2, 0);
             mesh->colors = join_vertex_data(&core::MeshData::colors, 4, 1);
+            const auto device = mesh->vertices.device();
             MeshComponent component{std::move(mesh)};
-            for (const auto& value : values)
-                if (value.mesh && value.mesh->mesh)
-                    component.textures.insert(component.textures.end(), value.mesh->textures.begin(), value.mesh->textures.end());
+            for (const auto* value : mesh_components)
+                component.textures.insert(component.textures.end(), value->textures.begin(), value->textures.end());
+            component.attributes = join_attributes(mesh_components, device);
             result.mesh = std::move(component);
         }
         return result;

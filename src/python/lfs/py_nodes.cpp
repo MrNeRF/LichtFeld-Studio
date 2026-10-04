@@ -232,7 +232,10 @@ namespace lfs::python {
                 result->materials = source.materials;
                 result->submeshes = source.submeshes;
                 result->texture_images = source.texture_images;
-                return PyMesh{MeshComponent{std::move(result)}};
+                // Like the splat and point replacements, keep the component's textures and attributes.
+                PyMesh replaced = *this;
+                replaced.value.mesh = std::move(result);
+                return replaced;
             }
         };
 

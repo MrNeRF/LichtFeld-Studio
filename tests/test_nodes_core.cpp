@@ -743,6 +743,44 @@ namespace {
         EXPECT_EQ(result.geometry.mesh->mesh->submeshes[1].start_index, 3u);
     }
 
+    TEST_P(NodesCore, MeshAttributesSurviveDeviceTransferAndJoin) {
+        auto mesh_a = std::make_shared<lfs::core::MeshData>(tensor({0, 0, 0, 1, 0, 0, 0, 1, 0}, {3, 3}).cpu(),
+                                                            ints({0, 1, 2}, {1, 3}).cpu());
+        auto mesh_b = std::make_shared<lfs::core::MeshData>(tensor({0, 0, 1, 1, 0, 1, 0, 1, 1}, {3, 3}).cpu(),
+                                                            ints({0, 1, 2}, {1, 3}).cpu());
+        Geometry a, b;
+        a.mesh = MeshComponent{mesh_a};
+        a.mesh->attributes["a"] = Tensor::full({3}, 7.0f, Device::CPU);
+        b.mesh = MeshComponent{mesh_b};
+        NodeTypeInfo info;
+        info.id = "test.mesh_b";
+        info.outputs.push_back({"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)});
+        info.evaluate = [b](NodeContext& context) { context.set_output("Geometry", b); };
+        registry_.unregister_type(info.id);
+        ASSERT_TRUE(registry_.register_type(std::move(info)));
+        NodeTree tree(registry_);
+        tree.add_node("test.mesh_b", "B");
+        tree.add_node("lfs.join_geometry", "Join");
+        Node& read = tree.add_node("lfs.named_attribute", "Read");
+        read.input_values["Name"] = std::string("a");
+        Node& copy = tree.add_node("lfs.store_named_attribute", "Copy");
+        copy.input_values["Name"] = std::string("copy");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Join", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"B", "Geometry", "Join", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Join", "Geometry", "Copy", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Read", "Attribute", "Copy", "Value"}));
+        ASSERT_TRUE(tree.add_link({"Copy", "Geometry", tree.output_node().name, "Geometry"}));
+        const auto result = evaluate(tree, {a, {}, 1, device()});
+        registry_.unregister_type("test.mesh_b");
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
+        ASSERT_TRUE(result.geometry.mesh);
+        const auto& attributes = result.geometry.mesh->attributes;
+        ASSERT_TRUE(attributes.contains("a"));
+        EXPECT_EQ(attributes.at("a").device(), device());
+        EXPECT_EQ(host<float>(attributes.at("a")), (std::vector<float>{7, 7, 7, 0, 0, 0}));
+        EXPECT_EQ(host<float>(attributes.at("copy")), (std::vector<float>{7, 7, 7, 0, 0, 0}));
+    }
+
     TEST_P(NodesCore, DeleteSeparateAndStoredSelectionCarryAttributes) {
         NodeTree tree(registry_);
         Node &stored = tree.add_node("lfs.stored_selection"),
