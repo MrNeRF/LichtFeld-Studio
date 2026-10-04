@@ -783,29 +783,17 @@ namespace lfs::python {
             }
 
             PyTensor field(const std::string& name, const PyGeometry& geometry) const {
-                FieldContext field_context;
-                if (geometry.value.splats) {
-                    field_context.domain = Domain::Splat;
-                    field_context.splats = &*geometry.value.splats;
-                } else if (geometry.value.points) {
-                    field_context.domain = Domain::Point;
-                    field_context.points = &*geometry.value.points;
-                } else if (geometry.value.mesh) {
-                    field_context.domain = Domain::Vertex;
-                    field_context.mesh = &*geometry.value.mesh;
-                } else {
+                const auto context = lfs::nodes::field_context(geometry.value);
+                if (!context)
                     throw nb::value_error("Geometry has no component for field evaluation");
-                }
-                // Python components are temporary copies, with no stable
-                // FieldContext identity. Sharing the evaluator's memo under
-                // identity 0 reuses fields from earlier, different geometry.
-                // Keep memoization within this field evaluation instead.
+                // Python components are temporary copies, so a memo shared with the evaluator would
+                // rarely hit; keep memoization within this field evaluation.
                 FieldMemo memo;
                 std::string type(FLOAT_SOCKET);
                 if (input_types)
                     if (const auto declared = input_types->find(name); declared != input_types->end())
                         type = declared->second;
-                return PyTensor(live().field(name, type).evaluate(field_context, memo));
+                return PyTensor(live().field(name, type).evaluate(*context, memo));
             }
 
             nb::object prop(const std::string& name) const {

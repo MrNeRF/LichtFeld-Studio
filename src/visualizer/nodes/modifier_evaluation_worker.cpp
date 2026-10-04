@@ -331,32 +331,6 @@ namespace lfs::vis {
             return core::gpu_backend_available(backend) ? std::optional{backend} : std::nullopt;
         }
 
-        std::optional<FieldContext> fieldContext(const Geometry& geometry) {
-            FieldContext context;
-            if (geometry.splats) {
-                context.domain = Domain::Splat;
-                context.splats = &*geometry.splats;
-                const auto& splats = *geometry.splats;
-                context.identity = static_cast<std::uint64_t>(splats.means.debug_id()) ^
-                                   (static_cast<std::uint64_t>(splats.sh0.debug_id()) << 8U) ^
-                                   (static_cast<std::uint64_t>(splats.scaling.debug_id()) << 16U) ^
-                                   (static_cast<std::uint64_t>(splats.opacity.debug_id()) << 24U) ^
-                                   (static_cast<std::uint64_t>(splats.shN.debug_id()) << 32U);
-            } else if (geometry.points) {
-                context.domain = Domain::Point;
-                context.points = &*geometry.points;
-                context.identity = static_cast<std::uint64_t>(geometry.points->positions.debug_id()) ^
-                                   (static_cast<std::uint64_t>(geometry.points->colors.debug_id()) << 32U);
-            } else if (geometry.mesh) {
-                context.domain = Domain::Vertex;
-                context.mesh = &*geometry.mesh;
-                context.identity = geometry.mesh->mesh ? geometry.mesh->mesh->id() : 0;
-            } else {
-                return std::nullopt;
-            }
-            return context;
-        }
-
         // Attribute nodes replace tensors but keep element order, so tensor identity would hide every
         // preview behind them. Equal counts alone prove nothing: a reordering join keeps the count.
         bool sameElements(const ModifierHostResult& result, const FieldContext& left, const FieldContext& right) {
@@ -492,7 +466,7 @@ namespace lfs::vis {
                 return geometry ? std::optional{PreviewProduct{.geometry = *geometry}} : std::nullopt;
             }
             Geometry context_geometry = evaluated.geometry;
-            const auto context = fieldContext(context_geometry);
+            const auto context = field_context(context_geometry);
             if (!context)
                 return std::nullopt;
             FieldMemo memo;
@@ -556,7 +530,7 @@ namespace lfs::vis {
                 }
                 if (!consumer || !consumer->geometry_input)
                     continue;
-                const auto context = fieldContext(*consumer->geometry_input);
+                const auto context = field_context(*consumer->geometry_input);
                 if (!context)
                     continue;
                 const auto cached = cache.nodes.find(source);

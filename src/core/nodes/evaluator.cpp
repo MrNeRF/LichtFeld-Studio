@@ -51,7 +51,7 @@ namespace lfs::nodes {
                         std::format("Input '{}' requires a single value, not a context-dependent field",
                                     declaration.identifier));
                 PointsComponent point{core::Tensor::zeros({1, 3}, core::Device::CPU), {}, {}};
-                FieldContext context{Domain::Point, nullptr, &point, nullptr, point.positions.debug_id()};
+                const auto context = field_context(point);
                 FieldMemo memo;
                 const auto evaluated =
                     field->evaluate(context, memo).to(core::DataType::Float32).reshape({-1});

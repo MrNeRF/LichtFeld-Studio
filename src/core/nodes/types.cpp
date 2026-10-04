@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -38,7 +39,65 @@ namespace lfs::nodes {
             throw std::runtime_error("Position field has no component for its domain");
         }
 
+        std::uint64_t mixed(std::uint64_t value) {
+            value += 0x9e3779b97f4a7c15ULL;
+            value = (value ^ (value >> 30U)) * 0xbf58476d1ce4e5b9ULL;
+            value = (value ^ (value >> 27U)) * 0x94d049bb133111ebULL;
+            return value ^ (value >> 31U);
+        }
+
+        struct IdentityHash {
+            std::uint64_t value;
+            IdentityHash& operator<<(const std::uint64_t part) {
+                value = mixed(value ^ mixed(part));
+                return *this;
+            }
+            IdentityHash& operator<<(const core::Tensor& tensor) {
+                return *this << static_cast<std::uint64_t>(tensor.debug_id());
+            }
+            // Order-independent, since attribute maps are unordered.
+            IdentityHash& operator<<(const AttributeMap& attributes) {
+                std::uint64_t sum = attributes.size();
+                for (const auto& [name, tensor] : attributes)
+                    sum += mixed(std::hash<std::string>{}(name) ^ mixed(tensor.debug_id()));
+                return *this << sum;
+            }
+        };
+
     } // namespace
+
+    FieldContext field_context(const SplatsComponent& component) {
+        IdentityHash identity{static_cast<std::uint64_t>(Domain::Splat)};
+        identity << component.means << component.sh0 << component.shN << component.scaling << component.rotation
+                 << component.opacity << static_cast<std::uint64_t>(component.sh_degree)
+                 << std::bit_cast<std::uint32_t>(component.scene_scale) << component.attributes;
+        return {Domain::Splat, &component, nullptr, nullptr, identity.value};
+    }
+
+    FieldContext field_context(const PointsComponent& component) {
+        IdentityHash identity{static_cast<std::uint64_t>(Domain::Point)};
+        identity << component.positions << component.colors << component.attributes;
+        return {Domain::Point, nullptr, &component, nullptr, identity.value};
+    }
+
+    FieldContext field_context(const MeshComponent& component) {
+        IdentityHash identity{static_cast<std::uint64_t>(Domain::Vertex)};
+        identity << (component.mesh ? component.mesh->id() : 0) << (component.mesh ? component.mesh->generation() : 0);
+        for (const auto& texture : component.textures)
+            identity << texture;
+        identity << component.attributes;
+        return {Domain::Vertex, nullptr, nullptr, &component, identity.value};
+    }
+
+    std::optional<FieldContext> field_context(const Geometry& geometry) {
+        if (geometry.splats)
+            return field_context(*geometry.splats);
+        if (geometry.points)
+            return field_context(*geometry.points);
+        if (geometry.mesh)
+            return field_context(*geometry.mesh);
+        return std::nullopt;
+    }
 
     std::size_t FieldContext::size() const {
         switch (domain) {

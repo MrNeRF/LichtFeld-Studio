@@ -113,23 +113,6 @@ namespace lfs::nodes::builtin {
         return {};
     }
 
-    FieldContext field_context(const SplatsComponent& component) {
-        return {Domain::Splat, &component, nullptr, nullptr,
-                static_cast<std::uint64_t>(component.means.debug_id()) ^ (component.sh0.debug_id() << 8U) ^
-                    (component.scaling.debug_id() << 16U) ^ (component.opacity.debug_id() << 24U) ^
-                    (component.shN.debug_id() << 32U)};
-    }
-
-    FieldContext field_context(const PointsComponent& component) {
-        return {Domain::Point, nullptr, &component, nullptr,
-                static_cast<std::uint64_t>(component.positions.debug_id()) ^
-                    (component.colors.debug_id() << 32U)};
-    }
-
-    FieldContext field_context(const MeshComponent& component) {
-        return {Domain::Vertex, nullptr, nullptr, &component, component.mesh ? component.mesh->id() : 0};
-    }
-
     core::Tensor selection(const NodeContext& context, std::string_view socket, const FieldContext& domain,
                            bool structural) {
         core::Tensor value = context.evaluate_field(socket, domain, FLOAT_SOCKET);

@@ -87,6 +87,14 @@ namespace lfs::nodes {
         [[nodiscard]] core::Device device() const;
     };
 
+    // The identity covers every tensor, attribute and scalar a field can read. Tensor handle ids are
+    // never reused, so equal identities mean equal contents for as long as a memo lives.
+    LFS_CORE_API FieldContext field_context(const SplatsComponent&);
+    LFS_CORE_API FieldContext field_context(const PointsComponent&);
+    LFS_CORE_API FieldContext field_context(const MeshComponent&);
+    // The first of splats, points and mesh.
+    LFS_CORE_API std::optional<FieldContext> field_context(const Geometry&);
+
     class Field;
 
     struct LFS_CORE_API FieldMemo {

@@ -1350,6 +1350,40 @@ namespace {
         EXPECT_EQ(consumer.selection->mask.cpu().to_vector_bool(), (std::vector<bool>{false, true, false}));
     }
 
+    TEST_P(NodesCore, SharedFieldsReadAttributesAsTheyAreAfterAnOverwrite) {
+        NodeTree tree(registry_);
+        // Node references do not survive later add_node calls; keep names.
+        const auto store = [&](const std::string& node_name, const std::string& name, const std::optional<float> value) {
+            Node& node = tree.add_node("lfs.store_named_attribute", node_name);
+            node.input_values["Name"] = name;
+            if (value)
+                node.input_values["Value"] = *value;
+            return node_name;
+        };
+        const auto first = store("First", "a", 1.0f);
+        const auto before = store("Before", "b", std::nullopt);
+        const auto overwrite = store("Overwrite", "a", 2.0f);
+        const auto after = store("After", "c", std::nullopt);
+        tree.add_node("lfs.named_attribute", "Read").input_values["Name"] = std::string("a");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", first, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({first, "Geometry", before, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({before, "Geometry", overwrite, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({overwrite, "Geometry", after, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({after, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Read", "Attribute", before, "Value"}));
+        ASSERT_TRUE(tree.add_link({"Read", "Attribute", after, "Value"}));
+        // Every copy of a mesh component shares its mesh, so a memo keyed on the mesh alone serves the
+        // first read of "a" to the second.
+        const auto mesh = torus(4, 3);
+        const auto result = evaluate(tree, {Geometry{std::nullopt, std::nullopt, MeshComponent{mesh}}, {}, 7, device()});
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
+        ASSERT_TRUE(result.geometry.mesh);
+        const auto& attributes = result.geometry.mesh->attributes;
+        const auto vertices = static_cast<size_t>(mesh->vertex_count());
+        EXPECT_EQ(host<float>(attributes.at("b")), std::vector<float>(vertices, 1.0f));
+        EXPECT_EQ(host<float>(attributes.at("c")), std::vector<float>(vertices, 2.0f));
+    }
+
     TEST_P(NodesCore, PaintSelectionSoftnessEndpointsAndInvert) {
         auto geometry = splats(0);
         geometry.splats->means = tensor({0, 0, 0, 0.75f, 0, 0, 1.1f, 0, 0}, {3, 3});
