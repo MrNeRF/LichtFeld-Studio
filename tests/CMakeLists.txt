@@ -68,6 +68,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_python_editor_input.cpp
         test_startup_overlay_geometry.cpp
         test_trackpad_navigation.cpp
+        test_training_manager_capacity.cpp
         test_vram_hud_geometry.cpp
     )
     if(NOT LFS_HAS_CUDA)

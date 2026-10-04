@@ -39,6 +39,7 @@ namespace lfs::core {
 }
 
 class TrainingSceneInitConcurrencyTest;
+class TrainingManagerCapacityTest;
 
 namespace lfs::vis {
 
@@ -255,6 +256,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
         friend class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class ::TrainingSceneInitConcurrencyTest;
+        friend class ::TrainingManagerCapacityTest;
 
         // Training initialization and execution thread functions
         void trainingInitializationThreadFunc(std::stop_token stop_token);
@@ -277,6 +279,9 @@ namespace lfs::vis {
         [[nodiscard]] lfs::Result<lfs::core::SplatTensorAllocator> createTrainingSplatTensorAllocator(
             const lfs::core::param::TrainingParameters& params,
             std::size_t min_capacity);
+        [[nodiscard]] static std::size_t initialSplatLiveEstimate(
+            const lfs::core::param::TrainingParameters& params,
+            std::size_t min_capacity) noexcept;
 
         // Install densify-time grow/rebind hook on the training model.
         void installExportableCapacityEnsure(lfs::core::SplatData& model);

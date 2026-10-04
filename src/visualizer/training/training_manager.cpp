@@ -322,6 +322,18 @@ namespace lfs::vis {
         LOG_DEBUG("TrainerManager created");
     }
 
+    std::size_t TrainerManager::initialSplatLiveEstimate(
+        const lfs::core::param::TrainingParameters& params,
+        const std::size_t min_capacity) noexcept {
+        std::size_t live_estimate = min_capacity;
+        if (params.optimization.random) {
+            live_estimate = std::max(
+                live_estimate,
+                static_cast<std::size_t>(std::max(params.optimization.init_num_pts, 1)));
+        }
+        return std::max(live_estimate, std::size_t{1});
+    }
+
     lfs::Result<lfs::core::SplatTensorAllocator>
     TrainerManager::createTrainingSplatTensorAllocator(
         const lfs::core::param::TrainingParameters& params,
@@ -339,14 +351,7 @@ namespace lfs::vis {
 
         // size the exportable block to live N (+ 1.5× headroom), not
         // max_cap. Virtual-reserve max_cap so densify can grow in place.
-        std::size_t live_estimate = min_capacity;
-        if (live_estimate == 0 && params.optimization.random) {
-            live_estimate = static_cast<std::size_t>(
-                std::max(params.optimization.init_num_pts, 1));
-        }
-        if (live_estimate == 0) {
-            live_estimate = 1;
-        }
+        const std::size_t live_estimate = initialSplatLiveEstimate(params, min_capacity);
 
         const std::size_t exportable_capacity =
             lfs::core::SplatExportableStorage::growthCapacity(live_estimate, configured_capacity);
