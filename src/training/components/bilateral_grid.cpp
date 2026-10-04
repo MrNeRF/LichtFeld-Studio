@@ -273,7 +273,8 @@ namespace lfs::training {
         last_step_.assign(n, 0);
 
         rebuild_identity_mean();
-        rebuild_projection_state();
+        // Every cell starts at the identity, so the dataset mean is the identity itself.
+        set_projection_state(identity_mean_);
 
         LOG_DEBUG("BilateralGrid: {}x{}x{} for {} images, C={}, lr={:.2e}",
                   grid_W, grid_H, grid_L, num_images, channels_, config.lr);
@@ -522,7 +523,10 @@ namespace lfs::training {
     void BilateralGrid::rebuild_projection_state() {
         flush_resident();
         const int dataset_axes[] = {0, 2, 3, 4};
-        const auto mean = grids_.mean(std::span<const int>(dataset_axes), false).cuda();
+        set_projection_state(grids_.mean(std::span<const int>(dataset_axes), false).cuda());
+    }
+
+    void BilateralGrid::set_projection_state(const lfs::core::Tensor& mean) {
         const float spatial = static_cast<float>(grid_guidance_ * grid_height_ * grid_width_);
         // Sum over every image's cells: N * L * H * W, not the per-image spatial count.
         const float n_spatial = spatial * static_cast<float>(num_images_);

@@ -115,6 +115,9 @@ namespace lfs::training {
         constexpr float CAMERA_LOSS_EMA_ALPHA = 0.2f;
         constexpr int CAMERA_LOSS_PUBLISH_INTERVAL = 16;
         constexpr int INVISIBLE_ITERATION_LIMIT = 1000;
+        // Datasets with at most this share of non-JPEG images take the JPEG hot path.
+        constexpr float NON_JPEG_THRESHOLD = 0.1f;
+        constexpr size_t JPEG_HOT_DECODER_POOL_SIZE = 2;
 
         [[nodiscard]] std::optional<std::string_view> first_non_finite_parameter(
             const lfs::core::SplatData& model) {
@@ -910,9 +913,7 @@ namespace lfs::training {
                 return config;
             }
 
-            constexpr float NON_JPEG_THRESHOLD = 0.1f;
             constexpr size_t JPEG_HOT_OUTPUT_QUEUE_SIZE = 2;
-            constexpr size_t JPEG_HOT_DECODER_POOL_SIZE = 2;
             const float non_jpeg_ratio = dataset ? dataset->get_non_jpeg_ratio() : 0.0f;
             if (non_jpeg_ratio <= NON_JPEG_THRESHOLD) {
                 if (config.output_queue_size > JPEG_HOT_OUTPUT_QUEUE_SIZE) {
@@ -1259,15 +1260,19 @@ namespace lfs::training {
 
             const bool resume = params_.resume_checkpoint.has_value() || params_.resume_project.has_value();
             if (params_.optimization.ppisp_exposure_from_exif && !resume) {
-                std::vector<std::pair<int, float>> uid_ev;
+                std::vector<int> uids;
+                std::vector<std::filesystem::path> paths;
                 for (const auto& cam : train_dataset_->get_cameras()) {
-                    if (!cam || !ppisp_->is_known_frame(cam->uid())) {
-                        continue;
+                    if (cam && ppisp_->is_known_frame(cam->uid())) {
+                        uids.push_back(cam->uid());
+                        paths.push_back(cam->image_path());
                     }
-                    const auto ev = lfs::core::exif_exposure_ev_for_training_image(
-                        cam->image_path(), params_.dataset.data_path);
-                    if (ev) {
-                        uid_ev.emplace_back(cam->uid(), static_cast<float>(*ev));
+                }
+                const auto evs = lfs::core::exif_exposure_ev_for_training_images(paths, params_.dataset.data_path);
+                std::vector<std::pair<int, float>> uid_ev;
+                for (size_t i = 0; i < evs.size(); ++i) {
+                    if (evs[i]) {
+                        uid_ev.emplace_back(uids[i], static_cast<float>(*evs[i]));
                     }
                 }
                 const int n = static_cast<int>(uid_ev.size());
@@ -3147,6 +3152,15 @@ namespace lfs::training {
 
     Trainer::~Trainer() {
         shutdown();
+    }
+
+    void Trainer::prewarm_image_decoders() {
+        if (image_decoder_warmup_.valid() || !scene_ ||
+            non_jpeg_ratio(scene_->getActiveCameras()) > NON_JPEG_THRESHOLD)
+            return;
+        image_decoder_warmup_ = std::async(std::launch::async, [] {
+            return std::make_unique<lfs::io::ImageDecoderWarmup>(JPEG_HOT_DECODER_POOL_SIZE);
+        });
     }
 
     std::shared_ptr<lfs::io::PipelinedImageLoader> Trainer::getActiveImageLoader() const {
@@ -8396,7 +8410,6 @@ namespace lfs::training {
             pipelined_config.use_16bit_color = params_.dataset.loading_params.use_16bit_color;
 
             // Non-JPEG images (PNG, WebP) need CPU decoding - use more threads until cache warms
-            constexpr float NON_JPEG_THRESHOLD = 0.1f;
             constexpr size_t MIN_COLD_THREADS = 4;
             constexpr size_t COLD_PREFETCH_COUNT = 16;
             const float non_jpeg_ratio = train_dataset_->get_non_jpeg_ratio();
@@ -8596,6 +8609,9 @@ namespace lfs::training {
 
             pipelined_config = tunePipelinedLoaderConfig(
                 pipelined_config, train_dataset_, aux_pipeline_config);
+            // Decoders warmed for another pool size would only hold VRAM beside the loader's own.
+            if (pipelined_config.decoder_pool_size != JPEG_HOT_DECODER_POOL_SIZE)
+                image_decoder_warmup_ = {};
 
             // Keep the camera stream stable across checkpoint resume.  The
             // loader is intentionally rebuilt after the checkpoint is loaded;
@@ -8611,6 +8627,7 @@ namespace lfs::training {
             auto active_image_loader_guard = makeScopeGuard([this]() {
                 clearActiveImageLoader();
             });
+            image_decoder_warmup_ = {};
             updateGTLoadConfigSnapshot();
             setActiveImageLoader(train_dataloader->get_loader_shared());
             strategy_->set_image_loader(train_dataloader->get_loader());

@@ -123,6 +123,7 @@ namespace lfs::training {
 
         void rebuild_identity_mean();
         void rebuild_projection_state();
+        void set_projection_state(const lfs::core::Tensor& mean);
         [[nodiscard]] size_t slice_elements() const;
         void allocate_resident_slots();
         // Device slot holding image_idx, uploading its grid and Adam moments on a miss.

@@ -791,6 +791,7 @@ namespace lfs::vis {
             if (!state_machine_.transitionTo(TrainingState::Ready)) {
                 LOG_WARN("Failed to transition to Ready");
             }
+            trainer_->prewarm_image_decoders();
 
             internal::TrainerReady{}.emit();
         }
@@ -826,6 +827,7 @@ namespace lfs::vis {
                 if (scene_ && trainer_) {
                     scene_->setLiveModelMutex(&trainer_->getRenderMutex());
                 }
+                trainer_->prewarm_image_decoders();
             }
             internal::TrainerReady{}.emit();
 

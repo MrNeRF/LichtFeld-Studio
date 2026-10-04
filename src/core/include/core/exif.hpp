@@ -7,6 +7,8 @@
 
 #include <filesystem>
 #include <optional>
+#include <span>
+#include <vector>
 
 namespace lfs::core {
 
@@ -19,5 +21,10 @@ namespace lfs::core {
     [[nodiscard]] LFS_CORE_API std::optional<double>
     exif_exposure_ev_for_training_image(const std::filesystem::path& image_path,
                                         const std::filesystem::path& dataset_root);
+
+    /// exif_exposure_ev_for_training_image for many images, read in parallel; results follow the input order.
+    [[nodiscard]] LFS_CORE_API std::vector<std::optional<double>>
+    exif_exposure_ev_for_training_images(std::span<const std::filesystem::path> image_paths,
+                                         const std::filesystem::path& dataset_root);
 
 } // namespace lfs::core

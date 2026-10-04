@@ -696,6 +696,8 @@ namespace lfs::io {
             bool active_ = false;
         };
 
+        std::atomic<size_t> live_loaders{0};
+
     } // anonymous namespace
 
     struct NvCodecImageLoader::Impl {
@@ -1082,7 +1084,7 @@ namespace lfs::io {
             options.max_num_cpu_threads,
             nullptr,
             options.device_id,
-            0,
+            options.create_eagerly ? 1 : 0,
             0,
             0,
             nullptr};
@@ -1108,7 +1110,8 @@ namespace lfs::io {
         }
 
         const auto init_vram_after = cuda_usage_snapshot_now();
-        if (init_vram_before.total_valid && init_vram_after.total_valid &&
+        // An eager build runs beside other GPU work, so its device-wide delta is not the loader's own.
+        if (!options.create_eagerly && init_vram_before.total_valid && init_vram_after.total_valid &&
             init_vram_after.total_used > init_vram_before.total_used) {
             const auto baseline_bytes =
                 NvCodecVramAccount::delta_bytes(init_vram_before, init_vram_after);
@@ -1116,9 +1119,16 @@ namespace lfs::io {
             LOG_INFO("[NvCodecImageLoader] Accounted nvImageCodec init VRAM: {:.1f} MiB",
                      static_cast<double>(baseline_bytes.total()) / (1024.0 * 1024.0));
         }
+        live_loaders.fetch_add(1, std::memory_order_relaxed);
     }
 
-    NvCodecImageLoader::~NvCodecImageLoader() = default;
+    NvCodecImageLoader::~NvCodecImageLoader() {
+        live_loaders.fetch_sub(1, std::memory_order_relaxed);
+    }
+
+    size_t NvCodecImageLoader::live_count() {
+        return live_loaders.load(std::memory_order_relaxed);
+    }
 
     bool NvCodecImageLoader::is_available() {
         static std::once_flag once;

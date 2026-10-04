@@ -518,6 +518,8 @@ set(TEST_FILES
     test_gpu_teardown_order.cpp
     test_logger.cpp
     test_exif.cpp
+    test_nanoflann_build.cpp
+    test_initial_scales.cpp
     test_system_info.cpp
     test_parameter_manager.cpp
     test_mcp_protocol.cpp

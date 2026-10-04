@@ -433,15 +433,9 @@ namespace lfs::core::image_codecs {
             }
             cinfo.out_color_space = target.channels == 1 ? JCS_GRAYSCALE : JCS_RGB;
             if (target.max_width > 0) {
-                const auto max_dimension = std::max(cinfo.image_width, cinfo.image_height);
-                for (const unsigned int denominator : {1u, 2u, 4u, 8u}) {
-                    if ((max_dimension + denominator - 1) / denominator <=
-                        static_cast<unsigned int>(target.max_width)) {
-                        cinfo.scale_num = 1;
-                        cinfo.scale_denom = denominator;
-                        break;
-                    }
-                }
+                cinfo.scale_num = 1;
+                cinfo.scale_denom = jpeg_scale_denominator(std::max(cinfo.image_width, cinfo.image_height),
+                                                           static_cast<unsigned>(target.max_width));
             }
             jpeg_start_decompress(&cinfo);
             if (cinfo.output_components != target.channels) {
