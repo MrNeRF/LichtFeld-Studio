@@ -7,6 +7,21 @@ from pathlib import Path
 
 import pytest
 
+# "gpu" is the default backend; "cuda" and "vulkan" name one, and must be the backend the result is on.
+DEVICES = ["cpu"] + [pytest.param(device, marks=pytest.mark.gpu) for device in ("gpu", "cuda", "vulkan")]
+
+
+def _evaluate_on(evaluate_tree, tree, geometry, device, **kwargs):
+    try:
+        result = evaluate_tree(tree, geometry, device=device, **kwargs)
+    except RuntimeError as error:
+        if "is not available" in str(error):
+            pytest.skip(str(error))
+        raise
+    if device in ("cuda", "vulkan") and result.splats is not None:
+        assert result.splats.means.backend == device
+    return result
+
 
 def _geometry(lf, numpy):
     tensor = lambda value: lf.Tensor.from_numpy(numpy.ascontiguousarray(value))
@@ -124,7 +139,7 @@ def test_builtin_help_contract(lf):
                 assert 0 < len(message) <= limit, (node["id"], declaration["identifier"])
 
 
-@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
+@pytest.mark.parametrize("device", DEVICES)
 def test_animated_inputs_rename_clipboard_group_json_and_clock(lf, numpy, device):
     import uuid
 
@@ -140,7 +155,7 @@ def test_animated_inputs_rename_clipboard_group_json_and_clock(lf, numpy, device
         geometry = _geometry(lf, numpy)
 
         def check(graph):
-            result = nodes.evaluate_tree(graph, geometry, time=0.5, device=device)
+            result = _evaluate_on(nodes.evaluate_tree, graph, geometry, device, time=0.5)
             numpy.testing.assert_allclose(result.splats.means.tolist(), [[0.125, 0.25, 0.375]] * 2)
 
         check(tree)
@@ -164,10 +179,10 @@ def test_animated_inputs_rename_clipboard_group_json_and_clock(lf, numpy, device
         assert f"nodes/{copied.uuid}/Moving subject/Offset" in paths
         subject = next(node for node in copied.nodes if node.name == "Moving subject")
         assert subject.keyframe_remove("Offset", time=2)
-        numpy.testing.assert_array_equal(nodes.evaluate_tree(copied, geometry, time=2, device=device).splats.means.tolist(), numpy.zeros((2, 3)))
+        numpy.testing.assert_array_equal(_evaluate_on(nodes.evaluate_tree, copied, geometry, device, time=2).splats.means.tolist(), numpy.zeros((2, 3)))
         clock = copied.add_node("lfs.scene_time", "Clock")
         copied.link(clock, "Seconds", subject, "Offset")
-        numpy.testing.assert_array_equal(nodes.evaluate_tree(copied, geometry, time=1.5, device=device).splats.means.tolist(), numpy.full((2, 3), 1.5))
+        numpy.testing.assert_array_equal(_evaluate_on(nodes.evaluate_tree, copied, geometry, device, time=1.5).splats.means.tolist(), numpy.full((2, 3), 1.5))
         with pytest.raises(ValueError, match="unlinked"):
             subject.keyframe_insert("Offset", time=1, value=[1, 1, 1])
     finally:
@@ -265,7 +280,7 @@ def test_posterize_selection_blends_rgb_and_fades_higher_sh(lf, numpy, weight):
     numpy.testing.assert_allclose(result.splats.shN.tolist(), 1.0 - weight, atol=1e-6)
 
 
-@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
+@pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("keep", [0, 1])
 def test_posterize_field_after_geometry_changes(lf, numpy, device, keep):
     tree = lf.nodes.new_tree("Posterize changed domain")
@@ -289,13 +304,13 @@ def test_posterize_field_after_geometry_changes(lf, numpy, device, keep):
     tree.link(delete, "Geometry", last, "Geometry")
     tree.link(colour, "R", last, "Selection")
     tree.link(last, "Geometry", tree.output_node, "Geometry")
-    result = lf.nodes.evaluate_tree(tree, _geometry(lf, numpy), device=device)
+    result = _evaluate_on(lf.nodes.evaluate_tree, tree, _geometry(lf, numpy), device)
     assert result.splats.means.shape == (keep, 3)
     assert result.splats.sh0.shape == (keep, 3)
     assert result.splats.shN.shape == (keep, 1, 3)
 
 
-@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
+@pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("levels", [0, 2, 32, 999])
 def test_posterize_degree_zero_and_level_limits(lf, numpy, device, levels):
     tree = lf.nodes.new_tree("Posterize zero SH degree")
@@ -305,7 +320,7 @@ def test_posterize_degree_zero_and_level_limits(lf, numpy, device, levels):
     geometry = _geometry(lf, numpy)
     geometry = geometry.replace(splats=geometry.splats.replace(
         shN=lf.Tensor.zeros((2, 0, 3), device="cpu")))
-    result = lf.nodes.evaluate_tree(tree, geometry, device=device)
+    result = _evaluate_on(lf.nodes.evaluate_tree, tree, geometry, device)
     assert result.splats.shN.shape == (2, 0, 3)
     original = numpy.asarray(geometry.splats.sh0.tolist())
     steps = min(32, max(2, levels)) - 1
@@ -313,7 +328,7 @@ def test_posterize_degree_zero_and_level_limits(lf, numpy, device, levels):
     numpy.testing.assert_allclose(result.splats.sh0.tolist(), expected, atol=1e-6)
 
 
-@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
+@pytest.mark.parametrize("device", DEVICES)
 def test_posterize_field_after_same_size_colour_edit(lf, numpy, device):
     tree = lf.nodes.new_tree("Posterize changed colours")
     colour = tree.add_node("lfs.colour_attribute")
@@ -335,11 +350,11 @@ def test_posterize_field_after_same_size_colour_edit(lf, numpy, device):
         rgb = numpy.clip(0.5 + 0.28209479177387814 * expected, 0, 1)
         quantized = (numpy.round(rgb * steps) / steps - 0.5) / 0.28209479177387814
         expected = expected + (quantized - expected) * rgb[:, :1]
-    result = lf.nodes.evaluate_tree(tree, geometry, device=device)
+    result = _evaluate_on(lf.nodes.evaluate_tree, tree, geometry, device)
     numpy.testing.assert_allclose(result.splats.sh0.tolist(), expected, atol=1e-6)
 
 
-@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
+@pytest.mark.parametrize("device", DEVICES)
 def test_posterize_nan_selection_is_unselected(lf, numpy, device):
     tree = lf.nodes.new_tree("Posterize invalid selection")
     power = tree.add_node("lfs.math")
@@ -350,16 +365,16 @@ def test_posterize_nan_selection_is_unselected(lf, numpy, device):
     _insert_between(tree, posterize, "Geometry")
     tree.link(power, "Value", posterize, "Selection")
     geometry = _geometry(lf, numpy)
-    result = lf.nodes.evaluate_tree(tree, geometry, device=device)
+    result = _evaluate_on(lf.nodes.evaluate_tree, tree, geometry, device)
     numpy.testing.assert_array_equal(result.splats.sh0.tolist(), geometry.splats.sh0.tolist())
     numpy.testing.assert_array_equal(result.splats.shN.tolist(), geometry.splats.shN.tolist())
 
 
-@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
+@pytest.mark.parametrize("device", DEVICES)
 def test_posterize_without_splats(lf, device):
     tree = lf.nodes.new_tree("Posterize without splats")
     _insert_between(tree, tree.add_node("lfs.posterize"), "Geometry")
-    result = lf.nodes.evaluate_tree(tree, lf.nodes.Geometry(), device=device)
+    result = _evaluate_on(lf.nodes.evaluate_tree, tree, lf.nodes.Geometry(), device)
     assert result.splats is None
 
 
@@ -517,3 +532,34 @@ def test_python_node_cannot_reach_the_viewer_from_execute(lf, numpy):
 def test_scene_modifier_api_skips_without_scene(lf):
     with pytest.raises(RuntimeError, match="scene manager is unavailable"):
         lf.nodes.evaluate("missing")
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_python_node_runs_on_the_requested_backend(lf, numpy, device):
+    class Brighten(lf.nodes.Node):
+        id = "tests.brighten_on_backend"
+        label = "Brighten"
+        category = "Test"
+        inputs = [
+            lf.nodes.Input("Geometry", "geometry"),
+            lf.nodes.Input("Amount", "float", 0.25, field=True),
+        ]
+        outputs = [lf.nodes.Output("Result", "geometry")]
+
+        def execute(self, ctx):
+            geometry = ctx.input("Geometry")
+            amount = ctx.field("Amount", geometry.splats)
+            splats = geometry.splats
+            return {"Result": geometry.replace(splats=splats.replace(sh0=splats.sh0 + amount.reshape([-1, 1])))}
+
+    lf.nodes.register_node(Brighten)
+    try:
+        tree = lf.nodes.new_tree("Python node on a backend")
+        node = tree.add_node(Brighten.id, "Brighten")
+        _insert_between(tree, node)
+        geometry = _geometry(lf, numpy)
+        original = numpy.asarray(geometry.splats.sh0.tolist())
+        result = _evaluate_on(lf.nodes.evaluate_tree, tree, geometry, device)
+        numpy.testing.assert_allclose(result.splats.sh0.tolist(), original + 0.25, atol=1e-6)
+    finally:
+        lf.nodes.unregister_nodes_for_module(Brighten.__module__)

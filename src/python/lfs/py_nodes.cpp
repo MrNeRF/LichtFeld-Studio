@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "core/nodes/nodes.hpp"
 #include "core/path_utils.hpp"
+#include "core/tensor_backend.hpp"
 #include "py_tensor.hpp"
 #include "py_ui.hpp"
 #include "py_viewer_dispatch.hpp"
@@ -21,6 +22,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <algorithm>
+#include <format>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -1601,8 +1603,19 @@ namespace lfs::python {
                                     false);
         });
         module.def("evaluate_tree", [](const PyTree& tree, const PyGeometry& geometry, std::optional<float> time, std::optional<std::string> device) {
-            if (device && *device != "cpu" && *device != "gpu")
-                throw std::invalid_argument("Evaluation device must be cpu or gpu");
+            // "gpu" evaluates on the default backend; "cuda", "vulkan" and "metal" name one.
+            std::optional<core::GpuBackendScope> backend_scope;
+            if (device && *device != "cpu" && *device != "gpu") {
+                const auto backend = *device == "cuda"     ? std::optional{core::GpuBackend::CUDA}
+                                     : *device == "vulkan" ? std::optional{core::GpuBackend::Vulkan}
+                                     : *device == "metal"  ? std::optional{core::GpuBackend::Metal}
+                                                           : std::nullopt;
+                if (!backend)
+                    throw std::invalid_argument("Evaluation device must be cpu, gpu, cuda, vulkan or metal");
+                if (!core::gpu_backend_available(*backend))
+                    throw std::runtime_error(std::format("The {} backend is not available", *device));
+                backend_scope.emplace(*backend);
+            }
             auto graph = require_tree(tree);
             auto* manager = live_manager();
             const auto* controller = manager ? manager->sequencer() : &standalone().sequencer;
