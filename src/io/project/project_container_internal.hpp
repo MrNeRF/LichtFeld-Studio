@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #ifdef _WIN32
@@ -44,6 +45,11 @@ namespace lfs::io::project::detail {
     // Same cap read_chunk uses for a materialized decode of `row`.
     [[nodiscard]] std::uint64_t
     max_materialized_bytes_for(const ChunkInfo& row) noexcept;
+
+    // errno, or the Win32 error code on Windows.
+    [[nodiscard]] bool native_disk_full(std::int64_t error) noexcept;
+    // std::filesystem reports errno in the system or the generic category, depending on the library.
+    [[nodiscard]] bool disk_full(const std::error_code& error) noexcept;
 
     [[nodiscard]] lfs::Error project_error(
         lfs::ErrorCode code, std::string user_message, std::string detail,

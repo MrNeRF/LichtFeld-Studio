@@ -626,7 +626,8 @@ namespace {
     using lfs::vis::gui::verifyGalleryProjectCommit;
 
     std::filesystem::path portable_fixture(const std::string& kind) {
-        return std::filesystem::path(__FILE__).parent_path() / "data" / ("portable-" + kind + ".licht");
+        // __FILE__ is relative when compiler-cache builds map the source prefix.
+        return std::filesystem::path(PROJECT_ROOT_PATH) / "tests" / "data" / ("portable-" + kind + ".licht");
     }
 
     // Deliberately invalid bindings cannot pass ProjectDocument::save validation.

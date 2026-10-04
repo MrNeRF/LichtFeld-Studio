@@ -2534,6 +2534,9 @@ namespace lfs::vis {
                 timeout_source = source;
             }
         };
+        // A wake for posted work can be consumed while a frame is paced.
+        if (hasPendingWork())
+            consider_timeout(0.0, "viewer_work");
         if (continuous_animation) {
             const double elapsed = std::chrono::duration<double>(
                                        std::chrono::high_resolution_clock::now() - last_frame_time_)
@@ -2624,6 +2627,24 @@ namespace lfs::vis {
             window_manager_->pollEvents();
             return;
         }
+
+        // Frames no input asked for (GUI animation, Python redraws, training updates) would run far
+        // above the display rate when presenting does not block. Wakes without input start at most
+        // one display interval after the last presented frame started; requests stay queued for this
+        // frame, and work posted meanwhile is picked up by the next wait.
+        if (last_presented_frame_start_) {
+            const auto ready_at = *last_presented_frame_start_ +
+                                  std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                      std::chrono::duration<double>(displayFrameInterval()));
+            while (!window_manager_->frameInput().hasUserInput()) {
+                const double remaining =
+                    std::chrono::duration<double>(ready_at - std::chrono::steady_clock::now()).count();
+                if (remaining <= 0.0)
+                    break;
+                window_manager_->waitEvents(remaining);
+            }
+        }
+        const auto frame_started_at = std::chrono::steady_clock::now();
 
         auto now = std::chrono::high_resolution_clock::now();
         float delta_time = std::chrono::duration<float>(now - last_frame_time_).count();
@@ -2944,6 +2965,8 @@ namespace lfs::vis {
             LOG_TIMER("VisualizerImpl::render.gui_frame_total_with_swapchain_wait");
             window_manager_->updateWindowSize("pre_gui_render");
             presented_gui_frame = gui_manager_->render();
+            if (presented_gui_frame)
+                last_presented_frame_start_ = frame_started_at;
             window_manager_->refreshResizeCursor();
             // Count only successful presents, including GUI-only frames.
             if (presented_gui_frame && rendering_manager_) {

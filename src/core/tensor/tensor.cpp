@@ -894,7 +894,7 @@ namespace lfs::core {
                 // Rehoming changes where future writes occur. Preserve prior writes
                 // from the old home before changing allocator ownership metadata.
                 bridgeStreams(state_->stream, stream);
-                if (!has_external_storage()) {
+                if (!has_external_storage() && data_ != nullptr) {
                     CudaMemoryPool::instance().rehome_stream(data_owner_.get(), stream);
                 }
             }

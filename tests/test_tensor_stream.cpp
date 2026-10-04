@@ -9,10 +9,13 @@
 #include <gtest/gtest.h>
 #include <iostream>
 #include <numeric>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <vector>
 
+#include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -664,4 +667,25 @@ TEST_F(TensorStreamTest, EagerOpsOnStreamTensorWaitForItsProducer) {
         }
     }
     destroyStreamSafely(producer);
+}
+
+// Fails if moving an empty CUDA tensor to another stream asks the memory pool to rehome storage the pool never
+// allocated: the pool then logs a missed allocation.
+TEST_F(TensorStreamTest, EmptyTensorChangesStreamWithoutRehomingStorage) {
+    std::vector<std::string> warnings;
+    const auto token = Logger::get().add_log_handler(
+        [&warnings](const LogLevel level, const SourceSite&, const std::string_view message) {
+            if (level == LogLevel::Warn && message.find("rehome_stream missed") != std::string_view::npos)
+                warnings.emplace_back(message);
+        });
+    cudaStream_t stream;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    {
+        auto empty = Tensor::empty({0}, Device::CUDA, DataType::Int64);
+        empty.set_stream(stream);
+        EXPECT_EQ(empty.stream(), stream);
+    }
+    Logger::get().remove_log_handler(token);
+    destroyStreamSafely(stream);
+    EXPECT_TRUE(warnings.empty()) << warnings.front();
 }

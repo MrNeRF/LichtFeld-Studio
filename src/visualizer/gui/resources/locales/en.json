@@ -1300,6 +1300,8 @@
     "cropbox_loss_weight": "Scale pixel losses outside the active crop-box ROI",
     "environment_mode": "Background source: solid color or HDRI",
     "environment_map_path": "Choose an HDRI environment map",
+    "color_tonemapping": "Tone curve for the displayed splat colors (None = unchanged)",
+    "color_exposure": "Scales splat brightness before the tone curve; the splats themselves are not changed",
     "environment_exposure": "HDRI exposure in EV stops",
     "environment_rotation": "Rotate HDRI around the vertical axis",
     "voxel_size": "Voxel grid cell size for spatial queries",

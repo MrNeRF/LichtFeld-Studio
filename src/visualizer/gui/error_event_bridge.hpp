@@ -40,6 +40,9 @@ namespace lfs::vis::gui {
         inline constexpr const char* kProjectSettings = "project_settings";
     } // namespace error_op
 
+    // The disk-space dialog event for a failed training whose project save ran out of space.
+    LFS_VIS_API std::optional<core::events::state::DiskSpaceSaveFailed>
+    projectDiskSpaceFailure(const core::events::state::TrainingCompleted& e);
     LFS_VIS_API std::optional<lfs::ErrorNotification>
     translateTrainingCompleted(const core::events::state::TrainingCompleted& e);
     LFS_VIS_API std::optional<lfs::ErrorNotification>

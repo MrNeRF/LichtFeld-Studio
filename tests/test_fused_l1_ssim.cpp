@@ -821,11 +821,15 @@ TEST_F(FusedL1SSIMTest, ThinImagesMatchFiniteDifferenceForFusedAndDecoupled) {
     constexpr int C = 3;
     constexpr float ssim_weight = 0.35f;
     constexpr float epsilon = 1.0e-2f;
+    // The L1 term has a kink where a pixel equals its target. A finite difference across it disagrees with the
+    // analytic gradient, so every pixel stays 0.2 from its target, beyond any epsilon step, and the draw is seeded.
+    Tensor::manual_seed(2574);
     for (const auto& [H, W] : {std::pair{8, 40}, std::pair{40, 8}}) {
         const TensorShape dims{
             size_t{1}, static_cast<size_t>(C), static_cast<size_t>(H), static_cast<size_t>(W)};
-        auto raw = Tensor::rand(dims, Device::CUDA) * 0.7f + 0.15f;
-        auto target = Tensor::rand(dims, Device::CUDA) * 0.7f + 0.15f;
+        auto raw = Tensor::rand(dims, Device::CUDA) * 0.4f + 0.3f;
+        const auto side = Tensor::rand(dims, Device::CUDA).gt(0.5f).to(DataType::Float32) * 2.0f - 1.0f;
+        auto target = raw + side * 0.2f;
         auto direction = Tensor::randn(dims, Device::CUDA);
 
         FusedL1SSIMWorkspace fused_workspace;

@@ -394,6 +394,8 @@ TEST_F(TensorMultiStreamTest, PinnedFallbackUsesMatchingDeallocator) {
     auto& pinned = PinnedMemoryAllocator::instance();
     pinned.empty_cache();
     pinned.reset_stats();
+    // Other users of the process-wide allocator (image codecs) may hold live blocks.
+    const size_t live_before = pinned.get_stats().allocated_bytes;
     pinned.set_force_fallback_for_testing(true);
 
     constexpr size_t kBytes = 64 * 1024;
@@ -406,7 +408,7 @@ TEST_F(TensorMultiStreamTest, PinnedFallbackUsesMatchingDeallocator) {
     pinned.deallocate(ptr);
 
     const auto stats = pinned.get_stats();
-    EXPECT_EQ(stats.allocated_bytes, 0u);
+    EXPECT_EQ(stats.allocated_bytes, live_before);
     EXPECT_EQ(stats.cached_bytes, 0u);
     EXPECT_EQ(stats.malloc_fallback_allocs, 1u);
     EXPECT_EQ(stats.malloc_fallback_frees, 1u);
@@ -461,6 +463,8 @@ TEST_F(TensorMultiStreamTest, PinnedCacheDoesNotRetainBlockLargerThanBudget) {
     auto& pinned = PinnedMemoryAllocator::instance();
     pinned.empty_cache();
     pinned.reset_stats();
+    // Other users of the process-wide allocator (image codecs) may hold live blocks.
+    const size_t live_before = pinned.get_stats().allocated_bytes;
     pinned.set_cache_limit_for_testing(512 * 1024);
 
     void* ptr = pinned.allocate(1 * 1024 * 1024);
@@ -468,7 +472,7 @@ TEST_F(TensorMultiStreamTest, PinnedCacheDoesNotRetainBlockLargerThanBudget) {
     pinned.deallocate(ptr);
 
     const auto stats = pinned.get_stats();
-    EXPECT_EQ(stats.allocated_bytes, 0u);
+    EXPECT_EQ(stats.allocated_bytes, live_before);
     EXPECT_EQ(stats.cached_bytes, 0u);
     EXPECT_EQ(stats.evicted_blocks, 1u);
     EXPECT_EQ(stats.evicted_bytes, 1 * 1024 * 1024u);

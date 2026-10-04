@@ -8,6 +8,7 @@
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 #include "core/user_paths.hpp"
 #include "io/loader.hpp"
 #include "io/project_recovery.hpp"
@@ -4810,9 +4811,11 @@ namespace lfs::io::project {
                     original_path, temporary,
                     std::filesystem::copy_options::none, error)) {
                 remove_temporary();
+                const bool disk_full = detail::disk_full(error);
                 return fail<ProjectDocumentSaveReport>(
-                    lfs::ErrorCode::Unavailable,
-                    "The project could not be staged for Save As.",
+                    disk_full ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Unavailable,
+                    disk_full ? lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE
+                              : "The project could not be staged for Save As.",
                     std::format("copy_file failed: {}", error.message()),
                     "project.save_as.copy");
             }

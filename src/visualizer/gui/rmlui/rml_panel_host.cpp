@@ -344,7 +344,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlUI: failed to load {}", rml_path_);
             }
         } catch (const std::exception& e) {
-            LOG_ERROR("RmlUI: resource not found: {}", e.what());
+            LOG_ERROR("RmlUI: failed to load {}: {}", rml_path_, e.what());
         }
         return document_ != nullptr;
     }
