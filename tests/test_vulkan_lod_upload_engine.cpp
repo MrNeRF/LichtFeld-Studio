@@ -391,6 +391,7 @@ namespace {
         EXPECT_EQ(frames[17], 0);
     }
 
-    INSTANTIATE_TEST_SUITE_P(TensorBackends, LodUpload, testing::ValuesIn(kGpuBackends),
-                             [](const testing::TestParamInfo<GpuBackend>& p) { return p.param == GpuBackend::CUDA ? "CUDA" : "Vulkan"; });
+    INSTANTIATE_TEST_SUITE_P(TensorBackends, LodUpload, testing::ValuesIn(kCompiledGpuBackends),
+                             [](const testing::TestParamInfo<GpuBackend>& p) { return p.param == GpuBackend::CUDA ? "CUDA" : p.param == GpuBackend::Vulkan ? "Vulkan"
+                                                                                                                                                           : "Metal"; });
 } // namespace

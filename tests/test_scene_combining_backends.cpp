@@ -175,8 +175,9 @@ namespace {
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, SceneCombiningBackends,
-                             testing::ValuesIn(kGpuBackends),
+                             testing::ValuesIn(kCompiledGpuBackends),
                              [](const testing::TestParamInfo<GpuBackend>& info) {
-                                 return info.param == GpuBackend::CUDA ? "Cuda" : "Vulkan";
+                                 return info.param == GpuBackend::CUDA ? "Cuda" : info.param == GpuBackend::Vulkan ? "Vulkan"
+                                                                                                                   : "Metal";
                              });
 } // namespace
