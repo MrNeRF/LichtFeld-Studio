@@ -43,6 +43,16 @@ namespace lfs::core::image_codecs {
         int max_width = 0;
     };
 
+    /// libjpeg scale denominator for a decode that is resampled to max_width afterwards: the largest
+    /// reduction that keeps at least max_width pixels along the longer side.
+    [[nodiscard]] constexpr unsigned jpeg_scale_denominator(const unsigned max_dimension, const unsigned max_width) {
+        for (const unsigned denominator : {8u, 4u, 2u}) {
+            if ((max_dimension + denominator - 1) / denominator >= max_width)
+                return denominator;
+        }
+        return 1;
+    }
+
     bool probe(const std::filesystem::path& path, Probe& result, std::string& error);
     bool decode(const std::filesystem::path& path, Image& result, std::string& error);
     bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error);
