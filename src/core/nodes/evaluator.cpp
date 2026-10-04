@@ -236,6 +236,30 @@ namespace lfs::nodes {
             selection_ = ConsumedSelection{context.identity, mask};
     }
 
+    namespace {
+        // A graph and every graph its groups reference, so an edit anywhere below a group changes its key.
+        std::size_t group_graph_revision(const std::string& uuid, const TreeResolver& resolver) {
+            std::size_t revision = 0;
+            std::unordered_set<std::string> visited;
+            std::vector<std::string> pending{uuid};
+            while (!pending.empty()) {
+                auto current = std::move(pending.back());
+                pending.pop_back();
+                if (!visited.insert(current).second)
+                    continue;
+                const NodeTree* graph = resolver(current);
+                hash_combine(revision, std::hash<std::string>{}(graph ? graph->to_json().dump() : current));
+                if (!graph)
+                    continue;
+                for (const auto& node : graph->nodes)
+                    if (node.type_id == "lfs.group")
+                        if (const auto found = node.properties.find("tree"); found != node.properties.end() && found->is_string())
+                            pending.push_back(found->get<std::string>());
+            }
+            return revision;
+        }
+    } // namespace
+
     EvalResult evaluate(const NodeTree& tree, EvalInputs inputs, EvalHost* host, EvalCache* cache,
                         const EvalControl& control) {
         if (!inputs.requested_node.empty() && inputs.resolve_preview_context) {
@@ -347,8 +371,7 @@ namespace lfs::nodes {
             if (node.type_id == "lfs.group" && inputs.tree_resolver) {
                 const auto graph = node.properties.find("tree");
                 if (graph != node.properties.end() && graph->is_string())
-                    if (const auto* nested = inputs.tree_resolver(graph->get_ref<const std::string&>()))
-                        hash_combine(key, std::hash<std::string>{}(nested->to_json().dump()));
+                    hash_combine(key, group_graph_revision(graph->get_ref<const std::string&>(), inputs.tree_resolver));
             }
             hash_combine(key, std::hash<std::uint64_t>{}(inputs.geometry_generation));
             hash_combine(key, static_cast<size_t>(device));
@@ -505,7 +528,9 @@ namespace lfs::nodes {
                     nested_inputs.geometry = inputs.geometry;
                     nested_inputs.seconds = inputs.seconds;
                     nested_inputs.frames_per_second = inputs.frames_per_second;
-                    nested_inputs.geometry_generation = inputs.geometry_generation;
+                    // Interface geometry hashes only by type; the group's own key carries its upstream
+                    // revisions, so nested caches follow upstream edits.
+                    nested_inputs.geometry_generation = evaluation.key;
                     nested_inputs.device = inputs.device;
                     nested_inputs.tree_resolver = inputs.tree_resolver;
                     nested_inputs.group_stack = inputs.group_stack;

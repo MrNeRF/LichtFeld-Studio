@@ -3690,6 +3690,42 @@ namespace {
         EXPECT_TRUE(result.nodes.contains("Instance/Instance/" + inner.output_node().name));
     }
 
+    // Fails if a group's cached contents survive an edit upstream of the group or inside a group it contains:
+    // interface geometry hashed only by type, and a group key covered only its own graph.
+    TEST_P(NodesCore, GroupCachesFollowUpstreamAndNestedEdits) {
+        NodeTree inner(registry_, "Inner");
+        NodeTree middle(registry_, "Middle");
+        NodeTree outer(registry_, "Outer");
+        const TreeResolver resolver = [&](std::string_view uuid) -> const NodeTree* {
+            for (const auto* tree : {&inner, &middle, &outer})
+                if (tree->uuid == uuid)
+                    return tree;
+            return nullptr;
+        };
+        inner.add_node("lfs.transform_geometry", "Move").input_values["Translation"] = glm::vec3(0, 0, 0);
+        ASSERT_TRUE(inner.add_link({inner.input_node().name, "Geometry", "Move", "Geometry"}));
+        ASSERT_TRUE(inner.add_link({"Move", "Geometry", inner.output_node().name, "Geometry"}));
+        middle.add_node("lfs.group", "Inner").properties["tree"] = inner.uuid;
+        ASSERT_TRUE(middle.add_link({middle.input_node().name, "Geometry", "Inner", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(middle.add_link({"Inner", "Geometry", middle.output_node().name, "Geometry"}, nullptr, resolver));
+        outer.add_node("lfs.transform_geometry", "Shift").input_values["Translation"] = glm::vec3(1, 0, 0);
+        outer.add_node("lfs.group", "Middle").properties["tree"] = middle.uuid;
+        ASSERT_TRUE(outer.add_link({outer.input_node().name, "Geometry", "Shift", "Geometry"}));
+        ASSERT_TRUE(outer.add_link({"Shift", "Geometry", "Middle", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(outer.add_link({"Middle", "Geometry", outer.output_node().name, "Geometry"}, nullptr, resolver));
+        EvalCache cache;
+        const auto x = [&] {
+            const auto result = evaluate(outer, {.geometry = splats(), .device = device(), .tree_resolver = resolver}, nullptr, &cache);
+            EXPECT_TRUE(result.ok);
+            return host<float>(result.geometry.splats->means)[0];
+        };
+        EXPECT_FLOAT_EQ(x(), 1.0f);
+        outer.find_node("Shift")->input_values["Translation"] = glm::vec3(2, 0, 0);
+        EXPECT_FLOAT_EQ(x(), 2.0f);
+        inner.find_node("Move")->input_values["Translation"] = glm::vec3(3, 0, 0);
+        EXPECT_FLOAT_EQ(x(), 5.0f);
+    }
+
     TEST(NodesGraphEditing, ForcedJsonGroupCycleReportsNamedNodeError) {
         NodeTypeRegistry registry;
         register_builtin_nodes(registry);
