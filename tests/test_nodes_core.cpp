@@ -9,6 +9,7 @@
 #include "core/tensor_procedural.hpp"
 #include "core/tensor_random.hpp"
 #include "core/tensor_spatial.hpp"
+#include "io/formats/ply.hpp"
 #include "visualizer/nodes/camera_nodes.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -17,6 +18,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -1771,6 +1773,28 @@ namespace {
                                                  Tensor::empty({0}, device(), lfs::core::DataType::Int32), 1.0f)
                       .numel(),
                   0u);
+
+        std::vector<float> local_radii(count);
+        for (size_t i = 0; i < count; ++i)
+            local_radii[i] = std::ldexp(0.75f, int(i % 6) - 3);
+        auto expected = integers;
+        for (size_t i = 0; i < count; ++i)
+            for (size_t j = 0; j < count; ++j) {
+                float squared = 0;
+                for (int axis = 0; axis < 3; ++axis) {
+                    const float d = xyz[3 * i + axis] - xyz[3 * j + axis];
+                    squared += d * d;
+                }
+                const float radius = std::min(local_radii[i], local_radii[j]);
+                if (squared <= radius * radius)
+                    expected[i] = std::min(expected[i], integers[j]);
+            }
+        const auto radii = tensor(local_radii, {count});
+        const auto values = ints(integers, {count});
+        auto actual = values;
+        for (int octave = -3; octave <= 2; ++octave)
+            actual = actual.minimum(lfs::core::radius_neighbor_min(points, values, std::ldexp(1.0f, octave), &radii));
+        EXPECT_EQ(host<int>(actual), expected) << "Octaves must include every symmetric local-radius edge";
     }
 
     TEST_P(NodesCore, CurvesRampDistanceGradientAndNoiseEvaluateOnBackend) {
@@ -1848,6 +1872,57 @@ namespace {
         EXPECT_EQ(cleaned.geometry.splats->means.shape()[0], 3u);
         EXPECT_EQ(host<float>(cleaned.geometry.splats->attributes.at("weight")),
                   (std::vector<float>{1, 2, 3}));
+    }
+
+    TEST_P(NodesCore, RemoveClumpsPreservesTenfoldSurfaceDensityAndRejectsIsolatedClusters) {
+        std::vector<float> positions;
+        for (int patch = 0; patch < 2; ++patch) {
+            const float step = patch ? 0.0316227766f : 0.01f;
+            for (int y = 0; y < 20; ++y)
+                for (int x = 0; x < 20; ++x)
+                    positions.insert(positions.end(), {patch * 0.22f + x * step, y * step, 0.0f});
+        }
+        const auto surface = positions;
+        for (int cluster = 0; cluster < 4; ++cluster)
+            for (int point = 0; point < 8; ++point)
+                positions.insert(positions.end(), {cluster * 0.5f + (point & 1) * 0.002f,
+                                                   ((point >> 1) & 1) * 0.002f,
+                                                   2.0f + ((point >> 2) & 1) * 0.002f});
+        Geometry geometry;
+        geometry.points = PointsComponent{tensor(positions, {positions.size() / 3, 3}),
+                                          tensor(std::vector<float>(positions.size()), {positions.size() / 3, 3}),
+                                          {}};
+        const auto result = single("lfs.remove_clumps", geometry);
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
+        ASSERT_TRUE(result.geometry.points);
+        EXPECT_EQ(host<float>(result.geometry.points->positions), surface);
+    }
+
+    TEST_P(NodesCore, RemoveClumpsFullSceneAcceptance) {
+        const auto* directory = std::getenv("LFS_NODE_SCENES_DIR");
+        if (!directory)
+            GTEST_SKIP() << "Set LFS_NODE_SCENES_DIR to the full garden/bicycle PLY fixture directory";
+        for (const auto& [name, limit, expected] : {
+                 std::tuple{"garden", 0.01, 992505u}, std::tuple{"bicycle", 0.02, 983348u}}) {
+            const auto loaded = lfs::io::load_ply(std::filesystem::path(directory) / (std::string(name) + ".ply"));
+            ASSERT_TRUE(loaded) << name;
+            auto geometry = geometry_from_splat_data(loaded->value);
+            geometry.splats->means = geometry.splats->means.to(device());
+            const auto count = geometry.splats->means.shape()[0];
+            ASSERT_EQ(count, 1'000'000u) << "The acceptance fixtures are the full 1M-splat captures";
+            for (int run = 0; run < 2; ++run) {
+                const auto begin = std::chrono::steady_clock::now();
+                const auto result = single("lfs.remove_clumps", geometry);
+                ASSERT_TRUE(result.ok);
+                const auto kept = host<float>(result.geometry.splats->means).size() / 3;
+                const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+                std::cout << "CLUMPS " << GetParam().name << ' ' << name << " run=" << run
+                          << " kept=" << kept << " removed=" << (count - kept)
+                          << " percent=" << (100.0 * (count - kept) / count) << " seconds=" << seconds << '\n';
+                EXPECT_EQ(kept, expected) << "CPU/Metal/Vulkan must retain identical element counts";
+                EXPECT_LE(double(count - kept) / count, limit);
+            }
+        }
     }
 
     TEST_P(NodesCore, MergeByDistanceAveragesPointsRemapsMeshAndKeepsOpaqueSplat) {
@@ -2838,6 +2913,36 @@ namespace {
         const auto missing = evaluate(tree, {{}, {}, 1}, nullptr, &cache);
         EXPECT_FALSE(missing.ok);
         EXPECT_TRUE(missing.errors.contains("Host"));
+    }
+
+    TEST_P(NodesCore, InvalidPowerReportsNodeErrorInsteadOfPublishingNonFiniteOpacity) {
+        NodeTree tree(registry_);
+        auto& math = tree.add_node("lfs.math", "Power");
+        math.properties["operation"] = "power";
+        tree.add_node("lfs.set_opacity", "Opacity");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Opacity", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Power", "Value", "Opacity", "Opacity"}));
+        ASSERT_TRUE(tree.add_link({"Opacity", "Geometry", tree.output_node().name, "Geometry"}));
+        for (const auto [base, exponent] : {std::pair{-1.0689604f, -0.848964f}, {0.0f, -1.0f}, {1e30f, 2.0f}}) {
+            SCOPED_TRACE(std::format("base={} exponent={}", base, exponent));
+            tree.find_node("Power")->input_values["A"] = base;
+            tree.find_node("Power")->input_values["B"] = exponent;
+            const auto result = evaluate(tree, {.geometry = splats()});
+            EXPECT_FALSE(result.ok);
+            ASSERT_TRUE(result.errors.contains("Opacity"));
+            EXPECT_NE(result.errors.at("Opacity").find("Set Opacity received 3 non-finite values"), std::string::npos);
+            tree.find_node("Opacity")->input_values["Selection"] = 0.0f;
+            const auto unselected = evaluate(tree, {.geometry = splats()});
+            ASSERT_TRUE(unselected.ok);
+            EXPECT_EQ(host<float>(unselected.geometry.splats->opacity), (std::vector<float>{0, 1, -1}));
+            tree.find_node("Opacity")->input_values["Selection"] = 1.0f;
+        }
+        const auto valid = field_result("lfs.math", "Value", FLOAT_SOCKET, splats(), [](Node& node) {
+            node.properties["operation"] = "power";
+            node.input_values["A"] = -2.0f;
+            node.input_values["B"] = 3.0f;
+        });
+        EXPECT_EQ(host<float>(valid), (std::vector<float>{-8, -8, -8}));
     }
 
     TEST_P(NodesCore, ArithmeticOperationsMatchExpectedValues) {

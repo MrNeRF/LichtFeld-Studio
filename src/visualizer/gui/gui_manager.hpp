@@ -21,6 +21,7 @@
 #include "gui/rml_progress_overlay.hpp"
 #include "gui/rml_shell_frame.hpp"
 #include "gui/rml_status_bar.hpp"
+#include "gui/rml_template_browser.hpp"
 #include "gui/rml_toast_overlay.hpp"
 #include "gui/rml_viewport_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -143,6 +144,7 @@ namespace lfs::vis {
             [[nodiscard]] AsyncTaskManager& asyncTasks() { return async_tasks_; }
             [[nodiscard]] const AsyncTaskManager& asyncTasks() const { return async_tasks_; }
             void enqueueModal(lfs::core::ModalRequest request);
+            void openTemplateBrowser(core::Uuid target, std::string save_tree = {});
             [[nodiscard]] RmlModalOverlay* modalOverlay() { return rml_modal_overlay_.get(); }
             [[nodiscard]] const RmlModalOverlay* modalOverlay() const {
                 return rml_modal_overlay_.get();
@@ -398,6 +400,7 @@ namespace lfs::vis {
 
             // Owned components
             std::unique_ptr<RmlModalOverlay> rml_modal_overlay_;
+            std::unique_ptr<RmlTemplateBrowser> rml_template_browser_;
             std::unique_ptr<RmlProgressOverlay> rml_progress_overlay_;
             std::unique_ptr<RmlToastOverlay> rml_toast_overlay_;
             std::unique_ptr<lfs::gui::IVideoExtractorWidget> video_widget_;

@@ -119,7 +119,7 @@ namespace lfs::core {
         return radius_query(points, references, radius, true, queries, max_count);
     }
 
-    Tensor radius_neighbor_min(const Tensor& points, const Tensor& values, const float radius) {
+    Tensor radius_neighbor_min(const Tensor& points, const Tensor& values, const float radius, const Tensor* radii) {
         LFS_ASSERT_MSG(points.is_valid() && points.ndim() == 2 && points.size(1) == 3 &&
                            points.dtype() == DataType::Float32,
                        std::format("radius_neighbor_min requires Float32 [N,3] points (valid={}, rank={}, columns={}, dtype={})",
@@ -136,6 +136,16 @@ namespace lfs::core {
                        std::format("radius_neighbor_min requires the same device (points={}, values={})",
                                    static_cast<int>(points.device()), static_cast<int>(values.device())));
         internal::require_same_gpu_backend(points, values, "radius_neighbor_min");
+        Tensor local_radii;
+        if (radii) {
+            LFS_ASSERT_MSG(radii->is_valid() && radii->ndim() == 1 && radii->numel() == points.size(0) &&
+                               radii->dtype() == DataType::Float32 && radii->device() == points.device(),
+                           std::format("radius_neighbor_min radii require Float32 [N] on the points device (valid={}, rank={}, count={}, dtype={}, device={}, N={}, points device={})",
+                                       radii->is_valid(), radii->ndim(), radii->numel(), static_cast<int>(radii->dtype()),
+                                       static_cast<int>(radii->device()), points.size(0), static_cast<int>(points.device())));
+            internal::require_same_gpu_backend(points, *radii, "radius_neighbor_min radii");
+            local_radii = radii->contiguous();
+        }
         const size_t count = points.size(0);
         LFS_ASSERT_MSG(count <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
                        std::format("radius_neighbor_min point count exceeds int32 (count={})", count));
@@ -144,25 +154,27 @@ namespace lfs::core {
             return output;
         const auto positions = points.contiguous();
         const auto source = values.contiguous();
-        const auto references = internal::allocate_like(points, TensorShape{count}, DataType::Bool, 1.0f);
+        const auto references = radii ? local_radii.gt(radius * 0.5f)
+                                      : internal::allocate_like(points, TensorShape{count}, DataType::Bool, 1.0f);
         const size_t buckets = std::bit_ceil(count);
         const auto bucket_mask = static_cast<uint32_t>(buckets - 1);
         if (points.device() == Device::GPU) {
             auto heads = internal::allocate_like(points, TensorShape{buckets}, DataType::Int32, -1.0f);
             auto next = internal::allocate_like(points, TensorShape{count}, DataType::Int32);
-            pin_operands({&positions, &source, &references, &heads, &next});
-            const auto stream = prepare_inputs_for_stream({&positions, &source, &references, &heads, &next}, output.stream());
+            pin_operands({&positions, &source, &references, &heads, &next, radii ? &local_radii : &source});
+            const auto stream = prepare_inputs_for_stream({&positions, &source, &references, &heads, &next, radii ? &local_radii : &source}, output.stream());
             internal::backend_ops_for(positions).radius_neighbor_min(
                 internal::storage_ref(positions), internal::storage_ref(source), internal::storage_ref(references),
                 internal::storage_ref(heads), internal::storage_ref(next), internal::storage_ref(output),
-                count, buckets, radius, internal::ExecContext{stream});
+                count, buckets, radius, radii ? std::optional(internal::storage_ref(local_radii)) : std::nullopt,
+                internal::ExecContext{stream});
             return output;
         }
         const auto* xyz = positions.ptr<float>();
         std::vector<int32_t> heads(buckets, -1), next(count, -1);
         for (size_t i = 0; i < count; ++i) {
             const auto* p = xyz + i * 3;
-            if (!finite_point(p))
+            if (!finite_point(p) || (radii && !(local_radii.ptr<float>()[i] > radius * 0.5f)))
                 continue;
             const auto bucket = hash_cell(cell(p[0], radius), cell(p[1], radius), cell(p[2], radius), bucket_mask);
             next[i] = heads[bucket];
@@ -172,12 +184,12 @@ namespace lfs::core {
             const auto* input = source.ptr<int32_t>();
             auto* result = output.ptr<int32_t>();
             for (size_t i = 0; i < count; ++i)
-                result[i] = pointNeighborMin(xyz, input, heads.data(), next.data(), i, bucket_mask, radius);
+                result[i] = pointNeighborMin(xyz, input, heads.data(), next.data(), i, bucket_mask, radius, radii ? local_radii.ptr<float>() : nullptr);
         } else {
             const auto* input = source.ptr<float>();
             auto* result = output.ptr<float>();
             for (size_t i = 0; i < count; ++i)
-                result[i] = pointNeighborMin(xyz, input, heads.data(), next.data(), i, bucket_mask, radius);
+                result[i] = pointNeighborMin(xyz, input, heads.data(), next.data(), i, bucket_mask, radius, radii ? local_radii.ptr<float>() : nullptr);
         }
         return output;
     }

@@ -1892,6 +1892,10 @@ namespace lfs::vis {
         if (selection_.selectedNodeCount() == 1 && selection_.isNodeSelected(id))
             return;
 
+        if (const auto& preview = modifier_manager_->previewState();
+            preview && preview->target != scene_.getNodeUuid(id))
+            modifier_manager_->previewClear();
+
         selection_.selectNode(id);
         if (import_selection_generation)
             *import_selection_generation = selection_.generation();
@@ -1934,6 +1938,9 @@ namespace lfs::vis {
                 return;
         }
 
+        if (const auto& preview = modifier_manager_->previewState();
+            preview && (ids.size() != 1 || preview->target != scene_.getNodeUuid(ids.front())))
+            modifier_manager_->previewClear();
         selection_.selectNodes(ids);
         python::invalidate_poll_caches(1);
         if (services().renderingOrNull())
@@ -3526,8 +3533,15 @@ namespace lfs::vis {
             modifier_preview_selection_ = std::move(selection);
             ++modifier_preview_generation_;
         }
-        std::lock_guard state_lock(state_mutex_);
-        cached_render_state_.reset();
+        {
+            std::lock_guard state_lock(state_mutex_);
+            cached_render_state_.reset();
+        }
+        // The derived mask can change without a new payload (for example an
+        // attribute-only graph or a Paint Selection stroke). Invalidating the
+        // snapshot alone does not schedule a new scene render.
+        if (auto* rendering = services().renderingOrNull())
+            rendering->markDirty(DirtyFlag::SELECTION, FrameReason::Selection, "node_selection_preview");
     }
 
     SceneRenderState SceneManager::buildRenderState(const SceneRenderStateOptions options) const {

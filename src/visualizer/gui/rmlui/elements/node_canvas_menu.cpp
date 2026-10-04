@@ -1,10 +1,13 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "gui/gui_manager.hpp"
 #include "node_canvas_element.hpp"
+#include "visualizer/core/services.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "gui/rmlui/elements/node_canvas_dom.hpp"
 #include "gui/rmlui/elements/node_canvas_widgets.hpp"
+#include "gui/utils/native_file_dialog.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
 
 #include <RmlUi/Core/ElementDocument.h>
@@ -17,6 +20,16 @@
 #include <ranges>
 
 namespace lfs::vis::gui {
+    void NodeCanvasElement::openTemplateBrowser() {
+        if (const auto host = activeHost(); host && services().guiOrNull())
+            services().gui().openTemplateBrowser(*host);
+    }
+
+    void NodeCanvasElement::openTemplateSaveDialog(std::string tree_uuid) {
+        if (const auto host = activeHost(); host && services().guiOrNull())
+            services().gui().openTemplateBrowser(*host, std::move(tree_uuid));
+    }
+
     void NodeCanvasElement::closeAddMenu() {
         if (add_menu_)
             RemoveChild(add_menu_);

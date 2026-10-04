@@ -82,6 +82,91 @@ namespace lfs::nodes {
             return value;
         }
 
+        // Follow fields across group interfaces without executing consumers. The
+        // returned geometry producer is qualified relative to the modifier root.
+        std::optional<std::pair<std::string, std::string>> preview_context_source(
+            const NodeTree& root, const EvalInputs& inputs) {
+            struct Scope {
+                const NodeTree* tree;
+                int parent;
+                std::string instance;
+                std::string prefix;
+            };
+            struct Output {
+                int scope;
+                std::string node;
+                std::string socket;
+            };
+            std::vector<Scope> scopes{{&root, -1, {}, {}}};
+            const auto enter = [&](const int parent, const Node& instance) {
+                const auto* graph = inputs.tree_resolver
+                                        ? inputs.tree_resolver(instance.properties.value("tree", std::string{}))
+                                        : nullptr;
+                if (!graph)
+                    return -1;
+                for (int ancestor = parent; ancestor >= 0; ancestor = scopes[ancestor].parent)
+                    if (scopes[ancestor].tree->uuid == graph->uuid)
+                        return -1;
+                const auto prefix = scopes[parent].prefix + instance.name + "/";
+                for (size_t i = 0; i < scopes.size(); ++i)
+                    if (scopes[i].prefix == prefix)
+                        return static_cast<int>(i);
+                scopes.push_back({graph, parent, instance.name, prefix});
+                return static_cast<int>(scopes.size() - 1);
+            };
+            int scope = 0;
+            std::string path = inputs.requested_node;
+            while (!scopes[scope].tree->find_node(path)) {
+                const auto slash = path.find('/');
+                if (slash == std::string::npos)
+                    return std::nullopt;
+                const auto* group = scopes[scope].tree->find_node(path.substr(0, slash));
+                if (!group || group->type_id != "lfs.group")
+                    return std::nullopt;
+                scope = enter(scope, *group);
+                if (scope < 0)
+                    return std::nullopt;
+                path.erase(0, slash + 1);
+            }
+            std::vector<Output> pending{{scope, path, inputs.requested_socket}};
+            std::unordered_set<std::string> visited;
+            for (size_t index = 0; index < pending.size(); ++index) {
+                const auto output = pending[index];
+                const auto current = scopes[output.scope];
+                if (!visited.insert(current.prefix + output.node + "/" + output.socket).second)
+                    continue;
+                for (const auto& link : current.tree->links) {
+                    if (link.from_node != output.node || link.from_socket != output.socket)
+                        continue;
+                    const auto* consumer = current.tree->find_node(link.to_node);
+                    if (!consumer)
+                        continue;
+                    if (consumer->type_id == "lfs.group_output") {
+                        if (current.parent >= 0)
+                            pending.push_back({current.parent, current.instance, link.to_socket});
+                        continue;
+                    }
+                    if (consumer->type_id == "lfs.group") {
+                        const auto inner = enter(output.scope, *consumer);
+                        if (inner >= 0)
+                            pending.push_back({inner, scopes[inner].tree->input_node().name, link.to_socket});
+                        continue;
+                    }
+                    for (const auto& input : effective_inputs(*current.tree, *consumer, inputs.tree_resolver)) {
+                        if (input.type != GEOMETRY_SOCKET)
+                            continue;
+                        for (const auto& source : current.tree->links)
+                            if (source.to_node == consumer->name && source.to_socket == input.identifier)
+                                return std::pair{current.prefix + source.from_node, source.from_socket};
+                    }
+                    for (const auto& next : effective_outputs(*current.tree, *consumer, inputs.tree_resolver))
+                        if (next.type != GEOMETRY_SOCKET)
+                            pending.push_back({output.scope, consumer->name, next.identifier});
+                }
+            }
+            return std::nullopt;
+        }
+
     } // namespace
 
     namespace {
@@ -152,6 +237,27 @@ namespace lfs::nodes {
 
     EvalResult evaluate(const NodeTree& tree, EvalInputs inputs, EvalHost* host, EvalCache* cache,
                         const EvalControl& control) {
+        if (!inputs.requested_node.empty() && inputs.resolve_preview_context) {
+            inputs.resolve_preview_context = false;
+            auto result = evaluate(tree, inputs, host, cache, control);
+            const auto output = result.output_values.find(inputs.requested_socket);
+            if (result.ok && output != result.output_values.end() && !output->second.get_if<Geometry>()) {
+                result.geometry = inputs.geometry;
+                if (const auto source = preview_context_source(tree, inputs)) {
+                    inputs.requested_node = source->first;
+                    inputs.requested_socket = source->second;
+                    const auto context = evaluate(tree, inputs, host, cache, control);
+                    result.geometry = context.geometry;
+                    hash_combine(result.output_key, context.output_key);
+                    result.ok = context.ok;
+                    result.cancelled |= context.cancelled;
+                    result.errors.insert(context.errors.begin(), context.errors.end());
+                    result.nodes.insert(context.nodes.begin(), context.nodes.end());
+                    result.time_ms.insert(context.time_ms.begin(), context.time_ms.end());
+                }
+            }
+            return result;
+        }
         const auto backend = geometry_backend(inputs.geometry).value_or(core::TensorExecutionTarget::current().backend());
         core::GpuBackendScope execution_scope(backend);
         const ActiveControl active_control_scope(control);
@@ -489,18 +595,77 @@ namespace lfs::nodes {
         };
 
         try {
-            const Node& output = tree.output_node();
+            const Node* requested = inputs.requested_node.empty() ? nullptr : tree.find_node(inputs.requested_node);
+            if (!requested && inputs.requested_node.contains('/')) {
+                const auto slash = inputs.requested_node.find('/');
+                const auto* instance = tree.find_node(inputs.requested_node.substr(0, slash));
+                const auto* nested = instance && instance->type_id == "lfs.group" && inputs.tree_resolver
+                                         ? inputs.tree_resolver(instance->properties.value("tree", std::string{}))
+                                         : nullptr;
+                if (!nested)
+                    throw NodeError("Preview group no longer exists");
+                EvalInputs inner = inputs;
+                inner.interface_overrides.clear();
+                inner.requested_node = inputs.requested_node.substr(slash + 1);
+                inner.cache_namespace += instance->name + "/";
+                inner.group_stack.emplace_back(tree.uuid, tree.name);
+                size_t generation = inputs.geometry_generation;
+                for (const auto& input : effective_inputs(tree, *instance, inputs.tree_resolver)) {
+                    const auto own = instance->input_values.find(input.identifier);
+                    Value value = own == instance->input_values.end() ? input.default_value : own->second;
+                    for (const auto& link : tree.links) {
+                        if (link.to_node != instance->name || link.to_socket != input.identifier)
+                            continue;
+                        const auto* producer = tree.find_node(link.from_node);
+                        if (!producer)
+                            throw NodeError("Preview group input no longer exists");
+                        const auto upstream = run(*producer);
+                        if (!upstream.ok)
+                            throw NodeError("Preview group input failed");
+                        hash_combine(generation, upstream.key);
+                        const auto declarations = effective_outputs(tree, *producer, inputs.tree_resolver);
+                        const auto output = std::ranges::find(declarations, link.from_socket, &SocketDecl::identifier);
+                        if (output == declarations.end())
+                            throw NodeError("Preview group input socket no longer exists");
+                        value = convert_value(upstream.outputs.at(link.from_socket), output->type, input.type);
+                        break;
+                    }
+                    inner.interface_overrides[input.identifier] = value;
+                    if (const auto* geometry = value.get_if<Geometry>())
+                        inner.geometry = *geometry;
+                }
+                inner.geometry_generation = generation;
+                auto evaluated = evaluate(*nested, std::move(inner), host, cache, control);
+                result.geometry = std::move(evaluated.geometry);
+                result.output_values = std::move(evaluated.output_values);
+                result.output_key = evaluated.output_key;
+                result.ok = evaluated.ok;
+                result.cancelled = evaluated.cancelled;
+                for (const auto& [name, status] : evaluated.nodes)
+                    result.nodes[instance->name + "/" + name] = status;
+                for (const auto& [name, time] : evaluated.time_ms)
+                    result.time_ms[instance->name + "/" + name] = time;
+                for (const auto& [name, error] : evaluated.errors)
+                    result.errors[instance->name + "/" + name] = error;
+                return result;
+            }
+            if (!inputs.requested_node.empty() && !requested)
+                throw NodeError("Preview node no longer exists");
+            const Node& output = requested ? *requested : tree.output_node();
             Evaluation evaluated = run(output);
             if (evaluated.ok) {
                 result.output_values = evaluated.outputs;
-                auto geometry = evaluated.outputs.find("Geometry");
+                result.output_key = evaluated.key;
+                auto geometry = evaluated.outputs.find(requested ? inputs.requested_socket : "Geometry");
                 if (geometry != evaluated.outputs.end()) {
                     if (const auto* value = geometry->second.get_if<Geometry>())
                         result.geometry = *value;
-                    else {
+                    else if (!requested) {
                         result.errors[output.name] = "Group Output did not produce geometry";
                         result.ok = false;
                     }
+                } else if (requested) {
+                    throw NodeError("Preview socket no longer exists");
                 }
             }
         } catch (const EvaluationCancelled&) {

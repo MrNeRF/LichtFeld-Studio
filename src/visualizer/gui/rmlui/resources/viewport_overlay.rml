@@ -4,6 +4,7 @@
 </head>
 <body id="overlay-body">
     <div id="viewport-content">
+    <div class="node-preview-position"><div id="node-preview-banner" class="node-preview-banner hidden"></div></div>
     <div id="split-divider-overlay" class="viewport-split-divider hidden"></div>
     <div id="empty-state-hint" class="empty-state-hint" data-if="show_empty_state">
         <img class="empty-state-icon" src="../icon/archive.png" />

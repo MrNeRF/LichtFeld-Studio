@@ -27,6 +27,7 @@ namespace lfs::vis {
         const auto* controller = sequencer();
         request.frames_per_second = export_time_ ? export_fps_ : controller ? controller->framesPerSecond()
                                                                             : 24.0f;
+        request.preview = preview_;
         request.inputs_ready = std::make_shared<core::TensorCompletion>();
         request.splat_allocator = scene_manager_->makeExternalSplatAllocator();
         const auto include = [&](const core::Tensor& tensor) {
@@ -123,6 +124,10 @@ namespace lfs::vis {
             state.evaluation = std::move(result.evaluation);
             state.shown = result.enabled;
             state.previews = std::move(result.previews);
+            if (preview_ && preview_->target == uuid) {
+                preview_->range_min = result.preview_min;
+                preview_->range_max = result.preview_max;
+            }
             if (!result.enabled && state.evaluation.ok)
                 scene.clearNodeEvaluatedPayload(node->id);
             else if (state.evaluation.ok &&
@@ -221,6 +226,7 @@ namespace lfs::vis {
         auto request = captureRequest();
         request.targets = {node_uuid};
         request.bake = true;
+        request.preview.reset(); // Applying a modifier must never bake an editor preview.
         const auto object = std::ranges::find(request.objects, node_uuid, &ModifierObjectSnapshot::uuid);
         if (object == request.objects.end())
             return {};

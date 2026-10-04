@@ -69,6 +69,25 @@ namespace lfs::nodes::builtin {
                 s.shN = blend(s.shN, Tensor::zeros_like(s.shN), w);
             }
         }
+        if (geometry.points) {
+            auto& points = *geometry.points;
+            const auto fc = field_context(points);
+            points.colors = blend(points.colors, context.evaluate_field("Colour", fc, COLOUR_SOCKET),
+                                  selection(context, "Selection", fc));
+        }
+        if (geometry.mesh && geometry.mesh->mesh) {
+            auto& component = *geometry.mesh;
+            const auto& source = *component.mesh;
+            const auto fc = field_context(component);
+            const auto colour = context.evaluate_field("Colour", fc, COLOUR_SOCKET);
+            const auto old = source.has_colors() ? source.colors.slice(1, 0, 3)
+                                                 : Tensor::ones({source.vertices.shape()[0], 3}, source.vertices.device());
+            const auto alpha = source.has_colors() ? source.colors.slice(1, 3, 4)
+                                                   : Tensor::ones({source.vertices.shape()[0], 1}, source.vertices.device());
+            auto mesh = copy_mesh(source, source.vertices, source.indices);
+            mesh->colors = Tensor::cat({blend(old, colour, selection(context, "Selection", fc)), alpha}, 1);
+            component.mesh = std::move(mesh);
+        }
         context.set_output("Geometry", std::move(geometry));
     }
 
@@ -78,7 +97,11 @@ namespace lfs::nodes::builtin {
             auto& s = *geometry.splats;
             auto fc = field_context(s);
             auto w = selection(context, "Selection", fc);
-            auto value = context.evaluate_field("Opacity", fc, FLOAT_SOCKET).clamp(1e-6f, 1.0f - 1e-6f);
+            auto value = context.evaluate_field("Opacity", fc, FLOAT_SOCKET);
+            const auto invalid = value.isfinite().logical_not().logical_and(w.gt(0)).count_nonzero();
+            if (invalid)
+                throw NodeError(std::format("Set Opacity received {} non-finite values on selected elements", invalid));
+            value = value.clamp(1e-6f, 1.0f - 1e-6f);
             s.opacity = blend(s.opacity, value.logit(), w);
         }
         context.set_output("Geometry", std::move(geometry));

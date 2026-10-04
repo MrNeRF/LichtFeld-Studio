@@ -22,13 +22,14 @@ namespace lfs::core::internal {
             uint64_t output;
             uint64_t queries;
             uint64_t values;
+            uint64_t radii;
             uint32_t count;
             uint32_t bucket_mask;
             float radius;
             uint32_t exclude_self;
             uint32_t query_begin, query_end;
         };
-        static_assert(sizeof(RadiusPush) == 80);
+        static_assert(sizeof(RadiusPush) == 88);
 
         struct ProjectionPush {
             std::array<float, 4> row0;
@@ -57,7 +58,8 @@ namespace lfs::core::internal {
                             const StorageRef heads, const StorageRef next, const StorageRef output,
                             const size_t count, const size_t buckets, const float radius, const bool exclude_self,
                             const std::optional<StorageRef> queries, const int32_t max_count, const bool spacing = false,
-                            const std::optional<StorageRef> values = std::nullopt) {
+                            const std::optional<StorageRef> values = std::nullopt,
+                            const std::optional<StorageRef> radii = std::nullopt) {
         const auto context = acquire_vulkan_context();
         RadiusPush push{
             .points = vk::address(points),
@@ -67,6 +69,7 @@ namespace lfs::core::internal {
             .output = vk::address(output),
             .queries = queries ? vk::address(*queries) : 0,
             .values = values ? vk::address(*values) : 0,
+            .radii = radii ? vk::address(*radii) : 0,
             .count = static_cast<uint32_t>(count),
             .bucket_mask = static_cast<uint32_t>(buckets - 1),
             .radius = radius,
@@ -97,6 +100,8 @@ namespace lfs::core::internal {
             query_reads.push_back(*queries);
         if (values)
             query_reads.push_back(*values);
+        if (radii)
+            query_reads.push_back(*radii);
         const std::array query_writes{output};
         // Boolean mode packs four results per output word. Counts own one Int32.
         const size_t query_batch = exclude_self && !max_count ? 8192 : count;
@@ -181,10 +186,10 @@ namespace lfs::core::internal {
                                                const StorageRef references, const StorageRef heads,
                                                const StorageRef next, const StorageRef output,
                                                const size_t count, const size_t buckets, const float radius,
-                                               ExecContext) {
+                                               const std::optional<StorageRef> radii, ExecContext) {
         LFS_FACADE_TRACE(radius_neighbor_min);
         radiusQuery(points, references, heads, next, output, count, buckets, radius, false,
-                    std::nullopt, 0, false, values);
+                    std::nullopt, 0, false, values, radii);
     }
 
     void VulkanBackendOps::rasterize_points(const PointRasterProgram& program, ExecContext) {

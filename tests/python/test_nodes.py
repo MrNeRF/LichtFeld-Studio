@@ -50,6 +50,30 @@ def test_types_and_tree_json_round_trip(lf):
     assert payload["interface"]["inputs"][1]["max"] == 1.0
 
 
+def test_template_catalogue_locales_and_posterize_points(lf, numpy):
+    root = Path(__file__).resolve().parents[2]
+    resources = root / "src/visualizer/gui/resources"
+    templates = [json.loads(path.read_text()) for path in (resources / "node_templates").glob("*.json")]
+    assert 15 <= len(templates) <= 20
+    for locale in (resources / "locales").glob("*.json"):
+        text = json.loads(locale.read_text())
+        for template in templates:
+            for field in ("name", "description", "adjust"):
+                assert text[f"node_template.{template['id']}.{field}"].strip()
+            assert any(node["type_id"] == "lfs.frame" for node in template["tree"]["nodes"])
+    posterize = next(t for t in templates if t["id"] == "posterize")
+    tree = lf.nodes.load_tree(json.dumps(posterize["tree"]))
+    try:
+        colour = numpy.array([[.1, .4, .9], [.3, .7, 1.]], dtype=numpy.float32)
+        points = lf.nodes.Points(lf.Tensor.from_numpy(numpy.zeros((2, 3), dtype=numpy.float32)), lf.Tensor.from_numpy(colour))
+        result = lf.nodes.evaluate_tree(tree, lf.nodes.Geometry(points=points), device="cpu")
+        numpy.testing.assert_allclose(result.points.colors.tolist(), numpy.floor(colour * 4 + .5) / 4)
+        for api in ("templates", "apply_template", "save_template", "rename_template", "import_template", "export_template", "delete_template", "preview", "clear_preview"):
+            assert callable(getattr(lf.nodes, api))
+    finally:
+        lf.nodes.remove_tree(tree.uuid)
+
+
 def test_group_interface_copy_paste_and_ungroup_python_api(lf, numpy):
     tree = lf.nodes.new_tree("Python graph editing")
     node = tree.add_node("lfs.colour_correct", "Grade")

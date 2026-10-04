@@ -56,10 +56,10 @@ namespace lfs::core::tensor_ops {
         template <class T>
         __global__ void query_min(const float* points, const T* values, const int32_t* heads,
                                   const int32_t* next, T* output, const size_t count,
-                                  const uint32_t bucket_mask, const float radius) {
+                                  const uint32_t bucket_mask, const float radius, const float* radii) {
             const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
             if (i < count)
-                output[i] = pointNeighborMin(points, values, heads, next, i, bucket_mask, radius);
+                output[i] = pointNeighborMin(points, values, heads, next, i, bucket_mask, radius, radii);
         }
         __global__ void query_spacing(const float* points, const int32_t* heads, const int32_t* next,
                                       float* output, size_t count, uint32_t bucket_mask, float radius) {
@@ -206,18 +206,18 @@ namespace lfs::core::tensor_ops {
     void launch_radius_neighbor_min(const float* points, const void* values, const uint8_t value_is_float,
                                     const uint8_t* references, int32_t* heads, int32_t* next, void* output,
                                     const size_t count, const size_t buckets, const float radius,
-                                    const cudaStream_t stream) {
+                                    const float* radii, const cudaStream_t stream) {
         const auto bucket_mask = static_cast<uint32_t>(buckets - 1);
         const auto blocks = static_cast<unsigned int>((count + kBlockSize - 1) / kBlockSize);
         build<<<blocks, kBlockSize, 0, stream>>>(points, references, heads, next, count, bucket_mask, radius, 0);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_neighbor_min.build");
         if (value_is_float) {
             query_min<<<blocks, kBlockSize, 0, stream>>>(points, static_cast<const float*>(values), heads, next,
-                                                         static_cast<float*>(output), count, bucket_mask, radius);
+                                                         static_cast<float*>(output), count, bucket_mask, radius, radii);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_neighbor_min.query_float");
         } else {
             query_min<<<blocks, kBlockSize, 0, stream>>>(points, static_cast<const int32_t*>(values), heads, next,
-                                                         static_cast<int32_t*>(output), count, bucket_mask, radius);
+                                                         static_cast<int32_t*>(output), count, bucket_mask, radius, radii);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_neighbor_min.query_int");
         }
     }

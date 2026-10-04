@@ -192,3 +192,17 @@
     background-color: @{alpha(primary,0.45)};
     border-radius: 4dp;
 }
+.node-title-tool.active {
+    background-color: @{alpha(info,0.18)};
+    color: @{info};
+}
+.node-empty-templates > span, .node-empty-templates > div small {
+    color: @{text_dim};
+}
+.node-empty-templates > div button {
+    background-color: @{surface_bright};
+    color: @{text};
+}
+.node-empty-templates > div button:hover {
+    background-color: @{alpha(primary,0.14)};
+}

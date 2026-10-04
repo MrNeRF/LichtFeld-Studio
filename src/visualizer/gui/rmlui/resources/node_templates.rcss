@@ -1,0 +1,66 @@
+/* Preferences window structure and Asset Manager cards, with a modal viewport. */
+body#template-overlay { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
+#template-backdrop { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
+#window-frame.template-window { position: relative; flex: none; width: 960dp; height: 640dp; max-width: 90%; max-height: 90%; min-height: 0; border-width: 0; border-radius: 10dp; overflow: hidden; }
+.template-window #title-bar { box-sizing: border-box; height: auto; min-height: 70dp; padding: 12dp 20dp; border-width: 0; flex-shrink: 0; }
+.template-window .btn { box-sizing: border-box; display: flex; align-items: center; justify-content: center; line-height: 16dp; }
+.template-window .btn > span { display: block; white-space: nowrap; }
+.template-window .btn:disabled, .template-window .btn.disabled { opacity: 0.4; cursor: default; }
+.template-title-copy { flex: 1; min-width: 0; }
+.template-title-copy #title-text { display: block; font-size: 20dp; line-height: 26dp; font-weight: 600; }
+.template-title-copy .preferences-description { line-height: 18dp; margin-top: 2dp; }
+.template-window #close-btn { display: flex; align-items: center; justify-content: center; flex: 0 0 28dp; width: 28dp; height: 28dp; margin: 0; border-width: 0; }
+.template-window #close-btn img { width: 14dp; height: 14dp; }
+.template-window #content-wrap { flex: 1; min-height: 0; padding: 4dp 20dp 0; overflow: hidden; }
+.template-window .preferences-layout { min-width: 0; }
+.template-window .preferences-nav { flex: 0 0 160dp; min-height: 0; overflow-y: auto; padding-right: 12dp; margin-right: 20dp; }
+.template-window .preferences-nav-item { display: flex; align-items: center; justify-content: space-between; gap: 8dp; min-height: 32dp; flex-shrink: 0; padding: 6dp 10dp; border-width: 0; border-radius: 5dp; font-size: 12dp; }
+.template-window .preferences-nav-item .template-count { font-size: 11dp; opacity: 0.65; }
+.template-window .preferences-nav-item.my-templates { margin-top: 12dp; }
+.template-results { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.template-window .asset-search-box { flex: 0 0 34dp; min-height: 34dp; max-height: 34dp; border-radius: 5dp; }
+.template-window .asset-search-box input[type="text"] { height: 34dp; padding: 8dp 10dp 8dp 34dp; border-width: 0; font-size: 12dp; line-height: 16dp; }
+.template-search-icon { position: absolute; left: 11dp; top: 10dp; width: 14dp; height: 14dp; pointer-events: none; z-index: 1; }
+.template-window .asset-search-placeholder { left: 34dp; top: 9dp; line-height: 16dp; font-size: 12dp; }
+#template-results-label { display: block; margin: 12dp 0 10dp; font-size: 11dp; flex-shrink: 0; }
+#template-scroll { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+#template-grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12dp; padding: 0 6dp 16dp 0; }
+.template-window .asset-card { box-sizing: border-box; flex: 0 0 auto; border-width: 1dp; border-radius: 7dp; padding: 14dp; cursor: pointer; overflow: visible; }
+.template-card-heading { display: flex; align-items: flex-start; gap: 6dp; }
+.template-window .asset-card-title { display: block; flex: 1; font-size: 13dp; line-height: 18dp; font-weight: 600; white-space: normal; }
+.template-window .asset-card.is-selected .asset-card-title { font-size: 13dp; }
+.template-card-description { display: block; font-size: 12dp; line-height: 17dp; margin-top: 7dp; max-height: 34dp; overflow: hidden; }
+.template-card-adjust { display: block; font-size: 11dp; line-height: 16dp; margin-top: 8dp; max-height: 32dp; overflow: hidden; }
+.template-card-bottom { display: flex; align-items: center; justify-content: space-between; gap: 8dp; margin-top: 12dp; }
+.template-chips { display: flex; flex-wrap: wrap; gap: 4dp; min-width: 0; }
+.template-chip { display: block; padding: 2dp 6dp; border-radius: 4dp; font-size: 10dp; line-height: 14dp; }
+.template-card-bottom .btn { flex-shrink: 0; min-width: 48dp; padding: 3dp 10dp; min-height: 26dp; }
+.template-window .asset-card-menu { position: relative; top: auto; right: auto; bottom: auto; visibility: visible; flex-shrink: 0; }
+.template-card-menu-items { display: flex; gap: 8dp; margin-top: 8dp; }
+.template-card-menu-items .btn { flex: 1; }
+.template-footer { display: flex; align-items: center; gap: 12dp; padding: 16dp 20dp; flex-shrink: 0; }
+.template-footer-files { display: flex; gap: 8dp; }
+.template-footer .btn { flex-shrink: 0; min-width: 86dp; min-height: 32dp; padding: 6dp 14dp; white-space: nowrap; }
+#template-selection { flex: 1; min-width: 0; text-align: right; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11dp; }
+#template-empty { display: block; padding: 32dp 16dp; text-align: center; font-size: 12dp; }
+#template-error { display: none; padding-top: 8dp; font-size: 12dp; }
+#template-edit-content { display: none; }
+#template-edit-content label { display: flex; flex-direction: column; gap: 6dp; margin-bottom: 16dp; font-size: 12dp; }
+#template-edit-content input { box-sizing: border-box; width: 100%; height: 34dp; padding: 6dp 10dp; }
+.template-window.is-editing { width: 480dp; height: auto; }
+.template-window.is-editing #template-browser-content, .template-window.is-editing .template-footer-files { display: none; }
+.template-window.is-editing #template-edit-content { display: block; }
+#template-empty.hidden, #template-search-placeholder.hidden, .template-window .filtered { display: none; }
+.template-window.is-narrow .preferences-nav { flex-basis: 122dp; margin-right: 12dp; padding-right: 8dp; }
+.template-window.is-narrow #title-bar { min-height: 60dp; padding: 8dp 16dp; }
+.template-window.is-narrow #title-text { font-size: 18dp; line-height: 24dp; }
+.template-window.is-narrow #content-wrap { padding: 0 16dp; }
+.template-window.is-narrow .preferences-nav-item { min-height: 28dp; padding: 4dp 8dp; font-size: 11dp; }
+.template-window.is-narrow #template-selection { display: none; }
+.template-window.is-narrow .template-footer { justify-content: space-between; gap: 8dp; padding: 10dp 16dp; }
+.template-window.is-narrow .template-footer .btn { min-width: 72dp; padding-left: 10dp; padding-right: 10dp; }
+.template-window.is-narrow .asset-card { padding: 12dp; }
+.template-window.is-narrow .template-card-description { margin-top: 5dp; }
+.template-window.is-narrow .template-card-adjust { margin-top: 6dp; }
+.template-window.is-narrow .template-card-bottom { margin-top: 8dp; }
+.template-window.is-narrow .template-card-menu-items { margin-top: 6dp; }

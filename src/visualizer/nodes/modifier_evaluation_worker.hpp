@@ -39,6 +39,7 @@ namespace lfs::vis {
         core::SplatTensorAllocator splat_allocator;
         std::chrono::steady_clock::time_point requested_at;
         bool bake = false;
+        std::optional<NodePreviewState> preview;
     };
 
     struct ModifierHostResult {
@@ -50,6 +51,9 @@ namespace lfs::vis {
         std::unordered_map<std::string, core::Tensor> previews;
         bool enabled = false;
         std::uint64_t output_key = 0;
+        std::optional<float> preview_min;
+        std::optional<float> preview_max;
+        std::string preview_key;
     };
 
     struct ModifierWorkerResult {

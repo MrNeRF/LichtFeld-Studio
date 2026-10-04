@@ -22,5 +22,5 @@ namespace lfs::core::tensor_ops {
                                        const uint8_t* queries, cudaStream_t stream);
     void launch_radius_neighbor_min(const float* points, const void* values, uint8_t value_is_float,
                                     const uint8_t* references, int32_t* heads, int32_t* next, void* output,
-                                    size_t count, size_t buckets, float radius, cudaStream_t stream);
+                                    size_t count, size_t buckets, float radius, const float* radii, cudaStream_t stream);
 } // namespace lfs::core::tensor_ops

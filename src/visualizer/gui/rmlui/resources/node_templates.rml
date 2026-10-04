@@ -1,0 +1,38 @@
+<rml>
+<head>
+  <link type="text/rcss" href="components.rcss"/>
+  <link type="text/rcss" href="preferences.rcss"/>
+  <link type="text/rcss" href="asset_manager.rcss"/>
+  <link type="text/rcss" href="node_templates.rcss"/>
+</head>
+<body id="template-overlay">
+  <div id="template-backdrop"></div>
+  <div id="window-frame" class="template-window">
+    <div id="title-bar">
+      <div class="template-title-copy"><span id="title-text">@tr:node_editor.templates_title</span><span class="preferences-description">@tr:node_editor.suggested_templates</span></div>
+      <button id="close-btn" data-action="close" aria-label="Close"><img src="../icon/scene/x.png"/></button>
+    </div>
+    <div id="content-wrap">
+      <div id="template-browser-content" class="preferences-layout">
+        <div id="template-nav" class="preferences-nav"></div>
+        <div class="template-results">
+          <div class="asset-search-box">
+            <img class="template-search-icon" src="../icon/scene/search.png"/>
+            <input id="template-search" type="text" aria-label="Search templates"/>
+            <span id="template-search-placeholder" class="asset-search-placeholder text-muted">@tr:node_editor.template_search</span>
+          </div>
+          <span id="template-results-label" class="text-muted"></span>
+          <div id="template-scroll" class="asset-gallery-scroll" tabindex="0"><div id="template-grid" class="asset-card-grid-window"></div><div id="template-empty" class="text-muted"></div></div>
+        </div>
+      </div>
+      <div id="template-edit-content"></div>
+      <div id="template-error" class="text-error"></div>
+    </div>
+    <div class="template-footer">
+      <div class="template-footer-files"><button class="btn btn--secondary" data-action="import"><span>@tr:node_editor.template_import</span></button><button id="template-export" class="btn btn--secondary" data-action="export"><span>@tr:node_editor.template_export</span></button></div>
+      <span id="template-selection" class="text-muted"></span>
+      <button id="template-confirm" class="btn btn--primary" data-action="confirm"><span>@tr:node_editor.template_add_modifier</span></button>
+    </div>
+  </div>
+</body>
+</rml>

@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "id": "remove_clumps",
+  "name": "Remove floater clumps",
+  "description": "Remove small disconnected islands while retaining larger surfaces.",
+  "category": "Clean-up",
+  "scene_kinds": [
+    "splat"
+  ],
+  "adjust": "Increase Radius to connect nearby splats; increase Min Size to reject larger islands.",
+  "tree": {
+    "schema_version": 1,
+    "uuid": "builtin.remove_clumps",
+    "name": "Remove floater clumps",
+    "tree_type": "lfs.geometry",
+    "nodes": [
+      {
+        "name": "Group Input",
+        "type_id": "lfs.group_input",
+        "location": [
+          -760,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Group Output",
+        "type_id": "lfs.group_output",
+        "location": [
+          520,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "none"
+          }
+        },
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Remove Clumps",
+        "type_id": "lfs.remove_clumps",
+        "location": [
+          0,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "geometry"
+          },
+          "Radius": {
+            "type": "float",
+            "value": 2.0
+          },
+          "Min Size": {
+            "type": "int",
+            "value": 16
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Adjust these settings",
+        "type_id": "lfs.frame",
+        "location": [
+          -620,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "colour": "neutral",
+          "label": "Adjust these settings",
+          "note": "Increase Radius to connect nearby splats; increase Min Size to reject larger islands."
+        },
+        "ui": {},
+        "version": 1
+      }
+    ],
+    "links": [
+      {
+        "from_node": "Group Input",
+        "from_socket": "Geometry",
+        "to_node": "Remove Clumps",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Radius",
+        "to_node": "Remove Clumps",
+        "to_socket": "Radius"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Min Size",
+        "to_node": "Remove Clumps",
+        "to_socket": "Min Size"
+      },
+      {
+        "from_node": "Remove Clumps",
+        "from_socket": "Geometry",
+        "to_node": "Group Output",
+        "to_socket": "Geometry"
+      }
+    ],
+    "interface": {
+      "inputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        },
+        {
+          "identifier": "Radius",
+          "label": "Radius",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 2.0
+          },
+          "min": 0,
+          "max": 20,
+          "step": 0.1
+        },
+        {
+          "identifier": "Min Size",
+          "label": "Min Size",
+          "type": "lfs.int",
+          "default": {
+            "type": "int",
+            "value": 16
+          },
+          "min": 1,
+          "max": 10000,
+          "step": 1
+        }
+      ],
+      "outputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        }
+      ]
+    }
+  }
+}

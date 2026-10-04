@@ -165,7 +165,7 @@ namespace lfs::core {
             virtual void radius_neighbor_min(StorageRef points, StorageRef values, StorageRef references,
                                              StorageRef heads, StorageRef next, StorageRef output,
                                              size_t count, size_t buckets, float radius,
-                                             ExecContext context) = 0;
+                                             std::optional<StorageRef> radii, ExecContext context) = 0;
             virtual void point_neighbor_spacing(StorageRef points, StorageRef references,
                                                 StorageRef heads, StorageRef next, StorageRef output,
                                                 size_t count, size_t buckets, float cell_width, ExecContext context) = 0;
@@ -493,7 +493,7 @@ namespace lfs::core {
             void radius_neighbor_min(StorageRef points, StorageRef values, StorageRef references,
                                      StorageRef heads, StorageRef next, StorageRef output,
                                      size_t count, size_t buckets, float radius,
-                                     ExecContext context) override;
+                                     std::optional<StorageRef> radii, ExecContext context) override;
             void point_neighbor_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                         size_t, size_t, float, ExecContext) override;
             void project_points(StorageRef points, StorageRef output, size_t count,

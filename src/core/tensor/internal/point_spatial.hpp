@@ -103,10 +103,10 @@ namespace lfs::core::internal {
     template <class T>
     LFS_POINT_HD inline T pointNeighborMin(const float* points, const T* values, const int32_t* heads,
                                            const int32_t* next, size_t i, uint32_t bucket_mask,
-                                           float radius) {
+                                           float radius, const float* radii = nullptr) {
         const float* p = points + i * 3;
         T result = values[i];
-        if (!finite_point(p))
+        if (!finite_point(p) || (radii && !(radii[i] > radius * 0.5f)))
             return result;
         const int cx = cell(p[0], radius), cy = cell(p[1], radius), cz = cell(p[2], radius);
         for (int dz = -1; dz <= 1; ++dz) {
@@ -116,7 +116,7 @@ namespace lfs::core::internal {
                     for (int32_t j = heads[hash_cell(tx, ty, tz, bucket_mask)]; j >= 0; j = next[j]) {
                         const float* q = points + static_cast<size_t>(j) * 3;
                         if (cell(q[0], radius) == tx && cell(q[1], radius) == ty && cell(q[2], radius) == tz &&
-                            within(p, q, radius) && values[j] < result)
+                            within(p, q, radii ? fminf(radius, fminf(radii[i], radii[j])) : radius) && values[j] < result)
                             result = values[j];
                     }
                 }
@@ -147,7 +147,7 @@ namespace lfs::core::internal {
                             if (static_cast<size_t>(j) == i || cell(q[0], radius) != tx || cell(q[1], radius) != ty || cell(q[2], radius) != tz)
                                 continue;
                             const float dx = p[0] - q[0], dy = p[1] - q[1], dz = p[2] - q[2];
-                            const float distance = dx * dx + dy * dy + dz * dz;
+                            const float distance = roundedAdd(roundedAdd(roundedMul(dx, dx), roundedMul(dy, dy)), roundedMul(dz, dz));
                             if (distance < best[2]) {
                                 best[2] = fmaxf(best[1], distance);
                                 best[1] = fmaxf(best[0], fminf(best[1], distance));

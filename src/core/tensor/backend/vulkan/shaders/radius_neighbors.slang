@@ -1,7 +1,7 @@
 #include "../../../../include/core/rounded_math.slangh"
 
 static const uint LFS_LOCAL_SIZE_X = 256;
-static const uint LFS_PUSH_CONSTANT_SIZE = 80;
+static const uint LFS_PUSH_CONSTANT_SIZE = 88;
 
 [SpecializationConstant] const uint kMode = 0;
 
@@ -13,6 +13,7 @@ struct Parameters {
     uint64_t output;
     uint64_t queries;
     uint64_t values;
+    uint64_t radii;
     uint count;
     uint bucketMask;
     float radius;
@@ -109,6 +110,9 @@ uint queryCount(Parameters p, uint i) {
 int queryMinInt(Parameters p, uint i) {
     Ptr<int, Access.Read> values = (Ptr<int, Access.Read>)p.values;
     int result = values[i];
+    Ptr<float, Access.Read> radii = (Ptr<float, Access.Read>)p.radii;
+    if (p.radii != 0 && !(radii[i] > p.radius * 0.5f))
+        return result;
     const float3 point = position(p, i);
     if (!all(isfinite(point)))
         return result;
@@ -119,7 +123,7 @@ int queryMinInt(Parameters p, uint i) {
         const int3 target = center + int3(x, y, z);
         for (int j = heads[hashCell(target, p.bucketMask)]; j >= 0; j = next[j]) {
             const float3 other = position(p, uint(j));
-            if (all(cell(other, p.radius) == target) && within(point, other, p.radius))
+            if (all(cell(other, p.radius) == target) && within(point, other, p.radii != 0 ? min(p.radius, min(radii[i], radii[j])) : p.radius))
                 result = min(result, values[j]);
         }
     }
@@ -129,6 +133,9 @@ int queryMinInt(Parameters p, uint i) {
 float queryMinFloat(Parameters p, uint i) {
     Ptr<float, Access.Read> values = (Ptr<float, Access.Read>)p.values;
     float result = values[i];
+    Ptr<float, Access.Read> radii = (Ptr<float, Access.Read>)p.radii;
+    if (p.radii != 0 && !(radii[i] > p.radius * 0.5f))
+        return result;
     const float3 point = position(p, i);
     if (!all(isfinite(point)))
         return result;
@@ -139,7 +146,7 @@ float queryMinFloat(Parameters p, uint i) {
         const int3 target = center + int3(x, y, z);
         for (int j = heads[hashCell(target, p.bucketMask)]; j >= 0; j = next[j]) {
             const float3 other = position(p, uint(j));
-            if (all(cell(other, p.radius) == target) && within(point, other, p.radius))
+            if (all(cell(other, p.radius) == target) && within(point, other, p.radii != 0 ? min(p.radius, min(radii[i], radii[j])) : p.radius))
                 result = min(result, values[j]);
         }
     }
@@ -168,7 +175,7 @@ float querySpacing(Parameters p, uint i) {
                         if (uint(j) == i || !all(cell(other, p.radius) == target))
                             continue;
                         const float3 delta = point - other;
-                        const float distance = dot(delta, delta);
+                        const float distance = dotRounded(delta, delta);
                         if (distance < best.z) {
                             best.z = max(best.y, distance);
                             best.y = max(best.x, min(best.y, distance));

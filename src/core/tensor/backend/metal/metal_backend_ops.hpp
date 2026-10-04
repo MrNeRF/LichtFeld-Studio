@@ -80,7 +80,7 @@ namespace lfs::core::internal {
         void radius_neighbor_counts(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                     size_t, size_t, float, int32_t, std::optional<StorageRef>, ExecContext) override;
         void radius_neighbor_min(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
-                                 size_t, size_t, float, ExecContext) override;
+                                 size_t, size_t, float, std::optional<StorageRef>, ExecContext) override;
         void point_neighbor_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                     size_t, size_t, float, ExecContext) override;
         void mark_points_2d(StorageRef, StorageRef, size_t, const PointRegion2D&,

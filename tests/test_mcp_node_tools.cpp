@@ -125,7 +125,23 @@ namespace lfs::vis {
             EXPECT_TRUE(descriptor["annotations"].contains("destructiveHint"));
             EXPECT_TRUE(descriptor["annotations"].contains("idempotentHint"));
         }
-        EXPECT_EQ(count, 51u);
+        EXPECT_EQ(count, 60u);
+    }
+
+    TEST_F(McpNodeToolsTest, TemplatesAndPreviewRoundTrip) {
+        const auto listed = call("template_list");
+        ASSERT_GE(listed["templates"].size(), 15u);
+        const auto applied = call("template_apply", {{"target", target_}, {"template", "colour_grade"}, {"name", "Template MCP"}});
+        ASSERT_TRUE(applied["success"]);
+        const auto preview = call("preview_set", {{"target", target_}, {"node", "Colour Correct"}, {"socket", "Geometry"}});
+        EXPECT_EQ(preview["socket"], "Geometry");
+        EXPECT_EQ(resource("editor")["preview"]["node"], "Colour Correct");
+        ASSERT_TRUE(call("preview_clear")["success"]);
+        EXPECT_TRUE(resource("editor")["preview"].is_null());
+        const auto saved = call("template_save", {{"tree", applied["tree"]}, {"name", "MCP template"}, {"description", "Saved by the MCP test"}, {"category", "Test"}});
+        ASSERT_TRUE(saved["success"]);
+        ASSERT_TRUE(call("template_rename", {{"template", saved["template"]["id"]}, {"name", "Renamed MCP"}})["success"]);
+        ASSERT_TRUE(call("template_delete", {{"template", saved["template"]["id"]}})["success"]);
     }
 
     TEST_F(McpNodeToolsTest, KeyframesDefaultsRenameJsonCopyAndRemove) {

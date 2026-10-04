@@ -56,13 +56,13 @@ namespace lfs::core::internal {
                                              const StorageRef references, const StorageRef heads,
                                              const StorageRef next, const StorageRef output,
                                              const size_t count, const size_t buckets, const float radius,
-                                             const ExecContext context) {
+                                             const std::optional<StorageRef> radii, const ExecContext context) {
         LFS_FACADE_TRACE(radius_neighbor_min);
         tensor_ops::launch_radius_neighbor_min(
             cuda_pointer<const float>(points), cuda_pointer<const void>(values),
             values.dtype == DataType::Float32, cuda_pointer<const uint8_t>(references),
             cuda_pointer<int32_t>(heads), cuda_pointer<int32_t>(next), cuda_pointer<void>(output),
-            count, buckets, radius, context.cuda_stream);
+            count, buckets, radius, radii ? cuda_pointer<const float>(*radii) : nullptr, context.cuda_stream);
     }
 
     void CudaBackendOps::nearest_point_indices(StorageRef q, StorageRef t, StorageRef h, StorageRef n, StorageRef o,

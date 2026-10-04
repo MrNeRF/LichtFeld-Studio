@@ -42,6 +42,23 @@ namespace lfs::vis {
         using lfs::nodes::PropertyKind;
         using lfs::nodes::SocketDecl;
 
+        const lfs::nodes::Node* previewNode(const ModifierManager& manager,
+                                            const lfs::nodes::NodeTree*& graph, std::string_view path) {
+            while (graph) {
+                if (const auto* node = graph->find_node(path))
+                    return node;
+                const auto slash = path.find('/');
+                if (slash == std::string_view::npos)
+                    return nullptr;
+                const auto* instance = graph->find_node(path.substr(0, slash));
+                if (!instance || instance->type_id != "lfs.group")
+                    return nullptr;
+                graph = manager.tree(instance->properties.value("tree", std::string{}));
+                path.remove_prefix(slash + 1);
+            }
+            return nullptr;
+        }
+
         std::string new_uuid() {
             return core::generate_uuid_v4().to_string();
         }
@@ -343,6 +360,67 @@ namespace lfs::vis {
 
     const lfs::nodes::NodeTypeRegistry& ModifierManager::registry() const noexcept {
         return registry_;
+    }
+
+    ModifierResult ModifierManager::previewSet(const core::Uuid& node_uuid,
+                                               const std::string_view node_name,
+                                               std::optional<std::string> socket) {
+        const auto* modifiers = stack(node_uuid);
+        if (!modifiers)
+            return std::unexpected(ModifierError{"Target has no node modifiers"});
+        const Modifier* owner = nullptr;
+        const lfs::nodes::Node* node = nullptr;
+        const lfs::nodes::NodeTree* graph = nullptr;
+        std::string node_path;
+        for (const auto& modifier : modifiers->modifiers) {
+            const auto* candidate_graph = tree(modifier.tree_uuid);
+            auto local_name = node_name;
+            if (local_name.starts_with(modifier.uuid + "/"))
+                local_name.remove_prefix(modifier.uuid.size() + 1);
+            const auto* candidate = previewNode(*this, candidate_graph, local_name);
+            if (!candidate)
+                continue;
+            if (node)
+                return std::unexpected(ModifierError{"Node name is ambiguous across the modifier stack"});
+            owner = &modifier;
+            graph = candidate_graph;
+            node = candidate;
+            node_path = local_name;
+        }
+        if (!owner || !graph || !node)
+            return std::unexpected(ModifierError{"Node does not exist in the target's modifier stack"});
+        const auto outputs = lfs::nodes::effective_outputs(
+            *graph, *node, [&](const std::string_view uuid) { return tree(uuid); });
+        auto output = outputs.end();
+        if (socket)
+            output = std::ranges::find(outputs, *socket, &lfs::nodes::SocketDecl::identifier);
+        else {
+            output = std::ranges::find(outputs, std::string(lfs::nodes::GEOMETRY_SOCKET),
+                                       &lfs::nodes::SocketDecl::type);
+            if (output == outputs.end() && !outputs.empty())
+                output = outputs.begin();
+        }
+        if (output == outputs.end())
+            return std::unexpected(ModifierError{"Preview socket is not an output of this node"});
+        static const std::unordered_set<std::string_view> supported{
+            lfs::nodes::GEOMETRY_SOCKET, lfs::nodes::FLOAT_SOCKET, lfs::nodes::INT_SOCKET,
+            lfs::nodes::BOOL_SOCKET, lfs::nodes::VECTOR_SOCKET, lfs::nodes::COLOUR_SOCKET};
+        if (!supported.contains(output->type))
+            return std::unexpected(ModifierError{"This output type cannot be previewed"});
+        const auto previous = preview_ ? preview_->target : core::Uuid{};
+        preview_ = NodePreviewState{.target = node_uuid, .modifier_uuid = owner->uuid, .tree_uuid = owner->tree_uuid, .node = node_path, .socket = output->identifier, .socket_type = output->type, .label = node->name};
+        if (previous != core::Uuid{} && previous != node_uuid)
+            markDirty(previous);
+        markDirty(node_uuid);
+        return {};
+    }
+
+    void ModifierManager::previewClear() {
+        if (!preview_)
+            return;
+        const auto target = preview_->target;
+        preview_.reset();
+        markDirty(target);
     }
 
     lfs::nodes::NodeTree& ModifierManager::newTree(std::string name) {
@@ -1321,6 +1399,16 @@ namespace lfs::vis {
 
     void ModifierManager::markDirty(const core::Uuid& node_uuid) {
         animation_only_request_ = false;
+        if (preview_ && (node_uuid.is_nil() || node_uuid == preview_->target)) {
+            const auto* graph = tree(preview_->tree_uuid);
+            const auto* modifiers = stack(preview_->target);
+            const bool has_modifier = modifiers && std::ranges::any_of(
+                                                       modifiers->modifiers, [&](const Modifier& item) {
+                                                           return item.uuid == preview_->modifier_uuid && item.tree_uuid == preview_->tree_uuid;
+                                                       });
+            if (!graph || !has_modifier || !previewNode(*this, graph, preview_->node))
+                preview_.reset();
+        }
         if (auto* controller = sequencer(); controller && !controller->timeline().hasAnimationClip() && timeDependent()) {
             controller->timeline().ensureAnimationClip();
             controller->animationTracksChanged();
@@ -1540,6 +1628,7 @@ namespace lfs::vis {
     void ModifierManager::clear() {
         cancelViewportMode();
         viewport_selection_.reset();
+        preview_.reset();
         gizmo_before_.reset();
         worker_->invalidate(++output_generation_);
         ++source_generation_;

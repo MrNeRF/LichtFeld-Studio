@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "id": "remove_floaters",
+  "name": "Remove floaters",
+  "description": "Remove low-opacity or isolated splats across the capture.",
+  "category": "Clean-up",
+  "scene_kinds": [
+    "splat"
+  ],
+  "adjust": "Tune Min Opacity first, then Isolation Radius and Min Neighbours for detached specks.",
+  "tree": {
+    "schema_version": 1,
+    "uuid": "builtin.remove_floaters",
+    "name": "Remove floaters",
+    "tree_type": "lfs.geometry",
+    "nodes": [
+      {
+        "name": "Group Input",
+        "type_id": "lfs.group_input",
+        "location": [
+          -760,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Group Output",
+        "type_id": "lfs.group_output",
+        "location": [
+          520,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "none"
+          }
+        },
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Remove Floaters",
+        "type_id": "lfs.remove_floaters",
+        "location": [
+          0,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "geometry"
+          },
+          "Min Opacity": {
+            "type": "float",
+            "value": 0.05
+          },
+          "Isolation Radius": {
+            "type": "float",
+            "value": 3
+          },
+          "Min Neighbours": {
+            "type": "int",
+            "value": 3
+          }
+        },
+        "properties": {
+          "relative_to_size": true,
+          "preview": false
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Adjust these settings",
+        "type_id": "lfs.frame",
+        "location": [
+          -620,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "colour": "neutral",
+          "label": "Adjust these settings",
+          "note": "Tune Min Opacity first, then Isolation Radius and Min Neighbours for detached specks."
+        },
+        "ui": {},
+        "version": 1
+      }
+    ],
+    "links": [
+      {
+        "from_node": "Group Input",
+        "from_socket": "Geometry",
+        "to_node": "Remove Floaters",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Min Opacity",
+        "to_node": "Remove Floaters",
+        "to_socket": "Min Opacity"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Isolation Radius",
+        "to_node": "Remove Floaters",
+        "to_socket": "Isolation Radius"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Min Neighbours",
+        "to_node": "Remove Floaters",
+        "to_socket": "Min Neighbours"
+      },
+      {
+        "from_node": "Remove Floaters",
+        "from_socket": "Geometry",
+        "to_node": "Group Output",
+        "to_socket": "Geometry"
+      }
+    ],
+    "interface": {
+      "inputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        },
+        {
+          "identifier": "Min Opacity",
+          "label": "Min Opacity",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 0.05
+          },
+          "min": 0,
+          "max": 1,
+          "step": 0.01
+        },
+        {
+          "identifier": "Isolation Radius",
+          "label": "Isolation Radius",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 3
+          },
+          "min": 0,
+          "max": 20,
+          "step": 0.1
+        },
+        {
+          "identifier": "Min Neighbours",
+          "label": "Min Neighbours",
+          "type": "lfs.int",
+          "default": {
+            "type": "int",
+            "value": 3
+          },
+          "min": 0,
+          "max": 100,
+          "step": 1
+        }
+      ],
+      "outputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        }
+      ]
+    }
+  }
+}

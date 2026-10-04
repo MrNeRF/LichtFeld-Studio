@@ -167,6 +167,7 @@ namespace lfs::vis::gui {
         void applyGTMetricsOverlay();
         void applyLodStatsOverlay();
         void applyProjectDragOverlay();
+        void syncNodePreviewBanner();
         bool applyFrameTooltip();
         void queueCachedVulkanContext(bool refresh_cache);
         enum class RenderReason : std::uint32_t {
@@ -218,6 +219,7 @@ namespace lfs::vis::gui {
         bool toolbar_position_preference_dirty_ = true;
         std::string viewport_toolbar_position_ = "centered";
         std::string applied_viewport_toolbar_position_;
+        std::string applied_node_preview_banner_;
         float viewport_toolbar_free_y_ = 0.5f;
         float applied_toolbar_top_ = std::numeric_limits<float>::quiet_NaN();
         Rml::Element* toolbar_drag_handle_ = nullptr;

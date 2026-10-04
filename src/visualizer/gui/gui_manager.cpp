@@ -18,6 +18,7 @@
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
 #include "gui/import_error.hpp"
+#include "gui/rmlui/elements/node_canvas_element.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "ipc/view_context.hpp"
 #include "preferences.hpp"
@@ -3841,6 +3842,14 @@ namespace lfs::vis::gui {
         // Create components
         menu_bar_ = std::make_unique<MenuBar>();
         rml_modal_overlay_ = std::make_unique<RmlModalOverlay>(&rmlui_manager_);
+        rml_template_browser_ = std::make_unique<RmlTemplateBrowser>(rmlui_manager_, [this](std::string modifier) {
+            viewer_->screens().edit([](auto& screen) { screen.openEditor("node_editor"); });
+            if (auto* canvas = screen_host_.nodeCanvas()) {
+                canvas->refresh();
+                canvas->showModifier(modifier);
+                canvas->arrange(false);
+            }
+        });
         rml_progress_overlay_ = std::make_unique<RmlProgressOverlay>(
             &rmlui_manager_,
             [this] { async_tasks_.dismissImport(); },
@@ -5075,6 +5084,8 @@ namespace lfs::vis::gui {
 
         if (rml_modal_overlay_)
             rml_modal_overlay_->reloadResources();
+        if (rml_template_browser_)
+            rml_template_browser_->reloadResources();
         if (rml_progress_overlay_)
             rml_progress_overlay_->reloadResources();
         if (rml_toast_overlay_)
@@ -5183,6 +5194,7 @@ namespace lfs::vis::gui {
         lfs::python::set_global_context_menu(nullptr);
 
         rml_modal_overlay_.reset();
+        rml_template_browser_.reset();
         rml_progress_overlay_.reset();
         rml_toast_overlay_.reset();
         global_context_menu_.reset();
@@ -6277,7 +6289,8 @@ namespace lfs::vis::gui {
             if (startup_overlay_pointer_capture_active_ && !hasMouseButtonDown(sdl_input))
                 startup_overlay_pointer_capture_active_ = false;
             block_underlay_input = block_underlay_input || modal_overlay_open || modal_overlay_pending ||
-                                   progress_overlay_visible || context_menu_open;
+                                   progress_overlay_visible || context_menu_open ||
+                                   (rml_template_browser_ && rml_template_browser_->isOpen());
             if (block_underlay_input) {
                 auto& focus = guiFocusState();
                 focus.want_capture_mouse = true;
@@ -6296,6 +6309,9 @@ namespace lfs::vis::gui {
             }
             if (escape_pressed)
                 PanelRegistry::instance().cancel_floating_interactions();
+            if (escape_pressed && !(rml_template_browser_ && rml_template_browser_->isOpen()))
+                if (auto* scene_manager = viewer_->getSceneManager())
+                    scene_manager->modifierManager().previewClear();
             if (escape_pressed) {
                 auto* console_state = panels::PythonConsoleState::tryGetInstance();
                 auto* editor = console_state ? console_state->getEditor() : nullptr;
@@ -7019,6 +7035,8 @@ namespace lfs::vis::gui {
             LOG_TIMER_THRESHOLD("gui_render.rml_modal_processInput", 0.25);
             rml_modal_overlay_->processInput(raw_panel_input);
         }
+        if (rml_template_browser_)
+            rml_template_browser_->processInput(raw_panel_input, rml_modal_overlay_->isOpen());
         const bool window_resize_active =
             viewer_ &&
             viewer_->getWindowManager() &&
@@ -7182,6 +7200,8 @@ namespace lfs::vis::gui {
                                               viewport_layout_.size.x,
                                               viewport_layout_.size.y);
             }
+            if (rml_template_browser_)
+                rml_template_browser_->render(panel_input.screen_w, panel_input.screen_h);
             if (rml_modal_overlay_->hasPendingRenderWork()) {
                 LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.modal_overlay", 0.25);
                 rml_modal_overlay_->render(panel_input.screen_w,
@@ -8276,7 +8296,13 @@ namespace lfs::vis::gui {
 
     bool GuiManager::isModalWindowOpen() const {
         return rml_modal_overlay_->isOpen() ||
+               (rml_template_browser_ && rml_template_browser_->isOpen()) ||
                (rml_progress_overlay_ && rml_progress_overlay_->blocksUnderlayInput());
+    }
+
+    void GuiManager::openTemplateBrowser(const core::Uuid target, std::string save_tree) {
+        if (rml_template_browser_ && viewer_->getSceneManager())
+            rml_template_browser_->open(viewer_->getSceneManager()->modifierManager(), target, std::move(save_tree));
     }
 
     bool GuiManager::passiveMouseMoveNeedsRender(const float mouse_x, const float mouse_y) const {
@@ -8610,6 +8636,8 @@ namespace lfs::vis::gui {
         if (startup_overlay_.needsAnimationFrame())
             return true;
         if (rml_modal_overlay_ && rml_modal_overlay_->needsAnimationFrame())
+            return true;
+        if (rml_template_browser_ && rml_template_browser_->needsAnimationFrame())
             return true;
         if (rml_toast_overlay_ && rml_toast_overlay_->needsAnimationFrame())
             return true;

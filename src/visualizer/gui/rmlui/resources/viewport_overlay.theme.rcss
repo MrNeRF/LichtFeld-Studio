@@ -569,3 +569,8 @@
     background-color: @{alpha(toolbar.background,1.0)};
     color: @{text};
 }
+.node-preview-banner {
+    background-color: @{alpha(surface,0.90)};
+    color: @{text};
+    box-shadow: 0 4dp 14dp @{alpha(background,0.22)};
+}

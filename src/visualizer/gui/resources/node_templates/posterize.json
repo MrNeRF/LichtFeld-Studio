@@ -1,0 +1,694 @@
+{
+  "schema_version": 1,
+  "id": "posterize",
+  "name": "Posterize",
+  "description": "Reduce colour values to a small number of graphic bands.",
+  "category": "Colour",
+  "scene_kinds": [
+    "splat",
+    "mesh",
+    "points"
+  ],
+  "adjust": "Use Levels to choose between a bold graphic effect and a subtler stepped grade.",
+  "tree": {
+    "schema_version": 1,
+    "uuid": "builtin.posterize",
+    "name": "Posterize",
+    "tree_type": "lfs.geometry",
+    "nodes": [
+      {
+        "name": "Group Input",
+        "type_id": "lfs.group_input",
+        "location": [
+          -1350,
+          -250
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Group Output",
+        "type_id": "lfs.group_output",
+        "location": [
+          1060,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "none"
+          }
+        },
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Adjust these settings",
+        "type_id": "lfs.frame",
+        "location": [
+          -1220,
+          -430
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "colour": "neutral",
+          "label": "Adjust these settings",
+          "note": "Use Levels to choose between a bold graphic effect and a subtler stepped grade."
+        },
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Colour",
+        "type_id": "lfs.colour_attribute",
+        "location": [
+          -1100,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Channels",
+        "type_id": "lfs.separate_colour",
+        "location": [
+          -880,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "mode": "rgb"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Steps",
+        "type_id": "lfs.math",
+        "location": [
+          -880,
+          -300
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 1
+          }
+        },
+        "properties": {
+          "operation": "subtract"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "RClamp",
+        "type_id": "lfs.math",
+        "location": [
+          -630,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 1
+          }
+        },
+        "properties": {
+          "operation": "clamp"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "RScale",
+        "type_id": "lfs.math",
+        "location": [
+          -400,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0
+          }
+        },
+        "properties": {
+          "operation": "multiply"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "RRound",
+        "type_id": "lfs.math",
+        "location": [
+          -170,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0.5
+          }
+        },
+        "properties": {
+          "operation": "add"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "RFloor",
+        "type_id": "lfs.math",
+        "location": [
+          60,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0
+          }
+        },
+        "properties": {
+          "operation": "floor"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "RDivide",
+        "type_id": "lfs.math",
+        "location": [
+          290,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0
+          }
+        },
+        "properties": {
+          "operation": "divide"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "GClamp",
+        "type_id": "lfs.math",
+        "location": [
+          -630,
+          300
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 1
+          }
+        },
+        "properties": {
+          "operation": "clamp"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "GScale",
+        "type_id": "lfs.math",
+        "location": [
+          -400,
+          300
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0
+          }
+        },
+        "properties": {
+          "operation": "multiply"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "GRound",
+        "type_id": "lfs.math",
+        "location": [
+          -170,
+          300
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0.5
+          }
+        },
+        "properties": {
+          "operation": "add"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "GFloor",
+        "type_id": "lfs.math",
+        "location": [
+          60,
+          300
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0
+          }
+        },
+        "properties": {
+          "operation": "floor"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "GDivide",
+        "type_id": "lfs.math",
+        "location": [
+          290,
+          300
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0
+          }
+        },
+        "properties": {
+          "operation": "divide"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "BClamp",
+        "type_id": "lfs.math",
+        "location": [
+          -630,
+          600
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 1
+          }
+        },
+        "properties": {
+          "operation": "clamp"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "BScale",
+        "type_id": "lfs.math",
+        "location": [
+          -400,
+          600
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0
+          }
+        },
+        "properties": {
+          "operation": "multiply"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "BRound",
+        "type_id": "lfs.math",
+        "location": [
+          -170,
+          600
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0.5
+          }
+        },
+        "properties": {
+          "operation": "add"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "BFloor",
+        "type_id": "lfs.math",
+        "location": [
+          60,
+          600
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0
+          }
+        },
+        "properties": {
+          "operation": "floor"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "BDivide",
+        "type_id": "lfs.math",
+        "location": [
+          290,
+          600
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0
+          }
+        },
+        "properties": {
+          "operation": "divide"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Quantized",
+        "type_id": "lfs.combine_colour",
+        "location": [
+          580,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "mode": "rgb"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Posterize",
+        "type_id": "lfs.set_colour",
+        "location": [
+          810,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      }
+    ],
+    "links": [
+      {
+        "from_node": "Group Input",
+        "from_socket": "Levels",
+        "to_node": "Steps",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Colour",
+        "from_socket": "Colour",
+        "to_node": "Channels",
+        "to_socket": "Colour"
+      },
+      {
+        "from_node": "Channels",
+        "from_socket": "R",
+        "to_node": "RClamp",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "RClamp",
+        "from_socket": "Value",
+        "to_node": "RScale",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "RScale",
+        "from_socket": "Value",
+        "to_node": "RRound",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "RRound",
+        "from_socket": "Value",
+        "to_node": "RFloor",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "RFloor",
+        "from_socket": "Value",
+        "to_node": "RDivide",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Steps",
+        "from_socket": "Value",
+        "to_node": "RScale",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Steps",
+        "from_socket": "Value",
+        "to_node": "RDivide",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "RDivide",
+        "from_socket": "Value",
+        "to_node": "Quantized",
+        "to_socket": "R"
+      },
+      {
+        "from_node": "Channels",
+        "from_socket": "G",
+        "to_node": "GClamp",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "GClamp",
+        "from_socket": "Value",
+        "to_node": "GScale",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "GScale",
+        "from_socket": "Value",
+        "to_node": "GRound",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "GRound",
+        "from_socket": "Value",
+        "to_node": "GFloor",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "GFloor",
+        "from_socket": "Value",
+        "to_node": "GDivide",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Steps",
+        "from_socket": "Value",
+        "to_node": "GScale",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Steps",
+        "from_socket": "Value",
+        "to_node": "GDivide",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "GDivide",
+        "from_socket": "Value",
+        "to_node": "Quantized",
+        "to_socket": "G"
+      },
+      {
+        "from_node": "Channels",
+        "from_socket": "B",
+        "to_node": "BClamp",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "BClamp",
+        "from_socket": "Value",
+        "to_node": "BScale",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "BScale",
+        "from_socket": "Value",
+        "to_node": "BRound",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "BRound",
+        "from_socket": "Value",
+        "to_node": "BFloor",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "BFloor",
+        "from_socket": "Value",
+        "to_node": "BDivide",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Steps",
+        "from_socket": "Value",
+        "to_node": "BScale",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Steps",
+        "from_socket": "Value",
+        "to_node": "BDivide",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "BDivide",
+        "from_socket": "Value",
+        "to_node": "Quantized",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Quantized",
+        "from_socket": "Colour",
+        "to_node": "Posterize",
+        "to_socket": "Colour"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Geometry",
+        "to_node": "Posterize",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Posterize",
+        "from_socket": "Geometry",
+        "to_node": "Group Output",
+        "to_socket": "Geometry"
+      }
+    ],
+    "interface": {
+      "inputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        },
+        {
+          "identifier": "Levels",
+          "label": "Levels",
+          "type": "lfs.int",
+          "default": {
+            "type": "int",
+            "value": 5
+          },
+          "min": 2,
+          "max": 64,
+          "step": 1
+        }
+      ],
+      "outputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        }
+      ]
+    }
+  }
+}

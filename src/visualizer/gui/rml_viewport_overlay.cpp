@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rml_viewport_overlay.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_input.hpp"
@@ -20,10 +21,14 @@
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
+#include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
+#include "visualizer/core/services.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/ElementUtilities.h>
 #include <RmlUi/Core/Input.h>
 #include <RmlUi/Core/StringUtilities.h>
 #include <algorithm>
@@ -153,6 +158,35 @@ namespace lfs::vis::gui {
         append(RenderReason::ThemePresentation, "theme_presentation");
         append(RenderReason::Tooltip, "tooltip");
         return sources.empty() ? "unknown" : sources;
+    }
+
+    void RmlViewportOverlay::syncNodePreviewBanner() {
+        if (!document_)
+            return;
+        auto* element = document_->GetElementById("node-preview-banner");
+        if (!element)
+            return;
+        std::string message;
+        if (const auto* scene = services().sceneOrNull())
+            if (const auto& preview = scene->modifierManager().previewState()) {
+                std::string range;
+                if (preview->socket_type != lfs::nodes::GEOMETRY_SOCKET &&
+                    preview->range_min && preview->range_max)
+                    range = std::format(" · {:.3g}–{:.3g}", *preview->range_min,
+                                        *preview->range_max);
+                message = std::vformat(LOC("node_editor.previewing"),
+                                       std::make_format_args(preview->label, preview->socket, range));
+            }
+        if (message == applied_node_preview_banner_ && element->IsClassSet("hidden") == message.empty())
+            return;
+        applied_node_preview_banner_ = message;
+        element->SetClass("hidden", message.empty());
+        element->SetInnerRML(Rml::StringUtilities::EncodeRml(message));
+        const float dp = std::max(0.01f, element->GetContext()->GetDensityIndependentPixelRatio());
+        const float width = Rml::ElementUtilities::GetStringWidth(element, message) / dp + 22.0f;
+        element->SetProperty("width", std::format("{}dp", width));
+        element->SetProperty("flex", std::format("0 1 {}dp", width));
+        markRenderNeeded(RenderReason::DocumentSync);
     }
 
     void RmlViewportOverlay::init(RmlUIManager* mgr) {
@@ -1371,6 +1405,7 @@ namespace lfs::vis::gui {
             return;
         if (vp_size_.x <= 0 || vp_size_.y <= 0)
             return;
+        syncNodePreviewBanner();
 
         const int w = static_cast<int>(vp_size_.x);
         const int h = static_cast<int>(vp_size_.y);
@@ -1428,6 +1463,7 @@ namespace lfs::vis::gui {
             return;
         if (vp_size_.x <= 0 || vp_size_.y <= 0)
             return;
+        syncNodePreviewBanner();
 
         if (!doc_registered_) {
             lfs::python::register_rml_document("viewport_overlay", document_);

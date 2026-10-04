@@ -141,7 +141,13 @@ namespace lfs::core {
     // query point itself. values is Int32 or Float32 [N]; the result has the
     // same dtype, shape, device and backend. Nonfinite query points retain
     // their own value. Scratch space is O(N), independent of scene extent.
-    LFS_CORE_API Tensor radius_neighbor_min(const Tensor& points, const Tensor& values, float radius);
+    // Optional Float32 [N] local radii use mutual (symmetric) connectivity:
+    // distance(i,j) <= min(radius, radii[i], radii[j]). Only points with local
+    // radius > radius/2 participate; others retain their value. Taking the
+    // minimum over octave-wide calls covers every mutual edge while excluding
+    // dense points from coarse grids. radii must be finite and positive.
+    LFS_CORE_API Tensor radius_neighbor_min(const Tensor& points, const Tensor& values, float radius,
+                                            const Tensor* radii = nullptr);
 
     // Exact nearest target for each Float32 [N,3] query. Int32 [N] indices,
     // ties choose the first target; empty targets/nonfinite queries return -1.
@@ -158,7 +164,7 @@ namespace lfs::core {
 
     // Approximate mean distance to the nearest three other points. Search 27
     // cells, expanding once to 125 when fewer than three are found. Each cell
-    // visits at most 128 hash entries, bounding work even for coincident clouds.
+    // inspects every candidate, independently of hash insertion order.
     // Float32 [N,3] -> Float32 [N], same device/backend. A point with no local
     // neighbours uses four times cell_width. Nonfinite points produce zero.
     LFS_CORE_API Tensor point_neighbor_spacing(const Tensor& points, float cell_width);

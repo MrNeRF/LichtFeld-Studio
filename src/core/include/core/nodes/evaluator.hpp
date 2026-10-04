@@ -61,6 +61,11 @@ namespace lfs::nodes {
         // EvalInputs without a second evaluator API. Ordinary callers leave it empty.
         std::vector<std::pair<std::string, std::string>> group_stack;
         std::string cache_namespace;
+        // Evaluate only this output and its dependencies. For a field, geometry
+        // is the first reachable consumer's input (or the modifier input).
+        std::string requested_node;
+        std::string requested_socket;
+        bool resolve_preview_context = true;
         float seconds = 0.0f;
         float frames_per_second = 24.0f;
     };
@@ -97,6 +102,7 @@ namespace lfs::nodes {
         std::unordered_map<std::string, double> time_ms;
         std::unordered_map<std::string, NodeEvaluation> nodes;
         std::unordered_map<std::string, Value> output_values;
+        std::size_t output_key = 0;
         bool cancelled = false;
     };
 

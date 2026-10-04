@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "id": "camera_cleanup",
+  "name": "Camera coverage cleanup",
+  "description": "Remove geometry supported by fewer than a chosen number of capture cameras.",
+  "category": "Clean-up",
+  "scene_kinds": [
+    "splat",
+    "mesh",
+    "points"
+  ],
+  "adjust": "Load dataset cameras, then lower Minimum Views if too much useful geometry disappears.",
+  "tree": {
+    "schema_version": 1,
+    "uuid": "builtin.camera_cleanup",
+    "name": "Camera coverage cleanup",
+    "tree_type": "lfs.geometry",
+    "nodes": [
+      {
+        "name": "Group Input",
+        "type_id": "lfs.group_input",
+        "location": [
+          -760,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Group Output",
+        "type_id": "lfs.group_output",
+        "location": [
+          520,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "none"
+          }
+        },
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Camera Coverage",
+        "type_id": "lfs.camera_coverage",
+        "location": [
+          -320,
+          -160
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Unsupported",
+        "type_id": "lfs.compare",
+        "location": [
+          -80,
+          -160
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 3
+          }
+        },
+        "properties": {
+          "operation": "less_than"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Delete Unsupported",
+        "type_id": "lfs.delete_geometry",
+        "location": [
+          180,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "geometry"
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Adjust these settings",
+        "type_id": "lfs.frame",
+        "location": [
+          -620,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "colour": "neutral",
+          "label": "Adjust these settings",
+          "note": "Load dataset cameras, then lower Minimum Views if too much useful geometry disappears."
+        },
+        "ui": {},
+        "version": 1
+      }
+    ],
+    "links": [
+      {
+        "from_node": "Group Input",
+        "from_socket": "Geometry",
+        "to_node": "Delete Unsupported",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Camera Coverage",
+        "from_socket": "Count",
+        "to_node": "Unsupported",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Unsupported",
+        "from_socket": "Result",
+        "to_node": "Delete Unsupported",
+        "to_socket": "Selection"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Minimum Views",
+        "to_node": "Unsupported",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Delete Unsupported",
+        "from_socket": "Geometry",
+        "to_node": "Group Output",
+        "to_socket": "Geometry"
+      }
+    ],
+    "interface": {
+      "inputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        },
+        {
+          "identifier": "Minimum Views",
+          "label": "Minimum Views",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 3
+          },
+          "min": 0,
+          "max": 1000,
+          "step": 1
+        }
+      ],
+      "outputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        }
+      ]
+    }
+  }
+}

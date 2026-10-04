@@ -5,6 +5,7 @@
 
 #include "core/logger.hpp"
 #include "core/nodes/nodes.hpp"
+#include "core/path_utils.hpp"
 #include "py_tensor.hpp"
 #include "py_ui.hpp"
 #include "py_viewer_dispatch.hpp"
@@ -1641,6 +1642,101 @@ namespace lfs::python {
             if (!result)
                 throw std::runtime_error("Scene node or scene manager is unavailable");
             return *result; }, nb::arg("node_name"), nb::arg("tree"), nb::arg("name") = "");
+        module.def("templates", [] {
+            const auto result = invoke_on_viewer([] {
+                nlohmann::json values = nlohmann::json::array();
+                if (auto* manager = live_manager())
+                    for (const auto& value : manager->templates())
+                        values.push_back({{"id", value.id}, {"name", value.name}, {"description", value.description}, {"category", value.category}, {"scene_kinds", value.scene_kinds}, {"adjust", value.adjust}, {"builtin", value.builtin}});
+                return values;
+            },
+                                                 nlohmann::json::array());
+            return json_to_python(result);
+        });
+        module.def("apply_template", [](const std::string& node_name, const std::string& template_id, std::string name) {
+            const auto result = invoke_on_viewer(
+                [node_name, template_id, name = std::move(name)]() mutable
+                    -> std::optional<PyModifier> {
+                    const auto uuid = scene_node_uuid(node_name);
+                    if (!uuid || !live_manager())
+                        return std::nullopt;
+                    const auto applied = live_manager()->applyTemplate(*uuid, template_id,
+                                                                        std::move(name));
+                    if (!applied)
+                        throw std::invalid_argument(applied.error().message);
+                    return PyModifier{*uuid, (*applied)->uuid};
+                }, std::optional<PyModifier>{});
+            if (!result)
+                throw std::runtime_error("Scene node or scene manager is unavailable");
+            return *result; }, nb::arg("target"), nb::arg("id"), nb::arg("name") = "");
+        module.def("save_template", [](const PyTree& tree, std::string name, std::string description, std::string category) {
+            const auto result = invoke_on_viewer(
+                [tree, name = std::move(name), description = std::move(description),
+                 category = std::move(category)]() mutable {
+                    if (!live_manager())
+                        throw std::runtime_error("User templates require a running viewer");
+                    auto saved = live_manager()->saveTemplate(tree.uuid, std::move(name),
+                                                               std::move(description),
+                                                               std::move(category));
+                    if (!saved)
+                        throw std::invalid_argument(saved.error().message);
+                    return saved->id;
+                }, std::string{});
+            return result; }, nb::arg("tree"), nb::arg("name"), nb::arg("description"), nb::arg("category"));
+        module.def("delete_template", [](const std::string& id) {
+            return invoke_on_viewer([id] {
+                if (!live_manager())
+                    return false;
+                const auto result = live_manager()->deleteTemplate(id);
+                if (!result)
+                    throw std::invalid_argument(result.error().message);
+                return true;
+            },
+                                    false);
+        });
+        module.def("rename_template", [](const std::string& id, const std::string& name) { return invoke_on_viewer([id, name] {
+                                                                                               if (!live_manager())
+                                                                                                   throw std::runtime_error("User templates require a running viewer");
+                                                                                               const auto result = live_manager()->renameTemplate(id, name);
+                                                                                               if (!result)
+                                                                                                   throw std::invalid_argument(result.error().message);
+                                                                                               return true;
+                                                                                           },
+                                                                                                                   false); }, nb::arg("id"), nb::arg("name"));
+        module.def("import_template", [](const std::string& path) { return invoke_on_viewer([path] {
+                                                                        if (!live_manager())
+                                                                            throw std::runtime_error("User templates require a running viewer");
+                                                                        const auto result = live_manager()->importTemplate(core::utf8_to_path(path));
+                                                                        if (!result)
+                                                                            throw std::invalid_argument(result.error().message);
+                                                                        return result->id;
+                                                                    },
+                                                                                            std::string{}); }, nb::arg("path"));
+        module.def("export_template", [](const std::string& id, const std::string& path) { return invoke_on_viewer([id, path] {
+                                                                                               if (!live_manager())
+                                                                                                   throw std::runtime_error("User templates require a running viewer");
+                                                                                               const auto result = live_manager()->exportTemplate(id, core::utf8_to_path(path));
+                                                                                               if (!result)
+                                                                                                   throw std::invalid_argument(result.error().message);
+                                                                                               return true;
+                                                                                           },
+                                                                                                                   false); }, nb::arg("id"), nb::arg("path"));
+        module.def("preview", [](const std::string& target, const std::string& node, std::optional<std::string> socket) {
+            const auto error = invoke_on_viewer([target, node, socket = std::move(socket)] {
+                const auto uuid = scene_node_uuid(target);
+                if (!uuid || !live_manager())
+                    return std::string{"Scene node or scene manager is unavailable"};
+                const auto result = live_manager()->previewSet(*uuid, node, socket);
+                return result ? std::string{} : result.error().message;
+            }, std::string{"Viewer is unavailable"});
+            if (!error.empty())
+                throw std::invalid_argument(error); }, nb::arg("target"), nb::arg("node"), nb::arg("socket") = nb::none());
+        module.def("clear_preview", [] {
+            invoke_on_viewer([] {
+                if (live_manager())
+                    live_manager()->previewClear();
+            });
+        });
         module.def("modifiers", [](const std::string& node_name) {
             std::vector<PyModifier> result;
             const auto uuid = scene_node_uuid(node_name);

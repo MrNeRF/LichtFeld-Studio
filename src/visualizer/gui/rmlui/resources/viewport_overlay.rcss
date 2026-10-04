@@ -2302,3 +2302,28 @@ body {
     white-space: nowrap;
     font-size: 13dp;
 }
+.node-preview-position {
+    position: absolute;
+    z-index: 20;
+    top: 24dp;
+    left: 84dp;
+    right: 102dp;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+}
+.node-preview-banner {
+    flex: 0 1 340dp;
+    width: 340dp;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 5dp 11dp;
+    border-radius: 12dp;
+    border-width: 0;
+    font-size: 11dp;
+    line-height: 16dp;
+    text-align: center;
+    pointer-events: none;
+}
+.node-preview-banner.hidden { display: none; }

@@ -7,8 +7,8 @@ Finds and removes small connected groups of splats or points.
 
 ## How to use
 
-Radius is a multiple of the geometry's median local spacing.\
-Components propagate labels on the GPU; Min Size removes only smaller components. Meshes are not supported.
+Radius multiplies each element's nearby spacing (three nearest neighbours). Both elements must reach each other.\
+Min Size removes only smaller connected groups, preserving sparse surfaces. Meshes are not supported.
 
 ## Inputs
 
@@ -16,7 +16,7 @@ Components propagate labels on the GPU; Min Size removes only smaller components
 | --- | --- | --- | --- | --- | --- |
 | Geometry | `Geometry` | lfs.geometry | — | — | Splat or point geometry to clean. |
 | Selection | `Selection` | lfs.float | 1 | min 0; max 1; step 0.01; accepts per-element values | Elements eligible for removal; values of 0.5 or more are selected. |
-| Radius | `Radius` | lfs.float | 2 | min 0; step 0.1 | Connection radius as a multiple of median local spacing. |
+| Radius | `Radius` | lfs.float | 2 | min 0; step 0.1 | Connection radius as a multiple of each element's local spacing; both endpoints must reach each other. |
 | Min Size | `Min Size` | lfs.int | 16 | min 1; step 1 | Components with fewer elements are removal candidates. |
 
 ## Outputs

@@ -29,6 +29,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Geometry node modifiers
         nodes/modifier_manager.cpp
+        nodes/node_templates.cpp
         nodes/node_animation.cpp
         nodes/modifier_manager_animation.cpp
         nodes/camera_nodes.cpp
@@ -139,6 +140,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/film_strip_renderer.cpp
         gui/sequencer_ui_manager.cpp
         gui/rml_modal_overlay.cpp
+        gui/rml_template_browser.cpp
         gui/rml_progress_overlay.cpp
         gui/rml_toast_overlay.cpp
         gui/gui_error_consumer.cpp
@@ -544,6 +546,7 @@ if(LFS_DEV_IMPORT_SOURCE_RESOURCES AND NOT BUILD_PORTABLE)
     list(APPEND LFS_VISUALIZER_DEV_RESOURCE_DEFINITIONS
             LFS_DEV_RMLUI_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/gui/rmlui/resources"
             LFS_DEV_LOCALE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales"
+            LFS_DEV_NODE_TEMPLATE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/node_templates"
     )
     message(STATUS "Resource dev mode: RmlUI imports from ${CMAKE_CURRENT_SOURCE_DIR}/gui/rmlui/resources")
     message(STATUS "Resource dev mode: locales import from ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales")
@@ -618,6 +621,8 @@ if(NOT LFS_MACOS_PORTABLE_APP)
             FILES_MATCHING
             PATTERN "*.json"
     )
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/node_templates/
+            DESTINATION share/LichtFeld-Studio/node_templates)
     install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locale_index.json
             DESTINATION share/LichtFeld-Studio
     )

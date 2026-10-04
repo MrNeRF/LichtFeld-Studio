@@ -12,6 +12,7 @@
 
 #include <array>
 #include <expected>
+#include <filesystem>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
@@ -79,6 +80,29 @@ namespace lfs::vis {
         std::string graph;
     };
 
+    struct NodeGraphTemplate {
+        std::string id;
+        std::string name;
+        std::string description;
+        std::string category;
+        std::vector<std::string> scene_kinds;
+        std::string adjust;
+        nlohmann::json tree;
+        bool builtin = false;
+    };
+
+    struct NodePreviewState {
+        core::Uuid target;
+        std::string modifier_uuid;
+        std::string tree_uuid;
+        std::string node;
+        std::string socket;
+        std::string socket_type;
+        std::string label;
+        std::optional<float> range_min;
+        std::optional<float> range_max;
+    };
+
     enum class NodeViewportGizmoKind {
         Box,
         Ellipsoid,
@@ -134,6 +158,27 @@ namespace lfs::vis {
         [[nodiscard]] const lfs::nodes::NodeTree* tree(std::string_view uuid_or_name) const;
         [[nodiscard]] std::vector<lfs::nodes::NodeTree*> trees();
         bool removeTree(std::string_view uuid_or_name);
+        [[nodiscard]] std::vector<NodeGraphTemplate> templates() const;
+        [[nodiscard]] std::expected<Modifier*, ModifierError>
+        applyTemplate(const core::Uuid& node_uuid, std::string_view template_id,
+                      std::string name = {});
+        [[nodiscard]] std::expected<NodeGraphTemplate, ModifierError>
+        saveTemplate(std::string_view tree_uuid, std::string name,
+                     std::string description, std::string category);
+        [[nodiscard]] ModifierResult renameTemplate(std::string_view template_id,
+                                                    std::string name);
+        [[nodiscard]] ModifierResult deleteTemplate(std::string_view template_id);
+        [[nodiscard]] std::expected<NodeGraphTemplate, ModifierError>
+        importTemplate(const std::filesystem::path& path);
+        [[nodiscard]] ModifierResult exportTemplate(std::string_view template_id,
+                                                    const std::filesystem::path& path) const;
+        [[nodiscard]] ModifierResult previewSet(const core::Uuid& node_uuid,
+                                                std::string_view node,
+                                                std::optional<std::string> socket = {});
+        void previewClear();
+        [[nodiscard]] const std::optional<NodePreviewState>& previewState() const noexcept {
+            return preview_;
+        }
         [[nodiscard]] std::string uniqueTreeName(std::string name, std::string_view except_uuid = {}) const;
         [[nodiscard]] std::expected<std::string, ModifierError>
         copyNodes(std::string_view tree_uuid, const std::vector<std::string>& nodes) const;
@@ -321,6 +366,7 @@ namespace lfs::vis {
         };
         std::optional<ViewportSelection> viewport_selection_;
         std::optional<ColourPick> colour_pick_;
+        std::optional<NodePreviewState> preview_;
         bool paint_mode_ = false;
         // Viewport brush radius in logical screen pixels. Samples convert this
         // to world and then host-local units at the picked surface depth.
