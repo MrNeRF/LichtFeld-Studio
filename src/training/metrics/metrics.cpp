@@ -1315,7 +1315,7 @@ namespace lfs::training {
                                                  cudaEventRecord(lpips_start_event, lpips_stream) == cudaSuccess;
                         auto value = mask.is_valid()
                                          ? _lpips_metric->forward(
-                                               pred_lpips, target_lpips, mask_as_float01(mask),
+                                               pred_lpips, target_lpips, mask,
                                                lfs::core::nn::models::InputScaling::Identity)
                                          : _lpips_metric->forward(
                                                pred_lpips, target_lpips,

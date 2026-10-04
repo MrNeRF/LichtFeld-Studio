@@ -787,15 +787,15 @@ namespace lfs::core {
                 prepare_inputs_for_stream({this, &indices_int32});
             CUDAStreamGuard guard(execution_stream);
             result = empty(indices.shape(), device_, dtype_);
-            tensor_ops::launch_take(flat.ptr<float>(), indices_int32.ptr<int>(),
+            tensor_ops::launch_take(std::as_const(flat).ptr<float>(), std::as_const(indices_int32).ptr<int>(),
                                     result.ptr<float>(), flat.numel(), indices_int32.numel(), result.stream());
             // No sync - tensor operation
         } else {
             pin_operands({&flat, &indices_int32});
             result = empty(indices.shape(), device_, dtype_);
-            const float* src = flat.ptr<float>();
+            const float* src = std::as_const(flat).ptr<float>();
             float* dst = result.ptr<float>();
-            const int* idx = indices_int32.ptr<int>();
+            const int* idx = std::as_const(indices_int32).ptr<int>();
             size_t total = flat.numel();
 
             // IMPORTANT: Use sequential execution to avoid TBB threading issues with CUDA
