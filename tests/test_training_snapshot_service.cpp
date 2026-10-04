@@ -379,6 +379,12 @@ namespace {
 
 #if defined(__APPLE__)
     TEST_F(TrainingSnapshotServiceTest, MeasuresResidentCpuStateDuringCapture) {
+        // Isolate capture assertions from ambient runner memory; the admission
+        // tests exercise low-memory rejection separately; RSS is still measured.
+        const ScopedEnvironmentVariable available_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
+            std::to_string(64ull * 1024 * 1024 * 1024));
+
         constexpr std::size_t resident_bytes = 32 * MIB;
         constexpr std::size_t count = 512;
         auto params = make_snapshot_test_params(count);
@@ -829,6 +835,12 @@ namespace {
 
     TEST_F(TrainingSnapshotServiceTest,
            Q16Sh3ChunkedCaptureMatchesHostSerializeBitIdentical) {
+        // Isolate capture assertions from ambient runner memory; the admission
+        // tests exercise low-memory rejection separately; RSS is still measured.
+        const ScopedEnvironmentVariable available_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
+            std::to_string(64ull * 1024 * 1024 * 1024));
+
         lfs::training::sh_value::
             set_sh_value_quant_enabled_for_testing(true);
         struct QuantGuard {
