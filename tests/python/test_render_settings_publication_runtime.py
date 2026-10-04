@@ -67,7 +67,7 @@ retained = lf.get_render_settings()
 grid = retained.show_grid
 color = retained.background_color
 try:
-    lf.get_render_settings().background_color = [0.125, 0.25, 0.5]
+    lf.get_render_settings().background_color = (0.125, 0.25, 0.5)
     generation = RuntimeState.render_settings_generation.value
     retained.show_grid = not grid
     assert RuntimeState.render_settings_generation.value > generation
