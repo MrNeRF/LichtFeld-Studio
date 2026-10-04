@@ -1783,6 +1783,91 @@ namespace {
     // Fails if components are cut short (the old label propagation stopped after 64 rounds, splitting long chains),
     // if a point outside the selection still bridges two components, or if a backend labels differently.
     // Fails if the indexed spacing query differs from the full one at the same points, or skips duplicates.
+    TEST_P(NodesCore, PerPointRadiusCountsMatchBruteForce) {
+        // A dense cluster, a sparse cloud and a far field with radii from a thousandth to tens of units, so
+        // tree boxes are skipped, counted whole and opened, around queries inside and outside the references.
+        std::mt19937 random(9133);
+        std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+        std::normal_distribution<float> normal(0.0f, 1.0f);
+        constexpr size_t count = 4000;
+        std::vector<float> xyz(count * 3), radii(count), references(count), queries(count);
+        for (size_t i = 0; i < count; ++i) {
+            const float pick = unit(random);
+            const float spread = pick < 0.5f ? 0.05f : pick < 0.8f ? 2.0f
+                                                                   : 10.0f;
+            const float offset = pick < 0.8f ? 0.0f : 40.0f;
+            xyz[i * 3] = offset + spread * normal(random);
+            xyz[i * 3 + 1] = spread * normal(random);
+            xyz[i * 3 + 2] = spread * normal(random);
+            radii[i] = std::exp(std::log(1e-3f) + unit(random) * (std::log(50.0f) - std::log(1e-3f)));
+            references[i] = unit(random) < 0.8f ? 1.0f : 0.0f;
+            queries[i] = unit(random) < 0.7f ? 1.0f : 0.0f;
+        }
+        std::copy_n(xyz.begin() + 3, 3, xyz.begin() + 6);
+        xyz[30] = std::numeric_limits<float>::quiet_NaN();
+        radii[5] = 0.0f;
+        radii[6] = -1.0f;
+        radii[7] = std::numeric_limits<float>::quiet_NaN();
+        radii[8] = std::numeric_limits<float>::infinity();
+        radii[9] = 1e-30f;
+        const auto finite = [&](size_t i) {
+            return std::isfinite(xyz[i * 3]) && std::isfinite(xyz[i * 3 + 1]) && std::isfinite(xyz[i * 3 + 2]);
+        };
+        // The library's inclusive test, each operation rounded on its own.
+        const auto within = [](const float* a, const float* b, const float radius) {
+            volatile float x = a[0] - b[0], y = a[1] - b[1], z = a[2] - b[2];
+            volatile float limit = radius * radius;
+            if (limit < std::numeric_limits<float>::min() || !std::isfinite(limit)) {
+                x = x / radius;
+                y = y / radius;
+                z = z / radius;
+                limit = 1.0f;
+            }
+            volatile float xx = x * x, yy = y * y, zz = z * z;
+            volatile float partial = xx + yy;
+            volatile float total = partial + zz;
+            return total <= limit;
+        };
+        const auto brute = [&](const bool masked_references) {
+            std::vector<int> counts(count, 0);
+            for (size_t i = 0; i < count; ++i) {
+                if (!finite(i) || !(radii[i] > 0.0f) || !std::isfinite(radii[i]))
+                    continue;
+                for (size_t j = 0; j < count; ++j)
+                    if (j != i && (!masked_references || references[j] != 0.0f) && finite(j) &&
+                        within(&xyz[i * 3], &xyz[j * 3], radii[i]))
+                        ++counts[i];
+            }
+            return counts;
+        };
+        const auto points = tensor(xyz, {count, 3});
+        const auto radius_tensor = tensor(radii, {count});
+        const auto query_mask = tensor(queries, {count}).to(lfs::core::DataType::Bool);
+        for (const bool masked_references : {false, true}) {
+            const auto counts = brute(masked_references);
+            const auto reference_mask = masked_references ? tensor(references, {count}).to(lfs::core::DataType::Bool)
+                                                          : Tensor::full_bool({count}, true, device());
+            for (const int32_t max_count : {1, 3, 7, 1 << 20}) {
+                SCOPED_TRACE(std::format("masked references {} max_count {}", masked_references, max_count));
+                std::vector<int> expected(count), expected_queried(count);
+                for (size_t i = 0; i < count; ++i) {
+                    expected[i] = std::min(counts[i], max_count);
+                    expected_queried[i] = queries[i] != 0.0f ? expected[i] : 0;
+                }
+                const auto all = lfs::core::radius_neighbor_counts(points, reference_mask, radius_tensor, max_count);
+                EXPECT_EQ(all.device(), device());
+                EXPECT_EQ(all.dtype(), lfs::core::DataType::Int32);
+                EXPECT_EQ(host<int>(all), expected);
+                EXPECT_EQ(host<int>(lfs::core::radius_neighbor_counts(points, reference_mask, radius_tensor, max_count,
+                                                                      &query_mask)),
+                          expected_queried);
+            }
+        }
+        // No usable reference at all.
+        const auto none = Tensor::zeros({count}, device(), lfs::core::DataType::Bool);
+        EXPECT_EQ(host<int>(lfs::core::radius_neighbor_counts(points, none, radius_tensor, 4)), std::vector<int>(count, 0));
+    }
+
     TEST_P(NodesCore, RadiusConnectedComponentsMatchBruteForce) {
         const auto reference = [](const std::vector<float>& xyz, const std::vector<bool>& selected, const float radius) {
             const size_t count = xyz.size() / 3;

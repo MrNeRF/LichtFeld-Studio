@@ -175,6 +175,14 @@ namespace lfs::core {
                                                      ExecContext /*context*/) {
                 return false;
             }
+            // Int32 [N] neighbour counts over a point tree (see PointTreeProgram), with one Float32 radius per
+            // point. Returns false, writing nothing, when the backend has no kernel for it.
+            virtual bool point_tree_counts(StorageRef /*points*/, StorageRef /*sorted*/, StorageRef /*boxes*/,
+                                           StorageRef /*visit*/, StorageRef /*radii*/,
+                                           std::optional<StorageRef> /*queries*/, StorageRef /*output*/,
+                                           const PointTreeProgram& /*program*/, ExecContext /*context*/) {
+                return false;
+            }
             virtual void point_neighbor_spacing(StorageRef points, StorageRef references,
                                                 StorageRef heads, StorageRef next, StorageRef output,
                                                 size_t count, size_t buckets, float cell_width, ExecContext context) = 0;
@@ -506,6 +514,9 @@ namespace lfs::core {
             bool radius_connected_components(StorageRef points, StorageRef references, StorageRef heads,
                                              StorageRef next, StorageRef labels, size_t count, size_t buckets,
                                              float radius, ExecContext context) override;
+            bool point_tree_counts(StorageRef points, StorageRef sorted, StorageRef boxes, StorageRef visit,
+                                   StorageRef radii, std::optional<StorageRef> queries, StorageRef output,
+                                   const PointTreeProgram& program, ExecContext context) override;
             void point_neighbor_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                         size_t, size_t, float, ExecContext) override;
             void project_points(StorageRef points, StorageRef output, size_t count,

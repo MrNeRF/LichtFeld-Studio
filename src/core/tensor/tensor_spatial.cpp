@@ -2,7 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor_spatial.hpp"
+#include "core/tensor_export.hpp"
+#include "core/tensor_fused.hpp"
 #include "internal/point_spatial.hpp"
+#include "internal/point_tree.hpp"
 #include "internal/tensor_impl.hpp"
 
 #include <algorithm>
@@ -117,6 +120,189 @@ namespace lfs::core {
                                   const int32_t max_count, const Tensor* queries) {
         LFS_ASSERT_MSG(max_count > 0, std::format("radius_neighbor_counts requires a positive max_count (max_count={})", max_count));
         return radius_query(points, references, radius, true, queries, max_count);
+    }
+
+    namespace {
+        struct PointTree {
+            Tensor sorted;
+            Tensor boxes;
+            Tensor visit;
+            PointTreeProgram program;
+        };
+
+        // Order of finite [N,3] points along a 30-bit Morton curve, which keeps runs of the order spatially
+        // compact. The curve spans the interquartile box of a sample widened by twice its size, so sparse
+        // outliers clamp to the border cells instead of coarsening every cell; one 32-bit key sorts as a
+        // float in place of 64-bit keys.
+        Tensor morton30_order(const Tensor& points) {
+            static const auto kernel = [] {
+                namespace f = fused;
+                f::Builder builder(1);
+                const auto xyz = builder.input(DataType::Float32, 2);
+                const auto low = builder.input(DataType::Float32, 1);
+                const auto scale = builder.input(DataType::Float32, 1);
+                const auto row = builder.iota(0);
+                const auto spread = [](f::Expr v) {
+                    v = (v | (v << 16u)) & 0x030000FFu;
+                    v = (v | (v << 8u)) & 0x0300F00Fu;
+                    v = (v | (v << 4u)) & 0x030C30C3u;
+                    return (v | (v << 2u)) & 0x09249249u;
+                };
+                const auto axis = [&](const int32_t a) {
+                    const auto offset = xyz.gather({row, builder.constant(a)}) - low.at({uint32_t(a)});
+                    return spread(f::clamp(f::floor(offset * scale.at({uint32_t(a)})), 0.0f, 1023.0f).cast(DataType::UInt32));
+                };
+                // Offset into the normal floats, whose order as Float32 is the order of their bits.
+                builder.output((((axis(0) << 2u) | (axis(1) << 1u) | axis(2)) + 0x00800000u).cast(DataType::Int32),
+                               DataType::Int32);
+                return f::Kernel(builder);
+            }();
+            const size_t count = points.size(0), sampled = std::min<size_t>(count, 4096);
+            const auto indices = (Tensor::linspace(0, static_cast<float>(sampled - 1), sampled, points.device()) *
+                                  (static_cast<float>(count) / static_cast<float>(sampled)))
+                                     .to(DataType::Int32);
+            const auto sorted = points.index_select(0, indices).sort(0).first;
+            const auto lower = sorted.slice(0, sampled / 4, sampled / 4 + 1).squeeze(0);
+            const auto upper = sorted.slice(0, sampled * 3 / 4, sampled * 3 / 4 + 1).squeeze(0);
+            const auto spread = upper - lower;
+            const auto low = lower - spread * 2.0f;
+            const auto extent = spread * 5.0f;
+            const auto scale = Tensor::where(extent.gt(0.0f), extent.reciprocal() * 1024.0f, Tensor::zeros_like(extent));
+            const auto keys = kernel({count}, {points, low.contiguous(), scale.contiguous()})[0];
+            return keys.view_as(DataType::Float32).sort(0).second.to(DataType::Int32);
+        }
+
+        // Rows padded to a multiple of the fanout by repeating the last, which leaves every bound unchanged.
+        Tensor fanout_groups(const Tensor& rows) {
+            const size_t count = rows.size(0), width = rows.size(1);
+            const size_t groups = (count + kPointTreeFanout - 1) / kPointTreeFanout;
+            const auto padded = groups * kPointTreeFanout == count
+                                    ? rows
+                                    : Tensor::cat({rows, rows.slice(0, count - 1, count).expand({groups * kPointTreeFanout - count, width})}, 0);
+            return padded.contiguous().reshape({groups, size_t(kPointTreeFanout), width});
+        }
+
+        PointTree build_point_tree(const Tensor& points, const Tensor& references) {
+            PointTree tree;
+            const size_t count = points.size(0);
+            tree.program.points = static_cast<uint32_t>(count);
+            const auto keep = references.to(DataType::Bool).logical_and(points.isfinite().all(1));
+            const auto ids = keep.nonzero().reshape({-1}).to(DataType::Int32);
+            tree.program.references = static_cast<uint32_t>(ids.numel());
+            if (tree.program.references == 0)
+                return tree;
+            const auto reference_points = points.index_select(0, ids);
+            const auto order = reference_points.device() == Device::GPU ? morton30_order(reference_points)
+                                                                        : morton_sort_indices(reference_points).to(DataType::Int32);
+            tree.sorted = reference_points.index_select(0, order).contiguous();
+            const auto sorted_ids = ids.index_select(0, order);
+            const auto others = keep.logical_not().nonzero().reshape({-1}).to(DataType::Int32);
+            tree.visit = (others.numel() ? Tensor::cat({sorted_ids, others}, 0) : sorted_ids).contiguous();
+            std::vector<Tensor> levels;
+            auto grouped = fanout_groups(tree.sorted);
+            levels.push_back(Tensor::cat({grouped.min(1), grouped.max(1)}, 1));
+            while (levels.back().size(0) > kPointTreeFanout) {
+                grouped = fanout_groups(levels.back());
+                levels.push_back(Tensor::cat({grouped.slice(2, 0, 3).min(1), grouped.slice(2, 3, 6).max(1)}, 1));
+            }
+            LFS_ASSERT_MSG(levels.size() <= kPointTreeMaxLevels, "point tree exceeds its level limit");
+            tree.program.levels = static_cast<uint32_t>(levels.size());
+            uint32_t offset = 0;
+            for (size_t level = 0; level < levels.size(); ++level) {
+                tree.program.level_offset[level] = offset;
+                tree.program.level_count[level] = static_cast<uint32_t>(levels[level].size(0));
+                offset += tree.program.level_count[level];
+            }
+            tree.boxes = Tensor::cat(levels, 0).contiguous();
+            return tree;
+        }
+
+        void point_tree_counts_cpu(const Tensor& points, const PointTree& tree, const Tensor& radii,
+                                   const Tensor& queries, Tensor& output) {
+            const auto xyz = points.contiguous();
+            const auto* p = xyz.ptr<float>();
+            const auto* sorted = tree.sorted.ptr<float>();
+            const auto* boxes = tree.boxes.ptr<float>();
+            const auto* visit = tree.visit.ptr<int32_t>();
+            const auto query_bytes = queries.is_valid() ? queries.contiguous() : Tensor{};
+            const auto* use = query_bytes.is_valid() ? static_cast<const uint8_t*>(query_bytes.data_ptr()) : nullptr;
+            const auto radius_values = radii.is_valid() ? radii.contiguous() : Tensor{};
+            const auto* radius = radius_values.is_valid() ? radius_values.ptr<float>() : nullptr;
+            auto* result = output.ptr<int32_t>();
+            const int64_t count = tree.program.points;
+#pragma omp parallel for schedule(dynamic, 1024)
+            for (int64_t t = 0; t < count; ++t) {
+                const auto i = static_cast<size_t>(visit[t]);
+                const float* q = p + i * 3;
+                result[i] = (use && !use[i]) || !finite_point(q)
+                                ? 0
+                                : pointTreeCount(sorted, boxes, tree.program, q, t < int64_t(tree.program.references) ? t : -1,
+                                                 radius ? radius[i] : tree.program.radius, tree.program.max_count);
+            }
+        }
+    } // namespace
+
+    Tensor radius_neighbor_counts(const Tensor& points, const Tensor& references, const Tensor& radii,
+                                  const int32_t max_count, const Tensor* queries) {
+        LFS_ASSERT_MSG(points.is_valid() && references.is_valid() && radii.is_valid(),
+                       "radius_neighbor_counts requires valid tensors");
+        LFS_ASSERT_MSG(points.ndim() == 2 && points.size(1) == 3 && points.dtype() == DataType::Float32,
+                       "radius_neighbor_counts requires Float32 [N,3] points");
+        const size_t count = points.size(0);
+        LFS_ASSERT_MSG(count <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+                       "radius_neighbor_counts point count exceeds int32");
+        LFS_ASSERT_MSG(references.ndim() == 1 && references.numel() == count &&
+                           (references.dtype() == DataType::Bool || references.dtype() == DataType::UInt8),
+                       "radius_neighbor_counts requires a Bool or UInt8 [N] reference mask");
+        LFS_ASSERT_MSG(radii.ndim() == 1 && radii.numel() == count && radii.dtype() == DataType::Float32,
+                       "radius_neighbor_counts requires Float32 [N] radii");
+        LFS_ASSERT_MSG(max_count > 0, std::format("radius_neighbor_counts requires a positive max_count (max_count={})", max_count));
+        LFS_ASSERT_MSG(points.device() == references.device() && points.device() == radii.device(),
+                       "radius_neighbor_counts requires the same device");
+        internal::require_same_gpu_backend(points, references, "radius_neighbor_counts");
+        internal::require_same_gpu_backend(points, radii, "radius_neighbor_counts");
+        if (queries) {
+            LFS_ASSERT_MSG(queries->is_valid() && queries->ndim() == 1 && queries->numel() == count &&
+                               (queries->dtype() == DataType::Bool || queries->dtype() == DataType::UInt8) &&
+                               queries->device() == points.device(),
+                           "radius_neighbor_counts requires a Bool or UInt8 [N] query mask on the same device");
+            internal::require_same_gpu_backend(points, *queries, "radius_neighbor_counts");
+        }
+        auto output = internal::allocate_like(points, TensorShape{count}, DataType::Int32, 0.0f);
+        if (count == 0)
+            return output;
+        auto tree = build_point_tree(points, references);
+        if (tree.program.references == 0)
+            return output;
+        tree.program.max_count = max_count;
+        const auto positions = points.contiguous();
+        const auto radius_values = radii.contiguous();
+        const auto query_mask = queries ? queries->contiguous() : Tensor{};
+        if (points.device() == Device::GPU) {
+            pin_operands({&positions, &tree.sorted, &tree.boxes, &tree.visit, &radius_values});
+            if (queries)
+                pin_operands({&query_mask});
+            const auto stream = queries ? prepare_inputs_for_stream({&positions, &tree.sorted, &tree.boxes, &tree.visit,
+                                                                     &radius_values, &query_mask},
+                                                                    output.stream())
+                                        : prepare_inputs_for_stream({&positions, &tree.sorted, &tree.boxes, &tree.visit,
+                                                                     &radius_values},
+                                                                    output.stream());
+            if (internal::backend_ops_for(positions).point_tree_counts(
+                    internal::storage_ref(positions), internal::storage_ref(tree.sorted), internal::storage_ref(tree.boxes),
+                    internal::storage_ref(tree.visit), internal::storage_ref(radius_values),
+                    queries ? std::optional{internal::storage_ref(query_mask)} : std::nullopt,
+                    internal::storage_ref(output), tree.program, internal::ExecContext{stream}))
+                return output;
+            // No kernel on this backend: traverse on the host.
+            PointTree host{tree.sorted.cpu(), tree.boxes.cpu(), tree.visit.cpu(), tree.program};
+            auto result = Tensor::zeros({count}, Device::CPU, DataType::Int32);
+            point_tree_counts_cpu(positions.cpu(), host, radius_values.cpu(), queries ? query_mask.cpu() : Tensor{}, result);
+            GpuBackendScope scope(gpu_backend_of(positions).value());
+            return result.to(Device::GPU);
+        }
+        point_tree_counts_cpu(positions, tree, radius_values, query_mask, output);
+        return output;
     }
 
     Tensor radius_neighbor_min(const Tensor& points, const Tensor& values, const float radius, const Tensor* radii) {

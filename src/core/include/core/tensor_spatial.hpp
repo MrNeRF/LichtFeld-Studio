@@ -137,6 +137,13 @@ namespace lfs::core {
     LFS_CORE_API Tensor radius_neighbor_counts(const Tensor& points, const Tensor& references, float radius,
                                                int32_t max_count, const Tensor* queries = nullptr);
 
+    // radius_neighbor_counts with a radius per query point: Float32 [N] radii
+    // on the points' device. A query whose radius is not positive and finite
+    // counts nothing. Work follows the distance to surrounding clusters, not
+    // their size, so mixed small and very large radii stay cheap.
+    LFS_CORE_API Tensor radius_neighbor_counts(const Tensor& points, const Tensor& references, const Tensor& radii,
+                                               int32_t max_count, const Tensor* queries = nullptr);
+
     // Minimum value among all points in the inclusive radius, including the
     // query point itself. values is Int32 or Float32 [N]; the result has the
     // same dtype, shape, device and backend. Nonfinite query points retain

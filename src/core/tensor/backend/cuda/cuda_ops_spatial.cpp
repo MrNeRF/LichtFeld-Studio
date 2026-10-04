@@ -77,6 +77,19 @@ namespace lfs::core::internal {
         return true;
     }
 
+    bool CudaBackendOps::point_tree_counts(const StorageRef points, const StorageRef sorted, const StorageRef boxes,
+                                           const StorageRef visit, const StorageRef radii,
+                                           const std::optional<StorageRef> queries, const StorageRef output,
+                                           const PointTreeProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(point_tree_counts);
+        tensor_ops::launch_point_tree_counts(
+            cuda_pointer<const float>(points), cuda_pointer<const float>(sorted), cuda_pointer<const float>(boxes),
+            cuda_pointer<const int32_t>(visit), cuda_pointer<const float>(radii),
+            queries ? cuda_pointer<const uint8_t>(*queries) : nullptr, cuda_pointer<int32_t>(output), program,
+            context.cuda_stream);
+        return true;
+    }
+
     void CudaBackendOps::nearest_point_indices(StorageRef q, StorageRef t, StorageRef h, StorageRef n, StorageRef o,
                                                size_t nq, size_t nt, size_t buckets, float width, ExecContext context) {
         LFS_FACADE_TRACE(nearest_point_indices);

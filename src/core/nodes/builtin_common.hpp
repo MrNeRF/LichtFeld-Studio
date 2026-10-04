@@ -41,8 +41,10 @@ namespace lfs::nodes::builtin {
     PointsComponent filter_points(const PointsComponent&, const Tensor&);
     std::shared_ptr<core::MeshData> copy_mesh(const core::MeshData&, Tensor vertices, Tensor indices);
     std::shared_ptr<core::MeshData> filter_mesh_faces(const core::MeshData&, const Tensor&, bool);
-    Tensor neighbour_counts(const Tensor&, float, int32_t max_count);
-    Tensor relative_neighbour_counts(const Tensor&, const Tensor& activated_scale, float radius_multiple, int32_t max_count);
+    // An optional Bool [N] query mask leaves the other counts at zero.
+    Tensor neighbour_counts(const Tensor&, float, int32_t max_count, const Tensor* queries = nullptr);
+    Tensor relative_neighbour_counts(const Tensor&, const Tensor& activated_scale, float radius_multiple, int32_t max_count,
+                                     const Tensor* queries = nullptr);
     SocketDecl in(std::string, std::string, Value value = {}, bool field = false, bool multi = false);
     SocketDecl out(std::string, std::string);
     PropertyDecl prop(std::string, PropertyKind, nlohmann::json, std::vector<std::string> items = {});

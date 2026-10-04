@@ -4,6 +4,7 @@
 #include "core/tensor/backend/cuda/kernels/cub_workspace.hpp"
 #include "internal/nearest_point.hpp"
 #include "internal/point_spatial.hpp"
+#include "internal/point_tree.hpp"
 #include "tensor_spatial.hpp"
 
 #include <algorithm>
@@ -222,6 +223,30 @@ namespace lfs::core::tensor_ops {
                                                                heads, sorted_points.as<float>(), output, count, bucket_mask,
                                                                radius, cell_size, max_count, queries);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_neighbor_counts.query");
+    }
+
+    namespace {
+        __global__ void point_tree_counts(const float* points, const float* sorted, const float* boxes,
+                                          const int32_t* visit, const float* radii, const uint8_t* queries,
+                                          int32_t* output, const PointTreeProgram tree) {
+            const size_t t = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (t >= tree.points)
+                return;
+            const auto i = static_cast<size_t>(visit[t]);
+            const float* p = points + i * 3;
+            output[i] = (queries && !queries[i]) || !finite_point(p)
+                            ? 0
+                            : pointTreeCount(sorted, boxes, tree, p, t < tree.references ? static_cast<int64_t>(t) : -1,
+                                             radii[i], tree.max_count);
+        }
+    } // namespace
+
+    void launch_point_tree_counts(const float* points, const float* sorted, const float* boxes, const int32_t* visit,
+                                  const float* radii, const uint8_t* queries, int32_t* output,
+                                  const PointTreeProgram& tree, const cudaStream_t stream) {
+        point_tree_counts<<<(tree.points + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+            points, sorted, boxes, visit, radii, queries, output, tree);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.point_tree_counts");
     }
 
     void launch_nearest_point_indices(const float* queries, const float* targets, int32_t* heads, int32_t* next, int32_t* output,

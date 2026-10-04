@@ -91,14 +91,15 @@ namespace lfs::nodes::builtin {
             const bool relative = property_bool(context, "relative_to_size", true);
             if (maximum_size > 0)
                 candidate = candidate.logical_or(splats.scaling.exp().max(1).gt(maximum_size));
+            const auto selected = selection(context, "Selection", field_context(splats), true);
             if (radius > 0 && neighbours > 0) {
-                const auto activated_scale = splats.scaling.exp();
-                const auto isolated = (relative ? relative_neighbour_counts(splats.means, activated_scale, radius, neighbours)
-                                                : neighbour_counts(splats.means, radius, neighbours))
-                                          .lt(static_cast<float>(neighbours));
-                candidate = candidate.logical_or(isolated);
+                // Only selected splats that no other test removes need their neighbours counted.
+                const auto queries = selected.logical_and(candidate.logical_not());
+                const auto counts = relative ? relative_neighbour_counts(splats.means, splats.scaling.exp(), radius, neighbours, &queries)
+                                             : neighbour_counts(splats.means, radius, neighbours, &queries);
+                candidate = candidate.logical_or(counts.lt(static_cast<float>(neighbours)).logical_and(queries));
             }
-            candidate = candidate.logical_and(selection(context, "Selection", field_context(splats), true));
+            candidate = candidate.logical_and(selected);
             if (property_bool(context, "preview", false)) {
                 splats = filter_splats(splats, candidate);
             } else {

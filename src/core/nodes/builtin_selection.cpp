@@ -237,58 +237,24 @@ namespace lfs::nodes::builtin {
             }));
     }
 
-    Tensor neighbour_counts(const Tensor& positions, float radius, int32_t max_count) {
+    Tensor neighbour_counts(const Tensor& positions, float radius, int32_t max_count, const Tensor* queries) {
         const auto count = positions.shape()[0];
         if (!count || radius <= 0 || max_count <= 0)
             return Tensor::zeros({count}, positions.device(), DataType::Int32);
-        return core::radius_neighbor_counts(positions, Tensor::full_bool({count}, true, positions.device()), radius, max_count);
+        return core::radius_neighbor_counts(positions, Tensor::full_bool({count}, true, positions.device()), radius, max_count,
+                                            queries);
     }
 
-    namespace {
-        template <typename Evaluate>
-        Tensor evaluate_relative_radius(const Tensor& positions, const Tensor& activated_scale,
-                                        float radius_multiple, Evaluate evaluate) {
-            const auto count = positions.shape()[0];
-            auto result = Tensor::zeros({count}, positions.device(), DataType::Int32);
-            if (!count || radius_multiple <= 0)
-                return result;
-
-            // A collapsed or nonfinite splat has no usable radius; it counts no neighbours without
-            // setting the range for every other splat.
-            const auto raw_radii = activated_scale.max(1) * radius_multiple;
-            const auto valid = raw_radii.isfinite().logical_and(raw_radii.gt(std::numeric_limits<float>::min()));
-            if (!valid.any().item<bool>())
-                return result;
-            const float minimum = Tensor::where(valid, raw_radii, Tensor::full_like(raw_radii, std::numeric_limits<float>::infinity())).min().item<float>();
-            const float maximum = Tensor::where(valid, raw_radii, Tensor::zeros_like(raw_radii)).max().item<float>();
-            const auto radii = Tensor::where(valid, raw_radii, Tensor::full_like(raw_radii, minimum));
-
-            constexpr int max_levels = 8;
-            const int octaves = std::max(1, static_cast<int>(std::ceil(std::log2(maximum / minimum))));
-            const int octave_span = std::max(1, (octaves + max_levels - 1) / max_levels);
-            const auto levels = ((radii / minimum).log2().floor() / static_cast<float>(octave_span))
-                                    .floor()
-                                    .clamp(0, max_levels - 1);
-            const int level_count = std::min(max_levels, octaves / octave_span + 1);
-            for (int level = 0; level < level_count; ++level) {
-                const auto level_mask = levels.eq(static_cast<float>(level)).logical_and(valid);
-                const float level_radius = Tensor::where(level_mask, radii, Tensor::zeros_like(radii))
-                                               .max()
-                                               .item<float>();
-                if (level_radius <= 0)
-                    continue;
-                result = Tensor::where(level_mask, evaluate(level_radius, level_mask), result);
-            }
-            return result;
-        }
-    } // namespace
-
-    Tensor relative_neighbour_counts(const Tensor& positions, const Tensor& activated_scale,
-                                     float radius_multiple, int32_t max_count) {
-        const auto references = Tensor::full_bool({positions.shape()[0]}, true, positions.device());
-        return evaluate_relative_radius(positions, activated_scale, radius_multiple, [&](float radius, const Tensor& queries) {
-            return core::radius_neighbor_counts(positions, references, radius, max_count, &queries);
-        });
+    Tensor relative_neighbour_counts(const Tensor& positions, const Tensor& activated_scale, float radius_multiple,
+                                     int32_t max_count, const Tensor* queries) {
+        const auto count = positions.shape()[0];
+        if (!count || radius_multiple <= 0 || max_count <= 0)
+            return Tensor::zeros({count}, positions.device(), DataType::Int32);
+        // A collapsed or nonfinite splat has no usable radius; it counts no neighbours.
+        const auto radii = activated_scale.max(1) * radius_multiple;
+        const auto usable = radii.isfinite().logical_and(radii.gt(std::numeric_limits<float>::min()));
+        return core::radius_neighbor_counts(positions, Tensor::full_bool({count}, true, positions.device()),
+                                            Tensor::where(usable, radii, Tensor::zeros_like(radii)), max_count, queries);
     }
 
     const core::fused::Kernel& ray_parity_kernel() {
