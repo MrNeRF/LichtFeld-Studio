@@ -192,9 +192,12 @@ if(MSVC)
     )
     target_link_options(lfs_core PRIVATE /ignore:4217)
 else()
+    # Release binaries and compiler-cache entries must not depend on the build
+    # host's CPU. Keep the explicit AVX2/FMA baseline below instead of enabling
+    # every instruction detected by -march=native on a hosted runner.
     target_compile_options(lfs_core PRIVATE
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer -DDEBUG>
-        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG -march=native>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
         $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-O0 -g --extended-lambda --expt-relaxed-constexpr>
         $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr>
     )
