@@ -48,6 +48,15 @@ jobs:
           echo "Metal device: $device"
           test "$device" != NO_METAL_DEVICE
 
+      - name: Compile Metal training kernels
+        # The Metal backend compiles its kernels at runtime and needs a Metal 4 GPU, which this
+        # runner lacks; compile the training kernels here with the backend's options.
+        run: |
+          xcrun -sdk macosx metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+          sed -n '/set(LFS_TRAINING_METAL_KERNELS/,/)/p' src/training/CMakeLists.txt | grep -o 'kernels/metal/[a-z_0-9]*\.metal' |
+            while read -r file; do cat "src/training/$file"; done > "$RUNNER_TEMP/training.metal"
+          xcrun -sdk macosx metal -std=metal4.0 -fmetal-math-mode=fast -c "$RUNNER_TEMP/training.metal" -o "$RUNNER_TEMP/training.air"
+
       - name: Restore vcpkg binary cache
         uses: actions/cache@v6
         with:
