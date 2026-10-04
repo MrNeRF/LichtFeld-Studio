@@ -138,6 +138,39 @@ namespace {
         lfs::core::save_image_u8(path, image);
     }
 
+    // A project without node graphs stores no NODE chapter, so saving an older project keeps its
+    // chunks; graphs are stored, and clearing them rewrites the stored chapter.
+    TEST(ProjectDocumentTest, NodeChapterIsStoredOnlyForGraphs) {
+        using Json = lfs::io::JsonChapterDom::Json;
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "nodes.licht";
+        const auto stored = [&] {
+            auto reader = require_result(ProjectReader::open(path));
+            return reader.find(FOURCC_NODE, reader.superblock().project_uuid) != nullptr;
+        };
+        const auto trees = [&] {
+            auto reopened = require_result(ProjectDocument::open(path));
+            return reopened.nodes().dom().get_json("trees").value_or(Json());
+        };
+
+        auto document = make_empty_document(fixed_uuid(19'160), 100);
+        ASSERT_TRUE(document->save(path, save_options(19'161, 200)));
+        EXPECT_FALSE(stored());
+
+        const auto graphs = Json::array({Json{{"uuid", "graph"}, {"name", "Graph"}}});
+        auto with_graph = require_result(ProjectDocument::open(path));
+        require_status(with_graph.edit_nodes().dom().set_json("trees", graphs));
+        ASSERT_TRUE(with_graph.save(path, save_options(19'162, 300)));
+        EXPECT_TRUE(stored());
+        EXPECT_EQ(trees(), graphs);
+
+        auto cleared = require_result(ProjectDocument::open(path));
+        require_status(cleared.edit_nodes().dom().set_json("trees", Json::array()));
+        ASSERT_TRUE(cleared.save(path, save_options(19'163, 400)));
+        EXPECT_TRUE(stored());
+        EXPECT_EQ(trees(), Json::array());
+    }
+
     TEST(ProjectDocumentTest, LicensePersistsAcrossSaveAsAndCompaction) {
         TemporaryDirectory temporary;
         const auto source = temporary.path / "license-source.licht";

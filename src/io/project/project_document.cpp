@@ -4108,7 +4108,11 @@ namespace lfs::io::project {
             add_encoded(sequencer_key, impl_->sequencer.to_bytes(),
                         json_options());
         }
-        if (impl_->dirty_or_new(nodes_key)) {
+        // A project without node graphs carries no NODE chapter, so saving an older project
+        // leaves its view content unchanged; a stored chapter is rewritten even when emptied.
+        if (impl_->dirty_or_new(nodes_key) &&
+            (impl_->source_rows.contains(nodes_key) ||
+             impl_->nodes.dom().dump() != default_session_chapter_dom(SessionJsonChapterKind::Nodes).dump())) {
             add_encoded(nodes_key, impl_->nodes.to_bytes(), json_options());
         }
         if (impl_->dirty_or_new(metrics_key)) {
