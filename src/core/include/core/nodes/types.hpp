@@ -53,6 +53,9 @@ namespace lfs::nodes {
         // Albedo RGB tensors, indexed by the mesh's one-based texture handles.
         // Immutable device uploads are shared across derived mesh components.
         std::vector<core::Tensor> textures;
+        // Vertex-domain attributes remain available to later nodes and modifiers.
+        // MeshData has no generic attribute payload, so Apply intentionally drops them.
+        AttributeMap attributes;
     };
 
     struct Geometry {

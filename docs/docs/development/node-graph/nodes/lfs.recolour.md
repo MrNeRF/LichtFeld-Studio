@@ -7,8 +7,8 @@ Changes the colour of selected splats while optionally preserving their light an
 
 ## How to use
 
-Pick Colour and start with Weight 0.3 for a gentle tint.  
-Leave Keep Shading on to retain lighting detail.  
+Pick Colour and start with Weight 0.3 for a gentle tint.\
+Leave Keep Shading on to retain lighting detail.
 
 ## Inputs
 

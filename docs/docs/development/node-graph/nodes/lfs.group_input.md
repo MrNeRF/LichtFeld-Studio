@@ -7,8 +7,8 @@ Brings the host object's geometry into your node graph.
 
 ## How to use
 
-Connect Geometry to the first editing node.  
-In a modifier stack you receive the previous modifier's result.  
+Connect Geometry to the first editing node.\
+In a modifier stack you receive the previous modifier's result.
 
 ## Outputs
 

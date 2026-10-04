@@ -7,8 +7,8 @@ Gives you one on/off switch to control several connected settings.
 
 ## How to use
 
-Use to switch several options together.  
-Connect Value to a Boolean input; off is the default.  
+Use to switch several options together.\
+Connect Value to a Boolean input; off is the default.
 
 ## Inputs
 

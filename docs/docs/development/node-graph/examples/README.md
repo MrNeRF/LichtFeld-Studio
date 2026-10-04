@@ -1,6 +1,6 @@
 # Node graph examples
 
-Twenty-three node graphs for everyday splat editing, built with `lichtfeld.nodes`
+Twenty-eight node graphs for everyday splat editing, built with `lichtfeld.nodes`
 on the Mip-NeRF 360 `garden` and `bicycle` captures (1M Gaussians each). Each file
 defines `SCENE`, `TITLE`, a `build(target)` that creates the graph and adds it as
 a modifier on the scene node `target`, and a `check(target)` that returns numbers
@@ -15,7 +15,9 @@ import importlib, ex07_autumn_grass as ex
 ex.build("garden"); print(ex.check("garden"))
 ```
 
-All 23 evaluate in under 80 ms on 1M splats (Apple M5 Max, Metal).
+Evaluation time depends on the graph, device and output size. The newer examples
+also exercise spatial cleanup, camera coverage and animation; noise and connected
+component cleanup cost more than simple colour or selection edits.
 
 | Example | Scene | What it does | Main nodes |
 |---|---|---|---|
@@ -42,6 +44,14 @@ All 23 evaluate in under 80 ms on 1M splats (Apple M5 Max, Metal).
 | [ex21](ex21_clip_mesh.py) | mesh | A modifier on a mesh node: cuts a model in half | Position, Separate XYZ, Compare, Delete Geometry |
 | [ex22](ex22_sfm_points.py) | garden + points | Shows the SfM point cloud as splats | Object Info, Points to Splats |
 | [ex23](ex23_posterize_plugin.py) | bicycle | A node written in Python | Posterize (`lfs_plugins`) |
+| [ex24](ex24_remove_floater_clumps.py) | bicycle | Removes small disconnected islands in the sky | Remove Clumps, Compare |
+| [ex25](ex25_camera_supported_garden.py) | garden + cameras | Removes splats outside the cameras’ shared coverage | Camera Coverage, Compare, Delete Geometry |
+| [ex26](ex26_noise_autumn_lawn.py) | garden | Paints mottled autumn colour onto the lawn | Noise Texture, Colour Ramp, Set Colour |
+| [ex27](ex27_animated_reveal.py) | garden | Reveals the garden over two seconds | Distance, keyframed Compare, Scene Time |
+| [ex28](ex28_scatter_garden_flowers.py) | garden | Scatters small copies of the vase bouquet | Instance on Points, Separate Geometry |
 
 Examples 16 and 17 expect a mesh node named `torus` / `sphere`, and example 22 a
 point-cloud node named `garden_sparse` (the COLMAP `points3D` of the capture).
+Example 25 requires the garden dataset camera poses in the scene. Example 27
+creates ordinary sequencer tracks; scrub 0–2 seconds, or add camera keyframes
+over that interval and export a short video. Every file includes a numeric check.

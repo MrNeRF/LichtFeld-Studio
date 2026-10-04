@@ -7,8 +7,8 @@ Gives you one whole number to share between connected settings.
 
 ## How to use
 
-Connect Value to counts or whole-number settings.  
-Start at 0 and use the step buttons to change by one.  
+Connect Value to counts or whole-number settings.\
+Start at 0 and use the step buttons to change by one.
 
 ## Inputs
 

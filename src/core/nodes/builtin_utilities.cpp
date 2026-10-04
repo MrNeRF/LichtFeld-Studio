@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "builtin_common.hpp"
+#include "builtin_curve.hpp"
+#include "core/tensor_spatial.hpp"
 namespace lfs::nodes::builtin {
 
     void evaluate_math(NodeContext& context) {
@@ -177,11 +179,75 @@ namespace lfs::nodes::builtin {
                                          return blend(a, mixed, values[2].clamp(0, 1));
                                      }));
     }
+    void evaluate_float_curve(NodeContext& context) {
+        const auto points = curve_points(context, "points");
+        const bool clamp = property_bool(context, "clamp", true);
+        context.set_output("Value", operation(FLOAT_SOCKET, {context.field("Value", FLOAT_SOCKET)},
+                                              [points, clamp](const std::vector<Tensor>& values) {
+                                                  return evaluate_curve(values[0], points, clamp);
+                                              }));
+    }
+
+    static Tensor normalized(const Tensor& vector) {
+        return safe_divide(vector, (vector * vector).sum(1, true).sqrt());
+    }
+
+    void evaluate_distance(NodeContext& context) {
+        const auto mode = property_string(context, "mode", "point");
+        context.set_output("Distance", operation(FLOAT_SOCKET,
+                                                 {context.field("Vector", VECTOR_SOCKET), context.field("Point", VECTOR_SOCKET),
+                                                  context.field("Direction", VECTOR_SOCKET), context.field("Normal", VECTOR_SOCKET)},
+                                                 [mode](const auto& values) {
+                                                     const auto delta = values[0] - values[1];
+                                                     if (mode == "plane")
+                                                         return (delta * normalized(values[3])).sum(1);
+                                                     if (mode == "line") {
+                                                         const auto direction = normalized(values[2]);
+                                                         const auto perpendicular = delta - direction * (delta * direction).sum(1, true);
+                                                         return (perpendicular * perpendicular).sum(1).sqrt();
+                                                     }
+                                                     return (delta * delta).sum(1).sqrt();
+                                                 }));
+    }
+
+    void evaluate_geometry_proximity(NodeContext& context) {
+        const auto target = geometry_input(context, "Target");
+        std::vector<Tensor> positions;
+        if (target.splats)
+            positions.push_back(target.splats->means);
+        if (target.points)
+            positions.push_back(target.points->positions);
+        if (target.mesh && target.mesh->mesh)
+            positions.push_back(target.mesh->mesh->vertices);
+        if (positions.empty())
+            throw NodeError("Geometry Proximity needs a non-empty target geometry");
+        const auto targets = Tensor::cat(positions, 0);
+        if (!targets.size(0))
+            throw NodeError("Geometry Proximity needs a non-empty target geometry");
+        const auto position = position_field();
+        const auto nearest = Field(std::string(VECTOR_SOCKET), [targets, position](const FieldContext& domain, FieldMemo& memo) {
+            const auto queries = memo.evaluate(position, domain);
+            const auto reference = targets.to(domain.device());
+            const auto indices = core::nearest_point_indices(queries, reference);
+            if (indices.lt(0).count_nonzero())
+                throw NodeError("Geometry Proximity requires finite query and target positions");
+            return reference.index_select(0, indices);
+        });
+        context.set_output("Position", nearest);
+        context.set_output("Distance", operation(FLOAT_SOCKET, {position, nearest}, [](const auto& values) {
+                               const auto delta = values[0] - values[1];
+                               return (delta * delta).sum(1).sqrt();
+                           }));
+    }
+
     void register_utilities(NodeTypeRegistry& registry) {
         const auto f = std::string(FLOAT_SOCKET);
         const auto b = std::string(BOOL_SOCKET);
         const auto v = std::string(VECTOR_SOCKET);
         const auto c = std::string(COLOUR_SOCKET);
+        register_type(registry, type("lfs.geometry_proximity", "Utilities",
+                                     {in("Target", std::string(GEOMETRY_SOCKET))},
+                                     {out("Distance", f), out("Position", v)}, evaluate_geometry_proximity));
         register_type(registry,
                       type("lfs.math", "Utilities",
                            {in("A", f, 0.0f, true).step_size(0.01),
@@ -259,6 +325,18 @@ namespace lfs::nodes::builtin {
                                      {out("Colour", c)}, evaluate_mix_colour,
                                      {prop("mode", PropertyKind::Enum, "mix",
                                            {"mix", "multiply", "add", "subtract"})}));
+        const auto curve = nlohmann::json::array({{0, 0}, {1, 1}});
+        register_type(registry, type("lfs.float_curve", "Utilities",
+                                     {in("Value", f, 0.0f, true).step_size(0.01)}, {out("Value", f)},
+                                     evaluate_float_curve,
+                                     {prop("points", PropertyKind::Data, curve), prop("clamp", PropertyKind::Bool, true)}));
+        register_type(registry, type("lfs.distance", "Utilities",
+                                     {in("Vector", v, glm::vec3(0), true).step_size(0.01),
+                                      in("Point", v, glm::vec3(0), true).step_size(0.01),
+                                      in("Direction", v, glm::vec3(1, 0, 0), true).step_size(0.01),
+                                      in("Normal", v, glm::vec3(0, 0, 1), true).step_size(0.01)},
+                                     {out("Distance", f)}, evaluate_distance,
+                                     {prop("mode", PropertyKind::Enum, "point", {"point", "line", "plane"})}));
     }
 
 } // namespace lfs::nodes::builtin

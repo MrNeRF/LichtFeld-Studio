@@ -36,6 +36,16 @@ namespace lfs::sequencer {
         tracks_.erase(it);
     }
 
+    bool AnimationClip::renameTrack(TrackId id, const std::string& target_path) {
+        auto* track = getTrack(id);
+        if (!track || (path_to_track_.contains(target_path) && path_to_track_.at(target_path) != id))
+            return false;
+        path_to_track_.erase(track->target_path_);
+        track->target_path_ = target_path;
+        path_to_track_[target_path] = id;
+        return true;
+    }
+
     AnimationTrack* AnimationClip::getTrack(TrackId id) {
         const auto it = tracks_.find(id);
         return it != tracks_.end() ? it->second.get() : nullptr;

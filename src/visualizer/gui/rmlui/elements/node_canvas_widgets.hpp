@@ -9,9 +9,14 @@
 namespace Rml {
     class Element;
 }
+namespace lfs::vis {
+    class ModifierManager;
+}
 
 namespace lfs::vis::gui::node_widgets {
     void layoutCard(Rml::Element& card, float zoom, float dp_ratio);
+    float inlineEditorHeight(const lfs::nodes::Node& node);
+    std::string inlineEditor(const lfs::nodes::Node& node);
     std::string escape(std::string_view text);
     LFS_VIS_API std::string nonBreakingStatus(std::string_view text);
     std::string icon(std::string_view name);
@@ -28,5 +33,7 @@ namespace lfs::vis::gui::node_widgets {
                   const lfs::nodes::SocketDecl& socket);
     LFS_VIS_API std::string input(const lfs::nodes::Node& node, const lfs::nodes::SocketDecl& socket,
                                   bool inline_value);
+    std::string animatedInput(ModifierManager& manager, const lfs::nodes::NodeTree& tree,
+                              const lfs::nodes::Node& node, const lfs::nodes::SocketDecl& socket, bool inline_value);
     std::string property(const lfs::nodes::Node& node, const lfs::nodes::PropertyDecl& property);
 } // namespace lfs::vis::gui::node_widgets

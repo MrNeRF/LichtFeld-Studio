@@ -7,8 +7,8 @@ Blends two colours or combines them with a chosen colour operation.
 
 ## How to use
 
-Connect colours to A and B; Factor 0.5 gives an equal mix.  
-Start with Mix mode before trying Multiply or Add.  
+Connect colours to A and B; Factor 0.5 gives an equal mix.\
+Start with Mix mode before trying Multiply or Add.
 
 ## Inputs
 

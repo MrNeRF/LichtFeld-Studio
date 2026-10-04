@@ -7,6 +7,9 @@
 #include "core/logger.hpp"
 #include "core/nodes/events.hpp"
 #include "scene/scene_manager.hpp"
+#include "sequencer/sequencer_controller.hpp"
+#include "visualizer/nodes/camera_nodes.hpp"
+#include "visualizer/nodes/node_animation.hpp"
 
 #include <algorithm>
 #include <format>
@@ -19,14 +22,22 @@ namespace lfs::vis {
         request.generation = output_generation_;
         request.requested_at = std::chrono::steady_clock::now();
         request.source_generation = source_generation_;
+        request.seconds = animationTime();
+        const auto* controller = sequencer();
+        request.frames_per_second = export_time_ ? export_fps_ : controller ? controller->framesPerSecond()
+                                                                            : 24.0f;
         request.inputs_ready = std::make_shared<core::TensorCompletion>();
         const auto include = [&](const core::Tensor& tensor) {
             if (tensor.is_valid())
                 request.inputs_ready->include(tensor);
         };
-        for (const auto& [id, tree] : trees_)
-            request.trees[id] = tree->to_json();
+        for (const auto& [id, tree] : trees_) {
+            auto animated = *tree;
+            applyNodeAnimation(animated, controller ? controller->timeline().animationClip() : nullptr, request.seconds);
+            request.trees[id] = animated.to_json();
+        }
         const auto& scene = scene_manager_->getScene();
+        request.cameras = captureNodeCameras(scene);
         for (const auto* node : scene.getNodes()) {
             if (!node || (!node->model && !node->point_cloud && !node->mesh))
                 continue;
@@ -63,7 +74,8 @@ namespace lfs::vis {
             }
             if (const auto* modifiers = stack(node->uuid)) {
                 object.stack = *modifiers;
-                request.targets.push_back(node->uuid);
+                if (!animation_only_request_ || timeDependent(node->uuid))
+                    request.targets.push_back(node->uuid);
             }
             request.objects.push_back(std::move(object));
         }
@@ -117,6 +129,7 @@ namespace lfs::vis {
         }
         ++result_generation_;
         ++installed_count_;
+        last_installed_generation_ = ready->generation;
         if (measure_canvas_ && evaluation_latency_ms_.size() < 4096)
             evaluation_latency_ms_.push_back(std::chrono::duration<double, std::milli>(
                                                  std::chrono::steady_clock::now() - ready->requested_at)
@@ -127,6 +140,7 @@ namespace lfs::vis {
     }
 
     void ModifierManager::tick() {
+        updateAnimationTime();
         auto& scene = scene_manager_->getScene();
         if (scene_manager_->getContentType() != SceneManager::ContentType::SplatFiles) {
             if (worker_->progress().busy)

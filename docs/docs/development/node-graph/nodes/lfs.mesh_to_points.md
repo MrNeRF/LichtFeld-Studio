@@ -7,8 +7,8 @@ Turns mesh vertices into a point cloud, keeping available vertex colours.
 
 ## How to use
 
-Connect a mesh from Object Info.  
-You get one point per vertex, not an evenly sampled surface.  
+Connect a mesh from Object Info.\
+You get one point per vertex, not an evenly sampled surface.
 
 ## Inputs
 

@@ -7,8 +7,8 @@ Gives you one colour to share between connected nodes.
 
 ## How to use
 
-Pick a colour, then connect Colour to the settings you want to share.  
-The default is mid grey.  
+Pick a colour, then connect Colour to the settings you want to share.\
+The default is mid grey.
 
 ## Inputs
 

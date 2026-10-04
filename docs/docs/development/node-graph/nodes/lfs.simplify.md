@@ -7,8 +7,9 @@ Combines splats to reduce their count while preserving the scene's overall appea
 
 ## How to use
 
-Start with Ratio 0.5 to aim for half the splats.  
-This can take longer than other nodes; lower ratios lose fine detail.  
+Start with Ratio 0.5 to aim for half the splats.\
+This can take longer than other nodes; lower ratios lose fine detail.\
+Zero covariance axes remain collapsed; merging different positions or orientations can create real extent.
 
 ## Inputs
 

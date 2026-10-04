@@ -7,9 +7,9 @@ Combines several inputs into one; splats with different SH degrees are padded to
 
 ## How to use
 
-Connect several Geometry outputs to the same input.  
-Use after Separate Geometry to reunite branches.  
-Overlapping copies remain separate splats, points or mesh faces.  
+Connect several Geometry outputs to the same input.\
+Use after Separate Geometry to reunite branches.\
+Overlapping copies remain separate splats, points or mesh faces.
 
 ## Inputs
 
@@ -27,3 +27,4 @@ Overlapping copies remain separate splats, points or mesh faces.
 
 - [ex15_duplicate_vase](../examples/ex15_duplicate_vase.py)
 - [ex16_mesh_prop](../examples/ex16_mesh_prop.py)
+- [ex28_scatter_garden_flowers](../examples/ex28_scatter_garden_flowers.py)

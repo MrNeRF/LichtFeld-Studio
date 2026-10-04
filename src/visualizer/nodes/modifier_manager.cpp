@@ -2,7 +2,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "visualizer/nodes/modifier_manager.hpp"
+#include "core/logger.hpp"
+#include "ipc/view_context.hpp"
 #include "modifier_evaluation_worker.hpp"
+#include "rendering/coordinate_conventions.hpp"
+#include "sequencer/sequencer_controller.hpp"
+#include "visualizer/nodes/camera_nodes.hpp"
+#include "visualizer/nodes/node_animation.hpp"
 #include "visualizer/nodes/viewport_coordinates.hpp"
 
 #include "core/nodes/builtin.hpp"
@@ -353,6 +359,12 @@ namespace lfs::vis {
         trees_[result->uuid] = std::move(value);
         ++generation_;
         markDirty();
+        if (auto* controller = sequencer(); controller && json.contains("animation")) {
+            std::unordered_map<std::string, std::string> names;
+            for (const auto& node : result->nodes)
+                names[node.name] = node.name;
+            copyNodeAnimation(*controller, json.at("animation"), json.value("animation_tree", result->uuid), result->uuid, names);
+        }
         if (!restoring_)
             op::undoHistory().push(std::make_unique<ModifierStateUndoEntry>(
                 *this, before, toJson(false), std::string{}));
@@ -440,6 +452,8 @@ namespace lfs::vis {
             }
         };
         include_groups(clipboard["nodes"]);
+        clipboard["source_tree"] = graph->uuid;
+        clipboard["animation"] = animationJson();
         return clipboard.dump();
     }
 
@@ -561,6 +575,16 @@ namespace lfs::vis {
             if (link.from_node.empty() || link.to_node.empty() ||
                 !destination->add_link(std::move(link), nullptr, resolver))
                 ++result.dropped_links;
+        }
+        if (auto* controller = sequencer(); controller && clipboard.contains("animation")) {
+            copyNodeAnimation(*controller, clipboard["animation"], clipboard.value("source_tree", ""),
+                              destination->uuid, node_remap);
+            for (const auto& [source, target] : graph_remap) {
+                std::unordered_map<std::string, std::string> names;
+                for (const auto& node : tree(target)->nodes)
+                    names[node.name] = node.name;
+                copyNodeAnimation(*controller, clipboard["animation"], source, target, names);
+            }
         }
         recordLibraryEdit(before);
         return result;
@@ -731,6 +755,8 @@ namespace lfs::vis {
             }
         }
         const auto result = MakeGroupResult{group.name, nested_uuid};
+        if (auto* controller = sequencer())
+            copyNodeAnimation(*controller, before.at("animation"), outer->uuid, nested_uuid, node_remap, true);
         recordLibraryEdit(before);
         return result;
     }
@@ -839,6 +865,8 @@ namespace lfs::vis {
                         target->input_values[link.to_socket] = value->second;
             }
         }
+        if (auto* controller = sequencer())
+            copyNodeAnimation(*controller, before.at("animation"), nested->uuid, outer->uuid, remap);
         recordLibraryEdit(before);
         return created;
     }
@@ -905,6 +933,12 @@ namespace lfs::vis {
             lfs::nodes::NodeTree::from_json(json, registry_));
         trees_[uuid] = std::move(copy);
         node->properties["tree"] = uuid;
+        if (auto* controller = sequencer()) {
+            std::unordered_map<std::string, std::string> names;
+            for (const auto& original : source->nodes)
+                names[original.name] = original.name;
+            copyNodeAnimation(*controller, before.at("animation"), source->uuid, uuid, names);
+        }
         recordLibraryEdit(before);
         return {};
     }
@@ -1143,6 +1177,8 @@ namespace lfs::vis {
             return false;
         const std::string uuid = value->uuid;
         const auto before = toJson(false);
+        if (auto* controller = sequencer())
+            removeNodeAnimation(*controller, uuid);
         trees_.erase(uuid);
         for (auto& [_, stack] : stacks_)
             std::erase_if(stack.modifiers, [&](const Modifier& modifier) { return modifier.tree_uuid == uuid; });
@@ -1261,6 +1297,10 @@ namespace lfs::vis {
         const auto socket = std::ranges::find(sockets, input, &lfs::nodes::SocketDecl::identifier);
         if (socket == sockets.end())
             return std::unexpected(ModifierError{std::format("Input '{}' does not exist on node '{}' ({})", input, node_name, node->type_id)});
+        if (const auto* controller = sequencer(); controller && animatableNodeInput(*graph, *node, *socket))
+            if (const auto* clip = controller->timeline().animationClip();
+                clip && clip->getTrackByPath(nodeInputTrackPath(graph->uuid, node->name, input)))
+                return keyframeSet(graph->uuid, node->name, input, {}, std::move(value));
         const auto found = node->input_values.find(std::string(input));
         auto before = found == node->input_values.end() ? socket->default_value : found->second;
         if (nlohmann::json(before) == nlohmann::json(value))
@@ -1273,6 +1313,11 @@ namespace lfs::vis {
     }
 
     void ModifierManager::markDirty(const core::Uuid& node_uuid) {
+        animation_only_request_ = false;
+        if (auto* controller = sequencer(); controller && !controller->timeline().hasAnimationClip() && timeDependent()) {
+            controller->timeline().ensureAnimationClip();
+            controller->animationTracksChanged();
+        }
         ++generation_;
         worker_->invalidate(++output_generation_);
         if (node_uuid.is_nil()) {
@@ -1371,6 +1416,10 @@ namespace lfs::vis {
 
     nlohmann::json ModifierManager::toJson(bool existing_nodes_only) const {
         nlohmann::json result = {{"schema_version", 1}, {"trees", nlohmann::json::array()}, {"stacks", nlohmann::json::object()}};
+        // Project persistence uses the sequencer chapter. Only undo snapshots include
+        // the node-track subset so graph and target-path edits undo atomically.
+        if (!existing_nodes_only)
+            result["animation"] = animationJson();
         for (const auto& [_, value] : trees_)
             result["trees"].push_back(value->to_json());
         std::sort(result["trees"].begin(), result["trees"].end(), [](const auto& a, const auto& b) {
@@ -1406,6 +1455,9 @@ namespace lfs::vis {
             return std::unexpected(ModifierError{error.what()});
         }
         const bool output_changed = evaluation_state(toJson(false)) != evaluation_state(json);
+        if (json.contains("animation"))
+            if (auto* controller = sequencer())
+                restoreNodeAnimation(*controller, json.at("animation"));
         trees_ = std::move(trees);
         stacks_ = std::move(stacks);
         std::erase_if(runtime_, [&](const auto& entry) {
@@ -1453,9 +1505,36 @@ namespace lfs::vis {
         const auto after_tree = edited->to_json();
         if (after_tree == before)
             return;
+        const auto before_animation = animationJson();
+        if (auto* controller = sequencer()) {
+            for (const auto& node : before.at("nodes"))
+                if (!edited->find_node(node.at("name").get<std::string>()))
+                    removeNodeAnimation(*controller, edited->uuid, node.at("name").get<std::string>());
+            const auto* clip = controller->timeline().animationClip();
+            for (const auto& node : edited->nodes) {
+                const auto previous = std::ranges::find_if(before.at("nodes"), [&](const auto& item) {
+                    return item.value("name", "") == node.name;
+                });
+                if (previous == before.at("nodes").end())
+                    continue;
+                for (const auto& [input, value] : node.input_values) {
+                    if (!clip || !clip->getTrackByPath(nodeInputTrackPath(edited->uuid, node.name, input)))
+                        continue;
+                    const auto old_values = previous->value("input_values", nlohmann::json::object());
+                    const nlohmann::json encoded = value;
+                    if (old_values.contains(input) && old_values.at(input) == encoded)
+                        continue;
+                    const auto result = setNodeKeyframe(*edited, node.name, input, *controller, {}, value,
+                                                        sequencer::EasingType::LINEAR, [this](std::string_view id) { return tree(id); });
+                    if (!result)
+                        LOG_DEBUG("Node input animation unchanged: {}", result.error().message);
+                }
+            }
+        }
         const bool output_changed = evaluation_tree(after_tree) != evaluation_tree(before);
         auto after = toJson(false);
         auto before_state = replace_tree_state(after, tree_uuid, std::move(before));
+        before_state["animation"] = before_animation;
         op::undoHistory().push(std::make_unique<ModifierStateUndoEntry>(
             *this, std::move(before_state), std::move(after), std::move(merge_key)));
         if (output_changed && reevaluate)
@@ -1862,7 +1941,33 @@ namespace lfs::vis {
         return {};
     }
 
+    ModifierResult ModifierManager::captureViewportCamera(std::string_view tree_uuid, std::string_view node_name) {
+        auto* graph = tree(tree_uuid);
+        auto* node = graph ? graph->find_node(node_name) : nullptr;
+        const auto view = get_current_view_info();
+        if (!node || node->type_id != "lfs.view_distance")
+            return std::unexpected(ModifierError{"View Distance node no longer exists"});
+        if (!view)
+            return std::unexpected(ModifierError{"No viewport camera is available"});
+        const auto before = graph->to_json();
+        glm::mat3 rotation(1);
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c)
+                rotation[c][r] = view->rotation[3 * r + c];
+        const glm::vec3 eye(view->translation[0], view->translation[1], view->translation[2]);
+        const auto pose = glm::inverse(rendering::dataWorldToCameraFromVisualizerPose(rotation, eye));
+        auto data = nlohmann::json::array();
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r)
+                data.push_back(pose[c][r]);
+        node->properties["captured_transform"] = std::move(data);
+        node->properties["source"] = "captured";
+        recordTreeEdit(graph->uuid, before);
+        return {};
+    }
+
     void ModifierManager::registerVisualizerNodes() {
+        registerCameraNodes(registry_);
         NodeTypeInfo object_info;
         object_info.id = "lfs.object_info";
         object_info.category = "Input";

@@ -7,8 +7,8 @@ Builds a colour from separate RGB or HSV values.
 
 ## How to use
 
-Connect three values and choose RGB or HSV mode.  
-In HSV mode the R, G and B inputs mean hue, saturation and brightness.  
+Connect three values and choose RGB or HSV mode.\
+In HSV mode the R, G and B inputs mean hue, saturation and brightness.
 
 ## Inputs
 

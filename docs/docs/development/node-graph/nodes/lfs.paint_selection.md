@@ -7,8 +7,8 @@ Paints a live, geometric selection directly onto surfaces in your scene.
 
 ## How to use
 
-Select the node and turn on Paint, then drag over a surface; hold Alt/Option to erase.  
-Use [ and ] to resize the brush. Each stroke remains valid when the element count changes.  
+Select the node and turn on Paint, then drag over a surface; hold Alt/Option to erase.\
+Use [ and ] to resize the brush. Each stroke remains valid when the element count changes.
 
 ## Inputs
 

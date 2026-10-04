@@ -16,6 +16,7 @@
 #include "gui/rmlui/elements/crf_curve_element.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
 #include "gui/rmlui/elements/node_canvas_element.hpp"
+#include "gui/rmlui/elements/node_curve_element.hpp"
 #include "gui/rmlui/elements/python_editor_element.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
@@ -239,6 +240,7 @@ namespace lfs::vis::gui {
         static Rml::ElementInstancerGeneric<ChromaticityElement> chromaticity_instancer;
         static Rml::ElementInstancerGeneric<ColorPickerElement> color_picker_instancer;
         static Rml::ElementInstancerGeneric<ColourOffsetElement> colour_offset_instancer;
+        static Rml::ElementInstancerGeneric<NodeCurveElement> node_curve_instancer;
         static Rml::ElementInstancerGeneric<CRFCurveElement> crf_curve_instancer;
         static Rml::ElementInstancerGeneric<LossGraphElement> loss_graph_instancer;
         static Rml::ElementInstancerGeneric<NodeCanvasElement> node_canvas_instancer;
@@ -249,6 +251,7 @@ namespace lfs::vis::gui {
         Rml::Factory::RegisterElementInstancer("chromaticity-diagram", &chromaticity_instancer);
         Rml::Factory::RegisterElementInstancer("color-picker", &color_picker_instancer);
         Rml::Factory::RegisterElementInstancer("colour-offset", &colour_offset_instancer);
+        Rml::Factory::RegisterElementInstancer("node-curve", &node_curve_instancer);
         Rml::Factory::RegisterElementInstancer("crf-curve", &crf_curve_instancer);
         Rml::Factory::RegisterElementInstancer("loss-graph", &loss_graph_instancer);
         Rml::Factory::RegisterElementInstancer("node-canvas", &node_canvas_instancer);

@@ -6,6 +6,28 @@ body {
     font-family: Inter;
     font-size: 12dp;
 }
+.node-animated-input {
+    position: relative;
+    width: 100%;
+    box-sizing: border-box;
+    padding-right: 18dp;
+}
+.node-keyframe {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 18dp;
+    height: 20dp;
+    line-height: 20dp;
+    padding: 0;
+    border-width: 0;
+    decorator: none;
+    opacity: 0.45;
+    font-size: 13dp;
+    text-align: center;
+}
+.node-keyframe.animated { color: #e2b967; opacity: 0.85; }
+.node-keyframe.keyed, .node-keyframe:hover { opacity: 1; }
 #node-editor-canvas {
     position: relative;
     display: block;
@@ -747,4 +769,29 @@ colour-offset {
 #node-add-empty {
     padding: 12dp;
     font-size: 12dp;
+}
+node-curve {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 120dp;
+    cursor: crosshair;
+    border-width: 0;
+    border-radius: 4dp;
+}
+.node-curve-channels, .node-ramp-channels {
+    position: absolute;
+    pointer-events: none;
+}
+.node-curve-channels { top: 7%; left: 0; width: 100%; display: flex; }
+.node-curve-channels span { width: 25%; text-align: center; }
+.node-ramp-channels { top: 63.75%; left: 3%; }
+.node-ramp-channels span { display: block; }
+.lod-values .node-curve-channels, .lod-values .node-ramp-channels { display: none; }
+.node-capture-view {
+    display: block;
+    width: 100%;
+    height: 22dp;
+    border-width: 0;
+    border-radius: 4dp;
 }

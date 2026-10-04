@@ -58,4 +58,7 @@ namespace lfs::nodes::builtin {
     void register_splat(NodeTypeRegistry&);
     void register_cleanup(NodeTypeRegistry&);
     void register_conversion(NodeTypeRegistry&);
+    void register_colour(NodeTypeRegistry&);
+    void register_texture(NodeTypeRegistry&);
+    void register_instances(NodeTypeRegistry&);
 } // namespace lfs::nodes::builtin

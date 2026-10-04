@@ -7,6 +7,8 @@
 #include <cuda_runtime.h>
 
 namespace lfs::core::tensor_ops {
+    void launch_nearest_point_indices(const float*, const float*, int32_t*, int32_t*, int32_t*, size_t, size_t, size_t, float, cudaStream_t);
+    void launch_camera_frustum_counts(const float*, const float*, int32_t*, size_t, size_t, float, cudaStream_t);
     void launch_point_neighbor_spacing(const float* points, const uint8_t* references,
                                        int32_t* heads, int32_t* next, float* output,
                                        size_t count, size_t buckets, float cell_width, cudaStream_t stream);
@@ -18,4 +20,7 @@ namespace lfs::core::tensor_ops {
                                        int32_t* heads, int32_t* next, int32_t* output,
                                        size_t count, size_t buckets, float radius, int32_t max_count,
                                        const uint8_t* queries, cudaStream_t stream);
+    void launch_radius_neighbor_min(const float* points, const void* values, uint8_t value_is_float,
+                                    const uint8_t* references, int32_t* heads, int32_t* next, void* output,
+                                    size_t count, size_t buckets, float radius, cudaStream_t stream);
 } // namespace lfs::core::tensor_ops

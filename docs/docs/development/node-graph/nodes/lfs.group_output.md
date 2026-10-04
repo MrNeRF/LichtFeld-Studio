@@ -7,8 +7,8 @@ Sends your node graph's final geometry back to the scene.
 
 ## How to use
 
-Connect the last editing node to Geometry.  
-Only the branch reaching this node contributes to the modifier result.  
+Connect the last editing node to Geometry.\
+Only the branch reaching this node contributes to the modifier result.
 
 ## Inputs
 

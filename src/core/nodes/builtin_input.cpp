@@ -4,6 +4,7 @@
 #include "core/base64.hpp"
 #include "core/number_format.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_random.hpp"
 #include <cstring>
 #include <mutex>
 
@@ -87,20 +88,45 @@ namespace lfs::nodes::builtin {
     }
 
     void evaluate_random(NodeContext& context) {
-        const float seed = static_cast<float>(property_int(context, "seed"));
+        const auto seed = static_cast<uint32_t>(property_int(context, "seed"));
         context.set_output("Value",
                            operation(FLOAT_SOCKET,
-                                     {convert_field(index_field(), FLOAT_SOCKET),
+                                     {index_field(),
                                       context.field("Min", FLOAT_SOCKET), context.field("Max", FLOAT_SOCKET)},
                                      [seed](const std::vector<Tensor>& values) {
-                                         // Float hashing is repeatable per backend, not bit-identical across
-                                         // backends' sine implementations.
-                                         const auto hash =
-                                             (values[0] * 12.9898f + seed * 78.233f).sin() * 43758.5453f;
-                                         const auto unit = hash - hash.floor();
+                                         const auto unit = core::random_from_indices(values[0], seed);
                                          return values[1] + unit * (values[2] - values[1]);
                                      }));
     }
+    void store_attribute(NodeContext& context) {
+        auto geometry = geometry_input(context);
+        const auto* name_value = context.input("Name").get_if<std::string>();
+        const std::string name = name_value ? *name_value : std::string{};
+        if (name.empty())
+            throw NodeError("Store Named Attribute requires a non-empty name");
+        const auto type_id = property_string(context, "data_type", "float");
+        const std::string socket = type_id == "vector"   ? std::string(VECTOR_SOCKET)
+                                   : type_id == "colour" ? std::string(COLOUR_SOCKET)
+                                                         : std::string(FLOAT_SOCKET);
+        const auto apply = [&](auto& component) {
+            const auto fc = field_context(component);
+            const auto value = context.evaluate_field("Value", fc, socket);
+            const auto weight = selection(context, "Selection", fc);
+            auto found = component.attributes.find(name);
+            const auto previous = found != component.attributes.end() && found->second.shape() == value.shape()
+                                      ? found->second
+                                      : Tensor::zeros_like(value);
+            component.attributes[name] = blend(previous, value, weight);
+        };
+        if (geometry.splats)
+            apply(*geometry.splats);
+        if (geometry.points)
+            apply(*geometry.points);
+        if (geometry.mesh)
+            apply(*geometry.mesh);
+        context.set_output("Geometry", std::move(geometry));
+    }
+
     void register_input(NodeTypeRegistry& registry) {
         const auto geo = std::string(GEOMETRY_SOCKET);
         const auto f = std::string(FLOAT_SOCKET);
@@ -109,6 +135,11 @@ namespace lfs::nodes::builtin {
         const auto v = std::string(VECTOR_SOCKET);
         const auto c = std::string(COLOUR_SOCKET);
         const auto s = std::string(STRING_SOCKET);
+        register_type(registry, type("lfs.scene_time", "Input", {},
+                                     {out("Seconds", f), out("Frame", f)}, [](NodeContext& x) {
+                                         x.set_output("Seconds", x.seconds());
+                                         x.set_output("Frame", x.frame());
+                                     }));
         register_type(registry, type("lfs.group_input", "Input",
                                      {}, {out("Geometry", geo)}, {}));
         register_type(registry, type("lfs.group_output", "Output",
@@ -192,6 +223,12 @@ namespace lfs::nodes::builtin {
                            },
                            {prop("data", PropertyKind::Data, ""), prop("size", PropertyKind::Int, 0),
                             prop("invert", PropertyKind::Bool, false)}));
+        register_type(registry, type("lfs.store_named_attribute", "Attribute",
+                                     geometry_inputs({in("Selection", f, 1.0f, true).range(0, 1).step_size(0.01),
+                                                      in("Name", s, std::string("attribute")),
+                                                      in("Value", std::string(ANY_SOCKET), 0.0f, true).step_size(0.01)}),
+                                     {out("Geometry", geo)}, store_attribute,
+                                     {prop("data_type", PropertyKind::Enum, "float", {"float", "vector", "colour"})}));
     }
 
 } // namespace lfs::nodes::builtin

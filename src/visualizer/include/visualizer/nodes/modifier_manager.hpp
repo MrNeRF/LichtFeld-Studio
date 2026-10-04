@@ -6,6 +6,7 @@
 #include "core/export.hpp"
 #include "core/nodes/nodes.hpp"
 #include "core/scene.hpp"
+#include "visualizer/nodes/modifier_error.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -24,6 +25,7 @@
 namespace lfs::vis {
 
     class SceneManager;
+    class SequencerController;
     class ModifierEvaluationWorker;
     struct ModifierEvaluationRequest;
     struct ModifierHostResult;
@@ -65,10 +67,6 @@ namespace lfs::vis {
         std::unordered_map<std::string, lfs::nodes::NodeEvaluation> nodes;
     };
 
-    struct ModifierError {
-        std::string message;
-    };
-
     struct PasteNodesResult {
         std::vector<std::string> nodes;
         std::size_t dropped_links = 0;
@@ -78,8 +76,6 @@ namespace lfs::vis {
         std::string group_node;
         std::string graph;
     };
-
-    using ModifierResult = std::expected<void, ModifierError>;
 
     enum class NodeViewportGizmoKind {
         Box,
@@ -175,6 +171,20 @@ namespace lfs::vis {
                       std::optional<std::array<float, 2>> location = std::nullopt);
         [[nodiscard]] ModifierResult setNodeInput(std::string_view tree_uuid, std::string_view node_name,
                                                   std::string_view input, lfs::nodes::Value value);
+        [[nodiscard]] ModifierResult captureViewportCamera(std::string_view tree_uuid, std::string_view node_name);
+        [[nodiscard]] ModifierResult renameNode(std::string_view tree_uuid, std::string_view node, std::string name);
+        [[nodiscard]] ModifierResult keyframeSet(std::string_view tree_uuid, std::string_view node,
+                                                 std::string_view input, std::optional<float> time = {},
+                                                 std::optional<lfs::nodes::Value> value = {}, int easing = 0);
+        [[nodiscard]] ModifierResult keyframeRemove(std::string_view tree_uuid, std::string_view node,
+                                                    std::string_view input, std::optional<float> time = {});
+        [[nodiscard]] SequencerController* sequencer() const;
+        // Explicit binding supports headless controllers; the GUI uses its registered sequencer.
+        void setSequencer(SequencerController* controller) { sequencer_ = controller; }
+        [[nodiscard]] float animationTime() const;
+        [[nodiscard]] nlohmann::json animationJson() const;
+        [[nodiscard]] bool timeDependent(const core::Uuid& host = {}) const;
+        [[nodiscard]] ModifierResult evaluateAtTime(float seconds, float fps);
 
         Modifier& addModifier(const core::Uuid& node_uuid, std::string tree_uuid,
                               std::string name = {});
@@ -257,8 +267,17 @@ namespace lfs::vis {
         void registerVisualizerNodes();
         [[nodiscard]] ModifierEvaluationRequest captureRequest() const;
         void installReady();
+        void updateAnimationTime();
 
         SceneManager* scene_manager_ = nullptr;
+        SequencerController* sequencer_ = nullptr;
+        std::optional<float> export_time_;
+        float export_fps_ = 24.0f;
+        float last_animation_time_ = 0.0f;
+        float last_animation_fps_ = 24.0f;
+        std::uint64_t last_animation_revision_ = 0;
+        bool last_time_dependent_ = false;
+        bool animation_only_request_ = false;
         lfs::nodes::NodeTypeRegistry registry_;
         std::unordered_map<std::string, std::unique_ptr<lfs::nodes::NodeTree>> trees_;
         std::unordered_map<core::Uuid, ModifierStack> stacks_;
@@ -279,6 +298,7 @@ namespace lfs::vis {
         std::uint64_t requested_generation_ = 0;
         std::uint64_t result_generation_ = 0;
         std::uint64_t installed_count_ = 0;
+        std::uint64_t last_installed_generation_ = 0;
         std::uint64_t progress_event_generation_ = 0;
         std::string progress_event_node_;
         std::thread::id viewer_thread_;

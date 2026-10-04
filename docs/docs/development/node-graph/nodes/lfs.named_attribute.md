@@ -7,8 +7,8 @@ Reads a stored value by name so you can use it to control your edits.
 
 ## How to use
 
-Enter the exact attribute name and choose its type.  
-A missing attribute cannot provide values.  
+Enter the exact attribute name and choose its type.\
+A missing attribute cannot provide values.
 
 ## Inputs
 

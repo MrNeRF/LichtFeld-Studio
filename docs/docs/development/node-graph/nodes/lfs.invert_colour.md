@@ -7,8 +7,8 @@ Reverses colours so dark areas become light and colours turn into their opposite
 
 ## How to use
 
-Connect a Selection to invert only part of your scene.  
-Use twice to restore base colour, unless earlier clipping has lost detail.  
+Connect a Selection to invert only part of your scene.\
+Use twice to restore base colour, unless earlier clipping has lost detail.
 
 ## Inputs
 

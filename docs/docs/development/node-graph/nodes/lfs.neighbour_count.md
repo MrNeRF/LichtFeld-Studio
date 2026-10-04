@@ -7,9 +7,9 @@ Counts nearby splats or points so you can find sparse parts of your scene.
 
 ## How to use
 
-Connect Count to Compare to select low counts.  
-Start with Radius 3 and Relative to size for splats.  
-A point never counts itself.  
+Connect Count to Compare to select low counts.\
+Start with Radius 3 and Relative to size for splats.\
+A point never counts itself.
 
 ## Inputs
 

@@ -7,9 +7,9 @@ Reduces your scene's colours to a small number of flat steps.
 
 ## How to use
 
-Start with Levels 4 for a four-step palette per colour channel.  
-Connect a Selection to limit the effect.  
-Selected splats lose camera-dependent colour variation.  
+Start with Levels 4 for a four-step palette per colour channel.\
+Connect a Selection to limit the effect.\
+Selected splats lose camera-dependent colour variation.
 
 ## Inputs
 

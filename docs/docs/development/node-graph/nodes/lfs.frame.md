@@ -7,8 +7,8 @@ Keeps related nodes visually grouped.
 
 ## How to use
 
-Drop nodes into the frame. Moving the frame moves its members.  
-Drag a member outside the frame to remove it.  
+Drop nodes into the frame. Moving the frame moves its members.\
+Drag a member outside the frame to remove it.
 
 ## Settings
 

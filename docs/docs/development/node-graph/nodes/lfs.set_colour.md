@@ -7,8 +7,8 @@ Replaces selected splats' base colour with the colour you provide.
 
 ## How to use
 
-Pick Colour or connect colours from another node.  
-Leave Clear View Dependent on for a flat painted colour.  
+Pick Colour or connect colours from another node.\
+Leave Clear View Dependent on for a flat painted colour.
 
 ## Inputs
 
@@ -33,3 +33,4 @@ Leave Clear View Dependent on for a flat painted colour.
 ## Used in examples
 
 - [ex18_height_fog](../examples/ex18_height_fog.py)
+- [ex26_noise_autumn_lawn](../examples/ex26_noise_autumn_lawn.py)

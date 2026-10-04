@@ -7,8 +7,8 @@ Reduces splat count by keeping larger, more opaque splats within your selection.
 
 ## How to use
 
-Start with Keep Fraction 0.5 to retain about half the selected splats.  
-Unselected splats always stay; tied scores can keep more than requested.  
+Start with Keep Fraction 0.5 to retain about half the selected splats.\
+Unselected splats always stay; tied scores can keep more than requested.
 
 ## Inputs
 

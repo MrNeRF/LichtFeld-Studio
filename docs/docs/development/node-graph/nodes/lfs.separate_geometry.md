@@ -7,9 +7,9 @@ Splits into the selected part and the rest, so each can be edited differently an
 
 ## How to use
 
-Connect a Selection, then edit the two outputs separately.  
-Use Join Geometry to bring the branches back together.  
-Soft selection weights become a yes/no split at 0.5.  
+Connect a Selection, then edit the two outputs separately.\
+Use Join Geometry to bring the branches back together.\
+Soft selection weights become a yes/no split at 0.5.
 
 ## Inputs
 
@@ -31,3 +31,5 @@ Soft selection weights become a yes/no split at 0.5.
 - [ex05_extract_bike](../examples/ex05_extract_bike.py)
 - [ex15_duplicate_vase](../examples/ex15_duplicate_vase.py)
 - [ex17_mesh_cutout](../examples/ex17_mesh_cutout.py)
+- [ex27_animated_reveal](../examples/ex27_animated_reveal.py)
+- [ex28_scatter_garden_flowers](../examples/ex28_scatter_garden_flowers.py)

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "builtin_common.hpp"
 #include "core/splat_data_transform.hpp"
+#include "core/tensor_spatial.hpp"
 #include <set>
 namespace lfs::nodes::builtin {
     std::shared_ptr<core::MeshData> filter_mesh_faces(const core::MeshData& source, const Tensor& selection,
@@ -72,7 +73,7 @@ namespace lfs::nodes::builtin {
             auto o = context.evaluate_field("Offset", fc, VECTOR_SOCKET);
             auto m = copy_mesh(*geometry.mesh->mesh, blend(geometry.mesh->mesh->vertices, p + o, w),
                                geometry.mesh->mesh->indices);
-            geometry.mesh = MeshComponent{std::move(m), geometry.mesh->textures};
+            geometry.mesh = MeshComponent{std::move(m), geometry.mesh->textures, geometry.mesh->attributes};
         }
         context.set_output("Geometry", std::move(geometry));
     }
@@ -110,7 +111,7 @@ namespace lfs::nodes::builtin {
                     matrix_tensor(glm::transpose(glm::inverse(glm::mat3(matrix))), source.normals.device()));
                 mesh->normals = safe_divide(transformed, (transformed * transformed).sum(1, true).sqrt());
             }
-            geometry.mesh = MeshComponent{std::move(mesh), geometry.mesh->textures};
+            geometry.mesh = MeshComponent{std::move(mesh), geometry.mesh->textures, geometry.mesh->attributes};
         }
         context.set_output("Geometry", std::move(geometry));
     }
@@ -133,7 +134,8 @@ namespace lfs::nodes::builtin {
         if (source.mesh && source.mesh->mesh) {
             auto fc = field_context(*source.mesh);
             auto mask = selection(context, "Selection", fc, true);
-            result.mesh = MeshComponent{filter_mesh_faces(*source.mesh->mesh, mask, selected), source.mesh->textures};
+            result.mesh = MeshComponent{filter_mesh_faces(*source.mesh->mesh, mask, selected), source.mesh->textures,
+                                        source.mesh->attributes};
         }
         return result;
     }
@@ -296,7 +298,7 @@ namespace lfs::nodes::builtin {
             }
             mesh->vertices = core::Tensor::cat(verts, 0);
             mesh->indices = core::Tensor::cat(idx, 0);
-            const auto join_vertex_data = [&](Tensor core::MeshData::*member, size_t channels,
+            const auto join_vertex_data = [&](Tensor core::MeshData::* member, size_t channels,
                                               float fallback) {
                 if (!std::ranges::any_of(meshes, [&](const auto& source) {
                         return (source.get()->*member).is_valid();
@@ -334,6 +336,128 @@ namespace lfs::nodes::builtin {
         context.set_output("Geometry", join_geometries(values));
     }
 
+    static Tensor normalized(const Tensor& vector) {
+        return safe_divide(vector, (vector * vector).sum(1, true).sqrt());
+    }
+
+    Tensor integer_range(size_t count, Device device) {
+        return (Tensor::ones({count}, device, DataType::Int32).cumsum(0) - 1).to(DataType::Int32);
+    }
+
+    Tensor selected_component_labels(const Tensor& positions, const Tensor& selected, float radius) {
+        const size_t count = positions.shape()[0];
+        const auto indices = integer_range(count, positions.device());
+        // Keep the sentinel exactly representable as Float32 because Tensor::full takes a float scalar.
+        const auto sentinel = Tensor::full({count}, 1'000'000'000.0f,
+                                           positions.device(), DataType::Int32);
+        auto labels = Tensor::where(selected, indices, sentinel);
+        for (int iteration = 0; iteration < 64; ++iteration) {
+            auto next = core::radius_neighbor_min(positions, labels, radius);
+            const auto safe = Tensor::where(selected, next, indices);
+            next = next.minimum(labels.index_select(0, safe));
+            next = Tensor::where(selected, next, sentinel);
+            const bool stable = next.ne(labels).count_nonzero() == 0;
+            labels = std::move(next);
+            if (stable)
+                break;
+        }
+        return Tensor::where(selected, labels, indices).to(DataType::Int32);
+    }
+
+    Tensor cluster_average(const Tensor& values, const Tensor& labels, const Tensor& leaders) {
+        const size_t count = labels.numel();
+        auto sums = Tensor::zeros(values.shape(), values.device(), values.dtype());
+        sums.index_add_(0, labels, values);
+        auto counts = Tensor::zeros({count}, values.device(), DataType::Float32);
+        counts.index_add_(0, labels, Tensor::ones({count}, values.device()));
+        auto divisor = counts.maximum(1);
+        while (divisor.ndim() < values.ndim())
+            divisor = divisor.unsqueeze(1);
+        return (sums / divisor).index_select(0, leaders);
+    }
+
+    void evaluate_merge_by_distance(NodeContext& context) {
+        auto geometry = geometry_input(context);
+        const float radius = input_float(context, "Distance", 0.01f);
+        if (radius <= 0) {
+            context.set_output("Geometry", std::move(geometry));
+            return;
+        }
+        if (geometry.points) {
+            auto& points = *geometry.points;
+            const auto selected = selection(context, "Selection", field_context(points), true);
+            const auto labels = selected_component_labels(points.positions, selected, radius);
+            const auto leaders = labels.eq(integer_range(labels.numel(), labels.device())).nonzero().reshape({-1}).to(DataType::Int32);
+            points.positions = cluster_average(points.positions, labels, leaders);
+            points.colors = cluster_average(points.colors, labels, leaders);
+            for (auto& [_, attribute] : points.attributes) {
+                if (attribute.dtype() == DataType::Float32)
+                    attribute = cluster_average(attribute, labels, leaders);
+                else
+                    attribute = attribute.index_select(0, leaders);
+            }
+        }
+        if (geometry.mesh && geometry.mesh->mesh) {
+            auto& component = *geometry.mesh;
+            const auto& source = *component.mesh;
+            const auto selected = selection(context, "Selection", field_context(component), true);
+            const auto labels = selected_component_labels(source.vertices, selected, radius);
+            const auto indices = integer_range(labels.numel(), labels.device());
+            const auto leader_mask = labels.eq(indices);
+            const auto leaders = leader_mask.nonzero().reshape({-1}).to(DataType::Int32);
+            const auto compact = leader_mask.to(DataType::Int32).cumsum(0) - 1;
+            const auto remap = compact.index_select(0, labels).to(DataType::Int32);
+            auto faces = remap.index_select(0, source.indices.reshape({-1})).reshape(source.indices.shape());
+            const auto a = faces.slice(1, 0, 1).squeeze(1);
+            const auto b = faces.slice(1, 1, 2).squeeze(1);
+            const auto c = faces.slice(1, 2, 3).squeeze(1);
+            const auto keep = a.ne(b).logical_and(a.ne(c)).logical_and(b.ne(c));
+            faces = faces.index_select(0, keep.nonzero().reshape({-1}).to(DataType::Int32)).contiguous();
+            auto mesh = copy_mesh(source, cluster_average(source.vertices, labels, leaders), faces);
+            if (source.has_colors())
+                mesh->colors = cluster_average(source.colors, labels, leaders);
+            if (source.has_normals())
+                mesh->normals = normalized(cluster_average(source.normals, labels, leaders));
+            if (source.has_tangents())
+                mesh->tangents = cluster_average(source.tangents, labels, leaders);
+            if (source.has_texcoords())
+                mesh->texcoords = cluster_average(source.texcoords, labels, leaders);
+            mesh->submeshes.clear();
+            if (faces.numel())
+                mesh->submeshes.push_back({0, faces.numel(), 0});
+            component.mesh = std::move(mesh);
+            for (auto& [_, attribute] : component.attributes) {
+                if (attribute.dtype() == DataType::Float32)
+                    attribute = cluster_average(attribute, labels, leaders);
+                else
+                    attribute = attribute.index_select(0, leaders);
+            }
+        }
+        if (geometry.splats) {
+            auto& splats = *geometry.splats;
+            const auto selected = selection(context, "Selection", field_context(splats), true);
+            const size_t count = splats.means.shape()[0];
+            const auto opacity_order = splats.opacity.sort(0, true).second.to(DataType::Int32);
+            auto ranks = Tensor::zeros({count}, splats.means.device(), DataType::Int32);
+            ranks.scatter_(0, opacity_order, integer_range(count, splats.means.device()));
+            const auto indices = integer_range(count, splats.means.device());
+            const auto sentinel = Tensor::full({count}, 1'000'000'000.0f,
+                                               splats.means.device(), DataType::Int32);
+            auto best = Tensor::where(selected, ranks, sentinel);
+            for (int iteration = 0; iteration < 64; ++iteration) {
+                auto next = core::radius_neighbor_min(splats.means, best, radius);
+                next = Tensor::where(selected, next, sentinel);
+                const bool stable = next.ne(best).count_nonzero() == 0;
+                best = std::move(next);
+                if (stable)
+                    break;
+            }
+            const auto keep = selected.logical_not().logical_or(ranks.eq(best));
+            splats = filter_splats(splats, keep);
+        }
+        context.set_output("Geometry", std::move(geometry));
+    }
+
     void register_geometry(NodeTypeRegistry& registry) {
         const auto geo = std::string(GEOMETRY_SOCKET);
         const auto f = std::string(FLOAT_SOCKET);
@@ -362,6 +486,10 @@ namespace lfs::nodes::builtin {
         register_type(registry,
                       type("lfs.join_geometry", "Geometry",
                            {in("Geometry", geo, {}, false, true)}, {out("Geometry", geo)}, evaluate_join));
+        register_type(registry, type("lfs.merge_by_distance", "Geometry",
+                                     geometry_inputs({in("Selection", f, 1.0f, true).range(0, 1).step_size(0.01),
+                                                      in("Distance", f, 0.01f).minimum(0).step_size(0.001)}),
+                                     {out("Geometry", geo)}, evaluate_merge_by_distance));
     }
 
 } // namespace lfs::nodes::builtin

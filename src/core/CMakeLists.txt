@@ -90,6 +90,8 @@ set(TENSOR_SOURCES
         tensor/tensor_masking_ops.cpp
         tensor/tensor_advanced_ops.cpp
         tensor/tensor_spatial.cpp
+        tensor/tensor_proximity.cpp
+        tensor/tensor_procedural.cpp
         tensor/tensor_projection.cpp
         tensor/tensor_point_region.cpp
         tensor/tensor_histogram.cpp
@@ -279,6 +281,9 @@ set(CORE_SOURCES
         nodes/builtin_splat.cpp
         nodes/builtin_cleanup.cpp
         nodes/builtin_conversion.cpp
+        nodes/builtin_colour.cpp
+        nodes/builtin_texture.cpp
+        nodes/builtin_instances.cpp
         system_info.cpp
         user_paths.cpp
         legacy_settings_migration.cpp

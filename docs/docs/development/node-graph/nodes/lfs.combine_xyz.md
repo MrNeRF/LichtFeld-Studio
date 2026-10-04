@@ -7,8 +7,8 @@ Builds a position or direction from separate X, Y and Z values.
 
 ## How to use
 
-Use to change one coordinate while keeping the other two.  
-Connect the result to a Vector input.  
+Use to change one coordinate while keeping the other two.\
+Connect the result to a Vector input.
 
 ## Inputs
 

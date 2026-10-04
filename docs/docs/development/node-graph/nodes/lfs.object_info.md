@@ -7,9 +7,9 @@ Brings another scene object's geometry into your graph as a reference or an extr
 
 ## How to use
 
-Choose the exact name or UUID of the reference object.  
-Use Relative space to place it relative to the object being modified.  
-Avoid referencing an object that depends on this modifier.  
+Choose the exact name or UUID of the reference object.\
+Use Relative space to place it relative to the object being modified.\
+Avoid referencing an object that depends on this modifier.
 
 ## Outputs
 

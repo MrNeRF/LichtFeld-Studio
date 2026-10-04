@@ -7,9 +7,10 @@ Shortens needle-shaped Gaussians that show up as streaks when you move away from
 
 ## How to use
 
-Use when thin streaks appear off the camera path.  
-Start with Max Aspect 16; lower values shorten more needles.  
-Flat splats on surfaces are left alone unless 'Include flat' is on.  
+Use when thin streaks appear off the camera path.\
+Start with Max Aspect 16; lower values shorten more needles.\
+Flat splats on surfaces are left alone unless 'Include flat' is on.\
+Zero axes stay collapsed; aspect limits apply only to the remaining nonzero axes.
 
 ## Inputs
 

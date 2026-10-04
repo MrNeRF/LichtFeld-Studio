@@ -770,7 +770,11 @@ namespace lfs::vis {
                     const float speed = saved.at("playbackSpeed");
                     if (!std::isfinite(speed) || speed < MIN_PLAYBACK_SPEED || speed > MAX_PLAYBACK_SPEED)
                         return false;
-                    const nlohmann::json timeline{{"version", 4}, {"clip_duration", saved.at("duration")}, {"keyframes", saved.at("keyframes")}};
+                    // This API replaces the camera path, not generic animation
+                    // tracks belonging to node inputs or other scene targets.
+                    auto timeline = gm->sequencer().saveToJson();
+                    timeline["clip_duration"] = saved.at("duration");
+                    timeline["keyframes"] = saved.at("keyframes");
                     if (!gm->sequencer().loadFromJson(timeline))
                         return false;
                     gm->sequencer().setLoopMode(mode == "loop" ? LoopMode::LOOP : mode == "ping_pong" ? LoopMode::PING_PONG

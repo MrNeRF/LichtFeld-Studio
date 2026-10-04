@@ -4165,7 +4165,7 @@
     "scale_clamp": {
       "label": "Achsenverhältnis begrenzen",
       "description": "Verkürzt nadelförmige Gaussians, die abseits des Aufnahmepfads als Streifen sichtbar werden.",
-      "help": "Bei dünnen Streifen abseits des Kamerapfads verwenden.\nMit Max. Achsenverhältnis 16 beginnen; kleinere Werte verkürzen mehr Nadeln.\nFlache Oberflächen-Splats bleiben unverändert, ausser „Flache einbeziehen“ ist aktiv.",
+      "help": "Bei dünnen Streifen abseits des Kamerapfads verwenden.\nMit Max. Achsenverhältnis 16 beginnen; kleinere Werte verkürzen mehr Nadeln.\nFlache Oberflächen-Splats bleiben unverändert, ausser „Flache einbeziehen“ ist aktiv.\nAchsen mit Grösse null bleiben kollabiert; die Verhältnisgrenze gilt nur für die übrigen Achsen.",
       "inputs": {
         "Geometry": "Zu bearbeitende Geometrie. Verbinde eine Quelle; ohne Verbindung kommt keine Geometrie an.",
         "Selection": "Bearbeitungsstärke, 0–1: 0 unverändert, 1 volle Wirkung. Ohne Verbindung wird alles bearbeitet.",
@@ -4340,7 +4340,7 @@
     "set_scale": {
       "label": "Skalierung setzen",
       "description": "Setzt die Grösse ausgewählter Splats entlang ihrer drei lokalen Achsen.",
-      "help": "Verbinde Skalierung über Vektormathematik, um vorhandene Grössen zu multiplizieren.\nUnverbundene Werte ersetzen die Grösse in Szeneneinheiten; sie sind keine Multiplikatoren.",
+      "help": "Verbinde Skalierung über Vektormathematik, um vorhandene Grössen zu multiplizieren.\nUnverbundene Werte ersetzen die Grösse in Szeneneinheiten; sie sind keine Multiplikatoren.\nNull oder negative Grössen lassen eine Achse kollabieren. Eine positive Grösse stellt sie nur bei voller Auswahl wieder her; bei teilweiser Auswahl bleibt sie kollabiert.",
       "inputs": {
         "Geometry": "Zu bearbeitende Geometrie. Verbinde eine Quelle; ohne Verbindung kommt keine Geometrie an.",
         "Selection": "Bearbeitungsstärke, 0–1: 0 unverändert, 1 volle Wirkung. Ohne Verbindung wird alles bearbeitet.",
@@ -4411,7 +4411,7 @@
     "simplify": {
       "label": "Vereinfachen",
       "description": "Fasst Splats zusammen, um ihre Anzahl zu senken und das Gesamtbild zu erhalten.",
-      "help": "Beginne mit Verhältnis 0,5 für etwa die Hälfte der Splats.\nDies kann länger dauern; kleinere Verhältnisse verlieren feine Details.",
+      "help": "Beginne mit Verhältnis 0,5 für etwa die Hälfte der Splats.\nDies kann länger dauern; kleinere Verhältnisse verlieren feine Details.\nAchsen mit Kovarianz null bleiben kollabiert; beim Zusammenführen verschiedener Positionen oder Ausrichtungen kann eine tatsächliche Ausdehnung entstehen.",
       "inputs": {
         "Geometry": "Zu bearbeitende Geometrie. Verbinde eine Quelle; ohne Verbindung kommt keine Geometrie an.",
         "Ratio": "Gewünschter Splat-Anteil, 0,01–1. Standard 0,5 zielt auf die Hälfte; 1 behält die ursprüngliche Anzahl."
@@ -4583,8 +4583,397 @@
         "object": "Objekt",
         "transform_space": "Transformationsraum"
       }
+    },
+    "float_curve": {
+      "label": "Wertekurve",
+      "description": "Bildet Zahlen über eine glatte, bearbeitbare Kurve ab.",
+      "help": "Bildet Zahlen über eine glatte, bearbeitbare Kurve ab.\nStützpunkte ziehen, hinzufügen oder löschen. Die Fritsch–Carlson-Interpolation verhindert Überschwingen zwischen monotonen Punkten.",
+      "inputs": {
+        "Value": "Zahl pro Element, die durch die Kurve abgebildet wird."
+      },
+      "input_labels": {
+        "Value": "Wert"
+      },
+      "outputs": {
+        "Value": "Durch die Kurve abgebildete Zahl."
+      },
+      "output_labels": {
+        "Value": "Wert"
+      },
+      "properties": {
+        "points": "Geordnete Kurvenstützpunkte als Paare aus X und Y.",
+        "clamp": "Eingaben auf den Bereich zwischen erstem und letztem Stützpunkt begrenzen."
+      },
+      "property_labels": {
+        "points": "Kurve",
+        "clamp": "Begrenzen"
+      }
+    },
+    "rgb_curves": {
+      "label": "RGB-Kurven",
+      "description": "Verändert Farben über eine Gesamtkurve und einzelne Farbkanalkurven.",
+      "help": "Verändert Farben über eine Gesamtkurve und einzelne Farbkanalkurven.\nAuswahl × Faktor mischt das Ergebnis. Bei Splats ändert die nichtlineare Korrektur nur die Grundfarbe (DC), nicht die blickabhängigen SH-Bänder; auch für Punkte und Netze.",
+      "inputs": {
+        "Geometry": "Zu bearbeitende Geometrie; einen Geometrieausgang anschließen.",
+        "Selection": "Mischgewicht pro Element, 0–1; ohne Verbindung werden alle Elemente berücksichtigt.",
+        "Factor": "Zusätzliche Stärke der Kurvenwirkung, 0–1."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Auswahl",
+        "Factor": "Faktor"
+      },
+      "outputs": {
+        "Geometry": "Geometrie nach der Bearbeitung."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "combined": "Kurve, die zuerst auf alle Farbkanäle angewendet wird.",
+        "r": "Kurve für den Rotkanal.",
+        "g": "Kurve für den Grünkanal.",
+        "b": "Kurve für den Blaukanal."
+      },
+      "property_labels": {
+        "combined": "Gesamt",
+        "r": "Rot",
+        "g": "Grün",
+        "b": "Blau"
+      }
+    },
+    "colour_ramp": {
+      "label": "Farbverlauf",
+      "description": "Ordnet Zahlen Farben und Transparenzwerte zu.",
+      "help": "Ordnet Zahlen Farben und Transparenzwerte zu.\nMarken im Bereich 0–1 anordnen. Die Interpolation kann konstant, linear oder weich sein.",
+      "inputs": {
+        "Fac": "Position im Farbverlauf, normalerweise 0–1."
+      },
+      "input_labels": {
+        "Fac": "Faktor"
+      },
+      "outputs": {
+        "Colour": "Erzeugte RGB-Farbe.",
+        "Alpha": "Transparenzwert des Farbverlaufs, 0–1."
+      },
+      "output_labels": {
+        "Colour": "Farbe",
+        "Alpha": "Alpha"
+      },
+      "properties": {
+        "stops": "Geordnete Marken: Position, Rot, Grün, Blau und Alpha.",
+        "interpolation": "Übergang zwischen benachbarten Marken: konstant, linear oder weich."
+      },
+      "property_labels": {
+        "stops": "Farbverlauf",
+        "interpolation": "Interpolation"
+      }
+    },
+    "gradient_texture": {
+      "label": "Verlaufstextur",
+      "description": "Erzeugt einen Verlauf aus räumlichen Koordinaten.",
+      "help": "Erzeugt einen Verlauf aus räumlichen Koordinaten.\nPosition als Koordinaten verwenden. Linear nutzt X, diagonal X und Y; kugelförmig und radial beziehen sich auf den Ursprung.",
+      "inputs": {
+        "Vector": "Koordinaten X, Y und Z; ohne Verbindung werden Elementpositionen verwendet."
+      },
+      "input_labels": {
+        "Vector": "Vektor"
+      },
+      "outputs": {
+        "Fac": "Erzeugter Verlaufswert; kann außerhalb von 0–1 liegen."
+      },
+      "output_labels": {
+        "Fac": "Faktor"
+      },
+      "properties": {
+        "type": "Verlaufsform: linear, quadratisch, weich, diagonal, kugelförmig oder radial."
+      },
+      "property_labels": {
+        "type": "Typ"
+      }
+    },
+    "distance": {
+      "label": "Abstand",
+      "description": "Misst den Abstand jedes Elements zu einem Punkt, einer Geraden oder einer Ebene.",
+      "help": "Misst den Abstand jedes Elements zu einem Punkt, einer Geraden oder einer Ebene.\nDie Ebene liefert einen vorzeichenbehafteten Abstand; Punkt und Gerade liefern nichtnegative Abstände.",
+      "inputs": {
+        "Vector": "Koordinaten X, Y und Z; ohne Verbindung werden Elementpositionen verwendet.",
+        "Point": "Zielpunkt oder ein Punkt auf der Geraden bzw. Ebene.",
+        "Direction": "Richtung der Geraden bzw. Blickrichtung der Kamera.",
+        "Normal": "Normalenrichtung der Zielebene."
+      },
+      "input_labels": {
+        "Vector": "Vektor",
+        "Point": "Punkt",
+        "Direction": "Richtung",
+        "Normal": "Normale"
+      },
+      "outputs": {
+        "Distance": "Abstand in Szeneneinheiten; im Ebenenmodus mit Vorzeichen."
+      },
+      "output_labels": {
+        "Distance": "Abstand"
+      },
+      "properties": {
+        "mode": "Abstand zu Punkt, Gerade oder Ebene messen."
+      },
+      "property_labels": {
+        "mode": "Modus"
+      }
+    },
+    "noise_texture": {
+      "label": "Rauschtextur",
+      "description": "Erzeugt wiederholbares dreidimensionales fraktales Rauschen.",
+      "help": "Erzeugt wiederholbares dreidimensionales fraktales Rauschen.\nOhne Verbindung werden Positionen verwendet. Detail erlaubt 0–15 Oktaven mit fließenden Übergängen; Rauheit steuert deren Amplituden.",
+      "inputs": {
+        "Vector": "Koordinaten X, Y und Z; ohne Verbindung werden Elementpositionen verwendet.",
+        "Scale": "Größen- bzw. Koordinatenmultiplikator; 1 erhält die ursprüngliche Größe.",
+        "Detail": "Oktavenzahl von 0 bis 15; Bruchteile werden weich gemischt.",
+        "Roughness": "Amplitudenanteil, der bei jeder weiteren Oktave erhalten bleibt.",
+        "Distortion": "Stärke der Koordinatenverzerrung.",
+        "Seed": "Startwert für ein wiederholbares Rauschmuster."
+      },
+      "input_labels": {
+        "Vector": "Vektor",
+        "Scale": "Skalierung",
+        "Detail": "Detail",
+        "Roughness": "Rauheit",
+        "Distortion": "Verzerrung",
+        "Seed": "Startwert"
+      },
+      "outputs": {
+        "Fac": "Abtastwert des Verlaufs oder erzeugter Rauschwert, 0–1.",
+        "Colour": "Erzeugte RGB-Farbe."
+      },
+      "output_labels": {
+        "Fac": "Faktor",
+        "Colour": "Farbe"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "store_named_attribute": {
+      "label": "Benanntes Attribut speichern",
+      "description": "Speichert Werte auf den Elementen der Geometrie.",
+      "help": "Speichert Werte auf den Elementen der Geometrie.\nSpäter mit demselben Attributnamen lesen. Nicht ausgewählte Elemente behalten ihren Wert oder 0. Splat- und Punktattribute überleben spätere Modifikatoren; Netzknotenattribute gehen beim Anwenden verloren.",
+      "inputs": {
+        "Geometry": "Zu bearbeitende Geometrie; einen Geometrieausgang anschließen.",
+        "Selection": "Mischgewicht pro Element, 0–1; ohne Verbindung werden alle Elemente berücksichtigt.",
+        "Name": "Attributname zum späteren Lesen mit Benanntes Attribut.",
+        "Value": "Zu speichernde Zahl, Vektor- oder Farbwerte pro Element."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Auswahl",
+        "Name": "Name",
+        "Value": "Wert"
+      },
+      "outputs": {
+        "Geometry": "Geometrie nach der Bearbeitung."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "data_type": "Wert als Zahl, Vektor oder Farbe speichern."
+      },
+      "property_labels": {
+        "data_type": "Datentyp"
+      }
+    },
+    "remove_clumps": {
+      "label": "Kleine Gruppen entfernen",
+      "description": "Entfernt kleine zusammenhängende Gruppen von Splats oder Punkten.",
+      "help": "Entfernt kleine zusammenhängende Gruppen von Splats oder Punkten.\nDer Radius ist ein Vielfaches des medianen Nachbarabstands. Die GPU ermittelt Zusammenhangskomponenten; nur Gruppen unter der Mindestgröße werden entfernt. Netze werden nicht unterstützt.",
+      "inputs": {
+        "Geometry": "Zu bearbeitende Geometrie; einen Geometrieausgang anschließen.",
+        "Selection": "Elemente mit Werten ab 0,5 sind ausgewählt.",
+        "Radius": "Verbindungsradius als Vielfaches des medianen lokalen Abstands.",
+        "Min Size": "Gruppen mit weniger Elementen werden zur Entfernung ausgewählt."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Auswahl",
+        "Radius": "Radius",
+        "Min Size": "Mindestgröße"
+      },
+      "outputs": {
+        "Geometry": "Geometrie nach der Bearbeitung.",
+        "Selection": "Elemente in Gruppen unterhalb der Mindestgröße."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Auswahl"
+      },
+      "properties": {
+        "delete": "Kandidaten löschen; deaktivieren, um nur den Auswahlausgang zu nutzen."
+      },
+      "property_labels": {
+        "delete": "Löschen"
+      }
+    },
+    "merge_by_distance": {
+      "label": "Nach Abstand verschmelzen",
+      "description": "Fasst benachbarte Elemente zu kompakter Geometrie zusammen.",
+      "help": "Fasst benachbarte Elemente zu kompakter Geometrie zusammen.\nNur ausgewählte Elemente verschmelzen. Punkte und Netzknoten werden gemittelt, Flächen neu zugeordnet und entartete Flächen entfernt. Bei Splats bleibt das undurchsichtigste Mitglied jeder Gruppe.",
+      "inputs": {
+        "Geometry": "Zu bearbeitende Geometrie; einen Geometrieausgang anschließen.",
+        "Selection": "Elemente mit Werten ab 0,5 sind ausgewählt.",
+        "Distance": "Maximaler Abstand, der Elemente zu einer Gruppe verbindet."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Auswahl",
+        "Distance": "Abstand"
+      },
+      "outputs": {
+        "Geometry": "Geometrie nach der Bearbeitung."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "geometry_proximity": {
+      "label": "Geometrienähe",
+      "description": "Findet den nächsten Zielpunkt, Splat-Mittelpunkt oder Netzknoten.",
+      "help": "Findet den nächsten Zielpunkt, Splat-Mittelpunkt oder Netzknoten.\nZielgeometrie anschließen; beide Geometrien müssen passende Koordinaten verwenden. Gemessen wird zu Elementen, nicht zur Fläche zwischen Netzknoten.",
+      "inputs": {
+        "Target": "Zielgeometrie aus Punkten, Splats oder Netzknoten; darf nicht leer sein."
+      },
+      "input_labels": {
+        "Target": "Ziel"
+      },
+      "outputs": {
+        "Distance": "Abstand in Szeneneinheiten; im Ebenenmodus mit Vorzeichen.",
+        "Position": "Ermittelte Position in den Koordinaten der Geometrie bzw. Kamera."
+      },
+      "output_labels": {
+        "Distance": "Abstand",
+        "Position": "Position"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "instance_on_points": {
+      "label": "Instanzen auf Punkten",
+      "description": "Platziert eine transformierte Splat-Kopie an jedem ausgewählten Anker.",
+      "help": "Platziert eine transformierte Splat-Kopie an jedem ausgewählten Anker.\nAnker können Punkte, Netzknoten oder Splat-Mittelpunkte sein; die Instanz muss aus Splats bestehen. Euler-Drehungen in Grad und Skalierungen transformieren Form und SH-Farbe gemeinsam. Grenze: 50 Millionen Splats.\nNegative Faktoren verwenden ihren Betrag für die Grösse und spiegeln Positionen, Ausrichtung und SH-Farbe. Bei einer kollabierten Transformation bleibt die SH-Farbe unverändert.",
+      "inputs": {
+        "Points": "Geometrie, deren Elemente als Anker dienen.",
+        "Instance": "Zu vervielfältigende Splat-Geometrie; andere Geometriearten sind nicht zulässig.",
+        "Selection": "Elemente mit Werten ab 0,5 sind ausgewählt.",
+        "Rotation": "Euler-Winkel um X, Y und Z in Grad pro Anker; 0 erhält die Ausrichtung.",
+        "Scale": "Eine Zahl oder drei Achsenfaktoren: 1 erhält die Größe, 0 staucht eine Achse auf null, negative Werte spiegeln."
+      },
+      "input_labels": {
+        "Points": "Punkte",
+        "Instance": "Instanz",
+        "Selection": "Auswahl",
+        "Rotation": "Drehung",
+        "Scale": "Skalierung"
+      },
+      "outputs": {
+        "Geometry": "Geometrie nach der Bearbeitung."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "camera_info": {
+      "label": "Kamerainformationen",
+      "description": "Liest Position, Ausrichtung und Objektivdaten einer Datensatzkamera.",
+      "help": "Liest Position, Ausrichtung und Objektivdaten einer Datensatzkamera.\nKamera nach Index oder Bildname wählen. Die Ausgaben verwenden Weltkoordinaten; die Szene muss Datensatzkameras enthalten.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Ermittelte Position in den Koordinaten der Geometrie bzw. Kamera.",
+        "Direction": "Richtung der Geraden bzw. Blickrichtung der Kamera.",
+        "Up": "Einheitsvektor zur oberen Bildkante.",
+        "FOV": "Vertikaler Bildwinkel in Grad.",
+        "Image Size": "Bildbreite und -höhe in Pixeln; Z ist 0."
+      },
+      "output_labels": {
+        "Position": "Position",
+        "Direction": "Richtung",
+        "Up": "Oben",
+        "FOV": "Bildwinkel",
+        "Image Size": "Bildgröße"
+      },
+      "properties": {
+        "camera": "Kameraindex oder exakter Bildname; 0 wählt die erste Kamera."
+      },
+      "property_labels": {
+        "camera": "Kamera"
+      }
+    },
+    "camera_coverage": {
+      "label": "Kameraabdeckung",
+      "description": "Zählt die Kameras, deren Sichtkegel ein Element enthält.",
+      "help": "Zählt die Kameras, deren Sichtkegel ein Element enthält.\nAnzahl mit Vergleichen verbinden. Geprüft werden Bildgrenzen und positive Tiefe, keine Verdeckung. Maximaler Abstand 0 deaktiviert die Grenze. Für Splats, Punkte und Netzknoten; Datensatzkameras erforderlich.",
+      "inputs": {
+        "Max Distance": "Maximaler Kameraabstand in Welteinheiten; 0 deaktiviert die Begrenzung."
+      },
+      "input_labels": {
+        "Max Distance": "Maximaler Abstand"
+      },
+      "outputs": {
+        "Count": "Anzahl der Datensatzkameras, deren Bildgrenzen dieses Element enthalten.",
+        "Ratio": "Anteil der erfassenden Kameras an allen Kameras, 0–1."
+      },
+      "output_labels": {
+        "Count": "Anzahl",
+        "Ratio": "Anteil"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "view_distance": {
+      "label": "Kameraabstand",
+      "description": "Misst den Weltabstand zu einer Datensatzkamera oder gespeicherten Ansicht.",
+      "help": "Misst den Weltabstand zu einer Datensatzkamera oder gespeicherten Ansicht.\nDatensatzkamera wählen oder Ansicht speichern drücken. Die gespeicherte Kamera folgt späteren Ansichtsbewegungen nicht. Für Splats, Punkte und Netzknoten; Datensatzkameras erforderlich.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Distance": "Abstand von der gewählten Kamera in Welteinheiten."
+      },
+      "output_labels": {
+        "Distance": "Abstand"
+      },
+      "properties": {
+        "camera": "Kameraindex oder exakter Bildname; 0 wählt die erste Kamera.",
+        "source": "Datensatzkamera oder zuletzt gespeicherte Ansicht verwenden.",
+        "captured_transform": "Gespeicherte Kamera-zu-Welt-Matrix; vor der ersten Aufnahme leer."
+      },
+      "property_labels": {
+        "camera": "Kamera",
+        "source": "Quelle",
+        "captured_transform": "Gespeicherte Transformation"
+      }
+    },
+    "scene_time": {
+      "label": "Szenenzeit",
+      "description": "Gibt die Abspielposition des Sequenzers aus.",
+      "help": "Mit Sekunden oder Frame lassen sich Felder animieren.\nNur zeitabhängige Graphen werden bei der Wiedergabe neu ausgewertet.\nDer Videoexport wartet für jedes Bild auf die ausgewertete Geometrie.",
+      "inputs": {},
+      "properties": {},
+      "outputs": {
+        "Seconds": "Abspielposition in Sekunden.",
+        "Frame": "Abspielposition multipliziert mit der Bildrate des Sequenzers."
+      },
+      "output_labels": {
+        "Seconds": "Sekunden",
+        "Frame": "Frame"
+      }
     }
   },
   "node_editor.how_to_use": "So verwendest du den Knoten",
-  "node_editor.learn_more": "Mehr erfahren"
+  "node_editor.learn_more": "Mehr erfahren",
+  "node_editor.capture_view": "Ansicht speichern",
+  "node_editor.curve_hint": "Punkte ziehen; klicken zum Hinzufügen, doppelklicken oder Entf zum Löschen.",
+  "node_editor.ramp_hint": "Marken ziehen; klicken zum Hinzufügen, doppelklicken oder Entf zum Löschen. Marke auswählen, um RGBA zu ändern.",
+  "node_editor.keyframe_hint": "Schlüsselbild einfügen · Strg+Klick oder I beim Darüberfahren"
 }

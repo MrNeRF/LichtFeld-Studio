@@ -12,6 +12,7 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "input/input_controller.hpp"
 #include "scene/scene_manager.hpp"
+#include "sequencer/sequencer_controller.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
@@ -287,6 +288,8 @@ namespace lfs::vis::gui {
         AddEventListener("keydown", this, true);
         AddEventListener("change", this, true);
         AddEventListener("mousedown", this, true);
+        for (const char* event : {"curvebegin", "curvechange", "curveend", "curvecancel", "curvefocus"})
+            AddEventListener(event, this, true);
     }
 
     NodeCanvasElement::~NodeCanvasElement() {
@@ -300,6 +303,8 @@ namespace lfs::vis::gui {
         RemoveEventListener("keydown", this, true);
         RemoveEventListener("change", this, true);
         RemoveEventListener("mousedown", this, true);
+        for (const char* event : {"curvebegin", "curvechange", "curveend", "curvecancel", "curvefocus"})
+            RemoveEventListener(event, this, true);
         if (scene_manager_)
             scene_manager_->setModifierSelectionPreview({}, std::nullopt);
         if (manager_)
@@ -762,6 +767,8 @@ namespace lfs::vis::gui {
                 row_y += row_height;
             }
             const bool expanded = node_widgets::settingsExpanded(node);
+            const float editor_height = node_widgets::inlineEditorHeight(node);
+            row_y += editor_height == 120 && interaction_.zoom() < 0.75f ? 40 : editor_height;
             const auto settings = std::ranges::count_if(inputs, node_widgets::singleValue) +
                                   (type ? std::ranges::count_if(type->properties, [&](const auto& property) {
                                       return property.kind != lfs::nodes::PropertyKind::Data && node.type_id != "lfs.group";
@@ -977,6 +984,10 @@ namespace lfs::vis::gui {
                     {"theme", theme_signature_},
                     {"language", language_generation_},
                     {"optional", LOC("node_editor.optional_selection")}};
+                if (const auto* controller = manager_->sequencer()) {
+                    content_state["animation_time"] = manager_->animationTime();
+                    content_state["animation_revision"] = controller->timelineRevision();
+                }
                 for (const auto& input : inputs)
                     content_state["inputs"].push_back({input.identifier, input.label, input.type});
                 for (const auto& output : outputs)
@@ -1009,6 +1020,7 @@ namespace lfs::vis::gui {
                         for (const auto& output : outputs)
                             title += "<div class=\"socket-row output\" title=\"" + escape(output.description) + "\"><span class=\"socket-label\">" +
                                      escape(output.label) + "</span></div>";
+                        title += node_widgets::inlineEditor(*node);
                         const auto settings = std::ranges::count_if(inputs, node_widgets::singleValue) +
                                               (type ? std::ranges::count_if(type->properties, [&](const auto& property) {
                                                   return property.kind != lfs::nodes::PropertyKind::Data && node->type_id != "lfs.group";
@@ -1038,7 +1050,7 @@ namespace lfs::vis::gui {
                                           : "") +
                                      "</span>";
                             if (has_widget)
-                                title += "<div class=\"inline-value\">" + node_widgets::input(*node, input, true) +
+                                title += "<div class=\"inline-value\">" + node_widgets::animatedInput(*manager_, *tree, *node, input, true) +
                                          "</div>";
                             title += "</div>";
                         }
@@ -1328,7 +1340,7 @@ namespace lfs::vis::gui {
                             continue;
                         html += "<div class=\"node-setting-help\" title=\"" + escape(socket.description) + "\"><div class=\"setting-row node-setting\"><span class=\"prop-label\">" +
                                 escape(socket.label) + "</span><div class=\"node-field-control\">" +
-                                node_widgets::input(*node, socket, false) + "</div></div><div class=\"node-field-help\">" +
+                                node_widgets::animatedInput(*manager_, *tree, *node, socket, false) + "</div></div><div class=\"node-field-help\">" +
                                 escape(socket.description) + "</div></div>";
                     }
                     for (const auto& property : type->properties) {
@@ -1931,6 +1943,8 @@ namespace lfs::vis::gui {
                                       const bool alt) {
         if (!editableMode())
             return false;
+        if (scancode == SDL_SCANCODE_I && GetContext())
+            return keyframeInput(GetContext()->GetHoverElement());
         if (scancode == SDL_SCANCODE_L && shift) {
             arrange();
             return true;
@@ -1962,7 +1976,7 @@ namespace lfs::vis::gui {
         }
         if (auto* context = GetContext()) {
             const auto* focused = context->GetFocusElement();
-            if (focused && (focused->GetTagName() == "input" || focused->GetTagName() == "select" || focused->GetTagName() == "textarea"))
+            if (focused && (focused->GetTagName() == "input" || focused->GetTagName() == "select" || focused->GetTagName() == "textarea" || focused->GetTagName() == "node-curve"))
                 return false;
         }
         switch (scancode) {
@@ -2049,6 +2063,43 @@ namespace lfs::vis::gui {
     }
 
     void NodeCanvasElement::ProcessEvent(Rml::Event& event) {
+        const auto& event_type = event.GetType();
+        if (editableMode()) {
+            auto* target = event.GetTargetElement();
+            const bool shortcut = event_type == "mousedown" && event.GetParameter("button", 0) == 0 &&
+                                  event.GetParameter<int>("ctrl_key", 0) != 0;
+            const bool button = event_type == "click" && target->GetAttribute<Rml::String>("data-action", "") == "node-keyframe";
+            if ((shortcut || button) && keyframeInput(target)) {
+                event.StopImmediatePropagation();
+                return;
+            }
+        }
+        if (event_type == "curvebegin" || event_type == "curvechange" || event_type == "curveend" || event_type == "curvecancel" || event_type == "curvefocus") {
+            auto* target = event.GetTargetElement();
+            auto* graph = activeTree();
+            if (!editableMode() || !graph)
+                return;
+            if (event_type == "curvebegin") {
+                active_field_ = target;
+                field_before_ = graph->to_json();
+            }
+            if (event_type == "curvechange" || event_type == "curvefocus") {
+                if (auto* node = graph->find_node(target->GetAttribute<Rml::String>("data-node", ""))) {
+                    const auto property = event.GetParameter<Rml::String>("property", "");
+                    const auto value = nlohmann::json::parse(event.GetParameter<Rml::String>("value", "[]"), nullptr, false);
+                    node->ui["curve_selected"] = event.GetParameter<int>("selected", -1);
+                    node->ui["curve_channel"] = property;
+                    if (event_type == "curvechange" && !value.is_discarded()) {
+                        node->properties[property] = value;
+                        manager_->markDirty();
+                    }
+                }
+            }
+            if (event_type == "curveend" || event_type == "curvecancel")
+                finishFieldEdit(event_type == "curvecancel");
+            event.StopPropagation();
+            return;
+        }
         // Colour elements change their value in the target's default action,
         // before the canvas default action. Capture the undo snapshot first.
         if (event.GetType() == "mousedown") {
@@ -2325,6 +2376,16 @@ namespace lfs::vis::gui {
                 event.StopPropagation();
                 return;
             }
+            if (action == "capture-view") {
+                if (auto* graph = activeTree()) {
+                    const auto result = manager_->captureViewportCamera(graph->uuid, target->GetAttribute<Rml::String>("data-node", ""));
+                    if (!result)
+                        target->SetAttribute("title", result.error().message);
+                    dom_dirty_ = true;
+                }
+                event.StopPropagation();
+                return;
+            }
             if (action == "colour-pick") {
                 const std::string node = target->GetAttribute<Rml::String>("data-node", "");
                 const std::string input = target->GetAttribute<Rml::String>("data-input", "");
@@ -2565,6 +2626,8 @@ namespace lfs::vis::gui {
                 scancode = SDL_SCANCODE_N;
             else if (key == Rml::Input::KI_L)
                 scancode = SDL_SCANCODE_L;
+            else if (key == Rml::Input::KI_I)
+                scancode = SDL_SCANCODE_I;
             else if (key == Rml::Input::KI_TAB)
                 scancode = SDL_SCANCODE_TAB;
             if (handleKey(scancode, event.GetParameter<int>("shift_key", 0) != 0,

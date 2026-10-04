@@ -69,6 +69,7 @@ namespace lfs::nodes {
         [[nodiscard]] const Node* find_node(std::string_view name) const;
         Node& add_node(std::string type_id, std::string name = {});
         bool remove_node(std::string_view name);
+        bool rename_node(std::string_view name, std::string new_name);
         bool add_link(Link link, std::string* error = nullptr, const TreeResolver& resolver = {});
         bool remove_link(const Link& link);
         [[nodiscard]] std::vector<ValidationIssue> validate(const TreeResolver& resolver = {}) const;

@@ -4165,7 +4165,7 @@
     "scale_clamp": {
       "label": "Limiter les proportions",
       "description": "Raccourcit les Gaussians en aiguille qui créent des traînées loin du trajet de capture.",
-      "help": "Utilise-le si de fines traînées apparaissent hors du trajet caméra.\nCommence avec Rapport max 16 ; une valeur moindre raccourcit plus d'aiguilles.\nLes splats plats des surfaces restent intacts sauf si « Inclure les plats » est activé.",
+      "help": "Utilise-le si de fines traînées apparaissent hors du trajet caméra.\nCommence avec Rapport max 16 ; une valeur moindre raccourcit plus d'aiguilles.\nLes splats plats des surfaces restent intacts sauf si « Inclure les plats » est activé.\nLes axes de taille nulle restent repliés ; la limite de rapport s’applique uniquement aux autres axes.",
       "inputs": {
         "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
         "Selection": "Zone et force d'effet, 0–1 : 0 inchangé, 1 effet complet. Sans connexion, tout est concerné.",
@@ -4340,7 +4340,7 @@
     "set_scale": {
       "label": "Définir l'échelle",
       "description": "Définit la taille des splats sélectionnés selon leurs trois axes locaux.",
-      "help": "Passe Échelle par Calcul vectoriel pour multiplier les tailles existantes.\nSans connexion, les valeurs remplacent les tailles en unités de scène.",
+      "help": "Passe Échelle par Calcul vectoriel pour multiplier les tailles existantes.\nSans connexion, les valeurs remplacent les tailles en unités de scène.\nUne taille nulle ou négative replie l’axe. Une taille positive ne le rétablit qu’avec une sélection complète ; une sélection partielle le laisse replié.",
       "inputs": {
         "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
         "Selection": "Zone et force d'effet, 0–1 : 0 inchangé, 1 effet complet. Sans connexion, tout est concerné.",
@@ -4411,7 +4411,7 @@
     "simplify": {
       "label": "Simplifier",
       "description": "Combine des splats pour réduire leur nombre tout en préservant l'aspect global de ta scène.",
-      "help": "Commence avec Rapport 0,5 pour viser la moitié des splats.\nCe nœud peut être plus lent ; des rapports faibles perdent les détails fins.",
+      "help": "Commence avec Rapport 0,5 pour viser la moitié des splats.\nCe nœud peut être plus lent ; des rapports faibles perdent les détails fins.\nLes axes de covariance nulle restent repliés ; fusionner des positions ou orientations différentes peut créer une étendue réelle.",
       "inputs": {
         "Geometry": "Géométrie à modifier. Connecte une source ; sans connexion, aucune géométrie n'est fournie.",
         "Ratio": "Part cible de splats, 0,01–1. 0,5, par défaut, vise la moitié ; 1 conserve leur nombre initial."
@@ -4583,8 +4583,397 @@
         "object": "Objet",
         "transform_space": "Espace de transformation"
       }
+    },
+    "float_curve": {
+      "label": "Courbe de valeurs",
+      "description": "Remappe les nombres à l’aide d’une courbe lisse modifiable.",
+      "help": "Remappe les nombres à l’aide d’une courbe lisse modifiable.\nDéplacez, ajoutez ou supprimez les points de contrôle. L’interpolation de Fritsch–Carlson évite les dépassements entre points monotones.",
+      "inputs": {
+        "Value": "Nombre par élément à remapper par la courbe."
+      },
+      "input_labels": {
+        "Value": "Valeur"
+      },
+      "outputs": {
+        "Value": "Nombre remappé par la courbe."
+      },
+      "output_labels": {
+        "Value": "Valeur"
+      },
+      "properties": {
+        "points": "Points de contrôle ordonnés sous forme de paires X et Y.",
+        "clamp": "Limiter les entrées entre le premier et le dernier point de contrôle."
+      },
+      "property_labels": {
+        "points": "Courbe",
+        "clamp": "Limiter"
+      }
+    },
+    "rgb_curves": {
+      "label": "Courbes RVB",
+      "description": "Remappe les couleurs avec une courbe globale et des courbes par canal.",
+      "help": "Remappe les couleurs avec une courbe globale et des courbes par canal.\nSélection × Facteur dose le résultat. Cette correction non linéaire ne modifie que la couleur de base DC des splats, pas les bandes SH directionnelles. Accepte aussi les points et les maillages.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier ; connectez une sortie géométrique.",
+        "Selection": "Poids de mélange par élément, de 0 à 1 ; sans connexion, tous les éléments sont concernés.",
+        "Factor": "Intensité supplémentaire de la courbe, de 0 à 1."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Factor": "Facteur"
+      },
+      "outputs": {
+        "Geometry": "Géométrie après modification."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {
+        "combined": "Courbe appliquée d’abord à tous les canaux de couleur.",
+        "r": "Courbe du canal rouge.",
+        "g": "Courbe du canal vert.",
+        "b": "Courbe du canal bleu."
+      },
+      "property_labels": {
+        "combined": "Ensemble",
+        "r": "Rouge",
+        "g": "Vert",
+        "b": "Bleu"
+      }
+    },
+    "colour_ramp": {
+      "label": "Dégradé de couleurs",
+      "description": "Associe des nombres à des couleurs et à des valeurs de transparence.",
+      "help": "Associe des nombres à des couleurs et à des valeurs de transparence.\nDisposez les étapes entre 0 et 1. Choisissez une interpolation constante, linéaire ou adoucie.",
+      "inputs": {
+        "Fac": "Position dans le dégradé de couleurs, généralement de 0 à 1."
+      },
+      "input_labels": {
+        "Fac": "Facteur"
+      },
+      "outputs": {
+        "Colour": "Couleur RVB produite.",
+        "Alpha": "Transparence du dégradé, de 0 à 1."
+      },
+      "output_labels": {
+        "Colour": "Couleur",
+        "Alpha": "Alpha"
+      },
+      "properties": {
+        "stops": "Étapes ordonnées : position, rouge, vert, bleu et alpha.",
+        "interpolation": "Transition entre étapes voisines : constante, linéaire ou adoucie."
+      },
+      "property_labels": {
+        "stops": "Dégradé",
+        "interpolation": "Interpolation"
+      }
+    },
+    "gradient_texture": {
+      "label": "Texture de dégradé",
+      "description": "Crée un dégradé à partir de coordonnées spatiales.",
+      "help": "Crée un dégradé à partir de coordonnées spatiales.\nUtilisez Position comme coordonnées. Linéaire utilise X, diagonal utilise X et Y ; sphérique et radial se réfèrent à l’origine.",
+      "inputs": {
+        "Vector": "Coordonnées X, Y et Z ; sans connexion, utilise les positions des éléments."
+      },
+      "input_labels": {
+        "Vector": "Vecteur"
+      },
+      "outputs": {
+        "Fac": "Valeur du dégradé produit ; elle peut sortir de l’intervalle 0–1."
+      },
+      "output_labels": {
+        "Fac": "Facteur"
+      },
+      "properties": {
+        "type": "Forme du dégradé : linéaire, quadratique, adoucie, diagonale, sphérique ou radiale."
+      },
+      "property_labels": {
+        "type": "Type"
+      }
+    },
+    "distance": {
+      "label": "Distance",
+      "description": "Mesure la distance de chaque élément à un point, une droite ou un plan.",
+      "help": "Mesure la distance de chaque élément à un point, une droite ou un plan.\nLe mode plan donne une distance signée ; les modes point et droite donnent des distances positives ou nulles.",
+      "inputs": {
+        "Vector": "Coordonnées X, Y et Z ; sans connexion, utilise les positions des éléments.",
+        "Point": "Point cible ou point appartenant à la droite ou au plan.",
+        "Direction": "Direction de la droite ou direction de visée de la caméra.",
+        "Normal": "Direction normale au plan cible."
+      },
+      "input_labels": {
+        "Vector": "Vecteur",
+        "Point": "Point",
+        "Direction": "Direction",
+        "Normal": "Normale"
+      },
+      "outputs": {
+        "Distance": "Distance en unités de scène ; signée en mode plan."
+      },
+      "output_labels": {
+        "Distance": "Distance"
+      },
+      "properties": {
+        "mode": "Mesurer jusqu’à un point, une droite ou un plan."
+      },
+      "property_labels": {
+        "mode": "Mode"
+      }
+    },
+    "noise_texture": {
+      "label": "Texture de bruit",
+      "description": "Crée un bruit fractal tridimensionnel reproductible.",
+      "help": "Crée un bruit fractal tridimensionnel reproductible.\nSans connexion, les coordonnées sont les positions. Détail accepte 0 à 15 octaves et les fractions ; Rugosité règle leur amplitude.",
+      "inputs": {
+        "Vector": "Coordonnées X, Y et Z ; sans connexion, utilise les positions des éléments.",
+        "Scale": "Multiplicateur de taille ou de coordonnées ; 1 conserve la taille initiale.",
+        "Detail": "Nombre d’octaves de 0 à 15, avec mélange fractionnaire.",
+        "Roughness": "Part d’amplitude conservée à chaque octave supplémentaire.",
+        "Distortion": "Intensité de déformation des coordonnées.",
+        "Seed": "Graine permettant de reproduire le motif de bruit."
+      },
+      "input_labels": {
+        "Vector": "Vecteur",
+        "Scale": "Échelle",
+        "Detail": "Détail",
+        "Roughness": "Rugosité",
+        "Distortion": "Distorsion",
+        "Seed": "Graine"
+      },
+      "outputs": {
+        "Fac": "Valeur d’échantillonnage du dégradé ou bruit produit, de 0 à 1.",
+        "Colour": "Couleur RVB produite."
+      },
+      "output_labels": {
+        "Fac": "Facteur",
+        "Colour": "Couleur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "store_named_attribute": {
+      "label": "Stocker un attribut nommé",
+      "description": "Stocke des valeurs sur les éléments de la géométrie.",
+      "help": "Stocke des valeurs sur les éléments de la géométrie.\nRelisez avec le même nom d’attribut. Les éléments non sélectionnés gardent leur valeur ou 0. Les attributs de splats et points traversent les modificateurs ; ceux des sommets sont perdus à l’application.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier ; connectez une sortie géométrique.",
+        "Selection": "Poids de mélange par élément, de 0 à 1 ; sans connexion, tous les éléments sont concernés.",
+        "Name": "Nom utilisé pour relire la valeur avec Attribut nommé.",
+        "Value": "Nombres, vecteurs ou couleurs par élément à stocker."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Name": "Nom",
+        "Value": "Valeur"
+      },
+      "outputs": {
+        "Geometry": "Géométrie après modification."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {
+        "data_type": "Stocker la valeur comme nombre, vecteur ou couleur."
+      },
+      "property_labels": {
+        "data_type": "Type de données"
+      }
+    },
+    "remove_clumps": {
+      "label": "Supprimer les petits amas",
+      "description": "Supprime les petits groupes connexes de splats ou de points.",
+      "help": "Supprime les petits groupes connexes de splats ou de points.\nLe rayon multiplie l’espacement local médian. Le GPU trouve les composantes connexes ; seules celles sous la taille minimale sont supprimées. Les maillages ne sont pas pris en charge.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier ; connectez une sortie géométrique.",
+        "Selection": "Les éléments dont la valeur atteint 0,5 sont sélectionnés.",
+        "Radius": "Rayon de connexion, multiple de l’espacement local médian.",
+        "Min Size": "Les groupes contenant moins d’éléments sont candidats à la suppression."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Radius": "Rayon",
+        "Min Size": "Taille minimale"
+      },
+      "outputs": {
+        "Geometry": "Géométrie après modification.",
+        "Selection": "Éléments appartenant à des groupes sous la taille minimale."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection"
+      },
+      "properties": {
+        "delete": "Supprimer les candidats ; désactivez pour utiliser seulement la sortie Sélection."
+      },
+      "property_labels": {
+        "delete": "Supprimer"
+      }
+    },
+    "merge_by_distance": {
+      "label": "Fusionner par distance",
+      "description": "Fusionne les éléments proches pour compacter la géométrie.",
+      "help": "Fusionne les éléments proches pour compacter la géométrie.\nSeuls les éléments sélectionnés fusionnent. Les points et sommets sont moyennés, les faces réindexées et les faces dégénérées supprimées. Pour les splats, le membre le plus opaque de chaque groupe est conservé.",
+      "inputs": {
+        "Geometry": "Géométrie à modifier ; connectez une sortie géométrique.",
+        "Selection": "Les éléments dont la valeur atteint 0,5 sont sélectionnés.",
+        "Distance": "Distance maximale reliant les éléments d’un même groupe."
+      },
+      "input_labels": {
+        "Geometry": "Géométrie",
+        "Selection": "Sélection",
+        "Distance": "Distance"
+      },
+      "outputs": {
+        "Geometry": "Géométrie après modification."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "geometry_proximity": {
+      "label": "Proximité géométrique",
+      "description": "Trouve le point, centre de splat ou sommet cible le plus proche.",
+      "help": "Trouve le point, centre de splat ou sommet cible le plus proche.\nConnectez une géométrie cible dans le même repère. La mesure porte sur ses éléments, pas sur la surface entre les sommets.",
+      "inputs": {
+        "Target": "Géométrie cible de points, splats ou sommets ; elle ne doit pas être vide."
+      },
+      "input_labels": {
+        "Target": "Cible"
+      },
+      "outputs": {
+        "Distance": "Distance en unités de scène ; signée en mode plan.",
+        "Position": "Position obtenue dans le repère de la géométrie ou de la caméra."
+      },
+      "output_labels": {
+        "Distance": "Distance",
+        "Position": "Position"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "instance_on_points": {
+      "label": "Instances sur points",
+      "description": "Place une copie transformée de splats sur chaque ancrage sélectionné.",
+      "help": "Place une copie transformée de splats sur chaque ancrage sélectionné.\nLes ancrages peuvent être des points, sommets ou centres de splats ; l’instance doit contenir des splats. Les rotations Euler en degrés et les échelles transforment ensemble la forme et les couleurs SH. Limite : 50 millions de splats.\nLes facteurs négatifs utilisent leur valeur absolue pour la taille et reflètent les positions, l’orientation et les couleurs SH. Une transformation repliée laisse les couleurs SH inchangées.",
+      "inputs": {
+        "Points": "Géométrie dont les éléments servent d’ancrages.",
+        "Instance": "Géométrie de splats à dupliquer ; les autres types ne sont pas acceptés.",
+        "Selection": "Les éléments dont la valeur atteint 0,5 sont sélectionnés.",
+        "Rotation": "Angles Euler autour de X, Y et Z en degrés par ancrage ; 0 conserve l’orientation.",
+        "Scale": "Un nombre ou trois facteurs : 1 conserve la taille, 0 écrase un axe et les valeurs négatives le reflètent."
+      },
+      "input_labels": {
+        "Points": "Points",
+        "Instance": "Instance",
+        "Selection": "Sélection",
+        "Rotation": "Rotation",
+        "Scale": "Échelle"
+      },
+      "outputs": {
+        "Geometry": "Géométrie après modification."
+      },
+      "output_labels": {
+        "Geometry": "Géométrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "camera_info": {
+      "label": "Informations caméra",
+      "description": "Lit la position, l’orientation et l’objectif d’une caméra du jeu de données.",
+      "help": "Lit la position, l’orientation et l’objectif d’une caméra du jeu de données.\nChoisissez la caméra par index ou nom d’image. Les sorties sont en coordonnées monde ; la scène doit contenir des caméras de jeu de données.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Position obtenue dans le repère de la géométrie ou de la caméra.",
+        "Direction": "Direction de la droite ou direction de visée de la caméra.",
+        "Up": "Vecteur unitaire dirigé vers le haut de l’image.",
+        "FOV": "Champ de vision vertical en degrés.",
+        "Image Size": "Largeur et hauteur de l’image en pixels ; Z vaut 0."
+      },
+      "output_labels": {
+        "Position": "Position",
+        "Direction": "Direction",
+        "Up": "Haut",
+        "FOV": "Champ de vision",
+        "Image Size": "Taille d’image"
+      },
+      "properties": {
+        "camera": "Index de caméra ou nom d’image exact ; 0 choisit la première caméra."
+      },
+      "property_labels": {
+        "camera": "Caméra"
+      }
+    },
+    "camera_coverage": {
+      "label": "Couverture des caméras",
+      "description": "Compte les caméras dont le champ contient chaque élément.",
+      "help": "Compte les caméras dont le champ contient chaque élément.\nReliez Nombre à Comparer. Vérifie les limites d’image et la profondeur positive, sans occlusion. Distance maximale 0 désactive la limite. Accepte splats, points et sommets ; des caméras de jeu de données sont nécessaires.",
+      "inputs": {
+        "Max Distance": "Distance maximale à la caméra en unités monde ; 0 désactive la limite."
+      },
+      "input_labels": {
+        "Max Distance": "Distance maximale"
+      },
+      "outputs": {
+        "Count": "Nombre de caméras du jeu de données dont l’image contient cet élément.",
+        "Ratio": "Proportion des caméras contenant l’élément, de 0 à 1."
+      },
+      "output_labels": {
+        "Count": "Nombre",
+        "Ratio": "Proportion"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "view_distance": {
+      "label": "Distance à la caméra",
+      "description": "Mesure la distance dans le monde à une caméra ou à une vue enregistrée.",
+      "help": "Mesure la distance dans le monde à une caméra ou à une vue enregistrée.\nChoisissez une caméra ou appuyez sur Capturer la vue. La capture ne suit pas les mouvements ultérieurs. Accepte splats, points et sommets ; des caméras de jeu de données sont nécessaires.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Distance": "Distance à la caméra choisie en unités monde."
+      },
+      "output_labels": {
+        "Distance": "Distance"
+      },
+      "properties": {
+        "camera": "Index de caméra ou nom d’image exact ; 0 choisit la première caméra.",
+        "source": "Utiliser une caméra du jeu de données ou la dernière vue capturée.",
+        "captured_transform": "Matrice caméra vers monde enregistrée ; vide avant la première capture."
+      },
+      "property_labels": {
+        "camera": "Caméra",
+        "source": "Source",
+        "captured_transform": "Transformation enregistrée"
+      }
+    },
+    "scene_time": {
+      "label": "Temps de la scène",
+      "description": "Renvoie la position temporelle de la tête de lecture du séquenceur.",
+      "help": "Utilisez Secondes ou Image pour animer des champs.\nSeuls les graphes dépendant du temps sont réévalués pendant la lecture.\nL’export vidéo attend la géométrie évaluée de chaque image.",
+      "inputs": {},
+      "properties": {},
+      "outputs": {
+        "Seconds": "Position de la tête de lecture en secondes.",
+        "Frame": "Position temporelle multipliée par la cadence du séquenceur."
+      },
+      "output_labels": {
+        "Seconds": "Secondes",
+        "Frame": "Image"
+      }
     }
   },
   "node_editor.how_to_use": "Mode d'emploi",
-  "node_editor.learn_more": "En savoir plus"
+  "node_editor.learn_more": "En savoir plus",
+  "node_editor.capture_view": "Capturer la vue",
+  "node_editor.curve_hint": "Déplacez les points ; cliquez pour ajouter, double-cliquez ou Suppr pour retirer.",
+  "node_editor.ramp_hint": "Déplacez les étapes ; cliquez pour ajouter, double-cliquez ou Suppr pour retirer. Sélectionnez une étape pour régler RVBA.",
+  "node_editor.keyframe_hint": "Insérer une image clé · Ctrl+clic ou I au survol"
 }

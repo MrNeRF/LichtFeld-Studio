@@ -7,8 +7,8 @@ Removes the selected splats, points or mesh vertices from your scene.
 
 ## How to use
 
-Connect a selection before connecting Geometry.  
-An unconnected Selection removes everything; mesh faces touching removed vertices also go.  
+Connect a selection before connecting Geometry.\
+An unconnected Selection removes everything; mesh faces touching removed vertices also go.
 
 ## Inputs
 
@@ -29,3 +29,4 @@ An unconnected Selection removes everything; mesh faces touching removed vertice
 - [ex04_remove_bike](../examples/ex04_remove_bike.py)
 - [ex19_hand_selection](../examples/ex19_hand_selection.py)
 - [ex21_clip_mesh](../examples/ex21_clip_mesh.py)
+- [ex25_camera_supported_garden](../examples/ex25_camera_supported_garden.py)

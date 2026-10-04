@@ -7,8 +7,8 @@ Selects parts of your scene by comparing two values, such as height and a ground
 
 ## How to use
 
-Connect height to A and your ground level to B, then choose Less Than.  
-Epsilon only affects Equal and Not Equal.  
+Connect height to A and your ground level to B, then choose Less Than.\
+Epsilon only affects Equal and Not Equal.
 
 ## Inputs
 
@@ -38,3 +38,8 @@ Epsilon only affects Equal and Not Equal.
 - [ex08_repaint_bike](../examples/ex08_repaint_bike.py)
 - [ex15_duplicate_vase](../examples/ex15_duplicate_vase.py)
 - [ex21_clip_mesh](../examples/ex21_clip_mesh.py)
+- [ex24_remove_floater_clumps](../examples/ex24_remove_floater_clumps.py)
+- [ex25_camera_supported_garden](../examples/ex25_camera_supported_garden.py)
+- [ex26_noise_autumn_lawn](../examples/ex26_noise_autumn_lawn.py)
+- [ex27_animated_reveal](../examples/ex27_animated_reveal.py)
+- [ex28_scatter_garden_flowers](../examples/ex28_scatter_garden_flowers.py)

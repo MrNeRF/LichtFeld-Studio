@@ -47,6 +47,26 @@ namespace lfs::vis::gui {
         }
     } // namespace
 
+    bool NodeCanvasElement::keyframeInput(Rml::Element* target) {
+        for (auto* element = target; element && element != this; element = element->GetParentNode()) {
+            if (element->IsClassSet("is-editing"))
+                return false;
+            if (!element->IsClassSet("node-animated-input"))
+                continue;
+            const auto* graph = activeTree();
+            if (!graph || !manager_)
+                return false;
+            const auto result = manager_->keyframeSet(graph->uuid,
+                                                      element->GetAttribute<Rml::String>("data-node", ""),
+                                                      element->GetAttribute<Rml::String>("data-input", ""));
+            if (!result)
+                element->SetAttribute("title", result.error().message);
+            dom_dirty_ = true;
+            return true;
+        }
+        return false;
+    }
+
     void NodeCanvasElement::finishFieldEdit(const bool cancel) {
         auto* field = active_field_;
         if (!field)
@@ -114,6 +134,9 @@ namespace lfs::vis::gui {
             return true;
         const auto& type = event.GetType();
         auto* target = event.GetTargetElement();
+        for (auto* element = target; element && element != this; element = element->GetParentNode())
+            if (element->GetTagName() == "node-curve")
+                return true;
         Rml::Element* field = nullptr;
         Rml::Element* swatch = nullptr;
         bool control = false;

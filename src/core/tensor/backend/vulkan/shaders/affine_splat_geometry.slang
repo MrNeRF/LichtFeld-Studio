@@ -1,6 +1,6 @@
 static const uint LFS_LOCAL_SIZE_X = 256;
-static const uint LFS_PUSH_CONSTANT_SIZE = 72;
-struct Parameters { uint64_t scales, rotations, outScales, outRotations; float linear[9]; uint count; };
+static const uint LFS_PUSH_CONSTANT_SIZE = 80;
+struct Parameters { uint64_t scales, rotations, outScales, outRotations; float linear[9]; uint count; uint64_t matrices; };
 
 // The dispatch has one Y workgroup; the runtime zero retains rounded intermediates.
 static uint gOpaqueZero = 0;
@@ -159,7 +159,9 @@ void main(uint3 tid:SV_DispatchThreadID,uniform Parameters p) {
         float s[3],q[4],os[3],oq[4];
         for(uint k=0;k<3;++k)s[k]=((Ptr<float,Access.Read>)p.scales)[i*3+k];
         for(uint k=0;k<4;++k)q[k]=((Ptr<float,Access.Read>)p.rotations)[i*4+k];
-        affine(p,s,q,os,oq);
+        Parameters local=p;
+        if(p.matrices!=0) for(uint k=0;k<9;++k) local.linear[k]=((Ptr<float,Access.Read>)p.matrices)[9*i+k];
+        affine(local,s,q,os,oq);
         for(uint k=0;k<3;++k)((Ptr<float,Access.ReadWrite>)p.outScales)[i*3+k]=os[k];
         for(uint k=0;k<4;++k)((Ptr<float,Access.ReadWrite>)p.outRotations)[i*4+k]=oq[k];
     }

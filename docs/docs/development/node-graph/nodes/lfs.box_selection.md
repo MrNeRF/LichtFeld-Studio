@@ -7,8 +7,8 @@ Selects the part of your scene inside a box, with optional soft edges.
 
 ## How to use
 
-Move Centre and resize Size to enclose your target.  
-Start with Falloff 0 for a sharp boundary.  
+Move Centre and resize Size to enclose your target.\
+Start with Falloff 0 for a sharp boundary.
 
 ## Inputs
 

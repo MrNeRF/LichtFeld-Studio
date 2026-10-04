@@ -7,9 +7,9 @@ Covers a mesh surface with coloured, flat splats.
 
 ## How to use
 
-Start with the default Density for about 20,000 splats on a unit sphere.  
-Raise Density for finer detail; Max Count limits the total.  
-Vertex colours take priority over material colours and textures.  
+Start with the default Density for about 20,000 splats on a unit sphere.\
+Raise Density for finer detail; Max Count limits the total.\
+Vertex colours take priority over material colours and textures.
 
 ## Inputs
 

@@ -9,12 +9,16 @@
 #include "gui/rmlui/elements/node_canvas_dom.hpp"
 #include "gui/rmlui/elements/node_canvas_element.hpp"
 #include "gui/rmlui/elements/node_canvas_widgets.hpp"
+#include "gui/rmlui/elements/node_curve_element.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "ipc/view_context.hpp"
 #include "scene/scene_manager.hpp"
+#include "sequencer/sequencer_controller.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
+#include "visualizer/nodes/node_animation.hpp"
 #include "visualizer/operation/undo_history.hpp"
 
 #include <RmlUi/Core.h>
@@ -60,6 +64,7 @@ namespace {
             Rml::Factory::RegisterElementInstancer("node-canvas", &instancer_);
             Rml::Factory::RegisterElementInstancer("colour-offset", &offset_instancer_);
             Rml::Factory::RegisterElementInstancer("color-picker", &picker_instancer_);
+            Rml::Factory::RegisterElementInstancer("node-curve", &curve_instancer_);
             context_ = Rml::CreateContext("node_widgets", {1000, 700}, &renderer_);
             ASSERT_NE(context_, nullptr);
             context_->SetDensityIndependentPixelRatio(2.0f);
@@ -160,6 +165,7 @@ namespace {
         Rml::ElementInstancerGeneric<lfs::vis::gui::NodeCanvasElement> instancer_;
         Rml::ElementInstancerGeneric<lfs::vis::gui::ColourOffsetElement> offset_instancer_;
         Rml::ElementInstancerGeneric<lfs::vis::gui::ColorPickerElement> picker_instancer_;
+        Rml::ElementInstancerGeneric<lfs::vis::gui::NodeCurveElement> curve_instancer_;
         lfs::vis::SceneManager scene_ = isolatedScene();
         Rml::Context* context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
@@ -168,6 +174,140 @@ namespace {
         lfs::core::Uuid host_;
         std::string tree_;
     };
+
+    TEST_F(NodeCanvasWidgets, AnimatedInputDiamondCtrlClickHoverKeyAndDisplayedValue) {
+        lfs::vis::SequencerController controller;
+        auto& manager = scene_.modifierManager();
+        manager.setSequencer(&controller);
+        attachGraph();
+        manager.tree(tree_)->find_node("Value")->ui["settings_expanded"] = true;
+        manager.markDirty();
+        context_->Update();
+        const auto path = lfs::vis::nodeInputTrackPath(tree_, "Value", "Value");
+        auto button = [&] { return document_->QuerySelector(".node-keyframe[data-node='Value']"); };
+        ASSERT_NE(button(), nullptr);
+        button()->DispatchEvent("click", {});
+        context_->Update();
+        auto* clip = controller.timeline().animationClip();
+        ASSERT_NE(clip, nullptr);
+        ASSERT_NE(clip->getTrackByPath(path), nullptr);
+        EXPECT_TRUE(button()->IsClassSet("keyed"));
+        ASSERT_TRUE(manager.keyframeSet(tree_, "Value", "Value", 2, 4.0f));
+        controller.seek(1);
+        manager.tick();
+        context_->Update();
+        EXPECT_TRUE(button()->IsClassSet("animated"));
+        EXPECT_FALSE(button()->IsClassSet("keyed"));
+        auto* field = document_->QuerySelector(".node-animated-input[data-node='Value'] .node-scrub");
+        ASSERT_NE(field, nullptr);
+        EXPECT_NEAR(field->GetAttribute<float>("data-value", -1), 2, 1e-6f);
+        Rml::Dictionary parameters;
+        parameters["button"] = 0;
+        parameters["ctrl_key"] = 1;
+        field->DispatchEvent("mousedown", parameters);
+        context_->Update();
+        EXPECT_EQ(clip->getTrackByPath(path)->keyframeCount(), 3);
+        controller.seek(1.5f);
+        manager.tick();
+        context_->Update();
+        field = document_->QuerySelector(".node-animated-input[data-node='Value'] .node-scrub");
+        const auto offset = field->GetAbsoluteOffset();
+        context_->ProcessMouseMove(int(offset.x + 12), int(offset.y + 12), 0);
+        auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        ASSERT_TRUE(canvas->handleKey(SDL_SCANCODE_I, false, false, false));
+        EXPECT_EQ(clip->getTrackByPath(path)->keyframeCount(), 4);
+        manager.setSequencer(nullptr);
+    }
+
+    TEST_F(NodeCanvasWidgets, CurveAndRampDragAddDeleteUndoAndLod) {
+        attachGraph();
+        auto& manager = scene_.modifierManager();
+        auto* canvas = static_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
+        for (const char* type : {"lfs.float_curve", "lfs.colour_ramp", "lfs.rgb_curves"}) {
+            auto& node = manager.tree(tree_)->add_node(type, type);
+            node.location = {280, 300};
+            manager.markDirty();
+            context_->Update();
+            const std::string selector = std::string("node-curve[data-node=\"") + type + "\"]";
+            auto* editor = canvas->QuerySelector(selector);
+            ASSERT_NE(editor, nullptr);
+            EXPECT_EQ(editor->GetAttribute<int>("editing", 0), 1);
+            EXPECT_FLOAT_EQ(editor->GetBox().GetSize().y, 240);
+            const auto origin = editor->GetAbsoluteOffset(Rml::BoxArea::Content), size = editor->GetBox().GetSize();
+            const auto mouse = [&](float x, float y) { context_->ProcessMouseMove(int(origin.x + x * size.x / 200), int(origin.y + y * size.y / 120), 0); };
+            const std::string property = std::string(type) == "lfs.float_curve" ? "points" : std::string(type) == "lfs.colour_ramp" ? "stops"
+                                                                                                                                    : "combined";
+            lfs::vis::op::undoHistory().clear();
+            mouse(95, 48);
+            context_->ProcessMouseButtonDown(0, 0);
+            for (int i = 0; i < 8; ++i) {
+                mouse(100 + i * 2, 50 + i);
+                context_->Update();
+                EXPECT_EQ(canvas->QuerySelector(selector), editor);
+            }
+            context_->ProcessMouseButtonUp(0, 0);
+            context_->Update();
+            auto points = manager.tree(tree_)->find_node(type)->properties[property];
+            EXPECT_EQ(context_->GetFocusElement(), canvas->QuerySelector(selector));
+            ASSERT_EQ(points.size(), 3u) << type;
+            EXPECT_NEAR(points[1][0].get<float>(), (114.0f - 8) / 184, 0.01f);
+            EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u) << type;
+            ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+            EXPECT_EQ(manager.tree(tree_)->find_node(type)->properties[property].size(), 2u);
+            ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+            context_->Update();
+            editor = canvas->QuerySelector(selector);
+            ASSERT_NE(editor, nullptr);
+            Rml::Dictionary key;
+            key["key_identifier"] = int(Rml::Input::KI_DELETE);
+            editor->DispatchEvent("keydown", key);
+            context_->Update();
+            EXPECT_EQ(manager.tree(tree_)->find_node(type)->properties[property].size(), 2u) << type;
+            canvas->setView({}, 0.6f);
+            context_->Update();
+            editor = canvas->QuerySelector(selector);
+            ASSERT_NE(editor, nullptr);
+            EXPECT_EQ(editor->GetAttribute<int>("editing", 1), 0);
+            EXPECT_NEAR(editor->GetBox().GetSize().y, 48, 0.1);
+            const auto before = manager.tree(tree_)->find_node(type)->properties;
+            editor->DispatchEvent("mousedown", {});
+            editor->DispatchEvent("mouseup", {});
+            EXPECT_EQ(manager.tree(tree_)->find_node(type)->properties, before);
+            manager.tree(tree_)->remove_node(type);
+            manager.markDirty();
+            canvas->setView({}, 1.0f);
+            context_->Update();
+        }
+    }
+
+    TEST_F(NodeCanvasWidgets, ViewDistanceCaptureButtonFreezesCameraAndUndoesOnce) {
+        attachGraph();
+        auto& manager = scene_.modifierManager();
+        manager.tree(tree_)->add_node("lfs.view_distance", "Distance").location = {280, 300};
+        manager.markDirty();
+        context_->Update();
+        lfs::vis::ViewInfo view{};
+        view.rotation = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+        view.translation = {1, 2, 3};
+        lfs::vis::set_view_callback([&] { return std::optional{view}; });
+        auto* button = document_->QuerySelector("button[data-action=capture-view]");
+        ASSERT_NE(button, nullptr);
+        lfs::vis::op::undoHistory().clear();
+        button->DispatchEvent("click", {});
+        context_->Update();
+        const auto saved = manager.tree(tree_)->find_node("Distance")->properties;
+        EXPECT_EQ(saved["source"], "captured");
+        ASSERT_EQ(saved["captured_transform"].size(), 16u);
+        EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+        view.translation = {9, 8, 7};
+        manager.tick();
+        context_->Update();
+        EXPECT_EQ(manager.tree(tree_)->find_node("Distance")->properties, saved);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(manager.tree(tree_)->find_node("Distance")->properties["source"], "dataset");
+        EXPECT_TRUE(manager.tree(tree_)->find_node("Distance")->properties["captured_transform"].empty());
+        lfs::vis::set_view_callback({});
+    }
 
     TEST_F(NodeCanvasWidgets, ShiftDuplicateUsesClipboardPathAndKeepsInternalLinks) {
         attachGraph();
@@ -760,7 +900,11 @@ namespace {
         pointer("mouseup", 540, 346);
         SCOPED_TRACE(dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(canvas)->viewState().dump());
         EXPECT_EQ(canvas->QuerySelector(".node-box[data-node=Correct] input[data-input=Exposure]"), field);
-        EXPECT_TRUE(field->GetParentNode()->GetParentNode()->GetParentNode()->IsClassSet("linked"));
+        auto* row = field;
+        while (row && !row->IsClassSet("socket-input"))
+            row = row->GetParentNode();
+        ASSERT_NE(row, nullptr);
+        EXPECT_TRUE(row->IsClassSet("linked"));
         auto& manager = scene_.modifierManager();
         const auto* tree = manager.tree(tree_);
         ASSERT_TRUE(std::ranges::any_of(tree->links, [](const auto& link) {
@@ -777,7 +921,10 @@ namespace {
         auto* canvas = dynamic_cast<lfs::vis::gui::NodeCanvasElement*>(document_->GetElementById("node-editor-canvas"));
         auto* card = canvas->QuerySelector(".node-box[data-node=Correct]");
         auto* exposure = card->QuerySelector("input[data-input=Exposure]");
-        auto* row = exposure->GetParentNode()->GetParentNode()->GetParentNode();
+        auto* row = exposure;
+        while (row && !row->IsClassSet("socket-input"))
+            row = row->GetParentNode();
+        ASSERT_NE(row, nullptr);
         EXPECT_EQ(row->GetComputedValues().display(), Rml::Style::Display::None);
         const float compact_height = card->GetOffsetHeight();
         card->QuerySelector(".node-settings")->DispatchEvent("click", {});

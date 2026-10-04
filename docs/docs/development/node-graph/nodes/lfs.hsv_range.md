@@ -7,9 +7,9 @@ Selects splats by colour range — for example all the greens of a lawn — with
 
 ## How to use
 
-Pick the hue, then widen Hue Range until the whole object is caught.  
-Raise Saturation Min to ignore greys; raise Value Min to ignore shadows.  
-Turn on Preview Selection to see the result in the viewport.  
+Pick the hue, then widen Hue Range until the whole object is caught.\
+Raise Saturation Min to ignore greys; raise Value Min to ignore shadows.\
+Turn on Preview Selection to see the result in the viewport.
 
 ## Inputs
 
@@ -34,3 +34,5 @@ Turn on Preview Selection to see the result in the viewport.
 
 - [ex07_autumn_grass](../examples/ex07_autumn_grass.py)
 - [ex08_repaint_bike](../examples/ex08_repaint_bike.py)
+- [ex26_noise_autumn_lawn](../examples/ex26_noise_autumn_lawn.py)
+- [ex28_scatter_garden_flowers](../examples/ex28_scatter_garden_flowers.py)

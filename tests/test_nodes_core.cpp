@@ -3,12 +3,20 @@
 
 #include "core/base64.hpp"
 #include "core/nodes/nodes.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_fused.hpp"
+#include "core/tensor_procedural.hpp"
+#include "core/tensor_random.hpp"
 #include "core/tensor_spatial.hpp"
+#include "visualizer/nodes/camera_nodes.hpp"
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -145,7 +153,8 @@ namespace {
         }
 
         Tensor field_result(std::string_view id, std::string_view socket, std::string_view socket_type,
-                            Geometry geometry, std::function<void(Node&)> configure = {}) {
+                            Geometry geometry, std::function<void(Node&)> configure = {}, EvalHost* eval_host = nullptr,
+                            std::optional<Device> execution_device = {}) {
             Tensor value;
             NodeTypeInfo capture;
             capture.id = "test.capture";
@@ -168,7 +177,7 @@ namespace {
             EXPECT_TRUE(tree.add_link({"Field", std::string(socket), "Capture", "Value"}));
             EXPECT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Capture", "Geometry"}));
             EXPECT_TRUE(tree.add_link({"Capture", "Geometry", tree.output_node().name, "Geometry"}));
-            const auto result = evaluate(tree, {geometry, {}, 1});
+            const auto result = lfs::nodes::evaluate(tree, {geometry, {}, 1, execution_device.value_or(device())}, eval_host);
             if (!result.ok)
                 for (const auto& [name, message] : result.errors)
                     std::cerr << name << ": " << message << '\n';
@@ -822,6 +831,30 @@ namespace {
         EXPECT_EQ(host<float>(muted.geometry.splats->opacity), (std::vector<float>{0, 1, -1}));
     }
 
+    TEST_P(NodesCore, SceneTimeSecondsFramesAndCachedClockChanges) {
+        NodeTree tree(registry_);
+        tree.add_node("lfs.scene_time", "Clock");
+        tree.add_node("lfs.combine_xyz", "Vector");
+        tree.add_node("lfs.set_position", "Position");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Position", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Clock", "Seconds", "Vector", "X"}));
+        ASSERT_TRUE(tree.add_link({"Clock", "Frame", "Vector", "Y"}));
+        ASSERT_TRUE(tree.add_link({"Vector", "Vector", "Position", "Position"}));
+        ASSERT_TRUE(tree.add_link({"Position", "Geometry", tree.output_node().name, "Geometry"}));
+        EvalCache cache;
+        const auto geometry = splats();
+        for (float seconds : {0.0f, 0.125f, 1.0f, 3.5f, 0.0f}) {
+            const auto result = evaluate(tree, {.geometry = geometry, .seconds = seconds, .frames_per_second = 30}, nullptr, &cache);
+            ASSERT_TRUE(result.ok);
+            const auto positions = host<float>(result.geometry.splats->means);
+            for (size_t row = 0; row < positions.size() / 3; ++row) {
+                EXPECT_FLOAT_EQ(positions[3 * row], seconds);
+                EXPECT_FLOAT_EQ(positions[3 * row + 1], seconds * 30);
+                EXPECT_FLOAT_EQ(positions[3 * row + 2], 0);
+            }
+        }
+    }
+
     TEST_P(NodesCore, MissingTypeFailsWithoutLosingInputGeometry) {
         NodeTree tree(registry_);
         auto json = tree.to_json();
@@ -862,6 +895,10 @@ namespace {
                 node->input_values["Name"] = std::string("weight");
             if (builtin->id == "lfs.simplify")
                 node->input_values["Ratio"] = 1.0f;
+            if (builtin->id == "lfs.geometry_proximity")
+                node->input_values["Target"] = input;
+            if (builtin->id == "lfs.instance_on_points")
+                node->input_values["Instance"] = input;
 
             const SocketDecl& output = builtin->outputs.front();
             if (output.type == GEOMETRY_SOCKET) {
@@ -920,6 +957,8 @@ namespace {
             tree.add_node(builtin->id, "Builtin");
             ASSERT_TRUE(tree.add_link(
                 {tree.input_node().name, "Geometry", "Builtin", input->identifier}));
+            if (builtin->id == "lfs.instance_on_points")
+                ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Builtin", "Instance"}));
             ASSERT_TRUE(tree.add_link(
                 {"Builtin", output->identifier, tree.output_node().name, "Geometry"}));
             const auto result = evaluate(tree, {empty, {}, 1});
@@ -1260,6 +1299,141 @@ namespace {
         EXPECT_EQ(result.geometry.splats->scaling.shape(), TensorShape({0, 3}));
     }
 
+    TEST_P(NodesCore, ScaleClampCollapsedAxesRespectSelectionsAndNonzeroAspect) {
+        const float collapsed = -std::numeric_limits<float>::infinity();
+        for (bool flat : {false, true}) {
+            for (float weight : {0.0f, 0.25f, 1.0f}) {
+                for (int shift = 0; shift < 3; ++shift) {
+                    auto geometry = splats();
+                    std::vector<float> original{collapsed, collapsed, collapsed, 6, collapsed, collapsed, 6, 0, collapsed};
+                    for (size_t row = 0; row < original.size(); row += 3)
+                        std::rotate(original.begin() + row, original.begin() + row + shift, original.begin() + row + 3);
+                    geometry.splats->scaling = tensor(original, {3, 3});
+                    const auto result = single("lfs.scale_clamp", geometry, [&](Node& node) {
+                        node.input_values["Max Aspect"] = std::exp(2.0f);
+                        node.input_values["Selection"] = weight;
+                        node.properties["include_flat"] = flat;
+                    });
+                    ASSERT_TRUE(result.ok);
+                    const auto actual = host<float>(result.geometry.splats->scaling);
+                    for (size_t i = 0; i < original.size(); ++i) {
+                        if (original[i] == collapsed) {
+                            EXPECT_EQ(actual[i], collapsed) << i;
+                        } else {
+                            const float target = i < 6 ? original[i] : flat ? std::clamp(original[i], 2.0f, 4.0f)
+                                                                            : std::min(original[i], 2.0f);
+                            EXPECT_NEAR(actual[i], original[i] * (1 - weight) + target * weight, 1e-5f) << i;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    TEST_P(NodesCore, CollapsedScalesSharpenAndSetScaleSelectionEndpoints) {
+        const float collapsed = -std::numeric_limits<float>::infinity();
+        auto geometry = splats();
+        const std::vector<float> original{collapsed, collapsed, collapsed, 2, collapsed, collapsed, 2, 0, collapsed};
+        geometry.splats->scaling = tensor(original, {3, 3});
+        for (float weight : {0.0f, 0.5f, 1.0f}) {
+            for (float amount : {0.0f, 0.25f, 0.95f}) {
+                const auto result = single("lfs.sharpen", geometry, [&](Node& node) {
+                    node.input_values["Selection"] = weight;
+                    node.input_values["Amount"] = amount;
+                });
+                ASSERT_TRUE(result.ok);
+                const auto actual = host<float>(result.geometry.splats->scaling);
+                for (size_t i = 0; i < original.size(); ++i) {
+                    if (original[i] == collapsed)
+                        EXPECT_EQ(actual[i], collapsed);
+                    else
+                        EXPECT_NEAR(actual[i], original[i] + weight * std::log(1 - amount), 1e-5f);
+                }
+                for (float opacity : host<float>(result.geometry.splats->opacity))
+                    EXPECT_TRUE(std::isfinite(opacity));
+            }
+            const auto result = single("lfs.set_scale", geometry, [&](Node& node) {
+                node.input_values["Selection"] = weight;
+                node.input_values["Scale"] = glm::vec3(2, 0, -1);
+            });
+            ASSERT_TRUE(result.ok);
+            const auto actual = host<float>(result.geometry.splats->scaling);
+            for (size_t i = 0; i < original.size(); ++i) {
+                const float target = i % 3 == 0 ? std::log(2.0f) : collapsed;
+                if (weight == 0)
+                    EXPECT_EQ(actual[i], original[i]);
+                else if (weight == 1)
+                    EXPECT_EQ(actual[i], target);
+                else if (target == collapsed || original[i] == collapsed)
+                    EXPECT_EQ(actual[i], collapsed);
+                else
+                    EXPECT_NEAR(actual[i], original[i] * (1 - weight) + target * weight, 1e-5f);
+            }
+        }
+    }
+
+    TEST_P(NodesCore, SimplifyPreservesCollapsedCovarianceAndSingletons) {
+        const float collapsed = -std::numeric_limits<float>::infinity();
+        for (int rank = 0; rank < 3; ++rank) {
+            auto geometry = splats(3);
+            geometry.splats->means = tensor({2, 4, 6, 2, 4, 6, 2, 4, 6}, {3, 3});
+            geometry.splats->opacity = Tensor::zeros({3}, device());
+            std::vector<float> scales(9, collapsed);
+            for (size_t i = 0; i < scales.size(); ++i)
+                if (int(i % 3) < rank)
+                    scales[i] = std::log(0.1f);
+            geometry.splats->scaling = tensor(scales, {3, 3});
+            const auto result = single("lfs.simplify", geometry, [](Node& node) { node.input_values["Ratio"] = 0.25f; });
+            ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
+            ASSERT_EQ(result.geometry.splats->means.size(0), 1u);
+            const auto actual = host<float>(result.geometry.splats->scaling);
+            EXPECT_EQ(std::count(actual.begin(), actual.end(), collapsed), 3 - rank);
+            for (float value : actual)
+                if (value != collapsed)
+                    EXPECT_NEAR(value, std::log(0.1f), 1e-5f);
+            const auto means = host<float>(result.geometry.splats->means);
+            for (size_t axis = 0; axis < 3; ++axis)
+                EXPECT_NEAR(means[axis], 2.0f * (axis + 1), 1e-5f);
+            auto activated = result.geometry;
+            activated.splats->scaling = activated.splats->scaling.exp();
+            expect_finite(activated);
+        }
+        // One merged pair and one singleton: neither may acquire thickness.
+        auto geometry = splats();
+        geometry.splats->means = tensor({1, 0, 0, 1, 0, 0, 100, 0, 0}, {3, 3});
+        geometry.splats->opacity = Tensor::zeros({3}, device());
+        geometry.splats->scaling = tensor(std::vector<float>(9, collapsed), {3, 3});
+        const auto result = single("lfs.simplify", geometry, [](Node& node) { node.input_values["Ratio"] = 0.5f; });
+        ASSERT_TRUE(result.ok);
+        ASSERT_EQ(result.geometry.splats->means.size(0), 2u);
+        EXPECT_EQ(host<float>(result.geometry.splats->scaling), std::vector<float>(6, collapsed));
+    }
+
+    TEST_P(NodesCore, SimplifyRotatedCollapsedSplatsDoNotGainThickness) {
+        const float collapsed = -std::numeric_limits<float>::infinity();
+        auto geometry = splats(3);
+        geometry.splats->means = tensor({2, 4, 6, 2, 4, 6, 2, 4, 6}, {3, 3});
+        geometry.splats->opacity = Tensor::zeros({3}, device());
+        geometry.splats->rotation = tensor({0.8f, 0, 0.6f, 0, 0.8f, 0, 0.6f, 0, 0.8f, 0, 0.6f, 0}, {3, 4});
+        geometry.splats->scaling = tensor({std::log(0.1f), collapsed, collapsed, std::log(0.1f), collapsed, collapsed, std::log(0.1f), collapsed, collapsed}, {3, 3});
+        const auto result = single("lfs.simplify", geometry, [](Node& node) { node.input_values["Ratio"] = 0.25f; });
+        ASSERT_TRUE(result.ok);
+        const auto actual = host<float>(result.geometry.splats->scaling);
+        EXPECT_EQ(std::count(actual.begin(), actual.end(), collapsed), 2);
+        for (float value : actual)
+            if (value != collapsed)
+                EXPECT_NEAR(value, std::log(0.1f), 1e-5f);
+        // Different centres add a genuine second covariance direction. The
+        // null-space guard must not indiscriminately copy the input zero mask.
+        geometry.splats->means = tensor({0, 0, 0, 0, 1, 0, 0, 2, 0}, {3, 3});
+        const auto spread = single("lfs.simplify", geometry, [](Node& node) { node.input_values["Ratio"] = 0.25f; });
+        ASSERT_TRUE(spread.ok);
+        const auto spread_scales = host<float>(spread.geometry.splats->scaling);
+        EXPECT_EQ(std::count(spread_scales.begin(), spread_scales.end(), collapsed), 1);
+        for (float value : spread_scales)
+            EXPECT_TRUE(value == collapsed || std::isfinite(value));
+    }
+
     TEST_P(NodesCore, InsideMeshHandlesNonConvexTorusAndOutsideBounds) {
         auto geometry = splats();
         geometry.splats->means = tensor({1.5f, 0, 0, 0, 0, 0, 20, 0, 0}, {3, 3});
@@ -1336,6 +1510,849 @@ namespace {
         EXPECT_THROW(lfs::core::radius_neighbor_counts(points, references, 1.0f, 0), std::exception);
         const auto empty = lfs::core::radius_neighbor_counts(Tensor::empty({0, 3}, device()), Tensor::full_bool({0}, true, device()), 1.0f, 3);
         EXPECT_EQ(empty.numel(), 0u);
+    }
+
+    TEST_P(NodesCore, RadiusNeighborMinMatchesBruteForceForFloatAndInt) {
+        constexpr size_t count = 193;
+        std::mt19937 random(417);
+        std::uniform_real_distribution<float> coordinate(-3.0f, 3.0f);
+        std::uniform_int_distribution<int> integer(-50, 50);
+        std::vector<float> xyz(count * 3), floats(count);
+        std::vector<int> integers(count);
+        for (size_t i = 0; i < count; ++i) {
+            for (int axis = 0; axis < 3; ++axis)
+                xyz[i * 3 + axis] = coordinate(random);
+            floats[i] = coordinate(random);
+            integers[i] = integer(random);
+        }
+        // Exercise coincident points and hash collisions.
+        std::copy_n(xyz.begin(), 3, xyz.begin() + 3);
+        const auto points = tensor(xyz, {count, 3});
+        for (const float radius : {0.05f, 0.75f, 20.0f}) {
+            std::vector<float> expected_float = floats;
+            std::vector<int> expected_int = integers;
+            for (size_t i = 0; i < count; ++i) {
+                for (size_t j = 0; j < count; ++j) {
+                    float squared = 0;
+                    for (int axis = 0; axis < 3; ++axis) {
+                        const float delta = xyz[i * 3 + axis] - xyz[j * 3 + axis];
+                        squared += delta * delta;
+                    }
+                    if (squared <= radius * radius) {
+                        expected_float[i] = std::min(expected_float[i], floats[j]);
+                        expected_int[i] = std::min(expected_int[i], integers[j]);
+                    }
+                }
+            }
+            const auto actual_float = lfs::core::radius_neighbor_min(points, tensor(floats, {count}), radius);
+            const auto actual_int = lfs::core::radius_neighbor_min(points, ints(integers, {count}), radius);
+            EXPECT_EQ(actual_float.device(), device());
+            EXPECT_EQ(actual_float.dtype(), lfs::core::DataType::Float32);
+            EXPECT_EQ(host<float>(actual_float), expected_float);
+            EXPECT_EQ(host<int>(actual_int), expected_int);
+        }
+        EXPECT_EQ(lfs::core::radius_neighbor_min(Tensor::empty({0, 3}, device()),
+                                                 Tensor::empty({0}, device(), lfs::core::DataType::Int32), 1.0f)
+                      .numel(),
+                  0u);
+    }
+
+    TEST_P(NodesCore, CurvesRampDistanceGradientAndNoiseEvaluateOnBackend) {
+        auto geometry = splats();
+        const auto curve = field_result("lfs.float_curve", "Value", FLOAT_SOCKET, geometry, [](Node& node) {
+            node.input_values["Value"] = 0.5f;
+            node.properties["points"] = {{0.0f, 0.0f}, {0.5f, 0.8f}, {1.0f, 1.0f}};
+        });
+        for (float value : host<float>(curve))
+            EXPECT_NEAR(value, 0.8f, 1e-6f);
+
+        const auto ramp = field_result("lfs.colour_ramp", "Colour", COLOUR_SOCKET, geometry, [](Node& node) {
+            node.input_values["Fac"] = 0.25f;
+            node.properties["stops"] = {{0.0f, 1.0f, 0.0f, 0.0f, 0.25f},
+                                        {0.5f, 0.0f, 0.0f, 1.0f, 0.75f},
+                                        {1.0f, 1.0f, 1.0f, 1.0f, 1.0f}};
+        });
+        const auto ramp_values = host<float>(ramp);
+        ASSERT_EQ(ramp_values.size(), 9u);
+        EXPECT_NEAR(ramp_values[0], 0.5f, 1e-6f);
+        EXPECT_NEAR(ramp_values[1], 0.0f, 1e-6f);
+        EXPECT_NEAR(ramp_values[2], 0.5f, 1e-6f);
+
+        const auto distance = field_result("lfs.distance", "Distance", FLOAT_SOCKET, geometry, [](Node& node) {
+            node.input_values["Vector"] = glm::vec3(3, 4, 0);
+            node.input_values["Point"] = glm::vec3(0);
+        });
+        for (float value : host<float>(distance))
+            EXPECT_NEAR(value, 5.0f, 1e-6f);
+
+        const auto gradient = field_result("lfs.gradient_texture", "Fac", FLOAT_SOCKET, geometry, [](Node& node) {
+            node.input_values["Vector"] = glm::vec3(2, 4, 8);
+            node.properties["type"] = "diagonal";
+        });
+        for (float value : host<float>(gradient))
+            EXPECT_NEAR(value, 3.0f, 1e-6f);
+
+        const auto noise = field_result("lfs.noise_texture", "Fac", FLOAT_SOCKET, geometry, [](Node& node) {
+            node.input_values["Vector"] = glm::vec3(0.13f, -0.27f, 0.91f);
+            node.input_values["Detail"] = 2.5f;
+            node.input_values["Seed"] = 7.0f;
+        });
+        EXPECT_EQ(noise.device(), device());
+        for (float value : host<float>(noise)) {
+            EXPECT_TRUE(std::isfinite(value));
+            EXPECT_GE(value, 0.0f);
+            EXPECT_LE(value, 1.0f);
+        }
+    }
+
+    TEST_P(NodesCore, StoreNamedAttributeBlendsAndRemoveClumpsFindsComponents) {
+        auto geometry = splats();
+        const auto stored = single("lfs.store_named_attribute", geometry, [](Node& node) {
+            node.input_values["Name"] = std::string("temperature");
+            node.input_values["Value"] = 4.0f;
+            node.input_values["Selection"] = 0.25f;
+        });
+        ASSERT_TRUE(stored.ok) << (stored.errors.empty() ? "" : stored.errors.begin()->second);
+        EXPECT_EQ(host<float>(stored.geometry.splats->attributes.at("temperature")),
+                  (std::vector<float>{1, 1, 1}));
+
+        geometry.splats->means = tensor({0, 0, 0, 0.1f, 0, 0, 0.2f, 0, 0, 10, 0, 0}, {4, 3});
+        geometry.splats->sh0 = tensor(std::vector<float>(12), {4, 3});
+        geometry.splats->shN = tensor(std::vector<float>(36), {4, 3, 3});
+        geometry.splats->scaling = tensor(std::vector<float>(12, std::log(0.1f)), {4, 3});
+        geometry.splats->rotation = tensor({1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}, {4, 4});
+        geometry.splats->opacity = tensor(std::vector<float>(4), {4});
+        geometry.splats->attributes["weight"] = tensor({1, 2, 3, 4}, {4});
+        const auto cleaned = single("lfs.remove_clumps", geometry, [](Node& node) {
+            node.input_values["Radius"] = 2.5f;
+            node.input_values["Min Size"] = std::int64_t(2);
+        });
+        ASSERT_TRUE(cleaned.ok) << (cleaned.errors.empty() ? "" : cleaned.errors.begin()->second);
+        ASSERT_TRUE(cleaned.geometry.splats);
+        EXPECT_EQ(cleaned.geometry.splats->means.shape()[0], 3u);
+        EXPECT_EQ(host<float>(cleaned.geometry.splats->attributes.at("weight")),
+                  (std::vector<float>{1, 2, 3}));
+    }
+
+    TEST_P(NodesCore, MergeByDistanceAveragesPointsRemapsMeshAndKeepsOpaqueSplat) {
+        Geometry points_geometry;
+        points_geometry.points = PointsComponent{
+            tensor({0, 0, 0, 0.1f, 0, 0, 2, 0, 0}, {3, 3}),
+            tensor({1, 0, 0, 0, 0, 1, 0, 1, 0}, {3, 3}),
+            {}};
+        const auto points = single("lfs.merge_by_distance", std::move(points_geometry), [](Node& node) {
+            node.input_values["Distance"] = 0.2f;
+        });
+        ASSERT_TRUE(points.ok) << (points.errors.empty() ? "" : points.errors.begin()->second);
+        ASSERT_TRUE(points.geometry.points);
+        EXPECT_EQ(points.geometry.points->positions.shape(), TensorShape({2, 3}));
+        EXPECT_EQ(host<float>(points.geometry.points->positions),
+                  (std::vector<float>{0.05f, 0, 0, 2, 0, 0}));
+        EXPECT_EQ(host<float>(points.geometry.points->colors),
+                  (std::vector<float>{0.5f, 0, 0.5f, 0, 1, 0}));
+
+        auto mesh = std::make_shared<lfs::core::MeshData>(
+            tensor({0, 0, 0, 0.1f, 0, 0, 1, 0, 0, 0, 1, 0}, {4, 3}),
+            ints({0, 1, 2, 0, 2, 3}, {2, 3}));
+        mesh->colors = tensor({1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1}, {4, 4});
+        const auto merged_mesh = single("lfs.merge_by_distance", geometry_from_mesh(mesh), [](Node& node) {
+            node.input_values["Distance"] = 0.2f;
+        });
+        ASSERT_TRUE(merged_mesh.ok) << (merged_mesh.errors.empty() ? "" : merged_mesh.errors.begin()->second);
+        ASSERT_TRUE(merged_mesh.geometry.mesh && merged_mesh.geometry.mesh->mesh);
+        EXPECT_EQ(merged_mesh.geometry.mesh->mesh->vertices.shape(), TensorShape({3, 3}));
+        EXPECT_EQ(merged_mesh.geometry.mesh->mesh->indices.shape(), TensorShape({1, 3}));
+        EXPECT_EQ(host<int>(merged_mesh.geometry.mesh->mesh->indices), (std::vector<int>{0, 1, 2}));
+
+        auto splat_geometry = splats(0);
+        splat_geometry.splats->means = tensor({0, 0, 0, 0.1f, 0, 0, 2, 0, 0}, {3, 3});
+        splat_geometry.splats->opacity = tensor({-2, 3, 0}, {3});
+        const auto merged_splats = single("lfs.merge_by_distance", std::move(splat_geometry), [](Node& node) {
+            node.input_values["Distance"] = 0.2f;
+        });
+        ASSERT_TRUE(merged_splats.ok) << (merged_splats.errors.empty() ? "" : merged_splats.errors.begin()->second);
+        ASSERT_TRUE(merged_splats.geometry.splats);
+        EXPECT_EQ(merged_splats.geometry.splats->means.shape()[0], 2u);
+        EXPECT_EQ(host<float>(merged_splats.geometry.splats->opacity), (std::vector<float>{3, 0}));
+    }
+
+    TEST_P(NodesCore, GeometryProximityMatchesBruteForceAcrossComponents) {
+        auto geometry = splats();
+        std::mt19937 random(819);
+        std::uniform_real_distribution<float> coord(-3, 3);
+        std::vector<float> q(291), t(153);
+        std::generate(q.begin(), q.end(), [&] { return coord(random); });
+        std::generate(t.begin(), t.end(), [&] { return coord(random); });
+        q[0] = 100;
+        q[1] = -80;
+        q[2] = 20; // exact fallback across a large empty gap
+        geometry.splats->means = tensor(q, {97, 3});
+        Geometry target;
+        target.points = PointsComponent{tensor(t, {51, 3}), Tensor::ones({51, 3}, device()), {}};
+        const auto positions = host<float>(field_result("lfs.geometry_proximity", "Position", VECTOR_SOCKET, geometry, [&](Node& node) { node.input_values["Target"] = target; }));
+        const auto distances = host<float>(field_result("lfs.geometry_proximity", "Distance", FLOAT_SOCKET, geometry, [&](Node& node) { node.input_values["Target"] = target; }));
+        for (size_t i = 0; i < 97; ++i) {
+            float best = INFINITY;
+            size_t index = 0;
+            for (size_t j = 0; j < 51; ++j) {
+                float d = 0;
+                for (int a = 0; a < 3; ++a)
+                    d += std::pow(q[3 * i + a] - t[3 * j + a], 2);
+                if (d < best) {
+                    best = d;
+                    index = j;
+                }
+            }
+            EXPECT_NEAR(distances[i], std::sqrt(best), 2e-5f);
+            for (int a = 0; a < 3; ++a)
+                EXPECT_FLOAT_EQ(positions[3 * i + a], t[3 * index + a]);
+        }
+        const auto ties = lfs::core::nearest_point_indices(tensor({0, 0, 0}, {1, 3}), tensor({1, 0, 0, -1, 0, 0}, {2, 3}));
+        EXPECT_EQ(host<int>(ties), (std::vector<int>{0}));
+        EXPECT_EQ(host<int>(lfs::core::nearest_point_indices(tensor({0, 0, 0}, {1, 3}), Tensor::empty({0, 3}, device()))), (std::vector<int>{-1}));
+        target = geometry_from_mesh(std::make_shared<lfs::core::MeshData>(tensor(t, {51, 3}), ints({0, 1, 2}, {1, 3})));
+        EXPECT_EQ(host<float>(field_result("lfs.geometry_proximity", "Position", VECTOR_SOCKET, geometry, [&](Node& node) { node.input_values["Target"] = target; })), positions);
+        target = splats();
+        target.splats->means = tensor(t, {51, 3});
+        EXPECT_EQ(host<float>(field_result("lfs.geometry_proximity", "Position", VECTOR_SOCKET, geometry, [&](Node& node) { node.input_values["Target"] = target; })), positions);
+    }
+
+    TEST_P(NodesCore, InstanceOnPointsMatchesTransformIncludingShAndSelection) {
+        auto source = splats(3);
+        Geometry anchors;
+        anchors.points = PointsComponent{tensor({2, 3, 4, -1, 4, 2}, {2, 3}), Tensor::ones({2, 3}, device()), {}};
+        NodeTree tree(registry_);
+        auto& node = tree.add_node("lfs.instance_on_points", "Scatter");
+        node.input_values["Points"] = anchors;
+        node.input_values["Instance"] = source;
+        node.input_values["Rotation"] = glm::vec3(23, -31, 47);
+        node.input_values["Scale"] = glm::vec3(0.7f, 1.2f, 1.8f);
+        tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"});
+        const auto result = evaluate(tree, {{}, {}, 1});
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
+        ASSERT_TRUE(result.geometry.splats);
+        EXPECT_EQ(result.geometry.splats->means.size(0), 6u);
+        const glm::vec3 positions[] = {glm::vec3(2, 3, 4), glm::vec3(-1, 4, 2)};
+        const auto rotation = glm::rotate(glm::mat4(1), glm::radians(47.0f), glm::vec3(0, 0, 1)) * glm::rotate(glm::mat4(1), glm::radians(-31.0f), glm::vec3(0, 1, 0)) * glm::rotate(glm::mat4(1), glm::radians(23.0f), glm::vec3(1, 0, 0));
+        for (int a = 0; a < 2; ++a) {
+            auto reference = splat_data_from_geometry(source);
+            lfs::core::transform(*reference, glm::translate(glm::mat4(1), positions[a]) * rotation * glm::scale(glm::mat4(1), glm::vec3(0.7f, 1.2f, 1.8f)));
+            const auto expected = geometry_from_splat_data(*reference);
+            for (const auto& pair : {std::pair{result.geometry.splats->means, expected.splats->means}, std::pair{result.geometry.splats->shN, expected.splats->shN}, std::pair{result.geometry.splats->scaling, expected.splats->scaling}, std::pair{result.geometry.splats->rotation, expected.splats->rotation}}) {
+                const auto actual = host<float>(pair.first.slice(0, a * 3, a * 3 + 3)), want = host<float>(pair.second);
+                ASSERT_EQ(actual.size(), want.size());
+                for (size_t i = 0; i < want.size(); ++i)
+                    EXPECT_NEAR(actual[i], want[i], 6e-5f) << i;
+            }
+        }
+        node.input_values["Selection"] = 0.49f;
+        const auto empty = evaluate(tree, {{}, {}, 2});
+        ASSERT_TRUE(empty.ok);
+        EXPECT_EQ(empty.geometry.splats->means.size(0), 0u);
+        node.input_values["Selection"] = 1.0f;
+        node.input_values["Scale"] = 2.0f;
+        ASSERT_TRUE(evaluate(tree, {{}, {}, 3}).ok); // scalar broadcasts to vector
+        // Check the cap before allocating the repeated splats.
+        anchors.points->positions = Tensor::zeros({1, 3}, device()).expand({20'000'000, 3});
+        anchors.points->colors = Tensor::ones({1, 3}, device()).expand({20'000'000, 3});
+        node.input_values["Points"] = anchors;
+        const auto capped = evaluate(tree, {{}, {}, 4});
+        EXPECT_FALSE(capped.ok);
+        EXPECT_TRUE(std::ranges::any_of(capped.errors, [](const auto& entry) { return entry.second.find("50 million") != std::string::npos; }));
+    }
+
+    TEST_P(NodesCore, InstanceOnPointsSupportsReflectionsAndCollapsedAxes) {
+        for (const auto size : {glm::vec3(-1, 0.5f, 2), glm::vec3(0, 1, 2)}) {
+            const auto source = splats(3);
+            NodeTree tree(registry_);
+            auto& node = tree.add_node("lfs.instance_on_points");
+            Geometry anchors = geometry_from_mesh(std::make_shared<lfs::core::MeshData>(tensor({2, 3, 4}, {1, 3}), ints({}, {0, 3})));
+            node.input_values["Points"] = anchors;
+            node.input_values["Instance"] = source;
+            node.input_values["Scale"] = size;
+            node.input_values["Rotation"] = glm::vec3(0, 0, 30);
+            tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"});
+            const auto result = evaluate(tree, {{}, {}, 1});
+            ASSERT_TRUE(result.ok);
+            auto reference = splat_data_from_geometry(source);
+            lfs::core::transform(*reference, glm::translate(glm::mat4(1), glm::vec3(2, 3, 4)) * glm::rotate(glm::mat4(1), glm::radians(30.0f), glm::vec3(0, 0, 1)) * glm::scale(glm::mat4(1), size));
+            const auto expected = geometry_from_splat_data(*reference);
+            for (const auto& pair : {std::pair{result.geometry.splats->means, expected.splats->means}, std::pair{result.geometry.splats->shN, expected.splats->shN}, std::pair{result.geometry.splats->scaling, expected.splats->scaling}}) {
+                const auto actual = host<float>(pair.first), want = host<float>(pair.second);
+                ASSERT_EQ(actual.size(), want.size());
+                for (size_t i = 0; i < want.size(); ++i)
+                    EXPECT_NEAR(actual[i], want[i], 6e-5f) << i;
+            }
+        }
+    }
+
+    TEST_P(NodesCore, CollapsedScalesSurviveTransformsMergeAndInstances) {
+        const float collapsed = -std::numeric_limits<float>::infinity();
+        auto source = splats(3);
+        source.splats->scaling = tensor({collapsed, collapsed, collapsed, 0, collapsed, collapsed, 0, 1, collapsed}, {3, 3});
+        const auto assert_valid = [&](const Geometry& result) {
+            for (float value : host<float>(result.splats->scaling))
+                EXPECT_TRUE(std::isfinite(value) || value == collapsed) << value;
+            auto activated = result;
+            activated.splats->scaling = activated.splats->scaling.exp();
+            expect_finite(activated);
+        };
+        for (float factor : {-2.0f, 0.0f, 2.0f}) {
+            const auto result = single("lfs.transform_geometry", source, [&](Node& node) {
+                node.input_values["Scale"] = factor;
+                node.input_values["Rotation"] = glm::vec3(13, -29, 37);
+            });
+            ASSERT_TRUE(result.ok);
+            assert_valid(result.geometry);
+            const auto scales = host<float>(result.geometry.splats->scaling);
+            EXPECT_EQ(std::count(scales.begin(), scales.end(), collapsed), factor == 0 ? 9 : 6);
+        }
+        auto coincident = source;
+        coincident.splats->means = Tensor::zeros({3, 3}, device());
+        const auto merged = single("lfs.merge_by_distance", coincident);
+        ASSERT_TRUE(merged.ok);
+        assert_valid(merged.geometry);
+        EXPECT_EQ(host<float>(merged.geometry.splats->scaling), (std::vector<float>{0, collapsed, collapsed}));
+
+        for (const auto size : {glm::vec3(0), glm::vec3(0, 1, 2), glm::vec3(-1, 0, 2), glm::vec3(-1, 0.5f, 2), glm::vec3(-2)}) {
+            NodeTree tree(registry_);
+            auto& node = tree.add_node("lfs.instance_on_points");
+            Geometry anchors;
+            anchors.points = PointsComponent{tensor({2, 3, 4}, {1, 3}), Tensor::ones({1, 3}, device()), {}};
+            node.input_values["Points"] = anchors;
+            node.input_values["Instance"] = source;
+            node.input_values["Scale"] = size;
+            node.input_values["Rotation"] = glm::vec3(13, -29, 37);
+            ASSERT_TRUE(tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"}));
+            const auto result = evaluate(tree, {{}, {}, 1});
+            ASSERT_TRUE(result.ok);
+            assert_valid(result.geometry);
+            const auto scales = host<float>(result.geometry.splats->scaling);
+            const auto rotations = host<float>(result.geometry.splats->rotation);
+            const auto means = host<float>(result.geometry.splats->means);
+            const glm::mat3 linear = glm::mat3(glm::rotate(glm::mat4(1), glm::radians(37.0f), glm::vec3(0, 0, 1)) *
+                                               glm::rotate(glm::mat4(1), glm::radians(-29.0f), glm::vec3(0, 1, 0)) *
+                                               glm::rotate(glm::mat4(1), glm::radians(13.0f), glm::vec3(1, 0, 0)) * glm::scale(glm::mat4(1), size));
+            for (size_t row = 0; row < 3; ++row) {
+                glm::mat3 covariance(0), diagonal(0);
+                const auto q = glm::normalize(glm::quat(rotations[row * 4], rotations[row * 4 + 1], rotations[row * 4 + 2], rotations[row * 4 + 3]));
+                const auto rotation = glm::mat3_cast(q);
+                for (int axis = 0; axis < 3; ++axis) {
+                    diagonal[axis][axis] = std::exp(2 * scales[row * 3 + axis]);
+                    covariance[axis][axis] = row > 0 && axis == 0 ? 1.0f : row == 2 && axis == 1 ? std::exp(2.0f)
+                                                                                                 : 0.0f;
+                }
+                const auto expected = linear * covariance * glm::transpose(linear);
+                const auto actual = rotation * diagonal * glm::transpose(rotation);
+                for (int c = 0; c < 3; ++c)
+                    for (int r = 0; r < 3; ++r)
+                        EXPECT_NEAR(actual[c][r], expected[c][r], 1e-4f);
+                const auto position = linear * glm::vec3(row == 0 ? 0 : row == 1 ? 1
+                                                                                 : 3,
+                                                         0, 0) +
+                                      glm::vec3(2, 3, 4);
+                for (int axis = 0; axis < 3; ++axis)
+                    EXPECT_NEAR(means[row * 3 + axis], position[axis], 1e-5f);
+                EXPECT_GE(std::count(scales.begin() + row * 3, scales.begin() + row * 3 + 3, collapsed), 3 - int(row));
+            }
+        }
+    }
+
+    TEST_P(NodesCore, Seed5ConstantRampZeroInstancesRecolourScaleClampRegression) {
+        auto source = splats(3);
+        auto& s = *source.splats;
+        const auto indices = ints(std::vector<int>(16, 0), {16});
+        s.means = s.means.index_select(0, indices);
+        s.sh0 = s.sh0.index_select(0, indices);
+        s.shN = s.shN.index_select(0, indices);
+        s.scaling = s.scaling.index_select(0, indices);
+        s.rotation = s.rotation.index_select(0, indices);
+        s.opacity = s.opacity.index_select(0, indices);
+        s.attributes.clear();
+        Geometry anchors;
+        anchors.points = PointsComponent{Tensor::zeros({8, 3}, device()), Tensor::ones({8, 3}, device()), {}};
+        NodeTree tree(registry_);
+        auto& ramp = tree.add_node("lfs.colour_ramp", "Ramp");
+        ramp.input_values["Fac"] = -0.17210110884051355f;
+        ramp.properties["interpolation"] = "constant";
+        auto& instance = tree.add_node("lfs.instance_on_points", "Instance");
+        instance.input_values["Instance"] = source;
+        instance.input_values["Points"] = anchors;
+        instance.input_values["Selection"] = 0.5438486464309299f;
+        instance.input_values["Rotation"] = glm::vec3(-1.4020075016210316f, -1.126018474514678f, -1.218905424765976f);
+        auto& colour = tree.add_node("lfs.recolour", "Colour");
+        colour.input_values["Selection"] = 2.0f;
+        colour.input_values["Colour"] = glm::vec3(0.64235388642241f, 0.10659810068128317f, 0.91770056721701f);
+        colour.input_values["Weight"] = 0.9588916500839504f;
+        colour.properties["keep_shading"] = false;
+        colour.properties["fade_view_dependent"] = false;
+        auto& clamp = tree.add_node("lfs.scale_clamp", "Clamp");
+        clamp.input_values["Max Aspect"] = 1.5084207228853708f;
+        clamp.properties["include_flat"] = false;
+        ASSERT_TRUE(tree.add_link({"Ramp", "Colour", "Instance", "Scale"}));
+        ASSERT_TRUE(tree.add_link({"Instance", "Geometry", "Colour", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Colour", "Geometry", "Clamp", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Ramp", "Alpha", "Clamp", "Selection"}));
+        ASSERT_TRUE(tree.add_link({"Clamp", "Geometry", tree.output_node().name, "Geometry"}));
+        const auto result = evaluate(tree, {{}, {}, 1});
+        ASSERT_TRUE(result.ok);
+        ASSERT_EQ(result.geometry.splats->means.size(0), 128u);
+        EXPECT_EQ(host<float>(result.geometry.splats->scaling), std::vector<float>(384, -std::numeric_limits<float>::infinity()));
+        auto activated = result.geometry;
+        activated.splats->scaling = activated.splats->scaling.exp();
+        expect_finite(activated);
+    }
+
+    TEST_P(NodesCore, CameraNodesMatchSyntheticRingAndCapturedDistance) {
+        struct Host final : EvalHost {
+            std::vector<EvaluationCamera> views;
+            glm::mat4 world{1};
+            uint64_t generation() const override { return 1; }
+            std::optional<Geometry> object_geometry(std::string_view, TransformSpace) override { return {}; }
+            std::span<const EvaluationCamera> cameras() const override { return views; }
+            glm::mat4 object_to_world() const override { return world; }
+        } camera_host;
+        for (int i = 0; i < 8; ++i) {
+            const float angle = i * 2 * std::numbers::pi_v<float> / 8;
+            const glm::vec3 eye(5 * std::cos(angle), 1, 5 * std::sin(angle));
+            const auto view = glm::scale(glm::mat4(1), glm::vec3(1, -1, -1)) * glm::lookAt(eye, glm::vec3(0), glm::vec3(0, 1, 0));
+            camera_host.views.push_back({std::to_string(i), view, 320, 320, 320, 240, 640, 480});
+        }
+        lfs::vis::registerCameraNodes(registry_);
+        auto geometry = splats();
+        geometry.splats->means = tensor({0, 0, 0, 2, 0, 0, 8, 0, 0}, {3, 3});
+        camera_host.world = glm::translate(glm::mat4(1), glm::vec3(0.2f, -0.1f, 0.3f));
+        for (float maximum : {0.0f, 4.5f, 6.0f}) {
+            const auto counts = host<int>(field_result("lfs.camera_coverage", "Count", INT_SOCKET, geometry, [&](Node& node) { node.input_values["Max Distance"] = maximum; }, &camera_host));
+            const auto ratios = host<float>(field_result("lfs.camera_coverage", "Ratio", FLOAT_SOCKET, geometry, [&](Node& node) { node.input_values["Max Distance"] = maximum; }, &camera_host));
+            for (int i = 0; i < 3; ++i) {
+                const glm::vec3 local = i == 0 ? glm::vec3(0) : i == 1 ? glm::vec3(2, 0, 0)
+                                                                       : glm::vec3(8, 0, 0);
+                const auto p = camera_host.world * glm::vec4(local, 1);
+                int expected = 0;
+                for (const auto& c : camera_host.views) {
+                    const auto v = c.world_to_camera * p;
+                    const float x = c.focal_x * v.x + c.center_x * v.z, y = c.focal_y * v.y + c.center_y * v.z;
+                    const auto eye = glm::inverse(c.world_to_camera)[3];
+                    expected += v.z > 1e-6f && x >= 0 && y >= 0 && x <= c.width * v.z && y <= c.height * v.z && (maximum == 0 || glm::length(glm::vec3(p - eye)) <= maximum);
+                }
+                EXPECT_EQ(counts[i], expected);
+                EXPECT_NEAR(ratios[i], expected / 8.0f, 1e-6f);
+            }
+        }
+        const auto position = host<float>(field_result("lfs.camera_info", "Position", VECTOR_SOCKET, geometry, {}, &camera_host));
+        EXPECT_NEAR(position[0], 5, 1e-5);
+        EXPECT_NEAR(position[1], 1, 1e-5);
+        const auto fov = host<float>(field_result("lfs.camera_info", "FOV", FLOAT_SOCKET, geometry, {}, &camera_host));
+        EXPECT_NEAR(fov[0], glm::degrees(2 * std::atan(480.0f / 640)), 1e-5);
+        const auto image_size = host<float>(field_result("lfs.camera_info", "Image Size", VECTOR_SOCKET, geometry, {}, &camera_host));
+        EXPECT_EQ(image_size[0], 640);
+        EXPECT_EQ(image_size[1], 480);
+        EXPECT_EQ(image_size[2], 0);
+        const auto direction = host<float>(field_result("lfs.camera_info", "Direction", VECTOR_SOCKET, geometry, {}, &camera_host));
+        const auto wanted = glm::normalize(glm::vec3(-5, -1, 0));
+        for (int axis = 0; axis < 3; ++axis)
+            EXPECT_NEAR(direction[axis], wanted[axis], 1e-5);
+        const auto distance = host<float>(field_result("lfs.view_distance", "Distance", FLOAT_SOCKET, geometry, [](Node& node) {node.properties["source"]="captured";node.properties["captured_transform"]={1,0,0,0,0,1,0,0,0,0,1,0,0,0,3,1}; }, &camera_host));
+        EXPECT_NEAR(distance[0], glm::length(glm::vec3(0.2f, -0.1f, -2.7f)), 1e-5);
+        camera_host.views.clear();
+        NodeTree tree(registry_);
+        auto& camera = tree.add_node("lfs.view_distance");
+        auto& consumer = tree.add_node("lfs.delete_geometry");
+        tree.add_link({camera.name, "Distance", consumer.name, "Selection"});
+        tree.add_link({tree.input_node().name, "Geometry", consumer.name, "Geometry"});
+        tree.add_link({consumer.name, "Geometry", tree.output_node().name, "Geometry"});
+        const auto missing = evaluate(tree, {geometry, {}, 2}, &camera_host);
+        EXPECT_FALSE(missing.ok);
+        EXPECT_TRUE(std::ranges::any_of(missing.errors, [](const auto& entry) { return entry.second.find("requires dataset cameras") != std::string::npos; }));
+    }
+
+    TEST_P(NodesCore, RandomHashMatchesIntegerReferenceIncludingStridesAndHighBits) {
+        const std::vector<int> indices{0, 1, 2, 255, 256, 16777216, 16777217,
+                                       std::numeric_limits<int>::max(), std::numeric_limits<int>::min(), -1};
+        std::vector<int> interleaved;
+        for (const int index : indices) {
+            interleaved.push_back(index);
+            interleaved.push_back(999);
+        }
+        const auto input = ints(interleaved, {indices.size(), 2}).slice(1, 0, 1).squeeze(1);
+        for (const uint32_t seed : {0u, 17u, 0x80000000u, 0xffffffffu}) {
+            std::vector<float> reference;
+            for (const int index : indices) {
+                uint32_t hash = static_cast<uint32_t>(index) ^ seed;
+                hash = (hash ^ (hash >> 16u)) * 0x7feb352du;
+                hash = (hash ^ (hash >> 15u)) * 0x846ca68bu;
+                hash ^= hash >> 16u;
+                reference.push_back(static_cast<float>(hash >> 8u) * 0x1p-24f);
+            }
+            const auto result = lfs::core::random_from_indices(input, seed);
+            EXPECT_EQ(result.device(), device());
+            EXPECT_EQ(host<float>(result), reference) << "seed=" << seed;
+            for (const float value : reference) {
+                EXPECT_GE(value, 0);
+                EXPECT_LT(value, 1);
+            }
+        }
+        const auto empty = lfs::core::random_from_indices(ints({}, {0}), 17);
+        EXPECT_EQ(empty.numel(), 0);
+        EXPECT_EQ(empty.device(), device());
+    }
+
+    TEST_P(NodesCore, RandomValueMatchesCpuBitExactlyForSeedsRangesFieldsAndConversions) {
+        auto geometry = splats();
+        constexpr size_t count = 4099;
+        geometry.splats->means = Tensor::zeros({count, 3}, device());
+        std::vector<float> minimum(count), maximum(count);
+        for (size_t i = 0; i < count; ++i) {
+            minimum[i] = float(i % 17) * 0.31f - 2;
+            maximum[i] = float(i % 11) * -0.27f + 1;
+        }
+        geometry.splats->attributes["min"] = tensor(minimum, {count});
+        geometry.splats->attributes["max"] = tensor(maximum, {count});
+        float error = 0;
+        for (const int seed : {0, 17, -1, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()}) {
+            for (int range = 0; range < 5; ++range) {
+                const auto configure = [=](Node& node) {
+                    node.properties["seed"] = seed;
+                    if (range == 1) {
+                        node.input_values["Min"] = 0.678698060057878f;
+                        node.input_values["Max"] = -1.0708173877834182f;
+                    } else if (range == 2) {
+                        node.input_values["Min"] = 1.88136409995301f;
+                        node.input_values["Max"] = -0.9553689656533741f;
+                    } else if (range == 3) {
+                        node.input_values["Min"] = -3.5f;
+                        node.input_values["Max"] = -3.5f;
+                    } else if (range == 4) {
+                        node.input_values["Min"] = named_attribute_field("min", std::string(FLOAT_SOCKET));
+                        node.input_values["Max"] = named_attribute_field("max", std::string(FLOAT_SOCKET));
+                    }
+                };
+                for (const auto type : {FLOAT_SOCKET, INT_SOCKET, BOOL_SOCKET, VECTOR_SOCKET, COLOUR_SOCKET}) {
+                    const auto reference = host<float>(field_result("lfs.random_value", "Value", type, geometry, configure, nullptr, Device::CPU).to(lfs::core::DataType::Float32));
+                    const auto actual = host<float>(field_result("lfs.random_value", "Value", type, geometry, configure).to(lfs::core::DataType::Float32));
+                    ASSERT_EQ(actual.size(), reference.size());
+                    EXPECT_EQ(actual, reference) << "seed=" << seed << " range=" << range << " type=" << type;
+                    EXPECT_EQ(std::memcmp(actual.data(), reference.data(), actual.size() * sizeof(float)), 0)
+                        << "seed=" << seed << " range=" << range << " type=" << type;
+                    for (size_t i = 0; i < actual.size(); ++i)
+                        error = std::max(error, std::abs(actual[i] - reference[i]));
+                }
+            }
+        }
+        EXPECT_EQ(error, 0);
+        std::cout << "Random Value CPU/" << GetParam().name << " max error " << error << '\n';
+    }
+
+    TEST_P(NodesCore, RandomValueFuzzCleanupAndExtremeColourRegressions) {
+        // Exact node parameters from review seed 0 graphs 65 and 142. Use a
+        // small synthetic payload so this regression does not require garden.ply.
+        auto geometry = splats(3);
+        auto& s = *geometry.splats;
+        constexpr size_t count = 257;
+        std::vector<int> repeated(count);
+        for (size_t i = 0; i < count; ++i)
+            repeated[i] = int(i % 3);
+        const auto indices = ints(repeated, {count});
+        for (auto* value : {&s.means, &s.sh0, &s.shN, &s.scaling, &s.rotation, &s.opacity})
+            *value = value->index_select(0, indices);
+        std::vector<float> positions(count * 3, 0);
+        for (size_t i = 0; i < count; ++i)
+            positions[i * 3] = float(i) * 0.2f; // All points isolated at the failing query radius.
+        s.means = tensor(positions, {count, 3});
+        s.attributes.clear();
+        for (const bool colour_chain : {false, true}) {
+            NodeTree tree(registry_);
+            const auto input = tree.input_node().name, output = tree.output_node().name;
+            auto& random = tree.add_node("lfs.random_value", "Random");
+            random.input_values["Min"] = colour_chain ? 1.88136409995301f : 0.678698060057878f;
+            random.input_values["Max"] = colour_chain ? -0.9553689656533741f : -1.0708173877834182f;
+            if (colour_chain) {
+                tree.add_node("lfs.gradient_texture", "Gradient").properties["type"] = "diagonal";
+                auto& correct = tree.add_node("lfs.colour_correct", "Correct");
+                correct.properties["auto_range"] = true;
+                correct.input_values["Selection"] = 0.42511368531503624f;
+                correct.input_values["Exposure"] = 3.008884881414131f;
+                correct.input_values["Black Point"] = 0.7842575205379938f;
+                correct.input_values["White Point"] = -0.7270517910720553f;
+                correct.input_values["Midpoint"] = 0.99f;
+                correct.input_values["Contrast"] = 2.0f;
+                correct.input_values["Saturation"] = 0.4100576812013792f;
+                correct.input_values["Hue Shift"] = 0.7835067443254515f;
+                correct.input_values["Temperature"] = 0.27517091222663903f;
+                correct.input_values["Tint"] = 0.6303857412858538f;
+                correct.input_values["Shadows"] = glm::vec3(0.1563354897528767f, 0.6490276122149595f, 0.49411055450869856f);
+                correct.input_values["Midtones"] = glm::vec3(0.7519442597880299f, 0.4858927178470527f, 0.621337391930684f);
+                correct.input_values["Highlights"] = glm::vec3(0.0030512087616476613f, 0.8435756150132411f, 0.724649520722652f);
+                correct.input_values["Gamma"] = 1.8927186892537895f;
+                tree.add_node("lfs.invert_colour", "Invert").input_values["Selection"] = 0.9897881324650221f;
+                auto& recolour = tree.add_node("lfs.recolour", "Recolour");
+                recolour.input_values["Colour"] = glm::vec3(0.3500935021857404f, 0.4818020824426007f, 0.41463360322620446f);
+                recolour.input_values["Weight"] = 0.20930645811603366f;
+                recolour.properties["keep_shading"] = true;
+                recolour.properties["fade_view_dependent"] = false;
+                ASSERT_TRUE(tree.add_link({"Random", "Value", "Gradient", "Vector"}));
+                ASSERT_TRUE(tree.add_link({input, "Geometry", "Correct", "Geometry"}));
+                ASSERT_TRUE(tree.add_link({"Correct", "Geometry", "Invert", "Geometry"}));
+                ASSERT_TRUE(tree.add_link({"Invert", "Geometry", "Recolour", "Geometry"}));
+                ASSERT_TRUE(tree.add_link({"Gradient", "Fac", "Recolour", "Selection"}));
+                ASSERT_TRUE(tree.add_link({"Recolour", "Geometry", output, "Geometry"}));
+            } else {
+                auto& vector = tree.add_node("lfs.vector_math", "Vector");
+                vector.properties["operation"] = "add";
+                vector.input_values["A"] = glm::vec3(1.1266080730316999f, -0.536056806377653f, 1.1699958894348854f);
+                vector.input_values["Scale"] = 1.0663404053152297f;
+                tree.add_node("lfs.set_position", "Move");
+                auto& cleanup = tree.add_node("lfs.remove_floaters", "Cleanup");
+                cleanup.input_values["Min Opacity"] = 0.0f;
+                cleanup.input_values["Max Size"] = 0.9548304191655907f;
+                cleanup.input_values["Isolation Radius"] = 0.6885203373941402f;
+                cleanup.input_values["Min Neighbours"] = 2;
+                cleanup.properties["preview"] = true;
+                cleanup.properties["relative_to_size"] = true;
+                ASSERT_TRUE(tree.add_link({"Random", "Value", "Vector", "B"}));
+                ASSERT_TRUE(tree.add_link({input, "Geometry", "Move", "Geometry"}));
+                ASSERT_TRUE(tree.add_link({"Random", "Value", "Move", "Position"}));
+                ASSERT_TRUE(tree.add_link({"Random", "Value", "Move", "Offset"}));
+                ASSERT_TRUE(tree.add_link({"Vector", "Value", "Move", "Selection"}));
+                ASSERT_TRUE(tree.add_link({"Vector", "Vector", "Cleanup", "Selection"}));
+                ASSERT_TRUE(tree.add_link({"Move", "Geometry", "Cleanup", "Geometry"}));
+                ASSERT_TRUE(tree.add_link({"Cleanup", "Geometry", output, "Geometry"}));
+            }
+            const auto reference = lfs::nodes::evaluate(tree, {geometry, {}, 1, Device::CPU});
+            const auto actual = evaluate(tree, {geometry, {}, 1});
+            ASSERT_TRUE(reference.ok);
+            ASSERT_TRUE(actual.ok);
+            expect_finite(actual.geometry);
+            const auto& a = *actual.geometry.splats;
+            const auto& b = *reference.geometry.splats;
+            if (!colour_chain) {
+                EXPECT_GT(a.means.shape()[0], 0);
+                EXPECT_LT(a.means.shape()[0], count);
+            }
+            for (const auto& pair : {std::pair{a.means, b.means}, {a.sh0, b.sh0}, {a.shN, b.shN}, {a.scaling, b.scaling}, {a.rotation, b.rotation}, {a.opacity, b.opacity}}) {
+                ASSERT_EQ(pair.first.shape(), pair.second.shape());
+                const auto values = host<float>(pair.first), expected = host<float>(pair.second);
+                for (size_t i = 0; i < values.size(); ++i)
+                    EXPECT_NEAR(values[i], expected[i], 2e-5f * (1 + std::abs(expected[i]))) << "colour_chain=" << colour_chain << " i=" << i;
+            }
+        }
+    }
+
+    TEST_P(NodesCore, SharpenZeroIsBitExactIncludingMergeWinners) {
+        auto geometry = splats(3);
+        geometry.splats->opacity = tensor({25.0f, -25.0f, 0.1234567f}, {3});
+        NodeTree tree(registry_);
+        const auto input = tree.input_node().name, output = tree.output_node().name;
+        auto& sharpen = tree.add_node("lfs.sharpen", "Sharpen");
+        sharpen.input_values["Amount"] = 0.0f;
+        sharpen.input_values["Selection"] = 0.5100295992547904f;
+        sharpen.properties["keep_coverage"] = true;
+        ASSERT_TRUE(tree.add_link({input, "Geometry", "Sharpen", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Sharpen", "Geometry", output, "Geometry"}));
+        const auto check = [&](const Geometry& result) {
+            const auto& a = *result.splats;
+            const auto& b = *geometry.splats;
+            for (const auto& pair : {std::pair{a.means, b.means}, {a.sh0, b.sh0}, {a.shN, b.shN}, {a.scaling, b.scaling}, {a.rotation, b.rotation}, {a.opacity, b.opacity}})
+                EXPECT_EQ(host<float>(pair.first), host<float>(pair.second));
+        };
+        auto result = evaluate(tree, {geometry, {}, 1});
+        ASSERT_TRUE(result.ok);
+        check(result.geometry);
+        tree.add_node("lfs.join_geometry", "Join");
+        tree.add_node("lfs.merge_by_distance", "Merge").input_values["Distance"] = 0.870758021072702f;
+        ASSERT_TRUE(tree.add_link({"Sharpen", "Geometry", "Join", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({input, "Geometry", "Join", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Join", "Geometry", "Merge", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Merge", "Geometry", output, "Geometry"}));
+        result = evaluate(tree, {geometry, {}, 1});
+        ASSERT_TRUE(result.ok);
+        check(result.geometry);
+    }
+
+    TEST_P(NodesCore, UniformReflectionPreservesAxesAndShParity) {
+        auto geometry = splats(3);
+        geometry.splats->scaling = tensor({-1, -1, -1, -3, -1, -1, -2, -2, -4}, {3, 3});
+        geometry.splats->rotation = tensor({0.5f, 0.5f, 0.5f, 0.5f, 0, 1, 0, 0, 1, 0, 0, 0}, {3, 4});
+        const auto run = [&](float scale, Device target) {
+            NodeTree tree(registry_);
+            auto& transform = tree.add_node("lfs.transform_geometry", "Transform");
+            transform.input_values["Translation"] = glm::vec3(-1.95850298327221f, 0.01029500065166955f, 0.6724207119411831f);
+            transform.input_values["Rotation"] = glm::vec3(1.6567954333253958f, -0.13583290700924433f, -0.831743214379475f);
+            transform.input_values["Scale"] = scale;
+            EXPECT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Transform", "Geometry"}));
+            EXPECT_TRUE(tree.add_link({"Transform", "Geometry", tree.output_node().name, "Geometry"}));
+            auto result = lfs::nodes::evaluate(tree, {geometry, {}, 1, target});
+            EXPECT_TRUE(result.ok);
+            return result.geometry;
+        };
+        const auto positive = run(2.0f, Device::CPU);
+        const auto reference = run(-2.0f, Device::CPU);
+        const auto actual = run(-2.0f, device());
+        expect_finite(actual);
+        EXPECT_EQ(host<float>(positive.splats->rotation), host<float>(reference.splats->rotation));
+        EXPECT_EQ(host<float>(positive.splats->scaling), host<float>(reference.splats->scaling));
+        const auto quaternion = host<float>(actual.splats->rotation), expected = host<float>(reference.splats->rotation);
+        for (size_t i = 0; i < quaternion.size(); ++i)
+            EXPECT_NEAR(quaternion[i], expected[i], 1e-6f);
+        const auto sh = host<float>(actual.splats->shN), original = host<float>(positive.splats->shN);
+        for (size_t i = 0; i < sh.size(); ++i) {
+            const size_t coefficient = (i / 3) % 15;
+            const float sign = coefficient < 3 || coefficient >= 8 ? -1 : 1;
+            EXPECT_NEAR(sh[i], sign * original[i], 2e-5f);
+        }
+    }
+
+    TEST_P(NodesCore, NoiseMatchesCpuBitExactly) {
+        auto geometry = splats();
+        std::mt19937 random(173);
+        std::uniform_real_distribution<float> values(-4, 4);
+        std::vector<float> positions(771);
+        std::generate(positions.begin(), positions.end(), [&] { return values(random); });
+        geometry.splats->means = tensor(positions, {257, 3});
+        const auto configure = [](Node& node) {node.input_values["Scale"]=1.7f;node.input_values["Detail"]=3.4f;node.input_values["Roughness"]=0.63f;node.input_values["Distortion"]=0.27f;node.input_values["Seed"]=9.0f; };
+        const auto reference = host<float>(field_result("lfs.noise_texture", "Fac", FLOAT_SOCKET, geometry, configure, nullptr, Device::CPU));
+        const auto actual = host<float>(field_result("lfs.noise_texture", "Fac", FLOAT_SOCKET, geometry, configure));
+        ASSERT_EQ(reference.size(), actual.size());
+        float error = 0;
+        for (size_t i = 0; i < actual.size(); ++i)
+            error = std::max(error, std::abs(reference[i] - actual[i]));
+        EXPECT_EQ(error, 0.0f) << GetParam().name;
+        std::cout << "Noise CPU/" << GetParam().name << " max error " << error << '\n';
+        // Independent NumPy gradient-table/hash/fBM reference, stored as exact
+        // Float32 bits so the CPU implementation cannot silently change the stream.
+        geometry.splats->means = tensor({0, 0, 0, .125f, -.25f, .75f, 1.25f, 2.5f, -.125f,
+                                         -17.2f, 3.8f, 42.1f, 3.14159f, -2.71828f, 1.41421f,
+                                         65536.125f, -65536.25f, 3.75f},
+                                        {6, 3});
+        const auto golden = host<float>(field_result("lfs.noise_texture", "Fac", FLOAT_SOCKET, geometry, configure));
+        const std::array<uint32_t, 6> bits{0x3f042a67u, 0x3f06d9aau, 0x3f1f88a8u, 0x3f12f920u, 0x3f022d98u, 0x3ef5e40du};
+        ASSERT_EQ(golden.size(), bits.size());
+        for (size_t i = 0; i < bits.size(); ++i)
+            EXPECT_EQ(std::bit_cast<uint32_t>(golden[i]), bits[i]) << i;
+    }
+
+    TEST_P(NodesCore, FusedPreciseDivisionMatchesCpu) {
+        if (device() == Device::CPU)
+            GTEST_SKIP() << "Fused kernel requires GPU";
+        namespace fused = lfs::core::fused;
+        using lfs::core::DataType;
+        std::mt19937 random(192);
+        std::uniform_real_distribution<float> value(.1f, 16);
+        std::vector<float> numerator(1025), denominator(1025), expected(1025);
+        for (size_t i = 0; i < expected.size(); ++i) {
+            numerator[i] = value(random);
+            denominator[i] = value(random);
+            expected[i] = numerator[i] / denominator[i];
+        }
+        fused::Builder builder(1);
+        const auto a = builder.input(DataType::Float32, 1), b = builder.input(DataType::Float32, 1);
+        builder.output(fused::precise_divide(a.load(), b.load()), DataType::Float32);
+        const fused::Kernel kernel(builder);
+        const auto actual = host<float>(kernel({expected.size()}, {tensor(numerator, {expected.size()}), tensor(denominator, {expected.size()})})[0]);
+        EXPECT_EQ(actual, expected);
+    }
+
+    TEST_P(NodesCore, FusedNoiseVaryingFieldsStridesAndFractionalOctavesMatchCpuExactly) {
+        constexpr size_t n = 257;
+        std::mt19937 random(825);
+        std::uniform_real_distribution<float> value(-10, 10);
+        std::vector<float> positions(n * 6), scale(n), detail(n), roughness(n), distortion(n), seed(n);
+        std::generate(positions.begin(), positions.end(), [&] { return value(random); });
+        for (size_t i = 0; i < n; ++i) {
+            scale[i] = value(random);
+            detail[i] = float(i % 65) * .25f - .5f;
+            roughness[i] = float(i % 13) * .1f - .1f;
+            distortion[i] = i % 3 ? .5f : 0;
+            seed[i] = value(random);
+        }
+        auto p = tensor(positions, {n, 6}).slice(1, 0, 3);
+        const auto s = tensor(scale, {n}), d = tensor(detail, {n}), r = tensor(roughness, {n}), w = tensor(distortion, {n}), k = tensor(seed, {n});
+        const auto expected = host<float>(lfs::core::procedural_noise(p.cpu(), s.cpu(), d.cpu(), r.cpu(), w.cpu(), k.cpu()));
+        const auto actual = host<float>(lfs::core::procedural_noise(p, s, d, r, w, k));
+        ASSERT_EQ(actual.size(), n);
+        for (size_t i = 0; i < n; ++i) {
+            EXPECT_EQ(actual[i], expected[i]) << "element " << i;
+            EXPECT_GE(actual[i], 0);
+            EXPECT_LE(actual[i], 1);
+            if (detail[i] <= 0)
+                EXPECT_EQ(actual[i], 0);
+        }
+        const auto empty = Tensor::empty({0}, device());
+        EXPECT_EQ(lfs::core::procedural_noise(Tensor::empty({0, 3}, device()), empty, empty, empty, empty, empty).numel(), 0);
+    }
+
+    TEST_P(NodesCore, FusedCurvesSearchControlPointsAndReuseKernels) {
+        using lfs::core::CurveKnot;
+        // Same-depth counts exercise cache reuse; >64 words exercises device tables.
+        for (const size_t count : {2, 3, 4, 17, 23, 257}) {
+            std::vector<CurveKnot> knots;
+            std::vector<float> values{-0.125f};
+            for (size_t i = 0; i < count; ++i) {
+                const float x = float(i) / float(count - 1);
+                knots.push_back({x, x * x, 2 * x});
+                values.push_back(x);
+                if (i + 1 < count)
+                    values.push_back((float(i) + .5f) / float(count - 1));
+            }
+            values.push_back(1.125f);
+            for (bool clamped : {false, true}) {
+                const auto result = host<float>(lfs::core::interpolate_curve(tensor(values, {values.size()}), knots, clamped));
+                for (size_t i = 0; i < values.size(); ++i) {
+                    const float x = clamped ? std::clamp(values[i], 0.0f, 1.0f) : values[i];
+                    EXPECT_NEAR(result[i], x * x, 2e-5f) << count << ":" << i;
+                }
+                const auto exact = host<float>(lfs::core::interpolate_curve(tensor(values, {values.size()}).slice(0, 1, 2), knots, clamped));
+                EXPECT_EQ(exact[0], knots[0][1]);
+            }
+        }
+    }
+
+    TEST_P(NodesCore, FusedRampDuplicateStopsAllModesAndAlpha) {
+        using lfs::core::ColourStop;
+        using lfs::core::RampInterpolation;
+        const std::vector<ColourStop> stops{{0, 0, .2f, .5f, .1f}, {.5f, .4f, .6f, .8f, .3f}, {.5f, .8f, .7f, .4f, .7f}, {1, 1, .9f, .2f, 1}};
+        const auto values = tensor({-.17f, 0, .125f, .5f, .625f, 1, 2}, {7});
+        for (auto mode : {RampInterpolation::Constant, RampInterpolation::Linear, RampInterpolation::Ease}) {
+            for (bool alpha : {false, true}) {
+                const auto actual = host<float>(lfs::core::interpolate_colour_ramp(values, stops, mode, alpha));
+                const auto reference = host<float>(lfs::core::interpolate_colour_ramp(values.cpu(), stops, mode, alpha));
+                ASSERT_EQ(actual.size(), reference.size());
+                for (size_t i = 0; i < actual.size(); ++i)
+                    EXPECT_NEAR(actual[i], reference[i], 1e-7f) << i;
+                const int channels = alpha ? 1 : 3;
+                EXPECT_EQ(actual[0], stops.front()[alpha ? 4 : 1]);
+                EXPECT_EQ(actual[3 * channels], stops[2][alpha ? 4 : 1]);
+                const auto single = host<float>(lfs::core::interpolate_colour_ramp(values, {stops.data(), 1}, mode, alpha));
+                for (size_t i = 0; i < single.size(); ++i)
+                    EXPECT_EQ(single[i], stops[0][alpha ? 4 : i % 3 + 1]);
+            }
+        }
+    }
+
+    TEST_P(NodesCore, FusedRgbCurvesPreserveBlendEndpointsAndHigherSh) {
+        auto geometry = splats();
+        geometry.splats->sh0 = tensor({-.5f, 0, 2, 1e20f, -1e20f, 0, .3f, .5f, 1}, {3, 3});
+        for (float weight : {0.0f, .25f, 1.0f}) {
+            const auto result = single("lfs.rgb_curves", geometry, [weight](Node& node) {
+                node.input_values["Selection"] = weight;
+                node.properties["combined"] = {{0, 0}, {1, 1}};
+                node.properties["r"] = {{0, .25}, {1, .75}};
+                node.properties["g"] = {{0, .25}, {1, .75}};
+                node.properties["b"] = {{0, .25}, {1, .75}};
+            });
+            ASSERT_TRUE(result.ok);
+            const auto source = host<float>(geometry.splats->sh0), actual = host<float>(result.geometry.splats->sh0);
+            constexpr float c0 = 0.28209479177387814f;
+            for (size_t i = 0; i < actual.size(); ++i) {
+                const float rgb = source[i] * c0 + .5f, mapped = .25f + .5f * std::clamp(rgb, 0.0f, 1.0f);
+                const float blended = weight == 0 ? rgb : weight == 1 ? mapped
+                                                                      : rgb * (1 - weight) + mapped * weight;
+                const float expected = (blended - .5f) / c0;
+                EXPECT_NEAR(actual[i], expected, std::max(1e-6f, std::abs(expected) * 1e-6f));
+            }
+            EXPECT_EQ(host<float>(result.geometry.splats->shN), host<float>(geometry.splats->shN));
+        }
     }
 
     TEST_P(NodesCore, PointNeighbourSpacingExpandsAndHandlesEmptyInputs) {
@@ -1883,6 +2900,56 @@ namespace {
     }
 
     class NodesCoreScale : public NodesCore {};
+
+    TEST_P(NodesCoreScale, TexturesAndCurvesStayInteractive) {
+        if (device() == Device::CPU)
+            GTEST_SKIP() << "Performance regression requires GPU";
+        constexpr size_t count = 1'000'000;
+        auto geometry = splats(0);
+        geometry.splats->means = Tensor::uniform({count, 3}, -5, 5, device(), lfs::core::DataType::Float32, 31);
+        geometry.splats->sh0 = Tensor::uniform({count, 3}, -1, 1, device(), lfs::core::DataType::Float32, 17);
+        const auto measure = [&](const char* label, double budget, auto action) {
+            action().sum().template item<float>(); // compile and warm the exact field/kernel layout
+            const auto start = std::chrono::steady_clock::now();
+            action().sum().template item<float>();
+            const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            std::cout << "[NodesTexturePerformance " << GetParam().name << "] " << label << " " << ms << " ms\n";
+            if (const char* perf = std::getenv("LFS_NODES_PERF"); perf && std::string_view(perf) == "1")
+                EXPECT_LT(ms, budget) << label;
+        };
+        for (float detail : {0.0f, 2.5f, 8.0f}) {
+            const auto label = "Noise Texture 1M detail=" + std::to_string(detail) + " distortion=0.5";
+            measure(label.c_str(), 15, [&] {
+                return field_result("lfs.noise_texture", "Fac", FLOAT_SOCKET, geometry, [detail](Node& node) {
+                    node.input_values["Detail"] = detail;
+                    node.input_values["Distortion"] = .5f;
+                });
+            });
+        }
+        measure("Gradient Texture radial 1M", 5, [&] {
+            return field_result("lfs.gradient_texture", "Fac", FLOAT_SOCKET, geometry, [](Node& node) {
+                node.properties["type"] = "radial";
+                node.input_values["Vector"] = position_field();
+            });
+        });
+        measure("Colour Ramp 1M", 5, [&] {
+            return field_result("lfs.colour_ramp", "Colour", COLOUR_SOCKET, geometry, [](Node& node) {
+                node.properties["stops"] = {{0, 0, 0, 0, 1}, {.25, .8, .3, .1, 1}, {.6, .2, .8, .1, 1}, {1, 1, 1, 1, 1}};
+            });
+        });
+        measure("Float Curve 1M", 5, [&] {
+            return field_result("lfs.float_curve", "Value", FLOAT_SOCKET, geometry, [](Node& node) {
+                node.properties["points"] = {{0, 0}, {.25, .4}, {.6, .5}, {1, 1}};
+            });
+        });
+        measure("RGB Curves 1M", 5, [&] {
+            auto result = single("lfs.rgb_curves", geometry, [](Node& node) {
+                node.properties["combined"] = {{0, 0}, {.25, .4}, {.6, .5}, {1, 1}};
+            });
+            EXPECT_TRUE(result.ok);
+            return result.geometry.splats->sh0;
+        });
+    }
 
     TEST_P(NodesCoreScale, MillionSplatsColourSelectionCleanupAndTorus) {
         if (device() == Device::CPU)

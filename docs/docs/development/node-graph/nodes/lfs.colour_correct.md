@@ -7,9 +7,9 @@ Grades colour: exposure, levels, contrast, saturation, hue, white balance and sh
 
 ## How to use
 
-Start with Exposure to set brightness, then adjust Contrast and Saturation.  
-Connect a Selection to grade only part of your scene.  
-Reset colour wheels to the centre for neutral shadows, midtones and highlights.  
+Start with Exposure to set brightness, then adjust Contrast and Saturation.\
+Connect a Selection to grade only part of your scene.\
+Reset colour wheels to the centre for neutral shadows, midtones and highlights.
 
 ## Inputs
 

@@ -7,8 +7,8 @@ Redirects a link without changing its value.
 
 ## How to use
 
-Connect any socket type; the reroute adopts its upstream type.  
-Double-click a wire to insert a reroute without changing the result.  
+Connect any socket type; the reroute adopts its upstream type.\
+Double-click a wire to insert a reroute without changing the result.
 
 ## Inputs
 

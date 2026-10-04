@@ -1,7 +1,7 @@
 #include "../../../../include/core/rounded_math.slangh"
 
 static const uint LFS_LOCAL_SIZE_X = 256;
-static const uint LFS_PUSH_CONSTANT_SIZE = 72;
+static const uint LFS_PUSH_CONSTANT_SIZE = 80;
 
 [SpecializationConstant] const uint kMode = 0;
 
@@ -12,6 +12,7 @@ struct Parameters {
     uint64_t next;
     uint64_t output;
     uint64_t queries;
+    uint64_t values;
     uint count;
     uint bucketMask;
     float radius;
@@ -105,6 +106,46 @@ uint queryCount(Parameters p, uint i) {
     return count;
 }
 
+int queryMinInt(Parameters p, uint i) {
+    Ptr<int, Access.Read> values = (Ptr<int, Access.Read>)p.values;
+    int result = values[i];
+    const float3 point = position(p, i);
+    if (!all(isfinite(point)))
+        return result;
+    const int3 center = cell(point, p.radius);
+    Ptr<int, Access.Read> heads = (Ptr<int, Access.Read>)p.heads;
+    Ptr<int, Access.Read> next = (Ptr<int, Access.Read>)p.next;
+    for (int z = -1; z <= 1; ++z) for (int y = -1; y <= 1; ++y) for (int x = -1; x <= 1; ++x) {
+        const int3 target = center + int3(x, y, z);
+        for (int j = heads[hashCell(target, p.bucketMask)]; j >= 0; j = next[j]) {
+            const float3 other = position(p, uint(j));
+            if (all(cell(other, p.radius) == target) && within(point, other, p.radius))
+                result = min(result, values[j]);
+        }
+    }
+    return result;
+}
+
+float queryMinFloat(Parameters p, uint i) {
+    Ptr<float, Access.Read> values = (Ptr<float, Access.Read>)p.values;
+    float result = values[i];
+    const float3 point = position(p, i);
+    if (!all(isfinite(point)))
+        return result;
+    const int3 center = cell(point, p.radius);
+    Ptr<int, Access.Read> heads = (Ptr<int, Access.Read>)p.heads;
+    Ptr<int, Access.Read> next = (Ptr<int, Access.Read>)p.next;
+    for (int z = -1; z <= 1; ++z) for (int y = -1; y <= 1; ++y) for (int x = -1; x <= 1; ++x) {
+        const int3 target = center + int3(x, y, z);
+        for (int j = heads[hashCell(target, p.bucketMask)]; j >= 0; j = next[j]) {
+            const float3 other = position(p, uint(j));
+            if (all(cell(other, p.radius) == target) && within(point, other, p.radius))
+                result = min(result, values[j]);
+        }
+    }
+    return result;
+}
+
 float querySpacing(Parameters p, uint i) {
     const float3 point = position(p, i);
     if (!all(isfinite(point)))
@@ -166,6 +207,14 @@ result:
             InterlockedExchange(heads[bucket], int(i), previous);
             next[i] = previous;
         }
+    } else if (kMode == 5) {
+        Ptr<float, Access.ReadWrite> output = (Ptr<float, Access.ReadWrite>)p.output;
+        for (uint i = p.queryBegin + dispatchThreadId.x; i < p.queryEnd; i += stride)
+            output[i] = queryMinFloat(p, i);
+    } else if (kMode == 4) {
+        Ptr<int, Access.ReadWrite> output = (Ptr<int, Access.ReadWrite>)p.output;
+        for (uint i = p.queryBegin + dispatchThreadId.x; i < p.queryEnd; i += stride)
+            output[i] = queryMinInt(p, i);
     } else if (kMode == 3) {
         Ptr<float, Access.ReadWrite> output = (Ptr<float, Access.ReadWrite>)p.output;
         for (uint i = p.queryBegin + dispatchThreadId.x; i < p.queryEnd; i += stride)

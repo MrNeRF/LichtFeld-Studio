@@ -29,6 +29,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Geometry node modifiers
         nodes/modifier_manager.cpp
+        nodes/node_animation.cpp
+        nodes/modifier_manager_animation.cpp
+        nodes/camera_nodes.cpp
         nodes/viewport_coordinates.cpp
         nodes/modifier_manager_evaluation.cpp
         nodes/modifier_evaluation_worker.cpp
@@ -244,6 +247,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/chromaticity_element.cpp
         gui/rmlui/elements/color_picker_element.cpp
         gui/rmlui/elements/colour_offset_element.cpp
+        gui/rmlui/elements/node_curve_element.cpp
         gui/rmlui/elements/crf_curve_element.cpp
         gui/rmlui/elements/loss_graph_element.cpp
         gui/rmlui/elements/node_canvas_element.cpp

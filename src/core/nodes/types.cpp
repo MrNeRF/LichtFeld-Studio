@@ -344,6 +344,8 @@ namespace lfs::nodes {
                 attributes = &context.splats->attributes;
             else if (context.domain == Domain::Point && context.points)
                 attributes = &context.points->attributes;
+            else if (context.domain == Domain::Vertex && context.mesh)
+                attributes = &context.mesh->attributes;
             if (!attributes)
                 throw std::runtime_error(
                     std::format("Named attribute '{}' is unavailable on this domain", name));

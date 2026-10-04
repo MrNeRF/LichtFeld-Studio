@@ -111,6 +111,7 @@ namespace lfs::core::internal {
         GreaterUInt,
         GreaterEqualUInt,
         CastUnsignedFloat,
+        PreciseDiv,
     };
 
     enum class ExprOob : uint8_t { Clamp,
@@ -154,8 +155,9 @@ namespace lfs::core::internal {
 
     class LFS_CORE_API ExpressionProgram {
     public:
-        static constexpr uint32_t max_instructions = 512;
-        static constexpr uint32_t max_registers = 32;
+        // Procedural fields include domain warping and a folded octave expression.
+        static constexpr uint32_t max_instructions = 4096;
+        static constexpr uint32_t max_registers = 128;
         static constexpr uint32_t max_inputs = 12;
         static constexpr uint32_t max_outputs = 4;
         static constexpr uint32_t max_rank = 4;

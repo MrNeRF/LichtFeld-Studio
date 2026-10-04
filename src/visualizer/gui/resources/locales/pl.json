@@ -4165,7 +4165,7 @@
     "scale_clamp": {
       "label": "Ogranicz proporcje",
       "description": "Skraca igłowe Gaussians, które tworzą smugi po oddaleniu od trasy rejestracji.",
-      "help": "Użyj, gdy poza trasą kamery pojawiają się cienkie smugi.\nZacznij od Maks. proporcji 16; mniejsze wartości skracają więcej igieł.\nPłaskie splaty powierzchni pozostają bez zmian, chyba że włączysz „Uwzględnij płaskie”.",
+      "help": "Użyj, gdy poza trasą kamery pojawiają się cienkie smugi.\nZacznij od Maks. proporcji 16; mniejsze wartości skracają więcej igieł.\nPłaskie splaty powierzchni pozostają bez zmian, chyba że włączysz „Uwzględnij płaskie”.\nOsie o zerowym rozmiarze pozostają zapadnięte; limit proporcji dotyczy tylko pozostałych osi.",
       "inputs": {
         "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
         "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
@@ -4340,7 +4340,7 @@
     "set_scale": {
       "label": "Ustaw skalę",
       "description": "Ustawia rozmiar zaznaczonych splatów wzdłuż ich trzech lokalnych osi.",
-      "help": "Podłącz Skalę przez Działania wektorowe, aby pomnożyć istniejące rozmiary.\nNiepodłączone wartości zastępują rozmiary w jednostkach sceny, nie mnożą ich.",
+      "help": "Podłącz Skalę przez Działania wektorowe, aby pomnożyć istniejące rozmiary.\nNiepodłączone wartości zastępują rozmiary w jednostkach sceny, nie mnożą ich.\nRozmiary zerowe lub ujemne zapadają oś. Dodatni rozmiar przywraca ją tylko przy pełnym zaznaczeniu; przy częściowym pozostaje zapadnięta.",
       "inputs": {
         "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
         "Selection": "Siła zmiany: 0 pozostawia element, 1 stosuje pełny efekt. Bez połączenia zmienia wszystko.",
@@ -4411,7 +4411,7 @@
     "simplify": {
       "label": "Uprość",
       "description": "Łączy splaty, aby zmniejszyć ich liczbę i zachować ogólny wygląd sceny.",
-      "help": "Zacznij od Proporcji 0,5, celując w połowę splatów.\nMoże to trwać dłużej; niższe proporcje tracą drobne szczegóły.",
+      "help": "Zacznij od Proporcji 0,5, celując w połowę splatów.\nMoże to trwać dłużej; niższe proporcje tracą drobne szczegóły.\nOsie o zerowej kowariancji pozostają zapadnięte; łączenie różnych pozycji lub orientacji może utworzyć rzeczywistą rozpiętość.",
       "inputs": {
         "Geometry": "Geometria do edycji. Podłącz poprzedni węzeł; bez połączenia wejście jest puste.",
         "Ratio": "Część splatów do zachowania, 0,01–1. Domyślne 0,5 daje połowę; 1 zachowuje wszystko."
@@ -4583,8 +4583,397 @@
         "object": "Obiekt",
         "transform_space": "Przestrzeń przekształcenia"
       }
+    },
+    "float_curve": {
+      "label": "Krzywa wartości",
+      "description": "Przekształca liczby za pomocą gładkiej edytowalnej krzywej.",
+      "help": "Przekształca liczby za pomocą gładkiej edytowalnej krzywej.\nPrzeciągaj, dodawaj lub usuwaj punkty kontrolne. Interpolacja Fritscha–Carlsona zapobiega przekroczeniom między punktami monotonicznymi.",
+      "inputs": {
+        "Value": "Liczba dla każdego elementu przekształcana przez krzywą."
+      },
+      "input_labels": {
+        "Value": "Wartość"
+      },
+      "outputs": {
+        "Value": "Liczba po przekształceniu krzywą."
+      },
+      "output_labels": {
+        "Value": "Wartość"
+      },
+      "properties": {
+        "points": "Uporządkowane punkty kontrolne jako pary X i Y.",
+        "clamp": "Ogranicza wejścia do zakresu pierwszego i ostatniego punktu kontrolnego."
+      },
+      "property_labels": {
+        "points": "Krzywa",
+        "clamp": "Ogranicz"
+      }
+    },
+    "rgb_curves": {
+      "label": "Krzywe RGB",
+      "description": "Przekształca kolory za pomocą krzywej łącznej i krzywych kanałów.",
+      "help": "Przekształca kolory za pomocą krzywej łącznej i krzywych kanałów.\nZaznaczenie × Współczynnik określa siłę mieszania. Nieliniowa korekta zmienia tylko kolor bazowy DC splatów, zachowując kierunkowe pasma SH. Obsługuje też punkty i siatki.",
+      "inputs": {
+        "Geometry": "Geometria do modyfikacji; podłącz wyjście geometrii.",
+        "Selection": "Waga mieszania dla elementu, 0–1; bez połączenia uwzględniane są wszystkie.",
+        "Factor": "Dodatkowa siła działania krzywej, 0–1."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Factor": "Współczynnik"
+      },
+      "outputs": {
+        "Geometry": "Geometria po modyfikacji."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "combined": "Krzywa stosowana najpierw do wszystkich kanałów koloru.",
+        "r": "Krzywa kanału czerwonego.",
+        "g": "Krzywa kanału zielonego.",
+        "b": "Krzywa kanału niebieskiego."
+      },
+      "property_labels": {
+        "combined": "Łączna",
+        "r": "Czerwony",
+        "g": "Zielony",
+        "b": "Niebieski"
+      }
+    },
+    "colour_ramp": {
+      "label": "Rampa kolorów",
+      "description": "Przypisuje liczbom kolory i przezroczystość.",
+      "help": "Przypisuje liczbom kolory i przezroczystość.\nRozmieść znaczniki w zakresie 0–1. Wybierz interpolację stałą, liniową lub wygładzoną.",
+      "inputs": {
+        "Fac": "Pozycja na rampie kolorów, zwykle od 0 do 1."
+      },
+      "input_labels": {
+        "Fac": "Współczynnik"
+      },
+      "outputs": {
+        "Colour": "Wygenerowany kolor RGB.",
+        "Alpha": "Przezroczystość z rampy, 0–1."
+      },
+      "output_labels": {
+        "Colour": "Kolor",
+        "Alpha": "Alfa"
+      },
+      "properties": {
+        "stops": "Uporządkowane znaczniki: pozycja, czerwony, zielony, niebieski i alfa.",
+        "interpolation": "Przejście między sąsiednimi znacznikami: stałe, liniowe lub wygładzone."
+      },
+      "property_labels": {
+        "stops": "Rampa",
+        "interpolation": "Interpolacja"
+      }
+    },
+    "gradient_texture": {
+      "label": "Tekstura gradientu",
+      "description": "Tworzy gradient ze współrzędnych przestrzennych.",
+      "help": "Tworzy gradient ze współrzędnych przestrzennych.\nUżyj Pozycji jako współrzędnych. Liniowy używa X, ukośny X i Y; sferyczny i promieniowy odnoszą się do początku układu.",
+      "inputs": {
+        "Vector": "Współrzędne X, Y i Z; bez połączenia używane są pozycje elementów."
+      },
+      "input_labels": {
+        "Vector": "Wektor"
+      },
+      "outputs": {
+        "Fac": "Wartość wygenerowanego gradientu; może wykraczać poza zakres 0–1."
+      },
+      "output_labels": {
+        "Fac": "Współczynnik"
+      },
+      "properties": {
+        "type": "Kształt gradientu: liniowy, kwadratowy, wygładzony, ukośny, sferyczny lub promieniowy."
+      },
+      "property_labels": {
+        "type": "Typ"
+      }
+    },
+    "distance": {
+      "label": "Odległość",
+      "description": "Mierzy odległość każdego elementu od punktu, prostej lub płaszczyzny.",
+      "help": "Mierzy odległość każdego elementu od punktu, prostej lub płaszczyzny.\nTryb płaszczyzny zwraca odległość ze znakiem; punkt i prosta zwracają wartości nieujemne.",
+      "inputs": {
+        "Vector": "Współrzędne X, Y i Z; bez połączenia używane są pozycje elementów.",
+        "Point": "Punkt celu lub punkt należący do prostej albo płaszczyzny.",
+        "Direction": "Kierunek prostej lub kierunek patrzenia kamery.",
+        "Normal": "Kierunek normalny do płaszczyzny celu."
+      },
+      "input_labels": {
+        "Vector": "Wektor",
+        "Point": "Punkt",
+        "Direction": "Kierunek",
+        "Normal": "Normalna"
+      },
+      "outputs": {
+        "Distance": "Odległość w jednostkach sceny; ze znakiem w trybie płaszczyzny."
+      },
+      "output_labels": {
+        "Distance": "Odległość"
+      },
+      "properties": {
+        "mode": "Mierzy do punktu, prostej lub płaszczyzny."
+      },
+      "property_labels": {
+        "mode": "Tryb"
+      }
+    },
+    "noise_texture": {
+      "label": "Tekstura szumu",
+      "description": "Generuje powtarzalny trójwymiarowy szum fraktalny.",
+      "help": "Generuje powtarzalny trójwymiarowy szum fraktalny.\nBez połączenia używane są pozycje. Szczegóły obsługują 0–15 oktaw z częściami ułamkowymi; Chropowatość reguluje ich amplitudy.",
+      "inputs": {
+        "Vector": "Współrzędne X, Y i Z; bez połączenia używane są pozycje elementów.",
+        "Scale": "Mnożnik rozmiaru lub współrzędnych; 1 zachowuje rozmiar pierwotny.",
+        "Detail": "Liczba oktaw od 0 do 15 z mieszaniem części ułamkowych.",
+        "Roughness": "Część amplitudy zachowywana w każdej kolejnej oktawie.",
+        "Distortion": "Siła odkształcenia współrzędnych.",
+        "Seed": "Ziarno pozwalające odtworzyć wzór szumu."
+      },
+      "input_labels": {
+        "Vector": "Wektor",
+        "Scale": "Skala",
+        "Detail": "Szczegóły",
+        "Roughness": "Chropowatość",
+        "Distortion": "Zniekształcenie",
+        "Seed": "Ziarno"
+      },
+      "outputs": {
+        "Fac": "Wartość próbkowania gradientu lub wygenerowanego szumu, 0–1.",
+        "Colour": "Wygenerowany kolor RGB."
+      },
+      "output_labels": {
+        "Fac": "Współczynnik",
+        "Colour": "Kolor"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "store_named_attribute": {
+      "label": "Zapisz nazwany atrybut",
+      "description": "Zapisuje wartości na elementach geometrii.",
+      "help": "Zapisuje wartości na elementach geometrii.\nOdczytaj później pod tą samą nazwą. Niezaznaczone elementy zachowują wartość lub 0. Atrybuty splatów i punktów przechodzą przez modyfikatory; atrybuty wierzchołków są tracone przy zastosowaniu.",
+      "inputs": {
+        "Geometry": "Geometria do modyfikacji; podłącz wyjście geometrii.",
+        "Selection": "Waga mieszania dla elementu, 0–1; bez połączenia uwzględniane są wszystkie.",
+        "Name": "Nazwa używana do późniejszego odczytu przez Nazwany atrybut.",
+        "Value": "Liczby, wektory lub kolory dla elementów do zapisania."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Name": "Nazwa",
+        "Value": "Wartość"
+      },
+      "outputs": {
+        "Geometry": "Geometria po modyfikacji."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "data_type": "Zapisuje wartość jako liczbę, wektor lub kolor."
+      },
+      "property_labels": {
+        "data_type": "Typ danych"
+      }
+    },
+    "remove_clumps": {
+      "label": "Usuń małe skupiska",
+      "description": "Usuwa małe spójne grupy splatów lub punktów.",
+      "help": "Usuwa małe spójne grupy splatów lub punktów.\nPromień jest wielokrotnością mediany lokalnych odstępów. GPU wyznacza spójne składowe; usuwane są tylko grupy poniżej minimalnego rozmiaru. Siatki nie są obsługiwane.",
+      "inputs": {
+        "Geometry": "Geometria do modyfikacji; podłącz wyjście geometrii.",
+        "Selection": "Elementy o wartości co najmniej 0,5 są zaznaczone.",
+        "Radius": "Promień połączeń jako wielokrotność mediany lokalnych odstępów.",
+        "Min Size": "Grupy z mniejszą liczbą elementów kwalifikują się do usunięcia."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Radius": "Promień",
+        "Min Size": "Minimalny rozmiar"
+      },
+      "outputs": {
+        "Geometry": "Geometria po modyfikacji.",
+        "Selection": "Elementy grup poniżej minimalnego rozmiaru."
+      },
+      "output_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie"
+      },
+      "properties": {
+        "delete": "Usuwa kandydatów; wyłącz, aby użyć tylko wyjścia Zaznaczenie."
+      },
+      "property_labels": {
+        "delete": "Usuń"
+      }
+    },
+    "merge_by_distance": {
+      "label": "Scal według odległości",
+      "description": "Scala pobliskie elementy w zwartą geometrię.",
+      "help": "Scala pobliskie elementy w zwartą geometrię.\nScalane są tylko zaznaczone elementy. Punkty i wierzchołki są uśredniane, ściany przemapowywane, a zdegenerowane usuwane. Dla splatów pozostaje najbardziej nieprzezroczysty element grupy.",
+      "inputs": {
+        "Geometry": "Geometria do modyfikacji; podłącz wyjście geometrii.",
+        "Selection": "Elementy o wartości co najmniej 0,5 są zaznaczone.",
+        "Distance": "Maksymalna odległość łącząca elementy w grupę."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Zaznaczenie",
+        "Distance": "Odległość"
+      },
+      "outputs": {
+        "Geometry": "Geometria po modyfikacji."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "geometry_proximity": {
+      "label": "Bliskość geometrii",
+      "description": "Znajduje najbliższy punkt, środek splata lub wierzchołek celu.",
+      "help": "Znajduje najbliższy punkt, środek splata lub wierzchołek celu.\nPodłącz geometrię celu w tym samym układzie współrzędnych. Mierzona jest odległość do elementów, nie do powierzchni między wierzchołkami.",
+      "inputs": {
+        "Target": "Geometria celu z punktami, splatami lub wierzchołkami; nie może być pusta."
+      },
+      "input_labels": {
+        "Target": "Cel"
+      },
+      "outputs": {
+        "Distance": "Odległość w jednostkach sceny; ze znakiem w trybie płaszczyzny.",
+        "Position": "Wyznaczona pozycja w układzie geometrii lub kamery."
+      },
+      "output_labels": {
+        "Distance": "Odległość",
+        "Position": "Pozycja"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "instance_on_points": {
+      "label": "Instancje na punktach",
+      "description": "Umieszcza przekształconą kopię splatów na każdej zaznaczonej kotwicy.",
+      "help": "Umieszcza przekształconą kopię splatów na każdej zaznaczonej kotwicy.\nKotwicami mogą być punkty, wierzchołki lub środki splatów; instancja musi zawierać splaty. Obroty Eulera w stopniach i skale przekształcają kształt oraz kolor SH razem. Limit: 50 milionów splatów.\nUjemne mnożniki określają rozmiar wartością bezwzględną i odbijają pozycje, orientację oraz kolor SH. Transformacja zapadająca oś pozostawia kolor SH bez zmian.",
+      "inputs": {
+        "Points": "Geometria, której elementy stanowią kotwice.",
+        "Instance": "Geometria splatów do powielenia; inne typy nie są obsługiwane.",
+        "Selection": "Elementy o wartości co najmniej 0,5 są zaznaczone.",
+        "Rotation": "Kąty Eulera wokół X, Y i Z w stopniach dla kotwicy; 0 zachowuje orientację.",
+        "Scale": "Skala przyjmuje liczbę lub trzy mnożniki: 1 zachowuje rozmiar, 0 zapada oś, a wartości ujemne ją odbijają."
+      },
+      "input_labels": {
+        "Points": "Punkty",
+        "Instance": "Instancja",
+        "Selection": "Zaznaczenie",
+        "Rotation": "Obrót",
+        "Scale": "Skala"
+      },
+      "outputs": {
+        "Geometry": "Geometria po modyfikacji."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "camera_info": {
+      "label": "Informacje o kamerze",
+      "description": "Odczytuje pozycję, orientację i obiektyw kamery zbioru danych.",
+      "help": "Odczytuje pozycję, orientację i obiektyw kamery zbioru danych.\nWybierz kamerę według indeksu lub nazwy obrazu. Wyjścia używają współrzędnych świata; scena musi zawierać kamery zbioru danych.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Wyznaczona pozycja w układzie geometrii lub kamery.",
+        "Direction": "Kierunek prostej lub kierunek patrzenia kamery.",
+        "Up": "Wektor jednostkowy ku górnej krawędzi obrazu.",
+        "FOV": "Pionowy kąt widzenia w stopniach.",
+        "Image Size": "Szerokość i wysokość obrazu w pikselach; Z wynosi 0."
+      },
+      "output_labels": {
+        "Position": "Pozycja",
+        "Direction": "Kierunek",
+        "Up": "Góra",
+        "FOV": "Kąt widzenia",
+        "Image Size": "Rozmiar obrazu"
+      },
+      "properties": {
+        "camera": "Indeks kamery lub dokładna nazwa obrazu; 0 wybiera pierwszą kamerę."
+      },
+      "property_labels": {
+        "camera": "Kamera"
+      }
+    },
+    "camera_coverage": {
+      "label": "Pokrycie kamer",
+      "description": "Zlicza kamery, których pole widzenia zawiera dany element.",
+      "help": "Zlicza kamery, których pole widzenia zawiera dany element.\nPołącz Liczbę z Porównaj. Sprawdzane są granice obrazu i dodatnia głębokość, bez zasłaniania. Maksymalna odległość 0 wyłącza limit. Obsługuje splaty, punkty i wierzchołki; wymaga kamer zbioru danych.",
+      "inputs": {
+        "Max Distance": "Maksymalna odległość od kamery w jednostkach świata; 0 wyłącza limit."
+      },
+      "input_labels": {
+        "Max Distance": "Maksymalna odległość"
+      },
+      "outputs": {
+        "Count": "Liczba kamer zbioru danych, których obraz zawiera ten element.",
+        "Ratio": "Udział kamer zawierających element, 0–1."
+      },
+      "output_labels": {
+        "Count": "Liczba",
+        "Ratio": "Udział"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "view_distance": {
+      "label": "Odległość od kamery",
+      "description": "Mierzy odległość w świecie od kamery lub zapisanego widoku.",
+      "help": "Mierzy odległość w świecie od kamery lub zapisanego widoku.\nWybierz kamerę lub naciśnij Zapisz widok. Zapisana kamera nie podąża za późniejszym ruchem widoku. Obsługuje splaty, punkty i wierzchołki; wymaga kamer zbioru danych.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Distance": "Odległość od wybranej kamery w jednostkach świata."
+      },
+      "output_labels": {
+        "Distance": "Odległość"
+      },
+      "properties": {
+        "camera": "Indeks kamery lub dokładna nazwa obrazu; 0 wybiera pierwszą kamerę.",
+        "source": "Używa kamery zbioru danych lub ostatniego zapisanego widoku.",
+        "captured_transform": "Zapisana macierz kamera–świat; pusta przed pierwszym zapisem."
+      },
+      "property_labels": {
+        "camera": "Kamera",
+        "source": "Źródło",
+        "captured_transform": "Zapisana transformacja"
+      }
+    },
+    "scene_time": {
+      "label": "Czas sceny",
+      "description": "Zwraca czas głowicy odtwarzania sekwencera.",
+      "help": "Użyj sekund lub klatki, aby animować pola.\nPodczas odtwarzania ponownie obliczane są tylko grafy zależne od czasu.\nEksport wideo czeka na obliczenie geometrii każdej klatki.",
+      "inputs": {},
+      "properties": {},
+      "outputs": {
+        "Seconds": "Czas głowicy odtwarzania w sekundach.",
+        "Frame": "Czas głowicy pomnożony przez liczbę klatek na sekundę sekwencera."
+      },
+      "output_labels": {
+        "Seconds": "Sekundy",
+        "Frame": "Klatka"
+      }
     }
   },
   "node_editor.how_to_use": "Jak używać",
-  "node_editor.learn_more": "Dowiedz się więcej"
+  "node_editor.learn_more": "Dowiedz się więcej",
+  "node_editor.capture_view": "Zapisz widok",
+  "node_editor.curve_hint": "Przeciągaj punkty; kliknij, aby dodać, kliknij dwukrotnie lub naciśnij Delete, aby usunąć.",
+  "node_editor.ramp_hint": "Przeciągaj znaczniki; kliknij, aby dodać, kliknij dwukrotnie lub Delete, aby usunąć. Zaznacz znacznik, aby zmienić RGBA.",
+  "node_editor.keyframe_hint": "Wstaw klatkę kluczową · Ctrl+kliknięcie lub I po najechaniu kursorem"
 }

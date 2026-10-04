@@ -7,8 +7,8 @@ Changes how transparent selected splats appear.
 
 ## How to use
 
-Start with Opacity 0.5 to make selected splats translucent.  
-Use Selection for a soft blend with their original opacity.  
+Start with Opacity 0.5 to make selected splats translucent.\
+Use Selection for a soft blend with their original opacity.
 
 ## Inputs
 
@@ -27,3 +27,4 @@ Use Selection for a soft blend with their original opacity.
 ## Used in examples
 
 - [ex10_edge_fade](../examples/ex10_edge_fade.py)
+- [ex27_animated_reveal](../examples/ex27_animated_reveal.py)

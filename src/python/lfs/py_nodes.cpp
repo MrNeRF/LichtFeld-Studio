@@ -9,7 +9,9 @@
 #include "py_ui.hpp"
 #include "py_viewer_dispatch.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
+#include "visualizer/nodes/node_animation.hpp"
 #include "visualizer/scene/scene_manager.hpp"
+#include "visualizer/sequencer/sequencer_controller.hpp"
 
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
@@ -30,6 +32,7 @@ namespace lfs::python {
         using namespace lfs::nodes;
 
         struct StandaloneLibrary {
+            vis::SequencerController sequencer;
             NodeTypeRegistry registry;
             std::unordered_map<std::string, std::unique_ptr<NodeTree>> trees;
             std::unordered_map<std::string, EvalResult> evaluations;
@@ -349,6 +352,8 @@ namespace lfs::python {
                     }
                 };
             include_groups(result["nodes"]);
+            result["source_tree"] = tree.uuid;
+            result["animation"] = vis::nodeAnimationJson(standalone().sequencer.timeline().animationClip());
             return result.dump();
         }
 
@@ -457,6 +462,15 @@ namespace lfs::python {
                     destination.add_link({from->second, item.value("from_socket", ""),
                                           to->second, item.value("to_socket", "")},
                                          nullptr, active_tree_resolver());
+            }
+            if (clipboard.contains("animation")) {
+                vis::copyNodeAnimation(standalone().sequencer, clipboard["animation"], clipboard.value("source_tree", ""), destination.uuid, remap);
+                for (const auto& [source, target] : graph_remap) {
+                    std::unordered_map<std::string, std::string> names;
+                    for (const auto& node : active_tree(target)->nodes)
+                        names[node.name] = node.name;
+                    vis::copyNodeAnimation(standalone().sequencer, clipboard["animation"], source, target, names);
+                }
             }
             return result;
         }
@@ -585,6 +599,8 @@ namespace lfs::python {
                     outer.add_link({group.name, output_sockets.at(key), link.to_node, link.to_socket}, nullptr, active_tree_resolver());
                 }
             }
+            vis::copyNodeAnimation(standalone().sequencer, vis::nodeAnimationJson(standalone().sequencer.timeline().animationClip()),
+                                   outer.uuid, nested_uuid, remap, true);
             return {outer.uuid, group.name};
         }
 
@@ -672,14 +688,21 @@ namespace lfs::python {
                         target->input_values[link.to_socket] = values.at(link.from_socket);
                 }
             }
+            vis::copyNodeAnimation(standalone().sequencer,
+                                   vis::nodeAnimationJson(standalone().sequencer.timeline().animationClip()), nested->uuid, outer.uuid, remap);
         }
 
         void record_tree_mutation(NodeTree& tree, nlohmann::json before,
                                   std::string merge_key = {}) {
             if (auto* manager = live_manager())
                 manager->recordTreeEdit(tree.uuid, std::move(before), std::move(merge_key));
-            else if (tree.name != before.value("name", ""))
-                tree.name = standalone_tree_name(tree.name, tree.uuid);
+            else {
+                if (tree.name != before.value("name", ""))
+                    tree.name = standalone_tree_name(tree.name, tree.uuid);
+                for (const auto& node : before.at("nodes"))
+                    if (!tree.find_node(node.at("name").get<std::string>()))
+                        vis::removeNodeAnimation(standalone().sequencer, tree.uuid, node.at("name").get<std::string>());
+            }
         }
 
         nlohmann::json modifier_stack_json(const core::Uuid& node_uuid) {
@@ -1032,7 +1055,38 @@ namespace lfs::python {
             .def("output", &PyNodeContext::output);
 
         nb::class_<PyNode>(module, "NodeHandle")
-            .def_prop_ro("name", [](const PyNode& value) { return value.name; })
+            .def_prop_rw("name", [](const PyNode& value) { return value.name; }, [](PyNode& value, const std::string& name) { invoke_on_viewer([&value, name] {
+                                                                                                                                  if (auto* manager = live_manager()) {
+                                                                                                                                      const auto result = manager->renameNode(value.tree_uuid, value.name, name);
+                                                                                                                                      if (!result)
+                                                                                                                                          throw std::invalid_argument(result.error().message);
+                                                                                                                                  } else {
+                                                                                                                                      auto& graph = *active_tree(value.tree_uuid);
+                                                                                                                                      const auto animation = vis::nodeAnimationJson(standalone().sequencer.timeline().animationClip());
+                                                                                                                                      if (!graph.rename_node(value.name, name))
+                                                                                                                                          throw std::invalid_argument("Node name must be unique and non-empty");
+                                                                                                                                      vis::copyNodeAnimation(standalone().sequencer, animation, graph.uuid, graph.uuid, {{value.name, name}}, true);
+                                                                                                                                  }
+                                                                                                                                  value.name = name;
+                                                                                                                              }); })
+            .def("keyframe_insert", [](const PyNode& node, const std::string& input, std::optional<float> time, nb::object value, int easing) {
+                const auto converted = value.is_none() ? std::optional<Value>{} : std::optional{python_to_value(value)};
+                invoke_on_viewer([node, input, time, converted, easing] {
+                    if (auto* manager = live_manager()) {
+                        const auto result = manager->keyframeSet(node.tree_uuid, node.name, input, time, converted, easing);
+                        if (!result) throw std::invalid_argument(result.error().message);
+                    } else {
+                        const auto result = vis::setNodeKeyframe(*active_tree(node.tree_uuid), node.name, input,
+                            standalone().sequencer, time, converted, static_cast<sequencer::EasingType>(easing), active_tree_resolver());
+                        if (!result) throw std::invalid_argument(result.error().message);
+                    }
+                }); }, nb::arg("input"), nb::arg("time") = nb::none(), nb::arg("value") = nb::none(), nb::arg("easing") = 0)
+            .def("keyframe_remove", [](const PyNode& node, const std::string& input, std::optional<float> time) { return invoke_on_viewer([node, input, time] {
+                                                                                                                      if (auto* manager = live_manager())
+                                                                                                                          return bool(manager->keyframeRemove(node.tree_uuid, node.name, input, time));
+                                                                                                                      return vis::removeNodeKeyframe(standalone().sequencer, vis::nodeInputTrackPath(node.tree_uuid, node.name, input), time);
+                                                                                                                  },
+                                                                                                                                          false); }, nb::arg("input"), nb::arg("time") = nb::none())
             .def_prop_ro("type_id", [](const PyNode& value) { return require_node(value).type_id; })
             .def_prop_rw("location", [](const PyNode& value) { return require_node(value).location; }, [](const PyNode& value, std::array<float, 2> location) { invoke_on_viewer([value, location] {
                                                                                                                                                                     auto& tree = *active_tree(value.tree_uuid);
@@ -1320,7 +1374,12 @@ namespace lfs::python {
                          min, max, std::nullopt});
                     record_tree_mutation(tree, std::move(before));
                 }); }, nb::arg("identifier"), nb::arg("type"), nb::arg("default") = nb::none(), nb::arg("min") = nb::none(), nb::arg("max") = nb::none())
-            .def("to_json", [](const PyTree& value) { return require_tree(value).to_json().dump(2); });
+            .def("to_json", [](const PyTree& value) {
+                auto json = require_tree(value).to_json();
+                auto* manager = live_manager();
+                json["animation_tree"] = value.uuid;
+                json["animation"] = manager ? manager->animationJson() : vis::nodeAnimationJson(standalone().sequencer.timeline().animationClip());
+                return json.dump(2); });
 
         nb::class_<PyModifier>(module, "Modifier")
             .def_prop_ro("name", [](const PyModifier& value) { return require_modifier(value).name; })
@@ -1456,7 +1515,11 @@ namespace lfs::python {
                 if (auto* manager = live_manager())
                     return manager->removeTree(name);
                 const auto* tree = active_tree(name);
-                return tree && standalone().trees.erase(tree->uuid) != 0;
+                if (!tree)
+                    return false;
+                const auto uuid = tree->uuid;
+                vis::removeNodeAnimation(standalone().sequencer, uuid);
+                return standalone().trees.erase(uuid) != 0;
             },
                                     false);
         });
@@ -1469,6 +1532,13 @@ namespace lfs::python {
                     NodeTree::from_json(json, standalone().registry));
                 tree->name = standalone_tree_name(tree->name, tree->uuid);
                 const auto result = tree->uuid;
+                if (json.contains("animation")) {
+                    std::unordered_map<std::string, std::string> names;
+                    for (const auto& node : tree->nodes)
+                        names[node.name] = node.name;
+                    vis::copyNodeAnimation(standalone().sequencer, json.at("animation"),
+                                           json.value("animation_tree", result), result, names);
+                }
                 standalone().trees[result] = std::move(tree);
                 return result;
             },
@@ -1502,10 +1572,31 @@ namespace lfs::python {
             },
                                     false);
         });
-        module.def("evaluate_tree", [](const PyTree& tree, const PyGeometry& geometry) {
-            auto result = evaluate(require_tree(tree),
+        module.def("evaluate_tree", [](const PyTree& tree, const PyGeometry& geometry, std::optional<float> time, std::optional<std::string> device) {
+            if (device && *device != "cpu" && *device != "gpu")
+                throw std::invalid_argument("Evaluation device must be cpu or gpu");
+            auto graph = require_tree(tree);
+            auto* manager = live_manager();
+            const auto* controller = manager ? manager->sequencer() : &standalone().sequencer;
+            const float seconds = time.value_or(controller ? controller->playhead() : 0.0f);
+            std::unordered_map<std::string, std::unique_ptr<NodeTree>> animated_groups;
+            const auto* clip = controller ? controller->timeline().animationClip() : nullptr;
+            vis::applyNodeAnimation(graph, clip, seconds);
+            auto result = evaluate(graph,
                                    {.geometry = geometry.value,
-                                    .tree_resolver = active_tree_resolver()});
+                                    .device = device ? std::optional{*device == "cpu" ? core::Device::CPU : core::Device::GPU} : std::nullopt,
+                                    .tree_resolver = [&](std::string_view id) -> const NodeTree* {
+                                        auto& copy = animated_groups[std::string(id)];
+                                        if (!copy) {
+                                            const auto* original = active_tree(std::string(id));
+                                            if (!original) return nullptr;
+                                            copy = std::make_unique<NodeTree>(*original);
+                                            vis::applyNodeAnimation(*copy, clip, seconds);
+                                        }
+                                        return copy.get();
+                                    },
+                                    .seconds = seconds,
+                                    .frames_per_second = controller ? controller->framesPerSecond() : 24.0f});
             standalone().evaluations[tree.uuid] = result;
             if (!result.ok) {
                 std::string messages;
@@ -1516,8 +1607,7 @@ namespace lfs::python {
                 }
                 throw nb::value_error(messages.c_str());
             }
-            return PyGeometry{std::move(result.geometry)};
-        });
+            return PyGeometry{std::move(result.geometry)}; }, nb::arg("tree"), nb::arg("geometry"), nb::arg("time") = nb::none(), nb::arg("device") = nb::none());
         module.def("register_node", [](nb::object cls) {
             auto info = node_type_from_python(cls);
             const auto module_name = nb::cast<std::string>(cls.attr("__module__"));

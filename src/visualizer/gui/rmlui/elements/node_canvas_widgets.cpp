@@ -3,16 +3,62 @@
 
 #include "gui/rmlui/elements/node_canvas_widgets.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/services.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "internal/resource_paths.hpp"
+#include "scene/scene_manager.hpp"
+#include "sequencer/sequencer_controller.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
+#include "visualizer/nodes/node_animation.hpp"
 
 #include <RmlUi/Core/Element.h>
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <ranges>
 
 namespace lfs::vis::gui::node_widgets {
+    std::string animatedInput(ModifierManager& manager, const lfs::nodes::NodeTree& tree,
+                              const lfs::nodes::Node& node, const lfs::nodes::SocketDecl& socket, bool inline_value) {
+        if (!animatableNodeInput(tree, node, socket))
+            return input(node, socket, inline_value);
+        const auto* controller = manager.sequencer();
+        const auto* clip = controller ? controller->timeline().animationClip() : nullptr;
+        const auto* track = clip ? clip->getTrackByPath(nodeInputTrackPath(tree.uuid, node.name, socket.identifier)) : nullptr;
+        auto shown = node;
+        bool keyed = false;
+        if (track) {
+            if (auto value = track->evaluate(manager.animationTime()))
+                shown.input_values[socket.identifier] = nodeAnimationValue(*value);
+            for (const auto& key : track->keyframes())
+                keyed |= std::abs(key.time - manager.animationTime()) < 1e-4f;
+        }
+        const auto attributes = " data-node=\"" + escape(node.name) + "\" data-input=\"" + escape(socket.identifier) + "\"";
+        return "<div class=\"node-animated-input\"" + attributes + ">" + input(shown, socket, inline_value) +
+               "<button class=\"node-keyframe" + std::string(track ? " animated" : "") +
+               (keyed ? " keyed" : "") + "\" data-action=\"node-keyframe\"" + attributes +
+               " title=\"" + escape(LOC("node_editor.keyframe_hint")) + "\">" + (keyed ? "◆" : "◇") + "</button></div>";
+    }
+    float inlineEditorHeight(const lfs::nodes::Node& node) {
+        if (node.type_id == "lfs.float_curve" || node.type_id == "lfs.rgb_curves" || node.type_id == "lfs.colour_ramp")
+            return 120;
+        return node.type_id == "lfs.view_distance" ? 22 : 0;
+    }
+    std::string inlineEditor(const lfs::nodes::Node& node) {
+        if (node.type_id == "lfs.view_distance")
+            return "<button class=\"node-capture-view\" data-action=\"capture-view\" data-node=\"" + escape(node.name) + "\">" + escape(LOC("node_editor.capture_view")) + "</button>";
+        if (inlineEditorHeight(node) == 0)
+            return {};
+        const auto mode = node.type_id == "lfs.colour_ramp" ? "ramp" : node.type_id == "lfs.rgb_curves" ? "rgb"
+                                                                                                        : "curve";
+        std::string labels;
+        if (std::string_view(mode) == "rgb")
+            labels = "<div class=\"node-curve-channels\"><span>RGB</span><span>R</span><span>G</span><span>B</span></div>";
+        if (std::string_view(mode) == "ramp")
+            labels = "<div class=\"node-ramp-channels\"><span>R</span><span>G</span><span>B</span><span>A</span></div>";
+        return "<node-curve mode=\"" + std::string(mode) + "\" data-node=\"" + escape(node.name) + "\" data-selected=\"" + std::to_string(node.ui.value("curve_selected", std::string_view(mode) == "ramp" ? 0 : -1)) + "\" data-channel=\"" + escape(node.ui.value("curve_channel", std::string("combined"))) + "\" data-values=\"" + escape(node.properties.dump()) + "\" title=\"" + escape(LOC(mode == std::string("ramp") ? "node_editor.ramp_hint" : "node_editor.curve_hint")) + "\">" + labels + "</node-curve>";
+    }
     std::string icon(const std::string_view name) {
         const auto path = rml_theme::pathToRmlImageSource(
             getAssetPath("icon/" + std::string(name) + ".png"));
@@ -64,6 +110,19 @@ namespace lfs::vis::gui::node_widgets {
             return;
         }
         card.SetClass("lod-values", zoom < 0.75f);
+        apply("node-curve", "height", zoom >= 0.75f ? 120.0f : 40.0f);
+        apply(".node-ramp-channels span", "height", 10.0f);
+        apply(".node-ramp-channels span", "line-height", 10.0f);
+        apply(".node-ramp-channels", "font-size", 8.0f);
+        apply(".node-curve-channels", "font-size", 9.0f);
+        apply(".node-capture-view", "height", 22.0f);
+        apply(".node-animated-input", "padding-right", 18.0f);
+        apply(".node-keyframe", "width", 18.0f);
+        apply(".node-keyframe", "height", 20.0f);
+        apply(".node-keyframe", "line-height", 20.0f);
+        apply(".node-keyframe", "font-size", 13.0f);
+        if (auto* curve = card.QuerySelector("node-curve"))
+            curve->SetAttribute("editing", zoom >= 0.75f ? 1 : 0);
         card.SetClass("lod-compact", zoom < 0.45f);
         // Only value editors disappear with LOD. Below editing zoom, body text
         // scales to fit existing rows instead of hiding or enlarging the cards.
@@ -304,6 +363,17 @@ namespace lfs::vis::gui::node_widgets {
         const std::string attributes = " data-node=\"" + escape(node.name) + "\" data-property=\"" +
                                        escape(property.identifier) + "\"";
         using lfs::nodes::PropertyKind;
+        if (property.identifier == "camera" && (node.type_id == "lfs.camera_info" || node.type_id == "lfs.view_distance")) {
+            std::string html = "<select" + attributes + ">";
+            if (auto* scene = lfs::vis::services().sceneOrNull()) {
+                size_t index = 0;
+                for (const auto& camera : scene->getScene().getAllCameras()) {
+                    const auto number = std::to_string(index++), name = camera->image_name();
+                    html += "<option value=\"" + escape(name) + "\"" + ((value == name || value == number) ? " selected" : "") + ">" + escape(number + " · " + name) + "</option>";
+                }
+            }
+            return html + "</select>";
+        }
         if (property.kind == PropertyKind::Enum) {
             std::string html = "<select" + attributes + ">";
             for (const auto& item : property.items)

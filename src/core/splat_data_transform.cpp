@@ -285,6 +285,78 @@ namespace lfs::core {
 
     } // namespace
 
+    SplatData& transform(SplatData& data, const Tensor& matrices) {
+        const size_t count = data.means().size(0);
+        LFS_ASSERT_MSG(matrices.ndim() == 3 && matrices.size(0) == count && matrices.size(1) == 4 && matrices.size(2) == 4 &&
+                           matrices.dtype() == DataType::Float32 && matrices.device() == data.means().device(),
+                       std::format("Per-splat transforms require Float32 [N,4,4] (shape={}, dtype={}, device={}, count={}, data_device={})",
+                                   matrices.shape().str(), int(matrices.dtype()), int(matrices.device()), count, int(data.means().device())));
+        if (!count)
+            return data;
+        const auto device = data.means().device();
+        auto means = Tensor::empty({count, 3}, device), scales = Tensor::empty({count, 3}, device), rotations = Tensor::empty({count, 4}, device);
+        auto sh = data.shN_canonical().to(device);
+        auto result_sh = Tensor::empty(sh.shape(), device);
+        const int degree = data.get_max_sh_degree();
+        LFS_ASSERT_MSG(degree <= 3, std::format("Per-splat SH transforms support degrees 0..3 (degree={})", degree));
+        const auto sample_dirs = fibonacci_sphere_dirs(SH_FIT_SAMPLE_COUNT);
+        std::vector<float> directions;
+        for (const auto& d : sample_dirs)
+            directions.insert(directions.end(), {float(d.x), float(d.y), float(d.z)});
+        const auto samples = Tensor::from_vector(directions, {size_t(SH_FIT_SAMPLE_COUNT), 3}, device);
+        std::vector<Tensor> projectors;
+        for (int band = 1; band <= degree; ++band) {
+            const int k = 2 * band + 1;
+            std::vector<double> gram(k * k, 0), rhs(k * SH_FIT_SAMPLE_COUNT, 0);
+            for (int s = 0; s < SH_FIT_SAMPLE_COUNT; ++s) {
+                const auto basis = eval_sh_band_basis(band, sample_dirs[s]);
+                for (int i = 0; i < k; ++i) {
+                    rhs[i * SH_FIT_SAMPLE_COUNT + s] = basis[i];
+                    for (int j = 0; j < k; ++j)
+                        gram[i * k + j] += basis[i] * basis[j];
+                }
+            }
+            LFS_ASSERT_MSG(solve_linear_system(gram, rhs, k, SH_FIT_SAMPLE_COUNT), std::format("SH projector solve failed (band={}, samples={})", band, SH_FIT_SAMPLE_COUNT));
+            projectors.push_back(Tensor::from_vector(std::vector<float>(rhs.begin(), rhs.end()), {size_t(k), size_t(SH_FIT_SAMPLE_COUNT)}, device));
+        }
+        // Chunk scratch is independent of the number of generated instances.
+        for (size_t begin = 0; begin < count; begin += 4096) {
+            const size_t end = std::min(count, begin + 4096), n = end - begin;
+            const auto matrix = matrices.slice(0, begin, end);
+            const auto linear = matrix.slice(1, 0, 3).slice(2, 0, 3).contiguous();
+            const auto translation = matrix.slice(1, 0, 3).slice(2, 3, 4).squeeze(2);
+            means.slice(0, begin, end).copy_from(linear.bmm(data.means().slice(0, begin, end).unsqueeze(2)).squeeze(2) + translation);
+            auto out_s = scales.slice(0, begin, end), out_q = rotations.slice(0, begin, end);
+            affine_splat_geometry(linear.reshape({int(n), 9}), data.scaling_raw().slice(0, begin, end), data.rotation_raw().slice(0, begin, end), out_s, out_q);
+            if (!degree)
+                continue;
+            const auto norm = (linear * linear).sum(1, true).sqrt();
+            const auto rotation = linear / norm.maximum(1e-8f);
+            const auto valid_rotation = norm.min(2).gt(1e-8f).unsqueeze(2);
+            const auto pulled = samples.matmul(rotation);
+            const auto x = pulled.slice(2, 0, 1).squeeze(2), y = pulled.slice(2, 1, 2).squeeze(2), z = pulled.slice(2, 2, 3).squeeze(2);
+            const auto xx = x * x, yy = y * y, zz = z * z;
+            for (int band = 1; band <= degree; ++band) {
+                std::vector<Tensor> basis;
+                if (band == 1)
+                    basis = {y * float(-SH_C1), z * float(SH_C1), x * float(-SH_C1)};
+                if (band == 2)
+                    basis = {x * y * float(SH_C2_0), y * z * float(-SH_C2_0), (zz * 2 - xx - yy) * float(SH_C2_2), x * z * float(-SH_C2_0), (xx - yy) * float(SH_C2_3)};
+                if (band == 3)
+                    basis = {y * (yy - xx * 3) * float(SH_C3_0), x * y * z * float(SH_C3_1), y * (xx + yy - zz * 4) * float(SH_C3_2), z * (zz * 2 - xx * 3 - yy * 3) * float(SH_C3_3), x * (xx + yy - zz * 4) * float(SH_C3_2), z * (xx - yy) * float(SH_C3_4), x * (yy * 3 - xx) * float(SH_C3_0)};
+                const int offset = sh_band_offset_in_rest(band), k = 2 * band + 1;
+                const auto coefficients = projectors[band - 1].matmul(Tensor::stack(basis, 2));
+                const auto original = sh.slice(0, begin, end).slice(1, offset, offset + k);
+                result_sh.slice(0, begin, end).slice(1, offset, offset + k).copy_from(Tensor::where(valid_rotation, coefficients.bmm(original), original));
+            }
+        }
+        data.means_raw() = std::move(means);
+        data.scaling_raw() = std::move(scales);
+        data.rotation_raw() = std::move(rotations);
+        data.shN_set_from_canonical(result_sh, count);
+        return data;
+    }
+
     SplatData& transform(SplatData& splat_data, const glm::mat4& transform_matrix) {
         LOG_TIMER("transform");
 
@@ -323,11 +395,15 @@ namespace lfs::core {
             }
         }
 
-        glm::quat rotation_quat = glm::quat_cast(rot_mat);
+        // A uniform reflection A=-sR has the same covariance action as sR.
+        // Preserve the original splat axes instead of using an SVD whose basis
+        // is ambiguous at repeated scales. SH still uses the signed rot_mat below.
+        const auto covariance_rotation = glm::determinant(rot_mat) < 0.0f ? -rot_mat : rot_mat;
+        glm::quat rotation_quat = glm::quat_cast(covariance_rotation);
 
         const bool has_rotation = has_significant_rotation(rotation_quat);
         const float largest_scale = std::max({scale.x, scale.y, scale.z});
-        const bool similarity = largest_scale > 0.0f && glm::determinant(rot_mat) > 0.0f &&
+        const bool similarity = largest_scale > 0.0f &&
                                 std::abs(scale.x - scale.y) <= 1e-6f * largest_scale &&
                                 std::abs(scale.x - scale.z) <= 1e-6f * largest_scale &&
                                 std::abs(glm::dot(rot_mat[0], rot_mat[1])) <= 1e-6f &&

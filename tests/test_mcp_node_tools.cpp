@@ -7,9 +7,11 @@
 #include "visualizer/gui/rmlui/elements/node_canvas_element.hpp"
 #include "visualizer/gui/screen_host.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
+#include "visualizer/nodes/node_animation.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/selection/selection_service.hpp"
+#include "visualizer/sequencer/sequencer_controller.hpp"
 #include "visualizer/visualizer_impl.hpp"
 
 #include <RmlUi/Core.h>
@@ -123,7 +125,37 @@ namespace lfs::vis {
             EXPECT_TRUE(descriptor["annotations"].contains("destructiveHint"));
             EXPECT_TRUE(descriptor["annotations"].contains("idempotentHint"));
         }
-        EXPECT_EQ(count, 48u);
+        EXPECT_EQ(count, 51u);
+    }
+
+    TEST_F(McpNodeToolsTest, KeyframesDefaultsRenameJsonCopyAndRemove) {
+        auto& manager = viewer_->getSceneManager()->modifierManager();
+        auto& sequence = viewer_->getGuiManager()->sequencer();
+        manager.setSequencer(&sequence);
+        const auto uuid = graph();
+        ASSERT_TRUE(call("node_add", {{"tree", uuid}, {"type_id", "lfs.value"}, {"name", "Radius"}})["success"]);
+        ASSERT_TRUE(call("node_set_input", {{"tree", uuid}, {"node", "Radius"}, {"input", "Value"}, {"value", 2}})["success"]);
+        sequence.seek(0.5f);
+        ASSERT_TRUE(call("keyframe_set", {{"tree", uuid}, {"node", "Radius"}, {"input", "Value"}})["success"]);
+        ASSERT_TRUE(call("keyframe_set", {{"tree", uuid}, {"node", "Radius"}, {"input", "Value"}, {"time", 2}, {"value", 8}, {"easing", 3}})["success"]);
+        ASSERT_TRUE(call("node_rename", {{"tree", uuid}, {"node", "Radius"}, {"name", "Reveal radius"}})["success"]);
+        const auto* clip = sequence.timeline().animationClip();
+        ASSERT_NE(clip, nullptr);
+        EXPECT_EQ(clip->getTrackByPath(nodeInputTrackPath(uuid, "Radius", "Value")), nullptr);
+        const auto path = nodeInputTrackPath(uuid, "Reveal radius", "Value");
+        ASSERT_NE(clip->getTrackByPath(path), nullptr);
+        EXPECT_FLOAT_EQ(std::get<float>(*clip->getTrackByPath(path)->evaluate(0.5f)), 2);
+        const auto exported = call("tree_export_json", {{"tree", uuid}})["tree"];
+        const auto imported = call("tree_import_json", {{"json", exported}})["tree"]["uuid"].get<std::string>();
+        EXPECT_NE(imported, uuid);
+        const auto* copied = clip->getTrackByPath(nodeInputTrackPath(imported, "Reveal radius", "Value"));
+        ASSERT_NE(copied, nullptr);
+        EXPECT_EQ(copied->keyframeCount(), 2);
+        EXPECT_FLOAT_EQ(std::get<float>(*copied->evaluate(1.25f)), 5);
+        ASSERT_TRUE(call("keyframe_remove", {{"tree", uuid}, {"node", "Reveal radius"}, {"input", "Value"}})["success"]);
+        EXPECT_EQ(clip->getTrackByPath(path)->keyframeCount(), 1);
+        op::undoHistory().undo();
+        EXPECT_EQ(sequence.timeline().animationClip()->getTrackByPath(path)->keyframeCount(), 2);
     }
 
     TEST_F(McpNodeToolsTest, HostOnlyReferenceMatchesDescriptorText) {

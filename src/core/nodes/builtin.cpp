@@ -11,6 +11,9 @@ namespace lfs::nodes {
         builtin::register_splat(registry);
         builtin::register_cleanup(registry);
         builtin::register_conversion(registry);
+        builtin::register_colour(registry);
+        builtin::register_texture(registry);
+        builtin::register_instances(registry);
 
         NodeTypeInfo group;
         group.id = "lfs.group";

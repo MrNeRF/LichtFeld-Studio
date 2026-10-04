@@ -7,8 +7,8 @@ Turns splat centres and base colours into a point cloud.
 
 ## How to use
 
-Use to export centres or process your scene as points.  
-Splat size, opacity and camera-dependent colour are not kept.  
+Use to export centres or process your scene as points.\
+Splat size, opacity and camera-dependent colour are not kept.
 
 ## Inputs
 

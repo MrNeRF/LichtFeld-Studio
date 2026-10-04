@@ -22,7 +22,8 @@ namespace expression_test {
         case ExprOp::Add: return bits(x + y);
         case ExprOp::Sub: return bits(x - y);
         case ExprOp::Mul: return bits(x * y);
-        case ExprOp::Div: return bits(x / y);
+        case ExprOp::Div:
+        case ExprOp::PreciseDiv: return bits(x / y);
         case ExprOp::Mod: return bits(std::fmod(x, y));
         case ExprOp::Pow: return bits(std::pow(x, y));
         case ExprOp::Min:

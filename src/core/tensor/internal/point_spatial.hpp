@@ -100,6 +100,30 @@ namespace lfs::core::internal {
         }
         return count;
     }
+    template <class T>
+    LFS_POINT_HD inline T pointNeighborMin(const float* points, const T* values, const int32_t* heads,
+                                           const int32_t* next, size_t i, uint32_t bucket_mask,
+                                           float radius) {
+        const float* p = points + i * 3;
+        T result = values[i];
+        if (!finite_point(p))
+            return result;
+        const int cx = cell(p[0], radius), cy = cell(p[1], radius), cz = cell(p[2], radius);
+        for (int dz = -1; dz <= 1; ++dz) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int tx = cx + dx, ty = cy + dy, tz = cz + dz;
+                    for (int32_t j = heads[hash_cell(tx, ty, tz, bucket_mask)]; j >= 0; j = next[j]) {
+                        const float* q = points + static_cast<size_t>(j) * 3;
+                        if (cell(q[0], radius) == tx && cell(q[1], radius) == ty && cell(q[2], radius) == tz &&
+                            within(p, q, radius) && values[j] < result)
+                            result = values[j];
+                    }
+                }
+            }
+        }
+        return result;
+    }
     LFS_POINT_HD inline float pointNeighborSpacing(const float* points, const int32_t* heads,
                                                    const int32_t* next, size_t i, uint32_t bucket_mask,
                                                    float radius) {

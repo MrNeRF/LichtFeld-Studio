@@ -63,5 +63,37 @@ graph to a scene node; `evaluated` reads the derived result and
 `apply_modifier` bakes it into stored geometry as one undo operation.
 
 See `docs/plugins/examples/node_posterize.py` for a complete plug-in lifecycle.
+
+## Animated inputs
+
+Unlinked number, vector and colour inputs use the sequencer's animation tracks.
+Click ◇ beside a value, Ctrl+click the value, or hover it and press `I` to insert
+a keyframe at the playhead. ◆ marks an exact keyframe; ◇ marks an interpolated
+value between keys. Editing an animated value updates its key at the playhead.
+Tracks appear beneath the camera track in the sequencer; clicking a diamond
+seeks to that key's time. Times are in seconds.
+
+```python
+radius = tree.add_node("lfs.compare", "Reveal radius")
+radius.keyframe_insert("B", time=0.0, value=0.2, easing=3)
+radius.keyframe_insert("B", time=2.0, value=8.0)
+# easing: 0 linear, 1 ease in, 2 ease out, 3 ease in/out (sequencer cubic easing)
+radius.keyframe_remove("B", time=2.0)
+```
+
+Omitting time uses the playhead; omitting value captures the displayed value.
+The MCP equivalents are `nodes.keyframe_set` and `nodes.keyframe_remove`, with
+`tree`, `node`, `input`, and optional `time`/`value`. Use the existing sequencer
+tools to scrub or play. Assign `node.name` to rename a node without losing its
+tracks. Rename, copy/paste, grouping and ungrouping remap the stable targets
+`nodes/<tree uuid>/<node name>/<input identifier>`.
+
+Scene Time provides Seconds and Frame without keyframes. Only time-dependent
+modifier stacks and their Object Info consumers are submitted on a scrub;
+queued work is latest-wins. Video export waits for each frame's evaluation
+before capturing geometry. Project files keep tracks in the existing sequencer
+chapter, while graph JSON and the clipboard include the corresponding tracks.
+For headless tests, use `evaluate_tree(tree, geometry, time=0.5, device="cpu")`
+or `device="gpu"`; leaving time out uses the playhead (initially zero headless).
 Posterize quantizes clamped base RGB, not the raw SH DC coefficient. Its Selection
 field blends the quantized colour and fades selected view-dependent SH coefficients.

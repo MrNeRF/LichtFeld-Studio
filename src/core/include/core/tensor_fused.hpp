@@ -184,6 +184,8 @@ namespace lfs::core::fused {
     LFS_CORE_API Expr max(const Operand& a, const Operand& b);
     LFS_CORE_API Expr abs(const Expr& a);
     LFS_CORE_API Expr fma(const Operand& a, const Operand& b, const Operand& c);
+    // Float32 division without the CUDA fast-math reciprocal approximation.
+    LFS_CORE_API Expr precise_divide(const Operand& a, const Operand& b);
     LFS_CORE_API Expr pow(const Operand& a, const Operand& b);
     LFS_CORE_API Expr atan2(const Operand& y, const Operand& x);
 #define LFS_FUSED_UNARY(name) LFS_CORE_API Expr name(const Expr& a);

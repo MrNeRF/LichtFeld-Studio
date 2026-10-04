@@ -7,8 +7,8 @@ Moves selected splats, points or mesh vertices to new positions with an optional
 
 ## How to use
 
-Connect Position to Position, then set Offset for a relative move.  
-Without that connection, Position defaults to the origin.  
+Connect Position to Position, then set Offset for a relative move.\
+Without that connection, Position defaults to the origin.
 
 ## Inputs
 

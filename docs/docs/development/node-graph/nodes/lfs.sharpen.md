@@ -7,8 +7,8 @@ Shrinks selected splats to make soft details crisper.
 
 ## How to use
 
-Start with Amount 0.25 and leave Keep Coverage on.  
-High amounts can reveal gaps between splats.  
+Start with Amount 0.25 and leave Keep Coverage on.\
+High amounts can reveal gaps between splats.
 
 ## Inputs
 

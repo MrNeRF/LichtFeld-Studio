@@ -7,8 +7,8 @@ Combines selections so you can keep their overlap, their union or their opposite
 
 ## How to use
 
-Use And for overlap or Or to include either selection.  
-Not reverses A and ignores B.  
+Use And for overlap or Or to include either selection.\
+Not reverses A and ignores B.
 
 ## Inputs
 

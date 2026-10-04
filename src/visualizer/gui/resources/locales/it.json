@@ -4165,7 +4165,7 @@
     "scale_clamp": {
       "label": "Limita proporzioni",
       "description": "Accorcia i Gaussians ad ago che creano strisce lontano dal percorso di acquisizione.",
-      "help": "Usalo se compaiono strisce sottili fuori dal percorso della camera.\nInizia con Rapporto max 16; valori minori accorciano più aghi.\nGli splat piatti sulle superfici restano invariati, salvo attivare «Includi piatti».",
+      "help": "Usalo se compaiono strisce sottili fuori dal percorso della camera.\nInizia con Rapporto max 16; valori minori accorciano più aghi.\nGli splat piatti sulle superfici restano invariati, salvo attivare «Includi piatti».\nGli assi di dimensione zero restano collassati; il limite di rapporto si applica solo agli altri assi.",
       "inputs": {
         "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
         "Selection": "Dove applichi la modifica, 0–1: 0 invariato, 1 effetto completo. Senza collegamento riguarda tutto.",
@@ -4340,7 +4340,7 @@
     "set_scale": {
       "label": "Imposta scala",
       "description": "Imposta la dimensione degli splat selezionati lungo i tre assi locali.",
-      "help": "Collega Scala tramite Matematica vettoriale per moltiplicare le dimensioni esistenti.\nSenza collegamenti, i valori sostituiscono le dimensioni in unità di scena, non le moltiplicano.",
+      "help": "Collega Scala tramite Matematica vettoriale per moltiplicare le dimensioni esistenti.\nSenza collegamenti, i valori sostituiscono le dimensioni in unità di scena, non le moltiplicano.\nDimensioni nulle o negative fanno collassare un asse. Una dimensione positiva lo ripristina solo con selezione completa; con selezione parziale resta collassato.",
       "inputs": {
         "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
         "Selection": "Dove applichi la modifica, 0–1: 0 invariato, 1 effetto completo. Senza collegamento riguarda tutto.",
@@ -4411,7 +4411,7 @@
     "simplify": {
       "label": "Semplifica",
       "description": "Combina splat per ridurne il numero mantenendo l'aspetto generale della scena.",
-      "help": "Inizia con Rapporto 0,5 per puntare a metà degli splat.\nPuò richiedere più tempo; rapporti minori perdono dettagli fini.",
+      "help": "Inizia con Rapporto 0,5 per puntare a metà degli splat.\nPuò richiedere più tempo; rapporti minori perdono dettagli fini.\nGli assi con covarianza nulla restano collassati; unire posizioni o orientamenti diversi può creare un’estensione reale.",
       "inputs": {
         "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
         "Ratio": "Quota di splat da mantenere, 0,01–1. Lo 0,5 iniziale punta alla metà; 1 mantiene il numero originale."
@@ -4583,8 +4583,397 @@
         "object": "Oggetto",
         "transform_space": "Spazio di trasformazione"
       }
+    },
+    "float_curve": {
+      "label": "Curva di valori",
+      "description": "Rimappa i numeri con una curva morbida modificabile.",
+      "help": "Rimappa i numeri con una curva morbida modificabile.\nTrascina, aggiungi o elimina i punti di controllo. L’interpolazione Fritsch–Carlson evita sovraelongazioni tra punti monotoni.",
+      "inputs": {
+        "Value": "Numero per elemento da rimappare tramite la curva."
+      },
+      "input_labels": {
+        "Value": "Valore"
+      },
+      "outputs": {
+        "Value": "Numero rimappato dalla curva."
+      },
+      "output_labels": {
+        "Value": "Valore"
+      },
+      "properties": {
+        "points": "Punti di controllo ordinati come coppie X e Y.",
+        "clamp": "Limita gli ingressi tra il primo e l’ultimo punto di controllo."
+      },
+      "property_labels": {
+        "points": "Curva",
+        "clamp": "Limita"
+      }
+    },
+    "rgb_curves": {
+      "label": "Curve RGB",
+      "description": "Rimappa i colori con curve combinate e per canale.",
+      "help": "Rimappa i colori con curve combinate e per canale.\nSelezione × Fattore miscela il risultato. La correzione non lineare modifica solo il colore base DC degli splat, non le bande SH direzionali. Funziona anche su punti e mesh.",
+      "inputs": {
+        "Geometry": "Geometria da modificare; collega un’uscita geometrica.",
+        "Selection": "Peso di miscelazione per elemento, 0–1; senza collegamento include tutti.",
+        "Factor": "Intensità aggiuntiva della curva, 0–1."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Factor": "Fattore"
+      },
+      "outputs": {
+        "Geometry": "Geometria dopo la modifica."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "combined": "Curva applicata prima a tutti i canali di colore.",
+        "r": "Curva del canale rosso.",
+        "g": "Curva del canale verde.",
+        "b": "Curva del canale blu."
+      },
+      "property_labels": {
+        "combined": "Combinata",
+        "r": "Rosso",
+        "g": "Verde",
+        "b": "Blu"
+      }
+    },
+    "colour_ramp": {
+      "label": "Rampa di colori",
+      "description": "Associa valori numerici a colori e trasparenza.",
+      "help": "Associa valori numerici a colori e trasparenza.\nDistribuisci le tappe tra 0 e 1. Scegli un’interpolazione costante, lineare o smussata.",
+      "inputs": {
+        "Fac": "Posizione nella rampa di colori, normalmente da 0 a 1."
+      },
+      "input_labels": {
+        "Fac": "Fattore"
+      },
+      "outputs": {
+        "Colour": "Colore RGB generato.",
+        "Alpha": "Trasparenza della rampa, 0–1."
+      },
+      "output_labels": {
+        "Colour": "Colore",
+        "Alpha": "Alfa"
+      },
+      "properties": {
+        "stops": "Tappe ordinate: posizione, rosso, verde, blu e alfa.",
+        "interpolation": "Transizione tra tappe adiacenti: costante, lineare o smussata."
+      },
+      "property_labels": {
+        "stops": "Rampa",
+        "interpolation": "Interpolazione"
+      }
+    },
+    "gradient_texture": {
+      "label": "Texture gradiente",
+      "description": "Crea un gradiente da coordinate spaziali.",
+      "help": "Crea un gradiente da coordinate spaziali.\nUsa Posizione come coordinate. Lineare usa X, diagonale usa X e Y; sferico e radiale si riferiscono all’origine.",
+      "inputs": {
+        "Vector": "Coordinate X, Y e Z; senza collegamento usa le posizioni degli elementi."
+      },
+      "input_labels": {
+        "Vector": "Vettore"
+      },
+      "outputs": {
+        "Fac": "Valore del gradiente generato; può uscire dall’intervallo 0–1."
+      },
+      "output_labels": {
+        "Fac": "Fattore"
+      },
+      "properties": {
+        "type": "Forma del gradiente: lineare, quadratica, smussata, diagonale, sferica o radiale."
+      },
+      "property_labels": {
+        "type": "Tipo"
+      }
+    },
+    "distance": {
+      "label": "Distanza",
+      "description": "Misura la distanza di ogni elemento da un punto, una retta o un piano.",
+      "help": "Misura la distanza di ogni elemento da un punto, una retta o un piano.\nIl piano restituisce una distanza con segno; punto e retta restituiscono distanze non negative.",
+      "inputs": {
+        "Vector": "Coordinate X, Y e Z; senza collegamento usa le posizioni degli elementi.",
+        "Point": "Punto di destinazione o punto appartenente alla retta o al piano.",
+        "Direction": "Direzione della retta o direzione di vista della fotocamera.",
+        "Normal": "Direzione normale al piano di destinazione."
+      },
+      "input_labels": {
+        "Vector": "Vettore",
+        "Point": "Punto",
+        "Direction": "Direzione",
+        "Normal": "Normale"
+      },
+      "outputs": {
+        "Distance": "Distanza in unità di scena; con segno in modalità piano."
+      },
+      "output_labels": {
+        "Distance": "Distanza"
+      },
+      "properties": {
+        "mode": "Misura fino a un punto, una retta o un piano."
+      },
+      "property_labels": {
+        "mode": "Modalità"
+      }
+    },
+    "noise_texture": {
+      "label": "Texture rumore",
+      "description": "Genera rumore frattale tridimensionale riproducibile.",
+      "help": "Genera rumore frattale tridimensionale riproducibile.\nSenza collegamento usa le posizioni. Dettaglio ammette 0–15 ottave frazionarie; Rugosità ne controlla l’ampiezza.",
+      "inputs": {
+        "Vector": "Coordinate X, Y e Z; senza collegamento usa le posizioni degli elementi.",
+        "Scale": "Moltiplicatore di dimensioni o coordinate; 1 mantiene la dimensione originale.",
+        "Detail": "Numero di ottave da 0 a 15, con miscelazione frazionaria.",
+        "Roughness": "Frazione di ampiezza mantenuta a ogni ottava successiva.",
+        "Distortion": "Intensità della deformazione delle coordinate.",
+        "Seed": "Seme per riprodurre il motivo di rumore."
+      },
+      "input_labels": {
+        "Vector": "Vettore",
+        "Scale": "Scala",
+        "Detail": "Dettaglio",
+        "Roughness": "Rugosità",
+        "Distortion": "Distorsione",
+        "Seed": "Seme"
+      },
+      "outputs": {
+        "Fac": "Valore di campionamento del gradiente o rumore prodotto, 0–1.",
+        "Colour": "Colore RGB generato."
+      },
+      "output_labels": {
+        "Fac": "Fattore",
+        "Colour": "Colore"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "store_named_attribute": {
+      "label": "Memorizza attributo con nome",
+      "description": "Memorizza valori sugli elementi della geometria.",
+      "help": "Memorizza valori sugli elementi della geometria.\nRileggi usando lo stesso nome. Gli elementi non selezionati mantengono il valore precedente o 0. Gli attributi di splat e punti attraversano i modificatori; quelli dei vertici si perdono applicando il modificatore.",
+      "inputs": {
+        "Geometry": "Geometria da modificare; collega un’uscita geometrica.",
+        "Selection": "Peso di miscelazione per elemento, 0–1; senza collegamento include tutti.",
+        "Name": "Nome per la lettura successiva con Attributo con nome.",
+        "Value": "Numeri, vettori o colori per elemento da memorizzare."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Name": "Nome",
+        "Value": "Valore"
+      },
+      "outputs": {
+        "Geometry": "Geometria dopo la modifica."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "data_type": "Memorizza il valore come numero, vettore o colore."
+      },
+      "property_labels": {
+        "data_type": "Tipo di dati"
+      }
+    },
+    "remove_clumps": {
+      "label": "Rimuovi piccoli gruppi",
+      "description": "Elimina piccoli gruppi connessi di splat o punti.",
+      "help": "Elimina piccoli gruppi connessi di splat o punti.\nIl raggio moltiplica la spaziatura locale mediana. La GPU trova le componenti connesse e rimuove solo quelle sotto la dimensione minima. Le mesh non sono supportate.",
+      "inputs": {
+        "Geometry": "Geometria da modificare; collega un’uscita geometrica.",
+        "Selection": "Gli elementi con valore almeno 0,5 sono selezionati.",
+        "Radius": "Raggio di connessione come multiplo della spaziatura locale mediana.",
+        "Min Size": "I gruppi con meno elementi sono candidati alla rimozione."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Radius": "Raggio",
+        "Min Size": "Dimensione minima"
+      },
+      "outputs": {
+        "Geometry": "Geometria dopo la modifica.",
+        "Selection": "Elementi appartenenti a gruppi sotto la dimensione minima."
+      },
+      "output_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione"
+      },
+      "properties": {
+        "delete": "Elimina i candidati; disattiva per usare solo l’uscita Selezione."
+      },
+      "property_labels": {
+        "delete": "Elimina"
+      }
+    },
+    "merge_by_distance": {
+      "label": "Unisci per distanza",
+      "description": "Unisce elementi vicini per compattare la geometria.",
+      "help": "Unisce elementi vicini per compattare la geometria.\nUnisce solo gli elementi selezionati. Media punti e vertici, rimappa le facce ed elimina quelle degeneri. Per gli splat conserva il membro più opaco di ciascun gruppo.",
+      "inputs": {
+        "Geometry": "Geometria da modificare; collega un’uscita geometrica.",
+        "Selection": "Gli elementi con valore almeno 0,5 sono selezionati.",
+        "Distance": "Distanza massima che collega elementi dello stesso gruppo."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Distance": "Distanza"
+      },
+      "outputs": {
+        "Geometry": "Geometria dopo la modifica."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "geometry_proximity": {
+      "label": "Prossimità geometrica",
+      "description": "Trova il punto, centro di splat o vertice più vicino nella destinazione.",
+      "help": "Trova il punto, centro di splat o vertice più vicino nella destinazione.\nCollega una geometria di destinazione nello stesso sistema di coordinate. Misura fino agli elementi, non alla superficie tra vertici.",
+      "inputs": {
+        "Target": "Geometria di destinazione con punti, splat o vertici; non può essere vuota."
+      },
+      "input_labels": {
+        "Target": "Destinazione"
+      },
+      "outputs": {
+        "Distance": "Distanza in unità di scena; con segno in modalità piano.",
+        "Position": "Posizione ottenuta nelle coordinate della geometria o della fotocamera."
+      },
+      "output_labels": {
+        "Distance": "Distanza",
+        "Position": "Posizione"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "instance_on_points": {
+      "label": "Istanze sui punti",
+      "description": "Posiziona una copia trasformata di splat su ogni ancoraggio selezionato.",
+      "help": "Posiziona una copia trasformata di splat su ogni ancoraggio selezionato.\nGli ancoraggi possono essere punti, vertici o centri di splat; l’istanza deve contenere splat. Rotazioni Euler in gradi e scale trasformano insieme forma e colore SH. Limite: 50 milioni di splat.\nI fattori negativi usano il valore assoluto per la dimensione e riflettono posizioni, orientamento e colore SH. Una trasformazione collassata lascia invariato il colore SH.",
+      "inputs": {
+        "Points": "Geometria i cui elementi forniscono gli ancoraggi.",
+        "Instance": "Geometria di splat da duplicare; altri tipi non sono supportati.",
+        "Selection": "Gli elementi con valore almeno 0,5 sono selezionati.",
+        "Rotation": "Angoli Euler attorno a X, Y e Z in gradi per ancoraggio; 0 mantiene l’orientamento.",
+        "Scale": "Un numero o tre fattori: 1 mantiene la dimensione, 0 appiattisce un asse e i valori negativi lo specchiano."
+      },
+      "input_labels": {
+        "Points": "Punti",
+        "Instance": "Istanza",
+        "Selection": "Selezione",
+        "Rotation": "Rotazione",
+        "Scale": "Scala"
+      },
+      "outputs": {
+        "Geometry": "Geometria dopo la modifica."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "camera_info": {
+      "label": "Informazioni fotocamera",
+      "description": "Legge posizione, orientamento e obiettivo di una fotocamera del dataset.",
+      "help": "Legge posizione, orientamento e obiettivo di una fotocamera del dataset.\nScegli per indice o nome dell’immagine. Le uscite sono in coordinate globali; la scena deve contenere fotocamere del dataset.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Posizione ottenuta nelle coordinate della geometria o della fotocamera.",
+        "Direction": "Direzione della retta o direzione di vista della fotocamera.",
+        "Up": "Vettore unitario verso il bordo superiore dell’immagine.",
+        "FOV": "Campo visivo verticale in gradi.",
+        "Image Size": "Larghezza e altezza dell’immagine in pixel; Z vale 0."
+      },
+      "output_labels": {
+        "Position": "Posizione",
+        "Direction": "Direzione",
+        "Up": "Alto",
+        "FOV": "Campo visivo",
+        "Image Size": "Dimensione immagine"
+      },
+      "properties": {
+        "camera": "Indice della fotocamera o nome esatto dell’immagine; 0 sceglie la prima."
+      },
+      "property_labels": {
+        "camera": "Fotocamera"
+      }
+    },
+    "camera_coverage": {
+      "label": "Copertura fotocamere",
+      "description": "Conta le fotocamere il cui campo visivo contiene ogni elemento.",
+      "help": "Conta le fotocamere il cui campo visivo contiene ogni elemento.\nCollega Conteggio a Confronta. Verifica i limiti dell’immagine e la profondità positiva, non le occlusioni. Distanza massima 0 disattiva il limite. Funziona con splat, punti e vertici; richiede fotocamere del dataset.",
+      "inputs": {
+        "Max Distance": "Distanza massima dalla fotocamera in unità globali; 0 disattiva il limite."
+      },
+      "input_labels": {
+        "Max Distance": "Distanza massima"
+      },
+      "outputs": {
+        "Count": "Numero di fotocamere del dataset la cui immagine contiene l’elemento.",
+        "Ratio": "Proporzione di fotocamere che contengono l’elemento, 0–1."
+      },
+      "output_labels": {
+        "Count": "Conteggio",
+        "Ratio": "Proporzione"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "view_distance": {
+      "label": "Distanza dalla fotocamera",
+      "description": "Misura la distanza nel mondo da una fotocamera o vista acquisita.",
+      "help": "Misura la distanza nel mondo da una fotocamera o vista acquisita.\nScegli una fotocamera o premi Acquisisci vista. La cattura non segue i successivi movimenti della vista. Funziona con splat, punti e vertici; richiede fotocamere del dataset.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Distance": "Distanza dalla fotocamera scelta in unità globali."
+      },
+      "output_labels": {
+        "Distance": "Distanza"
+      },
+      "properties": {
+        "camera": "Indice della fotocamera o nome esatto dell’immagine; 0 sceglie la prima.",
+        "source": "Usa una fotocamera del dataset o l’ultima vista acquisita.",
+        "captured_transform": "Matrice da fotocamera a mondo salvata; vuota fino alla prima acquisizione."
+      },
+      "property_labels": {
+        "camera": "Fotocamera",
+        "source": "Origine",
+        "captured_transform": "Trasformazione acquisita"
+      }
+    },
+    "scene_time": {
+      "label": "Tempo della scena",
+      "description": "Restituisce il tempo dell’indicatore di riproduzione del sequencer.",
+      "help": "Usa Secondi o Fotogramma per animare i campi.\nSolo i grafi dipendenti dal tempo vengono ricalcolati durante la riproduzione.\nL’esportazione video attende la geometria calcolata per ogni fotogramma.",
+      "inputs": {},
+      "properties": {},
+      "outputs": {
+        "Seconds": "Tempo dell’indicatore di riproduzione in secondi.",
+        "Frame": "Tempo dell’indicatore moltiplicato per la frequenza dei fotogrammi del sequencer."
+      },
+      "output_labels": {
+        "Seconds": "Secondi",
+        "Frame": "Fotogramma"
+      }
     }
   },
   "node_editor.how_to_use": "Come usarlo",
-  "node_editor.learn_more": "Approfondisci"
+  "node_editor.learn_more": "Approfondisci",
+  "node_editor.capture_view": "Acquisisci vista",
+  "node_editor.curve_hint": "Trascina i punti; clic per aggiungere, doppio clic o Canc per rimuovere.",
+  "node_editor.ramp_hint": "Trascina le tappe; clic per aggiungere, doppio clic o Canc per rimuovere. Seleziona una tappa per modificare RGBA.",
+  "node_editor.keyframe_hint": "Inserisci fotogramma chiave · Ctrl+clic oppure I al passaggio del puntatore"
 }

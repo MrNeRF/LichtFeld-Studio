@@ -7,8 +7,8 @@ Turns a point cloud into coloured, round splats.
 
 ## How to use
 
-Leave Radius at 0 to estimate size from nearby points.  
-Set a positive radius in scene units if the automatic size leaves gaps.  
+Leave Radius at 0 to estimate size from nearby points.\
+Set a positive radius in scene units if the automatic size leaves gaps.
 
 ## Inputs
 

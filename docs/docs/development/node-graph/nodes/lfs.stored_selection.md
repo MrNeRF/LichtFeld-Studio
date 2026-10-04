@@ -7,8 +7,8 @@ Reuses a selection you capture from the viewport.
 
 ## How to use
 
-Hide this modifier with the eye icon, select splats in the viewport (brush, lasso or box), press Capture selection, then show the modifier again.  
-Capture again if anything before this node changes the splat count.  
+Hide this modifier with the eye icon, select splats in the viewport (brush, lasso or box), press Capture selection, then show the modifier again.\
+Capture again if anything before this node changes the splat count.
 
 ## Outputs
 

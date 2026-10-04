@@ -7,8 +7,9 @@ Sets the size of selected splats along each of their three local axes.
 
 ## How to use
 
-Connect Scale through Vector Math to multiply existing sizes.  
-Unconnected values replace sizes in scene units, not by a multiplier.  
+Connect Scale through Vector Math to multiply existing sizes.\
+Unconnected values replace sizes in scene units, not by a multiplier.\
+Zero or negative sizes collapse an axis. A positive size restores a collapsed axis only at full selection; partial selection keeps it collapsed.
 
 ## Inputs
 

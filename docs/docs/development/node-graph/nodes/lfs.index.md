@@ -7,8 +7,8 @@ Gives each splat, point or mesh vertex its position in the current list, startin
 
 ## How to use
 
-Use with Math or Compare to select numbered elements.  
-Deleting or joining geometry can change these numbers.  
+Use with Math or Compare to select numbered elements.\
+Deleting or joining geometry can change these numbers.
 
 ## Outputs
 
@@ -18,4 +18,4 @@ Deleting or joining geometry can change these numbers.
 
 ## Used in examples
 
-No shipped example currently uses this node.
+- [ex28_scatter_garden_flowers](../examples/ex28_scatter_garden_flowers.py)

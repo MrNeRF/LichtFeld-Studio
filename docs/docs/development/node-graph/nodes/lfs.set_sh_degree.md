@@ -7,8 +7,8 @@ Limits how much a splat's colour can vary with the viewing direction; lower degr
 
 ## How to use
 
-Use Degree 0 for flat colour and smaller exports.  
-Raising the degree adds room for detail but cannot restore discarded colour.  
+Use Degree 0 for flat colour and smaller exports.\
+Raising the degree adds room for detail but cannot restore discarded colour.
 
 ## Inputs
 

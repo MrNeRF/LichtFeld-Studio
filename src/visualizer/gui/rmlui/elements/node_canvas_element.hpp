@@ -200,6 +200,7 @@ namespace lfs::vis::gui {
         CanvasPoint panel_size_;
         std::size_t theme_signature_ = 0;
         Rml::Element* active_field_ = nullptr;
+        bool keyframeInput(Rml::Element* target);
         float field_start_x_ = 0.0f;
         double field_start_value_ = 0.0;
         bool field_dragged_ = false;

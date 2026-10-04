@@ -7,8 +7,8 @@ Reads each splat's size along its three local axes.
 
 ## How to use
 
-Connect Scale to Separate XYZ to compare axis sizes.  
-Values use scene units, not a size multiplier.  
+Connect Scale to Separate XYZ to compare axis sizes.\
+Values use scene units, not a size multiplier.
 
 ## Outputs
 

@@ -7,8 +7,8 @@ Selects parts of your scene whose colours resemble a colour you pick.
 
 ## How to use
 
-Pick Colour, then raise Tolerance until your target is included.  
-Add a little Softness to avoid a hard edge.  
+Pick Colour, then raise Tolerance until your target is included.\
+Add a little Softness to avoid a hard edge.
 
 ## Inputs
 

@@ -7,8 +7,8 @@ Adds an editable text card to the graph.
 
 ## How to use
 
-Double-click the card or edit its text in the sidebar.  
-Notes are layout-only and never affect evaluation.  
+Double-click the card or edit its text in the sidebar.\
+Notes are layout-only and never affect evaluation.
 
 ## Settings
 

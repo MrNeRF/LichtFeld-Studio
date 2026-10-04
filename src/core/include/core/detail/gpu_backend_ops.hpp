@@ -146,6 +146,8 @@ namespace lfs::core {
             virtual void cdist(StorageRef lhs, StorageRef rhs, StorageRef output,
                                size_t lhs_rows, size_t rhs_rows, size_t columns, float p,
                                ExecContext context) = 0;
+            virtual void nearest_point_indices(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, size_t, size_t, size_t, float, ExecContext) = 0;
+            virtual void camera_frustum_counts(StorageRef, StorageRef, StorageRef, size_t, size_t, float, ExecContext) = 0;
             virtual void radius_neighbors(StorageRef points, StorageRef references,
                                           StorageRef heads, StorageRef next, StorageRef output,
                                           size_t count, size_t buckets, float radius, bool exclude_self,
@@ -160,6 +162,10 @@ namespace lfs::core {
                                                 StorageRef heads, StorageRef next, StorageRef output,
                                                 size_t count, size_t buckets, float radius, int32_t max_count,
                                                 std::optional<StorageRef> queries, ExecContext context) = 0;
+            virtual void radius_neighbor_min(StorageRef points, StorageRef values, StorageRef references,
+                                             StorageRef heads, StorageRef next, StorageRef output,
+                                             size_t count, size_t buckets, float radius,
+                                             ExecContext context) = 0;
             virtual void point_neighbor_spacing(StorageRef points, StorageRef references,
                                                 StorageRef heads, StorageRef next, StorageRef output,
                                                 size_t count, size_t buckets, float cell_width, ExecContext context) = 0;
@@ -175,7 +181,7 @@ namespace lfs::core {
             virtual Tensor image_warp(const Tensor& input, const UndistortParams& params, int mode, bool inverse, Tensor* validity, ExecContext context);
             virtual Tensor image_undistort(const Tensor& input, const UndistortParams& params, bool mask, ExecContext context) = 0;
             virtual Tensor image_resize_prior(const Tensor& input, int height, int width, bool normal, ExecContext context) = 0;
-            virtual void affine_splat_geometry(StorageRef, StorageRef, StorageRef, StorageRef, const splat_transform::LinearTransform&, size_t, ExecContext) = 0;
+            virtual void affine_splat_geometry(StorageRef, StorageRef, StorageRef, StorageRef, const splat_transform::LinearTransform&, size_t, std::optional<StorageRef>, ExecContext) = 0;
             virtual void sh_codec(StorageRef, StorageRef, const ShCodecProgram&, ExecContext) = 0;
             virtual Tensor morton_sort(const Tensor& positions, Tensor* sorted_keys, ExecContext context) = 0;
             virtual std::tuple<Tensor, Tensor> kmeans_sh(const Tensor& shN, int n_points, int sh_coeffs, int k,
@@ -472,6 +478,8 @@ namespace lfs::core {
             void cdist(StorageRef lhs, StorageRef rhs, StorageRef output,
                        size_t lhs_rows, size_t rhs_rows, size_t columns, float p,
                        ExecContext context) override;
+            void nearest_point_indices(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, size_t, size_t, size_t, float, ExecContext) override;
+            void camera_frustum_counts(StorageRef, StorageRef, StorageRef, size_t, size_t, float, ExecContext) override;
             void radius_neighbors(StorageRef points, StorageRef references,
                                   StorageRef heads, StorageRef next, StorageRef output,
                                   size_t count, size_t buckets, float radius, bool exclude_self,
@@ -480,6 +488,10 @@ namespace lfs::core {
                                         StorageRef heads, StorageRef next, StorageRef output,
                                         size_t count, size_t buckets, float radius, int32_t max_count,
                                         std::optional<StorageRef> queries, ExecContext context) override;
+            void radius_neighbor_min(StorageRef points, StorageRef values, StorageRef references,
+                                     StorageRef heads, StorageRef next, StorageRef output,
+                                     size_t count, size_t buckets, float radius,
+                                     ExecContext context) override;
             void point_neighbor_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                         size_t, size_t, float, ExecContext) override;
             void project_points(StorageRef points, StorageRef output, size_t count,
@@ -499,7 +511,7 @@ namespace lfs::core {
             void environment_composite(StorageRef rgb, StorageRef alpha, StorageRef environment, StorageRef output, const EnvironmentCompositeParams& params, ExecContext context) override;
             Tensor image_undistort(const Tensor& input, const UndistortParams& params, bool mask, ExecContext context) override;
             Tensor image_resize_prior(const Tensor& input, int height, int width, bool normal, ExecContext context) override;
-            void affine_splat_geometry(StorageRef, StorageRef, StorageRef, StorageRef, const splat_transform::LinearTransform&, size_t, ExecContext) override;
+            void affine_splat_geometry(StorageRef, StorageRef, StorageRef, StorageRef, const splat_transform::LinearTransform&, size_t, std::optional<StorageRef>, ExecContext) override;
             void sh_codec(StorageRef, StorageRef, const ShCodecProgram&, ExecContext) override;
             Tensor morton_sort(const Tensor& positions, Tensor* sorted_keys, ExecContext context) override;
             std::tuple<Tensor, Tensor> kmeans_sh(const Tensor& shN, int n_points, int sh_coeffs, int k,

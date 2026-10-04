@@ -7,8 +7,8 @@ Splits a colour into RGB or HSV values so you can edit or compare each part.
 
 ## How to use
 
-Choose HSV to isolate hue, saturation or brightness.  
-In HSV mode the R, G and B outputs carry those values in that order.  
+Choose HSV to isolate hue, saturation or brightness.\
+In HSV mode the R, G and B outputs carry those values in that order.
 
 ## Inputs
 

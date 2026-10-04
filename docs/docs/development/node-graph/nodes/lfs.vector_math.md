@@ -7,8 +7,8 @@ Adds, subtracts and measures positions and directions — for example the distan
 
 ## How to use
 
-Use Scale to resize an offset or Distance to compare two positions.  
-Length, Distance and Dot use the Value output; other operations use Vector.  
+Use Scale to resize an offset or Distance to compare two positions.\
+Length, Distance and Dot use the Value output; other operations use Vector.
 
 ## Inputs
 

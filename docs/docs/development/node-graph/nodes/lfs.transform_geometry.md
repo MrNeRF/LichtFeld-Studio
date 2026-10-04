@@ -7,8 +7,8 @@ Moves, rotates and resizes the whole geometry together.
 
 ## How to use
 
-Start with Translation for a move or Scale 1 to keep the original size.  
-Rotation uses degrees around the object's origin.  
+Start with Translation for a move or Scale 1 to keep the original size.\
+Rotation uses degrees around the object's origin.
 
 ## Inputs
 
@@ -31,3 +31,4 @@ Rotation uses degrees around the object's origin.
 - [ex15_duplicate_vase](../examples/ex15_duplicate_vase.py)
 - [ex16_mesh_prop](../examples/ex16_mesh_prop.py)
 - [ex17_mesh_cutout](../examples/ex17_mesh_cutout.py)
+- [ex28_scatter_garden_flowers](../examples/ex28_scatter_garden_flowers.py)

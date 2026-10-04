@@ -7,8 +7,8 @@ Selects the part of your scene enclosed by a reference mesh.
 
 ## How to use
 
-Connect a closed mesh from Object Info to Mesh.  
-Holes or self-intersections can make the inside ambiguous.  
+Connect a closed mesh from Object Info to Mesh.\
+Holes or self-intersections can make the inside ambiguous.
 
 ## Inputs
 

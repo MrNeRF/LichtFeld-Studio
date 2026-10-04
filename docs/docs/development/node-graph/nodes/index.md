@@ -3,9 +3,15 @@
 
 Select a node in the editor for its controls and How to use guidance.
 
+## Attribute
+
+- [Store Named Attribute](lfs.store_named_attribute.md) — Stores values on the current geometry elements.
+
 ## Clean-up
 
 - [Decimate](lfs.decimate.md) — Reduces splat count by keeping larger, more opaque splats within your selection.
+
+- [Remove Clumps](lfs.remove_clumps.md) — Finds and removes small connected groups of splats or points.
 
 - [Remove Floaters](lfs.remove_floaters.md) — Deletes stray splats floating in empty space, such as specks in the sky or haze below the ground.
 
@@ -15,9 +21,13 @@ Select a node in the editor for its controls and How to use guidance.
 
 - [Colour Correct](lfs.colour_correct.md) — Grades colour: exposure, levels, contrast, saturation, hue, white balance and shadow/midtone/highlight tints.
 
+- [Colour Ramp](lfs.colour_ramp.md) — Maps values to colour and alpha stops.
+
 - [Invert Colour](lfs.invert_colour.md) — Reverses colours so dark areas become light and colours turn into their opposites.
 
 - [Posterize](lfs.posterize.md) — Reduces your scene's colours to a small number of flat steps.
+
+- [RGB Curves](lfs.rgb_curves.md) — Remaps scene colours through combined and per-channel curves.
 
 - [Recolour](lfs.recolour.md) — Changes the colour of selected splats while optionally preserving their light and shade.
 
@@ -37,6 +47,8 @@ Select a node in the editor for its controls and How to use guidance.
 
 - [Join Geometry](lfs.join_geometry.md) — Combines several inputs into one; splats with different SH degrees are padded to the highest.
 
+- [Merge by Distance](lfs.merge_by_distance.md) — Combines nearby elements into compact geometry.
+
 - [Separate Geometry](lfs.separate_geometry.md) — Splits into the selected part and the rest, so each can be edited differently and joined back.
 
 - [Set Position](lfs.set_position.md) — Moves selected splats, points or mesh vertices to new positions with an optional offset.
@@ -50,6 +62,8 @@ Select a node in the editor for its controls and How to use guidance.
 ## Input
 
 - [Boolean](lfs.boolean.md) — Gives you one on/off switch to control several connected settings.
+
+- [Camera Info](lfs.camera_info.md) — Reads the position, orientation and lens of a dataset camera.
 
 - [Colour](lfs.colour.md) — Gives you one colour to share between connected nodes.
 
@@ -73,11 +87,19 @@ Select a node in the editor for its controls and How to use guidance.
 
 - [Scale](lfs.scale.md) — Reads each splat's size along its three local axes.
 
+- [Scene Time](lfs.scene_time.md) — Outputs the sequencer playhead time.
+
 - [Stored Selection](lfs.stored_selection.md) — Reuses a selection you capture from the viewport.
 
 - [Value](lfs.value.md) — Gives you one number to share between connected settings.
 
 - [Vector](lfs.vector.md) — Gives you one set of X, Y and Z values to share between nodes.
+
+- [View Distance](lfs.view_distance.md) — Measures each element’s world-space distance from a saved or dataset camera.
+
+## Instances
+
+- [Instance on Points](lfs.instance_on_points.md) — Places a transformed copy of splat geometry at every selected anchor.
 
 ## Layout
 
@@ -94,6 +116,8 @@ Select a node in the editor for its controls and How to use guidance.
 ## Selection
 
 - [Box Selection](lfs.box_selection.md) — Selects the part of your scene inside a box, with optional soft edges.
+
+- [Camera Coverage](lfs.camera_coverage.md) — Counts the dataset camera frustums containing each element.
 
 - [Colour Key](lfs.colour_key.md) — Selects parts of your scene whose colours resemble a colour you pick.
 
@@ -121,6 +145,12 @@ Select a node in the editor for its controls and How to use guidance.
 
 - [Sharpen](lfs.sharpen.md) — Shrinks selected splats to make soft details crisper.
 
+## Texture
+
+- [Gradient Texture](lfs.gradient_texture.md) — Creates a scalar gradient from vector coordinates.
+
+- [Noise Texture](lfs.noise_texture.md) — Creates repeatable three-dimensional fractal gradient noise.
+
 ## Utilities
 
 - [Boolean Math](lfs.boolean_math.md) — Combines selections so you can keep their overlap, their union or their opposite.
@@ -130,6 +160,12 @@ Select a node in the editor for its controls and How to use guidance.
 - [Combine XYZ](lfs.combine_xyz.md) — Builds a position or direction from separate X, Y and Z values.
 
 - [Compare](lfs.compare.md) — Selects parts of your scene by comparing two values, such as height and a ground level.
+
+- [Distance](lfs.distance.md) — Measures distance from each element to a point, line or plane.
+
+- [Float Curve](lfs.float_curve.md) — Remaps values through a smooth editable curve.
+
+- [Geometry Proximity](lfs.geometry_proximity.md) — Finds the closest target point, splat centre or mesh vertex for each element.
 
 - [Map Range](lfs.map_range.md) — Converts a value from one range to another, e.g. height 0–2 m into a fade from 1 to 0.
 

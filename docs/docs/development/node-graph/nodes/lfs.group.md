@@ -7,8 +7,8 @@ Evaluates a reusable node graph.
 
 ## How to use
 
-Choose a graph in the sidebar. Inputs and outputs follow that graph's interface.  
-Enter the group to edit the shared graph for every instance.  
+Choose a graph in the sidebar. Inputs and outputs follow that graph's interface.\
+Enter the group to edit the shared graph for every instance.
 
 ## Settings
 

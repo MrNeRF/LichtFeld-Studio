@@ -7,9 +7,9 @@ Deletes stray splats floating in empty space, such as specks in the sky or haze 
 
 ## How to use
 
-Turn on Preview first: it shows only what would be removed.  
-Isolation Radius 3 with 'Relative to size' judges each splat at its own scale, so the sparse background survives.  
-Connect a Selection to limit the clean-up, for example to heights below the ground.  
+Turn on Preview first: it shows only what would be removed.\
+Isolation Radius 3 with 'Relative to size' judges each splat at its own scale, so the sparse background survives.\
+Connect a Selection to limit the clean-up, for example to heights below the ground.
 
 ## Inputs
 

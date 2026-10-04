@@ -7,8 +7,8 @@ Adds, multiplies, compares or rounds numbers — for example to scale opacity wi
 
 ## How to use
 
-Choose an operation, then connect values to A and B.  
-Start with Multiply to scale a selection's strength.  
+Choose an operation, then connect values to A and B.\
+Start with Multiply to scale a selection's strength.
 
 ## Inputs
 
@@ -34,3 +34,5 @@ Start with Multiply to scale a selection's strength.
 - [ex08_repaint_bike](../examples/ex08_repaint_bike.py)
 - [ex09_colour_pop](../examples/ex09_colour_pop.py)
 - [ex10_edge_fade](../examples/ex10_edge_fade.py)
+- [ex26_noise_autumn_lawn](../examples/ex26_noise_autumn_lawn.py)
+- [ex28_scatter_garden_flowers](../examples/ex28_scatter_garden_flowers.py)

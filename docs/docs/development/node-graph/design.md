@@ -83,6 +83,13 @@ struct Geometry { std::optional<SplatsComponent> splats; std::optional<PointsCom
   constructor plus `shN_set_from_canonical()`.
 - Every structural operation (delete, separate, join) carries
   `attributes` along with the built-in arrays.
+- Splat log-scales may be finite or `-inf` (an exactly collapsed, zero-size
+  axis), never NaN or `+inf`. Scale edits preserve collapsed axes unless Set
+  Scale explicitly replaces them with positive sizes at full selection.
+  Simplify preserves zero covariance eigenvalues; merging different positions
+  or orientations may create genuine extent. Instance on Points accepts signed
+  multipliers: magnitudes set size and signs mirror positions, orientation and
+  SH colour. A singular instance transform retains its input SH colour.
 
 ### 3.2 Domains and fields
 
@@ -242,8 +249,8 @@ Input / output
 - **Value** (float), **Integer**, **Boolean**, **Vector**, **Colour**.
 - Field inputs: **Position**, **Colour Attribute** (named "Colour"),
   **Opacity**, **Scale**, **Index**, **Named Attribute** (name, type),
-  **Random Value** (min, max, seed; deterministic per element index and seed
-  on a given backend), **Stored Selection** (captured bitmask; bool field;
+  **Random Value** (min, max, seed; bit-identical across backends for a given
+  element index and seed), **Stored Selection** (captured bitmask; bool field;
   invert property).
 
 Utilities (field operations)
@@ -292,6 +299,7 @@ Splat
   selection; the middle and smallest axes stay unchanged. This removes needles
   without thickening the flat discs used for trained surfaces. Include Flat
   restores the largest/smallest midpoint clamp for pancake-shaped splats.
+  Both modes compare only nonzero axes; collapsed axes remain collapsed.
 
 Colour
 - **Colour Correct** (selection, exposure, black point, white point, midpoint,

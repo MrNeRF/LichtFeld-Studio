@@ -7,8 +7,8 @@ Reads where each splat, point or mesh vertex sits in your object.
 
 ## How to use
 
-Connect Position to Separate XYZ to select by height or distance along an axis.  
-Coordinates use the object's local space.  
+Connect Position to Separate XYZ to select by height or distance along an axis.\
+Coordinates use the object's local space.
 
 ## Outputs
 
@@ -20,3 +20,4 @@ Coordinates use the object's local space.
 
 - [common](../examples/common.py)
 - [ex21_clip_mesh](../examples/ex21_clip_mesh.py)
+- [ex27_animated_reveal](../examples/ex27_animated_reveal.py)

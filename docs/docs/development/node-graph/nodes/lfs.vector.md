@@ -7,8 +7,8 @@ Gives you one set of X, Y and Z values to share between nodes.
 
 ## How to use
 
-Use for a common position, offset or direction.  
-The default has all three coordinates at 0.  
+Use for a common position, offset or direction.\
+The default has all three coordinates at 0.
 
 ## Inputs
 

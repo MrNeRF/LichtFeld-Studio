@@ -7,9 +7,9 @@ Converts a value from one range to another, e.g. height 0–2 m into a fade from
 
 ## How to use
 
-Set From Min and From Max to your source range.  
-Set To Min 1 and To Max 0 for a reversed fade.  
-Leave Clamp on to keep the result between the output limits.  
+Set From Min and From Max to your source range.\
+Set To Min 1 and To Max 0 for a reversed fade.\
+Leave Clamp on to keep the result between the output limits.
 
 ## Inputs
 
@@ -37,3 +37,4 @@ Leave Clamp on to keep the result between the output limits.
 
 - [ex10_edge_fade](../examples/ex10_edge_fade.py)
 - [ex18_height_fog](../examples/ex18_height_fog.py)
+- [ex27_animated_reveal](../examples/ex27_animated_reveal.py)

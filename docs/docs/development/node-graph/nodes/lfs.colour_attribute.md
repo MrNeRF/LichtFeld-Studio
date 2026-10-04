@@ -7,8 +7,8 @@ Reads the base colour of each splat or point so you can edit or select by colour
 
 ## How to use
 
-Connect Colour to Separate Colour to inspect individual channels.  
-This reads base colour, not camera-dependent reflections.  
+Connect Colour to Separate Colour to inspect individual channels.\
+This reads base colour, not camera-dependent reflections.
 
 ## Outputs
 

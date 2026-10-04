@@ -288,6 +288,24 @@ namespace lfs::nodes {
         return nodes.back();
     }
 
+    bool NodeTree::rename_node(const std::string_view name, std::string new_name) {
+        auto* node = find_node(name);
+        if (!node || new_name.empty() || (new_name != name && find_node(new_name)))
+            return false;
+        const std::string old_name(name);
+        node->name = std::move(new_name);
+        for (auto& link : links) {
+            if (link.from_node == old_name)
+                link.from_node = node->name;
+            if (link.to_node == old_name)
+                link.to_node = node->name;
+        }
+        for (auto& member : nodes)
+            if (member.ui.value("frame", "") == old_name)
+                member.ui["frame"] = node->name;
+        return true;
+    }
+
     bool NodeTree::remove_node(std::string_view node_name) {
         const auto found = std::ranges::find(nodes, node_name, &Node::name);
         if (found == nodes.end() || found->type_id == "lfs.group_input" ||

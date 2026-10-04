@@ -7,8 +7,8 @@ Gives you one number to share between connected settings.
 
 ## How to use
 
-Connect Value to several numeric inputs to control them together.  
-Start at 0 and drag the number to adjust it.  
+Connect Value to several numeric inputs to control them together.\
+Start at 0 and drag the number to adjust it.
 
 ## Inputs
 

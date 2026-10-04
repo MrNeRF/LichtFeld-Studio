@@ -4,7 +4,10 @@
 #include "core/nodes/nodes.hpp"
 #include "core/tensor_backend.hpp"
 #include "scene/scene_manager.hpp"
+#include "sequencer/interpolation.hpp"
+#include "sequencer/sequencer_controller.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
+#include "visualizer/nodes/node_animation.hpp"
 #include "visualizer/nodes/viewport_coordinates.hpp"
 #include "visualizer/operation/undo_history.hpp"
 
@@ -81,6 +84,301 @@ protected:
         lfs::vis::op::undoHistory().clear();
     }
 };
+
+TEST_F(NodesModifierManager, AnimatedInputsEasingPersistenceAndNonAnimatedPlayheadCounts) {
+    for_each_worker_target([&](const auto device) {
+        lfs::vis::SequencerController controller;
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        auto& manager = scene.modifierManager();
+        manager.setSequencer(&controller);
+        const auto id = scene.getScene().addSplat("Host", model(3, device));
+        const auto host = scene.getScene().getNodeUuid(id);
+        auto& tree = colour_tree(manager);
+        const auto tree_id = tree.uuid;
+        manager.addModifier(host, tree_id);
+        ASSERT_TRUE(manager.evaluate(host).ok);
+        (void)manager.performance(true);
+        for (float time : {0.25f, 0.5f, 1.0f}) {
+            controller.seek(time);
+            manager.tick();
+        }
+        EXPECT_EQ(manager.performance()["requests"], 0);
+        EXPECT_EQ(manager.performance()["evaluations"], 0);
+        ASSERT_TRUE(manager.keyframeSet(tree_id, "Correct", "Exposure", 0, 0.0f, 1));
+        ASSERT_TRUE(manager.keyframeSet(tree_id, "Correct", "Exposure", 2, 2.0f));
+        const auto path = lfs::vis::nodeInputTrackPath(tree_id, "Correct", "Exposure");
+        const auto* track = controller.timeline().animationClip()->getTrackByPath(path);
+        ASSERT_NE(track, nullptr);
+        EXPECT_EQ(track->keyframeCount(), 2);
+        for (float time : {0.0f, 0.5f, 1.0f, 1.75f, 2.0f, 3.0f}) {
+            controller.seek(time);
+            const auto result = manager.evaluate(host);
+            ASSERT_TRUE(result.ok);
+            const float t = std::clamp(time / 2, 0.0f, 1.0f);
+            const float exposure = 2 * t * t * t;
+            const float expected = (0.5f * std::exp2(exposure) - 0.5f) / 0.28209479177387814f;
+            EXPECT_NEAR(result.geometry.splats->sh0.cpu().to_vector()[0], expected, 2e-5f) << time;
+        }
+        // Project NODE contains graphs; the existing sequencer chapter contains tracks.
+        const auto graphs = manager.toJson();
+        const auto sequence = controller.saveToJson();
+        EXPECT_FALSE(graphs.contains("animation"));
+        controller.clear();
+        ASSERT_TRUE(controller.loadFromJson(nlohmann::json::parse(sequence.dump())));
+        ASSERT_TRUE(manager.restoreJson(nlohmann::json::parse(graphs.dump())));
+        const auto* restored = controller.timeline().animationClip()->getTrackByPath(path);
+        ASSERT_NE(restored, nullptr);
+        EXPECT_FLOAT_EQ(std::get<float>(*restored->evaluate(1)), 0.25f);
+        EXPECT_EQ(restored->keyframe(0).easing, lfs::sequencer::EasingType::EASE_IN);
+        ASSERT_TRUE(manager.keyframeRemove(tree_id, "Correct", "Exposure", 2));
+        EXPECT_EQ(controller.timeline().animationClip()->getTrackByPath(path)->keyframeCount(), 1);
+        lfs::vis::op::undoHistory().undo();
+        EXPECT_EQ(controller.timeline().animationClip()->getTrackByPath(path)->keyframeCount(), 2);
+    });
+}
+
+TEST_F(NodesModifierManager, AnimationSkipsStaticHostsAndFollowsObjectInfoDependencies) {
+    for_each_worker_target([&](const auto device) {
+        using namespace lfs;
+        std::atomic<int> static_calls = 0;
+        vis::SequencerController controller;
+        vis::SceneManager scene;
+        scene.changeContentType(vis::SceneManager::ContentType::SplatFiles);
+        auto& manager = scene.modifierManager();
+        manager.setSequencer(&controller);
+        nodes::NodeTypeInfo counter;
+        counter.id = "test.static_counter";
+        counter.label = "Static counter";
+        counter.uses_host = true; // Defeat host-generation caching: count actual submissions.
+        counter.inputs.push_back({"Geometry", "Geometry", std::string(nodes::GEOMETRY_SOCKET)});
+        counter.outputs = counter.inputs;
+        counter.evaluate = [&](nodes::NodeContext& context) {
+            ++static_calls;
+            context.set_output("Geometry", context.input("Geometry"));
+        };
+        ASSERT_TRUE(manager.registry().register_type(std::move(counter)));
+        const auto fixed = scene.getScene().getNodeUuid(scene.getScene().addSplat("Static", model(1, device)));
+        const auto animated = scene.getScene().getNodeUuid(scene.getScene().addSplat("Animated", model(1, device)));
+        const auto consumer = scene.getScene().getNodeUuid(scene.getScene().addSplat("Consumer", model(1, device)));
+        auto& fixed_tree = manager.newTree("Static graph");
+        fixed_tree.add_node("test.static_counter", "Counter");
+        fixed_tree.add_node("lfs.scene_time", "Disconnected clock");
+        ASSERT_TRUE(fixed_tree.add_link({fixed_tree.input_node().name, "Geometry", "Counter", "Geometry"}));
+        ASSERT_TRUE(fixed_tree.add_link({"Counter", "Geometry", fixed_tree.output_node().name, "Geometry"}));
+        manager.addModifier(fixed, fixed_tree.uuid);
+        auto& moving_tree = colour_tree(manager);
+        manager.addModifier(animated, moving_tree.uuid);
+        ASSERT_TRUE(manager.keyframeSet(moving_tree.uuid, "Correct", "Exposure", 0, 0.0f));
+        ASSERT_TRUE(manager.keyframeSet(moving_tree.uuid, "Correct", "Exposure", 2, 2.0f));
+        auto& consumer_tree = manager.newTree("Object dependency");
+        consumer_tree.add_node("lfs.object_info", "Source").properties["object"] = "Animated";
+        ASSERT_TRUE(consumer_tree.add_link({"Source", "Geometry", consumer_tree.output_node().name, "Geometry"}));
+        manager.addModifier(consumer, consumer_tree.uuid);
+        ASSERT_TRUE(manager.evaluate(fixed).ok);
+        const int initial = static_calls;
+        EXPECT_GT(initial, 0);
+        EXPECT_FALSE(manager.timeDependent(fixed));
+        EXPECT_TRUE(manager.timeDependent(consumer));
+        for (float time : {0.25f, 0.5f, 1.0f, 1.75f}) {
+            controller.seek(time);
+            ASSERT_TRUE(manager.evaluate(animated).ok);
+            EXPECT_EQ(static_calls.load(), initial);
+            EXPECT_EQ(manager.evaluated(animated)->splats->sh0.cpu().to_vector(),
+                      manager.evaluated(consumer)->splats->sh0.cpu().to_vector());
+        }
+        controller.clear();
+        ASSERT_TRUE(manager.evaluate(animated).ok);
+        EXPECT_FALSE(manager.timeDependent());
+        EXPECT_NEAR(manager.evaluated(animated)->splats->sh0.cpu().to_vector()[0], 0.5f / 0.28209479177387814f, 2e-5f);
+    });
+}
+
+TEST_F(NodesModifierManager, AnimationScrubsCoalesceToLatestWorkerSnapshot) {
+    for_each_worker_target([&](const auto device) {
+        using namespace lfs;
+        vis::SequencerController controller;
+        vis::SceneManager scene;
+        scene.changeContentType(vis::SceneManager::ContentType::SplatFiles);
+        auto& manager = scene.modifierManager();
+        manager.setSequencer(&controller);
+        const auto id = scene.getScene().addSplat("Host", model(1, device));
+        const auto host = scene.getScene().getNodeUuid(id);
+        std::promise<void> started, release;
+        auto began = started.get_future();
+        auto released = release.get_future().share();
+        bool first = true;
+        nodes::NodeTypeInfo wait;
+        wait.id = "test.animation_wait";
+        wait.label = "Wait";
+        wait.inputs = {{"Geometry", "Geometry", std::string(nodes::GEOMETRY_SOCKET)}};
+        wait.outputs = wait.inputs;
+        wait.evaluate = [&](nodes::NodeContext& context) {
+            if (first) {
+                first = false;
+                started.set_value();
+                released.wait();
+            }
+            context.set_output("Geometry", context.input("Geometry"));
+        };
+        ASSERT_TRUE(manager.registry().register_type(std::move(wait)));
+        auto& tree = colour_tree(manager);
+        tree.add_node("test.animation_wait", "Wait");
+        ASSERT_TRUE(tree.add_link({"Correct", "Geometry", "Wait", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Wait", "Geometry", tree.output_node().name, "Geometry"}));
+        manager.addModifier(host, tree.uuid);
+        ASSERT_TRUE(manager.keyframeSet(tree.uuid, "Correct", "Exposure", 0, 0.0f));
+        ASSERT_TRUE(manager.keyframeSet(tree.uuid, "Correct", "Exposure", 2, 2.0f));
+        manager.tick();
+        EXPECT_EQ(began.wait_for(std::chrono::seconds(10)), std::future_status::ready);
+        controller.seek(0.5f);
+        manager.tick();
+        controller.seek(1.5f);
+        manager.tick();
+        release.set_value();
+        const auto result = manager.evaluate(host);
+        ASSERT_TRUE(result.ok);
+        EXPECT_NEAR(result.geometry.splats->sh0.cpu().to_vector()[0],
+                    (0.5f * std::exp2(1.5f) - 0.5f) / 0.28209479177387814f, 2e-5f);
+        EXPECT_GE(manager.performance()["discarded"].get<int>(), 1);
+        EXPECT_EQ(manager.performance()["installed"], 1);
+    });
+}
+
+TEST_F(NodesModifierManager, AnimationPathsRenamePasteGroupUngroupCopyAndUndo) {
+    lfs::vis::SequencerController controller;
+    lfs::vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    manager.setSequencer(&controller);
+    auto& graph = colour_tree(manager);
+    const auto uuid = graph.uuid;
+    ASSERT_TRUE(manager.keyframeSet(uuid, "Correct", "Exposure", 0, 0.0f));
+    ASSERT_TRUE(manager.keyframeSet(uuid, "Correct", "Exposure", 2, 2.0f));
+    ASSERT_TRUE(manager.renameNode(uuid, "Correct", "Autumn Grade"));
+    auto has = [&](const std::string& tree, const std::string& node) {
+        const auto* track = controller.timeline().animationClip()->getTrackByPath(lfs::vis::nodeInputTrackPath(tree, node, "Exposure"));
+        return track && track->keyframeCount() == 2 && std::get<float>(*track->evaluate(1)) == 1;
+    };
+    EXPECT_TRUE(has(uuid, "Autumn Grade"));
+    EXPECT_FALSE(has(uuid, "Correct"));
+    const auto clipboard = manager.copyNodes(uuid, {"Autumn Grade"});
+    ASSERT_TRUE(clipboard);
+    const auto paste = manager.pasteNodes(uuid, *clipboard);
+    ASSERT_TRUE(paste);
+    ASSERT_EQ(paste->nodes.size(), 1);
+    EXPECT_TRUE(has(uuid, paste->nodes[0]));
+    const auto group = manager.makeGroup(uuid, {"Autumn Grade"});
+    ASSERT_TRUE(group);
+    EXPECT_TRUE(has(group->graph, "Autumn Grade"));
+    EXPECT_FALSE(has(uuid, "Autumn Grade"));
+    const auto copied = manager.makeGroupSingleUser(uuid, group->group_node);
+    ASSERT_TRUE(copied);
+    const auto duplicate = manager.tree(uuid)->find_node(group->group_node)->properties.at("tree").get<std::string>();
+    EXPECT_NE(duplicate, group->graph);
+    EXPECT_TRUE(has(duplicate, "Autumn Grade"));
+    const auto ungroup = manager.ungroup(uuid, group->group_node);
+    ASSERT_TRUE(ungroup);
+    ASSERT_EQ(ungroup->size(), 1);
+    EXPECT_TRUE(has(uuid, ungroup->front()));
+    lfs::vis::op::undoHistory().undo();
+    EXPECT_NE(manager.tree(uuid)->find_node(group->group_node), nullptr);
+    EXPECT_FALSE(has(uuid, "Autumn Grade"));
+}
+
+TEST_F(NodesModifierManager, SequencerExportControllerWaitsForEachAnimatedFrame) {
+    for_each_worker_target([&](const auto device) {
+        lfs::vis::SequencerController controller;
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        auto& manager = scene.modifierManager();
+        manager.setSequencer(&controller);
+        const auto id = scene.getScene().addSplat("Host", model(2, device));
+        const auto host = scene.getScene().getNodeUuid(id);
+        auto& tree = manager.newTree("Export animation");
+        const auto input = tree.input_node().name, output = tree.output_node().name;
+        tree.add_node("lfs.set_position", "Move");
+        tree.add_node("lfs.scene_time", "Clock");
+        tree.add_node("lfs.combine_xyz", "Vector");
+        ASSERT_TRUE(tree.add_link({input, "Geometry", "Move", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Clock", "Seconds", "Vector", "X"}));
+        ASSERT_TRUE(tree.add_link({"Clock", "Frame", "Vector", "Y"}));
+        ASSERT_TRUE(tree.add_link({"Vector", "Vector", "Move", "Offset"}));
+        ASSERT_TRUE(tree.add_link({"Move", "Geometry", output, "Geometry"}));
+        ASSERT_TRUE(manager.keyframeSet(tree.uuid, "Vector", "Z", 0, 1.0f));
+        ASSERT_TRUE(manager.keyframeSet(tree.uuid, "Vector", "Z", 1, 11.0f));
+        manager.addModifier(host, tree.uuid);
+        controller.seek(7); // Export must use the frame time, not this playhead.
+        ASSERT_TRUE(manager.evaluate(host).ok);
+        (void)manager.performance(true);
+        for (int frame = 0; frame < 7; ++frame) {
+            const float time = float(frame) / 30;
+            ASSERT_TRUE(controller.prepareExportFrame(manager, time, 30));
+            const auto* node = scene.getScene().getNodeById(id);
+            ASSERT_NE(node->evaluated_model, nullptr);
+            const auto positions = node->evaluated_model->means_raw().cpu().to_vector();
+            EXPECT_NEAR(positions[0], time, 1e-6f);
+            EXPECT_NEAR(positions[1], float(frame), 1e-6f);
+            EXPECT_NEAR(positions[2], 1 + 10 * time, 1e-5f);
+            EXPECT_FALSE(manager.progress().busy);
+        }
+        EXPECT_EQ(manager.performance()["evaluations"], 7);
+        EXPECT_FLOAT_EQ(controller.playhead(), 7);
+        ASSERT_TRUE(manager.evaluate(host).ok); // Restore normal viewport time.
+        EXPECT_NEAR(manager.evaluated(host)->splats->means.cpu().to_vector()[0], 7, 1e-6f);
+    });
+}
+
+TEST_F(NodesModifierManager, AnimatedInputTypesEditingDeletionAndAllEasings) {
+    using namespace lfs;
+    vis::SequencerController controller;
+    vis::SceneManager scene;
+    auto& manager = scene.modifierManager();
+    manager.setSequencer(&controller);
+    auto& graph = manager.newTree("Types");
+    const auto uuid = graph.uuid;
+    graph.add_node("lfs.set_position", "Position");
+    graph.add_node("lfs.set_colour", "Colour");
+    graph.add_node("lfs.value", "Value");
+    ASSERT_TRUE(manager.keyframeSet(uuid, "Position", "Offset", 0, glm::vec3(0, 2, 4)));
+    ASSERT_TRUE(manager.keyframeSet(uuid, "Position", "Offset", 2, glm::vec3(2, 4, 8)));
+    ASSERT_TRUE(manager.keyframeSet(uuid, "Colour", "Colour", 0, glm::vec3(0, 0, 0)));
+    ASSERT_TRUE(manager.keyframeSet(uuid, "Colour", "Colour", 2, glm::vec4(1, 0.5f, 0.25f, 0.5f)));
+    for (int easing = 0; easing < 4; ++easing) {
+        ASSERT_TRUE(manager.keyframeSet(uuid, "Value", "Value", 0, 0.0f, easing));
+        ASSERT_TRUE(manager.keyframeSet(uuid, "Value", "Value", 2, 8.0f));
+        for (float time : {0.0f, 0.25f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f}) {
+            auto snapshot = graph;
+            vis::applyNodeAnimation(snapshot, controller.timeline().animationClip(), time);
+            const float t = std::clamp(time / 2, 0.0f, 1.0f);
+            const float eased = easing == 0 ? t : easing == 1 ? t * t * t
+                                              : easing == 2   ? 1 - std::pow(1 - t, 3)
+                                              : t < 0.5f      ? 4 * t * t * t
+                                                              : 1 - std::pow(-2 * t + 2, 3) / 2;
+            EXPECT_NEAR(*snapshot.find_node("Value")->input_values.at("Value").get_if<float>(), 8 * eased, 1e-6f);
+            const auto offset = *snapshot.find_node("Position")->input_values.at("Offset").get_if<glm::vec3>();
+            EXPECT_EQ(offset, glm::vec3(2 * t, 2 + 2 * t, 4 + 4 * t));
+            const auto colour = *snapshot.find_node("Colour")->input_values.at("Colour").get_if<glm::vec4>();
+            EXPECT_EQ(colour, glm::vec4(t, 0.5f * t, 0.25f * t, 1 - 0.5f * t));
+        }
+    }
+    controller.seek(1);
+    ASSERT_TRUE(manager.setNodeInput(uuid, "Value", "Value", 6.0f));
+    const auto path = vis::nodeInputTrackPath(uuid, "Value", "Value");
+    EXPECT_FLOAT_EQ(std::get<float>(*controller.timeline().animationClip()->getTrackByPath(path)->evaluate(1)), 6);
+    vis::op::undoHistory().undo();
+    EXPECT_FLOAT_EQ(std::get<float>(*controller.timeline().animationClip()->getTrackByPath(path)->evaluate(1)), 4);
+    auto* restored = manager.tree(uuid);
+    const auto before = restored->to_json();
+    ASSERT_TRUE(restored->remove_node("Value"));
+    manager.recordTreeEdit(uuid, before);
+    EXPECT_EQ(controller.timeline().animationClip()->getTrackByPath(path), nullptr);
+    vis::op::undoHistory().undo();
+    EXPECT_NE(controller.timeline().animationClip()->getTrackByPath(path), nullptr);
+    ASSERT_TRUE(manager.removeTree(uuid));
+    EXPECT_EQ(controller.timeline().animationClip()->trackCount(), 0);
+    vis::op::undoHistory().undo();
+    EXPECT_NE(controller.timeline().animationClip()->getTrackByPath(path), nullptr);
+}
 
 TEST_F(NodesModifierManager, StackOrderEvaluationAndJsonRoundTrip) {
     lfs::vis::SceneManager scene_manager;

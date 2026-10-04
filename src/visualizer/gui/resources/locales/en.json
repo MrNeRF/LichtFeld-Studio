@@ -3225,6 +3225,257 @@
   "node_editor.optional_selection": "Optional: unconnected selects everything",
   "node_editor.captured_count": "Captured: {} selected",
   "nodes": {
+    "float_curve": {
+      "label": "Float Curve",
+      "description": "Remaps values through a smooth editable curve.",
+      "help": "Edit the control points to shape the mapping.\nFritsch–Carlson interpolation avoids overshoot between monotone points.",
+      "inputs": {
+        "Value": "Value field to remap through the curve."
+      },
+      "input_labels": {
+        "Value": "Value"
+      },
+      "outputs": {
+        "Value": "Remapped value field."
+      },
+      "output_labels": {
+        "Value": "Value"
+      },
+      "properties": {
+        "points": "Ordered curve control points as x and y pairs.",
+        "clamp": "Clamp inputs to the first and last control points."
+      },
+      "property_labels": {
+        "points": "Curve",
+        "clamp": "Clamp"
+      }
+    },
+    "rgb_curves": {
+      "label": "RGB Curves",
+      "description": "Remaps scene colours through combined and per-channel curves.",
+      "help": "Use Selection and Factor to blend the result.\nThis nonlinear adjustment changes only the DC colour of splats and preserves view-dependent SH bands.",
+      "inputs": {
+        "Geometry": "Splats, points or mesh vertices to colour.",
+        "Selection": "Per-element blend weight from 0 to 1.",
+        "Factor": "Additional curve effect strength from 0 to 1."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Factor": "Factor"
+      },
+      "outputs": {
+        "Geometry": "Geometry with remapped colours."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {
+        "combined": "Curve applied to every channel first.",
+        "r": "Curve applied to red.",
+        "g": "Curve applied to green.",
+        "b": "Curve applied to blue."
+      },
+      "property_labels": {
+        "combined": "Combined",
+        "r": "Red",
+        "g": "Green",
+        "b": "Blue"
+      }
+    },
+    "colour_ramp": {
+      "label": "Colour Ramp",
+      "description": "Maps values to colour and alpha stops.",
+      "help": "Add and arrange stops across the 0–1 range.\nChoose constant, linear or eased interpolation.",
+      "inputs": {
+        "Fac": "Value used to sample the ramp."
+      },
+      "input_labels": {
+        "Fac": "Fac"
+      },
+      "outputs": {
+        "Colour": "RGB colour sampled from the ramp.",
+        "Alpha": "Alpha sampled from the ramp."
+      },
+      "output_labels": {
+        "Colour": "Colour",
+        "Alpha": "Alpha"
+      },
+      "properties": {
+        "stops": "Ordered position, red, green, blue and alpha values.",
+        "interpolation": "Interpolation between adjacent stops."
+      },
+      "property_labels": {
+        "stops": "Ramp",
+        "interpolation": "Interpolation"
+      }
+    },
+    "gradient_texture": {
+      "label": "Gradient Texture",
+      "description": "Creates a scalar gradient from vector coordinates.",
+      "help": "Connect Position for a scene-space gradient.\nLinear uses X; diagonal uses X and Y; spherical and radial use the origin.",
+      "inputs": {
+        "Vector": "Coordinates used to evaluate the gradient."
+      },
+      "input_labels": {
+        "Vector": "Vector"
+      },
+      "outputs": {
+        "Fac": "Generated gradient value."
+      },
+      "output_labels": {
+        "Fac": "Fac"
+      },
+      "properties": {
+        "type": "Shape of the generated gradient."
+      },
+      "property_labels": {
+        "type": "Type"
+      }
+    },
+    "distance": {
+      "label": "Distance",
+      "description": "Measures distance from each element to a point, line or plane.",
+      "help": "Connect Position to Vector.\nPlane mode returns a signed distance; Point and Line return non-negative distances.",
+      "inputs": {
+        "Vector": "Positions to measure.",
+        "Point": "Point on the target point, line or plane.",
+        "Direction": "Direction of the target line.",
+        "Normal": "Normal of the target plane."
+      },
+      "input_labels": {
+        "Vector": "Vector",
+        "Point": "Point",
+        "Direction": "Direction",
+        "Normal": "Normal"
+      },
+      "outputs": {
+        "Distance": "Distance in scene units."
+      },
+      "output_labels": {
+        "Distance": "Distance"
+      },
+      "properties": {
+        "mode": "Measure to a point, line or plane."
+      },
+      "property_labels": {
+        "mode": "Mode"
+      }
+    },
+    "noise_texture": {
+      "label": "Noise Texture",
+      "description": "Creates repeatable three-dimensional fractal gradient noise.",
+      "help": "Vector defaults to Position. Detail supports fractional octaves from 0 to 15.\nRoughness controls the amplitude of successive octaves.",
+      "inputs": {
+        "Vector": "Coordinates used to evaluate noise.",
+        "Scale": "Coordinate scale.",
+        "Detail": "Number of octaves, with fractional blending.",
+        "Roughness": "Amplitude retained by each octave.",
+        "Distortion": "Amount of coordinate warping.",
+        "Seed": "Offset selecting a repeatable noise pattern."
+      },
+      "input_labels": {
+        "Vector": "Vector",
+        "Scale": "Scale",
+        "Detail": "Detail",
+        "Roughness": "Roughness",
+        "Distortion": "Distortion",
+        "Seed": "Seed"
+      },
+      "outputs": {
+        "Fac": "Noise value from 0 to 1.",
+        "Colour": "Grayscale noise colour."
+      },
+      "output_labels": {
+        "Fac": "Fac",
+        "Colour": "Colour"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "merge_by_distance": {
+      "label": "Merge by Distance",
+      "description": "Combines nearby elements into compact geometry.",
+      "help": "Selection limits which elements may merge. Points and mesh vertices are averaged; mesh faces are remapped and degenerate faces removed.\nFor splats, the most opaque member of each connected cluster is kept.",
+      "inputs": {
+        "Geometry": "Splats, points or mesh geometry to merge.",
+        "Selection": "Elements allowed to merge; values of 0.5 or more are selected.",
+        "Distance": "Maximum distance connecting elements in a cluster."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Distance": "Distance"
+      },
+      "outputs": {
+        "Geometry": "Geometry after nearby elements have been merged."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "remove_clumps": {
+      "label": "Remove Clumps",
+      "description": "Finds and removes small connected groups of splats or points.",
+      "help": "Radius is a multiple of the geometry's median local spacing.\nComponents propagate labels on the GPU; Min Size removes only smaller components. Meshes are not supported.",
+      "inputs": {
+        "Geometry": "Splat or point geometry to clean.",
+        "Selection": "Elements eligible for removal; values of 0.5 or more are selected.",
+        "Radius": "Connection radius as a multiple of median local spacing.",
+        "Min Size": "Components with fewer elements are removal candidates."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Radius": "Radius",
+        "Min Size": "Min Size"
+      },
+      "outputs": {
+        "Geometry": "Cleaned geometry when Delete is enabled, otherwise unchanged geometry.",
+        "Selection": "Elements belonging to undersized components."
+      },
+      "output_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection"
+      },
+      "properties": {
+        "delete": "Delete candidates from Geometry; disable to use the Selection output."
+      },
+      "property_labels": {
+        "delete": "Delete"
+      }
+    },
+    "store_named_attribute": {
+      "label": "Store Named Attribute",
+      "description": "Stores values on the current geometry elements.",
+      "help": "Use the same name in a later Named Attribute node. Unselected elements retain an existing value or use zero.\nSplat and point attributes persist through later modifiers; mesh vertex attributes are dropped on Apply.",
+      "inputs": {
+        "Geometry": "Geometry receiving the attribute.",
+        "Selection": "Per-element write weight from 0 to 1.",
+        "Name": "Attribute name used by later Named Attribute nodes.",
+        "Value": "Float, vector or colour field to store."
+      },
+      "input_labels": {
+        "Geometry": "Geometry",
+        "Selection": "Selection",
+        "Name": "Name",
+        "Value": "Value"
+      },
+      "outputs": {
+        "Geometry": "Geometry carrying the stored attribute."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {
+        "data_type": "Type used to interpret and store Value."
+      },
+      "property_labels": {
+        "data_type": "Data Type"
+      }
+    },
     "paint_selection": {
       "label": "Paint Selection",
       "description": "Paints a live, geometric selection directly onto surfaces in your scene.",
@@ -4165,7 +4416,7 @@
     "scale_clamp": {
       "label": "Scale Clamp",
       "description": "Shortens needle-shaped Gaussians that show up as streaks when you move away from the capture path.",
-      "help": "Use when thin streaks appear off the camera path.\nStart with Max Aspect 16; lower values shorten more needles.\nFlat splats on surfaces are left alone unless 'Include flat' is on.",
+      "help": "Use when thin streaks appear off the camera path.\nStart with Max Aspect 16; lower values shorten more needles.\nFlat splats on surfaces are left alone unless 'Include flat' is on.\nZero axes stay collapsed; aspect limits apply only to the remaining nonzero axes.",
       "inputs": {
         "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
         "Selection": "Where you apply the edit, 0–1: 0 leaves it unchanged, 1 applies it fully. Unconnected means everything.",
@@ -4340,7 +4591,7 @@
     "set_scale": {
       "label": "Set Scale",
       "description": "Sets the size of selected splats along each of their three local axes.",
-      "help": "Connect Scale through Vector Math to multiply existing sizes.\nUnconnected values replace sizes in scene units, not by a multiplier.",
+      "help": "Connect Scale through Vector Math to multiply existing sizes.\nUnconnected values replace sizes in scene units, not by a multiplier.\nZero or negative sizes collapse an axis. A positive size restores a collapsed axis only at full selection; partial selection keeps it collapsed.",
       "inputs": {
         "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
         "Selection": "Where you apply the edit, 0–1: 0 leaves it unchanged, 1 applies it fully. Unconnected means everything.",
@@ -4411,7 +4662,7 @@
     "simplify": {
       "label": "Simplify",
       "description": "Combines splats to reduce their count while preserving the scene's overall appearance.",
-      "help": "Start with Ratio 0.5 to aim for half the splats.\nThis can take longer than other nodes; lower ratios lose fine detail.",
+      "help": "Start with Ratio 0.5 to aim for half the splats.\nThis can take longer than other nodes; lower ratios lose fine detail.\nZero covariance axes remain collapsed; merging different positions or orientations can create real extent.",
       "inputs": {
         "Geometry": "Geometry you want to edit. Connect a source; an unconnected input supplies no geometry.",
         "Ratio": "Target share of splats to retain, 0.01–1. 0.5, the default, aims for half; 1 keeps the original count."
@@ -4583,8 +4834,146 @@
         "object": "Object",
         "transform_space": "Transform Space"
       }
+    },
+    "geometry_proximity": {
+      "label": "Geometry Proximity",
+      "description": "Finds the closest target point, splat centre or mesh vertex for each element.",
+      "help": "Connect another geometry as Target. Distances use the coordinates of both geometries.\nThis measures to elements, not to the surface between mesh vertices.",
+      "inputs": {
+        "Target": "Target geometry containing points, splat centres or mesh vertices; an empty target reports an error."
+      },
+      "input_labels": {
+        "Target": "Target"
+      },
+      "outputs": {
+        "Distance": "Distance to the nearest target element, in scene units.",
+        "Position": "Position of the nearest target element; ties choose the first target element."
+      },
+      "output_labels": {
+        "Distance": "Distance",
+        "Position": "Position"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "instance_on_points": {
+      "label": "Instance on Points",
+      "description": "Places a transformed copy of splat geometry at every selected anchor.",
+      "help": "Points accepts point clouds, mesh vertices and splat centres; Instance accepts splats only.\nRotation uses Euler degrees. Scale accepts one number or three axis multipliers: 1 keeps size, 0 collapses an axis, and negative values mirror it.\nSplat shape and view-dependent SH colour transform together. Output is limited to 50 million splats.\nNegative multipliers use their magnitude for size and mirror positions, orientation and SH colour. A collapsed transform leaves SH colour unchanged.",
+      "inputs": {
+        "Points": "Geometry whose elements provide the anchor positions.",
+        "Instance": "Splat geometry to duplicate around each anchor; other geometry is not supported.",
+        "Selection": "Anchors with values of 0.5 or more receive an instance. Unconnected selects every anchor.",
+        "Rotation": "Euler angles around X, Y and Z in degrees, evaluated at each anchor; zero keeps the orientation.",
+        "Scale": "Scale accepts one number or three axis multipliers: 1 keeps size, 0 collapses an axis, and negative values mirror it."
+      },
+      "input_labels": {
+        "Points": "Points",
+        "Instance": "Instance",
+        "Selection": "Selection",
+        "Rotation": "Rotation",
+        "Scale": "Scale"
+      },
+      "outputs": {
+        "Geometry": "Realized splats with transformed positions, shapes and SH colours."
+      },
+      "output_labels": {
+        "Geometry": "Geometry"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "camera_info": {
+      "label": "Camera Info",
+      "description": "Reads the position, orientation and lens of a dataset camera.",
+      "help": "Choose a dataset camera by index or image name.\nOutputs use world coordinates; the scene must contain dataset cameras.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Camera centre in world coordinates.",
+        "Direction": "Unit direction pointing forward from the camera.",
+        "Up": "Unit direction pointing toward the top of the image.",
+        "FOV": "Vertical field of view in degrees.",
+        "Image Size": "Image width and height in pixels; Z is zero."
+      },
+      "output_labels": {
+        "Position": "Position",
+        "Direction": "Direction",
+        "Up": "Up",
+        "FOV": "FOV",
+        "Image Size": "Image Size"
+      },
+      "properties": {
+        "camera": "Dataset camera index or exact image name; the default 0 selects the first camera."
+      },
+      "property_labels": {
+        "camera": "Camera"
+      }
+    },
+    "camera_coverage": {
+      "label": "Camera Coverage",
+      "description": "Counts the dataset camera frustums containing each element.",
+      "help": "Use Count with Compare to remove elements seen by too few cameras.\nChecks the image bounds and positive depth, not occlusion. Max Distance 0 disables the distance limit.\nWorks with splats, points and mesh vertices; the scene must contain dataset cameras.",
+      "inputs": {
+        "Max Distance": "Maximum distance from a camera in world units; 0, the default, disables this limit."
+      },
+      "input_labels": {
+        "Max Distance": "Max Distance"
+      },
+      "outputs": {
+        "Count": "Number of dataset cameras whose image bounds contain this element.",
+        "Ratio": "Visible camera count divided by the total camera count, from 0 to 1."
+      },
+      "output_labels": {
+        "Count": "Count",
+        "Ratio": "Ratio"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "view_distance": {
+      "label": "View Distance",
+      "description": "Measures each element’s world-space distance from a saved or dataset camera.",
+      "help": "Choose a dataset camera, or press Capture view to save the current viewport camera.\nA capture does not follow later viewport movement. The scene must contain dataset cameras.\nWorks with splats, point clouds and mesh vertices.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Distance": "Distance from the chosen camera in world units."
+      },
+      "output_labels": {
+        "Distance": "Distance"
+      },
+      "properties": {
+        "camera": "Dataset camera index or exact image name; the default 0 selects the first camera.",
+        "source": "Use a dataset camera or the last captured viewport camera.",
+        "captured_transform": "Saved camera-to-world matrix, written by Capture view. Empty until captured."
+      },
+      "property_labels": {
+        "camera": "Camera",
+        "source": "Source",
+        "captured_transform": "Captured Transform"
+      }
+    },
+    "scene_time": {
+      "label": "Scene Time",
+      "description": "Outputs the sequencer playhead time.",
+      "help": "Use Seconds or Frame to animate fields.\nOnly time-dependent graphs re-evaluate during playback.\nVideo export waits for each frame’s evaluated geometry.",
+      "inputs": {},
+      "properties": {},
+      "outputs": {
+        "Seconds": "Playhead time in seconds.",
+        "Frame": "Playhead time multiplied by the sequencer frame rate."
+      },
+      "output_labels": {
+        "Seconds": "Seconds",
+        "Frame": "Frame"
+      }
     }
   },
   "node_editor.how_to_use": "How to use",
-  "node_editor.learn_more": "Learn more"
+  "node_editor.learn_more": "Learn more",
+  "node_editor.capture_view": "Capture view",
+  "node_editor.curve_hint": "Drag points to shape the curve. Click to add; double-click or Delete to remove.",
+  "node_editor.ramp_hint": "Drag stops to move them. Click to add; double-click or Delete to remove. Select a stop to edit RGBA.",
+  "node_editor.keyframe_hint": "Insert keyframe · Ctrl+click or I while hovering"
 }

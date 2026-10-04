@@ -7,8 +7,8 @@ Reads how opaque each splat is so you can find faint or solid areas.
 
 ## How to use
 
-Connect Opacity to Compare to select faint splats.  
-Values run from 0 for transparent to 1 for opaque.  
+Connect Opacity to Compare to select faint splats.\
+Values run from 0 for transparent to 1 for opaque.
 
 ## Outputs
 

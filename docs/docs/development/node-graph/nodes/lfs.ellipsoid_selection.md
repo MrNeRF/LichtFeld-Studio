@@ -7,8 +7,8 @@ Selects the part of your scene inside a sphere or stretched sphere, with optiona
 
 ## How to use
 
-Set Centre and Radii to surround your target.  
-Equal radii make a sphere; Falloff 0 gives a sharp boundary.  
+Set Centre and Radii to surround your target.\
+Equal radii make a sphere; Falloff 0 gives a sharp boundary.
 
 ## Inputs
 

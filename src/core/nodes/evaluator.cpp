@@ -199,6 +199,10 @@ namespace lfs::nodes {
             hash_combine(key, std::hash<int>{}(type->version));
             hash_combine(key, std::hash<const void*>{}(type.get()));
             hash_combine(key, std::hash<bool>{}(node.muted));
+            if (node.type_id == "lfs.scene_time" || node.type_id == "lfs.group") {
+                hash_combine(key, std::hash<float>{}(inputs.seconds));
+                hash_combine(key, std::hash<float>{}(inputs.frames_per_second));
+            }
             hash_combine(key, std::hash<std::string>{}(tree.uuid));
             if (type->uses_host) {
                 hash_combine(key, host ? host->generation() : 0);
@@ -227,6 +231,8 @@ namespace lfs::nodes {
             context.node_ = &node;
             context.memo_ = &memo;
             context.host_ = host;
+            context.seconds_ = inputs.seconds;
+            context.frames_per_second_ = inputs.frames_per_second;
             std::optional<Geometry> geometry_input;
             bool upstream_ok = true;
             const auto input_declarations = effective_inputs(tree, node, inputs.tree_resolver);
@@ -361,6 +367,8 @@ namespace lfs::nodes {
                         throw NodeError("Group cycle: " + cycle);
                     EvalInputs nested_inputs;
                     nested_inputs.geometry = inputs.geometry;
+                    nested_inputs.seconds = inputs.seconds;
+                    nested_inputs.frames_per_second = inputs.frames_per_second;
                     nested_inputs.geometry_generation = inputs.geometry_generation;
                     nested_inputs.device = inputs.device;
                     nested_inputs.tree_resolver = inputs.tree_resolver;

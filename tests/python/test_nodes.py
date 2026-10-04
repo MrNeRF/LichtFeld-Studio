@@ -100,6 +100,58 @@ def test_builtin_help_contract(lf):
                 assert 0 < len(message) <= limit, (node["id"], declaration["identifier"])
 
 
+@pytest.mark.parametrize("device", ["cpu", "gpu"])
+def test_animated_inputs_rename_clipboard_group_json_and_clock(lf, numpy, device):
+    import uuid
+
+    nodes = lf.nodes
+    previous = {tree.uuid for tree in nodes.trees()}
+    try:
+        tree = nodes.new_tree("Animated Python API")
+        move = tree.add_node("lfs.set_position", "Move")
+        _insert_between(tree, move, "Geometry")
+        move.keyframe_insert("Offset", time=0, value=[0, 0, 0], easing=3)
+        move.keyframe_insert("Offset", time=2, value=[2, 4, 6])
+        move.name = "Moving subject"
+        geometry = _geometry(lf, numpy)
+
+        def check(graph):
+            result = nodes.evaluate_tree(graph, geometry, time=0.5, device=device)
+            numpy.testing.assert_allclose(result.splats.means.tolist(), [[0.125, 0.25, 0.375]] * 2)
+
+        check(tree)
+        pasted = tree.paste(tree.copy([move]), (30, 40))[0]
+        paths = {track["target"] for track in json.loads(tree.to_json())["animation"]["tracks"]}
+        assert f"nodes/{tree.uuid}/{pasted.name}/Offset" in paths
+        tree.remove_node(pasted.name)
+        group = tree.make_group([move], "Animated group")
+        check(tree)
+        tree.ungroup(group)
+        check(tree)
+        payload = json.loads(tree.to_json())
+        original_uuid = tree.uuid
+        assert nodes.remove_tree(original_uuid)
+        restored = nodes.load_tree(json.dumps(payload))
+        check(restored)
+        payload["uuid"] = str(uuid.uuid4())
+        copied = nodes.load_tree(json.dumps(payload))
+        check(copied)
+        paths = {track["target"] for track in json.loads(copied.to_json())["animation"]["tracks"]}
+        assert f"nodes/{copied.uuid}/Moving subject/Offset" in paths
+        subject = next(node for node in copied.nodes if node.name == "Moving subject")
+        assert subject.keyframe_remove("Offset", time=2)
+        numpy.testing.assert_array_equal(nodes.evaluate_tree(copied, geometry, time=2, device=device).splats.means.tolist(), numpy.zeros((2, 3)))
+        clock = copied.add_node("lfs.scene_time", "Clock")
+        copied.link(clock, "Seconds", subject, "Offset")
+        numpy.testing.assert_array_equal(nodes.evaluate_tree(copied, geometry, time=1.5, device=device).splats.means.tolist(), numpy.full((2, 3), 1.5))
+        with pytest.raises(ValueError, match="unlinked"):
+            subject.keyframe_insert("Offset", time=1, value=[1, 1, 1])
+    finally:
+        for tree in list(nodes.trees()):
+            if tree.uuid not in previous:
+                nodes.remove_tree(tree.uuid)
+
+
 def test_builtin_help_translations_are_complete_and_compact():
     root = Path(__file__).resolve().parents[2]
     for locale in (root / "src/visualizer/gui/resources/locales").glob("*.json"):
@@ -145,7 +197,9 @@ def test_generated_node_reference_is_current(lf):
     descriptors = {node["id"]: node for node in lf.nodes.node_types() if node["id"].startswith("lfs.")}
     for node in descriptors.values():
         path = reference.DESTINATION / (node["id"] + ".md")
-        assert path.read_text(encoding="utf-8") == reference.render_node(node), node["id"]
+        rendered = reference.render_node(node)
+        assert all(line == line.rstrip() for line in rendered.splitlines()), node["id"]
+        assert path.read_text(encoding="utf-8") == rendered, node["id"]
     # Host-only descriptors are checked against the live MCP registry in C++.
     # Include their page headings when checking the complete index headlessly.
     for page in reference.DESTINATION.glob("lfs.*.md"):

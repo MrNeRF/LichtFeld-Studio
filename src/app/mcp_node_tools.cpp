@@ -212,12 +212,50 @@ namespace lfs::app {
         auto* impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
         if (!impl)
             return;
+        for (const bool remove : {false, true}) {
+            add(registry, impl, remove ? "nodes.keyframe_remove" : "nodes.keyframe_set",
+                remove ? "Remove an input keyframe at the sequencer playhead or supplied time" : "Keyframe an unlinked node input using the sequencer animation track",
+                {{"tree", stringSchema()}, {"node", stringSchema()}, {"input", stringSchema()}, {"time", {{"type", "number"}, {"minimum", 0}}}, {"value", json::object()}, {"easing", {{"type", "integer"}, {"minimum", 0}, {"maximum", 3}}}},
+                {"tree", "node", "input"}, [remove](auto& viewer, const json& args) {
+                    auto& manager = viewer.getSceneManager()->modifierManager();
+                    auto* graph = tree(manager, args);
+                    auto* node = graph ? graph->find_node(args.value("node", "")) : nullptr;
+                    if (!node)
+                        return failure("Unknown graph or node", "node");
+                    const auto inputs = lfs::nodes::effective_inputs(*graph, *node, [&](std::string_view id) { return manager.tree(id); });
+                    const auto socket = std::ranges::find(inputs, args.value("input", ""), &lfs::nodes::SocketDecl::identifier);
+                    if (socket == inputs.end())
+                        return failure("Unknown input identifier", "input");
+                    std::optional<lfs::nodes::Value> supplied;
+                    if (args.contains("value")) {
+                        auto converted = value(args.at("value"), *socket);
+                        if (!converted)
+                            return failure(converted.error().message, "value");
+                        supplied = std::move(*converted);
+                    }
+                    const auto time = args.contains("time") ? std::optional{args.at("time").get<float>()} : std::nullopt;
+                    const auto result = remove ? manager.keyframeRemove(graph->uuid, node->name, socket->identifier, time)
+                                               : manager.keyframeSet(graph->uuid, node->name, socket->identifier, time, supplied, args.value("easing", 0));
+                    if (!result)
+                        return failure(result.error().message, "input");
+                    return json{{"success", true}, {"animation", manager.animationJson()}};
+                });
+        }
+        add(registry, impl, "nodes.node_rename", "Rename a node and update links and sequencer target paths atomically",
+            {{"tree", stringSchema()}, {"node", stringSchema()}, {"name", stringSchema()}}, {"tree", "node", "name"},
+            [](auto& viewer, const json& args) {
+                auto& manager = viewer.getSceneManager()->modifierManager();
+                const auto result = manager.renameNode(args.at("tree").get<std::string>(), args.at("node").get<std::string>(), args.at("name").get<std::string>());
+                return result ? json{{"success", true}} : failure(result.error().message, "name");
+            });
         add(registry, impl, "nodes.tree_create", "Create an undoable node graph with linked Group Input and Group Output", {{"name", stringSchema()}}, {},
             [](auto& viewer, const json& args) { return treeState(viewer.getSceneManager()->modifierManager().newTree(args.value("name", "Node Graph"))); });
         add(registry, impl, "nodes.tree_import_json", "Import a graph JSON object as a new graph with a fresh UUID", {{"json", {{"type", "object"}}}}, {"json"},
             [](auto& viewer, const json& args) {
                 auto& manager = viewer.getSceneManager()->modifierManager();
                 auto data = args.at("json");
+                if (data.contains("animation") && !data.contains("animation_tree"))
+                    data["animation_tree"] = data.value("uuid", "");
                 data["uuid"] = core::generate_uuid_v4().to_string();
                 try {
                     if (!data.contains("nodes") || !data["nodes"].is_array())
@@ -264,7 +302,12 @@ namespace lfs::app {
                         graph->name = name;
                         manager.recordTreeEdit(graph->uuid, before);
                     }
-                    return treeState(*graph); }, operation == "export_json", operation == "delete");
+                    auto result = treeState(*graph);
+                    if (operation == "export_json") {
+                        result["tree"]["animation_tree"] = graph->uuid;
+                        result["tree"]["animation"] = manager.animationJson();
+                    }
+                    return result; }, operation == "export_json", operation == "delete");
         }
         add(registry, impl, "nodes.node_add", "Add a registered node type; omit location for placement beside existing nodes", {{"tree", stringSchema()}, {"type_id", stringSchema()}, {"name", stringSchema()}, {"location", pointSchema()}}, {"tree", "type_id"},
             [](auto& viewer, const json& args) {

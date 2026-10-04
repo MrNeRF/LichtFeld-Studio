@@ -2120,7 +2120,7 @@ static float dot_rounded(float3 a, float3 b) {
 }
 
 // kOp 0 builds hashed cells, 1 marks radius matches, 2 counts other references,
-// 3 estimates nearest-neighbour spacing.
+// 3 estimates nearest-neighbour spacing, 4/5 find Int32/Float32 minima.
 struct RadiusParams {
     device const float* points;
     device const uchar* references;
@@ -2128,6 +2128,7 @@ struct RadiusParams {
     device int* next;
     device uchar* output;
     device const uchar* queries;
+    device const uchar* values;
     uint count;
     uint bucket_mask;
     float radius;
@@ -2223,12 +2224,41 @@ static float radius_spacing(constant RadiusParams& p, uint i) {
         sum += sqrt(best[k]);
     return found ? sum / found : p.radius * 4;
 }
+template <typename T>
+static T radius_minimum(constant RadiusParams& p, uint i, device const T* values) {
+    T result = values[i];
+    const float3 point = radius_point(p, i);
+    if (!all(isfinite(point)))
+        return result;
+    const int3 center = radius_cell(point, p.radius);
+    for (int z = -1; z <= 1; ++z) {
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                const int3 target = center + int3(x, y, z);
+                for (int j = p.heads[radius_bucket(target, p.bucket_mask)]; j >= 0; j = p.next[j]) {
+                    const float3 other = radius_point(p, uint(j));
+                    if (all(radius_cell(other, p.radius) == target) && within_radius(point, other, p.radius))
+                        result = min(result, values[j]);
+                }
+            }
+        }
+    }
+    return result;
+}
 kernel void radius_neighbors(constant RadiusParams& params [[buffer(0)]], uint i [[thread_position_in_grid]]) {
     i += params.query_begin;
     if (i >= params.query_end)
         return;
     if (i >= params.count)
         return;
+    if (kOp == 5) {
+        ((device float*)params.output)[i] = radius_minimum(params, i, (device const float*)params.values);
+        return;
+    }
+    if (kOp == 4) {
+        ((device int*)params.output)[i] = radius_minimum(params, i, (device const int*)params.values);
+        return;
+    }
     if (kOp == 3) {
         ((device float*)params.output)[i] = radius_spacing(params, i);
         return;
@@ -2710,6 +2740,7 @@ struct AffineSplatParams {
     device float* out_rotations;
     float linear[9];
     uint count;
+    device const float* matrices;
 };
 
 static float2 two_sum(float a, float b) {
@@ -2808,6 +2839,8 @@ static void sort_axes(thread float3& a, thread float3& b, thread float& la, thre
 kernel void affine_splat_geometry(constant AffineSplatParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
     if (i >= p.count)
         return;
+    float linear[9];
+    for(int k=0;k<9;++k) linear[k]=p.matrices ? p.matrices[9*i+k] : p.linear[k];
     device float* const out_scale = p.out_scales + 3 * i;
     device float* const out_rotation = p.out_rotations + 4 * i;
     const float3 log_scale(p.scales[3 * i], p.scales[3 * i + 1], p.scales[3 * i + 2]);
@@ -2822,7 +2855,7 @@ kernel void affine_splat_geometry(constant AffineSplatParams& p [[buffer(0)]], u
     const float largest_log = max(log_scale.x, max(log_scale.y, log_scale.z));
     float linear_scale = 0;
     for (int k = 0; k < 9; ++k)
-        linear_scale = max(linear_scale, abs(p.linear[k]));
+        linear_scale = max(linear_scale, abs(linear[k]));
     if (linear_scale == 0 || largest_log == -INFINITY) {
         for (int k = 0; k < 3; ++k)
             out_scale[k] = -INFINITY;
@@ -2831,9 +2864,9 @@ kernel void affine_splat_geometry(constant AffineSplatParams& p [[buffer(0)]], u
         return;
     }
     // Common scale factors leave singular vectors unchanged and bound matrix entries.
-    const float3 a0 = float3(p.linear[0], p.linear[1], p.linear[2]) / linear_scale;
-    const float3 a1 = float3(p.linear[3], p.linear[4], p.linear[5]) / linear_scale;
-    const float3 a2 = float3(p.linear[6], p.linear[7], p.linear[8]) / linear_scale;
+    const float3 a0 = float3(linear[0], linear[1], linear[2]) / linear_scale;
+    const float3 a1 = float3(linear[3], linear[4], linear[5]) / linear_scale;
+    const float3 a2 = float3(linear[6], linear[7], linear[8]) / linear_scale;
     float3 b0 = float3(dot(a0, r0), dot(a1, r0), dot(a2, r0)) * exp_difference(log_scale.x, largest_log);
     float3 b1 = float3(dot(a0, r1), dot(a1, r1), dot(a2, r1)) * exp_difference(log_scale.y, largest_log);
     float3 b2 = float3(dot(a0, r2), dot(a1, r2), dot(a2, r2)) * exp_difference(log_scale.z, largest_log);
@@ -3834,4 +3867,72 @@ kernel void cdist(device const uchar* lhs_buffer [[buffer(0)]],
     else if (p != 1.0f && p != 0.0f && !isinf(p))
         distance = pow(distance, 1.0f / p);
     ((device float*)(output_buffer + params.output_offset))[index] = distance;
+}
+
+struct ProximityParams {
+    device const float* queries;
+    device const float* targets;
+    device atomic_int* heads;
+    device int* next;
+    device int* output;
+    uint nq,nt,mask; float width,maximum; uint padding;
+};
+float3 proximityPoint(device const float* address,uint i) {
+    device const float* data=address;
+    return float3(data[3*i],data[3*i+1],data[3*i+2]);
+}
+int3 gridCell(float3 p,float width) { return int3(clamp(floor(p/width),-268435456.0f,268435456.0f)); }
+uint gridHash(int3 c,uint mask) { return ((uint(c.x)*73856093u)^(uint(c.y)*19349663u)^(uint(c.z)*83492791u))&mask; }
+int proximityNearest(ProximityParams p,float3 point) {
+    if(!all(isfinite(point))) return -1;
+    device const int* heads=(device const int*)p.heads; device const int* next=p.next;
+    int3 centre=gridCell(point,p.width);
+    float best=1.0f/0.0f; int index=-1;
+    for(int shell=0;shell<8;++shell) {
+        for(int z=-shell;z<=shell;++z) for(int y=-shell;y<=shell;++y) for(int x=-shell;x<=shell;++x) {
+            if(shell!=0 && abs(x)!=shell && abs(y)!=shell && abs(z)!=shell) continue;
+            int3 target=centre+int3(x,y,z);
+            for(int j=heads[gridHash(target,p.mask)];j>=0;j=next[j]) {
+                float3 q=proximityPoint(p.targets,uint(j));
+                if(any(gridCell(q,p.width)!=target)) continue;
+                float3 delta=point-q; float d=dot(delta,delta);
+                if(d<best || (d==best && (index<0 || j<index))) { best=d;index=j; }
+            }
+        }
+        float3 lower=point-float3(centre-shell)*p.width;
+        float3 upper=float3(centre+shell+1)*p.width-point;
+        float3 bounds=min(lower,upper); float bound=min(bounds.x,min(bounds.y,bounds.z));
+        if(index>=0 && bound>0 && best<bound*bound) return index;
+    }
+    for(uint j=0;j<p.nt;++j) {
+        float3 delta=point-proximityPoint(p.targets,j); float d=dot(delta,delta);
+        if(d<best || (d==best && (index<0 || int(j)<index))) { best=d;index=int(j); }
+    }
+    return index;
+}
+int proximityCoverage(ProximityParams p,float3 point) {
+    device const float* cameras=p.targets;
+    int count=0;
+    for(uint c=0;c<p.nt;++c) {
+        uint b=16*c;
+        float x=dot(float3(cameras[b],cameras[b+1],cameras[b+2]),point)+cameras[b+3];
+        float y=dot(float3(cameras[b+4],cameras[b+5],cameras[b+6]),point)+cameras[b+7];
+        float z=dot(float3(cameras[b+8],cameras[b+9],cameras[b+10]),point)+cameras[b+11];
+        float3 delta=point-float3(cameras[b+12],cameras[b+13],cameras[b+14]);
+        count+=int(z>1e-6f && x>=0 && y>=0 && x<=z && y<=z && (p.maximum<=0 || dot(delta,delta)<=p.maximum*p.maximum));
+    }
+    return count;
+}
+
+kernel void proximity_build(constant ProximityParams& p [[buffer(0)]],uint i [[thread_position_in_grid]]) {
+    if(i>=p.nt) return;
+    float3 q=proximityPoint(p.targets,i); if(!all(isfinite(q))) return;
+    uint bucket=gridHash(gridCell(q,p.width),p.mask);
+    p.next[i]=atomic_exchange_explicit(p.heads+bucket,int(i),memory_order_relaxed);
+}
+kernel void proximity_query(constant ProximityParams& p [[buffer(0)]],uint i [[thread_position_in_grid]]) {
+    if(i<p.nq) p.output[i]=proximityNearest(p,proximityPoint(p.queries,i));
+}
+kernel void camera_coverage(constant ProximityParams& p [[buffer(0)]],uint i [[thread_position_in_grid]]) {
+    if(i<p.nq) p.output[i]=proximityCoverage(p,proximityPoint(p.queries,i));
 }

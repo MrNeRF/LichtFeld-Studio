@@ -7,8 +7,8 @@ Splits a position or direction into its X, Y and Z values.
 
 ## How to use
 
-Connect Position, then send the height axis to Compare or Map Range.  
-Check which axis points up in your scene.  
+Connect Position, then send the height axis to Compare or Map Range.\
+Check which axis points up in your scene.
 
 ## Inputs
 

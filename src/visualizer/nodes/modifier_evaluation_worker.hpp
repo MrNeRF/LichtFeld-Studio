@@ -27,7 +27,10 @@ namespace lfs::vis {
     struct ModifierEvaluationRequest {
         std::uint64_t generation = 0;
         std::uint64_t source_generation = 0;
+        float seconds = 0.0f;
+        float frames_per_second = 24.0f;
         std::vector<ModifierObjectSnapshot> objects;
+        std::vector<lfs::nodes::EvaluationCamera> cameras;
         std::unordered_map<std::string, nlohmann::json> trees;
         std::vector<core::Uuid> targets;
         std::shared_ptr<core::TensorCompletion> inputs_ready;

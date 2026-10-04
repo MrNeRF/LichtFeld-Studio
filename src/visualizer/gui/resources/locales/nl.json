@@ -4165,7 +4165,7 @@
     "scale_clamp": {
       "label": "Asverhouding begrenzen",
       "description": "Verkort naaldvormige Gaussians die strepen tonen wanneer je het opnamepad verlaat.",
-      "help": "Gebruik dit wanneer dunne strepen buiten het camerapad verschijnen.\nBegin met Max. asverhouding 16; lagere waarden verkorten meer naalden.\nPlatte splats op oppervlakken blijven intact tenzij ‘Plat meenemen’ aanstaat.",
+      "help": "Gebruik dit wanneer dunne strepen buiten het camerapad verschijnen.\nBegin met Max. asverhouding 16; lagere waarden verkorten meer naalden.\nPlatte splats op oppervlakken blijven intact tenzij ‘Plat meenemen’ aanstaat.\nAssen met grootte nul blijven ingeklapt; de verhoudingslimiet geldt alleen voor de overige assen.",
       "inputs": {
         "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
         "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
@@ -4340,7 +4340,7 @@
     "set_scale": {
       "label": "Schaal instellen",
       "description": "Stelt de grootte van geselecteerde splats langs hun drie lokale assen in.",
-      "help": "Verbind Schaal via Vectorrekenen om bestaande groottes te vermenigvuldigen.\nZonder verbinding vervangen waarden de grootte in scène-eenheden; het zijn geen factoren.",
+      "help": "Verbind Schaal via Vectorrekenen om bestaande groottes te vermenigvuldigen.\nZonder verbinding vervangen waarden de grootte in scène-eenheden; het zijn geen factoren.\nEen grootte van nul of lager klapt een as in. Een positieve grootte herstelt deze alleen bij volledige selectie; bij gedeeltelijke selectie blijft de as ingeklapt.",
       "inputs": {
         "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
         "Selection": "Waar je bewerkt, 0–1: 0 onveranderd, 1 volledig toegepast. Zonder verbinding betekent alles.",
@@ -4411,7 +4411,7 @@
     "simplify": {
       "label": "Vereenvoudigen",
       "description": "Combineert splats om hun aantal te verlagen en het totaalbeeld te behouden.",
-      "help": "Begin met Verhouding 0,5 om naar de helft van de splats te streven.\nDit kan langer duren; lagere verhoudingen verliezen fijne details.",
+      "help": "Begin met Verhouding 0,5 om naar de helft van de splats te streven.\nDit kan langer duren; lagere verhoudingen verliezen fijne details.\nAssen met covariantie nul blijven ingeklapt; samenvoegen van verschillende posities of oriëntaties kan echte omvang creëren.",
       "inputs": {
         "Geometry": "Geometrie om te bewerken. Verbind een bron; zonder verbinding wordt geen geometrie geleverd.",
         "Ratio": "Gewenst splataandeel, 0,01–1. Standaard 0,5 streeft naar de helft; 1 behoudt het oorspronkelijke aantal."
@@ -4583,8 +4583,397 @@
         "object": "Object",
         "transform_space": "Transformatieruimte"
       }
+    },
+    "float_curve": {
+      "label": "Waardecurve",
+      "description": "Zet getallen om met een vloeiende, bewerkbare curve.",
+      "help": "Zet getallen om met een vloeiende, bewerkbare curve.\nVersleep, voeg toe of verwijder controlepunten. Fritsch–Carlson-interpolatie voorkomt overschrijding tussen monotone punten.",
+      "inputs": {
+        "Value": "Getal per element dat met de curve wordt omgezet."
+      },
+      "input_labels": {
+        "Value": "Waarde"
+      },
+      "outputs": {
+        "Value": "Getal na omzetting met de curve."
+      },
+      "output_labels": {
+        "Value": "Waarde"
+      },
+      "properties": {
+        "points": "Geordende controlepunten als X- en Y-paren.",
+        "clamp": "Begrens invoer tussen het eerste en laatste controlepunt."
+      },
+      "property_labels": {
+        "points": "Curve",
+        "clamp": "Begrenzen"
+      }
+    },
+    "rgb_curves": {
+      "label": "RGB-curven",
+      "description": "Zet kleuren om met een gecombineerde curve en curven per kanaal.",
+      "help": "Zet kleuren om met een gecombineerde curve en curven per kanaal.\nSelectie × Factor mengt het resultaat. De niet-lineaire correctie wijzigt alleen de DC-basiskleur van splats, niet de kijkafhankelijke SH-banden. Werkt ook op punten en meshes.",
+      "inputs": {
+        "Geometry": "Te bewerken geometrie; verbind een geometrie-uitgang.",
+        "Selection": "Menggewicht per element, 0–1; zonder verbinding gelden alle elementen.",
+        "Factor": "Extra sterkte van de curve, 0–1."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Factor": "Factor"
+      },
+      "outputs": {
+        "Geometry": "Geometrie na de bewerking."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "combined": "Curve die eerst op alle kleurkanalen wordt toegepast.",
+        "r": "Curve voor het rode kanaal.",
+        "g": "Curve voor het groene kanaal.",
+        "b": "Curve voor het blauwe kanaal."
+      },
+      "property_labels": {
+        "combined": "Gecombineerd",
+        "r": "Rood",
+        "g": "Groen",
+        "b": "Blauw"
+      }
+    },
+    "colour_ramp": {
+      "label": "Kleurverloop",
+      "description": "Koppelt getallen aan kleuren en transparantie.",
+      "help": "Koppelt getallen aan kleuren en transparantie.\nPlaats kleurstops tussen 0 en 1. Kies constante, lineaire of verzachte interpolatie.",
+      "inputs": {
+        "Fac": "Positie in het kleurverloop, gewoonlijk van 0 tot 1."
+      },
+      "input_labels": {
+        "Fac": "Factor"
+      },
+      "outputs": {
+        "Colour": "Gegenereerde RGB-kleur.",
+        "Alpha": "Transparantie uit het kleurverloop, 0–1."
+      },
+      "output_labels": {
+        "Colour": "Kleur",
+        "Alpha": "Alfa"
+      },
+      "properties": {
+        "stops": "Geordende stops: positie, rood, groen, blauw en alfa.",
+        "interpolation": "Overgang tussen nabije stops: constant, lineair of verzacht."
+      },
+      "property_labels": {
+        "stops": "Verloop",
+        "interpolation": "Interpolatie"
+      }
+    },
+    "gradient_texture": {
+      "label": "Verlooptextuur",
+      "description": "Maakt een verloop uit ruimtelijke coördinaten.",
+      "help": "Maakt een verloop uit ruimtelijke coördinaten.\nGebruik Positie als coördinaten. Lineair gebruikt X, diagonaal X en Y; bolvormig en radiaal verwijzen naar de oorsprong.",
+      "inputs": {
+        "Vector": "X-, Y- en Z-coördinaten; zonder verbinding worden elementposities gebruikt."
+      },
+      "input_labels": {
+        "Vector": "Vector"
+      },
+      "outputs": {
+        "Fac": "Gegenereerde verloopwaarde; kan buiten 0–1 vallen."
+      },
+      "output_labels": {
+        "Fac": "Factor"
+      },
+      "properties": {
+        "type": "Verloopvorm: lineair, kwadratisch, verzacht, diagonaal, bolvormig of radiaal."
+      },
+      "property_labels": {
+        "type": "Type"
+      }
+    },
+    "distance": {
+      "label": "Afstand",
+      "description": "Meet de afstand van elk element tot een punt, lijn of vlak.",
+      "help": "Meet de afstand van elk element tot een punt, lijn of vlak.\nVlakmodus geeft een afstand met teken; punt en lijn geven niet-negatieve afstanden.",
+      "inputs": {
+        "Vector": "X-, Y- en Z-coördinaten; zonder verbinding worden elementposities gebruikt.",
+        "Point": "Doelpunt of een punt op de lijn of het vlak.",
+        "Direction": "Richting van de lijn of kijkrichting van de camera.",
+        "Normal": "Normaalrichting van het doelvlak."
+      },
+      "input_labels": {
+        "Vector": "Vector",
+        "Point": "Punt",
+        "Direction": "Richting",
+        "Normal": "Normaal"
+      },
+      "outputs": {
+        "Distance": "Afstand in scène-eenheden; met teken in vlakmodus."
+      },
+      "output_labels": {
+        "Distance": "Afstand"
+      },
+      "properties": {
+        "mode": "Meet tot een punt, lijn of vlak."
+      },
+      "property_labels": {
+        "mode": "Modus"
+      }
+    },
+    "noise_texture": {
+      "label": "Ruistextuur",
+      "description": "Maakt reproduceerbare driedimensionale fractale ruis.",
+      "help": "Maakt reproduceerbare driedimensionale fractale ruis.\nZonder verbinding worden posities gebruikt. Detail ondersteunt 0–15 octaven met fracties; Ruwheid regelt hun amplitudes.",
+      "inputs": {
+        "Vector": "X-, Y- en Z-coördinaten; zonder verbinding worden elementposities gebruikt.",
+        "Scale": "Vermenigvuldiger voor grootte of coördinaten; 1 behoudt de oorspronkelijke grootte.",
+        "Detail": "Aantal octaven van 0 tot 15, met fractioneel mengen.",
+        "Roughness": "Deel van de amplitude dat elke volgende octaaf behoudt.",
+        "Distortion": "Sterkte van de coördinatenvervorming.",
+        "Seed": "Startwaarde om het ruispatroon te reproduceren."
+      },
+      "input_labels": {
+        "Vector": "Vector",
+        "Scale": "Schaal",
+        "Detail": "Detail",
+        "Roughness": "Ruwheid",
+        "Distortion": "Vervorming",
+        "Seed": "Startwaarde"
+      },
+      "outputs": {
+        "Fac": "Bemonsteringswaarde van het verloop of gemaakte ruis, 0–1.",
+        "Colour": "Gegenereerde RGB-kleur."
+      },
+      "output_labels": {
+        "Fac": "Factor",
+        "Colour": "Kleur"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "store_named_attribute": {
+      "label": "Attribuut met naam opslaan",
+      "description": "Slaat waarden op de elementen van de geometrie op.",
+      "help": "Slaat waarden op de elementen van de geometrie op.\nLees later met dezelfde attribuutnaam. Niet-geselecteerde elementen houden hun waarde of 0. Splat- en puntattributen blijven in volgende modifiers beschikbaar; meshknooppuntattributen verdwijnen bij toepassen.",
+      "inputs": {
+        "Geometry": "Te bewerken geometrie; verbind een geometrie-uitgang.",
+        "Selection": "Menggewicht per element, 0–1; zonder verbinding gelden alle elementen.",
+        "Name": "Naam voor later uitlezen met Attribuut met naam.",
+        "Value": "Op te slaan getallen, vectoren of kleuren per element."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Name": "Naam",
+        "Value": "Waarde"
+      },
+      "outputs": {
+        "Geometry": "Geometrie na de bewerking."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {
+        "data_type": "Sla de waarde op als getal, vector of kleur."
+      },
+      "property_labels": {
+        "data_type": "Gegevenstype"
+      }
+    },
+    "remove_clumps": {
+      "label": "Kleine groepen verwijderen",
+      "description": "Verwijdert kleine verbonden groepen splats of punten.",
+      "help": "Verwijdert kleine verbonden groepen splats of punten.\nDe straal vermenigvuldigt de mediane lokale tussenafstand. De GPU bepaalt verbonden componenten; alleen groepen onder de minimumgrootte verdwijnen. Meshes worden niet ondersteund.",
+      "inputs": {
+        "Geometry": "Te bewerken geometrie; verbind een geometrie-uitgang.",
+        "Selection": "Elementen met een waarde van minstens 0,5 worden geselecteerd.",
+        "Radius": "Verbindingsstraal als veelvoud van de mediane lokale tussenafstand.",
+        "Min Size": "Groepen met minder elementen komen in aanmerking voor verwijdering."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Radius": "Straal",
+        "Min Size": "Minimumgrootte"
+      },
+      "outputs": {
+        "Geometry": "Geometrie na de bewerking.",
+        "Selection": "Elementen in groepen onder de minimumgrootte."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie"
+      },
+      "properties": {
+        "delete": "Verwijder kandidaten; schakel uit om alleen de selectie-uitgang te gebruiken."
+      },
+      "property_labels": {
+        "delete": "Verwijderen"
+      }
+    },
+    "merge_by_distance": {
+      "label": "Samenvoegen op afstand",
+      "description": "Voegt nabije elementen samen tot compacte geometrie.",
+      "help": "Voegt nabije elementen samen tot compacte geometrie.\nAlleen geselecteerde elementen worden samengevoegd. Punten en knooppunten worden gemiddeld, vlakken opnieuw gekoppeld en ontaarde vlakken verwijderd. Van splats blijft het meest ondoorzichtige lid per groep behouden.",
+      "inputs": {
+        "Geometry": "Te bewerken geometrie; verbind een geometrie-uitgang.",
+        "Selection": "Elementen met een waarde van minstens 0,5 worden geselecteerd.",
+        "Distance": "Maximale afstand die elementen binnen een groep verbindt."
+      },
+      "input_labels": {
+        "Geometry": "Geometrie",
+        "Selection": "Selectie",
+        "Distance": "Afstand"
+      },
+      "outputs": {
+        "Geometry": "Geometrie na de bewerking."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "geometry_proximity": {
+      "label": "Geometrische nabijheid",
+      "description": "Vindt het dichtstbijzijnde doelpunt, splatcentrum of meshknooppunt.",
+      "help": "Vindt het dichtstbijzijnde doelpunt, splatcentrum of meshknooppunt.\nVerbind doelgeometrie in hetzelfde coördinatenstelsel. Meet tot elementen, niet tot het oppervlak tussen meshknooppunten.",
+      "inputs": {
+        "Target": "Doelgeometrie met punten, splats of knooppunten; mag niet leeg zijn."
+      },
+      "input_labels": {
+        "Target": "Doel"
+      },
+      "outputs": {
+        "Distance": "Afstand in scène-eenheden; met teken in vlakmodus.",
+        "Position": "Gevonden positie in de coördinaten van geometrie of camera."
+      },
+      "output_labels": {
+        "Distance": "Afstand",
+        "Position": "Positie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "instance_on_points": {
+      "label": "Instanties op punten",
+      "description": "Plaatst een getransformeerde splatkopie op elk geselecteerd anker.",
+      "help": "Plaatst een getransformeerde splatkopie op elk geselecteerd anker.\nAnkers mogen punten, meshknooppunten of splatcentra zijn; de instantie moet splats bevatten. Euler-rotaties in graden en schalen transformeren vorm en SH-kleur samen. Limiet: 50 miljoen splats.\nNegatieve factoren gebruiken hun absolute waarde voor de grootte en spiegelen posities, oriëntatie en SH-kleur. Een ingeklapte transformatie laat SH-kleur ongewijzigd.",
+      "inputs": {
+        "Points": "Geometrie waarvan de elementen als ankers dienen.",
+        "Instance": "Te kopiëren splatgeometrie; andere typen zijn niet toegestaan.",
+        "Selection": "Elementen met een waarde van minstens 0,5 worden geselecteerd.",
+        "Rotation": "Euler-hoeken rond X, Y en Z in graden per anker; 0 behoudt de oriëntatie.",
+        "Scale": "Eén getal of drie asfactoren: 1 behoudt de grootte, 0 maakt een as vlak en negatieve waarden spiegelen."
+      },
+      "input_labels": {
+        "Points": "Punten",
+        "Instance": "Instantie",
+        "Selection": "Selectie",
+        "Rotation": "Rotatie",
+        "Scale": "Schaal"
+      },
+      "outputs": {
+        "Geometry": "Geometrie na de bewerking."
+      },
+      "output_labels": {
+        "Geometry": "Geometrie"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "camera_info": {
+      "label": "Camera-informatie",
+      "description": "Leest positie, oriëntatie en lensgegevens van een datasetcamera.",
+      "help": "Leest positie, oriëntatie en lensgegevens van een datasetcamera.\nKies op index of afbeeldingsnaam. Uitgangen gebruiken wereldcoördinaten; de scène moet datasetcamera’s bevatten.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Gevonden positie in de coördinaten van geometrie of camera.",
+        "Direction": "Richting van de lijn of kijkrichting van de camera.",
+        "Up": "Eenheidsvector naar de bovenrand van het beeld.",
+        "FOV": "Verticale beeldhoek in graden.",
+        "Image Size": "Beeldbreedte en -hoogte in pixels; Z is 0."
+      },
+      "output_labels": {
+        "Position": "Positie",
+        "Direction": "Richting",
+        "Up": "Omhoog",
+        "FOV": "Beeldhoek",
+        "Image Size": "Beeldformaat"
+      },
+      "properties": {
+        "camera": "Camera-index of exacte afbeeldingsnaam; 0 kiest de eerste camera."
+      },
+      "property_labels": {
+        "camera": "Camera"
+      }
+    },
+    "camera_coverage": {
+      "label": "Cameradekking",
+      "description": "Telt camera’s waarvan het zichtvolume elk element bevat.",
+      "help": "Telt camera’s waarvan het zichtvolume elk element bevat.\nVerbind Aantal met Vergelijken. Controleert beeldgrenzen en positieve diepte, niet afscherming. Maximale afstand 0 schakelt de grens uit. Werkt op splats, punten en meshknooppunten; datasetcamera’s zijn vereist.",
+      "inputs": {
+        "Max Distance": "Maximale camera-afstand in wereldeenheden; 0 schakelt de grens uit."
+      },
+      "input_labels": {
+        "Max Distance": "Maximale afstand"
+      },
+      "outputs": {
+        "Count": "Aantal datasetcamera’s waarvan de beeldgrenzen dit element bevatten.",
+        "Ratio": "Aandeel camera’s dat het element bevat, 0–1."
+      },
+      "output_labels": {
+        "Count": "Aantal",
+        "Ratio": "Aandeel"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "view_distance": {
+      "label": "Camera-afstand",
+      "description": "Meet de wereldafstand tot een camera of vastgelegde weergave.",
+      "help": "Meet de wereldafstand tot een camera of vastgelegde weergave.\nKies een camera of druk op Weergave vastleggen. De vastgelegde camera volgt latere bewegingen niet. Werkt op splats, punten en meshknooppunten; datasetcamera’s zijn vereist.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Distance": "Afstand tot de gekozen camera in wereldeenheden."
+      },
+      "output_labels": {
+        "Distance": "Afstand"
+      },
+      "properties": {
+        "camera": "Camera-index of exacte afbeeldingsnaam; 0 kiest de eerste camera.",
+        "source": "Gebruik een datasetcamera of de laatst vastgelegde weergave.",
+        "captured_transform": "Opgeslagen camera-naar-wereldmatrix; leeg tot de eerste vastlegging."
+      },
+      "property_labels": {
+        "camera": "Camera",
+        "source": "Bron",
+        "captured_transform": "Vastgelegde transformatie"
+      }
+    },
+    "scene_time": {
+      "label": "Scènetijd",
+      "description": "Geeft de tijd van de afspeelkop van de sequencer.",
+      "help": "Gebruik Seconden of Frame om velden te animeren.\nAlleen tijdafhankelijke grafen worden tijdens het afspelen opnieuw berekend.\nVideo-export wacht voor elk frame op de berekende geometrie.",
+      "inputs": {},
+      "properties": {},
+      "outputs": {
+        "Seconds": "Tijd van de afspeelkop in seconden.",
+        "Frame": "Tijd van de afspeelkop vermenigvuldigd met de beeldsnelheid van de sequencer."
+      },
+      "output_labels": {
+        "Seconds": "Seconden",
+        "Frame": "Frame"
+      }
     }
   },
   "node_editor.how_to_use": "Zo gebruik je dit",
-  "node_editor.learn_more": "Meer informatie"
+  "node_editor.learn_more": "Meer informatie",
+  "node_editor.capture_view": "Weergave vastleggen",
+  "node_editor.curve_hint": "Versleep punten; klik om toe te voegen, dubbelklik of Delete om te verwijderen.",
+  "node_editor.ramp_hint": "Versleep kleurstops; klik om toe te voegen, dubbelklik of Delete om te verwijderen. Selecteer een stop om RGBA te wijzigen.",
+  "node_editor.keyframe_hint": "Sleutelframe invoegen · Ctrl+klik of I onder de muisaanwijzer"
 }

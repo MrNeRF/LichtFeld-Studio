@@ -128,7 +128,7 @@ namespace lfs::core::internal {
             const auto op = ExprOp(ins.op_dst_a_b & 255u);
             const uint32_t aux = (ins.c_aux_policy >> 8) & 255u;
             const uint32_t policy = (ins.c_aux_policy >> 16) & 255u;
-            require(uint32_t(op) <= uint32_t(ExprOp::CastUnsignedFloat), "invalid expression opcode");
+            require(uint32_t(op) <= uint32_t(ExprOp::PreciseDiv), "invalid expression opcode");
             const uint32_t registers[]{(ins.op_dst_a_b >> 16) & 255u, ins.op_dst_a_b >> 24, ins.c_aux_policy & 255u};
             std::array<uint32_t, 3> sources{};
             for (uint32_t a = 0; a < expr_arity(op); ++a)

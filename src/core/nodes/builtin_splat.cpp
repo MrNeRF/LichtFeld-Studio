@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "builtin_common.hpp"
+#include <limits>
 namespace lfs::nodes::builtin {
     namespace {
         constexpr glm::vec3 kRec709Luma(0.2126f, 0.7152f, 0.0722f);
@@ -88,7 +89,8 @@ namespace lfs::nodes::builtin {
             auto& s = *geometry.splats;
             auto fc = field_context(s);
             auto w = selection(context, "Selection", fc);
-            auto value = context.evaluate_field("Scale", fc, VECTOR_SOCKET).clamp_min(1e-8f);
+            // Zero size is a collapsed axis, represented exactly by log(0).
+            auto value = context.evaluate_field("Scale", fc, VECTOR_SOCKET).clamp_min(0.0f);
             s.scaling = blend(s.scaling, value.log(), w);
         }
         context.set_output("Geometry", std::move(geometry));
@@ -117,11 +119,19 @@ namespace lfs::nodes::builtin {
 
     void evaluate_sharpen(NodeContext& context) {
         auto geometry = geometry_input(context);
+        const float amount = input_float(context, "Amount");
+        if (amount == 0.0f) {
+            // sigmoid/logit is not a bit-exact identity, and clamping it changes
+            // large logits. Preserve ties used by downstream structural nodes.
+            context.set_output("Geometry", std::move(geometry));
+            return;
+        }
         if (geometry.splats) {
             auto& splats = *geometry.splats;
             const auto weight = selection(context, "Selection", field_context(splats));
-            const float shrink = 1 - input_float(context, "Amount");
-            splats.scaling = blend(splats.scaling, splats.scaling + std::log(shrink), weight);
+            const float shrink = 1 - amount;
+            // Add the weighted log factor directly: no interpolation of infinities.
+            splats.scaling = splats.scaling + weight.unsqueeze(1) * std::log(shrink);
             if (property_bool(context, "keep_coverage", true)) {
                 const auto opacity = splats.opacity.sigmoid();
                 const auto corrected = (opacity / shrink).clamp(1e-6f, 1 - 1e-6f).logit();
@@ -142,13 +152,24 @@ namespace lfs::nodes::builtin {
             }
             const float limit = std::log(input_float(context, "Max Aspect", 16));
             const auto largest = splats.scaling.max(1, true);
-            const auto smallest = splats.scaling.min(1, true);
             Tensor clamped;
             if (property_bool(context, "include_flat", false)) {
-                const auto centre = (largest + smallest) * 0.5f;
+                // Limit only nonzero axes. Collapsed axes must not acquire
+                // thickness or force every other axis to collapse as well.
+                const auto finite = splats.scaling.isfinite();
+                const auto smallest = Tensor::where(finite, splats.scaling,
+                                                    Tensor::full(splats.scaling.shape(), std::numeric_limits<float>::infinity(), splats.scaling.device()))
+                                          .min(1, true);
+                const auto centre = Tensor::where(largest.isfinite(), largest * 0.5f + smallest * 0.5f,
+                                                  Tensor::zeros_like(largest));
                 clamped = splats.scaling.maximum(centre - limit * 0.5f).minimum(centre + limit * 0.5f);
+                clamped = Tensor::where(finite, clamped, splats.scaling);
             } else {
-                const auto middle = splats.scaling.sum(1, true) - largest - smallest;
+                const auto x = channel(splats.scaling, 0), y = channel(splats.scaling, 1), z = channel(splats.scaling, 2);
+                // A comparison-only median also works for log(0)=-inf;
+                // sum - min - max subtracts infinities and produces NaN.
+                auto middle = x.minimum(y).maximum(x.maximum(y).minimum(z)).unsqueeze(1);
+                middle = Tensor::where(middle.isfinite(), middle, largest);
                 clamped = splats.scaling.minimum(middle + limit);
             }
             splats.scaling = blend(splats.scaling, clamped, weight);

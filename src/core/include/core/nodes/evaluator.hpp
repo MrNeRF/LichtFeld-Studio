@@ -18,11 +18,20 @@ namespace lfs::nodes {
     enum class TransformSpace { Original,
                                 Relative };
 
+    struct EvaluationCamera {
+        std::string name;
+        glm::mat4 world_to_camera{1.0f}; // dataset convention: +Z forward, +Y down
+        float focal_x = 1, focal_y = 1, center_x = 0, center_y = 0;
+        int width = 1, height = 1;
+    };
+
     class LFS_CORE_API EvalHost {
     public:
         virtual ~EvalHost() = default;
         virtual std::uint64_t generation() const = 0;
         virtual std::optional<Geometry> object_geometry(std::string_view name, TransformSpace space) = 0;
+        virtual std::span<const EvaluationCamera> cameras() const { return {}; }
+        virtual glm::mat4 object_to_world() const { return glm::mat4(1.0f); }
     };
 
     class LFS_CORE_API NodeError : public std::runtime_error {
@@ -52,6 +61,8 @@ namespace lfs::nodes {
         // EvalInputs without a second evaluator API. Ordinary callers leave it empty.
         std::vector<std::pair<std::string, std::string>> group_stack;
         std::string cache_namespace;
+        float seconds = 0.0f;
+        float frames_per_second = 24.0f;
     };
 
     struct NodeEvaluation {
@@ -103,6 +114,8 @@ namespace lfs::nodes {
         [[nodiscard]] const nlohmann::json& properties() const;
         [[nodiscard]] const Node& node() const;
         [[nodiscard]] EvalHost* host() const noexcept;
+        [[nodiscard]] float seconds() const noexcept { return seconds_; }
+        [[nodiscard]] float frame() const noexcept { return seconds_ * frames_per_second_; }
         void set_output(std::string identifier, Value value);
 
     private:
@@ -112,6 +125,8 @@ namespace lfs::nodes {
         std::unordered_map<std::string, Value> outputs_;
         FieldMemo* memo_ = nullptr;
         EvalHost* host_ = nullptr;
+        float seconds_ = 0.0f;
+        float frames_per_second_ = 24.0f;
     };
 
     LFS_CORE_API EvalResult evaluate(const NodeTree& tree, EvalInputs inputs, EvalHost* host = nullptr,

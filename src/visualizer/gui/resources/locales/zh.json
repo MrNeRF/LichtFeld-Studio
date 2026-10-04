@@ -4165,7 +4165,7 @@
     "scale_clamp": {
       "label": "限制轴比",
       "description": "缩短远离拍摄路径时形成拖痕的针状 Gaussian。",
-      "help": "若相机路径以外出现细条纹，可使用此节点。\n从最大轴比 16 开始；值越小，缩短的针状 splat 越多。\n表面上的扁平 splat 保持不变，除非开启“包括扁平”。",
+      "help": "若相机路径以外出现细条纹，可使用此节点。\n从最大轴比 16 开始；值越小，缩短的针状 splat 越多。\n表面上的扁平 splat 保持不变，除非开启“包括扁平”。\n尺寸为零的轴保持塌缩；轴比限制仅作用于其余非零轴。",
       "inputs": {
         "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
         "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
@@ -4340,7 +4340,7 @@
     "set_scale": {
       "label": "设置尺寸",
       "description": "设置选中 splat 沿三个局部轴的尺寸。",
-      "help": "让尺寸经过向量运算来缩放现有大小。\n未连接的数值直接替换场景单位下的尺寸，不是乘数。",
+      "help": "让尺寸经过向量运算来缩放现有大小。\n未连接的数值直接替换场景单位下的尺寸，不是乘数。\n零或负尺寸会使轴塌缩。只有完全选中时，正尺寸才能恢复该轴；部分选中时仍保持塌缩。",
       "inputs": {
         "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
         "Selection": "编辑范围和强度，0–1：0 保持不变，1 完全应用。未连接表示全部。",
@@ -4411,7 +4411,7 @@
     "simplify": {
       "label": "简化",
       "description": "合并 splat 以减少数量，同时保持场景的整体外观。",
-      "help": "从比例 0.5 开始，目标是保留一半 splat。\n可能比其他节点耗时更长；更低比例会损失细节。",
+      "help": "从比例 0.5 开始，目标是保留一半 splat。\n可能比其他节点耗时更长；更低比例会损失细节。\n协方差为零的轴保持塌缩；合并不同位置或朝向时可能产生实际的延展。",
       "inputs": {
         "Geometry": "要编辑的几何体。请连接来源；未连接的输入不提供几何体。",
         "Ratio": "目标保留比例，0.01–1。默认 0.5 目标为一半；1 保留原始数量。"
@@ -4583,8 +4583,397 @@
         "object": "对象",
         "transform_space": "变换空间"
       }
+    },
+    "float_curve": {
+      "label": "数值曲线",
+      "description": "通过可编辑的平滑曲线重新映射数值。",
+      "help": "通过可编辑的平滑曲线重新映射数值。\n拖动、添加或删除控制点来调整曲线。Fritsch–Carlson 插值可避免单调控制点之间出现过冲。",
+      "inputs": {
+        "Value": "通过曲线重新映射的逐元素数值。"
+      },
+      "input_labels": {
+        "Value": "数值"
+      },
+      "outputs": {
+        "Value": "经曲线重新映射的数值。"
+      },
+      "output_labels": {
+        "Value": "数值"
+      },
+      "properties": {
+        "points": "按顺序排列的曲线控制点，每项为 X、Y 数值对。",
+        "clamp": "将输入限制在首尾控制点的范围内。"
+      },
+      "property_labels": {
+        "points": "曲线",
+        "clamp": "限制"
+      }
+    },
+    "rgb_curves": {
+      "label": "RGB 曲线",
+      "description": "通过综合曲线及各颜色通道的曲线重新映射颜色。",
+      "help": "通过综合曲线及各颜色通道的曲线重新映射颜色。\n使用选择×系数混合结果。非线性调整仅改变高斯点的直流基础颜色，不改变随视角变化的球谐频带。也适用于点云和网格。",
+      "inputs": {
+        "Geometry": "需要编辑的几何体，请连接几何体输出。",
+        "Selection": "逐元素混合权重，范围 0–1；未连接时作用于全部元素。",
+        "Factor": "曲线效果的额外强度，范围 0–1。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Factor": "系数"
+      },
+      "outputs": {
+        "Geometry": "编辑后的几何体。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "combined": "首先应用于所有颜色通道的曲线。",
+        "r": "应用于红色通道的曲线。",
+        "g": "应用于绿色通道的曲线。",
+        "b": "应用于蓝色通道的曲线。"
+      },
+      "property_labels": {
+        "combined": "综合",
+        "r": "红色",
+        "g": "绿色",
+        "b": "蓝色"
+      }
+    },
+    "colour_ramp": {
+      "label": "颜色渐变",
+      "description": "将数值映射到颜色和透明度。",
+      "help": "将数值映射到颜色和透明度。\n在 0–1 范围内排列色标。可选恒定、线性或缓动插值。",
+      "inputs": {
+        "Fac": "颜色渐变中的位置，通常为 0–1。"
+      },
+      "input_labels": {
+        "Fac": "系数"
+      },
+      "outputs": {
+        "Colour": "生成的 RGB 颜色。",
+        "Alpha": "从渐变采样的透明度，范围 0–1。"
+      },
+      "output_labels": {
+        "Colour": "颜色",
+        "Alpha": "透明度"
+      },
+      "properties": {
+        "stops": "按顺序排列的色标：位置、红、绿、蓝、透明度。",
+        "interpolation": "相邻色标间的过渡方式：恒定、线性或缓动。"
+      },
+      "property_labels": {
+        "stops": "渐变",
+        "interpolation": "插值"
+      }
+    },
+    "gradient_texture": {
+      "label": "渐变纹理",
+      "description": "根据空间坐标生成渐变。",
+      "help": "根据空间坐标生成渐变。\n将位置用作坐标。线性使用 X，对角使用 X 和 Y；球形与径向以原点为基准。",
+      "inputs": {
+        "Vector": "X、Y、Z 坐标；未连接时使用元素位置。"
+      },
+      "input_labels": {
+        "Vector": "向量"
+      },
+      "outputs": {
+        "Fac": "生成的渐变值，可能超出 0–1 范围。"
+      },
+      "output_labels": {
+        "Fac": "系数"
+      },
+      "properties": {
+        "type": "渐变形状：线性、二次、缓动、对角、球形或径向。"
+      },
+      "property_labels": {
+        "type": "类型"
+      }
+    },
+    "distance": {
+      "label": "距离",
+      "description": "测量每个元素到点、直线或平面的距离。",
+      "help": "测量每个元素到点、直线或平面的距离。\n平面模式返回有符号距离；点和直线模式返回非负距离。",
+      "inputs": {
+        "Vector": "X、Y、Z 坐标；未连接时使用元素位置。",
+        "Point": "目标点，或直线、平面上的一点。",
+        "Direction": "直线方向或相机前向方向。",
+        "Normal": "目标平面的法线方向。"
+      },
+      "input_labels": {
+        "Vector": "向量",
+        "Point": "点",
+        "Direction": "方向",
+        "Normal": "法线"
+      },
+      "outputs": {
+        "Distance": "以场景单位表示的距离；平面模式下带符号。"
+      },
+      "output_labels": {
+        "Distance": "距离"
+      },
+      "properties": {
+        "mode": "测量到点、直线或平面的距离。"
+      },
+      "property_labels": {
+        "mode": "模式"
+      }
+    },
+    "noise_texture": {
+      "label": "噪声纹理",
+      "description": "生成可重复的三维分形噪声。",
+      "help": "生成可重复的三维分形噪声。\n未连接时使用位置。细节支持 0–15 个八度及小数混合，粗糙度控制各八度的振幅。",
+      "inputs": {
+        "Vector": "X、Y、Z 坐标；未连接时使用元素位置。",
+        "Scale": "大小或坐标的倍数；1 保持原始大小。",
+        "Detail": "0–15 个八度，小数部分平滑混合。",
+        "Roughness": "每个后续八度保留的振幅比例。",
+        "Distortion": "坐标扭曲强度。",
+        "Seed": "用于复现噪声图案的种子。"
+      },
+      "input_labels": {
+        "Vector": "向量",
+        "Scale": "缩放",
+        "Detail": "细节",
+        "Roughness": "粗糙度",
+        "Distortion": "扭曲",
+        "Seed": "种子"
+      },
+      "outputs": {
+        "Fac": "渐变采样值或生成的噪声值，范围 0–1。",
+        "Colour": "生成的 RGB 颜色。"
+      },
+      "output_labels": {
+        "Fac": "系数",
+        "Colour": "颜色"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "store_named_attribute": {
+      "label": "存储命名属性",
+      "description": "在几何体元素上存储数值。",
+      "help": "在几何体元素上存储数值。\n后续可用相同属性名读取。未选中的元素保留已有值或使用 0。高斯点与点云属性可传递给后续修改器，网格顶点属性会在应用修改器时丢弃。",
+      "inputs": {
+        "Geometry": "需要编辑的几何体，请连接几何体输出。",
+        "Selection": "逐元素混合权重，范围 0–1；未连接时作用于全部元素。",
+        "Name": "后续通过命名属性节点读取时使用的名称。",
+        "Value": "要存储的逐元素数值、向量或颜色。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Name": "名称",
+        "Value": "数值"
+      },
+      "outputs": {
+        "Geometry": "编辑后的几何体。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {
+        "data_type": "将值存储为数值、向量或颜色。"
+      },
+      "property_labels": {
+        "data_type": "数据类型"
+      }
+    },
+    "remove_clumps": {
+      "label": "移除小簇",
+      "description": "移除高斯点或点云中的小型连通簇。",
+      "help": "移除高斯点或点云中的小型连通簇。\n半径是局部间距中位数的倍数。GPU 计算连通分量，只移除小于最小大小的簇。不支持网格。",
+      "inputs": {
+        "Geometry": "需要编辑的几何体，请连接几何体输出。",
+        "Selection": "数值大于或等于 0.5 的元素被选中。",
+        "Radius": "连接半径，以局部间距中位数的倍数表示。",
+        "Min Size": "元素数量低于此值的簇成为移除候选。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Radius": "半径",
+        "Min Size": "最小大小"
+      },
+      "outputs": {
+        "Geometry": "编辑后的几何体。",
+        "Selection": "属于小于最小大小的簇的元素。"
+      },
+      "output_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择"
+      },
+      "properties": {
+        "delete": "删除候选元素；关闭后可仅使用选择输出。"
+      },
+      "property_labels": {
+        "delete": "删除"
+      }
+    },
+    "merge_by_distance": {
+      "label": "按距离合并",
+      "description": "合并邻近元素，使几何体更紧凑。",
+      "help": "合并邻近元素，使几何体更紧凑。\n只有选中的元素会合并。点和顶点取平均，面索引重新映射并删除退化面。高斯点则保留每个连通簇中最不透明的成员。",
+      "inputs": {
+        "Geometry": "需要编辑的几何体，请连接几何体输出。",
+        "Selection": "数值大于或等于 0.5 的元素被选中。",
+        "Distance": "将元素连接到同一簇的最大距离。"
+      },
+      "input_labels": {
+        "Geometry": "几何体",
+        "Selection": "选择",
+        "Distance": "距离"
+      },
+      "outputs": {
+        "Geometry": "编辑后的几何体。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "geometry_proximity": {
+      "label": "几何邻近",
+      "description": "查找最近的目标点、高斯点中心或网格顶点。",
+      "help": "查找最近的目标点、高斯点中心或网格顶点。\n连接处于同一坐标系的目标几何体。测量到元素本身的距离，而不是网格顶点之间的表面。",
+      "inputs": {
+        "Target": "包含点、高斯点或网格顶点的目标几何体；不能为空。"
+      },
+      "input_labels": {
+        "Target": "目标"
+      },
+      "outputs": {
+        "Distance": "以场景单位表示的距离；平面模式下带符号。",
+        "Position": "在几何体或相机坐标系中得到的位置。"
+      },
+      "output_labels": {
+        "Distance": "距离",
+        "Position": "位置"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "instance_on_points": {
+      "label": "在点上实例化",
+      "description": "在每个选中的锚点上放置变换后的高斯点副本。",
+      "help": "在每个选中的锚点上放置变换后的高斯点副本。\n锚点可以是点云点、网格顶点或高斯点中心；实例仅支持高斯点。以度为单位的欧拉旋转和缩放值同时变换形状与球谐颜色。输出上限为 5000 万个高斯点。\n负倍数使用绝对值决定尺寸，并镜像位置、朝向和球谐颜色。塌缩变换保持球谐颜色不变。",
+      "inputs": {
+        "Points": "以其元素作为锚点的几何体。",
+        "Instance": "要复制的高斯点几何体；不支持其他类型。",
+        "Selection": "数值大于或等于 0.5 的元素被选中。",
+        "Rotation": "每个锚点绕 X、Y、Z 轴的欧拉角，以度为单位；0 保持朝向。",
+        "Scale": "缩放可使用一个数值或三个轴倍率：1 保持大小，0 将轴压平，负值镜像该轴。"
+      },
+      "input_labels": {
+        "Points": "点",
+        "Instance": "实例",
+        "Selection": "选择",
+        "Rotation": "旋转",
+        "Scale": "缩放"
+      },
+      "outputs": {
+        "Geometry": "编辑后的几何体。"
+      },
+      "output_labels": {
+        "Geometry": "几何体"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "camera_info": {
+      "label": "相机信息",
+      "description": "读取数据集相机的位置、朝向和镜头信息。",
+      "help": "读取数据集相机的位置、朝向和镜头信息。\n按索引或图像名称选择相机。输出使用世界坐标；场景必须包含数据集相机。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "在几何体或相机坐标系中得到的位置。",
+        "Direction": "直线方向或相机前向方向。",
+        "Up": "指向图像上方的单位向量。",
+        "FOV": "垂直视场角，以度为单位。",
+        "Image Size": "图像宽度和高度，以像素为单位；Z 为 0。"
+      },
+      "output_labels": {
+        "Position": "位置",
+        "Direction": "方向",
+        "Up": "上方向",
+        "FOV": "视场角",
+        "Image Size": "图像尺寸"
+      },
+      "properties": {
+        "camera": "相机索引或准确的图像名称；0 选择第一台相机。"
+      },
+      "property_labels": {
+        "camera": "相机"
+      }
+    },
+    "camera_coverage": {
+      "label": "相机覆盖",
+      "description": "统计视锥体内包含每个元素的相机数量。",
+      "help": "统计视锥体内包含每个元素的相机数量。\n将数量连接到比较节点。检查图像边界和正深度，不检查遮挡。最大距离为 0 时不限制距离。适用于高斯点、点云和网格顶点；需要数据集相机。",
+      "inputs": {
+        "Max Distance": "以世界单位表示的最大相机距离；0 表示不限制。"
+      },
+      "input_labels": {
+        "Max Distance": "最大距离"
+      },
+      "outputs": {
+        "Count": "图像范围内包含此元素的数据集相机数量。",
+        "Ratio": "包含此元素的相机占全部相机的比例，范围 0–1。"
+      },
+      "output_labels": {
+        "Count": "数量",
+        "Ratio": "比例"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "view_distance": {
+      "label": "相机距离",
+      "description": "测量到相机或已捕获视图的世界空间距离。",
+      "help": "测量到相机或已捕获视图的世界空间距离。\n选择数据集相机，或点击捕获视图保存当前视口相机。捕获后不会跟随视口移动。适用于高斯点、点云和网格顶点；需要数据集相机。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Distance": "到所选相机的距离，以世界单位表示。"
+      },
+      "output_labels": {
+        "Distance": "距离"
+      },
+      "properties": {
+        "camera": "相机索引或准确的图像名称；0 选择第一台相机。",
+        "source": "使用数据集相机或最后捕获的视图。",
+        "captured_transform": "保存的相机到世界变换矩阵；首次捕获前为空。"
+      },
+      "property_labels": {
+        "camera": "相机",
+        "source": "来源",
+        "captured_transform": "捕获的变换"
+      }
+    },
+    "scene_time": {
+      "label": "场景时间",
+      "description": "输出序列编辑器播放头的时间。",
+      "help": "使用秒或帧为场添加动画。\n播放时只重新求值依赖时间的图。\n导出视频时会等待每一帧的几何求值完成。",
+      "inputs": {},
+      "properties": {},
+      "outputs": {
+        "Seconds": "播放头的时间，单位为秒。",
+        "Frame": "播放头时间乘以序列编辑器的帧率。"
+      },
+      "output_labels": {
+        "Seconds": "秒",
+        "Frame": "帧"
+      }
     }
   },
   "node_editor.how_to_use": "使用方法",
-  "node_editor.learn_more": "了解更多"
+  "node_editor.learn_more": "了解更多",
+  "node_editor.capture_view": "捕获视图",
+  "node_editor.curve_hint": "拖动控制点调整曲线。单击添加，双击或按 Delete 删除。",
+  "node_editor.ramp_hint": "拖动色标移动位置。单击添加，双击或按 Delete 删除。选择色标后可编辑 RGBA。",
+  "node_editor.keyframe_hint": "插入关键帧 · Ctrl+单击，或悬停时按 I"
 }

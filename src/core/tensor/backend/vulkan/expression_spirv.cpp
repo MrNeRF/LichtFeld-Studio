@@ -280,13 +280,14 @@ namespace lfs::core::internal {
                     bool saved;
                     ~RoundingScope() { flag = saved; }
                 } rounding{rounded_, rounded_};
-                rounded_ = op == ExprOp::Add || op == ExprOp::Sub || op == ExprOp::Mul || op == ExprOp::Div || op == ExprOp::Square;
+                rounded_ = op == ExprOp::Add || op == ExprOp::Sub || op == ExprOp::Mul || op == ExprOp::Div || op == ExprOp::PreciseDiv || op == ExprOp::Square;
                 Value result;
                 switch (op) {
                 case ExprOp::Add: result = add(x, y); break;
                 case ExprOp::Sub: result = sub(x, y); break;
                 case ExprOp::Mul: result = mul(x, y); break;
-                case ExprOp::Div: result = div(x, y); break;
+                case ExprOp::Div:
+                case ExprOp::PreciseDiv: result = div(x, y); break;
                 case ExprOp::Mod: result = fp(spv::OpFRem, x, y); break;
                 case ExprOp::Pow: result = choose(cmp(spv::OpFOrdEqual, y, f(2)), mul(x, x), c_pow(x, y), float_); break;
                 case ExprOp::Min: result = ieee_minmax(x, y, false); break;

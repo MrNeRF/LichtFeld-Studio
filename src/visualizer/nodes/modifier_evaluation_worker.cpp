@@ -76,7 +76,8 @@ namespace lfs::vis {
                 result->materials = source.materials;
                 result->submeshes = source.submeshes;
                 result->texture_images = source.texture_images;
-                geometry.mesh = lfs::nodes::MeshComponent{std::move(result), geometry.mesh->textures};
+                geometry.mesh = lfs::nodes::MeshComponent{std::move(result), geometry.mesh->textures,
+                                                          geometry.mesh->attributes};
             }
             return geometry;
         }
@@ -340,6 +341,8 @@ namespace lfs::vis {
                 : request_(request), registry_(registry), caches_(caches), sources_(sources), previous_(previous), control_(control), stack_started_(std::move(stack_started)) {}
 
             std::uint64_t generation() const override { return request_.generation; }
+            std::span<const EvaluationCamera> cameras() const override { return request_.cameras; }
+            glm::mat4 object_to_world() const override { return current_world_; }
 
             std::optional<Geometry> object_geometry(const std::string_view name, const TransformSpace space) override {
                 const auto target = std::ranges::find(request_.objects, name, &ModifierObjectSnapshot::name);
@@ -419,7 +422,9 @@ namespace lfs::vis {
                                                            .geometry_generation = input_generation,
                                                            .tree_resolver = [this](const std::string_view uuid) {
                                                                return resolveTree(uuid);
-                                                           }},
+                                                           },
+                                                           .seconds = request_.seconds,
+                                                           .frames_per_second = request_.frames_per_second},
                                                           this, &cache, control_);
                     result.evaluation.time_ms.insert(evaluated.time_ms.begin(), evaluated.time_ms.end());
                     for (auto& [name, status] : evaluated.nodes)

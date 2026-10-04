@@ -7,8 +7,8 @@ Gives each splat or point a repeatable random value for varied edits.
 
 ## How to use
 
-Set Min and Max to the range you need.  
-Change Seed for another pattern; reordering geometry can change it too.  
+Set Min and Max to the range you need.\
+Change Seed for another pattern; reordering geometry can change it too.
 
 ## Inputs
 

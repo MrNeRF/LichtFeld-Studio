@@ -25,6 +25,9 @@ namespace lfs::core {
      * @return Reference to the modified splat_data
      */
     LFS_CORE_API SplatData& transform(SplatData& splat_data, const glm::mat4& transform_matrix);
+    // Per-splat row-major Float32 [N,4,4] TRS transforms. Shares the affine
+    // covariance factorization and SH basis/least-squares convention above.
+    LFS_CORE_API SplatData& transform(SplatData& splat_data, const Tensor& transform_matrices);
 
     LFS_CORE_API Tensor compute_cropbox_mask(const Tensor& means,
                                              const glm::vec3& crop_min,
