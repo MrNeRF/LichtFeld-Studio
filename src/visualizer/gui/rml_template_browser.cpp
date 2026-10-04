@@ -34,15 +34,29 @@ namespace lfs::vis::gui {
             if (element)
                 element->SetInnerRML(element->GetTagName() == "button" ? "<span>" + escaped(value) + "</span>" : escaped(value));
         }
+        // Literal keys, so the localization contract test resolves each of them.
         std::string categoryLabel(const std::string& category) {
-            static const std::map<std::string, std::string> keys{
-                {"Clean-up", "cleanup"},
-                {"Colour", "colour"},
-                {"Selection", "selection"},
-                {"Geometry", "geometry"},
-                {"Animation", "animation"}};
-            const auto found = keys.find(category);
-            return found == keys.end() ? category : LOC("node_template.category." + found->second);
+            if (category == "Clean-up")
+                return LOC("node_template.category.cleanup");
+            if (category == "Colour")
+                return LOC("node_template.category.colour");
+            if (category == "Selection")
+                return LOC("node_template.category.selection");
+            if (category == "Geometry")
+                return LOC("node_template.category.geometry");
+            if (category == "Animation")
+                return LOC("node_template.category.animation");
+            return category;
+        }
+
+        std::string kindLabel(const std::string& kind) {
+            if (kind == "splat")
+                return LOC("node_template.kind.splat");
+            if (kind == "mesh")
+                return LOC("node_template.kind.mesh");
+            if (kind == "points")
+                return LOC("node_template.kind.points");
+            return kind;
         }
     } // namespace
 
@@ -190,7 +204,7 @@ namespace lfs::vis::gui {
                      escaped(value.adjust) + "\">" + escaped(LOC("node_editor.template_adjust_short")) + " " +
                      escaped(value.adjust) + "</span><div class=\"template-card-bottom\"><div class=\"template-chips\">";
             for (const auto& kind : value.scene_kinds)
-                cards += "<span class=\"template-chip\">" + escaped(LOC("node_template.kind." + kind)) + "</span>";
+                cards += "<span class=\"template-chip\">" + escaped(kindLabel(kind)) + "</span>";
             cards += "</div><button class=\"btn btn--secondary\" data-action=\"add\"><span>" +
                      escaped(LOC("node_editor.template_add")) + "</span></button></div>";
             if (value.id == menu_id_)
