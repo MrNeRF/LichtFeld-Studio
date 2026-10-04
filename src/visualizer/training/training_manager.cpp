@@ -851,6 +851,10 @@ namespace lfs::vis {
         return true;
     }
 
+    bool TrainerManager::isModelChanging() const {
+        return isRunning() || (trainer_ && trainer_->is_running() && !trainer_->is_paused());
+    }
+
     bool TrainerManager::hasLiveTrainingThread() const {
         // stopTraining's no-thread branch uses this same flag: the reaper
         // steals training_thread_ immediately, so joinable() is not the

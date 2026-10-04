@@ -1466,7 +1466,9 @@ namespace lfs::vis {
         const bool training_model = scene_manager_->getContentType() == SceneManager::ContentType::Dataset &&
                                     node_uuid == scene.getTrainingModelNodeUuid();
         auto* trainer_manager = scene_manager_->getTrainerManager();
-        if (training_model && trainer_manager && trainer_manager->isRunning())
+        if (training_model)
+            waitForTrainingBoundary();
+        if (training_model && trainer_manager && trainer_manager->isModelChanging())
             return std::unexpected(ModifierError{"Modifiers are paused while training"});
         const size_t index = static_cast<size_t>(std::distance(modifiers->modifiers.begin(), found));
         auto prepared = evaluateForApply(node_uuid, index);

@@ -139,6 +139,9 @@ namespace lfs::vis {
         [[nodiscard]] bool isPaused() const { return state_machine_.isInState(TrainingState::Paused); }
         [[nodiscard]] bool isFinished() const { return state_machine_.isInState(TrainingState::Finished); }
         [[nodiscard]] bool isTrainingActive() const { return state_machine_.isActive(); }
+        // Whether the training loop may still change the model: running, or paused or stopping before the
+        // loop has reached the iteration boundary where it honours the request.
+        [[nodiscard]] bool isModelChanging() const;
         [[nodiscard]] bool canStart() const { return canPerform(TrainingAction::Start); }
         [[nodiscard]] bool canPause() const { return canPerform(TrainingAction::Pause); }
         [[nodiscard]] bool canResume() const { return canPerform(TrainingAction::Resume); }
