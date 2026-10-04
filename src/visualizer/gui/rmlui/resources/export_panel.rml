@@ -49,6 +49,15 @@
       <div class="separator"></div>
 
       <!-- SH Degree -->
+      <div class="ep-section" data-if="show_model_selection">
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:export_dialog.apply_modifiers</span>
+          <div class="setting-row__control-col">
+            <input type="checkbox" data-attrif-checked="apply_modifiers" data-event-change="toggle_apply_modifiers" />
+          </div>
+        </div>
+      </div>
+
       <div class="ep-section" data-if="show_sh_degree">
         <div class="setting-row setting-row--aligned">
           <span class="setting-row__label-col">@tr:export_dialog.sh_degree</span>

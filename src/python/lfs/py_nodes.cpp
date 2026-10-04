@@ -787,7 +787,12 @@ namespace lfs::python {
                 } else {
                     throw nb::value_error("Geometry has no component for field evaluation");
                 }
-                return PyTensor(context->evaluate_field(name, field_context));
+                // Python components are temporary copies, with no stable
+                // FieldContext identity. Sharing the evaluator's memo under
+                // identity 0 reuses fields from earlier, different geometry.
+                // Keep memoization within this field evaluation instead.
+                FieldMemo memo;
+                return PyTensor(context->field(name, FLOAT_SOCKET).evaluate(field_context, memo));
             }
 
             nb::object prop(const std::string& name) const {
@@ -907,7 +912,7 @@ namespace lfs::python {
                 } catch (const nb::python_error& error) {
                     LOG_WARN("Python node {} failed:\n{}", type_id, error.what());
                     const auto name = nb::cast<std::string>(error.type().attr("__name__"));
-                    throw NodeError(name + ": " + nb::cast<std::string>(nb::str(error.value())));
+                    throw NodeError("Python node '" + type_id + "' failed (" + name + "). See the log for details.");
                 }
             };
             return info;

@@ -240,7 +240,10 @@ namespace lfs::nodes {
         core::Tensor canonical = data.shN_canonical();
         const std::size_t active_coefficients = static_cast<std::size_t>(
             (data.get_active_sh_degree() + 1) * (data.get_active_sh_degree() + 1) - 1);
-        if (canonical.is_valid() && canonical.ndim() == 3 && canonical.shape()[1] > active_coefficients)
+        if (active_coefficients == 0)
+            canonical = core::Tensor::zeros(
+                {static_cast<std::size_t>(data.size()), 0, 3}, data.means_raw().device());
+        else if (canonical.is_valid() && canonical.ndim() == 3 && canonical.shape()[1] > active_coefficients)
             canonical = canonical.slice(1, 0, active_coefficients).contiguous();
         if (!canonical.is_valid())
             canonical =

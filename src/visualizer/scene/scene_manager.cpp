@@ -3511,7 +3511,7 @@ namespace lfs::vis {
         case ContentType::SplatFiles:
             return scene_.getCombinedModel();
         case ContentType::Dataset:
-            return scene_.getTrainingModel();
+            return scene_.getEffectiveTrainingModel();
         case ContentType::Empty:
             return scene_.hasNodes() ? scene_.getCombinedModel() : nullptr;
         }
@@ -3553,7 +3553,7 @@ namespace lfs::vis {
         const auto* current_model = options.metadata_only
                                         ? nullptr
                                         : (content_type_ == ContentType::Dataset
-                                               ? scene_.getTrainingModel()
+                                               ? scene_.getEffectiveTrainingModel()
                                                : scene_.getCombinedModel());
         // PointCloud tensors are public and can be edited in place without a Scene mutation
         // notification. Keep the small node scan, but do not reuse a state that owns a merged
@@ -3586,7 +3586,7 @@ namespace lfs::vis {
         if (!options.metadata_only && content_type_ == ContentType::SplatFiles) {
             state.combined_model = scene_.getCombinedModel();
         } else if (!options.metadata_only && content_type_ == ContentType::Dataset) {
-            state.combined_model = scene_.getTrainingModel();
+            state.combined_model = scene_.getEffectiveTrainingModel();
             hidden_dataset_training_model =
                 state.combined_model != nullptr &&
                 !scene_.isTrainingModelEffectivelyVisible();

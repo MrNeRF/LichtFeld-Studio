@@ -241,6 +241,104 @@ def test_posterize_selection_blends_rgb_and_fades_higher_sh(lf, numpy, weight):
     numpy.testing.assert_allclose(result.splats.shN.tolist(), 1.0 - weight, atol=1e-6)
 
 
+@pytest.mark.parametrize("device", ["cpu", "gpu"])
+@pytest.mark.parametrize("keep", [0, 1])
+def test_posterize_field_after_geometry_changes(lf, numpy, device, keep):
+    tree = lf.nodes.new_tree("Posterize changed domain")
+    colour = tree.add_node("lfs.separate_colour")
+    colour.set_input("Colour", (0.1047519339336952, 0.7735781815168312, 0.755501599559747))
+    first = tree.add_node("lfs.posterize")
+    first.set_input("Levels", 8)
+    index = tree.add_node("lfs.index")
+    compare = tree.add_node("lfs.compare")
+    compare.set_property("operation", "greater_equal")
+    compare.set_input("B", float(keep))
+    delete = tree.add_node("lfs.delete_geometry")
+    last = tree.add_node("lfs.posterize")
+    last.set_input("Levels", 7)
+    tree.unlink(tree.input_node, "Geometry", tree.output_node, "Geometry")
+    tree.link(tree.input_node, "Geometry", first, "Geometry")
+    tree.link(colour, "G", first, "Selection")
+    tree.link(first, "Geometry", delete, "Geometry")
+    tree.link(index, "Index", compare, "A")
+    tree.link(compare, "Result", delete, "Selection")
+    tree.link(delete, "Geometry", last, "Geometry")
+    tree.link(colour, "R", last, "Selection")
+    tree.link(last, "Geometry", tree.output_node, "Geometry")
+    result = lf.nodes.evaluate_tree(tree, _geometry(lf, numpy), device=device)
+    assert result.splats.means.shape == (keep, 3)
+    assert result.splats.sh0.shape == (keep, 3)
+    assert result.splats.shN.shape == (keep, 1, 3)
+
+
+@pytest.mark.parametrize("device", ["cpu", "gpu"])
+@pytest.mark.parametrize("levels", [0, 2, 32, 999])
+def test_posterize_degree_zero_and_level_limits(lf, numpy, device, levels):
+    tree = lf.nodes.new_tree("Posterize zero SH degree")
+    node = tree.add_node("lfs.posterize")
+    node.set_input("Levels", levels)
+    _insert_between(tree, node, "Geometry")
+    geometry = _geometry(lf, numpy)
+    geometry = geometry.replace(splats=geometry.splats.replace(
+        shN=lf.Tensor.zeros((2, 0, 3), device="cpu")))
+    result = lf.nodes.evaluate_tree(tree, geometry, device=device)
+    assert result.splats.shN.shape == (2, 0, 3)
+    original = numpy.asarray(geometry.splats.sh0.tolist())
+    steps = min(32, max(2, levels)) - 1
+    expected = (numpy.round(numpy.clip(0.5 + 0.28209479177387814 * original, 0, 1) * steps) / steps - 0.5) / 0.28209479177387814
+    numpy.testing.assert_allclose(result.splats.sh0.tolist(), expected, atol=1e-6)
+
+
+@pytest.mark.parametrize("device", ["cpu", "gpu"])
+def test_posterize_field_after_same_size_colour_edit(lf, numpy, device):
+    tree = lf.nodes.new_tree("Posterize changed colours")
+    colour = tree.add_node("lfs.colour_attribute")
+    separate = tree.add_node("lfs.separate_colour")
+    first = tree.add_node("lfs.posterize")
+    last = tree.add_node("lfs.posterize")
+    first.set_input("Levels", 3)
+    last.set_input("Levels", 7)
+    tree.unlink(tree.input_node, "Geometry", tree.output_node, "Geometry")
+    tree.link(tree.input_node, "Geometry", first, "Geometry")
+    tree.link(first, "Geometry", last, "Geometry")
+    tree.link(last, "Geometry", tree.output_node, "Geometry")
+    tree.link(colour, "Colour", separate, "Colour")
+    tree.link(separate, "R", first, "Selection")
+    tree.link(separate, "R", last, "Selection")
+    geometry = _geometry(lf, numpy)
+    expected = numpy.asarray(geometry.splats.sh0.tolist())
+    for steps in (2, 6):
+        rgb = numpy.clip(0.5 + 0.28209479177387814 * expected, 0, 1)
+        quantized = (numpy.round(rgb * steps) / steps - 0.5) / 0.28209479177387814
+        expected = expected + (quantized - expected) * rgb[:, :1]
+    result = lf.nodes.evaluate_tree(tree, geometry, device=device)
+    numpy.testing.assert_allclose(result.splats.sh0.tolist(), expected, atol=1e-6)
+
+
+@pytest.mark.parametrize("device", ["cpu", "gpu"])
+def test_posterize_nan_selection_is_unselected(lf, numpy, device):
+    tree = lf.nodes.new_tree("Posterize invalid selection")
+    power = tree.add_node("lfs.math")
+    power.set_property("operation", "power")
+    power.set_input("A", -1.0)
+    power.set_input("B", 0.5)
+    posterize = tree.add_node("lfs.posterize")
+    _insert_between(tree, posterize, "Geometry")
+    tree.link(power, "Value", posterize, "Selection")
+    geometry = _geometry(lf, numpy)
+    result = lf.nodes.evaluate_tree(tree, geometry, device=device)
+    numpy.testing.assert_array_equal(result.splats.sh0.tolist(), geometry.splats.sh0.tolist())
+    numpy.testing.assert_array_equal(result.splats.shN.tolist(), geometry.splats.shN.tolist())
+
+
+@pytest.mark.parametrize("device", ["cpu", "gpu"])
+def test_posterize_without_splats(lf, device):
+    tree = lf.nodes.new_tree("Posterize without splats")
+    _insert_between(tree, tree.add_node("lfs.posterize"), "Geometry")
+    result = lf.nodes.evaluate_tree(tree, lf.nodes.Geometry(), device=device)
+    assert result.splats is None
+
+
 def test_graph_names_are_unique_on_create_rename_and_import(lf):
     first = lf.nodes.new_tree("Autumn Lawn")
     second = lf.nodes.new_tree("Autumn Lawn")
@@ -291,7 +389,11 @@ def test_python_node_declarations_require_lists_and_execute(lf):
         lf.nodes.Output("geometry")
 
 
-def test_python_node_hot_reload_and_error_containment(lf, numpy):
+@pytest.mark.parametrize("message", [
+    "contained python failure",
+    "Incompatible shapes for broadcasting: [0, 3] vs [20, 1]",
+])
+def test_python_node_hot_reload_and_error_containment(lf, numpy, message):
     class PassThrough(lf.nodes.Node):
         id = "tests.pass_through"
         label = "Pass Through"
@@ -322,12 +424,13 @@ def test_python_node_hot_reload_and_error_containment(lf, numpy):
         id = PassThrough.id
 
         def execute(self, ctx):
-            raise RuntimeError("contained python failure")
+            raise RuntimeError(message)
 
     lf.nodes.register_node(Broken)
-    with pytest.raises(ValueError, match="contained python failure"):
+    with pytest.raises(ValueError, match=r"Python node 'tests.pass_through' failed \(RuntimeError\)"):
         lf.nodes.evaluate_tree(tree, _geometry(lf, numpy))
-    assert node.error == "RuntimeError: contained python failure"
+    assert node.error == "Python node 'tests.pass_through' failed (RuntimeError). See the log for details."
+    assert message not in node.error
     assert lf.nodes.unregister_nodes_for_module(PassThrough.__module__) == 1
     assert PassThrough.id not in {item["id"] for item in lf.nodes.node_types()}
 

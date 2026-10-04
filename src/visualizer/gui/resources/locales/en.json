@@ -4972,6 +4972,8 @@
   },
   "node_editor.how_to_use": "How to use",
   "node_editor.learn_more": "Learn more",
+  "node_editor.modifiers_paused_while_training": "Modifiers are paused while training",
+  "export_dialog.apply_modifiers": "Apply modifiers",
   "node_editor.capture_view": "Capture view",
   "node_editor.curve_hint": "Drag points to shape the curve. Click to add; double-click or Delete to remove.",
   "node_editor.ramp_hint": "Drag stops to move them. Click to add; double-click or Delete to remove. Select a stop to edit RGBA.",

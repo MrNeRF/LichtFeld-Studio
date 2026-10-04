@@ -4972,6 +4972,8 @@
   },
   "node_editor.how_to_use": "Cómo usarlo",
   "node_editor.learn_more": "Más información",
+  "node_editor.modifiers_paused_while_training": "Los modificadores están pausados durante el entrenamiento",
+  "export_dialog.apply_modifiers": "Aplicar modificadores",
   "node_editor.capture_view": "Capturar vista",
   "node_editor.curve_hint": "Arrastra los puntos; haz clic para añadir, doble clic o Supr para eliminar.",
   "node_editor.ramp_hint": "Arrastra las paradas; haz clic para añadir, doble clic o Supr para eliminar. Selecciona una parada para editar RGBA.",

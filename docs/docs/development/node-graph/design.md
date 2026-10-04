@@ -23,8 +23,11 @@ Goals
 - Extensible: node types, socket types and tree types live in registries.
   Built-in nodes are C++; plugins add node types in Python through
   `lichtfeld.nodes`, against `lf.Tensor` only.
-- Edit mode only (scene content type `SplatFiles`). While a dataset/training
-  scene is loaded the editor shows a notice and nothing evaluates.
+- Edit mode and the training model of a dataset scene are supported. During
+  active training graph editing remains available, evaluation is suspended,
+  the viewport uses the live stored model, and the editor shows a non-blocking
+  "Modifiers are paused while training" notice. Pausing, finishing or stopping
+  training evaluates the latest graph state once.
 
 Non-goals for v1
 - Pipeline trees, nested node groups (group
@@ -101,6 +104,9 @@ component (`[N]` for float/int/bool, `[N,3]` for vector/colour). Constants are
 fields with no context dependency and are constant-folded. Field results are
 memoised per evaluation (key: field node identity + context identity), so a
 field used by two consumers on the same geometry is computed once.
+Python `ctx.field` calls use a fresh memo for each request: Python component
+copies have no stable geometry identity and may change size or attributes
+between calls. Subexpressions within each field request are still memoised.
 
 Context reads:
 
@@ -205,13 +211,17 @@ plain text with short usage, starting-value and caveat lines.
   `std::shared_ptr<MeshData> evaluated_mesh`), set and cleared by the
   ModifierManager through Scene API (`setNodeEvaluatedPayload`,
   `clearNodeEvaluatedPayload`), which bumps the render generation.
-- Every Scene accessor that feeds **display, picking, selection index space
-  and export** uses the effective payload (evaluated if present, else
+- Every Scene accessor that feeds **display, picking and selection index space**
+  uses the effective payload (evaluated if present, else
   stored): combined model (single-node alias and concatenation, sync and
   worker paths), visible splat node slots, `snapshotVisibleSplats`,
   `getVisibleMeshes`, selection capacity per node, visible SH degrees,
   point cloud collection. Nodes with an evaluated payload are excluded from
   consolidation.
+- Scene export has an explicit **Apply modifiers** option. It defaults on and
+  exports the effective payload, preserving the pre-option behaviour; off
+  exports the stored payload. The option is shared by the export dialog,
+  Python and MCP export paths and applies to every splat export format.
 - Undo snapshots and project persistence keep using the stored payload,
   so saving, loading and undo need no special cases.
 - Type rule in v1: a SPLAT node displays the result's splats, a MESH node
@@ -226,12 +236,22 @@ plain text with short usage, starting-value and caveat lines.
   selects on the stored data, and captures the selection into a Stored
   Selection node. The capture is persisted with the modifier.
 - Apply: bakes the result of the stack up to and including that modifier
-  into the stored payload (one undo entry) and removes those modifiers.
+  into the stored payload (one undo entry) and removes those modifiers. On a
+  training model it is refused while training runs. When training is paused or
+  stopped, same-count (attribute-only) results are copied into the existing
+  model allocation and all six Adam parameter moment sets are reset. Resetting
+  the complete optimizer is deliberately conservative because one graph can
+  couple several output attributes. Count-changing results are refused with
+  "Export the result or stop training first"; optimizer parameter surgery is
+  not attempted.
 
 ### 3.8 Persistence, undo
 
 - Project chapter `NODE` (singleton JSON):
   `{schema_version:1, trees:[…], stacks:{<node uuid>:[modifier…]}}`.
+- Training checkpoints carry the same `NODE` chapter. Checkpoint restore or
+  resume restores graphs and stacks, while the checkpoint's training payload
+  remains the stored model; evaluated payloads are derived and never saved.
 - Every graph or stack edit (from UI or Python) is one undo entry storing
   before/after JSON; consecutive edits of the same value merge.
 
@@ -370,12 +390,20 @@ class Posterize(N.Node):               # plugin node
     outputs = [N.Output("Geometry", "lfs.geometry")]
     def execute(self, ctx):
         geo = ctx.input("Geometry")
+        if geo is None or geo.splats is None:
+            return {"Geometry": geo}
         s = geo.splats
+        if s.means.shape[0] == 0:
+            return {"Geometry": geo}
         w = ctx.field("Selection", s)              # lf.Tensor [N]
         ...
         return {"Geometry": geo.replace(splats=s.replace(sh0=new_sh0))}
 N.register_node(Posterize)
 ```
+
+Python callback exceptions become a concise node error identifying the plugin
+and exception type. The full message and traceback are retained in the log,
+not displayed as tensor/backend implementation details on the node.
 
 ## 6. Node editor UI
 

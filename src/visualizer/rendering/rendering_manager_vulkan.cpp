@@ -1716,8 +1716,11 @@ namespace lfs::vis {
 
         SceneManager* const scene_manager = context.scene_manager;
         auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
+        // The live trainer path deliberately bypasses scene evaluated payloads.
+        // Use it only while optimization is advancing; a paused session renders
+        // through the scene so its Node Editor modifier payload is visible.
         const bool is_training = scene_manager && scene_manager->hasDataset() &&
-                                 trainer_manager && trainer_manager->isTrainingActive();
+                                 trainer_manager && trainer_manager->isRunning();
         const bool training_initializing = trainer_manager &&
                                            trainer_manager->getState() == TrainingState::Starting;
         if (!is_training && vksplat_viewport_renderer_) {

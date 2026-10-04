@@ -4972,6 +4972,8 @@
   },
   "node_editor.how_to_use": "So verwendest du den Knoten",
   "node_editor.learn_more": "Mehr erfahren",
+  "node_editor.modifiers_paused_while_training": "Modifikatoren sind während des Trainings pausiert",
+  "export_dialog.apply_modifiers": "Modifikatoren anwenden",
   "node_editor.capture_view": "Ansicht speichern",
   "node_editor.curve_hint": "Punkte ziehen; klicken zum Hinzufügen, doppelklicken oder Entf zum Löschen.",
   "node_editor.ramp_hint": "Marken ziehen; klicken zum Hinzufügen, doppelklicken oder Entf zum Löschen. Marke auswählen, um RGBA zu ändern.",

@@ -229,6 +229,12 @@ jobs:
           clean: false
       - name: Build the GUI executable
         run: cmake --build build --target LichtFeld-Studio -j6
+      - name: Run CUDA node and spatial tests
+        run: |
+          cmake --build build --target lichtfeld_tests lfs_py -j6
+          build/tests/lichtfeld_tests --tensor-backend=cuda --gtest_filter='Nodes*:*Nodes*:McpNode*:*Spatial*'
+          build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m pytest \
+            tests/python/test_nodes.py -q
       - name: Start Xvfb when needed
         run: |
           if ! xdpyinfo -display :92 >/dev/null 2>&1; then

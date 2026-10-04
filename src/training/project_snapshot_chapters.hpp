@@ -48,6 +48,7 @@ namespace lfs::training {
         lfs::io::project::EditorSessionChapter editor;
         lfs::io::project::SequencerSessionChapter
             sequencer;
+        lfs::io::project::NodesSessionChapter nodes;
         lfs::io::project::MetricsChapter metrics;
         std::vector<lfs::core::Uuid>
             selected_node_uuids;

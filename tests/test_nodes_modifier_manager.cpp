@@ -1,11 +1,18 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera.hpp"
 #include "core/nodes/nodes.hpp"
+#include "core/services.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
 #include "scene/scene_manager.hpp"
 #include "sequencer/interpolation.hpp"
 #include "sequencer/sequencer_controller.hpp"
+#include "training/optimizer/adam_optimizer.hpp"
+#include "training/project_snapshot_chapters.hpp"
+#include "training/trainer.hpp"
+#include "visualizer/core/training_manager.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
 #include "visualizer/nodes/node_animation.hpp"
 #include "visualizer/nodes/viewport_coordinates.hpp"
@@ -71,6 +78,30 @@ namespace {
         EXPECT_TRUE(tree.add_link({input_name, "Geometry", correct.name, "Geometry"}));
         EXPECT_TRUE(tree.add_link({correct.name, "Geometry", output_name, "Geometry"}));
         return tree;
+    }
+
+    struct ServicesScope {
+        ServicesScope() { lfs::vis::services().clear(); }
+        ~ServicesScope() { lfs::vis::services().clear(); }
+    };
+
+    bool transition(lfs::vis::TrainerManager& manager, const lfs::vis::TrainingState state) {
+        return const_cast<lfs::vis::TrainingStateMachine&>(manager.getStateMachine())
+            .transitionTo(state);
+    }
+
+    void add_training_camera(lfs::core::Scene& scene) {
+        const auto group = scene.addGroup("Training cameras");
+        auto camera = std::make_shared<lfs::core::Camera>(
+            lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f,
+            lfs::core::Tensor{}, lfs::core::Tensor{},
+            lfs::core::CameraModelType::PINHOLE,
+            "camera.png", std::filesystem::path{}, std::filesystem::path{},
+            64, 64, 0);
+        ASSERT_NE(scene.addCamera("camera.png", group, std::move(camera)),
+                  lfs::core::NULL_NODE);
     }
 } // namespace
 
@@ -874,6 +905,151 @@ TEST_F(NodesModifierManager, ApplyBakesOnceAndUndoRestoresPayloadAndStack) {
     ASSERT_NE(manager.stack(uuid), nullptr);
     EXPECT_EQ(manager.stack(uuid)->modifiers.size(), 1u);
     EXPECT_EQ(scene_manager.getScene().getNodeById(id)->model->sh0_raw().to_vector(), before);
+}
+
+TEST_F(NodesModifierManager, TrainingSuspendsEvaluationAndResumesLatestGraphOnce) {
+    ServicesScope services_scope;
+    lfs::vis::SceneManager scene_manager;
+    auto& scene = scene_manager.getScene();
+    const auto id = scene.addSplat("Training model", model(4));
+    scene.setTrainingModelNode(id);
+    add_training_camera(scene);
+    scene_manager.changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+
+    lfs::vis::TrainerManager trainer_manager;
+    trainer_manager.setScene(&scene);
+    lfs::vis::services().set(&trainer_manager);
+
+    auto& manager = scene_manager.modifierManager();
+    std::atomic<int> evaluations = 0;
+    lfs::nodes::NodeTypeInfo counter;
+    counter.id = "test.training_counter";
+    counter.label = "Training counter";
+    counter.inputs = {{"Geometry", "Geometry", std::string(lfs::nodes::GEOMETRY_SOCKET)}};
+    counter.outputs = counter.inputs;
+    counter.evaluate = [&](lfs::nodes::NodeContext& context) {
+        ++evaluations;
+        context.set_output("Geometry", context.input("Geometry"));
+    };
+    ASSERT_TRUE(manager.registry().register_type(std::move(counter)));
+    auto& tree = manager.newTree("Training graph");
+    tree.add_node("test.training_counter", "Counter");
+    ASSERT_TRUE(tree.remove_link({tree.input_node().name, "Geometry",
+                                  tree.output_node().name, "Geometry"}));
+    ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Counter", "Geometry"}));
+    ASSERT_TRUE(tree.add_link({"Counter", "Geometry", tree.output_node().name, "Geometry"}));
+    const auto host = scene.getNodeUuid(id);
+    manager.addModifier(host, tree.uuid);
+    ASSERT_TRUE(manager.evaluate(host).ok);
+    ASSERT_EQ(evaluations.load(), 1);
+    ASSERT_NE(scene.getNodeById(id)->evaluated_model, nullptr);
+    EXPECT_EQ(scene_manager.buildRenderState().combined_model,
+              scene.getNodeById(id)->evaluated_model.get());
+
+    ASSERT_TRUE(transition(trainer_manager, lfs::vis::TrainingState::Ready));
+    ASSERT_TRUE(transition(trainer_manager, lfs::vis::TrainingState::Starting));
+    ASSERT_TRUE(transition(trainer_manager, lfs::vis::TrainingState::Running));
+    manager.tick();
+    EXPECT_TRUE(manager.trainingSuspended());
+    EXPECT_EQ(scene.getNodeById(id)->evaluated_model, nullptr);
+    EXPECT_EQ(scene_manager.buildRenderState().combined_model,
+              scene.getNodeById(id)->model.get());
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+        manager.markDirty(host);
+        manager.tick();
+    }
+    EXPECT_EQ(evaluations.load(), 1);
+
+    ASSERT_TRUE(transition(trainer_manager, lfs::vis::TrainingState::Paused));
+    ASSERT_TRUE(manager.evaluate(host).ok);
+    EXPECT_FALSE(manager.trainingSuspended());
+    EXPECT_EQ(evaluations.load(), 2);
+    manager.tick();
+    EXPECT_EQ(evaluations.load(), 2);
+}
+
+TEST_F(NodesModifierManager, TrainingApplyResetsAllAdamMomentsAndRejectsStructuralResult) {
+    ServicesScope services_scope;
+    lfs::vis::SceneManager scene_manager;
+    auto& scene = scene_manager.getScene();
+    const auto id = scene.addSplat("Training model", model(4));
+    scene.setTrainingModelNode(id);
+    add_training_camera(scene);
+    scene_manager.changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+
+    auto optimizer_model = model(4);
+    lfs::training::AdamOptimizer optimizer(*optimizer_model, {});
+    for (const auto parameter : lfs::training::AdamOptimizer::all_param_types()) {
+        optimizer.get_grad(parameter);
+        auto* state = optimizer.get_state_mutable(parameter);
+        ASSERT_NE(state, nullptr);
+        ASSERT_TRUE(state->exp_avg.is_valid());
+        state->exp_avg.copy_from(
+            lfs::core::Tensor::ones(state->exp_avg.shape(), state->exp_avg.device())
+                .to(state->exp_avg.dtype()));
+        if (state->joint_bounds.is_valid())
+            state->joint_bounds.fill_(3);
+        state->step_count = 9;
+    }
+    optimizer.reset_all_states();
+    for (const auto parameter : lfs::training::AdamOptimizer::all_param_types()) {
+        const auto* state = optimizer.get_state(parameter);
+        ASSERT_NE(state, nullptr);
+        EXPECT_EQ(state->step_count, 0);
+        EXPECT_EQ(state->exp_avg.count_nonzero(), 0u);
+        if (state->joint_bounds.is_valid())
+            EXPECT_EQ(state->joint_bounds.count_nonzero(), 0u);
+    }
+
+    auto& manager = scene_manager.modifierManager();
+    auto& colour = colour_tree(manager);
+    const auto host = scene.getNodeUuid(id);
+    manager.addModifier(host, colour.uuid, "Colour");
+    const auto before_count = scene.getNodeById(id)->model->size();
+    ASSERT_TRUE(manager.applyModifier(host, "Colour"));
+    EXPECT_EQ(scene.getNodeById(id)->model->size(), before_count);
+
+    auto& structural = manager.newTree("Structural");
+    auto& remove = structural.add_node("lfs.delete_geometry", "Delete");
+    ASSERT_TRUE(structural.remove_link({structural.input_node().name, "Geometry",
+                                       structural.output_node().name, "Geometry"}));
+    ASSERT_TRUE(structural.add_link({structural.input_node().name, "Geometry",
+                                     remove.name, "Geometry"}));
+    ASSERT_TRUE(structural.add_link({remove.name, "Geometry",
+                                     structural.output_node().name, "Geometry"}));
+    manager.addModifier(host, structural.uuid, "Structural");
+    const auto applied = manager.applyModifier(host, "Structural");
+    ASSERT_FALSE(applied);
+    EXPECT_EQ(applied.error().message, "Export the result or stop training first");
+    EXPECT_EQ(scene.getNodeById(id)->model->size(), before_count);
+}
+
+TEST_F(NodesModifierManager, CheckpointDocumentContextRoundTripsGraphsAndStacks) {
+    lfs::vis::SceneManager source_scene;
+    source_scene.changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+    const auto id = source_scene.getScene().addSplat("Training model", model(3));
+    source_scene.getScene().setTrainingModelNode(id);
+    auto& source = source_scene.modifierManager();
+    auto& tree = colour_tree(source);
+    const auto host = source_scene.getScene().getNodeUuid(id);
+    source.addModifier(host, tree.uuid, "Checkpoint colour");
+
+    auto parsed = lfs::io::JsonChapterDom::parse(source.toJson().dump());
+    ASSERT_TRUE(parsed) << lfs::format_for_developer(parsed.error());
+    lfs::training::ProjectSnapshotDocumentContext context;
+    context.nodes = lfs::io::project::NodesSessionChapter(std::move(*parsed));
+    auto restored_chapter = lfs::io::project::NodesSessionChapter::from_bytes(
+        context.nodes.to_bytes());
+    ASSERT_TRUE(restored_chapter) << lfs::format_for_developer(restored_chapter.error());
+
+    lfs::vis::SceneManager restored_scene;
+    auto& restored = restored_scene.modifierManager();
+    ASSERT_TRUE(restored.restoreJson(nlohmann::json::parse(restored_chapter->dom().dump())));
+    ASSERT_NE(restored.tree(tree.uuid), nullptr);
+    ASSERT_NE(restored.stack(host), nullptr);
+    ASSERT_EQ(restored.stack(host)->modifiers.size(), 1u);
+    EXPECT_EQ(restored.stack(host)->modifiers.front().name, "Checkpoint colour");
 }
 
 TEST_F(NodesModifierManager, LayoutUndoAndRepeatedReadsNeverEvaluate) {

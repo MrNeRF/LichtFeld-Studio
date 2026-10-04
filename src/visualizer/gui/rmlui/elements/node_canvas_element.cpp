@@ -15,6 +15,7 @@
 #include "sequencer/sequencer_controller.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/core/training_manager.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
 #include "window/window_manager.hpp"
 
@@ -493,11 +494,18 @@ namespace lfs::vis::gui {
         if (!node || (node->type != core::NodeType::SPLAT && node->type != core::NodeType::POINTCLOUD &&
                       node->type != core::NodeType::MESH))
             return std::nullopt;
+        if (scene_manager_->getContentType() == SceneManager::ContentType::Dataset &&
+            node->uuid != scene_manager_->getScene().getTrainingModelNodeUuid())
+            return std::nullopt;
         return node->uuid;
     }
 
     bool NodeCanvasElement::editableMode() const {
-        return scene_manager_ && scene_manager_->getContentType() == SceneManager::ContentType::SplatFiles;
+        if (!scene_manager_)
+            return false;
+        const auto content = scene_manager_->getContentType();
+        return content == SceneManager::ContentType::SplatFiles ||
+               content == SceneManager::ContentType::Dataset;
     }
 
     lfs::nodes::NodeTree* NodeCanvasElement::activeTree() {
@@ -930,14 +938,20 @@ namespace lfs::vis::gui {
             return true;
         });
         const auto host = activeHost();
+        notice_element_->SetClass("training-suspended", false);
         if (!editableMode()) {
-            notice_element_->SetInnerRML(escape(LOC("node_editor.edit_mode_notice")));
+            notice_element_->SetInnerRML("<span>" + escape(LOC("node_editor.edit_mode_notice")) + "</span>");
             notice_element_->SetProperty("display", "flex");
         } else if (!host) {
-            notice_element_->SetInnerRML(escape(LOC("node_editor.select_node_notice")));
+            notice_element_->SetInnerRML("<span>" + escape(LOC("node_editor.select_node_notice")) + "</span>");
             notice_element_->SetProperty("display", "flex");
         } else if (!activeTree()) {
-            notice_element_->SetInnerRML(escape(LOC("node_editor.add_modifier_notice")));
+            notice_element_->SetInnerRML("<span>" + escape(LOC("node_editor.add_modifier_notice")) + "</span>");
+            notice_element_->SetProperty("display", "flex");
+        } else if (manager_->trainingSuspended()) {
+            notice_element_->SetClass("training-suspended", true);
+            notice_element_->SetInnerRML(
+                "<span>" + escape(LOC("node_editor.modifiers_paused_while_training")) + "</span>");
             notice_element_->SetProperty("display", "flex");
         } else {
             notice_element_->SetProperty("display", "none");

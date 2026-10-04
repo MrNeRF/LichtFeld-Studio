@@ -326,6 +326,22 @@ namespace {
         EXPECT_EQ(host<float>(set.geometry.splats->shN),
                   std::vector<float>(set.geometry.splats->shN.numel(), 0.0f));
 
+        auto flat_set = single("lfs.set_colour", splats(0), [](Node& node) {
+            node.input_values["Colour"] = glm::vec3(0.8f, 0.2f, 0.1f);
+        });
+        ASSERT_TRUE(flat_set.ok) << (flat_set.errors.empty() ? "" : flat_set.errors.begin()->second);
+        EXPECT_EQ(flat_set.geometry.splats->shN.shape(), TensorShape({3, 0, 3}));
+        EXPECT_EQ(flat_set.geometry.splats->shN.numel(), 0u);
+
+        auto staged_model = splat_data_from_geometry(splats(3));
+        ASSERT_TRUE(staged_model);
+        staged_model->set_active_sh_degree(0);
+        auto staged = geometry_from_splat_data(*staged_model);
+        EXPECT_EQ(staged.splats->shN.shape(), TensorShape({3, 0, 3}));
+        auto staged_set = single("lfs.set_colour", std::move(staged));
+        ASSERT_TRUE(staged_set.ok) << (staged_set.errors.empty() ? "" : staged_set.errors.begin()->second);
+        EXPECT_EQ(staged_set.geometry.splats->shN.shape(), TensorShape({3, 0, 3}));
+
         Geometry original = splats();
         auto inverted = single("lfs.invert_colour", original);
         ASSERT_TRUE(inverted.ok);
@@ -1327,6 +1343,51 @@ namespace {
                     }
                 }
             }
+        }
+    }
+
+    TEST_P(NodesCore, SharpenSeed10CoverageNearSaturationMatchesDoubleReference) {
+        auto geometry = splats();
+        const std::vector<float> logits{-1.4096522f, -100.0f, 100.0f};
+        geometry.splats->opacity = tensor(logits, {3});
+        geometry.splats->scaling = tensor({-80, 80, -std::numeric_limits<float>::infinity(), 1, 2, 3, -3, -2, -1}, {3, 3});
+        NodeTree tree(registry_);
+        auto& boolean = tree.add_node("lfs.boolean_math", "Boolean");
+        boolean.properties["operation"] = "and";
+        boolean.input_values["A"] = true;
+        boolean.input_values["B"] = false;
+        auto& distance = tree.add_node("lfs.distance", "Distance");
+        distance.properties["mode"] = "line";
+        distance.input_values["Vector"] = glm::vec3(-0.6279172757530982f, 0.626565338433462f, 1.8062866772833788f);
+        distance.input_values["Point"] = glm::vec3(-1.9800320780380165f, 1.6760289130573076f, -0.9195863934260489f);
+        distance.input_values["Direction"] = glm::vec3(1.4300321781511167f, -0.579142019187024f, -1.1000398726153522f);
+        distance.input_values["Normal"] = glm::vec3(-1.6785224615751129f, 0.4252425189733855f, 0.3258174906958726f);
+        tree.add_node("lfs.set_scale", "Scale");
+        auto& sharpen = tree.add_node("lfs.sharpen", "Sharpen");
+        constexpr float amount = 0.8037107154414453f;
+        sharpen.input_values["Amount"] = amount;
+        sharpen.properties["keep_coverage"] = true;
+        tree.add_node("lfs.splats_to_points", "Points");
+        auto& clumps = tree.add_node("lfs.remove_clumps", "Clumps");
+        clumps.input_values["Selection"] = 0.17230541194853133f;
+        clumps.input_values["Radius"] = 1.0796938448451159f;
+        clumps.input_values["Min Size"] = std::int64_t(2);
+        clumps.properties["delete"] = false;
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Scale", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Boolean", "Result", "Scale", "Selection"}));
+        ASSERT_TRUE(tree.add_link({"Distance", "Distance", "Scale", "Scale"}));
+        ASSERT_TRUE(tree.add_link({"Scale", "Geometry", "Sharpen", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Distance", "Distance", "Sharpen", "Selection"}));
+        ASSERT_TRUE(tree.add_link({"Sharpen", "Geometry", "Points", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Points", "Geometry", "Clumps", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Clumps", "Geometry", tree.output_node().name, "Geometry"}));
+        const auto result = evaluate(tree, {geometry, {}, 1});
+        ASSERT_TRUE(result.ok);
+        const auto actual = host<float>(result.geometry.splats->opacity);
+        for (size_t row = 0; row < logits.size(); ++row) {
+            const double alpha = std::clamp((1.0 / (1.0 + std::exp(-double(logits[row])))) / double(1.0f - amount),
+                                           double(1e-6f), double(1.0f - 1e-6f));
+            EXPECT_NEAR(actual[row], std::log(alpha / (1.0 - alpha)), 1e-5) << "row=" << row;
         }
     }
 

@@ -8,6 +8,7 @@
 #include "core/nodes/events.hpp"
 #include "scene/scene_manager.hpp"
 #include "sequencer/sequencer_controller.hpp"
+#include "visualizer/core/training_manager.hpp"
 #include "visualizer/nodes/camera_nodes.hpp"
 #include "visualizer/nodes/node_animation.hpp"
 
@@ -37,6 +38,8 @@ namespace lfs::vis {
             request.trees[id] = animated.to_json();
         }
         const auto& scene = scene_manager_->getScene();
+        const bool dataset = scene_manager_->getContentType() == SceneManager::ContentType::Dataset;
+        const core::Uuid training_model = scene.getTrainingModelNodeUuid();
         request.cameras = captureNodeCameras(scene);
         for (const auto* node : scene.getNodes()) {
             if (!node || (!node->model && !node->point_cloud && !node->mesh))
@@ -74,7 +77,8 @@ namespace lfs::vis {
             }
             if (const auto* modifiers = stack(node->uuid)) {
                 object.stack = *modifiers;
-                if (!animation_only_request_ || timeDependent(node->uuid))
+                if ((!dataset || node->uuid == training_model) &&
+                    (!animation_only_request_ || timeDependent(node->uuid)))
                     request.targets.push_back(node->uuid);
             }
             request.objects.push_back(std::move(object));
@@ -142,12 +146,36 @@ namespace lfs::vis {
     void ModifierManager::tick() {
         updateAnimationTime();
         auto& scene = scene_manager_->getScene();
-        if (scene_manager_->getContentType() != SceneManager::ContentType::SplatFiles) {
+        const auto content = scene_manager_->getContentType();
+        if (content != SceneManager::ContentType::SplatFiles && content != SceneManager::ContentType::Dataset) {
             if (worker_->progress().busy)
                 worker_->invalidate(++output_generation_);
             clearEvaluatedPayloads();
             last_scene_generation_ = scene.renderGeneration();
+            training_suspended_ = false;
             return;
+        }
+        const auto* trainer_manager = scene_manager_->getTrainerManager();
+        const bool training_running = content == SceneManager::ContentType::Dataset &&
+                                      trainer_manager && trainer_manager->isRunning();
+        if (training_running) {
+            if (!training_suspended_) {
+                training_suspended_ = true;
+                ++generation_;
+                worker_->invalidate(++output_generation_);
+                clearEvaluatedPayloads();
+            }
+            // Training publishes a new stored payload generation every iteration.
+            // Consume it without scheduling modifier work.
+            last_scene_generation_ = scene.renderGeneration();
+            return;
+        }
+        if (training_suspended_) {
+            training_suspended_ = false;
+            ++generation_;
+            ++source_generation_;
+            markDirty();
+            last_scene_generation_ = scene.renderGeneration();
         }
         if (last_scene_generation_ != scene.renderGeneration()) {
             ++source_generation_;

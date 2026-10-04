@@ -4972,6 +4972,8 @@
   },
   "node_editor.how_to_use": "使い方",
   "node_editor.learn_more": "詳しく見る",
+  "node_editor.modifiers_paused_while_training": "トレーニング中はモディファイアが一時停止します",
+  "export_dialog.apply_modifiers": "モディファイアを適用",
   "node_editor.capture_view": "ビューを保存",
   "node_editor.curve_hint": "点をドラッグして調整。クリックで追加、ダブルクリックまたはDeleteで削除。",
   "node_editor.ramp_hint": "ストップをドラッグして移動。クリックで追加、ダブルクリックまたはDeleteで削除。選択するとRGBAを編集できます。",

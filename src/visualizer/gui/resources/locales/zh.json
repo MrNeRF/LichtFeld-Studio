@@ -4972,6 +4972,8 @@
   },
   "node_editor.how_to_use": "使用方法",
   "node_editor.learn_more": "了解更多",
+  "node_editor.modifiers_paused_while_training": "训练期间修改器已暂停",
+  "export_dialog.apply_modifiers": "应用修改器",
   "node_editor.capture_view": "捕获视图",
   "node_editor.curve_hint": "拖动控制点调整曲线。单击添加，双击或按 Delete 删除。",
   "node_editor.ramp_hint": "拖动色标移动位置。单击添加，双击或按 Delete 删除。选择色标后可编辑 RGBA。",

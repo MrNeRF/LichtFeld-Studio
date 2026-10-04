@@ -4972,6 +4972,8 @@
   },
   "node_editor.how_to_use": "Zo gebruik je dit",
   "node_editor.learn_more": "Meer informatie",
+  "node_editor.modifiers_paused_while_training": "Modifiers zijn gepauzeerd tijdens het trainen",
+  "export_dialog.apply_modifiers": "Modifiers toepassen",
   "node_editor.capture_view": "Weergave vastleggen",
   "node_editor.curve_hint": "Versleep punten; klik om toe te voegen, dubbelklik of Delete om te verwijderen.",
   "node_editor.ramp_hint": "Versleep kleurstops; klik om toe te voegen, dubbelklik of Delete om te verwijderen. Selecteer een stop om RGBA te wijzigen.",

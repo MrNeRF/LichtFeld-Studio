@@ -911,7 +911,9 @@ namespace lfs::core {
                     weights.push_back(w);
                     total_weight += w;
                 }
-                if (total_weight < 1e-30f) {
+                if (total_weight < 1e-30f && !has_collapsed) {
+                    total_weight = 1e-30f;
+                } else if (total_weight < 1e-30f) {
                     // Point/line splats have tiny regularized mass. Normalize
                     // relative weights instead of moving their centre to zero.
                     const float largest_weight = *std::max_element(weights.begin(), weights.end());

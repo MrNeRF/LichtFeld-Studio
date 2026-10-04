@@ -1705,6 +1705,8 @@ namespace lfs::vis::project {
                     .sequencer =
                         std::move(
                             session->sequencer),
+                    .nodes =
+                        std::move(session->nodes),
                     .metrics =
                         std::move(session->metrics),
                     .selected_node_uuids =

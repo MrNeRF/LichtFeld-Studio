@@ -2197,11 +2197,11 @@ NB_MODULE(lichtfeld, m) {
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
            bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance,
-           int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
+           bool apply_modifiers, int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
             if (format >= 9 && format <= 12)
                 throw std::runtime_error("Use prepare_gallery_scene() to prepare a gallery upload.");
             lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable,
-                                       spz_version, include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
+                                       spz_version, include_provenance, apply_modifiers, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
         },
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
         nb::arg("rad_flip_y") = false,
@@ -2209,6 +2209,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("spz_version") = 4,
         nb::arg("include_provenance") = true,
         nb::kw_only(),
+        nb::arg("apply_modifiers") = true,
         nb::arg("lod_levels") = 4,
         nb::arg("lod_ratio") = 0.5f,
         nb::arg("chunk_count_k") = 512,
@@ -2219,6 +2220,7 @@ NB_MODULE(lichtfeld, m) {
         "For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. "
         "spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. "
         "include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. "
+        "apply_modifiers (default true) exports the evaluated Node Editor result; false exports the stored payload. "
         "Ignored for COLMAP and SPZ v3.");
 
     m.def(

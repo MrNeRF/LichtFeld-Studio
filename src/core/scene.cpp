@@ -5855,6 +5855,11 @@ namespace lfs::core {
         return node->model.get();
     }
 
+    const lfs::core::SplatData* Scene::getEffectiveTrainingModel() const {
+        const auto* node = getNodeByUuid(training_model_uuid_);
+        return node ? effectiveModel(*node) : nullptr;
+    }
+
     bool Scene::isTrainingModelEffectivelyVisible() const {
         const auto* node = getNodeByUuid(training_model_uuid_);
         return node && node->model && isNodeEffectivelyVisible(node->id);

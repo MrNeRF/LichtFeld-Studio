@@ -197,6 +197,7 @@ namespace lfs::vis {
 
         void markDirty(const core::Uuid& node_uuid = {});
         void tick();
+        [[nodiscard]] bool trainingSuspended() const noexcept { return training_suspended_; }
         void recordCanvasFrame(double milliseconds);
         void recordViewerFrame(double milliseconds, bool rendered_viewport);
         [[nodiscard]] nlohmann::json performance(bool reset = false);
@@ -284,6 +285,7 @@ namespace lfs::vis {
         std::unordered_map<core::Uuid, RuntimeState> runtime_;
         std::uint64_t generation_ = 1;
         std::uint64_t last_scene_generation_ = 0;
+        bool training_suspended_ = false;
         bool restoring_ = false;
         std::vector<double> canvas_frame_ms_;
         std::vector<double> evaluation_latency_ms_;

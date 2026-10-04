@@ -499,6 +499,21 @@ def test_ssog_directory_and_options(export_panel_module, tmp_path, monkeypatch):
     assert panel._cached_export_state["format"] == "SSOG"
 
 
+def test_apply_modifiers_defaults_on_and_forwards_toggle(export_panel_module, monkeypatch):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._selected_nodes = {"Tree"}
+    state.nodes = [_make_node(module.lf.scene.NodeType.SPLAT, "Tree", 128)]
+    calls = []
+    monkeypatch.setattr(module.lf, "export_scene", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    panel._do_export()
+    assert calls[-1][1]["apply_modifiers"] is True
+    panel._on_toggle_apply_modifiers(None, None, None)
+    panel._do_export()
+    assert calls[-1][1]["apply_modifiers"] is False
+
+
 @pytest.mark.parametrize("reply,expected_exports", [("Overwrite", 1), ("Cancel", 0)])
 def test_ssog_overwrite_confirmation(export_panel_module, tmp_path, reply, expected_exports):
     module, state = export_panel_module

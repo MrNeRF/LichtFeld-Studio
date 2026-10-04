@@ -4657,6 +4657,9 @@ namespace lfs::training {
                                 document->edit_sequencer() =
                                     document_context
                                         ->sequencer;
+                                document->edit_nodes() =
+                                    document_context
+                                        ->nodes;
                                 document->edit_metrics() =
                                     document_context
                                         ->metrics;

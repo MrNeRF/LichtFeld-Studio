@@ -348,6 +348,18 @@ body {
     justify-content: center;
     font-size: 13dp;
 }
+#node-canvas-notice.training-suspended {
+    left: 16dp;
+    top: 8dp;
+    right: 296dp;
+    bottom: auto;
+    height: 28dp;
+    padding-left: 10dp;
+    padding-right: 10dp;
+    border-width: 1dp;
+    border-radius: 5dp;
+    pointer-events: none;
+}
 #node-editor-sidebar {
     z-index: 2;
     position: absolute;

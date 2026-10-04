@@ -1708,7 +1708,8 @@ namespace lfs::vis::gui {
                                          bool rad_streamable,
                                          int spz_version,
                                          bool include_provenance,
-                                         int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
+                                         int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations,
+                                         const bool apply_modifiers) {
         if (isExporting()) {
             if (lfs::vis::gui::isGalleryPublicationFormat(format))
                 throw std::runtime_error("Wait for the current export to finish before uploading.");
@@ -1780,8 +1781,10 @@ namespace lfs::vis::gui {
         for (const auto& name : node_names) {
             const auto* node = scene.getNode(name);
             if (node && node->type == core::NodeType::SPLAT && node->model) {
+                const auto evaluated = apply_modifiers ? node->evaluated_model : nullptr;
                 splats.push_back(ExportSplatSource{
-                    .data = node->model.get(),
+                    .data = evaluated ? evaluated.get() : node->model.get(),
+                    .owner = evaluated,
                     .transform = scene_coords::nodeDataWorldTransform(scene, node->id)});
             }
         }
@@ -1791,6 +1794,10 @@ namespace lfs::vis::gui {
         }
 
         auto borrow_plan = makeBorrowSingleIdentityExportPlan(*scene_manager, node_names);
+        if (std::ranges::any_of(splats, [](const auto& source) { return source.owner != nullptr; })) {
+            borrow_plan.storage_mode = core::Scene::MergeStorageMode::Clone;
+            borrow_plan.model_mutex = nullptr;
+        }
 
         auto provenance = include_provenance ? make_gui_export_stamp(*scene_manager)
                                              : core::make_minimal_provenance_stamp();

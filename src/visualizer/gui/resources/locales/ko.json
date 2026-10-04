@@ -4972,6 +4972,8 @@
   },
   "node_editor.how_to_use": "사용 방법",
   "node_editor.learn_more": "자세히 보기",
+  "node_editor.modifiers_paused_while_training": "훈련 중에는 수정자가 일시 중지됩니다",
+  "export_dialog.apply_modifiers": "수정자 적용",
   "node_editor.capture_view": "뷰 저장",
   "node_editor.curve_hint": "점을 끌어 조정하세요. 클릭하여 추가하고 두 번 클릭하거나 Delete로 삭제합니다.",
   "node_editor.ramp_hint": "스톱을 끌어 이동하세요. 클릭하여 추가하고 두 번 클릭하거나 Delete로 삭제합니다. 스톱을 선택하면 RGBA를 편집할 수 있습니다.",

@@ -1572,6 +1572,8 @@ lf.export_scene(
     rad_streamable: bool = True,
     spz_version: int = 4,    # SPZ only: 4 (zstd) or 3 (legacy gzip)
     include_provenance: bool = True,  # False writes a minimal build stamp; ignored for COLMAP and SPZ v3
+    *,
+    apply_modifiers: bool = True,  # False exports stored scene payloads
 )
 lf.save_config_file(path: str)
 ```

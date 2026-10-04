@@ -23,9 +23,14 @@ class Posterize:
         geometry = ctx.input("Geometry")
         if geometry is None or geometry.splats is None:
             return {"Geometry": geometry}
-        levels = max(2, int(ctx.input("Levels")))
         splats = geometry.splats
+        if splats.means.shape[0] == 0:
+            return {"Geometry": geometry}
+        levels = min(32, max(2, int(ctx.input("Levels"))))
         weight = ctx.field("Selection", splats).clamp(0.0, 1.0)
+        # Match built-in selection semantics: a non-finite field result must
+        # not contaminate otherwise valid colour/SH values.
+        weight = lf.Tensor.where(~weight.isnan(), weight, lf.Tensor.zeros_like(weight))
         colour = (splats.sh0 * 0.28209479177387814 + 0.5).clamp(0.0, 1.0)
         colour = (colour * float(levels - 1)).round() / float(levels - 1)
         quantized = (colour - 0.5) / 0.28209479177387814

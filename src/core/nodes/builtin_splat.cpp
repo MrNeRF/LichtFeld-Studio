@@ -65,7 +65,7 @@ namespace lfs::nodes::builtin {
             auto w = selection(context, "Selection", fc);
             auto color = context.evaluate_field("Colour", fc, COLOUR_SOCKET);
             s.sh0 = blend(s.sh0, (color - 0.5f) / kShC0, w);
-            if (property_bool(context, "clear_view_dependent", true)) {
+            if (property_bool(context, "clear_view_dependent", true) && s.shN.numel() != 0) {
                 s.shN = blend(s.shN, Tensor::zeros_like(s.shN), w);
             }
         }
@@ -120,7 +120,8 @@ namespace lfs::nodes::builtin {
     void evaluate_sharpen(NodeContext& context) {
         auto geometry = geometry_input(context);
         const float amount = input_float(context, "Amount");
-        if (amount == 0.0f) {
+        const float shrink = 1 - amount;
+        if (shrink == 1.0f) {
             // sigmoid/logit is not a bit-exact identity, and clamping it changes
             // large logits. Preserve ties used by downstream structural nodes.
             context.set_output("Geometry", std::move(geometry));
@@ -129,12 +130,26 @@ namespace lfs::nodes::builtin {
         if (geometry.splats) {
             auto& splats = *geometry.splats;
             const auto weight = selection(context, "Selection", field_context(splats));
-            const float shrink = 1 - amount;
             // Add the weighted log factor directly: no interpolation of infinities.
             splats.scaling = splats.scaling + weight.unsqueeze(1) * std::log(shrink);
             if (property_bool(context, "keep_coverage", true)) {
-                const auto opacity = splats.opacity.sigmoid();
-                const auto corrected = (opacity / shrink).clamp(1e-6f, 1 - 1e-6f).logit();
+                // logit(sigmoid(x)/s) = -log(1-s) - log(expm1(logit(s)-x)).
+                // Work in logits: rounding an almost-one opacity by one ULP
+                // before logit otherwise amplifies backend error by ~0.03.
+                // Split the scalar threshold to retain its low bits when x
+                // is only a few ULPs below it (the seed-10 garden regression).
+                const double threshold = std::log(double(shrink) / (1.0 - double(shrink)));
+                const float threshold_high = static_cast<float>(threshold);
+                const float threshold_low = static_cast<float>(threshold - threshold_high);
+                const auto gap = (Tensor::full_like(splats.opacity, threshold_high) - splats.opacity + threshold_low)
+                                     .clamp(1e-12f, 32.0f);
+                // expm1(d) = 2*exp(d/2)*sinh(d/2), without near-zero cancellation.
+                const auto half_gap = gap * 0.5f;
+                constexpr float minimum = 1e-6f, maximum = 1.0f - 1e-6f;
+                const auto corrected = (-(half_gap.sinh().mul(2.0f).log() + half_gap) -
+                                        static_cast<float>(std::log1p(-double(shrink))))
+                                           .clamp(std::log(minimum / (1 - minimum)),
+                                                  std::log(maximum / (1 - maximum)));
                 splats.opacity = blend(splats.opacity, corrected, weight);
             }
         }

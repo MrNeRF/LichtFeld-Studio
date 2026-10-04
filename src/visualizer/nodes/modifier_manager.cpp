@@ -14,15 +14,22 @@
 #include "core/nodes/builtin.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
+#include "lfs/training/live_model_mutation_guard.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "scene/scene_manager.hpp"
+#include "training/optimizer/adam_optimizer.hpp"
+#include "training/trainer.hpp"
+#include "visualizer/core/training_manager.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <format>
 #include <glm/gtc/matrix_transform.hpp>
+#include <numeric>
 #include <ranges>
 
 namespace lfs::vis {
@@ -1368,6 +1375,11 @@ namespace lfs::vis {
         const auto found = std::ranges::find(modifiers->modifiers, modifier_name, &Modifier::name);
         if (found == modifiers->modifiers.end())
             return std::unexpected(ModifierError{"Modifier does not exist"});
+        const bool training_model = scene_manager_->getContentType() == SceneManager::ContentType::Dataset &&
+                                    node_uuid == scene.getTrainingModelNodeUuid();
+        auto* trainer_manager = scene_manager_->getTrainerManager();
+        if (training_model && trainer_manager && trainer_manager->isRunning())
+            return std::unexpected(ModifierError{"Modifiers are paused while training"});
         const size_t index = static_cast<size_t>(std::distance(modifiers->modifiers.begin(), found));
         auto prepared = evaluateForApply(node_uuid, index);
         const auto& result = prepared.evaluation;
@@ -1379,6 +1391,10 @@ namespace lfs::vis {
             (node->type == core::NodeType::MESH && !result.geometry.mesh))
             return std::unexpected(
                 ModifierError{"The modifier result does not match the host geometry type"});
+        if (training_model && (!prepared.splats || !node->model ||
+                               prepared.splats->size() != node->model->size()))
+            return std::unexpected(
+                ModifierError{"Export the result or stop training first"});
 
         const auto manager_before = toJson(false);
         op::SceneGraphCaptureOptions options;
@@ -1389,7 +1405,45 @@ namespace lfs::vis {
         auto scene_before = op::SceneGraphPatchEntry::captureStateByIds(
             *scene_manager_, {node->id}, options);
         op::TransactionGuard transaction("node.apply_modifier");
-        if (node->type == core::NodeType::SPLAT) {
+        if (training_model) {
+            auto& destination = *node->model;
+            auto* trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
+            std::unique_lock<std::shared_mutex> render_lock;
+            std::unique_lock<std::shared_mutex> model_lock;
+            if (trainer) {
+                render_lock = std::unique_lock<std::shared_mutex>(trainer->getRenderMutex());
+                model_lock = std::unique_lock<std::shared_mutex>(trainer->getModelAccessMutex());
+            }
+            lfs::training::LiveModelMutationGuard mutation_guard("ModifierManager::applyModifier");
+            destination.means().copy_(prepared.splats->means_raw());
+            destination.sh0().copy_(prepared.splats->sh0_raw());
+            destination.scaling_raw().copy_(prepared.splats->scaling_raw());
+            destination.rotation_raw().copy_(prepared.splats->rotation_raw());
+            destination.opacity_raw().copy_(prepared.splats->opacity_raw());
+            if (destination.max_sh_coeffs_rest() > 0) {
+                auto canonical = destination.shN_canonical();
+                const auto source = prepared.splats->shN_canonical();
+                if (source.is_valid() && source.numel() > 0) {
+                    const int coefficients = static_cast<int>(std::min(canonical.size(1), source.size(1)));
+                    canonical.slice(1, 0, coefficients).copy_(source.slice(1, 0, coefficients));
+                }
+                std::vector<int> rows(static_cast<size_t>(destination.size()));
+                std::iota(rows.begin(), rows.end(), 0);
+                const auto indices = core::Tensor::from_vector(
+                                         rows, {rows.size()}, core::Device::CPU)
+                                         .to(destination.means_raw().device());
+                lfs::training::sh_value::scatter_canonical_into_shN(destination, indices, canonical);
+            }
+            destination.set_active_sh_degree(prepared.splats->get_active_sh_degree());
+            if (trainer && trainer->isInitialized())
+                trainer->get_strategy_mutable().get_optimizer().reset_all_states();
+            core::TensorCompletion completion;
+            completion.include_current_gpu();
+            completion.wait();
+            scene.clearNodeEvaluatedPayload(node->id);
+            scene.markPayloadDiverged(node->id);
+            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        } else if (node->type == core::NodeType::SPLAT) {
             scene.replaceNodeModel(node->name,
                                    std::make_unique<core::SplatData>(prepared.splats->readOnlySnapshot()));
         } else if (node->type == core::NodeType::POINTCLOUD) {
