@@ -155,6 +155,7 @@ target_include_directories(lfs_video SYSTEM PRIVATE
 
 target_link_libraries(lfs_video
         PRIVATE
+        lfs_core
         PkgConfig::FFMPEG
         spdlog::spdlog
         CUDA::cudart

@@ -9,12 +9,57 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <jpeglib.h>
+#include <png.h>
 #include <stdexcept>
 #include <vector>
 #include <zlib.h>
 
 namespace {
     namespace codec = lfs::core::image_codecs;
+
+    struct PngMetadataReader {
+        png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+        png_infop info = png ? png_create_info_struct(png) : nullptr;
+        ~PngMetadataReader() {
+            if (png)
+                png_destroy_read_struct(&png, &info, nullptr);
+        }
+    };
+    struct PngMetadataInput {
+        const std::vector<std::uint8_t>& bytes;
+        std::size_t offset = 0;
+    };
+    void read_metadata_bytes(png_structp png, png_bytep output, png_size_t size) {
+        auto* input = static_cast<PngMetadataInput*>(png_get_io_ptr(png));
+        if (size > input->bytes.size() - input->offset)
+            png_error(png, "Truncated PNG metadata");
+        std::memcpy(output, input->bytes.data() + input->offset, size);
+        input->offset += size;
+    }
+    bool read_metadata_info(png_structp png, png_infop info) {
+        if (setjmp(png_jmpbuf(png)))
+            return false;
+        png_read_info(png, info);
+        return true;
+    }
+    std::string read_png_comment(const std::filesystem::path& path) {
+        std::ifstream file(path, std::ios::binary);
+        std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(file), {}};
+        PngMetadataReader reader;
+        if (!reader.png || !reader.info)
+            throw std::runtime_error("Could not allocate PNG metadata reader");
+        PngMetadataInput input{bytes};
+        png_set_read_fn(reader.png, &input, read_metadata_bytes);
+        if (!read_metadata_info(reader.png, reader.info))
+            throw std::runtime_error("Could not read PNG metadata");
+        png_textp text = nullptr;
+        const int count = png_get_text(reader.png, reader.info, &text, nullptr);
+        for (int i = 0; i < count; ++i) {
+            if (std::strcmp(text[i].key, "Comment") == 0)
+                return text[i].text;
+        }
+        return {};
+    }
     TEST(ProductionDependencies, HeadersMatchRuntimeBackend) {
         EXPECT_STREQ(zlibVersion(), ZLIB_VERSION);
     }
@@ -64,6 +109,7 @@ namespace {
                     const auto path = temporary.path / std::filesystem::path(u8"immagine-測試.png");
                     std::string error;
                     ASSERT_TRUE(codec::write_png(path, bytes.data(), width, height, channels, depth, level, "codec regression", error)) << error;
+                    EXPECT_EQ(read_png_comment(path), "codec regression");
                     codec::Probe probe;
                     ASSERT_TRUE(codec::probe(path, probe, error)) << error;
                     EXPECT_EQ(probe.width, width);

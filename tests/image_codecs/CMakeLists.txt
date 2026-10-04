@@ -32,7 +32,8 @@ add_executable(lichtfeld_image_codec_tests
     ${LFS_CODEC_ROOT}/src/core/image_codecs.cpp
     ${LFS_CODEC_ROOT}/src/core/image_exr.cpp)
 target_compile_features(lichtfeld_image_codec_tests PRIVATE cxx_std_20)
-target_include_directories(lichtfeld_image_codec_tests PRIVATE ${LFS_CODEC_ROOT}/src)
+target_include_directories(lichtfeld_image_codec_tests PRIVATE ${LFS_CODEC_ROOT}/src ${LFS_CODEC_ROOT}/src/core/include)
+target_compile_definitions(lichtfeld_image_codec_tests PRIVATE LFS_STATIC_BUILD)
 target_include_directories(lichtfeld_image_codec_tests BEFORE PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_include_directories(lichtfeld_image_codec_tests SYSTEM PRIVATE ${LFS_CODEC_ROOT}/external)
 target_link_libraries(lichtfeld_image_codec_tests PRIVATE
@@ -44,3 +45,29 @@ if(MSVC)
 endif()
 add_test(NAME lichtfeld_image_codec_tests COMMAND lichtfeld_image_codec_tests)
 set_tests_properties(lichtfeld_image_codec_tests PROPERTIES LABELS "fast;image;cpu" TIMEOUT 120)
+
+# Exercise the actual import/export boundary; direct-source codec tests cannot
+# detect missing exports from the hidden-visibility core shared library.
+add_library(lichtfeld_codec_exports SHARED
+    ${LFS_CODEC_ROOT}/src/core/image_codecs.cpp
+    ${LFS_CODEC_ROOT}/src/core/image_exr.cpp)
+target_compile_features(lichtfeld_codec_exports PUBLIC cxx_std_20)
+target_compile_definitions(lichtfeld_codec_exports PRIVATE LFS_CORE_EXPORTS)
+target_include_directories(lichtfeld_codec_exports PUBLIC ${LFS_CODEC_ROOT}/src ${LFS_CODEC_ROOT}/src/core/include)
+target_include_directories(lichtfeld_codec_exports BEFORE PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_include_directories(lichtfeld_codec_exports SYSTEM PRIVATE ${LFS_CODEC_ROOT}/external)
+target_link_libraries(lichtfeld_codec_exports PRIVATE
+    Threads::Threads OpenEXR::OpenEXRCore JPEG::JPEG PNG::PNG TIFF::TIFF WebP::webp ZLIB::ZLIB)
+set_target_properties(lichtfeld_codec_exports PROPERTIES
+    CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+
+add_library(lichtfeld_codec_exports_consumer STATIC ../test_image_codec_exports.cpp)
+target_link_libraries(lichtfeld_codec_exports_consumer PRIVATE lichtfeld_codec_exports)
+add_executable(lichtfeld_codec_exports_test test_codec_exports_main.cpp)
+target_link_libraries(lichtfeld_codec_exports_test PRIVATE lichtfeld_codec_exports_consumer)
+if(MSVC)
+    target_compile_definitions(lichtfeld_codec_exports PRIVATE NOMINMAX)
+    target_compile_options(lichtfeld_codec_exports PRIVATE /utf-8 /W4)
+endif()
+add_test(NAME lichtfeld_codec_exports_test COMMAND lichtfeld_codec_exports_test)
+set_tests_properties(lichtfeld_codec_exports_test PROPERTIES LABELS "fast;image;cpu" TIMEOUT 30)
