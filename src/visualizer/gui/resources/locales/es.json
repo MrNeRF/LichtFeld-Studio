@@ -1302,6 +1302,8 @@
     "cropbox_loss_weight": "Escala las pérdidas por píxel fuera de la ROI de la caja de recorte activa",
     "environment_mode": "Fuente del fondo: color sólido o HDRI",
     "environment_map_path": "Elegir un mapa de entorno HDRI",
+    "color_tonemapping": "Curva tonal para los colores de splats mostrados (Ninguno = sin cambios)",
+    "color_exposure": "Escala el brillo de los splats antes de la curva tonal; los splats no se modifican",
     "environment_exposure": "Exposición del HDRI en pasos EV",
     "environment_rotation": "Rotar el HDRI alrededor del eje vertical",
     "voxel_size": "Tamaño de celda de la cuadrícula de vóxeles para consultas espaciales",

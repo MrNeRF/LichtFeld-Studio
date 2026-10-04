@@ -1302,6 +1302,8 @@
     "cropbox_loss_weight": "缩放活动裁剪框 ROI 外的像素损失",
     "environment_mode": "背景来源：纯色或 HDRI",
     "environment_map_path": "选择 HDRI 环境贴图",
+    "color_tonemapping": "显示的 Splat 颜色的色调曲线（无 = 不变）",
+    "color_exposure": "在色调曲线之前缩放 Splat 亮度；不会修改 Splat 本身",
     "environment_exposure": "HDRI 曝光（EV 档位）",
     "environment_rotation": "围绕垂直轴旋转 HDRI",
     "voxel_size": "用于空间查询的体素单元大小",

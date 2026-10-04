@@ -1302,6 +1302,8 @@
     "cropbox_loss_weight": "Scala le loss per pixel fuori dalla ROI della scatola di ritaglio attiva",
     "environment_mode": "Fonte sfondo: tinta unita o HDRI",
     "environment_map_path": "Scegli una mappa ambientale HDRI",
+    "color_tonemapping": "Curva tonale per i colori degli splat visualizzati (Nessuno = invariati)",
+    "color_exposure": "Scala la luminosità degli splat prima della curva tonale; gli splat non vengono modificati",
     "environment_exposure": "Esposizione HDRI in stop EV",
     "environment_rotation": "Ruota HDRI attorno all'asse verticale",
     "voxel_size": "Dimensione cella voxel per query spaziali",

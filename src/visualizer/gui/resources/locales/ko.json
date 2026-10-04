@@ -1302,6 +1302,8 @@
     "cropbox_loss_weight": "활성 자르기 상자 ROI 외부의 픽셀 손실 배율을 조정합니다",
     "environment_mode": "배경 소스: 단색 또는 HDRI",
     "environment_map_path": "HDRI 환경 맵 선택",
+    "color_tonemapping": "표시되는 스플랫 색상의 톤 커브 (없음 = 변경 없음)",
+    "color_exposure": "톤 커브 전에 스플랫 밝기를 배율로 조정 (스플랫 자체는 변경되지 않음)",
     "environment_exposure": "HDRI 노출 (EV 스톱)",
     "environment_rotation": "수직 축을 중심으로 HDRI 회전",
     "voxel_size": "공간 쿼리용 복셀 셀 크기",

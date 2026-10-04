@@ -1302,6 +1302,8 @@
     "cropbox_loss_weight": "Mettre à l'échelle les pertes par pixel hors de la ROI de la boîte de recadrage active",
     "environment_mode": "Source de fond : couleur unie ou HDRI",
     "environment_map_path": "Choisir une carte d'environnement HDRI",
+    "color_tonemapping": "Courbe tonale des couleurs de splats affichées (Aucun = inchangées)",
+    "color_exposure": "Ajuste la luminosité des splats avant la courbe tonale ; les splats ne sont pas modifiés",
     "environment_exposure": "Exposition HDRI en stops EV",
     "environment_rotation": "Faire pivoter le HDRI autour de l'axe vertical",
     "voxel_size": "Taille de cellule de grille voxel pour requêtes spatiales",

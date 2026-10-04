@@ -1302,6 +1302,8 @@
     "cropbox_loss_weight": "Schaal pixelverliezen buiten de ROI van het actieve bijsnijvak",
     "environment_mode": "Achtergrondbron: effen kleur of HDRI",
     "environment_map_path": "Kies een HDRI-omgevingskaart",
+    "color_tonemapping": "Toncurve voor de weergegeven splatkleuren (Geen = ongewijzigd)",
+    "color_exposure": "Schaalt de helderheid van splats vóór de toncurve; de splats zelf veranderen niet",
     "environment_exposure": "HDRI-belichting in EV-stops",
     "environment_rotation": "Roteer HDRI rond de verticale as",
     "voxel_size": "Voxel-celgrootte voor ruimtelijke queries",

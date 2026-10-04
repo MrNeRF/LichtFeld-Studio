@@ -1302,6 +1302,8 @@
     "cropbox_loss_weight": "Pixelverluste außerhalb der aktiven Zuschneidebox-ROI skalieren",
     "environment_mode": "Hintergrundquelle: Volltonfarbe oder HDRI",
     "environment_map_path": "HDRI-Umgebungsmap auswählen",
+    "color_tonemapping": "Tonkurve für die angezeigten Splat-Farben (Keine = unverändert)",
+    "color_exposure": "Skaliert die Splat-Helligkeit vor der Tonkurve; die Splats selbst bleiben unverändert",
     "environment_exposure": "HDRI-Belichtung in EV-Stufen",
     "environment_rotation": "HDRI um die vertikale Achse drehen",
     "voxel_size": "Voxelgittergröße für räumliche Abfragen",

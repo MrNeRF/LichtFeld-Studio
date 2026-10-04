@@ -1302,6 +1302,8 @@
     "cropbox_loss_weight": "有効なクロップボックス ROI の外側にあるピクセル損失をスケールします",
     "environment_mode": "背景ソース：単色または HDRI",
     "environment_map_path": "HDRI 環境マップを選択",
+    "color_tonemapping": "表示されるスプラット色のトーンカーブ（なし＝変更なし）",
+    "color_exposure": "トーンカーブの前にスプラットの明るさを倍率で調整（スプラット自体は変更されません）",
     "environment_exposure": "HDRI 露出 (EV ストップ)",
     "environment_rotation": "垂直軸を中心に HDRI を回転",
     "voxel_size": "空間クエリ用ボクセルセルサイズ",

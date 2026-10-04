@@ -1302,6 +1302,8 @@
     "cropbox_loss_weight": "Skaluj straty pikseli poza ROI aktywnego pola przycinania",
     "environment_mode": "Źródło tła: jednolity kolor lub HDRI",
     "environment_map_path": "Wybierz mapę środowiska HDRI",
+    "color_tonemapping": "Krzywa tonalna wyświetlanych kolorów splatów (Żaden = bez zmian)",
+    "color_exposure": "Skaluje jasność splatów przed krzywą tonalną; same splaty się nie zmieniają",
     "environment_exposure": "Ekspozycja HDRI w jednostkach EV",
     "environment_rotation": "Obróć HDRI wokół osi pionowej",
     "voxel_size": "Rozmiar komórki voxel dla zapytań przestrzennych",
