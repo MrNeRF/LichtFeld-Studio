@@ -498,6 +498,8 @@ namespace lfs::vis {
             bounds.input = {.mouse_pos = face_screen + glm::vec2(20.0f, 0.0f)};
             gui::beginBoundsGizmoFrame();
             EXPECT_FALSE(gui::drawBoundsGizmo(bounds).active);
+            // End the scripted frame: a gizmo left hovered would swallow later tests' camera drags.
+            gui::beginBoundsGizmoFrame();
 
             op::undoHistory().clear();
             ASSERT_TRUE(manager.beginViewportNodeGizmoDrag());
