@@ -162,6 +162,39 @@ namespace {
         }
     }
 
+    // Fails if sinh or tanh loses relative accuracy near zero, where their shading-language definitions cancel, or
+    // overflows before the float limit. The negated chains also cover the fused expression path.
+    TEST_F(TensorVulkanPointwise, HyperbolicFunctionsKeepRelativeAccuracyNearZero) {
+        constexpr float inf = std::numeric_limits<float>::infinity();
+        const std::vector<float> values{1e-30f, -1e-30f, 1e-12f, 3e-8f, -3e-8f, 1e-4f, -2e-3f, 0.3f, -0.9f, 0.999f,
+                                        1.0f, -1.5f, 4.0f, 9.5f, -11.0f, 40.0f, 88.0f, 89.0f, -89.0f, 0.0f, -0.0f,
+                                        inf, -inf, std::numeric_limits<float>::quiet_NaN()};
+        const Tensor vulkan = upload_float(values, {values.size()});
+        const auto check = [&](std::string_view name, const Tensor& actual, double (*reference)(double)) {
+            SCOPED_TRACE(name);
+            const auto result = actual.cpu().to_vector();
+            ASSERT_EQ(result.size(), values.size());
+            for (size_t i = 0; i < values.size(); ++i) {
+                const double expected = reference(double(values[i]));
+                if (std::isnan(expected)) {
+                    EXPECT_TRUE(std::isnan(result[i])) << "x=" << values[i];
+                } else if (std::isinf(expected) || expected == 0.0) {
+                    EXPECT_EQ(std::bit_cast<std::uint32_t>(result[i]), std::bit_cast<std::uint32_t>(float(expected)))
+                        << "x=" << values[i];
+                } else {
+                    // Four ULPs below one; above, the Vulkan exp bound of 3 + 2|x| ULPs plus two for the rest.
+                    const double x = std::abs(double(values[i]));
+                    const double ulps = x < 1.0 ? 4.0 : 5.0 + 2.0 * x;
+                    EXPECT_LE(std::abs(result[i] - expected) / std::abs(expected), ulps * 0x1p-23) << "x=" << values[i];
+                }
+            }
+        };
+        check("sinh", vulkan.sinh(), [](double x) { return std::sinh(x); });
+        check("tanh", vulkan.tanh(), [](double x) { return std::tanh(x); });
+        check("fused sinh", vulkan.neg().sinh().neg(), [](double x) { return std::sinh(x); });
+        check("fused tanh", vulkan.neg().tanh().neg(), [](double x) { return std::tanh(x); });
+    }
+
     TEST_F(TensorVulkanPointwise, IeeePoliciesCatchNaNZeroDenormalAndHalfEvenErrors) {
         const float nan_a = std::bit_cast<float>(0x7fc01234u);
         const float nan_b = std::bit_cast<float>(0x7fc05678u);

@@ -2469,6 +2469,61 @@ namespace {
         EXPECT_EQ(actual, expected);
     }
 
+    // Fails if precise division is not correctly rounded across the float range: subnormal inputs and results, the
+    // overflow boundary, signed zeros, infinities and NaN must match the CPU bit for bit.
+    TEST_P(NodesCore, FusedPreciseDivisionIsCorrectlyRoundedAcrossTheFloatRange) {
+        if (device() == Device::CPU)
+            GTEST_SKIP() << "Fused kernel requires GPU";
+        namespace fused = lfs::core::fused;
+        using lfs::core::DataType;
+        const auto bits = [](std::uint32_t value) { return std::bit_cast<float>(value); };
+        constexpr float inf = std::numeric_limits<float>::infinity();
+        const std::vector<float> special{0.0f, -0.0f, 1.0f, -1.0f, 3.0f, 0.1f, 7.0f, 1e-38f, 3e38f, inf, -inf,
+                                         std::numeric_limits<float>::quiet_NaN(), bits(1), bits(0x00400001u),
+                                         bits(0x007fffffu), bits(0x00800000u), bits(0x7f7fffffu)};
+        std::vector<float> numerator, denominator;
+        for (const float a : special) {
+            for (const float b : special) {
+                numerator.push_back(a);
+                denominator.push_back(b);
+            }
+        }
+        std::mt19937 random(2766);
+        std::uniform_int_distribution<std::uint32_t> any;
+        for (int i = 0; i < 1 << 16; ++i) {
+            numerator.push_back(bits(any(random)));
+            denominator.push_back(bits(any(random)));
+        }
+        // Quotient exponents around the subnormal range and the overflow boundary, where rounding shifts and carries.
+        std::uniform_int_distribution<std::uint32_t> fraction(0, 0x7fffffu), sign(0, 1);
+        for (const int exponent : {-160, -150, -149, -140, -127, -126, -125, 126, 127, 128}) {
+            for (int i = 0; i < 4096; ++i) {
+                const int ey = 1 + int(any(random) % 200);
+                const int ex = std::clamp(ey + exponent, 0, 254);
+                numerator.push_back(bits(sign(random) << 31 | std::uint32_t(ex) << 23 | fraction(random)));
+                denominator.push_back(bits(sign(random) << 31 | std::uint32_t(ey) << 23 | fraction(random)));
+            }
+        }
+        fused::Builder builder(1);
+        const auto a = builder.input(DataType::Float32, 1), b = builder.input(DataType::Float32, 1);
+        builder.output(fused::precise_divide(a.load(), b.load()), DataType::Float32);
+        const fused::Kernel kernel(builder);
+        const size_t n = numerator.size();
+        const auto actual = host<float>(kernel({n}, {tensor(numerator, {n}), tensor(denominator, {n})})[0]);
+        size_t mismatches = 0;
+        for (size_t i = 0; i < n; ++i) {
+            const float expected = numerator[i] / denominator[i];
+            const bool same = std::isnan(expected) ? std::isnan(actual[i])
+                                                   : std::bit_cast<std::uint32_t>(actual[i]) == std::bit_cast<std::uint32_t>(expected);
+            if (!same && ++mismatches <= 8) {
+                ADD_FAILURE() << std::hex << std::bit_cast<std::uint32_t>(numerator[i]) << " / "
+                              << std::bit_cast<std::uint32_t>(denominator[i]) << ": "
+                              << std::bit_cast<std::uint32_t>(actual[i]) << " vs " << std::bit_cast<std::uint32_t>(expected);
+            }
+        }
+        EXPECT_EQ(mismatches, 0u) << "of " << n;
+    }
+
     TEST_P(NodesCore, FusedNoiseVaryingFieldsStridesAndFractionalOctavesMatchCpuExactly) {
         constexpr size_t n = 257;
         std::mt19937 random(825);

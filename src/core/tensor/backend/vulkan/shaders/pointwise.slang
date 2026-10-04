@@ -3,6 +3,7 @@ static const uint LFS_PUSH_CONSTANT_SIZE = 48;
 #include "half_bits.slangh"
 #include "byte_word.slangh"
 #include "integer_math.slangh"
+#include "hyperbolic_math.slangh"
 #include "power_math.slangh"
 
 [SpecializationConstant]
@@ -170,7 +171,7 @@ float floatUnary(float value, float scalar, bool scalarOnRight)
     if (kOp == 15) return 1.0f / (1.0f + exp(-value));
     if (kOp == 16) return isnan(value) ? value : ieeeMaximum(value, 0.0f);
     if (kOp == 17) return value * value;
-    if (kOp == 18) return tanh(value);
+    if (kOp == 18) return accurateTanh(value);
     if (kOp == 19) return rsqrt(value);
     if (kOp == 20) return float((value > 0.0f) - (value < 0.0f));
     if (kOp == 21) return 1.0f / value;
@@ -187,13 +188,13 @@ float floatUnary(float value, float scalar, bool scalarOnRight)
     if (kOp == 45) return accurateAsin(value);
     if (kOp == 46) return accurateAcos(value);
     if (kOp == 47) return atan(value);
-    if (kOp == 48) return sinh(value);
+    if (kOp == 48) return accurateSinh(value);
     if (kOp == 49) return cosh(value);
     if (kOp == 50)
     {
         const float inner = sqrt(2.0f / 3.14159265358979323846f) *
                             (value + 0.044715f * value * value * value);
-        return 0.5f * value * (1.0f + tanh(inner));
+        return 0.5f * value * (1.0f + accurateTanh(inner));
     }
     if (kOp == 51) return value / (1.0f + exp(-value));
     if (kOp == 52) return trunc(value);
@@ -225,7 +226,7 @@ float applyChainOp(float value, ChainOp op, uint index)
     if (op.kind == 15) return 1.0f / (1.0f + exp(-value));
     if (op.kind == 16) return isnan(value) ? value : ieeeMaximum(value, 0.0f);
     if (op.kind == 17) return value * value;
-    if (op.kind == 18) return tanh(value);
+    if (op.kind == 18) return accurateTanh(value);
     if (op.kind == 19) return rsqrt(value);
     if (op.kind == 20) return float((value > 0.0f) - (value < 0.0f));
     if (op.kind == 21) return 1.0f / value;
