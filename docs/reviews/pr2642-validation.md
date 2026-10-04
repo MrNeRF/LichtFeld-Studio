@@ -82,7 +82,7 @@ excluded visualizer test target, and the following recorded results:
 - Portable Metal suite with API and shader validation: 496 pass, 117 skip.
 - Viewer/shared/profile contracts with validation: 19/19.
 - Vulkan snapshot, step-tracker and queue contracts with validation: 22/22.
-- Selected Python suite: 3228 pass, 212 subtests, one skip, 67 deselected.
+- Selected Python suite in the fresh isolated run: 3228 pass, 211 subtests, one skip, 67 deselected.
 - Backend neutrality, error census, I/O discipline, locales and whitespace pass.
 - App and first-party dylib deployment commands use macOS 26 or newer.
 
@@ -100,6 +100,8 @@ selections are outside the reported Python run.
 - M5 Max first frame with default MoltenVK configuration, fresh app profile,
   and the dataset/PLY inputs from the review.
 - Garden pause/cold-path targets and repeatable total-save-time improvement.
+- Viewer tail latency: current Raccoon front SH0 p95 13.010 versus historical
+  6.161 ms; Lizard front SH0 6.036 versus 5.213 ms. Cause remains open.
 - Actual scope separation using the prepared cumulative dependencies; earlier nine ref binaries are not individually GPU-tested.
 - Hosted CI, stable Xcode 26, physical macOS 26, CUDA and non-Mac production Vulkan.
 - LOD CPU-download follow-up and corresponding issue linkage.
@@ -117,3 +119,39 @@ The shared-Metal-timeline readiness fixture fails 99/100 repetitions before its 
 Twelve cumulative refs build successfully; CPU checks pass at each ref. Functional GPU/Python coverage is recorded at refs 10/11/12. The earlier nine ref binaries are not claimed individually GPU-tested; actual online scope separation remains pending.
 
 The first Release build is clean. Subsequent refs use the same isolated checkout/build path with CMake regeneration and Ninja dependency checks. The early CPU-labelled checks are SDL smoke coverage; they are not full CPU or GPU suites. Excluded drag/drop and visualizer targets are explicitly built where present.
+
+## Current viewer benchmark and tail diagnostics
+
+The immutable isolated source `5a3e9183a` completes three repetitions of all
+25 original PR configurations. Production runtime is identical to `d9bd2a680`.
+The benchmark binary SHA-256 is
+`1fc9c90b21665986271c02d72afc30976c35cf11c733697134b59b1110bada53`.
+Each repetition uses 100 warmup pairs and 40 samples per backend/configuration;
+120 samples are aggregated. Scene, camera, resolution, mode, SH storage, renderer
+identity and isolated preferences match the original JSON metadata. All 75 image
+comparisons pass unchanged numerical gates. No peaks or unfavorable rows are removed.
+
+The ordinary timing campaign runs in full system wake from 12:04:32 to 12:07:20
+on 2026-10-04, without concurrent compilation, training or GPU tests. Default
+MoltenVK is used without configuration overrides; API/shader validation and
+profiling are off. Inputs are read-only and output files are internal. Seven Metal
+medians improve and eighteen increase by 0.06–2.11%. Raccoon front SH0 p95 is
+13.010 versus original 6.161 ms (+111.2%); Lizard front SH0 is 6.036 versus
+5.213 ms (+15.8%). These unfavorable results remain acceptance boundaries.
+Historical/current measurements without controlled thermals or alternating
+baseline binaries do not isolate a code regression. The Mac Vulkan reference
+remains test-only; its higher-precision cost is not counted as a native gain.
+
+A separate read-only diagnostic uses the same immutable source and binary,
+eight invocations across both front cameras, two repetitions and profiling
+off/on. SH0 and SH3 each collect 400 samples/backend/invocation. All sixteen
+image comparisons pass. Full wake is verified from 12:18:13 to 12:19:59.
+Ordinary timing and profiling samples are kept separate. The second profiled
+Raccoon SH0 run has Metal median/p95 10.357/15.671 ms and Vulkan
+10.398/15.115 ms. Metal GPU command time is 9.303/14.274 ms; multiple GPU
+stages slow down. Similar intermittent GPU-stage increases appear in Lizard
+SH3. This demonstrates a GPU-execution component rather than filesystem/host
+wait alone, but does not identify its cause or rule out code regressions.
+No production fix is claimed from the profiling run, and it does not replace
+the unfavorable 25-case measurements. Driver, competing GPU load and GPU
+frequencies are not independently controlled.
