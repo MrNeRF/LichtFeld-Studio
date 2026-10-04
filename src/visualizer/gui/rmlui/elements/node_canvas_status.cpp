@@ -210,7 +210,7 @@ namespace lfs::vis::gui {
         queued_nodes_.erase(busy_node_);
         progress_nodes_ = visible ? progress.finished_nodes : decltype(progress_nodes_){};
         for (const auto& [name, element] : node_elements_) {
-            element->SetClass("evaluating", name == busy_node_);
+            element->SetClass("is-evaluating", name == busy_node_);
             element->SetClass("queued", queued_nodes_.contains(name));
         }
         updateEvaluationDom();

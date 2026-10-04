@@ -234,6 +234,18 @@ namespace lfs::training {
     };
 
     /// Camera dataset - loads images from cameras
+    /// Fraction of cameras whose image is not a JPEG (0.0 = all JPEG, 1.0 = none).
+    [[nodiscard]] inline float non_jpeg_ratio(const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
+        if (cameras.empty())
+            return 0.0f;
+        const auto count = std::count_if(cameras.begin(), cameras.end(), [](const auto& cam) {
+            auto ext = cam->image_path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            return ext != ".jpg" && ext != ".jpeg";
+        });
+        return static_cast<float>(count) / static_cast<float>(cameras.size());
+    }
+
     class CameraDataset {
     public:
         enum class Split {
@@ -363,16 +375,7 @@ namespace lfs::training {
         int get_max_width() const { return config_.max_width; }
 
         /// Returns fraction of non-JPEG images (0.0 = all JPEG, 1.0 = none)
-        [[nodiscard]] float get_non_jpeg_ratio() const {
-            if (cameras_.empty())
-                return 0.0f;
-            const auto count = std::count_if(cameras_.begin(), cameras_.end(), [](const auto& cam) {
-                auto ext = cam->image_path().extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                return ext != ".jpg" && ext != ".jpeg";
-            });
-            return static_cast<float>(count) / static_cast<float>(cameras_.size());
-        }
+        [[nodiscard]] float get_non_jpeg_ratio() const { return non_jpeg_ratio(cameras_); }
 
     private:
         std::vector<std::shared_ptr<lfs::core::Camera>> cameras_;

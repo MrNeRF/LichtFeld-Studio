@@ -165,6 +165,8 @@ namespace lfs::training {
         /// @param uid Original frame UID (translated internally)
         lfs::core::Tensor backward(const lfs::core::Tensor& rgb, const lfs::core::Tensor& grad_output, int camera_id,
                                    int uid);
+        /// Backward pass that overwrites the contiguous grad with the gradient with respect to rgb.
+        void backward_in_place(const lfs::core::Tensor& rgb, lfs::core::Tensor& grad, int camera_id, int uid);
 
         /// Backward pass through ISP using controller-predicted params.
         /// Returns gradient w.r.t. controller_params [1,9] for controller backward.

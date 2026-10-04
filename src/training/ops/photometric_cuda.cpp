@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -22,6 +23,8 @@ namespace lfs::training {
             lfs::core::Tensor l1_reduction;
             size_t l1_blocks = 0;
             kernels::SSIMMapWorkspace error_maps;
+            // The last decoupled evaluate's raw-render gradient, added by add_raw_gradient.
+            std::optional<kernels::DecoupledRawGradient> raw_gradient;
             // Keeps the last allocating metric's inputs alive until the next call.
             std::vector<lfs::core::Tensor> metric_keep;
             lfs::core::RankedDims l1_dims;
@@ -112,11 +115,8 @@ namespace lfs::training {
             lfs::gpu_ops::Tensor& grad_raw) {
             auto& state = state_of(saved);
             kernels::validate_loss_weight(params.ssim_weight);
-            const bool writes_raw = params.path == lfs::gpu_ops::PhotoPath::Decoupled ||
-                                    params.path == lfs::gpu_ops::PhotoPath::MaskedDecoupled;
-            if (!writes_raw && grad_raw.is_valid()) {
-                grad_raw = {};
-            }
+            state.raw_gradient.reset();
+            grad_raw = {};
 
             switch (params.path) {
             case lfs::gpu_ops::PhotoPath::L1: {
@@ -171,10 +171,9 @@ namespace lfs::training {
                 auto grads = kernels::decoupled_fused_l1_ssim_backward(ctx, workspace);
                 loss = loss_tensor;
                 grad_corrected = grads.grad_corrected;
-                grad_raw = grads.grad_raw;
+                state.raw_gradient = kernels::decoupled_raw_gradient(ctx);
                 if (corrected.ndim() == 3) {
                     grad_corrected = grad_corrected.squeeze(0);
-                    grad_raw = grad_raw.squeeze(0);
                 }
                 publish_maps(saved, workspace.ssim_map, workspace.cs_map);
                 break;
@@ -198,12 +197,9 @@ namespace lfs::training {
                 auto grads = kernels::masked_decoupled_fused_l1_ssim_backward(ctx, workspace);
                 loss = loss_tensor;
                 grad_corrected = grads.grad_corrected;
-                grad_raw = grads.grad_raw;
+                state.raw_gradient = kernels::decoupled_raw_gradient(ctx);
                 if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
                     grad_corrected = grad_corrected.squeeze(0);
-                }
-                if (grad_raw.ndim() == 4 && corrected.ndim() == 3) {
-                    grad_raw = grad_raw.squeeze(0);
                 }
                 publish_maps(saved, workspace.ssim_map, workspace.cs_map);
                 break;
@@ -261,6 +257,17 @@ namespace lfs::training {
             kernels::launch_ssim_to_error_map(map, error);
         }
 
+        void photo_add_raw_gradient(lfs::gpu_ops::PhotoSaved& saved, lfs::gpu_ops::Tensor& grad_image) {
+            if (!saved.backend) {
+                return;
+            }
+            auto& state = state_of(saved);
+            if (state.raw_gradient && grad_image.is_valid()) {
+                kernels::accumulate_decoupled_raw_gradient(*state.raw_gradient, grad_image);
+            }
+            state.raw_gradient.reset();
+        }
+
         lfs::gpu_ops::PhotoWorkspaceBytes photo_workspace_bytes(const lfs::gpu_ops::PhotoSaved& saved) {
             const CudaPhotoState* state = state_of(saved);
             if (!state) {
@@ -275,12 +282,14 @@ namespace lfs::training {
 
         void photo_shrink_to_required(lfs::gpu_ops::PhotoSaved& saved) {
             if (saved.backend) {
+                state_of(saved).raw_gradient.reset();
                 state_of(saved).arena.shrink_to_required();
             }
         }
 
         void photo_reset(lfs::gpu_ops::PhotoSaved& saved) {
             if (saved.backend) {
+                state_of(saved).raw_gradient.reset();
                 state_of(saved).arena.reset();
             }
         }
@@ -294,6 +303,7 @@ namespace lfs::training {
             .workspace_bytes = photo_workspace_bytes,
             .shrink_to_required = photo_shrink_to_required,
             .reset = photo_reset,
+            .add_raw_gradient = photo_add_raw_gradient,
         };
 
     } // namespace

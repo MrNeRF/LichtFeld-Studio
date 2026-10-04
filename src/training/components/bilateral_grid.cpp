@@ -7,6 +7,7 @@
 
 #include "bilateral_grid.hpp"
 #include "config_serialization.hpp"
+#include "core/assert.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_execution.hpp"
 #include "core/tensor_serialization.hpp"
@@ -275,31 +276,63 @@ namespace lfs::training {
         last_step_.assign(n, 0);
 
         rebuild_identity_mean();
-        rebuild_projection_state();
+        // Every cell starts at the identity, so the dataset mean is the identity itself.
+        set_projection_state(identity_mean_);
 
         LOG_DEBUG("BilateralGrid: {}x{}x{} for {} images, C={}, lr={:.2e}",
                   grid_W, grid_H, grid_L, num_images, channels_, config.lr);
     }
 
     lfs::core::Tensor BilateralGrid::apply(const lfs::core::Tensor& rgb, int image_idx) {
+        validate_image_tensor(rgb, "BilateralGrid::apply");
+        auto output = lfs::core::Tensor::empty(rgb.shape(), lfs::core::Device::GPU);
+        apply_into(rgb.contiguous(), output, image_idx);
+        return output;
+    }
+
+    void BilateralGrid::apply_in_place(lfs::core::Tensor& rgb, int image_idx) {
+        if (!training_ops(lfs::core::default_gpu_backend()).bilateral->in_place) {
+            rgb = apply(rgb, image_idx);
+            return;
+        }
+        LFS_ASSERT(rgb.is_contiguous());
+        apply_into(rgb, rgb, image_idx);
+    }
+
+    void BilateralGrid::apply_into(const lfs::core::Tensor& rgb, lfs::core::Tensor& output, int image_idx) {
         if (image_idx < 0 || image_idx >= num_images_) {
             throw std::out_of_range("BilateralGrid::apply: image_idx out of range");
         }
 
         const ImageLayout layout = validate_image_tensor(rgb, "BilateralGrid::apply");
-        const auto& shape = rgb.shape();
-        const auto rgb_cont = rgb.contiguous();
         const int slot = resident_slot(image_idx);
         const auto grid = resident_grids_.slice(0, slot, slot + 1);
         assert(static_cast<int>(grids_.shape()[1]) == channels_);
-        auto output = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU);
-        training_ops(lfs::core::default_gpu_backend()).bilateral->slice_forward(grid, rgb_cont, shared_offset_, output, {.layout = layout.chw ? ops::Layout::CHW : ops::Layout::HWC, .transform = parameterization_ == BilateralGridParameterization::ExposureChroma ? ops::GridTransform::ExposureChroma : ops::GridTransform::Affine});
-        return output;
+        training_ops(lfs::core::default_gpu_backend()).bilateral->slice_forward(grid, rgb, shared_offset_, output, {.layout = layout.chw ? ops::Layout::CHW : ops::Layout::HWC, .transform = parameterization_ == BilateralGridParameterization::ExposureChroma ? ops::GridTransform::ExposureChroma : ops::GridTransform::Affine});
     }
 
     lfs::core::Tensor BilateralGrid::backward(const lfs::core::Tensor& rgb,
                                               const lfs::core::Tensor& grad_output,
                                               int image_idx) {
+        validate_image_tensor(rgb, "BilateralGrid::backward");
+        auto grad_rgb = lfs::core::Tensor::empty(rgb.shape(), lfs::core::Device::GPU);
+        backward_into(rgb, grad_output.contiguous(), grad_rgb, image_idx);
+        return grad_rgb;
+    }
+
+    void BilateralGrid::backward_in_place(const lfs::core::Tensor& rgb, lfs::core::Tensor& grad, int image_idx) {
+        if (!training_ops(lfs::core::default_gpu_backend()).bilateral->in_place) {
+            grad = backward(rgb, grad, image_idx);
+            return;
+        }
+        LFS_ASSERT(grad.is_contiguous());
+        backward_into(rgb, grad, grad, image_idx);
+    }
+
+    void BilateralGrid::backward_into(const lfs::core::Tensor& rgb,
+                                      const lfs::core::Tensor& grad_output,
+                                      lfs::core::Tensor& grad_rgb,
+                                      int image_idx) {
         if (image_idx < 0 || image_idx >= num_images_) {
             throw std::out_of_range("BilateralGrid::backward: image_idx out of range");
         }
@@ -309,16 +342,12 @@ namespace lfs::training {
         if (rgb.shape() != grad_output.shape() || layout.chw != grad_layout.chw)
             throw std::invalid_argument("BilateralGrid::backward: rgb and grad_output shapes must match");
 
-        const auto& shape = rgb.shape();
         const auto rgb_cont = rgb.contiguous();
-        const auto grad_cont = grad_output.contiguous();
         const int slot = resident_slot(image_idx);
         const auto grid = resident_grids_.slice(0, slot, slot + 1);
         assert(static_cast<int>(grids_.shape()[1]) == channels_);
         slice_grad_.zero_();
-        auto grad_rgb = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU);
-        training_ops(lfs::core::default_gpu_backend()).bilateral->slice_backward(grid, rgb_cont, grad_cont, shared_offset_, slice_grad_, grad_rgb, {.layout = layout.chw ? ops::Layout::CHW : ops::Layout::HWC, .transform = parameterization_ == BilateralGridParameterization::ExposureChroma ? ops::GridTransform::ExposureChroma : ops::GridTransform::Affine});
-        return grad_rgb;
+        training_ops(lfs::core::default_gpu_backend()).bilateral->slice_backward(grid, rgb_cont, grad_output, shared_offset_, slice_grad_, grad_rgb, {.layout = layout.chw ? ops::Layout::CHW : ops::Layout::HWC, .transform = parameterization_ == BilateralGridParameterization::ExposureChroma ? ops::GridTransform::ExposureChroma : ops::GridTransform::Affine});
     }
 
     lfs::core::Tensor BilateralGrid::tv_loss_gpu() {
@@ -447,7 +476,10 @@ namespace lfs::training {
     void BilateralGrid::rebuild_projection_state() {
         flush_resident();
         const int dataset_axes[] = {0, 2, 3, 4};
-        const auto mean = grids_.mean(std::span<const int>(dataset_axes), false).gpu();
+        set_projection_state(grids_.mean(std::span<const int>(dataset_axes), false).gpu());
+    }
+
+    void BilateralGrid::set_projection_state(const lfs::core::Tensor& mean) {
         const float spatial = static_cast<float>(grid_guidance_ * grid_height_ * grid_width_);
         // Sum over every image's cells: N * L * H * W, not the per-image spatial count.
         const float n_spatial = spatial * static_cast<float>(num_images_);

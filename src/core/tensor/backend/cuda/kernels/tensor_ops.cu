@@ -777,10 +777,67 @@ namespace lfs::core::tensor_ops {
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.permute_copy");
     }
 
+    // Rows of a few elements: one thread per row keeps whole warps busy, where a warp or a CUB block
+    // per row would leave almost all of its lanes idle.
+    constexpr size_t kSmallRowReduce = 16;
+
+    template <typename Op>
+    __global__ void small_row_reduce_kernel(const float* __restrict__ input, float* __restrict__ output,
+                                            const size_t rows, const int width, const float init,
+                                            const float divisor, Op op) {
+        for (size_t row = blockIdx.x * static_cast<size_t>(blockDim.x) + threadIdx.x; row < rows;
+             row += static_cast<size_t>(gridDim.x) * blockDim.x) {
+            const float* values = input + row * width;
+            float result = init;
+            for (int i = 0; i < width; ++i)
+                result = op(result, values[i]);
+            output[row] = divisor == 1.0f ? result : result / divisor;
+        }
+    }
+
+    bool launch_small_row_reduce(const float* input, float* output, const size_t rows, const size_t width,
+                                 const ReduceOp op, cudaStream_t stream) {
+        if (width == 0 || width > kSmallRowReduce || rows == 0)
+            return false;
+        constexpr int block_size = 256;
+        const auto grid = static_cast<unsigned>(std::min<size_t>((rows + block_size - 1) / block_size, size_t{1} << 20));
+        const int w = static_cast<int>(width);
+        switch (op) {
+        case ReduceOp::Sum:
+            small_row_reduce_kernel<<<grid, block_size, 0, stream>>>(input, output, rows, w, 0.0f, 1.0f, ops::add_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.small_row_reduce");
+            break;
+        case ReduceOp::Mean:
+            small_row_reduce_kernel<<<grid, block_size, 0, stream>>>(input, output, rows, w, 0.0f,
+                                                                     static_cast<float>(width), ops::add_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.small_row_reduce");
+            break;
+        case ReduceOp::Max:
+            small_row_reduce_kernel<<<grid, block_size, 0, stream>>>(
+                input, output, rows, w, -std::numeric_limits<float>::infinity(), 1.0f, ops::maximum_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.small_row_reduce");
+            break;
+        case ReduceOp::Min:
+            small_row_reduce_kernel<<<grid, block_size, 0, stream>>>(
+                input, output, rows, w, std::numeric_limits<float>::infinity(), 1.0f, ops::minimum_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.small_row_reduce");
+            break;
+        case ReduceOp::Prod:
+            small_row_reduce_kernel<<<grid, block_size, 0, stream>>>(input, output, rows, w, 1.0f, 1.0f, ops::mul_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.small_row_reduce");
+            break;
+        default:
+            return false;
+        }
+        return true;
+    }
+
     // Trailing-axis (inner_size == 1) multi-axis reduce after the permute.
     void launch_trailing_multi_axis_reduce(const float* input, float* output,
                                            size_t outer_size, size_t reduce_count,
                                            size_t n, ReduceOp op, cudaStream_t stream) {
+        if (outer_size > 1 && launch_small_row_reduce(input, output, outer_size, reduce_count, op, stream))
+            return;
         if (outer_size == 1 && should_use_warp_reduce(n, 1)) {
             float init_val = 0.0f;
             switch (op) {
@@ -982,6 +1039,8 @@ namespace lfs::core::tensor_ops {
             size_t output_size = outer_size * inner_size;
 
             if (inner_size == 1) {
+                if (outer_size > 1 && launch_small_row_reduce(input_f, output_f, outer_size, reduce_size, op, stream))
+                    return;
                 // Contiguous segments - use vectorized warp reduction
                 if (should_use_warp_reduce(n, outer_size)) {
                     LOG_DEBUG("[REDUCE] Using warp segmented reduce: outer={} reduce={} inner=1", outer_size, reduce_size);

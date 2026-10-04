@@ -563,6 +563,7 @@ if(NOT LFS_HAS_CUDA)
             test_vulkan_trainer_start.cpp
             test_session_loader_storage.cpp
             test_training_command_masks.cpp
+            test_mesh_mask_kernels.cpp
             test_training_ops_parity.cpp
             test_training_ops_vulkan_gsplat.cpp
             test_tensor_vulkan_training_fault.cpp
@@ -794,6 +795,7 @@ set(TEST_FILES
     test_tensor_uint8_masking.cpp
     test_tensor_serialization.cpp
     test_tensor_cat_reduction_bug.cpp
+    test_percentile_bounds.cpp
     test_tensor_inplace_capacity.cpp
     test_sog_format.cpp
     test_ssog_format.cpp
@@ -840,6 +842,8 @@ set(TEST_FILES
     test_gpu_teardown_order.cpp
     test_logger.cpp
     test_exif.cpp
+    test_nanoflann_build.cpp
+    test_initial_scales.cpp
     test_system_info.cpp
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
@@ -978,6 +982,7 @@ set(TEST_FILES
     test_ppisp_checkpoint_roundtrip.cpp
     test_bilateral_grid_projection.cpp
     test_bilateral_grid_exposure_chroma.cpp
+    test_appearance_in_place.cpp
     test_ppisp_projection.cpp
     test_ppisp_cuda_vs_torch.cpp
     test_ppisp_banded_region.cpp

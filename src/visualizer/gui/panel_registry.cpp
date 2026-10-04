@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/panel_registry.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_input.hpp"
@@ -25,6 +26,11 @@
 namespace lfs::vis::gui {
 
     namespace {
+        std::string localized_label(const std::string& source) {
+            const auto& localization = lfs::event::LocalizationManager::getInstance();
+            return localization.hasKey(source) ? std::string(localization.get(source)) : source;
+        }
+
         float floatingUiScale() {
             return std::max(1.0f, getThemeDpiScale());
         }
@@ -335,6 +341,8 @@ namespace lfs::vis::gui {
             assert(!info.id.empty());
 
             info.id_storage = std::make_shared<const std::string>(info.id);
+            info.label_source = info.label;
+            info.label = localized_label(info.label_source);
             info.label_storage = std::make_shared<const std::string>(info.label);
 
             if (!validatePanelContract(info, info.space))
@@ -2067,12 +2075,28 @@ apply_registered_chrome:
         std::lock_guard lock(mutex_);
         for (auto& p : panels_) {
             if (p.id == id) {
-                p.label = new_label;
+                p.label_source = new_label;
+                p.label = localized_label(new_label);
                 p.label_storage = std::make_shared<const std::string>(p.label);
                 return true;
             }
         }
         return false;
+    }
+
+    void PanelRegistry::refresh_localized_labels() {
+        const auto generation = lfs::event::LocalizationManager::getInstance().getCurrentLanguageGeneration();
+        std::lock_guard lock(mutex_);
+        if (generation == localized_label_generation_)
+            return;
+        localized_label_generation_ = generation;
+        for (auto& p : panels_) {
+            auto label = localized_label(p.label_source);
+            if (label != p.label) {
+                p.label = std::move(label);
+                p.label_storage = std::make_shared<const std::string>(p.label);
+            }
+        }
     }
 
     bool PanelRegistry::set_panel_order(const std::string& id, int new_order) {

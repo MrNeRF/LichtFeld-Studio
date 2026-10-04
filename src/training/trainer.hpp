@@ -34,6 +34,7 @@
 #include <expected>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <istream>
 #include <list>
 #include <memory>
@@ -307,6 +308,8 @@ namespace lfs::training {
 
         lfs::core::Scene* getScene() const { return scene_; }
         std::shared_ptr<lfs::io::PipelinedImageLoader> getActiveImageLoader() const;
+        // Builds the GPU image decoders in the background so the first training batch skips their setup.
+        void prewarm_image_decoders();
         GTLoadConfigSnapshot getGTLoadConfigSnapshot() const;
         std::expected<CameraMetricsSnapshot, std::string> computeCameraMetrics(
             lfs::core::Camera& camera,
@@ -682,6 +685,8 @@ namespace lfs::training {
         std::shared_ptr<CameraDataset> train_dataset_;
         std::shared_ptr<CameraDataset> val_dataset_;
         std::shared_ptr<lfs::io::PipelinedImageLoader> active_image_loader_;
+        // Released once train() has built its loader, which then holds the decoders.
+        std::future<std::unique_ptr<lfs::io::ImageDecoderWarmup>> image_decoder_warmup_;
         std::unique_ptr<IStrategy> strategy_;
         // Hot-loop reads use params_ without locking. Active updates therefore
         // coalesce here and are installed only by the worker at safe boundaries.

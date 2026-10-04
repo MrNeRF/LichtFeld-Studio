@@ -13,4 +13,10 @@ namespace lfs::io {
 
     void PipelinedImageLoader::release_cuda_decode_stage() {}
 
+    // Without nvImageCodec there is no decoder to warm up.
+    ImageDecoderWarmup::ImageDecoderWarmup(const size_t decoder_pool_size)
+        : decoder_pool_size_(decoder_pool_size) {}
+
+    ImageDecoderWarmup::~ImageDecoderWarmup() = default;
+
 } // namespace lfs::io

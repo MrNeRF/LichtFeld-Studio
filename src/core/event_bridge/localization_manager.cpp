@@ -285,16 +285,19 @@ namespace lfs::event {
     void LocalizationManager::setOverride(const std::string& key, const std::string& value) {
         const std::lock_guard lock(mutex_);
         overrides_[key] = value;
+        language_generation_.fetch_add(1, std::memory_order_release);
     }
 
     void LocalizationManager::clearOverride(const std::string& key) {
         const std::lock_guard lock(mutex_);
         overrides_.erase(key);
+        language_generation_.fetch_add(1, std::memory_order_release);
     }
 
     void LocalizationManager::clearAllOverrides() {
         const std::lock_guard lock(mutex_);
         overrides_.clear();
+        language_generation_.fetch_add(1, std::memory_order_release);
     }
 
     bool LocalizationManager::hasOverride(const std::string& key) const {

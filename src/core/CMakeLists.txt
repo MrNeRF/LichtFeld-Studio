@@ -329,7 +329,11 @@ target_compile_definitions(lfs_core PRIVATE LFS_CORE_EXPORTS LFS_TENSOR_PRIVATE_
 set(_node_locale "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales/en.json")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_node_locale}")
 file(READ "${_node_locale}" _node_locale_json)
-string(JSON LFS_NODE_TEXT GET "${_node_locale_json}" nodes)
+string(JSON _node_text GET "${_node_locale_json}" nodes)
+# MSVC caps a string literal at 64 KiB, in pieces of 16 KiB, so the text is embedded as bytes.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/builtin_text.json" "${_node_text}")
+file(READ "${CMAKE_CURRENT_BINARY_DIR}/builtin_text.json" _node_text_hex HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," LFS_NODE_TEXT_BYTES "${_node_text_hex}")
 configure_file(nodes/builtin_text.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/builtin_text.hpp" @ONLY)
 target_include_directories(lfs_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 

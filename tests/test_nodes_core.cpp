@@ -3335,11 +3335,11 @@ namespace {
         NodeTypeRegistry registry;
         register_builtin_nodes(registry);
         NodeTree inner(registry), outer(registry);
-        inner.interface.inputs.push_back({"Amount", "Strength", std::string(FLOAT_SOCKET), 0.25f, 0.0, 1.0, 0.1});
-        inner.interface.outputs.push_back({"Value", "Value", std::string(FLOAT_SOCKET), 0.0f});
+        inner.group_interface.inputs.push_back({"Amount", "Strength", std::string(FLOAT_SOCKET), 0.25f, 0.0, 1.0, 0.1});
+        inner.group_interface.outputs.push_back({"Value", "Value", std::string(FLOAT_SOCKET), 0.0f});
         ASSERT_TRUE(inner.add_link({inner.input_node().name, "Amount", inner.output_node().name, "Value"}));
         outer.add_node("lfs.group", "Group").properties["tree"] = inner.uuid;
-        outer.interface.outputs.push_back({"Value", "Value", std::string(FLOAT_SOCKET), 0.0f});
+        outer.group_interface.outputs.push_back({"Value", "Value", std::string(FLOAT_SOCKET), 0.0f});
         const TreeResolver resolver = [&](std::string_view uuid) -> const NodeTree* { return uuid == inner.uuid ? &inner : nullptr; };
         ASSERT_TRUE(outer.add_link({"Group", "Value", outer.output_node().name, "Value"}, nullptr, resolver));
         const auto inputs = effective_inputs(outer, *outer.find_node("Group"), resolver);

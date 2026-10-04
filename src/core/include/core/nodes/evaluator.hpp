@@ -104,6 +104,9 @@ namespace lfs::nodes {
         }
     };
 
+    LFS_CORE_API EvalResult evaluate(const NodeTree& tree, EvalInputs inputs, EvalHost* host = nullptr,
+                                     EvalCache* cache = nullptr, const EvalControl& control = {});
+
     class LFS_CORE_API NodeContext {
     public:
         [[nodiscard]] const Value& input(std::string_view identifier) const;
@@ -128,8 +131,5 @@ namespace lfs::nodes {
         float seconds_ = 0.0f;
         float frames_per_second_ = 24.0f;
     };
-
-    LFS_CORE_API EvalResult evaluate(const NodeTree& tree, EvalInputs inputs, EvalHost* host = nullptr,
-                                     EvalCache* cache = nullptr, const EvalControl& control = {});
 
 } // namespace lfs::nodes

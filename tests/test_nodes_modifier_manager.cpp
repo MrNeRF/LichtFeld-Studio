@@ -1131,7 +1131,7 @@ TEST_F(NodesModifierManager, ClipboardGroupsInterfaceAndLayoutRoundTrip) {
     ASSERT_TRUE(manager.interfaceUpdate(tree.uuid, false, *amount, {{"label", "Strength"}}));
     EXPECT_TRUE(modifier.input_overrides.contains(*amount));
     ASSERT_TRUE(manager.interfaceMove(tree.uuid, false, *amount, 0));
-    EXPECT_EQ(tree.interface.inputs.front().identifier, *amount);
+    EXPECT_EQ(tree.group_interface.inputs.front().identifier, *amount);
     ASSERT_TRUE(manager.interfaceRemove(tree.uuid, false, *amount));
     EXPECT_FALSE(modifier.input_overrides.contains(*amount));
 
@@ -1368,8 +1368,8 @@ TEST_F(NodesModifierManager, InterfaceRenameAndMoveRetainOverrideByStableIdentif
     modifier.input_overrides[*id] = 0.8f;
     ASSERT_TRUE(manager.interfaceUpdate(tree, false, *id, {{"label", "Amount"}}));
     ASSERT_TRUE(manager.interfaceMove(tree, false, *id, 0));
-    EXPECT_EQ(manager.tree(tree)->interface.inputs.front().identifier, *id);
-    EXPECT_EQ(manager.tree(tree)->interface.inputs.front().label, "Amount");
+    EXPECT_EQ(manager.tree(tree)->group_interface.inputs.front().identifier, *id);
+    EXPECT_EQ(manager.tree(tree)->group_interface.inputs.front().label, "Amount");
     EXPECT_EQ(*modifier.input_overrides.at(*id).get_if<float>(), 0.8f);
 }
 

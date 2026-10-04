@@ -148,7 +148,7 @@ namespace lfs::vis::gui {
         void draw(const AreaDrawContext& ctx) override;
     };
 
-    class NodeEditor final : public AreaEditor {
+    class LFS_VIS_API NodeEditor final : public AreaEditor {
     public:
         NodeEditor(RmlUIManager& rml, SceneManager& scene_manager, GlobalContextMenu* context_menu);
         ~NodeEditor() override;

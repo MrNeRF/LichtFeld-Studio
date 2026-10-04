@@ -337,7 +337,7 @@ namespace lfs::nodes {
                         }
                     }
                 if (node.type_id == "lfs.group_input") {
-                    for (const auto& declaration : tree.interface.inputs) {
+                    for (const auto& declaration : tree.group_interface.inputs) {
                         const auto override_value = inputs.interface_overrides.find(declaration.identifier);
                         if (override_value != inputs.interface_overrides.end())
                             context.outputs_[declaration.identifier] = override_value->second;
@@ -347,7 +347,7 @@ namespace lfs::nodes {
                             context.outputs_[declaration.identifier] = declaration.default_value;
                     }
                 } else if (node.type_id == "lfs.group_output") {
-                    for (const auto& output : tree.interface.outputs)
+                    for (const auto& output : tree.group_interface.outputs)
                         context.outputs_[output.identifier] = context.input(output.identifier);
                 } else if (node.type_id == "lfs.reroute") {
                     context.outputs_["Output"] = context.input("Input");

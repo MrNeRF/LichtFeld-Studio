@@ -100,7 +100,7 @@ def test_builtin_help_contract(lf):
                 assert 0 < len(message) <= limit, (node["id"], declaration["identifier"])
 
 
-@pytest.mark.parametrize("device", ["cpu", "gpu"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
 def test_animated_inputs_rename_clipboard_group_json_and_clock(lf, numpy, device):
     import uuid
 

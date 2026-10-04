@@ -1,8 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/cuda/undistort/undistort.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_image.hpp"
 #include "training/metrics/mesh_mask.hpp"
 
 #include "cuda_backend_test.hpp"
@@ -14,6 +15,8 @@
 #include <cstdint>
 #include <limits>
 #include <numbers>
+#include <optional>
+#include <string>
 #include <tuple>
 #include <vector>
 
@@ -270,17 +273,30 @@ namespace {
         return mesh;
     }
 
-    class MeshMaskRasterizerTest : public lfs::test::CudaBackendTest {
+    // Each backend's rasterizer must match the double-precision reference; the trainer picks
+    // the rasterizer of the default backend.
+    class MeshMaskRasterizerTest : public ::testing::TestWithParam<lfs::core::GpuBackend> {
     protected:
         void SetUp() override {
-            lfs::test::CudaBackendTest::SetUp();
+            if (!lfs::core::gpu_backend_available(GetParam()))
+                GTEST_SKIP() << lfs::core::gpu_backend_name(GetParam()) << " unavailable";
+            backend_.emplace(GetParam());
+            ASSERT_TRUE(backend_->switched());
         }
+
+    private:
+        std::optional<lfs::test::DefaultGpuBackendForTesting> backend_;
     };
+
+    INSTANTIATE_TEST_SUITE_P(Backends, MeshMaskRasterizerTest,
+                             ::testing::Values(lfs::core::GpuBackend::CUDA, lfs::core::GpuBackend::Vulkan,
+                                               lfs::core::GpuBackend::Metal),
+                             [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
 
 } // namespace
 
 // Catches corner sampling or output scaling that changes the covered pixel rectangle.
-TEST_F(MeshMaskRasterizerTest, PixelCenterQuadMatchesAtTwoResolutions) {
+TEST_P(MeshMaskRasterizerTest, PixelCenterQuadMatchesAtTwoResolutions) {
     const Mesh mesh = quad(-0.5625, -0.4375, 0.4375, 0.3125, 2.0);
     for (const auto [width, height, focal] : {
              std::tuple{16, 12, 8.0f}, std::tuple{32, 24, 16.0f}}) {
@@ -300,7 +316,7 @@ TEST_F(MeshMaskRasterizerTest, PixelCenterQuadMatchesAtTwoResolutions) {
 }
 
 // Catches exclusive shared-edge tests that leave cracks between adjacent faces.
-TEST_F(MeshMaskRasterizerTest, WatertightCubeHasNoDiagonalCracks) {
+TEST_P(MeshMaskRasterizerTest, WatertightCubeHasNoDiagonalCracks) {
     Mesh mesh = cube(-1.0f, 1.0f);
     for (size_t vertex = 0; vertex < mesh.vertices.size() / 3; ++vertex)
         mesh.vertices[3 * vertex + 2] += 3.0f;
@@ -314,7 +330,7 @@ TEST_F(MeshMaskRasterizerTest, WatertightCubeHasNoDiagonalCracks) {
 }
 
 // Catches projection without near-plane and one-frame guard-band clipping.
-TEST_F(MeshMaskRasterizerTest, NearPlaneGuardBandAndBehindCameraMatchReference) {
+TEST_P(MeshMaskRasterizerTest, NearPlaneGuardBandAndBehindCameraMatchReference) {
     const auto cam = camera(96, 72, 55.0f, 55.0f);
     constexpr float Z_NEAR = 0.1f;
     const std::array meshes{
@@ -347,7 +363,7 @@ TEST_F(MeshMaskRasterizerTest, NearPlaneGuardBandAndBehindCameraMatchReference) 
 }
 
 // Catches back-face culling, which is invalid for silhouette union coverage.
-TEST_F(MeshMaskRasterizerTest, CameraInsideClosedCubeCoversEveryPixel) {
+TEST_P(MeshMaskRasterizerTest, CameraInsideClosedCubeCoversEveryPixel) {
     const Mesh mesh = cube(-1.0f, 1.0f);
     const auto cam = camera(80, 60, 30.0f, 30.0f);
     const auto mask = rasterize(mesh, cam, 1.0e-4f);
@@ -355,7 +371,7 @@ TEST_F(MeshMaskRasterizerTest, CameraInsideClosedCubeCoversEveryPixel) {
 }
 
 // Catches a second inverse solve or a non-conservative distorted triangle bound.
-TEST_F(MeshMaskRasterizerTest, DistortedSamplesMatchDoublePrecisionReference) {
+TEST_P(MeshMaskRasterizerTest, DistortedSamplesMatchDoublePrecisionReference) {
     lfs::core::UndistortParams params{};
     params.src_fx = 70.0f;
     params.src_fy = 69.0f;
@@ -399,7 +415,7 @@ TEST_F(MeshMaskRasterizerTest, DistortedSamplesMatchDoublePrecisionReference) {
 
 // Catches clipping against a guard band narrower than the inverse samples: rays from 72 to 87
 // degrees off-axis land far outside every frame of a wide equidistant fisheye.
-TEST_F(MeshMaskRasterizerTest, WideFisheyeRaysBeyondTheFrameAreCovered) {
+TEST_P(MeshMaskRasterizerTest, WideFisheyeRaysBeyondTheFrameAreCovered) {
     lfs::core::UndistortParams params{};
     params.model_type = lfs::core::CameraModelType::FISHEYE;
     params.num_distortion = 4;
@@ -435,7 +451,7 @@ TEST_F(MeshMaskRasterizerTest, WideFisheyeRaysBeyondTheFrameAreCovered) {
 }
 
 // Catches dense-mesh queue loss and shared-edge holes.
-TEST_F(MeshMaskRasterizerTest, TwoMillionFaceSphereHasNoHolesAt5K) {
+TEST_P(MeshMaskRasterizerTest, TwoMillionFaceSphereHasNoHolesAt5K) {
     constexpr int WIDTH = 5120;
     constexpr int HEIGHT = 2700;
     const Mesh mesh = subdivided_sphere(1000, 1000);

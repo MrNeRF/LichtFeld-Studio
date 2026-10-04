@@ -219,6 +219,8 @@ namespace lfs::vis::gui {
     struct PanelInfo {
         std::shared_ptr<IPanel> panel;
         std::string label;
+        // The label as registered or set; a localization key is shown translated in the current language.
+        std::string label_source;
         std::string id;
         std::string parent_id;
         PanelSpace space = PanelSpace::Floating;
@@ -429,6 +431,7 @@ namespace lfs::vis::gui {
         std::optional<double> nextScheduledAnimationDelayForVisiblePanels(
             PanelAnimationVisibility visibility) const;
         bool set_panel_label(const std::string& id, const std::string& new_label);
+        void refresh_localized_labels();
         bool set_panel_order(const std::string& id, int new_order);
         bool set_panel_space(const std::string& id, PanelSpace new_space);
         bool set_panel_parent(const std::string& id, const std::string& parent_id);
@@ -474,6 +477,7 @@ namespace lfs::vis::gui {
         uint64_t next_float_stack_order_ = 1;
         uint64_t registration_revision_ = 0;
         uint64_t visibility_revision_ = 0;
+        uint64_t localized_label_generation_ = 0;
         int8_t floating_cursor_dir_x_ = 0;
         int8_t floating_cursor_dir_y_ = 0;
     };

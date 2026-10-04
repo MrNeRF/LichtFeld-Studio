@@ -37,6 +37,8 @@ namespace lfs::gpu_ops {
                                           float center, float channel, float non_positive);
         void (*project_mean)(Out exposure, Out color);
         void (*initialize)(const PPISPOutputs&);
+        // backward may write grad_rgb over grad_output.
+        bool in_place = false;
     };
     struct ControllerOps {
         // Invalid features initializes the prior slot and waits for the copy.

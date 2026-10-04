@@ -697,6 +697,7 @@ namespace lfs::vis {
         mutable std::chrono::steady_clock::time_point display_refresh_queried_at_{};
         mutable double gui_animation_frame_interval_ = 1.0 / 60.0;
         CameraAnimationCadence camera_animation_cadence_;
+        std::optional<std::chrono::steady_clock::time_point> last_presented_frame_start_;
         bool gui_initialized_ = false;
         bool tools_initialized_ = false;
         bool view_context_bridge_initialized_ = false;

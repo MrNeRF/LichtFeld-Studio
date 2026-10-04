@@ -84,6 +84,11 @@ namespace lfs::vis {
         int window_h = 0;
         std::chrono::steady_clock::time_point poll_time{};
 
+        [[nodiscard]] bool hasUserInput() const {
+            return mouse_moved || window_event || mouse_wheel != 0.0f || mouse_wheel_x != 0.0f ||
+                   !mouse_button_events.empty() || !input_events.empty() || !keys_pressed.empty();
+        }
+
         void beginFrame() {
             ++serial;
             mouse_clicked[0] = mouse_clicked[1] = mouse_clicked[2] = false;

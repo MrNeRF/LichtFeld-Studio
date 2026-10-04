@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
 
 #include <algorithm>
@@ -280,6 +281,16 @@ TEST(ImageIoTest, LoadsJpegThumbnailWithDctScaling) {
     EXPECT_EQ(decoded_height, 64);
     EXPECT_EQ(channels, 3);
     lfs::core::free_image(decoded);
+}
+
+// Fails if a thumbnail decode reduces below the requested size or skips a reduction that still covers it.
+TEST(ImageIoTest, JpegScaleDenominatorKeepsThumbnailResolution) {
+    using lfs::core::image_codecs::jpeg_scale_denominator;
+    EXPECT_EQ(jpeg_scale_denominator(5187, 512), 8u);
+    EXPECT_EQ(jpeg_scale_denominator(2000, 512), 2u);
+    EXPECT_EQ(jpeg_scale_denominator(1023, 512), 2u);
+    EXPECT_EQ(jpeg_scale_denominator(1022, 512), 1u);
+    EXPECT_EQ(jpeg_scale_denominator(300, 512), 1u);
 }
 
 TEST(ImageIoTest, LoadsEmbeddedExifThumbnailAndReportsFastPath) {

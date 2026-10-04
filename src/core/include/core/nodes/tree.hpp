@@ -88,7 +88,7 @@ namespace lfs::nodes {
         std::string tree_type;
         std::vector<Node> nodes;
         std::vector<Link> links;
-        TreeInterface interface;
+        TreeInterface group_interface;
 
     private:
         enum class EmptyTag {};

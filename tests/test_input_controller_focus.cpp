@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <glm/gtc/constants.hpp>
 #include <gtest/gtest.h>
 #include <iterator>
@@ -233,6 +234,30 @@ namespace lfs::vis {
         const auto next = start + std::chrono::milliseconds(5);
         EXPECT_GT(cadence.secondsUntilReady(next, 1.0 / 60.0), 0.0);
         EXPECT_EQ(cadence.secondsUntilReady(next, 1.0 / 240.0), 0.0);
+    }
+
+    // Fails if a wake without input (a viewer-thread user event) counts as input, which would let
+    // demand-driven frames skip the display pacing, or if any kind of user input does not bypass it.
+    TEST(FrameInputBufferTest, OnlyUserInputBypassesDisplayPacing) {
+        FrameInputBuffer input;
+        input.had_event = true;
+        input.user_event = true;
+        EXPECT_FALSE(input.hasUserInput());
+
+        const std::vector<std::function<void(FrameInputBuffer&)>> inputs{
+            [](FrameInputBuffer& b) { b.mouse_moved = true; },
+            [](FrameInputBuffer& b) { b.window_event = true; },
+            [](FrameInputBuffer& b) { b.mouse_wheel = 1.0f; },
+            [](FrameInputBuffer& b) { b.mouse_wheel_x = -1.0f; },
+            [](FrameInputBuffer& b) { b.mouse_button_events.emplace_back(); },
+            [](FrameInputBuffer& b) { b.input_events.emplace_back(); },
+            [](FrameInputBuffer& b) { b.keys_pressed.push_back(SDL_SCANCODE_W); },
+        };
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            FrameInputBuffer buffer;
+            inputs[i](buffer);
+            EXPECT_TRUE(buffer.hasUserInput()) << "input kind " << i;
+        }
     }
 
     TEST_F(InputControllerFocusTest, CameraViewHotkeysDoNotBypassGuiKeyboardCapture) {

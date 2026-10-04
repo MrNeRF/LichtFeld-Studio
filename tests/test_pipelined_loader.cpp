@@ -167,6 +167,36 @@ TEST_F(PipelinedImageLoaderTest, LoadsRealImageAndMaskWithExpectedContract) {
     EXPECT_LE(ready.mask->max().item<float>(), 1.0f);
 }
 
+// Fails if the warm-up builds no decoders, if a loader builds its own instead of sharing them, if either
+// owner frees them while the other still holds them, or if they outlive both.
+TEST_F(PipelinedImageLoaderTest, DecoderWarmupSharesDecodersInEitherLifetimeOrder) {
+    const size_t base = NvCodecImageLoader::live_count();
+    const auto decode = [this](PipelinedImageLoader& loader, const size_t sequence_id) {
+        loader.prefetch({request(sequence_id, 0, false)});
+        EXPECT_TRUE(loader.get().tensor.is_valid());
+    };
+    {
+        auto warmup = std::make_unique<ImageDecoderWarmup>(config().decoder_pool_size);
+        EXPECT_EQ(NvCodecImageLoader::live_count(), base + 1);
+        PipelinedImageLoader loader(config());
+        decode(loader, 0);
+        EXPECT_EQ(NvCodecImageLoader::live_count(), base + 1);
+        warmup.reset();
+        EXPECT_EQ(NvCodecImageLoader::live_count(), base + 1);
+        decode(loader, 1);
+    }
+    EXPECT_EQ(NvCodecImageLoader::live_count(), base);
+    {
+        ImageDecoderWarmup warmup(config().decoder_pool_size);
+        for (size_t run = 0; run < 2; ++run) {
+            PipelinedImageLoader loader(config());
+            decode(loader, 2 + run);
+        }
+        EXPECT_EQ(NvCodecImageLoader::live_count(), base + 1);
+    }
+    EXPECT_EQ(NvCodecImageLoader::live_count(), base);
+}
+
 TEST_F(PipelinedImageLoaderTest, OriginalJpegUsesDirectDecodeWithoutColdReencoding) {
     for (const bool high_precision : {false, true}) {
         SCOPED_TRACE(high_precision);

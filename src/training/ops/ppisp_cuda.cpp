@@ -113,6 +113,7 @@ namespace lfs::training {
             .vignetting_regularization = vignetting_regularization,
             .project_mean = project_mean,
             .initialize = initialize,
+            .in_place = true,
         };
         const ControllerOps kCudaControllerOps{
             .prepare_input = prepare_input,

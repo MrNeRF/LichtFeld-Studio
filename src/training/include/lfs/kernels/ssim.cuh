@@ -175,7 +175,22 @@ namespace lfs::training::kernels {
 
     struct DecoupledGradients {
         lfs::core::Tensor grad_corrected; // Gradient through the appearance-corrected image
-        lfs::core::Tensor grad_raw;       // Direct gradient to the raw render (contrast/structure only)
+    };
+
+    // The decoupled loss's contrast/structure gradient with respect to the raw render. It is added straight into
+    // the render gradient after the appearance backward, so it needs no buffer of its own. The views stay valid
+    // until the loss workspace is used again.
+    struct DecoupledRawGradient {
+        lfs::core::Tensor raw_img;
+        lfs::core::Tensor gt_img;
+        lfs::core::Tensor mask; // Empty for the unmasked loss
+        lfs::core::Tensor raw_dm_dmu1;
+        lfs::core::Tensor raw_dm_dsigma1_sq;
+        lfs::core::Tensor raw_dm_dsigma12;
+        float mask_sum_value = 0.0f;
+        int H = 0;
+        int W = 0;
+        bool apply_valid_padding = true;
     };
 
     struct DecoupledFusedL1SSIMWorkspace {
@@ -187,7 +202,6 @@ namespace lfs::training::kernels {
         lfs::core::Tensor raw_dm_dsigma1_sq; // [N, C, H, W] fp16 lambda-scaled d(ssim)/d sigma^2(raw)
         lfs::core::Tensor raw_dm_dsigma12;   // [N, C, H, W] fp16 lambda-scaled d(ssim)/d sigma12(raw)
         lfs::core::Tensor grad_corrected;    // [N, C, H, W] fp32
-        lfs::core::Tensor grad_raw;          // [N, C, H, W] fp32
         lfs::core::Tensor reduction_temp;    // [<=1024]
         lfs::core::Tensor reduction_result;  // [1]
 
@@ -278,7 +292,6 @@ namespace lfs::training::kernels {
         lfs::core::Tensor raw_dm_dsigma1_sq; // [N, C, H, W] fp16
         lfs::core::Tensor raw_dm_dsigma12;   // [N, C, H, W] fp16
         lfs::core::Tensor grad_corrected;    // [N, C, H, W] fp32
-        lfs::core::Tensor grad_raw;          // [N, C, H, W] fp32
         lfs::core::Tensor reduction_temp;    // [<=2048]
         lfs::core::Tensor masked_loss;       // [1]
         lfs::core::Tensor mask_sum;          // [1]
@@ -439,6 +452,11 @@ namespace lfs::training::kernels {
     DecoupledGradients masked_decoupled_fused_l1_ssim_backward(
         const MaskedDecoupledFusedL1SSIMContext& ctx,
         MaskedDecoupledFusedL1SSIMWorkspace& workspace);
+
+    [[nodiscard]] DecoupledRawGradient decoupled_raw_gradient(const DecoupledFusedL1SSIMContext& ctx);
+    [[nodiscard]] DecoupledRawGradient decoupled_raw_gradient(const MaskedDecoupledFusedL1SSIMContext& ctx);
+    // grad_image += the raw-render gradient; grad_image has the raw render's element count.
+    void accumulate_decoupled_raw_gradient(const DecoupledRawGradient& raw, lfs::core::Tensor& grad_image);
 
     // Fused SSIM map → error map: error_map[i] = max(0, 1 - mean_c(ssim_map[c, i]))
     // Replaces .neg().add(1).mean({1}).squeeze(0).clamp_min(0).contiguous() chain

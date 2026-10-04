@@ -939,7 +939,8 @@ namespace lfs::vis::gui {
                     cancelPointerInput(context, event.GetType() == "unload" && owns_drag);
             }
         }
-        if (event.GetType() == "focus" && rml_input::hasFocusedKeyboardTarget(element)) {
+        // Reloading a panel document dispatches focus to an element without a context.
+        if (event.GetType() == "focus" && element->GetContext() && rml_input::hasFocusedKeyboardTarget(element)) {
             accepts_text_activation_ = focusContext(element->GetContext());
             if (!accepts_text_activation_)
                 rejected_focus_.push_back(element->GetObserverPtr());

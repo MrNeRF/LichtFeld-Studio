@@ -60,12 +60,12 @@ namespace lfs::python {
             return name;
         }
 
-        std::string interface_name(const TreeInterface& interface, std::string label) {
+        std::string interface_name(const TreeInterface& sockets, std::string label) {
             if (label.empty())
                 label = "Socket";
             const auto used = [&](const std::string_view candidate) {
-                return std::ranges::any_of(interface.inputs, [&](const auto& socket) { return socket.identifier == candidate; }) ||
-                       std::ranges::any_of(interface.outputs, [&](const auto& socket) { return socket.identifier == candidate; });
+                return std::ranges::any_of(sockets.inputs, [&](const auto& socket) { return socket.identifier == candidate; }) ||
+                       std::ranges::any_of(sockets.outputs, [&](const auto& socket) { return socket.identifier == candidate; });
             };
             if (!used(label))
                 return label;
@@ -491,8 +491,8 @@ namespace lfs::python {
             const auto original_nodes = outer.nodes;
             const auto original_links = outer.links;
             auto nested = std::make_unique<NodeTree>(standalone().registry, standalone_tree_name(std::move(name)));
-            nested->interface.inputs.clear();
-            nested->interface.outputs.clear();
+            nested->group_interface.inputs.clear();
+            nested->group_interface.outputs.clear();
             nested->links.clear();
             const auto input_name = nested->input_node().name;
             const auto output_name = nested->output_node().name;
@@ -547,10 +547,10 @@ namespace lfs::python {
                         if (const auto* target = outer.find_node(link.to_node))
                             if (const auto found = target->input_values.find(link.to_socket); found != target->input_values.end())
                                 initial = found->second;
-                        const auto identifier = interface_name(nested->interface,
+                        const auto identifier = interface_name(nested->group_interface,
                                                                declaration->label.empty() ? declaration->identifier : declaration->label);
-                        nested->interface.inputs.push_back({identifier, declaration->label.empty() ? declaration->identifier : declaration->label,
-                                                            declaration->type, initial, declaration->min, declaration->max, declaration->step});
+                        nested->group_interface.inputs.push_back({identifier, declaration->label.empty() ? declaration->identifier : declaration->label,
+                                                                  declaration->type, initial, declaration->min, declaration->max, declaration->step});
                         input_sockets[key] = identifier;
                     }
                     nested->add_link({input_name, input_sockets[key], remap[link.to_node], link.to_socket}, nullptr, resolver);
@@ -562,10 +562,10 @@ namespace lfs::python {
                         const auto declaration = std::ranges::find(outputs, link.from_socket, &SocketDecl::identifier);
                         if (declaration == outputs.end())
                             continue;
-                        const auto identifier = interface_name(nested->interface,
+                        const auto identifier = interface_name(nested->group_interface,
                                                                declaration->label.empty() ? declaration->identifier : declaration->label);
-                        nested->interface.outputs.push_back({identifier, declaration->label.empty() ? declaration->identifier : declaration->label,
-                                                             declaration->type, declaration->default_value, declaration->min, declaration->max, declaration->step});
+                        nested->group_interface.outputs.push_back({identifier, declaration->label.empty() ? declaration->identifier : declaration->label,
+                                                                   declaration->type, declaration->default_value, declaration->min, declaration->max, declaration->step});
                         output_sockets[key] = identifier;
                         nested->add_link({remap[link.from_node], link.from_socket, output_name, identifier}, nullptr, resolver);
                     }
@@ -581,7 +581,7 @@ namespace lfs::python {
             auto& group = outer.add_node("lfs.group", nested_name);
             group.location = {x, y};
             group.properties["tree"] = nested_uuid;
-            for (const auto& socket : active_tree(nested_uuid)->interface.inputs)
+            for (const auto& socket : active_tree(nested_uuid)->group_interface.inputs)
                 group.input_values[socket.identifier] = socket.default_value;
             outer.links.clear();
             std::unordered_set<std::string> linked_inputs;
@@ -1131,7 +1131,7 @@ namespace lfs::python {
                                                                                                                                            auto& node = require_node(value);
                                                                                                                                            node.properties["tree"] = graph.uuid;
                                                                                                                                            node.input_values.clear();
-                                                                                                                                           for (const auto& socket : referenced->interface.inputs)
+                                                                                                                                           for (const auto& socket : referenced->group_interface.inputs)
                                                                                                                                                node.input_values[socket.identifier] = socket.default_value;
                                                                                                                                            const auto inputs = effective_inputs(owner, node, active_tree_resolver());
                                                                                                                                            const auto outputs = effective_outputs(owner, node, active_tree_resolver());
@@ -1199,12 +1199,12 @@ namespace lfs::python {
                         return *result;
                     }
                     auto& tree = *active_tree(value.tree_uuid);
-                    const auto identifier = interface_name(tree.interface, label);
-                    tree.interface.inputs.push_back({identifier, label, std::move(type), std::move(converted), min, max, step});
+                    const auto identifier = interface_name(tree.group_interface, label);
+                    tree.group_interface.inputs.push_back({identifier, label, std::move(type), std::move(converted), min, max, step});
                     for (auto& [_, other] : standalone().trees)
                         for (auto& node : other->nodes)
                             if (node.type_id == "lfs.group" && node.properties.value("tree", "") == tree.uuid)
-                                node.input_values[identifier] = tree.interface.inputs.back().default_value;
+                                node.input_values[identifier] = tree.group_interface.inputs.back().default_value;
                     return identifier;
                 }, std::string{}); }, nb::arg("type"), nb::arg("label"), nb::arg("default") = nb::none(), nb::arg("min") = nb::none(), nb::arg("max") = nb::none(), nb::arg("step") = nb::none())
             .def("add_output", [](const PyInterface& value, std::string type, std::string label, nb::object initial, std::optional<double> min, std::optional<double> max, std::optional<double> step) {
@@ -1217,8 +1217,8 @@ namespace lfs::python {
                         return *result;
                     }
                     auto& tree = *active_tree(value.tree_uuid);
-                    const auto identifier = interface_name(tree.interface, label);
-                    tree.interface.outputs.push_back({identifier, label, std::move(type), std::move(converted), min, max, step});
+                    const auto identifier = interface_name(tree.group_interface, label);
+                    tree.group_interface.outputs.push_back({identifier, label, std::move(type), std::move(converted), min, max, step});
                     return identifier;
                 }, std::string{}); }, nb::arg("type"), nb::arg("label"), nb::arg("default") = nb::none(), nb::arg("min") = nb::none(), nb::arg("max") = nb::none(), nb::arg("step") = nb::none())
             .def("remove", [](const PyInterface& value, const std::string& side, const std::string& identifier) { invoke_on_viewer([value, side, identifier] {
@@ -1230,7 +1230,7 @@ namespace lfs::python {
                                                                                                                       }
                                                                                                                       auto& tree = *active_tree(value.tree_uuid);
                                                                                                                       const bool output = side == "output";
-                                                                                                                      auto& sockets = output ? tree.interface.outputs : tree.interface.inputs;
+                                                                                                                      auto& sockets = output ? tree.group_interface.outputs : tree.group_interface.inputs;
                                                                                                                       if (std::erase_if(sockets, [&](const auto& socket) { return socket.identifier == identifier; }) == 0)
                                                                                                                           throw std::invalid_argument("Interface socket does not exist");
                                                                                                                       const auto endpoint = output ? tree.output_node().name : tree.input_node().name;
@@ -1258,7 +1258,7 @@ namespace lfs::python {
                                                                                                                                            return;
                                                                                                                                        }
                                                                                                                                        auto& tree = *active_tree(value.tree_uuid);
-                                                                                                                                       auto& sockets = side == "output" ? tree.interface.outputs : tree.interface.inputs;
+                                                                                                                                       auto& sockets = side == "output" ? tree.group_interface.outputs : tree.group_interface.inputs;
                                                                                                                                        const auto found = std::ranges::find(sockets, identifier, &InterfaceSocket::identifier);
                                                                                                                                        if (found == sockets.end())
                                                                                                                                            throw std::invalid_argument("Interface socket does not exist");
@@ -1374,7 +1374,7 @@ namespace lfs::python {
                                   converted = std::move(converted), min, max]() mutable {
                     auto& tree = require_tree(value);
                     auto before = tree.to_json();
-                    tree.interface.inputs.push_back(
+                    tree.group_interface.inputs.push_back(
                         {identifier, identifier, std::move(type), std::move(converted),
                          min, max, std::nullopt});
                     record_tree_mutation(tree, std::move(before));

@@ -121,6 +121,10 @@ namespace lfs::training {
                 validate_shape(pooled_x, shape, "pooled_x");
                 validate_shape(pooled_y, shape, "pooled_y");
             }
+            if (p.weights && p.weights->is_valid())
+                validate_operand(*p.weights, DataType::Float32, "weights");
+            const auto region_error = gpu_ops::pool_reduce_region_error(x, p);
+            LFS_ASSERT_MSG(region_error.empty(), region_error);
             core::nn::kernels::lpips_pool_reduce(x.data_ptr(), y.data_ptr(), weight.data_ptr(), score.ptr<float>(),
                                                  pooled_x.is_valid() ? pooled_x.data_ptr() : nullptr, pooled_y.is_valid() ? pooled_y.data_ptr() : nullptr,
                                                  x.shape()[0], x.shape()[1], x.shape()[2], x.shape()[3], p.y0, p.y1, p.x0, p.x1,

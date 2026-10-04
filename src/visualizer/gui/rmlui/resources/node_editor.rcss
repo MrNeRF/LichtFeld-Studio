@@ -696,7 +696,7 @@ colour-offset {
     from { width: 15%; }
     to { width: 100%; }
 }
-.node-box.evaluating .node-progress {
+.node-box.is-evaluating .node-progress {
     display: block;
     animation: node-progress-pulse 0.65s quadratic-in-out infinite alternate;
 }

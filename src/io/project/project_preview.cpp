@@ -160,7 +160,7 @@ namespace lfs::io::project {
         int channels = 0;
         try {
             std::tie(image.pixels, width, height, channels) =
-                lfs::core::load_image(first_image, -1, max_size);
+                lfs::core::load_image_thumbnail(first_image, max_size);
         } catch (...) {
             return lfs::core::detail::normalize_current_exception(
                 lfs::core::TaskContext{

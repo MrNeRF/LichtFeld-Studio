@@ -3,6 +3,7 @@
 
 #include "ppisp.hpp"
 #include "config_serialization.hpp"
+#include "core/assert.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_execution.hpp"
@@ -654,6 +655,23 @@ namespace lfs::training {
         training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->backward({exposure_params_, vignetting_params_, color_params_, crf_params_}, rgb, grad_output, {exposure_grad_, vignetting_grad_, color_grad_, crf_grad_}, grad_rgb, num_cameras_, num_frames_, camera_idx, frame_idx);
 
         return grad_rgb;
+    }
+
+    void PPISP::backward_in_place(const lfs::core::Tensor& rgb, lfs::core::Tensor& grad, int camera_id, int uid) {
+        assert(finalized_ && "Must call finalize() before backward_in_place()");
+        const int camera_idx = translate_camera(camera_id);
+        const int frame_idx = translate_frame(uid);
+
+        const auto& shape = rgb.shape();
+        assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
+
+        const auto& ops = training_ops(lfs::core::gpu_backend_of(exposure_params_).value());
+        if (!ops.ppisp->in_place) {
+            grad = backward(rgb, grad, camera_id, uid);
+            return;
+        }
+        LFS_ASSERT(grad.is_contiguous() && grad.shape() == rgb.shape());
+        ops.ppisp->backward({exposure_params_, vignetting_params_, color_params_, crf_params_}, rgb, grad, {exposure_grad_, vignetting_grad_, color_grad_, crf_grad_}, grad, num_cameras_, num_frames_, camera_idx, frame_idx);
     }
 
     lfs::core::Tensor PPISP::backward_with_controller_params(const lfs::core::Tensor& rgb,
