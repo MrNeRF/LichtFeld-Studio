@@ -189,6 +189,10 @@ namespace lfs::core {
                             "eval_space must be 'distorted' or 'undistorted'");
                     }
                 }
+                if (const auto removed = json.find("background_improvements");
+                    removed != json.end() && removed->is_boolean() && removed->get<bool>()) {
+                    LOG_WARN("Ignoring background_improvements: the option was removed and MRNF trains with its default profile");
+                }
                 read_registered_optimization_properties(json, params, skip_missing);
                 if (const auto image_count_scaler = stored_image_count_scaler(json, params.steps_scaler))
                     params.image_count_scaler = *image_count_scaler;

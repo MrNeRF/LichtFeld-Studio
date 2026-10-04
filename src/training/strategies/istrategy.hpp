@@ -18,8 +18,6 @@ namespace lfs::io {
 
 namespace lfs::training {
 
-    class CameraDataset;
-
     /**
      * @brief Strategy interface for Gaussian splatting optimization.
      *
@@ -66,9 +64,6 @@ namespace lfs::training {
 
         // Update the strategy's cached optimization parameters after checkpoint params are resolved.
         virtual void set_optimization_params(const lfs::core::param::OptimizationParameters&) {}
-
-        // Optional hook for strategies that need the training dataset (e.g., for view-based scoring)
-        virtual void set_training_dataset(std::shared_ptr<CameraDataset>) {}
 
         virtual void set_image_loader(lfs::io::PipelinedImageLoader*) {}
 

@@ -761,7 +761,7 @@ namespace lfs::training {
         }
     }
 
-    void MRNF::post_backward(int iter, RenderOutput& render_output) {
+    void MRNF::post_backward(int iter, RenderOutput& /*render_output*/) {
         LOG_TIMER("MRNF::post_backward");
         using namespace lfs::core;
 

@@ -2868,7 +2868,6 @@ namespace lfs::training {
             }
 
             // Re-initialize strategy with new parameters
-            strategy_->set_training_dataset(train_dataset_);
             strategy_->initialize(get_runtime_optimization_params());
             apply_frozen_ranges_to_optimizer(
                 splat,

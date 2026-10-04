@@ -1487,7 +1487,7 @@ TEST(MRNFStrategyTest, ZeroVisibilityProducesNoGrowth) {
     opt_params.iterations = 10'000;
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 32;
-    opt_params.growth_grad_threshold = 10.0f;
+    opt_params.growth_grad_threshold = 0.5f;
     opt_params.grow_fraction = 1.0f;
     opt_params.grow_until_iter = 10'000;
     strategy.initialize(opt_params);
@@ -1498,6 +1498,11 @@ TEST(MRNFStrategyTest, ZeroVisibilityProducesNoGrowth) {
     strategy.visibility_accumulator().zero_();
     strategy.grow_and_split(100, 0);
     EXPECT_EQ(strategy.active_count(), active);
+
+    strategy._refine_weight_max = Tensor::ones({n}, Device::CUDA);
+    strategy.visibility_accumulator().fill_(1.0f);
+    strategy.grow_and_split(100, 0);
+    EXPECT_GT(strategy.active_count(), active);
 }
 
 TEST(MRNFDecayTest, ZeroDecayPreservesFiniteLogitsAndStillDecaysScales) {
