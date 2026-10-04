@@ -85,6 +85,8 @@ namespace lfs::nodes {
 
     // Long node work calls this between chunks; it does nothing outside an evaluation.
     LFS_CORE_API void throw_if_evaluation_cancelled();
+    // Whether the running evaluation was cancelled, for work that reports through its own channel.
+    LFS_CORE_API bool evaluation_cancelled();
 
     struct EvalControl {
         std::function<bool()> cancelled;

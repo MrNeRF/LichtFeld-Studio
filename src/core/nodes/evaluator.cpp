@@ -187,8 +187,12 @@ namespace lfs::nodes {
         };
     } // namespace
 
+    bool evaluation_cancelled() {
+        return active_control && active_control->cancelled && active_control->cancelled();
+    }
+
     void throw_if_evaluation_cancelled() {
-        if (active_control && active_control->cancelled && active_control->cancelled())
+        if (evaluation_cancelled())
             throw EvaluationCancelled();
     }
 

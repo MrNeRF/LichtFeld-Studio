@@ -86,9 +86,13 @@ namespace lfs::nodes::builtin {
             const auto data = splat_data_from_geometry(geometry);
             core::SplatSimplifyOptions options;
             options.ratio = input_float(context, "Ratio", 0.5f);
-            auto simplified = core::simplify_splats(*data, options);
-            if (!simplified)
+            auto simplified = core::simplify_splats(*data, options, [](float, const std::string&) {
+                return !evaluation_cancelled();
+            });
+            if (!simplified) {
+                throw_if_evaluation_cancelled();
                 throw NodeError(simplified.error());
+            }
             geometry.splats = geometry_from_splat_data(**simplified).splats;
         }
         context.set_output("Geometry", std::move(geometry));
