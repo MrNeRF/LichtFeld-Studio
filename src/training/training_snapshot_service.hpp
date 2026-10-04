@@ -136,10 +136,28 @@ namespace lfs::training {
             capture_additional_cpu_state;
     };
 
+    // Fixed-size storage constructed without a checkpoint-sized zero pass.
+    // Only the capture service writes it. Publication requires complete byte
+    // coverage and successful completion of every asynchronous drain.
+    class TrainingSnapshotBytes {
+    public:
+        explicit TrainingSnapshotBytes(const std::size_t size, const bool overwrite = false)
+            : bytes_(overwrite ? std::make_unique_for_overwrite<std::byte[]>(size)
+                               : std::make_unique<std::byte[]>(size)),
+              size_(size) {}
+        [[nodiscard]] std::size_t size() const noexcept { return size_; }
+        [[nodiscard]] std::byte* data() noexcept { return bytes_.get(); }
+        [[nodiscard]] const std::byte* data() const noexcept { return bytes_.get(); }
+
+    private:
+        std::unique_ptr<std::byte[]> bytes_;
+        std::size_t size_;
+    };
+
     struct CapturedTrainingSnapshot {
         lfs::core::Uuid snapshot_uuid;
         int iteration = 0;
-        std::shared_ptr<const std::vector<std::byte>> checkpoint_bytes;
+        std::shared_ptr<const TrainingSnapshotBytes> checkpoint_bytes;
         TrainingSnapshotPauseMetrics metrics;
     };
 

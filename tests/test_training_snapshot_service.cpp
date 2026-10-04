@@ -43,6 +43,7 @@
 #include <ranges>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -670,6 +671,90 @@ namespace {
             expect_optimizer_moment_bytes_equal(
                 original_optimizer_moments,
                 target_strategy.get_optimizer());
+    }
+
+    TEST_F(TrainingSnapshotServiceTest,
+           RecyclesRetiredMetalStagingWithoutRevivingWeakOwners) {
+        const ScopedEnvironmentVariable available_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
+            std::to_string(64ull * 1024 * MIB));
+        auto params = make_snapshot_test_params(129);
+        auto model = make_snapshot_test_splat(129);
+        lfs::training::MCMC strategy(*model);
+        strategy.initialize(params.optimization);
+        auto service = std::make_unique<lfs::training::TrainingSnapshotService>(
+            lfs::training::TrainingSnapshotServiceConfig{
+                .ring_slots = 3,
+                .band_bytes = 4096,
+                .calibration_bytes = 64,
+                .calibration_iterations = 4,
+            });
+        lfs::training::TrainingSnapshotCaptureRequest request{
+            .iteration = 100,
+            .strategy = strategy,
+            .params = params};
+        ASSERT_TRUE(service->initialize(request));
+        std::string reference_bytes;
+        auto capture = [&](const int iteration, const float value)
+            -> std::optional<lfs::training::CapturedTrainingSnapshot> {
+            request.iteration = iteration;
+            model->means().fill_(value);
+            lfs::core::TensorExecutionTarget::current().wait();
+            std::ostringstream reference(std::ios::binary | std::ios::out);
+            if (!lfs::training::serialize_checkpoint(reference, iteration, strategy, params,
+                                                     nullptr, nullptr, nullptr, nullptr)) {
+                ADD_FAILURE() << "Reference serialization failed";
+                return std::nullopt;
+            }
+            reference_bytes = reference.str();
+            auto prepared = service->prepare(request);
+            if (!prepared) {
+                ADD_FAILURE() << lfs::format_for_developer(prepared.error());
+                return std::nullopt;
+            }
+            auto pending = service->capture(std::move(*prepared), request);
+            if (!pending) {
+                ADD_FAILURE() << lfs::format_for_developer(pending.error());
+                return std::nullopt;
+            }
+            auto captured = pending->wait();
+            if (!captured) {
+                ADD_FAILURE() << lfs::format_for_developer(captured.error());
+                return std::nullopt;
+            }
+            EXPECT_TRUE(captured->metrics.consistency_proven);
+            EXPECT_EQ(captured->checkpoint_bytes->size(), reference_bytes.size());
+            EXPECT_EQ(std::memcmp(captured->checkpoint_bytes->data(),
+                                  reference_bytes.data(), reference_bytes.size()),
+                      0);
+            return std::move(*captured);
+        };
+        auto first = capture(100, 1.25f);
+        ASSERT_TRUE(first);
+        const auto* retired_address = first->checkpoint_bytes->data();
+        std::weak_ptr<const lfs::training::TrainingSnapshotBytes> retired = first->checkpoint_bytes;
+        first.reset();
+        const auto cleanup_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (!retired.expired() && std::chrono::steady_clock::now() < cleanup_deadline)
+            std::this_thread::yield();
+        ASSERT_TRUE(retired.expired());
+        auto second = capture(101, 2.25f);
+        ASSERT_TRUE(second);
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Metal)
+            EXPECT_EQ(second->checkpoint_bytes->data(), retired_address);
+        EXPECT_FALSE(retired.lock());
+        const auto second_reference = reference_bytes;
+        // A live immutable reader must prevent reuse, even at the same size.
+        auto third = capture(102, 3.25f);
+        ASSERT_TRUE(third);
+        EXPECT_NE(third->checkpoint_bytes->data(), second->checkpoint_bytes->data());
+        EXPECT_EQ(std::memcmp(second->checkpoint_bytes->data(),
+                              second_reference.data(), second_reference.size()),
+                  0);
+        service.reset();
+        EXPECT_EQ(std::memcmp(third->checkpoint_bytes->data(),
+                              reference_bytes.data(), reference_bytes.size()),
+                  0);
     }
 
     TEST_F(TrainingSnapshotServiceTest,

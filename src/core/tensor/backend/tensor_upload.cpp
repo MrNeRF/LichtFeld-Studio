@@ -976,6 +976,9 @@ namespace lfs::core {
 #endif
     }
     TensorReadbackRing::~TensorReadbackRing() = default;
+    bool TensorReadbackRing::prefers_recycled_host_staging() const noexcept {
+        return impl_->backend == GpuBackend::Metal;
+    }
     void TensorReadbackRing::enqueue(const Tensor& source, size_t offset, size_t bytes,
                                      size_t index, size_t destination, bool stage) {
         auto& s = *impl_;

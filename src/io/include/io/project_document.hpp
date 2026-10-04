@@ -59,6 +59,13 @@ namespace lfs::io::project {
         [[nodiscard]] static lfs::Result<LazyChunkValue>
         from_owned(std::vector<std::byte> bytes,
                    const lfs::core::Uuid& snapshot_uuid);
+        // Retain immutable contiguous storage supplied by a producer without
+        // copying it into a vector. The span must belong to owner and remain
+        // unchanged throughout the value's lifetime, including share().
+        [[nodiscard]] static lfs::Result<LazyChunkValue>
+        from_owned(std::shared_ptr<const void> owner,
+                   std::span<const std::byte> bytes,
+                   const lfs::core::Uuid& snapshot_uuid);
         // Independent owner of the same file-backed or owned bytes. Safe to
         // retain after the source ProjectDocument is closed or replaced.
         [[nodiscard]] lfs::Result<LazyChunkValue> share() const;

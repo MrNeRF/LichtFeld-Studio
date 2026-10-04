@@ -4779,10 +4779,10 @@ namespace lfs::training {
                             auto lazy =
                                 lfs::io::project::
                                     LazyChunkValue::from_owned(
-                                        captured
-                                            ->checkpoint_bytes,
-                                        captured
-                                            ->snapshot_uuid);
+                                        captured->checkpoint_bytes,
+                                        std::span<const std::byte>(captured->checkpoint_bytes->data(),
+                                                                   captured->checkpoint_bytes->size()),
+                                        captured->snapshot_uuid);
                             if (!lazy) {
                                 return lfs::Status::failure(
                                     std::move(lazy)

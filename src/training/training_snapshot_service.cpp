@@ -717,14 +717,15 @@ namespace lfs::training {
         std::uint64_t checkpoint_bytes = 0;
         std::uint64_t device_snapshot_bytes = 0;
         std::vector<TensorLayoutWitness> layout;
-        std::shared_ptr<std::vector<std::byte>> staging;
+        std::shared_ptr<TrainingSnapshotBytes> staging;
         TrainingSnapshotPauseMetrics metrics;
     };
 
     struct PendingTrainingSnapshot::Impl {
         mutable std::mutex mutex;
         std::condition_variable drained_condition;
-        std::shared_ptr<std::vector<std::byte>> staging;
+        std::shared_ptr<TrainingSnapshotBytes> staging;
+        std::uint64_t baseline_rss_bytes = 0;
         TrainingSnapshotPauseMetrics metrics;
         std::vector<PieceStamp> stamps;
         std::size_t outstanding_drains = 0;
@@ -754,6 +755,49 @@ namespace lfs::training {
             bool busy = false;
             std::optional<DrainTask> task;
         };
+
+        // Recycle at most one Metal checkpoint allocation, only after its
+        // last immutable owner has released it. A new shared_ptr control block
+        // prevents old weak owners from acquiring a buffer being overwritten.
+        struct StagingPool {
+            std::mutex mutex;
+            std::unique_ptr<TrainingSnapshotBytes> retired;
+
+            std::unique_ptr<TrainingSnapshotBytes> take(const std::size_t bytes) {
+                std::scoped_lock lock(mutex);
+                if (retired && retired->size() == bytes)
+                    return std::move(retired);
+                retired.reset();
+                return {};
+            }
+
+            void release(std::unique_ptr<TrainingSnapshotBytes> bytes) {
+                std::scoped_lock lock(mutex);
+                if (!retired)
+                    retired = std::move(bytes);
+            }
+
+            bool trim() {
+                std::scoped_lock lock(mutex);
+                const bool released = bool(retired);
+                retired.reset();
+                return released;
+            }
+        };
+
+        std::shared_ptr<TrainingSnapshotBytes> acquire_staging(const std::size_t bytes) {
+            if (!ring->prefers_recycled_host_staging())
+                return std::make_shared<TrainingSnapshotBytes>(bytes);
+            auto allocation = staging_pool->take(bytes);
+            if (!allocation)
+                allocation = std::make_unique<TrainingSnapshotBytes>(bytes, true);
+            const std::weak_ptr<StagingPool> retired_pool = staging_pool;
+            return std::shared_ptr<TrainingSnapshotBytes>(allocation.release(), [retired_pool](TrainingSnapshotBytes* value) {
+                std::unique_ptr<TrainingSnapshotBytes> retired(value);
+                if (const auto pool = retired_pool.lock())
+                    pool->release(std::move(retired));
+            });
+        }
 
         explicit Impl(TrainingSnapshotServiceConfig value)
             : config(std::move(value)) {
@@ -1174,6 +1218,9 @@ namespace lfs::training {
             const std::shared_ptr<
                 PendingTrainingSnapshot::Impl>& capture) {
             TrainingSnapshotPauseMetrics completed;
+            // Overwrite storage faults pages during drains, so sample the
+            // completed buffer as well as the earlier pause-end observation.
+            const auto rss_after_drain = read_rss_bytes();
             bool record = false;
             {
                 std::scoped_lock lock(capture->mutex);
@@ -1181,11 +1228,11 @@ namespace lfs::training {
                     return;
                 }
                 capture->completion_recorded = true;
-                capture->metrics.final_drain_ms =
-                    Milliseconds(
-                        Clock::now() -
-                        capture->pause_end)
-                        .count();
+                if (rss_after_drain >= capture->baseline_rss_bytes)
+                    capture->metrics.host_rss_delta_bytes = std::max(
+                        capture->metrics.host_rss_delta_bytes, rss_after_drain - capture->baseline_rss_bytes);
+                capture->metrics.host_ram_within_gate =
+                    capture->metrics.host_rss_delta_bytes <= capture->metrics.checkpoint_bytes + HOST_MEMORY_GATE_HEADROOM_BYTES;
                 bool consistent =
                     capture->error.empty() &&
                     !capture->stamps.empty();
@@ -1206,6 +1253,26 @@ namespace lfs::training {
                     tensor_count += stamp.tensor ? 1 : 0;
                     cpu_count += stamp.tensor ? 0 : 1;
                 }
+                // Never expose an unwritten byte from overwrite storage.
+                // Header rewrites and CPU tensor stamps may overlap; their
+                // union with fully drained device payloads must cover CKPT.
+                std::vector<std::pair<std::uint64_t, std::uint64_t>> ranges;
+                ranges.reserve(capture->stamps.size());
+                for (const auto& stamp : capture->stamps) {
+                    if (stamp.bytes > 0 && stamp.offset <= capture->staging->size() &&
+                        stamp.bytes <= capture->staging->size() - stamp.offset)
+                        ranges.emplace_back(stamp.offset, stamp.offset + stamp.bytes);
+                }
+                std::ranges::sort(ranges);
+                std::uint64_t covered = 0;
+                for (const auto& [begin, end] : ranges) {
+                    if (begin > covered) {
+                        consistent = false;
+                        break;
+                    }
+                    covered = std::max(covered, end);
+                }
+                consistent = consistent && covered == capture->staging->size();
                 capture->metrics.tensor_piece_count =
                     tensor_count;
                 capture->metrics.cpu_piece_count =
@@ -1217,8 +1284,13 @@ namespace lfs::training {
                          .consistency_proven &&
                     capture->error.empty()) {
                     capture->error =
-                        "Snapshot UUID consistency proof failed";
+                        "Snapshot byte coverage or UUID consistency proof failed";
                 }
+                capture->metrics.final_drain_ms =
+                    Milliseconds(
+                        Clock::now() -
+                        capture->pause_end)
+                        .count();
                 capture->drained = true;
                 completed = capture->metrics;
                 record = capture->error.empty();
@@ -1247,8 +1319,12 @@ namespace lfs::training {
             if (record) {
                 LOG_INFO(
                     "Training snapshot pause metric: "
-                    "p95={:.3f}ms p95_n={}",
-                    pause_p95_ms, p95_n);
+                    "p95={:.3f}ms p95_n={} snapshot={} final_drain={:.3f}ms "
+                    "host_delta={} host_gate={} consistency={}",
+                    pause_p95_ms, p95_n, completed.snapshot_uuid.to_string(),
+                    completed.final_drain_ms, completed.host_rss_delta_bytes,
+                    completed.host_ram_within_gate ? "PASS" : "FAIL",
+                    completed.consistency_proven ? "PASS" : "FAIL");
             }
         }
 
@@ -1284,6 +1360,7 @@ namespace lfs::training {
         std::condition_variable ring_condition;
         std::deque<std::size_t> drain_queue;
         std::vector<std::jthread> drain_threads;
+        std::shared_ptr<StagingPool> staging_pool = std::make_shared<StagingPool>();
         double measured_bandwidth = 0.0;
 
         mutable std::mutex metrics_mutex;
@@ -1921,6 +1998,12 @@ namespace lfs::training {
             }
             const auto required_host_memory =
                 prepared->checkpoint_bytes + reserve_bytes;
+            // An idle recycled buffer must never turn a previously viable
+            // save into a memory-pressure rejection. Live readers retain
+            // their own buffers; the pool can only release retired storage.
+            if (host_memory.available_bytes < required_host_memory &&
+                impl_->staging_pool->trim())
+                host_memory = read_host_memory_info();
             if (request.release_host_memory &&
                 host_memory.available_bytes > 0 &&
                 host_memory.available_bytes <
@@ -1948,12 +2031,8 @@ namespace lfs::training {
                         reserve_bytes),
                     LFS_SOURCE_SITE_CURRENT());
             }
-            prepared->staging =
-                std::make_shared<
-                    std::vector<std::byte>>();
-            prepared->staging->resize(
-                static_cast<std::size_t>(
-                    prepared->checkpoint_bytes));
+            prepared->staging = impl_->acquire_staging(
+                static_cast<std::size_t>(prepared->checkpoint_bytes));
             const auto rss_after = read_rss_bytes();
 
             prepared->metrics.snapshot_uuid =
@@ -2060,6 +2139,7 @@ namespace lfs::training {
                 PendingTrainingSnapshot::Impl>();
         pending->staging =
             std::move(prepared.impl_->staging);
+        pending->baseline_rss_bytes = prepared.impl_->baseline_rss_bytes;
         pending->metrics =
             prepared.impl_->metrics;
         pending->metrics.iteration =

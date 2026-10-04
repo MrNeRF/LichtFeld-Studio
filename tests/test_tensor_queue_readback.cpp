@@ -287,6 +287,7 @@ namespace {
         TensorExecutionTarget(consumer).wait_for(TensorExecutionTarget(producer));
 
         TensorReadbackRing ring(GpuBackend::Vulkan, 2, 16, consumer);
+        EXPECT_FALSE(ring.prefers_recycled_host_staging());
         ring.enqueue(device, sizeof(float), 2 * sizeof(float), 0, 4, true);
         ring.enqueue(device, 0, sizeof(float), 1, 0);
         ring.seal(0);
@@ -510,6 +511,7 @@ namespace {
             queue.wait_timeline(1);
 
             TensorReadbackRing ring(GpuBackend::Metal, 3, 16, queue, &lent);
+            EXPECT_TRUE(ring.prefers_recycled_host_staging());
             ring.enqueue(device, sizeof(float), 2 * sizeof(float), 0, 4, true);
             ring.enqueue(device, 0, sizeof(float), 1, 0);
             ring.enqueue(device, 0, device.bytes(), 2, 0);
@@ -642,6 +644,7 @@ namespace {
                 Tensor view = strided ? source.transpose(0, 1) : source;
                 TensorReadback readback;
                 TensorReadbackRing ring(GpuBackend::CUDA, 1, 24, consumer);
+                EXPECT_FALSE(ring.prefers_recycled_host_staging());
                 std::array<float, 6> output{};
                 readback.enqueue(view, consumer);
                 readback.wait(std::as_writable_bytes(std::span(output)));

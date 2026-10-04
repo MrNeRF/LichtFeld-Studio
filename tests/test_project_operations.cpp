@@ -9,17 +9,59 @@
 #include "licht_test_support.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <memory>
+#include <optional>
 
 namespace {
 
     namespace fs = std::filesystem;
     using namespace lfs::io::project;
     using namespace lfs::test::licht;
+
+    TEST(ProjectOperations, OwnedSpanShareRetainsProducerAndStreamsOnlyItsWindow) {
+        const auto uuid = fixed_uuid(989);
+        std::weak_ptr<std::array<std::byte, 8>> weak;
+        std::optional<LazyChunkValue> retained;
+        {
+            auto owner = std::make_shared<std::array<std::byte, 8>>(
+                std::array<std::byte, 8>{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4},
+                                         std::byte{5}, std::byte{6}, std::byte{7}, std::byte{8}});
+            weak = owner;
+            auto chunk = LazyChunkValue::from_owned(owner, std::span<const std::byte>(*owner).subspan(2, 4), uuid);
+            ASSERT_TRUE(chunk) << lfs::format_for_developer(chunk.error());
+            auto shared = chunk->share();
+            ASSERT_TRUE(shared) << lfs::format_for_developer(shared.error());
+            retained.emplace(std::move(*shared));
+            owner.reset();
+        }
+        ASSERT_FALSE(weak.expired());
+        ASSERT_EQ(retained->size(), 4u);
+        EXPECT_EQ(retained->snapshot_uuid(), uuid);
+        std::array<std::byte, 4> bytes{};
+        require_status(retained->read_at(0, bytes));
+        EXPECT_EQ(bytes, (std::array<std::byte, 4>{std::byte{3}, std::byte{4}, std::byte{5}, std::byte{6}}));
+        require_status(retained->visit_stream([&](std::istream& stream, std::uint64_t size) -> lfs::Result<void> {
+            EXPECT_EQ(size, 4u);
+            stream.seekg(1);
+            char byte = 0;
+            stream.read(&byte, 1);
+            EXPECT_EQ(byte, 4);
+            return {};
+        }));
+        std::array<std::byte, 2> prefix{};
+        require_status(retained->peek_prefix(prefix));
+        EXPECT_EQ(prefix, (std::array<std::byte, 2>{std::byte{3}, std::byte{4}}));
+        EXPECT_FALSE(retained->read_at(3, prefix));
+        retained.reset();
+        EXPECT_TRUE(weak.expired());
+        EXPECT_FALSE(LazyChunkValue::from_owned(std::shared_ptr<const void>{}, std::span<const std::byte>{}, uuid));
+    }
 
     std::vector<std::byte> checkpoint_payload(const std::int32_t iteration) {
         lfs::core::CheckpointHeader header{};
@@ -45,6 +87,28 @@ namespace {
         auto document = require_result(ProjectDocument::create(fixed_uuid(1000), 1'700'000'000'000'000'000));
         static_cast<void>(require_result(save_document(document, path)));
         return path;
+    }
+
+    TEST(ProjectOperations, OwnedCheckpointWindowWritesOnlyCanonicalPayloadAndReleasesStaging) {
+        TemporaryDirectory temporary;
+        const auto uuid = fixed_uuid(990);
+        const auto expected = checkpoint_payload(137);
+        auto owner = std::make_shared<std::vector<std::byte>>(expected.size() + 32, std::byte{0xa5});
+        std::copy(expected.begin(), expected.end(), owner->begin() + 16);
+        std::weak_ptr<std::vector<std::byte>> weak = owner;
+        auto value = require_result(LazyChunkValue::from_owned(
+            owner, std::span<const std::byte>(*owner).subspan(16, expected.size()), uuid));
+        auto document = require_result(ProjectDocument::create(fixed_uuid(991)));
+        require_status(document.set_checkpoint(uuid, std::move(value)));
+        owner.reset();
+        ASSERT_FALSE(weak.expired());
+        const auto path = temporary.path / "owned-window.licht";
+        static_cast<void>(require_result(save_document(document, path)));
+        EXPECT_TRUE(weak.expired());
+        auto reader = require_result(ProjectReader::open(path));
+        const auto* row = reader.find(FOURCC_CKPT, uuid);
+        ASSERT_NE(row, nullptr);
+        EXPECT_EQ(require_result(reader.read_chunk(*row)), expected);
     }
 
     void flip_byte(const fs::path& path, const std::uint64_t offset) {
