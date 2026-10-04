@@ -249,3 +249,25 @@ TEST(ExifExposureTest, IsoSpeedFallbackWithoutIsoTag) {
     ASSERT_TRUE(ev.has_value());
     EXPECT_DOUBLE_EQ(*ev, 2.0);
 }
+
+// Fails if the parallel batch reader reorders results or disagrees with the single-image reader.
+TEST(ExifExposureTest, BatchMatchesSingleImageInOrder) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_exif_batch";
+    std::filesystem::create_directories(root / "images");
+    std::vector<std::filesystem::path> paths;
+    for (int i = 0; i < 64; ++i) {
+        auto tags = kDirectTags;
+        tags[0].b = static_cast<std::uint32_t>(1 + i % 7);
+        const auto bytes = wrap_jpeg(build_tiff(Endian::Little, i % 5 == 0 ? std::vector<ExifTag>{} : tags));
+        const auto path = root / "images" / ("frame_" + std::to_string(i) + ".jpg");
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        paths.push_back(path);
+    }
+    const auto batch = lfs::core::exif_exposure_ev_for_training_images(paths, root);
+    ASSERT_EQ(batch.size(), paths.size());
+    for (size_t i = 0; i < paths.size(); ++i)
+        EXPECT_EQ(batch[i], lfs::core::exif_exposure_ev_for_training_image(paths[i], root)) << paths[i];
+    EXPECT_FALSE(batch[0].has_value());
+    EXPECT_NE(batch[1], batch[2]);
+}
