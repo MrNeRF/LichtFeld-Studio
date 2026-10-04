@@ -1557,9 +1557,9 @@ namespace lfs::vis {
 
     void RenderingManager::pollParkedArenaRetry() {
         if (scene_renderer_ && scene_renderer_->takeRefinementRequest())
-            markDirty(DirtyFlag::CAMERA);
+            markDirty(DirtyFlag::CAMERA, FrameReason::AsyncCompletion, "renderer_refinement_ready");
         if (point_scene_renderer_ && point_scene_renderer_->takeRefinementRequest())
-            markDirty(DirtyFlag::CAMERA);
+            markDirty(DirtyFlag::CAMERA, FrameReason::AsyncCompletion, "renderer_refinement_ready");
         if (scene_renderer_ && !rendererTrainingInterop(*scene_renderer_).pollArenaHandoff())
             return;
         std::lock_guard lock(views_mutex_);

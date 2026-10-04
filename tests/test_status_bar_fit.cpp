@@ -88,6 +88,12 @@ namespace lfs::vis::gui {
             status_bar.model_.mcp_details_expanded = expanded;
         }
 
+        static void bindStore(RmlStatusBar& status_bar) { status_bar.bindReactiveStore(); }
+        static void clearRedraw(RmlStatusBar& status_bar) { status_bar.model_dirty_ = false; }
+        [[nodiscard]] static bool redrawPending(const RmlStatusBar& status_bar) {
+            return status_bar.model_dirty_;
+        }
+
         static void trackRenderedFrame(RmlStatusBar& status_bar,
                                        RmlUIManager& manager,
                                        const float bar_x,
