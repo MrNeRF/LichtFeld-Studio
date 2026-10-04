@@ -5,8 +5,10 @@
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/services.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_sh.hpp"
 #include "core/tensor_vulkan_interop.hpp"
 #include "io/loader.hpp"
 #include "window/window_manager.hpp"
@@ -15,6 +17,7 @@
 #include <chrono>
 #include <format>
 #include <ranges>
+#include <tuple>
 #include <unordered_set>
 
 namespace lfs::vis {
@@ -104,8 +107,35 @@ namespace lfs::vis {
 
         // Splats for publication; attributes that are still the source's own tensors come from what was
         // published for them last time.
+        // Q16 SH encoded straight from canonical rows into renderer storage, without the float layout the
+        // renderer would otherwise receive first.
+        std::optional<std::pair<core::Tensor, core::Tensor>> renderer_q16(const lfs::nodes::SplatsComponent& splats,
+                                                                          const core::SplatTensorAllocator& allocator) {
+            const auto n = splats.means.shape()[0];
+            const auto rest = static_cast<std::uint32_t>((splats.sh_degree + 1) * (splats.sh_degree + 1) - 1);
+            if (!core::sh_value_quant::enabled() || n == 0 || rest == 0 || !splats.shN.is_valid() ||
+                splats.shN.ndim() != 3 || splats.shN.shape()[0] != n)
+                return std::nullopt;
+            const auto cells = core::sh_value_quant::sh_value_u16_count(n, rest);
+            const auto bound_values = core::sh_value_quant::n_bounds_for_prims(n) * 2;
+            auto codes = allocator(core::TensorShape{cells}, cells, core::DataType::Float16, "SplatData.shN");
+            auto bounds = allocator(core::TensorShape{bound_values}, bound_values, core::DataType::Float32,
+                                    "SplatData.shN_value_bounds");
+            core::sh_codec(splats.shN.contiguous(), codes,
+                           {.source_format = core::ShFormat::Canonical,
+                            .destination_format = core::ShFormat::Q16,
+                            .source_rows = n,
+                            .destination_rows = n,
+                            .count = n,
+                            .source_rest = static_cast<std::uint32_t>(splats.shN.shape()[1]),
+                            .destination_rest = rest},
+                           nullptr, nullptr, &bounds);
+            return std::pair{std::move(codes), std::move(bounds)};
+        }
+
         std::shared_ptr<core::SplatData> publishable(const Geometry& output, const lfs::nodes::SplatsComponent* source,
-                                                     const ModifierPublishedAttributes* record) {
+                                                     const ModifierPublishedAttributes* record,
+                                                     const core::SplatTensorAllocator* q16_allocator) {
             std::array<core::Tensor, 6> reused;
             if (source && record) {
                 const auto out = attributes(*output.splats);
@@ -116,14 +146,19 @@ namespace lfs::vis {
                         reused[i] = record->published[i];
             }
             std::shared_ptr<core::SplatData> splats;
-            if (reused[kShN].is_valid()) {
+            core::Tensor shN = reused[kShN];
+            core::Tensor shN_bounds = shN.is_valid() ? record->shN_bounds : core::Tensor{};
+            if (!shN.is_valid() && q16_allocator)
+                if (auto encoded = renderer_q16(*output.splats, *q16_allocator))
+                    std::tie(shN, shN_bounds) = std::move(*encoded);
+            if (shN.is_valid()) {
                 const auto& s = *output.splats;
                 splats = std::make_shared<core::SplatData>(
-                    s.sh_degree, s.means, s.sh0.ndim() == 2 ? s.sh0.unsqueeze(1) : s.sh0, reused[kShN], s.scaling,
-                    s.rotation, s.opacity.ndim() == 1 ? s.opacity.unsqueeze(1) : s.opacity, s.scene_scale,
+                    s.sh_degree, s.means, s.sh0.ndim() == 2 ? s.sh0.unsqueeze(1) : s.sh0, shN, s.scaling, s.rotation,
+                    s.opacity.ndim() == 1 ? s.opacity.unsqueeze(1) : s.opacity, s.scene_scale,
                     core::SplatData::ShNLayout::Swizzled);
-                if (record->shN_bounds.is_valid())
-                    splats->set_active_sh_degree(s.sh_degree, record->shN_bounds);
+                if (shN_bounds.is_valid())
+                    splats->set_active_sh_degree(s.sh_degree, shN_bounds);
                 else
                     splats->set_active_sh_degree(s.sh_degree);
             } else {
@@ -197,7 +232,9 @@ namespace lfs::vis {
                             component.rotation = component.rotation.to(core::Device::GPU);
                             component.opacity = component.opacity.to(core::Device::GPU);
                         }
-                        splats = publishable(output, source, record);
+                        const bool renderer_storage =
+                            allocator && core::splat_publication(*backend) == core::SplatPublication::RendererStorage;
+                        splats = publishable(output, source, record, renderer_storage ? &allocator : nullptr);
                     } else {
                         splats = std::shared_ptr<core::SplatData>(
                             lfs::nodes::splat_data_from_geometry(output).release());
