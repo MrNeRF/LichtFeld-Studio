@@ -253,11 +253,15 @@ namespace lfs::nodes::builtin {
             if (!count || radius_multiple <= 0)
                 return result;
 
-            const auto radii = activated_scale.max(1) * radius_multiple;
-            const float minimum = radii.min().item<float>();
-            const float maximum = radii.max().item<float>();
-            if (!std::isnormal(minimum) || !std::isfinite(maximum))
+            // A collapsed or nonfinite splat has no usable radius; it counts no neighbours without
+            // setting the range for every other splat.
+            const auto raw_radii = activated_scale.max(1) * radius_multiple;
+            const auto valid = raw_radii.isfinite().logical_and(raw_radii.gt(std::numeric_limits<float>::min()));
+            if (!valid.any().item<bool>())
                 return result;
+            const float minimum = Tensor::where(valid, raw_radii, Tensor::full_like(raw_radii, std::numeric_limits<float>::infinity())).min().item<float>();
+            const float maximum = Tensor::where(valid, raw_radii, Tensor::zeros_like(raw_radii)).max().item<float>();
+            const auto radii = Tensor::where(valid, raw_radii, Tensor::full_like(raw_radii, minimum));
 
             constexpr int max_levels = 8;
             const int octaves = std::max(1, static_cast<int>(std::ceil(std::log2(maximum / minimum))));
@@ -267,7 +271,7 @@ namespace lfs::nodes::builtin {
                                     .clamp(0, max_levels - 1);
             const int level_count = std::min(max_levels, octaves / octave_span + 1);
             for (int level = 0; level < level_count; ++level) {
-                const auto level_mask = levels.eq(static_cast<float>(level));
+                const auto level_mask = levels.eq(static_cast<float>(level)).logical_and(valid);
                 const float level_radius = Tensor::where(level_mask, radii, Tensor::zeros_like(radii))
                                                .max()
                                                .item<float>();
@@ -422,13 +426,14 @@ namespace lfs::nodes::builtin {
     void evaluate_neighbour_count(NodeContext& context) {
         const auto radius = input_float(context, "Radius", 1);
         const bool relative = property_bool(context, "relative_to_size", false);
-        const auto inputs = relative ? std::vector<Field>{position_field(), scale_field()}
-                                     : std::vector<Field>{position_field()};
-        context.set_output("Count", operation(INT_SOCKET, inputs, [radius, relative](const auto& values) {
+        context.set_output("Count", Field(std::string(INT_SOCKET), [radius, relative](const FieldContext& domain, FieldMemo& memo) {
                                constexpr int32_t limit = std::numeric_limits<int32_t>::max();
-                               return (relative ? relative_neighbour_counts(values[0], values[1], radius, limit)
-                                                : neighbour_counts(values[0], radius, limit))
-                                   .to(DataType::Int32);
+                               const auto positions = memo.evaluate(position_field(), domain);
+                               // Points and meshes have no size, so they always count in scene units.
+                               if (relative && domain.domain == Domain::Splat)
+                                   return relative_neighbour_counts(positions, memo.evaluate(scale_field(), domain), radius, limit)
+                                       .to(DataType::Int32);
+                               return neighbour_counts(positions, radius, limit).to(DataType::Int32);
                            }));
     }
     void register_selection(NodeTypeRegistry& registry) {

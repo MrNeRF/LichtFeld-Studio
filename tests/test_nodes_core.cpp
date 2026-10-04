@@ -1686,6 +1686,53 @@ namespace {
         EXPECT_EQ(two_required.geometry.splats->means.shape()[0], 0u);
     }
 
+    // Fails if one collapsed splat (zero size) sets the radius range for all others: relative mode then counted
+    // no neighbours anywhere and Remove Floaters deleted every splat.
+    TEST_P(NodesCore, RemoveFloatersIgnoresACollapsedSplatInRelativeMode) {
+        auto geometry = splats();
+        geometry.splats->means = tensor({0, 0, 0, 0.01f, 0, 0, 10, 0, 0}, {3, 3});
+        const float small = std::log(0.1f), collapsed = -std::numeric_limits<float>::infinity();
+        geometry.splats->scaling = tensor({small, small, small, small, small, small, collapsed, collapsed, collapsed}, {3, 3});
+        const auto result = single("lfs.remove_floaters", geometry, [](Node& node) {
+            node.input_values["Min Opacity"] = 0.0f;
+        });
+        ASSERT_TRUE(result.ok);
+        EXPECT_EQ(host<float>(result.geometry.splats->attributes.at("weight")), (std::vector<float>{10, 20}));
+    }
+
+    // Fails if relative mode measures point clouds by their (absent) size instead of in scene units.
+    TEST_P(NodesCore, RelativeNeighbourCountUsesSceneUnitsOnPoints) {
+        Tensor value;
+        NodeTypeInfo capture;
+        capture.id = "test.capture_points";
+        capture.inputs = {{"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)},
+                          {"Value", "Value", std::string(INT_SOCKET), {}, {}, {}, {}, true}};
+        capture.outputs = {{"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)}};
+        capture.evaluate = [&](NodeContext& context) {
+            const auto source = *context.input("Geometry").get_if<Geometry>();
+            const FieldContext domain{Domain::Point, nullptr, &*source.points, nullptr, 101};
+            value = context.evaluate_field("Value", domain, INT_SOCKET);
+            context.set_output("Geometry", source);
+        };
+        registry_.unregister_type(capture.id);
+        registry_.register_type(std::move(capture));
+        PointsComponent points;
+        points.positions = tensor({0, 0, 0, 0.5f, 0, 0}, {2, 3});
+        points.colors = tensor({1, 1, 1, 1, 1, 1}, {2, 3});
+        NodeTree tree(registry_);
+        auto& count = tree.add_node("lfs.neighbour_count", "Count");
+        count.input_values["Radius"] = 1.0f;
+        count.properties["relative_to_size"] = true;
+        tree.add_node("test.capture_points", "Capture");
+        ASSERT_TRUE(tree.add_link({"Count", "Count", "Capture", "Value"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Capture", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Capture", "Geometry", tree.output_node().name, "Geometry"}));
+        const auto result = lfs::nodes::evaluate(tree, {Geometry{std::nullopt, std::move(points), std::nullopt}, {}, 1, device()});
+        registry_.unregister_type("test.capture_points");
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
+        EXPECT_EQ(host<int>(value), (std::vector<int>{1, 1}));
+    }
+
     TEST_P(NodesCore, RadiusNeighborCountsMatchBruteForceWithCollisionsAndMasks) {
         constexpr size_t count = 257;
         std::mt19937 random(91);
