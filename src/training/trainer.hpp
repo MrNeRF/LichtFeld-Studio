@@ -557,7 +557,7 @@ namespace lfs::training {
         struct PhotometricLossResult {
             lfs::core::Tensor loss;
             lfs::core::Tensor grad_corrected;
-            lfs::core::Tensor grad_raw;
+            std::optional<lfs::training::kernels::DecoupledRawGradient> raw_gradient;
         };
 
         // Compute photometric loss AND gradient manually (no autograd)
@@ -571,7 +571,7 @@ namespace lfs::training {
         struct MaskLossResult {
             lfs::core::Tensor loss;
             lfs::core::Tensor grad_corrected;
-            lfs::core::Tensor grad_raw;
+            std::optional<lfs::training::kernels::DecoupledRawGradient> raw_gradient;
             lfs::core::Tensor grad_alpha;
             lfs::core::Tensor normal_pixel_weight;
         };

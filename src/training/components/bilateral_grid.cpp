@@ -281,51 +281,79 @@ namespace lfs::training {
     }
 
     lfs::core::Tensor BilateralGrid::apply(const lfs::core::Tensor& rgb, int image_idx) {
+        const ImageLayout layout = validate_image_tensor(rgb, "BilateralGrid::apply");
+        const auto& shape = rgb.shape();
+        auto output = layout.chw
+                          ? lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA)
+                          : lfs::core::Tensor::empty({shape[0], shape[1], 3}, lfs::core::Device::CUDA);
+        apply_into(rgb.contiguous(), output, image_idx);
+        return output;
+    }
+
+    void BilateralGrid::apply_in_place(lfs::core::Tensor& rgb, int image_idx) {
+        LFS_ASSERT(rgb.is_contiguous());
+        apply_into(rgb, rgb, image_idx);
+    }
+
+    void BilateralGrid::apply_into(const lfs::core::Tensor& rgb, lfs::core::Tensor& output, int image_idx) {
         if (image_idx < 0 || image_idx >= num_images_) {
             throw std::out_of_range("BilateralGrid::apply: image_idx out of range");
         }
 
         const ImageLayout layout = validate_image_tensor(rgb, "BilateralGrid::apply");
-        const auto& shape = rgb.shape();
-        const auto rgb_cont = rgb.contiguous();
         const float* grid_ptr = device_slice(resident_grids_, resident_slot(image_idx));
         const float* offset_ptr = shared_offset_.ptr<float>();
         assert(static_cast<int>(grids_.shape()[1]) == channels_);
 
         if (layout.chw) {
-            auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
             if (parameterization_ == BilateralGridParameterization::ExposureChroma) {
                 kernels::launch_bilateral_grid_slice_forward_exposure_chroma_chw(
-                    grid_ptr, rgb_cont.ptr<float>(), output.ptr<float>(),
+                    grid_ptr, rgb.ptr<float>(), output.ptr<float>(),
                     grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
                     offset_ptr, nullptr);
             } else {
                 kernels::launch_bilateral_grid_slice_forward_chw(
-                    grid_ptr, rgb_cont.ptr<float>(), output.ptr<float>(),
+                    grid_ptr, rgb.ptr<float>(), output.ptr<float>(),
                     grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
                     offset_ptr, nullptr);
             }
-            return output;
+            return;
         }
 
-        auto output = lfs::core::Tensor::empty({shape[0], shape[1], 3}, lfs::core::Device::CUDA);
         if (parameterization_ == BilateralGridParameterization::ExposureChroma) {
             kernels::launch_bilateral_grid_slice_forward_exposure_chroma(
-                grid_ptr, rgb_cont.ptr<float>(), output.ptr<float>(),
+                grid_ptr, rgb.ptr<float>(), output.ptr<float>(),
                 grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
                 offset_ptr, nullptr);
         } else {
             kernels::launch_bilateral_grid_slice_forward(
-                grid_ptr, rgb_cont.ptr<float>(), output.ptr<float>(),
+                grid_ptr, rgb.ptr<float>(), output.ptr<float>(),
                 grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
                 offset_ptr, nullptr);
         }
-        return output;
     }
 
     lfs::core::Tensor BilateralGrid::backward(const lfs::core::Tensor& rgb,
                                               const lfs::core::Tensor& grad_output,
                                               int image_idx) {
+        const ImageLayout layout = validate_image_tensor(rgb, "BilateralGrid::backward");
+        const auto& shape = rgb.shape();
+        auto grad_rgb = layout.chw
+                            ? lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA)
+                            : lfs::core::Tensor::empty({shape[0], shape[1], 3}, lfs::core::Device::CUDA);
+        backward_into(rgb, grad_output.contiguous(), grad_rgb, image_idx);
+        return grad_rgb;
+    }
+
+    void BilateralGrid::backward_in_place(const lfs::core::Tensor& rgb, lfs::core::Tensor& grad, int image_idx) {
+        LFS_ASSERT(grad.is_contiguous());
+        backward_into(rgb, grad, grad, image_idx);
+    }
+
+    void BilateralGrid::backward_into(const lfs::core::Tensor& rgb,
+                                      const lfs::core::Tensor& grad_output,
+                                      lfs::core::Tensor& grad_rgb,
+                                      int image_idx) {
         if (image_idx < 0 || image_idx >= num_images_) {
             throw std::out_of_range("BilateralGrid::backward: image_idx out of range");
         }
@@ -335,9 +363,7 @@ namespace lfs::training {
         if (rgb.shape() != grad_output.shape() || layout.chw != grad_layout.chw)
             throw std::invalid_argument("BilateralGrid::backward: rgb and grad_output shapes must match");
 
-        const auto& shape = rgb.shape();
         const auto rgb_cont = rgb.contiguous();
-        const auto grad_cont = grad_output.contiguous();
         const float* grid_ptr = device_slice(resident_grids_, resident_slot(image_idx));
         const float* offset_ptr = shared_offset_.ptr<float>();
         float* grad_grid_ptr = slice_grad_.ptr<float>();
@@ -347,38 +373,35 @@ namespace lfs::training {
             grad_grid_ptr, 0, slice_elements() * sizeof(float), nullptr));
 
         if (layout.chw) {
-            auto grad_rgb = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
             if (parameterization_ == BilateralGridParameterization::ExposureChroma) {
                 kernels::launch_bilateral_grid_slice_backward_exposure_chroma_chw(
-                    grid_ptr, rgb_cont.ptr<float>(), grad_cont.ptr<float>(),
+                    grid_ptr, rgb_cont.ptr<float>(), grad_output.ptr<float>(),
                     grad_grid_ptr, grad_rgb.ptr<float>(),
                     grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
                     offset_ptr, nullptr);
             } else {
                 kernels::launch_bilateral_grid_slice_backward_chw(
-                    grid_ptr, rgb_cont.ptr<float>(), grad_cont.ptr<float>(),
+                    grid_ptr, rgb_cont.ptr<float>(), grad_output.ptr<float>(),
                     grad_grid_ptr, grad_rgb.ptr<float>(),
                     grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
                     offset_ptr, nullptr);
             }
-            return grad_rgb;
+            return;
         }
 
-        auto grad_rgb = lfs::core::Tensor::empty({shape[0], shape[1], 3}, lfs::core::Device::CUDA);
         if (parameterization_ == BilateralGridParameterization::ExposureChroma) {
             kernels::launch_bilateral_grid_slice_backward_exposure_chroma(
-                grid_ptr, rgb_cont.ptr<float>(), grad_cont.ptr<float>(),
+                grid_ptr, rgb_cont.ptr<float>(), grad_output.ptr<float>(),
                 grad_grid_ptr, grad_rgb.ptr<float>(),
                 grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
                 offset_ptr, nullptr);
         } else {
             kernels::launch_bilateral_grid_slice_backward(
-                grid_ptr, rgb_cont.ptr<float>(), grad_cont.ptr<float>(),
+                grid_ptr, rgb_cont.ptr<float>(), grad_output.ptr<float>(),
                 grad_grid_ptr, grad_rgb.ptr<float>(),
                 grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
                 offset_ptr, nullptr);
         }
-        return grad_rgb;
     }
 
     lfs::core::Tensor BilateralGrid::tv_loss_gpu() {

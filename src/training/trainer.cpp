@@ -1637,13 +1637,12 @@ namespace lfs::training {
 
             if (corrected.ndim() == 3) {
                 grads.grad_corrected = grads.grad_corrected.squeeze(0);
-                grads.grad_raw = grads.grad_raw.squeeze(0);
             }
 
             return PhotometricLossResult{
                 .loss = loss_tensor,
                 .grad_corrected = grads.grad_corrected,
-                .grad_raw = grads.grad_raw};
+                .raw_gradient = lfs::training::kernels::decoupled_raw_gradient(ctx)};
         }
 
         lfs::training::losses::PhotometricLoss::Params params{.lambda_dssim = opt_params.lambda_dssim};
@@ -1654,8 +1653,7 @@ namespace lfs::training {
         auto [loss_tensor, ctx] = *result;
         return PhotometricLossResult{
             .loss = loss_tensor,
-            .grad_corrected = ctx.grad_image,
-            .grad_raw = {}};
+            .grad_corrected = ctx.grad_image};
     }
 
     std::expected<void, std::string> Trainer::validate_masks() {
@@ -1747,7 +1745,8 @@ namespace lfs::training {
             mode == param::MaskMode::SegmentAndIgnore,
             user_masks_photometric && normal_terms_on);
 
-        Tensor loss, grad_corrected, grad_raw, grad_alpha;
+        Tensor loss, grad_corrected, grad_alpha;
+        std::optional<lfs::training::kernels::DecoupledRawGradient> raw_gradient;
         const bool use_decoupled_appearance_loss =
             raw_rendered.is_valid() &&
             raw_rendered.numel() > 0 &&
@@ -1763,14 +1762,11 @@ namespace lfs::training {
                     ctx, masked_decoupled_ws);
 
                 grad_corrected = grads.grad_corrected;
-                grad_raw = grads.grad_raw;
+                raw_gradient = lfs::training::kernels::decoupled_raw_gradient(ctx);
                 loss = loss_tensor;
 
                 if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
                     grad_corrected = grad_corrected.squeeze(0);
-                }
-                if (grad_raw.ndim() == 4 && corrected.ndim() == 3) {
-                    grad_raw = grad_raw.squeeze(0);
                 }
             } else {
                 auto& masked_ws = photometric_loss_.arena().masked_fused();
@@ -1809,12 +1805,12 @@ namespace lfs::training {
             if (has_user_mask && mode == param::MaskMode::AlphaConsistent) {
                 loss = fallback->loss;
                 grad_corrected = fallback->grad_corrected;
-                grad_raw = fallback->grad_raw;
+                raw_gradient = fallback->raw_gradient;
             } else {
                 return MaskLossResult{
                     .loss = fallback->loss,
                     .grad_corrected = fallback->grad_corrected,
-                    .grad_raw = fallback->grad_raw,
+                    .raw_gradient = fallback->raw_gradient,
                     .grad_alpha = {}};
             }
         }
@@ -1835,7 +1831,7 @@ namespace lfs::training {
         return MaskLossResult{
             .loss = loss,
             .grad_corrected = grad_corrected,
-            .grad_raw = grad_raw,
+            .raw_gradient = raw_gradient,
             .grad_alpha = grad_alpha,
             .normal_pixel_weight = user_masks_photometric && normal_terms_on ? photometric_weight : Tensor{}};
     }
@@ -6734,23 +6730,25 @@ namespace lfs::training {
 
                         lfs::core::Tensor corrected_image = output.image;
                         lfs::core::Tensor ppisp_input;
-                        lfs::core::Tensor grid_input;
                         if (exposure_correction) {
                             if (ppisp_on) {
                                 nvtxRangePush("ppisp_forward");
                                 LFS_VRAM_SCOPE("train.ppisp.forward");
                                 LOG_VRAM_DIFF("train.ppisp.forward");
-                                ppisp_input = output.image;
                                 corrected_image = ppisp_->apply(
-                                    ppisp_input, cam->camera_id(), cam->uid());
+                                    output.image, cam->camera_id(), cam->uid());
                                 nvtxRangePop();
                             }
-                            grid_input = corrected_image;
                             if (grid_active_this_iter) {
                                 nvtxRangePush("bilateral_grid_forward");
                                 LFS_VRAM_SCOPE("train.bilateral_grid.forward");
                                 LOG_VRAM_DIFF("train.bilateral_grid.forward");
-                                corrected_image = bilateral_grid_->apply(grid_input, cam->uid());
+                                // The grid backward recomputes the PPISP output instead of keeping it through the loss.
+                                if (ppisp_on) {
+                                    bilateral_grid_->apply_in_place(corrected_image, cam->uid());
+                                } else {
+                                    corrected_image = bilateral_grid_->apply(output.image, cam->uid());
+                                }
                                 nvtxRangePop();
                             }
                             corrected_image.clamp_(0.0f, 1.0f);
@@ -6787,7 +6785,7 @@ namespace lfs::training {
                         PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::LossBegin, iter);
                         lfs::core::Tensor tile_loss;
                         lfs::core::Tensor tile_grad;
-                        lfs::core::Tensor tile_grad_raw;
+                        std::optional<lfs::training::kernels::DecoupledRawGradient> tile_raw_gradient;
                         lfs::core::Tensor tile_grad_alpha;
                         lfs::core::Tensor tile_grad_depth;
                         lfs::core::Tensor tile_grad_normal;
@@ -6901,7 +6899,7 @@ namespace lfs::training {
                                 }
                                 tile_loss = result->loss;
                                 tile_grad = result->grad_corrected;
-                                tile_grad_raw = result->grad_raw;
+                                tile_raw_gradient = result->raw_gradient;
                                 tile_grad_alpha = result->grad_alpha;
                                 normal_terms_weight = result->normal_pixel_weight;
                             } else {
@@ -6922,7 +6920,7 @@ namespace lfs::training {
                                 }
                                 tile_loss = result->loss;
                                 tile_grad = result->grad_corrected;
-                                tile_grad_raw = result->grad_raw;
+                                tile_raw_gradient = result->raw_gradient;
                             }
                         }
 
@@ -7470,7 +7468,6 @@ namespace lfs::training {
                             }
                             record_vram_tensor("train.losses", "tile_loss", tile_loss);
                             record_vram_tensor("train.losses", "tile_grad_corrected", tile_grad);
-                            record_vram_tensor("train.losses", "tile_grad_raw", tile_grad_raw);
                             record_vram_tensor("train.losses", "tile_grad_alpha", tile_grad_alpha);
                             record_vram_tensor("train.losses", "densification_error_map.live", tile_error_map);
                             {
@@ -7507,16 +7504,17 @@ namespace lfs::training {
                                 nvtxRangePush("bilateral_grid_backward");
                                 LFS_VRAM_SCOPE("train.bilateral_grid.backward");
                                 LOG_VRAM_DIFF("train.bilateral_grid.backward");
-                                raster_grad = bilateral_grid_->backward(grid_input, raster_grad, cam->uid());
-                                grid_input = {};
+                                const lfs::core::Tensor grid_input =
+                                    ppisp_on ? ppisp_->apply(output.image, cam->camera_id(), cam->uid())
+                                             : output.image;
+                                bilateral_grid_->backward_in_place(grid_input, raster_grad, cam->uid());
                                 nvtxRangePop();
                             }
                             if (ppisp_on) {
                                 nvtxRangePush("ppisp_backward");
                                 LFS_VRAM_SCOPE("train.ppisp.backward");
                                 LOG_VRAM_DIFF("train.ppisp.backward");
-                                raster_grad = ppisp_->backward(
-                                    ppisp_input, raster_grad, cam->camera_id(), cam->uid());
+                                ppisp_->backward_in_place(output.image, raster_grad, cam->camera_id(), cam->uid());
                                 if (ppisp_frozen) {
                                     ppisp_->zero_grad();
                                 }
@@ -7527,8 +7525,7 @@ namespace lfs::training {
                                 nvtxRangePush("ppisp_backward");
                                 LFS_VRAM_SCOPE("train.ppisp.backward");
                                 LOG_VRAM_DIFF("train.ppisp.backward");
-                                raster_grad = ppisp_->backward(
-                                    ppisp_input, raster_grad, cam->camera_id(), cam->uid());
+                                ppisp_->backward_in_place(ppisp_input, raster_grad, cam->camera_id(), cam->uid());
                                 ppisp_input = {};
                                 if (ppisp_frozen) {
                                     ppisp_->zero_grad();
@@ -7540,17 +7537,13 @@ namespace lfs::training {
                                 nvtxRangePush("bilateral_grid_backward");
                                 LFS_VRAM_SCOPE("train.bilateral_grid.backward");
                                 LOG_VRAM_DIFF("train.bilateral_grid.backward");
-                                raster_grad = bilateral_grid_->backward(output.image, raster_grad, cam->uid());
+                                bilateral_grid_->backward_in_place(output.image, raster_grad, cam->uid());
                                 nvtxRangePop();
                             }
                         }
 
-                        // Summed eagerly in place: the deferred sum materialized inside the rasterizer backward
-                        // with snapshot copies of both operands, three full-resolution images at the step peak.
-                        if (tile_grad_raw.is_valid() && tile_grad_raw.numel() > 0) {
-                            if (raster_grad.data_ptr() == tile_grad.data_ptr())
-                                raster_grad = raster_grad.clone();
-                            raster_grad.add_(tile_grad_raw);
+                        if (tile_raw_gradient) {
+                            lfs::training::kernels::accumulate_decoupled_raw_gradient(*tile_raw_gradient, raster_grad);
                         }
 
                         current_phase = StepPhase::Backward;

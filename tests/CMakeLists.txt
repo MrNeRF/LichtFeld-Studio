@@ -634,6 +634,7 @@ set(TEST_FILES
     test_bilateral_grid_projection.cpp
     test_bilateral_grid_exposure_chroma.cpp
     test_bilateral_grid_backward_tiled.cpp
+    test_appearance_in_place.cpp
     test_ppisp_projection.cpp
     test_ppisp_cuda_vs_torch.cpp
     test_ppisp_banded_region.cpp

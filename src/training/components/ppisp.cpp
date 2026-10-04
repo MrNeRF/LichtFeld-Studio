@@ -694,6 +694,23 @@ namespace lfs::training {
         return grad_rgb;
     }
 
+    void PPISP::backward_in_place(const lfs::core::Tensor& rgb, lfs::core::Tensor& grad, int camera_id, int uid) {
+        assert(finalized_ && "Must call finalize() before backward_in_place()");
+        LFS_ASSERT(grad.is_contiguous() && grad.shape() == rgb.shape());
+        const int camera_idx = translate_camera(camera_id);
+        const int frame_idx = translate_frame(uid);
+
+        const auto& shape = rgb.shape();
+        assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
+
+        kernels::launch_ppisp_backward_chw(
+            exposure_params_.ptr<float>(), vignetting_params_.ptr<float>(), color_params_.ptr<float>(),
+            crf_params_.ptr<float>(), rgb.ptr<float>(), grad.ptr<float>(), exposure_grad_.ptr<float>(),
+            vignetting_grad_.ptr<float>(), color_grad_.ptr<float>(), crf_grad_.ptr<float>(), grad.ptr<float>(),
+            static_cast<int>(shape[1]), static_cast<int>(shape[2]), num_cameras_, num_frames_, camera_idx, frame_idx,
+            nullptr);
+    }
+
     lfs::core::Tensor PPISP::backward_with_controller_params(const lfs::core::Tensor& rgb,
                                                              const lfs::core::Tensor& grad_output,
                                                              const lfs::core::Tensor& controller_params,
