@@ -109,8 +109,7 @@ namespace lfs::nodes {
     };
 
     struct ConsumedSelection {
-        std::uint64_t context = 0; // FieldContext::identity
-        core::Tensor mask;         // Bool
+        core::Tensor mask; // Bool, over the first component of the node's geometry input
     };
 
     struct CachedNodeOutput {
@@ -147,7 +146,7 @@ namespace lfs::nodes {
         [[nodiscard]] float seconds() const noexcept { return seconds_; }
         [[nodiscard]] float frame() const noexcept { return seconds_ * frames_per_second_; }
         void set_output(std::string identifier, Value value);
-        // Keeps the first Selection mask a node evaluates, for viewport previews.
+        // Keeps the first Selection mask a node evaluates on its geometry input, for viewport previews.
         void record_selection(const FieldContext& context, const core::Tensor& mask) const;
 
     private:
@@ -156,6 +155,7 @@ namespace lfs::nodes {
         std::unordered_map<std::string, std::vector<Value>> inputs_;
         std::unordered_map<std::string, Value> outputs_;
         mutable std::optional<ConsumedSelection> selection_;
+        const Geometry* geometry_input_ = nullptr;
         FieldMemo* memo_ = nullptr;
         EvalHost* host_ = nullptr;
         float seconds_ = 0.0f;

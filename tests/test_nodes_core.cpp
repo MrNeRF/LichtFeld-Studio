@@ -1350,6 +1350,36 @@ namespace {
         EXPECT_EQ(consumer.selection->mask.cpu().to_vector_bool(), (std::vector<bool>{false, true, false}));
     }
 
+    TEST_P(NodesCore, ConsumersRecordOnlySelectionsEvaluatedOnTheirInput) {
+        NodeTypeInfo info;
+        info.id = "test.select_moved";
+        info.inputs = {{"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)},
+                       {"Selection", "Selection", std::string(FLOAT_SOCKET), 1.0f, {}, {}, {}, true}};
+        info.outputs = {{"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)}};
+        info.evaluate = [](NodeContext& context) {
+            auto geometry = *context.input("Geometry").get_if<Geometry>();
+            geometry.splats->means = geometry.splats->means + 1.0f;
+            const auto domain = field_context(*geometry.splats);
+            context.record_selection(domain, context.evaluate_field("Selection", domain).ge(0.5f));
+            context.set_output("Geometry", geometry);
+        };
+        registry_.unregister_type(info.id);
+        ASSERT_TRUE(registry_.register_type(std::move(info)));
+        NodeTree tree(registry_);
+        Node& box = tree.add_node("lfs.box_selection");
+        box.input_values["Centre"] = glm::vec3(1, 0, 0);
+        box.input_values["Size"] = glm::vec3(0.5f);
+        const Node& node = tree.add_node("test.select_moved");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", node.name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({box.name, "Selection", node.name, "Selection"}));
+        ASSERT_TRUE(tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"}));
+        EvalCache cache;
+        ASSERT_TRUE(evaluate(tree, {splats(), {}, 7}, nullptr, &cache).ok);
+        // The mask covers moved positions, so it cannot stand in for a preview on the input.
+        EXPECT_FALSE(cache.nodes.at(node.name).selection);
+        registry_.unregister_type("test.select_moved");
+    }
+
     TEST_P(NodesCore, SharedFieldsReadAttributesAsTheyAreAfterAnOverwrite) {
         NodeTree tree(registry_);
         // Node references do not survive later add_node calls; keep names.
