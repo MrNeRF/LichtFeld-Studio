@@ -146,7 +146,6 @@ namespace {
 
         PointCloudAdaptor cloud(data, num_points);
         KDTree index(3, cloud, nanoflann::KDTreeSingleIndexAdaptorParams(10));
-        index.buildIndex();
 
         auto result = lfs::core::Tensor::zeros({static_cast<size_t>(num_points)}, lfs::core::Device::CPU);
         float* result_data = result.ptr<float>();
@@ -232,24 +231,22 @@ namespace {
             return zeros.to(points.device());
         }
 
-        std::sort(x_vals.begin(), x_vals.end());
-        std::sort(y_vals.begin(), y_vals.end());
-        std::sort(z_vals.begin(), z_vals.end());
-
-        const auto idx_pair = [percentile](const size_t len) {
+        // Half the central percentile range of one axis; selection instead of a full sort.
+        const auto half_range = [percentile](std::vector<float>& values) {
+            const size_t len = values.size();
             const size_t lower_idx = static_cast<size_t>(((1.0f - percentile) / 2.0f) * static_cast<float>(len));
             const size_t upper_idx =
                 std::min(len - 1, static_cast<size_t>(((1.0f + percentile) / 2.0f) * static_cast<float>(len)));
-            return std::pair<size_t, size_t>{lower_idx, upper_idx};
+            const auto lower = values.begin() + static_cast<std::ptrdiff_t>(lower_idx);
+            const auto upper = values.begin() + static_cast<std::ptrdiff_t>(upper_idx);
+            std::nth_element(values.begin(), upper, values.end());
+            std::nth_element(values.begin(), lower, upper);
+            return (*upper - *lower) * 0.5f;
         };
 
-        const auto [lx, ux] = idx_pair(x_vals.size());
-        const auto [ly, uy] = idx_pair(y_vals.size());
-        const auto [lz, uz] = idx_pair(z_vals.size());
-
-        const float ex = (x_vals[ux] - x_vals[lx]) * 0.5f;
-        const float ey = (y_vals[uy] - y_vals[ly]) * 0.5f;
-        const float ez = (z_vals[uz] - z_vals[lz]) * 0.5f;
+        const float ex = half_range(x_vals);
+        const float ey = half_range(y_vals);
+        const float ez = half_range(z_vals);
 
         float sorted_extents[3] = {ex, ey, ez};
         std::sort(sorted_extents, sorted_extents + 3);
@@ -258,7 +255,6 @@ namespace {
 
         PointCloudAdaptor cloud(data, num_points);
         KDTree index(3, cloud, nanoflann::KDTreeSingleIndexAdaptorParams(10));
-        index.buildIndex();
 
         auto result = lfs::core::Tensor::zeros(
             {static_cast<size_t>(num_points), 3},
