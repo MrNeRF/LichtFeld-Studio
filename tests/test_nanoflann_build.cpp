@@ -2,14 +2,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "../external/nanoflann.hpp"
+#include "io/formats/colmap.hpp"
 
 #include <algorithm>
 #include <array>
-#include <cstdint>
-#include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <gtest/gtest.h>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -22,23 +21,12 @@ namespace {
     };
     using Tree = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<float, Cloud>, Cloud, 3>;
 
-    std::vector<float> read_colmap_points(const std::filesystem::path& path) {
-        std::ifstream file(path, std::ios::binary);
-        std::uint64_t count = 0;
-        file.read(reinterpret_cast<char*>(&count), sizeof(count));
-        std::vector<float> points;
-        points.reserve(count * 3);
-        for (std::uint64_t i = 0; i < count && file; ++i) {
-            std::array<char, 8 + 24 + 3 + 8> record{};
-            file.read(record.data(), record.size());
-            std::array<double, 3> xyz{};
-            std::memcpy(xyz.data(), record.data() + 8, sizeof(xyz));
-            points.insert(points.end(), {static_cast<float>(xyz[0]), static_cast<float>(xyz[1]), static_cast<float>(xyz[2])});
-            std::uint64_t track = 0;
-            file.read(reinterpret_cast<char*>(&track), sizeof(track));
-            file.seekg(static_cast<std::streamoff>(track * 8), std::ios::cur);
-        }
-        return points;
+    std::vector<float> garden_points() {
+        auto cloud = lfs::io::read_colmap_point_cloud(std::filesystem::path(PROJECT_ROOT_PATH) / "data/garden/sparse/0");
+        if (!cloud)
+            return {};
+        auto means = cloud->value.means.cpu().contiguous();
+        return {means.ptr<float>(), means.ptr<float>() + means.numel()};
     }
 
     std::array<float, 4> brute_force_sq_dists(const std::vector<float>& points, const size_t query) {
@@ -62,7 +50,7 @@ namespace {
 // Fails if the build permutes the cached coordinates out of step with the point indices: the tree then
 // splits on the wrong values and exact searches miss true neighbours, single-threaded or concurrent.
 TEST(NanoflannBuild, ExactNeighboursOnRealPoints) {
-    const auto points = read_colmap_points(std::filesystem::path(PROJECT_ROOT_PATH) / "data/garden/sparse/0/points3D.bin");
+    const auto points = garden_points();
     ASSERT_GT(points.size() / 3, size_t{100000});
     const Cloud cloud{&points};
     for (const unsigned threads : {1u, 4u}) {
