@@ -570,6 +570,9 @@ namespace lfs::vis {
             std::unordered_map<std::string, std::unique_ptr<NodeTree>> resolved_trees_;
             glm::mat4 current_world_{1.0f};
         };
+
+        // Idle time after which pooled device memory goes back to the system.
+        constexpr auto kReleaseFreedMemoryAfter = std::chrono::seconds(1);
     } // namespace
 
     ModifierEvaluationWorker::ModifierEvaluationWorker(const lfs::nodes::NodeTypeRegistry& registry)
@@ -641,7 +644,15 @@ namespace lfs::vis {
             bool evaluate_request = false;
             {
                 std::unique_lock lock(mutex_);
-                changed_.wait(lock, stop, [&] { return pending_.has_value() || !retired_.empty(); });
+                const auto has_work = [&] { return pending_.has_value() || !retired_.empty(); };
+                if (!holding_freed_memory_)
+                    changed_.wait(lock, stop, has_work);
+                else if (!changed_.wait_for(lock, stop, kReleaseFreedMemoryAfter, has_work)) {
+                    lock.unlock();
+                    core::Tensor::release_freed_memory();
+                    holding_freed_memory_ = false;
+                    continue;
+                }
                 retired.swap(retired_);
                 if (pending_ && !stop.stop_requested()) {
                     request = std::move(*pending_);
@@ -654,8 +665,11 @@ namespace lfs::vis {
             // Releasing published storage can wait for the renderer's consumer
             // queue on MoltenVK. Do not do this on the viewer or under mutex_.
             retired.clear();
-            if (stop.stop_requested())
+            if (stop.stop_requested()) {
+                if (holding_freed_memory_)
+                    core::Tensor::release_freed_memory();
                 return;
+            }
             if (!evaluate_request)
                 continue;
             auto result = evaluate(request);
@@ -802,12 +816,13 @@ namespace lfs::vis {
                 }
             }
         };
-        // Graphs free and reallocate payload-sized intermediates between readbacks; keep that memory
-        // pooled until the request is done instead of mapping it again for every node.
-        core::Tensor::hold_freed_memory();
-        struct FreedMemoryRelease {
-            ~FreedMemoryRelease() { core::Tensor::release_freed_memory(); }
-        } freed_memory_release;
+        // Graphs free and reallocate payload-sized intermediates, and handing that memory back to the
+        // system costs more than evaluating the graph. Keep it pooled while requests keep arriving;
+        // run() releases it once they stop.
+        if (!holding_freed_memory_) {
+            core::Tensor::hold_freed_memory();
+            holding_freed_memory_ = true;
+        }
         try {
             try {
                 attempt();

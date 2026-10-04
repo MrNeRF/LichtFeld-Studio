@@ -99,6 +99,7 @@ namespace lfs::vis {
         std::unordered_map<core::Uuid, ModifierHostResult> previous_hosts_;
         std::uint64_t source_generation_ = 0;
         lfs::nodes::GeometryDeviceCache source_devices_;
+        bool holding_freed_memory_ = false;
         std::jthread thread_;
     };
 
