@@ -93,6 +93,8 @@ namespace lfs::nodes {
         // Rethrow device out-of-memory instead of reporting it as a node error,
         // for hosts that can release memory and retry.
         bool propagate_out_of_memory = false;
+        // Wait for each node's queued device work before stopping its timer, so node times include the GPU.
+        bool synchronize_nodes = false;
     };
 
     struct EvalResult {

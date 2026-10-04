@@ -4,6 +4,7 @@
 #include "core/nodes/evaluator.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
 #include "core/tensor_execution.hpp"
 
 #include <algorithm>
@@ -579,6 +580,11 @@ namespace lfs::nodes {
                 result.errors[node.name] = exception.what();
                 result.ok = false;
                 evaluation.ok = false;
+            }
+            if (control.synchronize_nodes) {
+                core::TensorCompletion completion;
+                completion.include_current_gpu();
+                completion.wait();
             }
             const auto stop = std::chrono::steady_clock::now();
             const double elapsed = std::chrono::duration<double, std::milli>(stop - start).count();

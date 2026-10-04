@@ -248,6 +248,7 @@ namespace lfs::vis {
         void recordCanvasFrame(double milliseconds);
         void recordViewerFrame(double milliseconds, bool rendered_viewport);
         [[nodiscard]] nlohmann::json performance(bool reset = false);
+        void setProfiling(bool enabled);
         [[nodiscard]] const ModifierEvaluation* lastResult(const core::Uuid& node_uuid) const;
         [[nodiscard]] std::uint64_t resultGeneration() const { return result_generation_; }
         [[nodiscard]] ModifierWorkerProgress progress() const;

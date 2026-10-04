@@ -1020,7 +1020,8 @@ namespace lfs::vis {
                     progress_.pending_nodes.erase(name);
                     progress_.completed = progress_.finished_nodes.size();
                     progress_.node.clear(); },
-                .propagate_out_of_memory = true};
+                .propagate_out_of_memory = true,
+                .synchronize_nodes = profiling_.load(std::memory_order_relaxed)};
             SnapshotHost host(request, registry_, caches_, source, previous_hosts_, published_, control,
                               [&](const core::Uuid& uuid, const std::string& modifier, const lfs::nodes::NodeTree& tree) {
                                   std::unordered_map<std::string, std::vector<std::string>> parents;

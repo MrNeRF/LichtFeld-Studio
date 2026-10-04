@@ -86,6 +86,8 @@ namespace lfs::vis {
         void wait(std::uint64_t generation);
         [[nodiscard]] ModifierWorkerProgress progress() const;
         [[nodiscard]] nlohmann::json performance(bool reset);
+        // Node times include their device work; each node then waits for the GPU.
+        void set_profiling(bool enabled) { profiling_.store(enabled, std::memory_order_relaxed); }
 
     private:
         void run(std::stop_token stop);
@@ -102,6 +104,7 @@ namespace lfs::vis {
         std::vector<ModifierWorkerResult> retired_;
         ModifierWorkerProgress progress_;
         std::atomic<std::uint64_t> generation_{0};
+        std::atomic<bool> profiling_{false};
         std::uint64_t finished_generation_ = 0;
         std::uint64_t requests_ = 0;
         std::uint64_t evaluations_ = 0;

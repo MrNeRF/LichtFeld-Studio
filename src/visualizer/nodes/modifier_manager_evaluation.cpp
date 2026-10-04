@@ -274,6 +274,8 @@ namespace lfs::vis {
             canvas_work_ms_ = canvas_work_ms_.value_or(0.0) + milliseconds;
     }
 
+    void ModifierManager::setProfiling(const bool enabled) { worker_->set_profiling(enabled); }
+
     nlohmann::json ModifierManager::performance(const bool reset) {
         auto result = worker_->performance(reset);
         result["canvas_frame_ms"] = canvas_frame_ms_;

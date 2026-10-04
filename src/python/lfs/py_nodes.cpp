@@ -967,10 +967,14 @@ namespace lfs::python {
             double total = 0.0;
             for (const auto& [_, time] : result.time_ms)
                 total += time;
+            nb::dict nodes;
+            for (const auto& [node, time] : result.time_ms)
+                nodes[nb::str(node.c_str())] = time;
             nb::dict value;
             value["ok"] = result.ok;
             value["errors"] = std::move(errors);
             value["time_ms"] = total;
+            value["node_time_ms"] = std::move(nodes);
             return value;
         }
 
@@ -1766,6 +1770,14 @@ namespace lfs::python {
                 return live_manager() ? live_manager()->performance(reset) : nlohmann::json::object();
             }, nlohmann::json::object());
             return json_to_python(result); }, nb::arg("reset") = false);
+        module.def(
+            "profile", [](const bool enabled) {
+                invoke_on_viewer([enabled] {
+                    if (auto* manager = live_manager())
+                        manager->setProfiling(enabled);
+                    return 0; }, 0);
+            },
+            nb::arg("enabled"), "Include each node's device work in its time; each node then waits for the GPU.");
         module.def("evaluate", [](const std::string& node_name) {
             const auto result = invoke_on_viewer([node_name] {
                 std::optional<nb::gil_scoped_release> release;
