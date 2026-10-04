@@ -1,11 +1,14 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/cuda_error.hpp"
+#include "core/tensor/backend/cuda/kernels/cub_workspace.hpp"
 #include "internal/nearest_point.hpp"
 #include "internal/point_spatial.hpp"
 #include "tensor_spatial.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <cub/cub.cuh>
 
 namespace lfs::core::tensor_ops {
     namespace {
@@ -50,15 +53,6 @@ namespace lfs::core::tensor_ops {
             }
             output[i] = (!queries || queries[i]) && pointHasNeighbor(points, references, heads, next, i, bucket_mask, radius, exclude_self);
         }
-        __global__ void query_counts(const float* points, const int32_t* heads, const int32_t* next,
-                                     int32_t* output, const size_t count, const uint32_t bucket_mask,
-                                     const float radius, const int32_t max_count, const size_t begin,
-                                     const uint8_t* queries) {
-            const size_t i = begin + static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-            if (i >= count)
-                return;
-            output[i] = (!queries || queries[i]) ? pointNeighborCount(points, heads, next, i, bucket_mask, radius, max_count) : 0;
-        }
         template <class T>
         __global__ void query_min(const float* points, const T* values, const int32_t* heads,
                                   const int32_t* next, T* output, const size_t count,
@@ -72,6 +66,85 @@ namespace lfs::core::tensor_ops {
             const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
             if (i < count)
                 output[i] = pointNeighborSpacing(points, heads, next, i, bucket_mask, radius);
+        }
+
+        // Counting walks every candidate in 27 cells. Sorting the references by bucket makes each
+        // cell one contiguous run instead of a linked list scattered over all points.
+        __global__ void bucket_keys(const float* points, const uint8_t* references, uint32_t* keys, int32_t* order,
+                                    const size_t count, const uint32_t bucket_mask, const float cell_size) {
+            const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (i >= count)
+                return;
+            const float* p = points + i * 3;
+            keys[i] = references[i] && finite_point(p)
+                          ? hash_cell(cell(p[0], cell_size), cell(p[1], cell_size), cell(p[2], cell_size), bucket_mask)
+                          : bucket_mask + 1;
+            order[i] = static_cast<int32_t>(i);
+        }
+
+        __global__ void bucket_starts(const float* points, const uint32_t* keys, const int32_t* order, int32_t* starts,
+                                      float* sorted, const size_t count, const uint32_t bucket_mask) {
+            const size_t k = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (k >= count || keys[k] > bucket_mask)
+                return;
+            if (k == 0 || keys[k - 1] != keys[k])
+                starts[keys[k]] = static_cast<int32_t>(k);
+            const float* p = points + static_cast<size_t>(order[k]) * 3;
+            sorted[k * 3] = p[0];
+            sorted[k * 3 + 1] = p[1];
+            sorted[k * 3 + 2] = p[2];
+        }
+
+        // Cells are half the radius wide, so the 5x5x5 block around a query, less the cells whose box
+        // lies beyond the radius, holds about a third of the candidates of radius-wide cells.
+        constexpr int kCellsPerRadius = 2;
+
+        // Threads take queries in sorted order, so a warp shares the cells it scans.
+        __global__ void sorted_query_counts(const float* points, const uint32_t* keys, const int32_t* order,
+                                            const int32_t* starts, const float* sorted, int32_t* output,
+                                            const size_t count, const uint32_t bucket_mask, const float radius,
+                                            const float cell_size, const int32_t max_count, const uint8_t* queries) {
+            const size_t k = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (k >= count)
+                return;
+            const auto i = static_cast<size_t>(order[k]);
+            const float* p = points + i * 3;
+            if ((queries && !queries[i]) || !finite_point(p)) {
+                output[i] = 0;
+                return;
+            }
+            const int x = cell(p[0], cell_size);
+            const int y = cell(p[1], cell_size);
+            const int z = cell(p[2], cell_size);
+            // Prune with a margin, since cells come from rounded divisions.
+            const float reach = radius * 1.001f + cell_size * 1e-3f;
+            const auto gap = [&](const float value, const int index) {
+                const float low = static_cast<float>(index) * cell_size;
+                return fmaxf(0.0f, fmaxf(low - value, value - (low + cell_size)));
+            };
+            int32_t found = 0;
+            constexpr int side = 2 * kCellsPerRadius + 1;
+            constexpr int centre = (side * side * side) / 2;
+            for (int slot = 0; slot < side * side * side; ++slot) {
+                const int neighbor = slot == 0 ? centre : (slot <= centre ? slot - 1 : slot);
+                const int cx = x + neighbor % side - kCellsPerRadius;
+                const int cy = y + neighbor / side % side - kCellsPerRadius;
+                const int cz = z + neighbor / (side * side) - kCellsPerRadius;
+                const float gx = gap(p[0], cx), gy = gap(p[1], cy), gz = gap(p[2], cz);
+                if (gx * gx + gy * gy + gz * gz > reach * reach)
+                    continue;
+                const auto bucket = hash_cell(cx, cy, cz, bucket_mask);
+                for (int32_t j = starts[bucket]; j >= 0 && static_cast<size_t>(j) < count && keys[j] == bucket; ++j) {
+                    const float* q = sorted + static_cast<size_t>(j) * 3;
+                    // Hash collisions must not count the same reference twice.
+                    if (cell(q[0], cell_size) == cx && cell(q[1], cell_size) == cy && cell(q[2], cell_size) == cz &&
+                        within(p, q, radius) && static_cast<size_t>(order[j]) != i && ++found == max_count) {
+                        output[i] = found;
+                        return;
+                    }
+                }
+            }
+            output[i] = found;
         }
     } // namespace
 
@@ -91,9 +164,27 @@ namespace lfs::core::tensor_ops {
                                        const float radius, const int32_t max_count, const uint8_t* queries, const cudaStream_t stream) {
         const auto bucket_mask = static_cast<uint32_t>(buckets - 1);
         const auto blocks = static_cast<unsigned int>((count + kBlockSize - 1) / kBlockSize);
-        build<<<blocks, kBlockSize, 0, stream>>>(points, references, heads, next, count, bucket_mask, radius, 0);
-        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_neighbor_counts.build");
-        query_counts<<<blocks, kBlockSize, 0, stream>>>(points, heads, next, output, count, bucket_mask, radius, max_count, 0, queries);
+        // heads arrives filled with -1 and receives each bucket's first sorted position; next holds
+        // the unsorted order.
+        ScopedDeviceBuffer keys(count * sizeof(uint32_t), stream, "tensor.radius_neighbor_counts.keys");
+        ScopedDeviceBuffer sorted_keys(count * sizeof(uint32_t), stream, "tensor.radius_neighbor_counts.sorted_keys");
+        ScopedDeviceBuffer sorted_order(count * sizeof(int32_t), stream, "tensor.radius_neighbor_counts.order");
+        ScopedDeviceBuffer sorted_points(count * 3 * sizeof(float), stream, "tensor.radius_neighbor_counts.points");
+        const float cell_size = radius / static_cast<float>(kCellsPerRadius);
+        bucket_keys<<<blocks, kBlockSize, 0, stream>>>(points, references, keys.as<uint32_t>(), next, count, bucket_mask, cell_size);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_neighbor_counts.keys");
+        const int end_bit = std::bit_width(static_cast<uint32_t>(buckets));
+        run_cub_operation("cub::DeviceRadixSort::SortPairs", stream, [&](void* workspace, size_t& workspace_bytes) {
+            return cub::DeviceRadixSort::SortPairs(workspace, workspace_bytes, keys.as<uint32_t>(),
+                                                   sorted_keys.as<uint32_t>(), next, sorted_order.as<int32_t>(),
+                                                   static_cast<int>(count), 0, end_bit, stream);
+        });
+        bucket_starts<<<blocks, kBlockSize, 0, stream>>>(points, sorted_keys.as<uint32_t>(), sorted_order.as<int32_t>(),
+                                                         heads, sorted_points.as<float>(), count, bucket_mask);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_neighbor_counts.starts");
+        sorted_query_counts<<<blocks, kBlockSize, 0, stream>>>(points, sorted_keys.as<uint32_t>(), sorted_order.as<int32_t>(),
+                                                               heads, sorted_points.as<float>(), output, count, bucket_mask,
+                                                               radius, cell_size, max_count, queries);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.radius_neighbor_counts.query");
     }
 
