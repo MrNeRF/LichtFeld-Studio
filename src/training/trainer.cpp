@@ -8609,6 +8609,9 @@ namespace lfs::training {
 
             pipelined_config = tunePipelinedLoaderConfig(
                 pipelined_config, train_dataset_, aux_pipeline_config);
+            // Decoders warmed for another pool size would only hold VRAM beside the loader's own.
+            if (pipelined_config.decoder_pool_size != JPEG_HOT_DECODER_POOL_SIZE)
+                image_decoder_warmup_ = {};
 
             // Keep the camera stream stable across checkpoint resume.  The
             // loader is intentionally rebuilt after the checkpoint is loaded;

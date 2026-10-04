@@ -60,6 +60,9 @@ namespace lfs::io {
         explicit NvCodecImageLoader(const Options& options);
         ~NvCodecImageLoader();
 
+        /// Loaders alive in this process.
+        [[nodiscard]] static size_t live_count();
+
         // Disable copying
         NvCodecImageLoader(const NvCodecImageLoader&) = delete;
         NvCodecImageLoader& operator=(const NvCodecImageLoader&) = delete;

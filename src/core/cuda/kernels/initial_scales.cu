@@ -322,7 +322,9 @@ namespace lfs::core::cuda {
                        "initial scales need between 3 and INT_MAX points");
 
         nvtxRangePush("mrnf_knn_log_scales");
-        const cudaStream_t stream = getCurrentCUDAStream();
+        const cudaStream_t stream = scaling.stream();
+        const CUDAStreamGuard stream_guard(stream);
+        means.sync_to_stream(stream);
         const auto n = static_cast<uint32_t>(means.size(0));
         const auto axes = finite_axes(means.ptr<float>(), n, stream);
         if (axes.complete)

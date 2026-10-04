@@ -2903,7 +2903,7 @@ namespace lfs::core {
                 rotation_.zero_();
                 rotation_.slice(1, 0, 1).fill_(1.0f);
 
-                const float init_opacity = params.optimization.init_opacity;
+                const float init_opacity = std::clamp(params.optimization.init_opacity, 1e-7f, 1.0f - 1e-7f);
                 opacity_.fill_(std::log(init_opacity / (1.0f - init_opacity)));
 
                 sh0_.copy_from(colors.unsqueeze(1));

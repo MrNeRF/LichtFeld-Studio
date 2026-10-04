@@ -7,9 +7,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
 #include <filesystem>
 #include <gtest/gtest.h>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -24,32 +24,15 @@ namespace {
         template <class BBox>
         bool kdtree_get_bbox(BBox&) const { return false; }
     };
-    // nanoflann's L2_Simple accumulation with the kernel's explicit fused multiply-adds.
-    struct FusedL2 {
-        using ElementType = float;
-        using DistanceType = float;
-        const Cloud& data_source;
-        explicit FusedL2(const Cloud& source) : data_source(source) {}
-        [[nodiscard]] float evalMetric(const float* a, const uint32_t b, size_t) const {
-            const float dx = a[0] - data_source.kdtree_get_pt(b, 0);
-            const float dy = a[1] - data_source.kdtree_get_pt(b, 1);
-            const float dz = a[2] - data_source.kdtree_get_pt(b, 2);
-            return std::fma(dz, dz, std::fma(dy, dy, dx * dx));
-        }
-        template <typename U, typename V>
-        [[nodiscard]] float accum_dist(const U a, const V b, size_t) const { return (a - b) * (a - b); }
-    };
-    using Tree = nanoflann::KDTreeSingleIndexAdaptor<FusedL2, Cloud, 3>;
+    using Tree = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<float, Cloud>, Cloud, 3>;
 
-    // The CPU kd-tree implementation the GPU kernel replaced, with the kernel's arithmetic.
-    std::vector<float> reference_log_scales(const std::vector<float>& points) {
-        const size_t count = points.size() / 3;
+    float max_scale(const std::vector<float>& points) {
         float extents[3];
         for (int axis = 0; axis < 3; ++axis) {
             std::vector<float> values;
-            for (size_t i = 0; i < count; ++i) {
-                if (std::isfinite(points[i * 3 + axis]))
-                    values.push_back(points[i * 3 + axis]);
+            for (size_t i = axis; i < points.size(); i += 3) {
+                if (std::isfinite(points[i]))
+                    values.push_back(points[i]);
             }
             const size_t len = values.size();
             const auto lower = static_cast<size_t>(0.125f * static_cast<float>(len));
@@ -58,8 +41,13 @@ namespace {
             extents[axis] = (values[upper] - values[lower]) * 0.5f;
         }
         std::sort(extents, extents + 3);
-        const float max_scale = std::max(extents[1] * 2.0f, 0.01f) * 0.1f;
+        return std::max(extents[1] * 2.0f, 0.01f) * 0.1f;
+    }
 
+    // The CPU kd-tree implementation the kernel replaced.
+    std::vector<float> kd_tree_log_scales(const std::vector<float>& points) {
+        const size_t count = points.size() / 3;
+        const float limit = max_scale(points);
         const Cloud cloud{points.data(), count};
         const Tree tree(3, cloud, nanoflann::KDTreeSingleIndexAdaptorParams(10));
         std::vector<float> scales(count);
@@ -69,10 +57,36 @@ namespace {
             nanoflann::KNNResultSet<float> result(3);
             result.init(indices, dists);
             tree.findNeighbors(result, &points[i * 3], nanoflann::SearchParameters(0));
-            const float dist = (std::sqrt(dists[1]) + std::sqrt(dists[2])) * 0.25f;
-            scales[i] = static_cast<float>(std::log(static_cast<double>(std::clamp(dist, 1e-3f, max_scale))));
+            const float dist = (std::sqrt(std::max(dists[1], 0.0f)) + std::sqrt(std::max(dists[2], 0.0f))) * 0.25f;
+            scales[i] = std::log(std::clamp(dist, 1e-3f, limit));
         }
         return scales;
+    }
+
+    // Exhaustive search with the kernel's arithmetic: fused squared distance and a double-precision log.
+    float exhaustive_log_scale(const std::vector<float>& points, const size_t query, const float limit) {
+        float best[3] = {std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(),
+                         std::numeric_limits<float>::infinity()};
+        for (size_t j = 0; j < points.size() / 3; ++j) {
+            const float dx = points[query * 3] - points[j * 3];
+            const float dy = points[query * 3 + 1] - points[j * 3 + 1];
+            const float dz = points[query * 3 + 2] - points[j * 3 + 2];
+            const float d = std::fma(dz, dz, std::fma(dy, dy, dx * dx));
+            if (d < best[2]) {
+                best[2] = d;
+                std::sort(best, best + 3);
+            }
+        }
+        const float dist = (std::sqrt(best[1]) + std::sqrt(best[2])) * 0.25f;
+        return static_cast<float>(std::log(static_cast<double>(std::clamp(dist, 1e-3f, limit))));
+    }
+
+    std::vector<float> gpu_log_scales(const std::vector<float>& points) {
+        const size_t count = points.size() / 3;
+        auto means = Tensor::from_vector(points, {count, 3}, Device::CPU).cuda();
+        auto scaling = Tensor::full({count, 3}, 1234.0f, Device::CUDA);
+        lfs::core::cuda::mrnf_knn_log_scales(means, scaling);
+        return scaling.cpu().to_vector();
     }
 
     std::vector<float> garden_points() {
@@ -83,40 +97,49 @@ namespace {
         return {means.ptr<float>(), means.ptr<float>() + means.numel()};
     }
 
-    void expect_matches_reference(const std::vector<float>& points) {
-        const size_t count = points.size() / 3;
-        auto means = Tensor::from_vector(points, {count, 3}, Device::CPU).cuda();
-        auto scaling = Tensor::full({count, 3}, 1234.0f, Device::CUDA);
-        lfs::core::cuda::mrnf_knn_log_scales(means, scaling);
-        const auto gpu = scaling.cpu().to_vector();
-        const auto reference = reference_log_scales(points);
-
-        for (size_t i = 0; i < count; ++i) {
+    void expect_exhaustive_match(const std::vector<float>& points, const size_t query_stride) {
+        const auto gpu = gpu_log_scales(points);
+        const float limit = max_scale(points);
+        for (size_t query = 0; query < points.size() / 3; query += query_stride) {
+            const float expected = exhaustive_log_scale(points, query, limit);
             for (int c = 0; c < 3; ++c)
-                ASSERT_EQ(gpu[i * 3 + c], reference[i]) << "point " << i;
+                ASSERT_EQ(gpu[query * 3 + c], expected) << "point " << query;
         }
     }
 } // namespace
 
-// Fails if the GPU tree walk prunes a true neighbour or the scale formula drifts from the CPU kd-tree it replaced.
-TEST(InitialScales, MatchesKdTreeOnRealPoints) {
+// Fails if the GPU tree walk prunes a true neighbour: an exhaustive search with the same arithmetic must agree.
+TEST(InitialScales, MatchesExhaustiveSearchOnRealPoints) {
     const auto points = garden_points();
     ASSERT_GT(points.size() / 3, size_t{100000});
-    expect_matches_reference(points);
+    expect_exhaustive_match(points, 97);
 }
 
 // Duplicated points have zero-distance neighbours, so each must find its copy and not count itself twice.
-TEST(InitialScales, DuplicatedPointsMatchKdTree) {
+TEST(InitialScales, DuplicatedPointsMatchExhaustiveSearch) {
     auto points = garden_points();
-    ASSERT_FALSE(points.empty());
+    ASSERT_GE(points.size(), size_t{30000 * 3});
     points.resize(30000 * 3);
-    points.insert(points.end(), points.begin(), points.begin() + 5000 * 3);
-    expect_matches_reference(points);
+    const std::vector<float> copies(points.begin(), points.begin() + 5000 * 3);
+    points.insert(points.end(), copies.begin(), copies.end());
+    expect_exhaustive_match(points, 7);
 }
 
-TEST(InitialScales, ThreePoints) {
+TEST(InitialScales, ThreePointsMatchExhaustiveSearch) {
     auto points = garden_points();
     ASSERT_FALSE(points.empty());
     points.resize(9);
-    expect_matches_reference(points);
+    expect_exhaustive_match(points, 1);
+}
+
+// Fails if the kernel drifts from the CPU kd-tree it replaced by more than the rounding of the distance metric.
+TEST(InitialScales, MatchesReplacedKdTree) {
+    const auto points = garden_points();
+    ASSERT_FALSE(points.empty());
+    const auto gpu = gpu_log_scales(points);
+    const auto reference = kd_tree_log_scales(points);
+    for (size_t i = 0; i < reference.size(); ++i) {
+        for (int c = 0; c < 3; ++c)
+            ASSERT_NEAR(gpu[i * 3 + c], reference[i], 1e-6f) << "point " << i;
+    }
 }
