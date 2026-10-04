@@ -995,7 +995,11 @@ namespace lfs::python {
         if (fresh) {
             settings_ = *fresh;
         }
-        prop_.setattr(name, value);
+        // RmlUI writes model values back during refresh. Publishing those
+        // unchanged values would invalidate the settings again on every frame.
+        if (!prop_.setattr(name, value, /*skip_unchanged=*/true)) {
+            return;
+        }
         if (name == "raster_backend") {
             const auto backend = static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend);
             settings_.raster_backend =
