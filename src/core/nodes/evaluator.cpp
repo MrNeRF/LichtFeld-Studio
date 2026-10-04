@@ -510,7 +510,7 @@ namespace lfs::nodes {
                         context.outputs_[output.identifier] = context.input(output.identifier);
                 } else if (node.type_id == "lfs.reroute") {
                     context.outputs_["Output"] = context.input("Input");
-                } else if (node.type_id == "lfs.group") {
+                } else if (node.type_id == "lfs.group" && !node.muted) {
                     const auto graph = node.properties.find("tree");
                     const NodeTree* nested = graph != node.properties.end() && graph->is_string() &&
                                                      inputs.tree_resolver
@@ -545,7 +545,13 @@ namespace lfs::nodes {
                         geometry != input_declarations.end())
                         if (const auto* value = context.input(geometry->identifier).get_if<Geometry>())
                             nested_inputs.geometry = *value;
-                    auto nested_result = evaluate(*nested, std::move(nested_inputs), host, cache);
+                    // Progress callbacks stay with the top-level nodes the host counts.
+                    const EvalControl nested_control{.cancelled = control.cancelled,
+                                                     .propagate_out_of_memory = control.propagate_out_of_memory,
+                                                     .synchronize_nodes = control.synchronize_nodes};
+                    auto nested_result = evaluate(*nested, std::move(nested_inputs), host, cache, nested_control);
+                    if (nested_result.cancelled)
+                        throw EvaluationCancelled{};
                     for (const auto& [inner, status] : nested_result.nodes)
                         result.nodes[node.name + "/" + inner] = status;
                     for (const auto& [inner, time] : nested_result.time_ms)

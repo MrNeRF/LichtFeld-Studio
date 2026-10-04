@@ -3726,6 +3726,42 @@ namespace {
         EXPECT_FLOAT_EQ(x(), 5.0f);
     }
 
+    // Fails if a muted group still runs its contents, or if nested graphs ignore cancellation.
+    TEST_P(NodesCore, GroupsBypassWhenMutedAndStopWhenCancelled) {
+        NodeTree inner(registry_, "Inner");
+        NodeTree outer(registry_, "Outer");
+        const TreeResolver resolver = [&](std::string_view uuid) -> const NodeTree* {
+            return uuid == inner.uuid ? &inner : uuid == outer.uuid ? &outer
+                                                                    : nullptr;
+        };
+        std::string previous = inner.input_node().name;
+        for (int step = 0; step < 5; ++step) {
+            const std::string name = "Move " + std::to_string(step);
+            inner.add_node("lfs.transform_geometry", name).input_values["Translation"] = glm::vec3(1, 0, 0);
+            ASSERT_TRUE(inner.add_link({previous, "Geometry", name, "Geometry"}));
+            previous = name;
+        }
+        ASSERT_TRUE(inner.add_link({previous, "Geometry", inner.output_node().name, "Geometry"}));
+        outer.add_node("lfs.group", "Group").properties["tree"] = inner.uuid;
+        ASSERT_TRUE(outer.add_link({outer.input_node().name, "Geometry", "Group", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(outer.add_link({"Group", "Geometry", outer.output_node().name, "Geometry"}, nullptr, resolver));
+        const auto run = [&](const EvalControl& control) {
+            return evaluate(outer, {.geometry = splats(), .device = device(), .tree_resolver = resolver}, nullptr, nullptr, control);
+        };
+        const auto moved = run({});
+        ASSERT_TRUE(moved.ok);
+        EXPECT_FLOAT_EQ(host<float>(moved.geometry.splats->means)[0], 5.0f);
+        outer.find_node("Group")->muted = true;
+        const auto muted = run({});
+        ASSERT_TRUE(muted.ok);
+        EXPECT_FLOAT_EQ(host<float>(muted.geometry.splats->means)[0], 0.0f);
+        outer.find_node("Group")->muted = false;
+        int checks = 0;
+        const auto cancelled = run({.cancelled = [&] { return ++checks > 4; }});
+        EXPECT_TRUE(cancelled.cancelled);
+        EXPECT_FALSE(cancelled.nodes.contains("Group/Move 4"));
+    }
+
     TEST(NodesGraphEditing, ForcedJsonGroupCycleReportsNamedNodeError) {
         NodeTypeRegistry registry;
         register_builtin_nodes(registry);
