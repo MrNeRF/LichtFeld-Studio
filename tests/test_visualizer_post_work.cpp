@@ -9579,6 +9579,244 @@ namespace lfs::vis {
         }
     }
 
+    TEST_F(VisualizerImplResetTest, AsyncTrainingBindReturnsBeforeSlowWriteAndCoalescesStarts) {
+        for (const bool explicit_output : {false, true}) {
+            VisualizerImpl viewer(projectOptions());
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+            const auto test_cameras = viewer.getScene().addGroup("Test cameras");
+            viewer.getScene().addCamera("test-camera.png", test_cameras, make_project_request_test_camera());
+            auto* lifecycle = viewer.project_lifecycle_.get();
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<lfs::training::Trainer>(viewer.getScene()));
+            auto* trainer = viewer.getTrainer();
+            auto params = trainer->getParams();
+            params.dataset.data_path = temporary_.path / "dataset";
+            params.dataset.output_path = temporary_.path / "explicit-output";
+            params.dataset.output_path_explicit = explicit_output;
+            trainer->setParams(params);
+            // Hold the real writer. The timeout makes a blocking-join regression
+            // fail the latency assertion instead of hanging the test process.
+            std::promise<void> locked, release;
+            auto release_future = release.get_future();
+            auto blocker = std::async(std::launch::async, [&] {
+                std::lock_guard lock(lifecycle->document_access_mutex_);
+                locked.set_value();
+                release_future.wait_for(std::chrono::seconds(3));
+            });
+            locked.get_future().wait();
+            int starts = 0;
+            auto ready = [&]() -> lfs::Result<void> {
+                ++starts;
+                EXPECT_TRUE(lifecycle->hasSourcePath());
+                const auto bound = trainer->bound_project_path();
+                EXPECT_TRUE(bound.has_value());
+                if (bound)
+                    EXPECT_TRUE(std::filesystem::is_regular_file(*bound));
+                EXPECT_TRUE(trainer->trainer_project_save_policy().on_completion);
+                return {};
+            };
+            const auto started = std::chrono::steady_clock::now();
+            auto accepted = lifecycle->prepareTrainingStartProjectAsync(ready);
+            const auto elapsed = std::chrono::steady_clock::now() - started;
+            auto duplicate = lifecycle->prepareTrainingStartProjectAsync(ready);
+            lifecycle->updateMaintenance();
+            EXPECT_EQ(starts, 0);
+            EXPECT_TRUE(viewer.jobs().anyRunning(JobType::ProjectWrite));
+            release.set_value();
+            blocker.get();
+            ASSERT_TRUE(accepted);
+            ASSERT_TRUE(duplicate);
+            EXPECT_LT(elapsed, std::chrono::milliseconds(500));
+            lifecycle->joinPendingWrite();
+            lifecycle->processPendingTrainingStart();
+            lifecycle->processPendingTrainingStart();
+            EXPECT_EQ(starts, 1);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest, AsyncTrainingBindFailureDoesNotStart) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        const auto test_cameras = viewer.getScene().addGroup("Test cameras");
+        viewer.getScene().addCamera("test-camera.png", test_cameras, make_project_request_test_camera());
+        auto* lifecycle = viewer.project_lifecycle_.get();
+        viewer.getTrainerManager()->setTrainer(
+            std::make_unique<lfs::training::Trainer>(viewer.getScene()));
+        auto params = viewer.getTrainer()->getParams();
+        params.dataset.output_path = temporary_.path / "invalid-output";
+        params.dataset.output_path_explicit = true;
+        viewer.getTrainer()->setParams(params);
+        std::unique_lock write_lock(lifecycle->document_access_mutex_);
+        int starts = 0;
+        auto accepted = lifecycle->prepareTrainingStartProjectAsync([&]() -> lfs::Result<void> {
+            ++starts;
+            return {};
+        });
+        if (accepted)
+            std::filesystem::create_directory(lifecycle->project_write_destination_);
+        write_lock.unlock();
+        ASSERT_TRUE(accepted);
+        lifecycle->joinPendingWrite();
+        lifecycle->processPendingTrainingStart();
+        EXPECT_EQ(starts, 0);
+        EXPECT_FALSE(lifecycle->pending_training_start_);
+        EXPECT_FALSE(lifecycle->hasSourcePath());
+        EXPECT_FALSE(viewer.getTrainer()->trainer_project_save_policy().on_completion);
+    }
+
+    TEST_F(VisualizerImplResetTest, AsyncTrainingBindCancelDoesNotStart) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        const auto test_cameras = viewer.getScene().addGroup("Test cameras");
+        viewer.getScene().addCamera("test-camera.png", test_cameras, make_project_request_test_camera());
+        auto* lifecycle = viewer.project_lifecycle_.get();
+        viewer.getTrainerManager()->setTrainer(
+            std::make_unique<lfs::training::Trainer>(viewer.getScene()));
+        std::unique_lock write_lock(lifecycle->document_access_mutex_);
+        int starts = 0;
+        auto accepted = lifecycle->prepareTrainingStartProjectAsync([&]() -> lfs::Result<void> {
+            ++starts;
+            return {};
+        });
+        if (accepted)
+            viewer.jobs().requestCancel(*lifecycle->project_write_job_);
+        write_lock.unlock();
+        ASSERT_TRUE(accepted);
+        lifecycle->joinPendingWrite();
+        lifecycle->processPendingTrainingStart();
+        EXPECT_EQ(starts, 0);
+        EXPECT_FALSE(lifecycle->pending_training_start_);
+    }
+
+    TEST_F(VisualizerImplResetTest, AsyncTrainingBoundProjectPropagatesStartRejection) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        const auto test_cameras = viewer.getScene().addGroup("Test cameras");
+        viewer.getScene().addCamera("test-camera.png", test_cameras, make_project_request_test_camera());
+        auto* lifecycle = viewer.project_lifecycle_.get();
+        viewer.getTrainerManager()->setTrainer(
+            std::make_unique<lfs::training::Trainer>(viewer.getScene()));
+        ASSERT_TRUE(lifecycle->prepareTrainingStartProject());
+        auto rejected = lifecycle->prepareTrainingStartProjectAsync([]() -> lfs::Result<void> {
+            return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Training,
+                .operation_id = lfs::OperationId::generate(),
+                .detail = "Invalid training parameters",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        });
+        ASSERT_FALSE(rejected);
+        EXPECT_EQ(rejected.error().code(), lfs::ErrorCode::InvalidArgument);
+        EXPECT_FALSE(lifecycle->pending_training_start_);
+    }
+
+    TEST_F(VisualizerImplResetTest, AsyncViewerTrainingStartCanBeCanceledBeforeInitialization) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        const auto test_cameras = viewer.getScene().addGroup("Test cameras");
+        viewer.getScene().addCamera("test-camera.png", test_cameras, make_project_request_test_camera());
+        auto* lifecycle = viewer.project_lifecycle_.get();
+        const auto cameras = viewer.getScene().addGroup("Train cameras");
+        viewer.getScene().addCamera("camera.png", cameras, make_project_request_test_camera());
+        auto* manager = viewer.getTrainerManager();
+        manager->setTrainer(std::make_unique<lfs::training::Trainer>(viewer.getScene()));
+        std::unique_lock write_lock(lifecycle->document_access_mutex_);
+        auto accepted = viewer.startTraining();
+        EXPECT_TRUE(viewer.isTrainingStartPending());
+        EXPECT_FALSE(manager->canStart());
+        EXPECT_TRUE(manager->canStop());
+        auto duplicate = viewer.startTraining();
+        manager->stopTraining();
+        EXPECT_FALSE(viewer.isTrainingStartPending());
+        write_lock.unlock();
+        ASSERT_TRUE(accepted);
+        ASSERT_TRUE(duplicate);
+        lifecycle->joinPendingWrite();
+        lifecycle->processPendingTrainingStart();
+        EXPECT_EQ(manager->getState(), TrainingState::Ready);
+        EXPECT_FALSE(viewer.getTrainer()->isInitialized());
+        EXPECT_EQ(viewer.getScene().getTrainingModel(), nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest, AsyncTrainingBindCloseDoesNotStart) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        const auto test_cameras = viewer.getScene().addGroup("Test cameras");
+        viewer.getScene().addCamera("test-camera.png", test_cameras, make_project_request_test_camera());
+        auto* lifecycle = viewer.project_lifecycle_.get();
+        viewer.getTrainerManager()->setTrainer(
+            std::make_unique<lfs::training::Trainer>(viewer.getScene()));
+        int starts = 0;
+        ASSERT_TRUE(lifecycle->prepareTrainingStartProjectAsync([&]() -> lfs::Result<void> {
+            ++starts;
+            return {};
+        }));
+        lifecycle->markApplicationClosePending();
+        lifecycle->joinPendingWrite();
+        lifecycle->processPendingTrainingStart();
+        EXPECT_EQ(starts, 0);
+        EXPECT_FALSE(lifecycle->pending_training_start_);
+    }
+
+    TEST_F(VisualizerImplResetTest, AsyncTrainingBindWaitsForAutosave) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        const auto test_cameras = viewer.getScene().addGroup("Test cameras");
+        viewer.getScene().addCamera("test-camera.png", test_cameras, make_project_request_test_camera());
+        auto* lifecycle = viewer.project_lifecycle_.get();
+        viewer.getTrainerManager()->setTrainer(
+            std::make_unique<lfs::training::Trainer>(viewer.getScene()));
+        const auto handle = viewer.jobs().init(JobType::ProjectWrite, "Slow autosave");
+        ASSERT_TRUE(handle);
+        lifecycle->project_write_job_ = *handle;
+        lifecycle->project_write_purpose_ = project::ProjectLifecycle::ProjectWritePurpose::Autosave;
+        viewer.jobs().work(*handle);
+        int starts = 0;
+        ASSERT_TRUE(lifecycle->prepareTrainingStartProjectAsync([&]() -> lfs::Result<void> {
+            ++starts;
+            return {};
+        }));
+        lifecycle->updateMaintenance();
+        EXPECT_EQ(starts, 0);
+        EXPECT_EQ(lifecycle->project_write_job_, handle);
+        viewer.jobs().finishWork(*handle, false, "Simulated autosave failure", lfs::ErrorCode::Unavailable);
+        lifecycle->updateMaintenance();
+        lifecycle->joinPendingWrite();
+        lifecycle->processPendingTrainingStart();
+        EXPECT_EQ(starts, 1);
+        EXPECT_TRUE(lifecycle->hasSourcePath());
+    }
+
+    TEST_F(VisualizerImplResetTest, AsyncTrainingBindTrainerReplacementCancels) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        const auto test_cameras = viewer.getScene().addGroup("Test cameras");
+        viewer.getScene().addCamera("test-camera.png", test_cameras, make_project_request_test_camera());
+        auto* lifecycle = viewer.project_lifecycle_.get();
+        viewer.getTrainerManager()->setTrainer(
+            std::make_unique<lfs::training::Trainer>(viewer.getScene()));
+        int starts = 0;
+        ASSERT_TRUE(lifecycle->prepareTrainingStartProjectAsync([&]() -> lfs::Result<void> {
+            ++starts;
+            return {};
+        }));
+        auto replacement = std::make_unique<lfs::training::Trainer>(viewer.getScene());
+        viewer.getTrainerManager()->setTrainer(std::move(replacement));
+        lifecycle->joinPendingWrite();
+        lifecycle->processPendingTrainingStart();
+        EXPECT_EQ(starts, 0);
+        EXPECT_FALSE(lifecycle->pending_training_start_);
+    }
+
     TEST_F(VisualizerImplResetTest,
            StartTrainingUntitledCreatesRealProjectInProjectLocation) {
         const auto& temporary = temporary_.path;
@@ -9884,6 +10122,11 @@ namespace lfs::vis {
             auto started = viewer.startTraining();
             ASSERT_TRUE(started)
                 << started.error();
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                    lifecycle->updateMaintenance();
+                    return !viewer.isTrainingStartPending();
+                }));
             EXPECT_FALSE(trainer_manager->isPaused());
             const auto policy =
                 trainer->trainer_project_save_policy();

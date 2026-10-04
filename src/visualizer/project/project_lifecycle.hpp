@@ -26,8 +26,22 @@
 #include <unordered_map>
 #include <vector>
 
+namespace lfs::training {
+    class Trainer;
+}
+
 namespace lfs::vis {
     class VisualizerImpl;
+    class VisualizerImplResetTest_AsyncViewerTrainingStartCanBeCanceledBeforeInitialization_Test;
+    class VisualizerImplResetTest_AsyncTrainingBindCancelDoesNotStart_Test;
+    class VisualizerImplResetTest_AsyncTrainingBoundProjectPropagatesStartRejection_Test;
+
+    class VisualizerImplResetTest_AsyncTrainingBindReturnsBeforeSlowWriteAndCoalescesStarts_Test;
+    class VisualizerImplResetTest_AsyncTrainingBindFailureDoesNotStart_Test;
+    class VisualizerImplResetTest_AsyncTrainingBindCloseDoesNotStart_Test;
+    class VisualizerImplResetTest_AsyncTrainingBindWaitsForAutosave_Test;
+    class VisualizerImplResetTest_AsyncTrainingBindTrainerReplacementCancels_Test;
+
     class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
     class VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
     class VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
@@ -302,6 +316,14 @@ namespace lfs::vis::project {
             bool allow_existing_destination_replacement = false);
         [[nodiscard]] lfs::Result<void>
         prepareTrainingStartProject();
+        // GUI callers continue on the scene-owner thread after the durable bind.
+        // Repeated requests while preparation is pending are coalesced.
+        [[nodiscard]] lfs::Result<void>
+        prepareTrainingStartProjectAsync(std::function<lfs::Result<void>()> on_ready);
+        [[nodiscard]] bool isTrainingStartPending() const {
+            return pending_training_start_active_.load(std::memory_order_acquire);
+        }
+        bool cancelTrainingStartPreparation();
         // Returns the blocking conflict a fresh training start would overwrite, if any:
         // the bound checkpoint iteration of the open titled project (in memory or
         // on the titled master), or -1 when an existing titled master is unreadable.
@@ -337,6 +359,16 @@ namespace lfs::vis::project {
 
     private:
         friend class lfs::vis::VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindReturnsBeforeSlowWriteAndCoalescesStarts_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindFailureDoesNotStart_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindCloseDoesNotStart_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AsyncViewerTrainingStartCanBeCanceledBeforeInitialization_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindCancelDoesNotStart_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBoundProjectPropagatesStartRejection_Test;
+
+        friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindWaitsForAutosave_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindTrainerReplacementCancels_Test;
+
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
         friend class lfs::vis::VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
         friend class lfs::vis::VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
@@ -595,6 +627,9 @@ namespace lfs::vis::project {
         void queueProjectWriteSettlement(
             JobHandle handle);
         void settleProjectWrite();
+        void processPendingTrainingStart();
+        [[nodiscard]] lfs::Result<void>
+        prepareTrainingStartProject(bool wait_for_write);
         void refreshStorageStats();
         void resetMaintenanceClocks();
         void clearAutosaveFailureBackoff();
@@ -634,7 +669,8 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         bindUntitledSessionToMaster(
             const std::filesystem::path& destination,
-            bool allow_existing_destination_replacement = false);
+            bool allow_existing_destination_replacement = false,
+            bool wait_for_write = true);
         void resetAdoptedSnapshotCountOnServiceRestart(
             std::uint64_t completed_snapshots);
         [[nodiscard]] lfs::Result<void>
@@ -747,6 +783,13 @@ namespace lfs::vis::project {
         bool autosave_quiesce_logged_ = false;
         std::uint64_t autosave_sequence_ = 0;
         bool autosave_memory_warning_published_ = false;
+        std::atomic<bool> pending_training_start_active_{false};
+        std::function<lfs::Result<void>()> pending_training_start_;
+        std::weak_ptr<lfs::io::project::ProjectDocument> pending_training_document_;
+        const lfs::training::Trainer* pending_training_trainer_ = nullptr;
+        std::optional<lfs::Error> pending_training_error_;
+        bool pending_training_write_started_ = false;
+        int pending_training_bind_attempts_ = 0;
         bool application_close_pending_ = false;
         bool close_discard_requested_ = false;
         bool suppress_training_adoption_ = false;

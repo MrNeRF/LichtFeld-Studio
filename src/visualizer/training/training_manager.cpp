@@ -855,6 +855,9 @@ namespace lfs::vis {
     }
 
     bool TrainerManager::canPerform(const TrainingAction action) const {
+        if (viewer_ && viewer_->isTrainingStartPending()) {
+            return action == TrainingAction::Stop;
+        }
         if (action == TrainingAction::Stop && !trainer_ && viewer_ &&
             getState() == TrainingState::Paused) {
             const auto session = viewer_->projectTrainingSessionState();
@@ -1547,6 +1550,10 @@ namespace lfs::vis {
     }
 
     void TrainerManager::stopTraining() {
+        if (viewer_ && viewer_->cancelTrainingStartPreparation() &&
+            !state_machine_.canPerform(TrainingAction::Stop)) {
+            return;
+        }
         if (!canStop()) {
             LOG_TRACE("Cannot stop: {}", getActionBlockedReason(TrainingAction::Stop));
             return;
