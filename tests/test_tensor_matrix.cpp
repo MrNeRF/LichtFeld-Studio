@@ -94,6 +94,26 @@ TEST_F(TensorMatrixTest, MatMul2D) {
     compare_tensors(custom_mm, torch_result, 1e-4f, 1e-5f, "MM_Alias");
 }
 
+// Products with at most 16 inner and output columns take a one-thread-per-row path; sizes just past
+// the limit take the tiled kernels.
+TEST_F(TensorMatrixTest, NarrowProductsMatchTorch) {
+    for (const auto [m, k, n] : {std::tuple{1037, 3, 3}, std::tuple{2, 3, 3}, std::tuple{1037, 1, 16},
+                                 std::tuple{1037, 16, 1}, std::tuple{1037, 16, 16}, std::tuple{70001, 4, 4},
+                                 std::tuple{1037, 17, 3}, std::tuple{1037, 3, 17}}) {
+        SCOPED_TRACE(::testing::Message() << m << "x" << k << " * " << k << "x" << n);
+        const auto torch_a = torch::randn({m, k}, torch::TensorOptions().device(torch::kCUDA));
+        const auto torch_b = torch::randn({k, n}, torch::TensorOptions().device(torch::kCUDA));
+        const auto to_custom = [](const torch::Tensor& value) {
+            const auto cpu = value.cpu().contiguous();
+            std::vector<float> data(cpu.data_ptr<float>(), cpu.data_ptr<float>() + cpu.numel());
+            return Tensor::from_vector(data, {static_cast<size_t>(value.size(0)), static_cast<size_t>(value.size(1))},
+                                       Device::CUDA);
+        };
+        compare_tensors(to_custom(torch_a).matmul(to_custom(torch_b)), torch::matmul(torch_a, torch_b), 1e-4f, 1e-5f,
+                        "narrow matmul");
+    }
+}
+
 TEST_F(TensorMatrixTest, MatMulVectorMatrix) {
     // Test vector-matrix multiplication: (3,) @ (3x2) = (2,)
     std::vector<float> vec_data = {1, 2, 3};
