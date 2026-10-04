@@ -733,6 +733,52 @@ TEST_F(NodesModifierManager, SelectionPreviewSurvivesAttributeNodes) {
     });
 }
 
+// Nodes inside groups report as "Group/Inner"; attribute-only groups and reroutes keep rows.
+TEST_F(NodesModifierManager, SelectionPreviewSurvivesGroupsAndReroutes) {
+    using namespace lfs::nodes;
+    for_each_worker_target([](const lfs::core::Device device) {
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto id = scene.getScene().addSplat("Host", model(6, device));
+        const auto host = scene.getScene().getNodeUuid(id);
+        auto& manager = scene.modifierManager();
+        const auto resolver = [&](const std::string_view uuid) { return manager.tree(uuid); };
+        auto& inner = manager.newTree("Tint group");
+        inner.add_node("lfs.set_colour", "Tint");
+        ASSERT_TRUE(inner.remove_link(
+            {inner.input_node().name, "Geometry", inner.output_node().name, "Geometry"}));
+        ASSERT_TRUE(inner.add_link({inner.input_node().name, "Geometry", "Tint", "Geometry"}));
+        ASSERT_TRUE(inner.add_link({"Tint", "Geometry", inner.output_node().name, "Geometry"}));
+
+        auto& tree = manager.newTree("Grouped");
+        auto& stored = tree.add_node("lfs.stored_selection", "Stored");
+        set_stored_selection(stored, selection({true, false, true, false, false, false}));
+        const auto stored_properties = stored.properties;
+        tree.add_node("lfs.reroute", "Route");
+        tree.add_node("lfs.group", "Group");
+        tree.add_node("lfs.set_opacity", "Opacity").input_values["Opacity"] = 0.25f;
+        ASSERT_TRUE(manager.setGroupGraph(tree.uuid, "Group", inner.uuid));
+        ASSERT_TRUE(tree.remove_link(
+            {tree.input_node().name, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Route", "Input"}, nullptr, resolver));
+        ASSERT_TRUE(tree.add_link({"Route", "Output", "Group", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(tree.add_link({"Group", "Geometry", "Opacity", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(tree.add_link({"Stored", "Selection", "Opacity", "Selection"}));
+        ASSERT_TRUE(tree.add_link({"Opacity", "Geometry", tree.output_node().name, "Geometry"}));
+        auto& modifier = manager.addModifier(host, tree.uuid, "Grouped");
+        modifier.stored_selections["Stored"] = stored_properties;
+
+        const auto result = manager.evaluate(host);
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
+                                                         : result.errors.begin()->second);
+        EXPECT_NE(result.nodes.find(modifier.uuid + "/Group/Tint"), result.nodes.end());
+        EXPECT_TRUE(result.rows_follow_source);
+        const auto preview = manager.selectionPreview(host, modifier.uuid, "Opacity");
+        ASSERT_TRUE(preview);
+        EXPECT_EQ(preview->cpu().to_vector_bool(), (std::vector<bool>{true, false, true, false, false, false}));
+    });
+}
+
 TEST_F(NodesModifierManager, SelectionPreviewHidesWhenAJoinReordersElements) {
     using namespace lfs::nodes;
     for_each_worker_target([](const lfs::core::Device device) {
