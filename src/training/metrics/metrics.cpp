@@ -43,8 +43,8 @@
 namespace lfs::training {
 
     namespace {
-        // LPIPS tiles exactly, so its activation budget only trades speed for memory; 384 MiB keeps
-        // 10 MP evaluation at full speed instead of reserving 1.5 GiB on top of training.
+        // LPIPS tiles exactly, so the budget only trades speed for memory: 384 MiB evaluates 10 MP views at
+        // full speed instead of reserving 1.5 GiB on top of training.
         constexpr std::size_t kEvalLpipsActivationBudget = 384ULL << 20;
 
         struct TensorLayoutInfo {
@@ -169,7 +169,7 @@ namespace lfs::training {
     } // namespace
 
     lfs::core::Tensor image_for_metrics_and_save(const lfs::core::Tensor& image) {
-        if (image.device() == lfs::core::Device::CUDA)
+        if (image.device() == lfs::core::Device::CUDA && image.dtype() == lfs::core::DataType::Float32)
             return kernels::quantize_to_8bit_grid(image);
         return image.clamp(0.0f, 1.0f)
             .mul(255.0f)
@@ -1282,7 +1282,7 @@ namespace lfs::training {
             view.masked = mask.is_valid();
             evaluated_images++;
 
-            const auto gt_float = image_as_float01(gt_image).clamp(0.0f, 1.0f).contiguous();
+            const auto gt_float = image_as_float01(gt_image).clamp(0.0f, 1.0f);
             std::optional<float> lpips;
             if (_lpips_metric) {
                 try {
@@ -1294,7 +1294,8 @@ namespace lfs::training {
                     const std::pair<int, int> image_size{image_height, image_width};
                     const bool size_changed = !lpips_preflight_size || *lpips_preflight_size != image_size;
                     lpips_preflight_size = image_size;
-                    const auto required = _lpips_metric->estimated_peak_bytes(image_height, image_width);
+                    const auto required =
+                        _lpips_metric->estimated_peak_bytes(image_height, image_width, mask.is_valid());
                     std::size_t free_bytes = 0;
                     std::size_t total_bytes = 0;
                     const auto status = cudaMemGetInfo(&free_bytes, &total_bytes);

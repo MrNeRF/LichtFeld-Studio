@@ -302,8 +302,6 @@ TEST(EvalMetricsImage, QuantizesWithImageSaverRounding) {
     std::filesystem::remove(path, ec);
 }
 
-// Fails if the GPU 8-bit quantization stops matching the tensor expression it replaced, value for value, around
-// every rounding boundary.
 TEST(MetricsEvaluatorTest, GpuQuantizationMatchesTensorExpressionBitwise) {
     std::vector<float> values{0.0f, 1.0f, -0.0f, -1.0f, 2.0f, std::numeric_limits<float>::infinity(),
                               -std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()};
