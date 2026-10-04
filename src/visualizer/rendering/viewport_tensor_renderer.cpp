@@ -14,6 +14,10 @@
 #include "viewport_overlay_program.hpp"
 #include "tensor_frame_uploads.hpp"
 #include "viewport_vignette_program.hpp"
+#include "core/executable_path.hpp"
+#include "core/image_io.hpp"
+#include "core/path_utils.hpp"
+#include "internal/resource_paths.hpp"
 #include "window/graphics_context.hpp"
 
 #include <algorithm>
@@ -21,6 +25,7 @@
 #include <cmath>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <limits>
 #include <span>
 #include <utility>
@@ -121,7 +126,7 @@ namespace lfs::vis {
             std::uint32_t source_chw = 0;
             std::uint32_t flip_y = 0;
             std::uint32_t has_scene = 0;
-            std::uint32_t padding = 0;
+            std::uint32_t over_destination = 0;
             std::array<float, 4> background{0, 0, 0, 1};
         };
         static_assert(offsetof(ComposeParameters, background) == 80);
@@ -253,6 +258,10 @@ namespace lfs::vis {
         Tensor dummy_depth;
         TensorFrameUploads uploads;
         SceneUpscalerSelection upscaler{};
+        // The environment map is loaded once per path, like SharedViewportGpuAssets.
+        std::filesystem::path environment_path;
+        bool environment_failed = false;
+        Tensor environment_map;
         // Frustum instances change rarely; the GUI keeps one shared block alive.
         const void* frustum_source = nullptr;
         std::uint64_t frustum_generation = 0;
@@ -296,7 +305,8 @@ namespace lfs::vis {
             return overlay_program->supports_raster() && grid_program->supports_raster();
         }
 
-        bool compose(const GraphicsFrame& frame, const ViewportFrameDesc& desc) {
+        bool compose(const GraphicsFrame& frame, const ViewportFrameDesc& desc,
+                     const bool over_destination) {
             Tensor* destination = graphics ? graphics->finalImageTensor(frame) : nullptr;
             if (!destination || !destination->is_valid())
                 return false;
@@ -327,6 +337,7 @@ namespace lfs::vis {
                 .source_chw = layout.chw ? 1u : 0u,
                 .flip_y = desc.scene_image_flip_y ? 1u : 0u,
                 .has_scene = has_scene ? 1u : 0u,
+                .over_destination = over_destination ? 1u : 0u,
                 .background = {desc.background_color.r, desc.background_color.g,
                                desc.background_color.b, 1.0f},
             };
@@ -491,6 +502,70 @@ namespace lfs::vis {
             }
         }
 
+        const Tensor* environmentMap(const std::filesystem::path& path) {
+            if (path == environment_path)
+                return environment_map.is_valid() ? &environment_map : nullptr;
+            environment_path = path;
+            environment_map = {};
+            std::filesystem::path resolved = path;
+            if (!resolved.is_absolute() && !std::filesystem::exists(resolved)) {
+                try {
+                    resolved = lfs::vis::getAssetPath(lfs::core::path_to_utf8(path));
+                } catch (const std::exception& error) {
+                    LOG_DEBUG("Environment resource lookup failed; trying the assets directory: {}", error.what());
+                    resolved = lfs::core::getAssetsDir() / path;
+                }
+            }
+            auto [pixels, width, height, channels] = lfs::core::load_image_float(resolved);
+            if (!pixels || width <= 0 || height <= 0 || channels <= 0) {
+                if (pixels)
+                    lfs::core::free_image_float(pixels);
+                LOG_WARN("Tensor compositor could not read environment map {}", lfs::core::path_to_utf8(resolved));
+                return nullptr;
+            }
+            const std::size_t count = static_cast<std::size_t>(width) * height;
+            std::vector<float> rgba(count * 4);
+            for (std::size_t i = 0; i < count; ++i) {
+                const float r = pixels[i * channels];
+                rgba[i * 4] = r;
+                rgba[i * 4 + 1] = channels >= 2 ? pixels[i * channels + 1] : r;
+                rgba[i * 4 + 2] = channels >= 3 ? pixels[i * channels + 2] : r;
+                rgba[i * 4 + 3] = 1.0f;
+            }
+            lfs::core::free_image_float(pixels);
+            // Half precision, like the Vulkan environment texture.
+            const auto half = Tensor::from_blob(rgba.data(), {std::size_t(height), std::size_t(width), 4},
+                                                Device::CPU, DataType::Float32)
+                                  .to(DataType::Float16)
+                                  .contiguous();
+            environment_map = uploads.upload(
+                std::as_bytes(std::span(static_cast<const std::byte*>(half.data_ptr()), half.bytes())),
+                half.shape(), DataType::Float16);
+            return &environment_map;
+        }
+
+        bool drawEnvironment(Tensor& destination, const ViewportFrameDesc& desc, const FramebufferRect rect) {
+            const auto& environment = desc.environment;
+            if (!environment.enabled || environment.map_path.empty())
+                return false;
+            const Tensor* map = environmentMap(environment.map_path);
+            if (!map)
+                return false;
+            auto& draw = addOverlay("environmentVertex", "environmentFragment", rect, desc, false);
+            draw.texture = std::make_shared<Tensor>(*map);
+            draw.vertex_count = 6;
+            const glm::mat4 rotation(environment.camera_to_world);
+            std::memcpy(draw.parameters.view.data(), &rotation[0][0], sizeof(draw.parameters.view));
+            draw.parameters.projection = array(environment.intrinsics);
+            draw.parameters.panel = {environment.viewport_size.x, environment.viewport_size.y,
+                                     environment.exposure, environment.rotation_radians};
+            draw.parameters.effects = {environment.equirectangular_view ? 1.0f : 0.0f, 0, 0, 0};
+            draw.parameters.sizes[0] = static_cast<std::uint32_t>(map->size(1));
+            draw.parameters.sizes[1] = static_cast<std::uint32_t>(map->size(0));
+            flushOverlays(destination);
+            return true;
+        }
+
         void flushOverlays(Tensor& destination) {
             if (overlays.empty())
                 return;
@@ -596,13 +671,14 @@ namespace lfs::vis {
 
         // Same order as the Vulkan viewport pass graph.
         void record(const GraphicsFrame& frame, const ViewportFrameDesc& desc) {
-            if (!compose(frame, desc))
-                return;
             Tensor* destination = graphics->finalImageTensor(frame);
             if (!destination)
                 return;
             const auto rect = framebufferRect(desc);
             if (rect.width == 0 || rect.height == 0)
+                return;
+            const bool environment = drawEnvironment(*destination, desc, rect);
+            if (!compose(frame, desc, environment))
                 return;
             const std::size_t post_count = std::min<std::size_t>(
                 desc.post_ui_overlay_vertex_count, desc.overlay_triangles.size());
@@ -685,6 +761,7 @@ namespace lfs::vis {
         desc.scene_image_alloc_size = view.vulkan_viewport_image_alloc_size_;
         desc.scene_image_flip_y = view.vulkan_viewport_image_flip_y_;
         desc.depth_blit = {.depth = view.viewport_depth_image_};
+        desc.environment = view.viewport_environment_;
         desc.scene_outputs = {{
             .target = view.main_render_target_,
             .color = desc.scene_image,

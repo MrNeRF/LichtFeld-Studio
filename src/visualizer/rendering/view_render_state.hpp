@@ -11,6 +11,7 @@
 #include "render_animation_state.hpp"
 #include "render_target_id.hpp"
 #include "rendering/rendering.hpp"
+#include "viewport_draw_types.hpp"
 #include "rendering/scene_temporal_resolve.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
@@ -59,8 +60,10 @@ namespace lfs::vis {
         lfs::rendering::ScreenOverlayRenderer screen_overlay_renderer_;
         mutable FramerateController framerate_controller_;
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
-        // Linear view depth matching vulkan_viewport_image_ (tensor compositor).
+        // Linear view depth and environment background matching
+        // vulkan_viewport_image_ (tensor compositor).
         std::shared_ptr<const lfs::core::Tensor> viewport_depth_image_;
+        ViewportEnvironment viewport_environment_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
         StaleFrameGuard vksplat_stale_frame_guard_;

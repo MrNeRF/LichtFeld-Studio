@@ -18,7 +18,7 @@ struct ComposeParameters {
     uint sourceChw;
     uint flipY;
     uint hasScene;
-    uint padding;
+    uint overDestination; // blend over the frame (environment) instead of the background
     float4 background;
 };
 [[vk::push_constant]] ConstantBuffer<ComposeParameters> p;
@@ -67,12 +67,16 @@ void composeViewport(uint3 tid : SV_DispatchThreadID) {
     // The graphics context cleared the frame; pixels outside the panel belong to the UI.
     if (!inside) return;
     float4 color = p.background;
+    if (p.overDestination != 0) {
+        uint i = (uint(pixel.y) * p.destinationWidth + uint(pixel.x)) * 4u;
+        color = float4(p.destination[i], p.destination[i + 1], p.destination[i + 2], 255) / 255.0;
+    }
     if (p.hasScene != 0) {
         float2 uv = (float2(pixel - int2(p.viewportX, p.viewportY)) + 0.5) /
                     float2(max(p.viewportWidth, 1u), max(p.viewportHeight, 1u));
         if (p.flipY != 0) uv.y = 1.0 - uv.y;
-        color = sampleScene(uv);
-        color.rgb = color.rgb * color.a + p.background.rgb * (1.0 - color.a);
+        float4 scene = sampleScene(uv);
+        color.rgb = scene.rgb * scene.a + color.rgb * (1.0 - scene.a);
         color.a = 1.0;
     }
     writeDestination(tid.xy, color);

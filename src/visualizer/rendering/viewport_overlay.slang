@@ -373,3 +373,70 @@ float4 pivotFragment(PivotOutput input) : SV_Target {
         discard;
     return float4(p.tint.rgb + float3(0.4) * (flash + dotAlpha * 0.3), alpha);
 }
+
+// --- Environment background, ported from resources/viewport/environment.frag ---
+// view: camera-to-world rotation (upper 3x3); projection: focal x/y, principal
+// point; panel: render size, exposure, rotation; effects.x: equirectangular
+// view; texture: Float16 RGBA equirectangular map of size sizes.xy.
+
+static const float2 FULLSCREEN[6] = {
+    float2(-1.0, -1.0), float2(1.0, -1.0), float2(1.0, 1.0),
+    float2(-1.0, -1.0), float2(1.0, 1.0), float2(-1.0, 1.0)
+};
+
+struct EnvironmentOutput {
+    float4 position : SV_Position;
+};
+
+[shader("vertex")]
+EnvironmentOutput environmentVertex(uint vertexId : SV_VertexID) {
+    EnvironmentOutput result;
+    result.position = float4(FULLSCREEN[vertexId], 0.0, 1.0);
+    return result;
+}
+
+float4 environmentTexel(int2 q) {
+    int2 size = int2(max(p.sizes.xy, uint2(1u)));
+    q.x = ((q.x % size.x) + size.x) % size.x; // repeat around the horizon
+    q.y = clamp(q.y, 0, size.y - 1);
+    uint index = (uint(q.y) * uint(size.x) + uint(q.x)) * 4u;
+    Ptr<half, Access.Read> texels = (Ptr<half, Access.Read>)p.texture;
+    return float4(texels[index], texels[index + 1], texels[index + 2], texels[index + 3]);
+}
+
+float3 acesTonemap(float3 x) {
+    return saturate((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14));
+}
+
+[shader("fragment")]
+float4 environmentFragment(EnvironmentOutput input) : SV_Target {
+    // Bottom-left origin inside the panel, as the Vulkan screen quad.
+    float2 uv = (input.position.xy - p.viewportRect.xy) / max(p.viewportRect.zw, float2(1.0));
+    uv.y = 1.0 - uv.y;
+    float3 local;
+    if (p.effects.x > 0.5) {
+        float lon = (uv.x - 0.5) * (2.0 * PI);
+        float lat = (uv.y - 0.5) * PI;
+        local = normalize(float3(sin(lon) * cos(lat), sin(lat), -cos(lon) * cos(lat)));
+    } else {
+        float2 pixel = uv * p.panel.xy;
+        local = normalize(float3((pixel.x - p.projection.z) / max(p.projection.x, 1e-6),
+                                 (pixel.y - p.projection.w) / max(p.projection.y, 1e-6), -1.0));
+    }
+    float3 world = normalize(mul(float3x3(p.view[0].xyz, p.view[1].xyz, p.view[2].xyz), local));
+    float c = cos(p.panel.w), s = sin(p.panel.w);
+    world = normalize(float3(c * world.x + s * world.z, world.y, -s * world.x + c * world.z));
+    float2 mapUv = float2(atan2(world.x, -world.z) / (2.0 * PI) + 0.5,
+                          0.5 - asin(clamp(world.y, -1.0, 1.0)) / PI);
+    mapUv.x = frac(mapUv.x);
+    // Bilinear, like the Vulkan linear sampler.
+    float2 position = mapUv * float2(max(p.sizes.xy, uint2(1u))) - 0.5;
+    float2 base = floor(position);
+    float2 f = position - base;
+    int2 q = int2(base);
+    float4 top = lerp(environmentTexel(q), environmentTexel(q + int2(1, 0)), f.x);
+    float4 bottom = lerp(environmentTexel(q + int2(0, 1)), environmentTexel(q + int2(1, 1)), f.x);
+    float3 color = lerp(top, bottom, f.y).rgb * exp2(p.panel.z);
+    color = pow(acesTonemap(color), float3(1.0 / 2.2));
+    return float4(color, 1.0);
+}

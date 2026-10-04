@@ -15,6 +15,34 @@
 #include <limits>
 
 namespace lfs::vis {
+    namespace {
+        // Same parameters as the Vulkan manager's mesh frame.
+        ViewportEnvironment environmentFor(const FrameContext& frame_ctx, const RenderSettings& settings) {
+            ViewportEnvironment environment;
+            environment.enabled = environmentBackgroundUsesTransparentViewerCompositing(settings);
+            if (!environment.enabled)
+                return environment;
+            const auto vp_data = frame_ctx.makeViewportData();
+            const auto frame_view = frame_ctx.makeFrameView();
+            environment.map_path = settings.environment_map_path;
+            environment.camera_to_world = vp_data.rotation;
+            environment.viewport_size = glm::vec2(static_cast<float>(frame_view.size.x),
+                                                  static_cast<float>(frame_view.size.y));
+            if (frame_view.intrinsics_override.has_value() && !frame_view.orthographic) {
+                const auto& intr = *frame_view.intrinsics_override;
+                environment.intrinsics = glm::vec4(intr.focal_x, intr.focal_y, intr.center_x, intr.center_y);
+            } else {
+                const auto [fx, fy] =
+                    lfs::rendering::computePixelFocalLengths(frame_view.size, frame_view.focal_length_mm);
+                environment.intrinsics = glm::vec4(fx, fy, frame_view.size.x * 0.5f, frame_view.size.y * 0.5f);
+            }
+            environment.exposure = settings.environment_exposure;
+            environment.rotation_radians = glm::radians(settings.environment_rotation_degrees);
+            environment.equirectangular_view = settings.equirectangular;
+            return environment;
+        }
+    } // namespace
+
     std::shared_ptr<lfs::core::Tensor> RenderingManager::composeSplitViewCpu(
         const SplitViewCpuDesc&, const glm::ivec2&) {
         // Split view is an explicit Phase 3 capability on Metal. Keeping this
@@ -377,6 +405,7 @@ namespace lfs::vis {
         ++view.vulkan_viewport_image_generation_;
         view.vulkan_viewport_image_ = image;
         view.viewport_depth_image_ = depth;
+        view.viewport_environment_ = environmentFor(frame_context, frame_settings);
         view.vulkan_viewport_image_size_ = size;
         view.vulkan_viewport_image_alloc_size_ = size;
         view.vulkan_viewport_coordinate_size_ = size;

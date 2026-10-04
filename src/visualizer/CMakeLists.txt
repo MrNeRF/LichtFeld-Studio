@@ -461,8 +461,8 @@ if(NOT LFS_GRAPHICS_VULKAN_BUILD)
         SOURCE rendering/viewport_vignette.slang COMPUTE applyVignette)
     lfs_add_gpu_program(lfs_visualizer viewport_overlay_program
         SOURCE rendering/viewport_overlay.slang
-        VERTEX overlayVertex shapeVertex frustumVertex texturedVertex pivotVertex
-        FRAGMENT overlayFragment shapeFragment texturedFragment pivotFragment)
+        VERTEX overlayVertex shapeVertex frustumVertex texturedVertex pivotVertex environmentVertex
+        FRAGMENT overlayFragment shapeFragment texturedFragment pivotFragment environmentFragment)
     lfs_add_gpu_program(lfs_visualizer viewport_grid_program
         SOURCE rendering/viewport_grid.slang
         VERTEX gridVertex FRAGMENT gridFragment)
