@@ -66,13 +66,21 @@ namespace lfs::app {
                                   ? "box"
                               : state->kind == vis::NodeViewportGizmoKind::Ellipsoid ? "ellipsoid"
                                                                                      : "transform";
-            return {{"success", true},
-                    {"node", state->node},
-                    {"target", state->host.to_string()},
-                    {"kind", kind},
-                    {"editable", state->editable},
-                    {"local", {{"matrix", matrixJson(state->local_transform)}, {"translation", vectorJson(state->local_translation)}, {"rotation", vectorJson(state->local_rotation)}, {"scale", vectorJson(state->local_scale)}, {"falloff", state->falloff}}},
-                    {"world", {{"matrix", matrixJson(state->world_transform)}, {"translation", vectorJson(glm::vec3(state->world_transform[3]))}}}};
+            json result = {{"success", true},
+                           {"node", state->node},
+                           {"target", state->host.to_string()},
+                           {"kind", kind},
+                           {"editable", state->editable},
+                           {"local", {{"matrix", matrixJson(state->local_transform)}, {"translation", vectorJson(state->local_translation)}, {"rotation", vectorJson(state->local_rotation)}, {"scale", vectorJson(state->local_scale)}, {"falloff", state->falloff}}},
+                           {"world", {{"matrix", matrixJson(state->world_transform)}, {"translation", vectorJson(glm::vec3(state->world_transform[3]))}}}};
+            if (state->kind != vis::NodeViewportGizmoKind::Transform) {
+                result["extent"] = {
+                    {"input", state->kind == vis::NodeViewportGizmoKind::Box ? "Size" : "Radii"},
+                    {"value", vectorJson(state->local_scale)},
+                    {"handles", {"face_x_negative", "face_x_positive", "face_y_negative", "face_y_positive", "face_z_negative", "face_z_positive", "corner"}},
+                };
+            }
+            return result;
         }
 
         json editView(vis::VisualizerImpl& viewer, const json& args, const std::string_view operation) {
