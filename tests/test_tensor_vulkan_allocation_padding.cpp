@@ -206,6 +206,98 @@ namespace {
         EXPECT_FLOAT_EQ(product.slice(0, 0, 1).slice(1, 0, 1).cpu().item<float>(), 2048.0f);
     }
 
+    uint64_t native_allocation(const Tensor& tensor) {
+        return internal::storage_ref(tensor).meta->gpu_descriptor.native_allocation;
+    }
+
+    TEST_F(TensorVulkanAllocationPadding, HeldDirectBuffersAreReusedUntilTheHoldEnds) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        auto& ops = internal::backend_ops(GpuBackend::Vulkan);
+        const auto context = internal::acquire_vulkan_context();
+        ops.synchronize_device();
+        ops.trim();
+        const uint64_t live_baseline = internal::vulkan_live_vma_objects_for_testing();
+        const size_t bytes = size_t{80} << 20;
+        ops.hold_freed_memory(true);
+        uint64_t first = 0;
+        {
+            const Tensor tensor = Tensor::full({bytes}, 3.0f, Device::GPU, DataType::UInt8);
+            first = native_allocation(tensor);
+        }
+        EXPECT_GE(context->memory().cached_bytes(), bytes);
+        {
+            // Slightly smaller requests reuse the held buffer too.
+            const Tensor tensor = Tensor::empty({bytes - 4096}, Device::GPU, DataType::UInt8);
+            EXPECT_EQ(native_allocation(tensor), first);
+        }
+        {
+            // A buffer much larger than the request is not handed out.
+            const Tensor tensor = Tensor::empty({bytes / 2}, Device::GPU, DataType::UInt8);
+            EXPECT_NE(native_allocation(tensor), first);
+        }
+        ops.hold_freed_memory(false);
+        ops.synchronize_device();
+        {
+            // An allocation collects completed retirements.
+            const Tensor probe = Tensor::empty({1}, Device::GPU, DataType::UInt8);
+            EXPECT_EQ(context->memory().cached_bytes(), 0u);
+        }
+        ops.trim();
+        EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), live_baseline);
+    }
+
+    TEST_F(TensorVulkanAllocationPadding, HeldBufferReusedInFlightWaitsForItsReaders) {
+#ifdef __APPLE__
+        GTEST_SKIP() << "MoltenVK must wait for device residency before freeing storage";
+#else
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        auto& ops = internal::backend_ops(GpuBackend::Vulkan);
+        ops.synchronize_device();
+        ops.trim();
+        const auto context = internal::acquire_vulkan_context();
+        const auto device = context->device();
+        VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        VkSemaphoreCreateInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        info.pNext = &type;
+        VkSemaphore gate = VK_NULL_HANDLE;
+        ASSERT_EQ(vkCreateSemaphore(device, &info, nullptr, &gate), VK_SUCCESS);
+        // Above the exportable range, so a held buffer may be reused in flight.
+        constexpr size_t count = size_t{20} << 20;
+        ops.hold_freed_memory(true);
+        {
+            TensorWorkQueue queue(GpuBackend::Vulkan);
+            queue.set_consumer_timeline(device, {gate, 1, {}});
+            queue.wait_timeline(1);
+            Tensor doubled, refilled;
+            {
+                TensorWorkQueue::Scope binding(queue);
+                Tensor source = Tensor::full({count}, 1.0f, Device::GPU);
+                const uint64_t buffer = native_allocation(source);
+                // Eager reads of source; a lazy expression would keep it alive.
+                doubled = Tensor::empty({count}, Device::GPU);
+                doubled.copy_from(source);
+                doubled.mul_(2.0f);
+                source = Tensor();
+                // Nothing has run yet: the gate holds every submission.
+                refilled = Tensor::full({count}, 5.0f, Device::GPU);
+                EXPECT_EQ(native_allocation(refilled), buffer);
+                EXPECT_FALSE(queue.ready());
+            }
+            VkSemaphoreSignalInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+            signal.semaphore = gate;
+            signal.value = 1;
+            ASSERT_EQ(vkSignalSemaphore(device, &signal), VK_SUCCESS);
+            queue.wait();
+            EXPECT_FLOAT_EQ(doubled.min().item<float>(), 2.0f);
+            EXPECT_FLOAT_EQ(doubled.max().item<float>(), 2.0f);
+            EXPECT_FLOAT_EQ(refilled.min().item<float>(), 5.0f);
+        }
+        ops.hold_freed_memory(false);
+        vkDestroySemaphore(device, gate, nullptr);
+#endif
+    }
+
     TEST_F(TensorVulkanAllocationPadding,
            DirectRangeWordPaddingOverflowThrowsTypedError) {
         GpuBackendScope scope(GpuBackend::Vulkan);

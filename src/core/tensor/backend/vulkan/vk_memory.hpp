@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -67,6 +68,9 @@ namespace lfs::core::internal {
         [[nodiscard]] LFS_CORE_API static VkDeviceSize offset_for(StorageRef storage);
 
         void trim();
+        // Nested holds keep freed buffers of the direct range for reuse instead
+        // of returning them to the driver; the last release destroys them.
+        void hold_freed(bool hold);
         [[nodiscard]] LFS_CORE_API MemoryInfo stats() const;
         [[nodiscard]] LFS_CORE_API size_t cached_bytes() const noexcept;
         [[nodiscard]] uint64_t live_object_count() const noexcept;
@@ -121,6 +125,8 @@ namespace lfs::core::internal {
         std::unordered_map<VkDeviceSize,
                            std::vector<std::unique_ptr<AllocationRecord>>>
             readback_free_lists_;
+        std::multimap<VkDeviceSize, std::unique_ptr<AllocationRecord>> held_;
+        uint32_t freed_memory_holds_ = 0;
         mutable std::mutex staging_mutex_;
         VkBuffer staging_buffer_ = VK_NULL_HANDLE;
         VmaAllocation staging_allocation_ = VK_NULL_HANDLE;

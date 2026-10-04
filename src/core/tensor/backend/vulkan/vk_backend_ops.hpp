@@ -177,6 +177,7 @@ namespace lfs::core::internal {
         void rehome_stream(StorageRef, ExecContext) override;
         void trim() override;
         void trim_if_reserved_unused_exceeds(size_t) override;
+        void hold_freed_memory(bool) override;
         MemoryInfo stats() override;
         void shutdown() override;
         void set_allocation_iteration(int) override;
