@@ -38,6 +38,12 @@ namespace lfs::core {
     LFS_CORE_API float transform_canonical(Tensor& means, Tensor& rotation, Tensor& scaling, Tensor& sh0,
                                            Tensor& shN, int sh_degree, const glm::mat4& transform_matrix);
 
+    /**
+     * @brief The scene scale transform() leaves after moving the means: their median distance from their
+     * centre, unless that is within 10% of the current scale. For transforms that are not similarities.
+     */
+    LFS_CORE_API float transformed_scene_scale(const Tensor& means, float scene_scale);
+
     LFS_CORE_API Tensor compute_cropbox_mask(const Tensor& means,
                                              const glm::vec3& crop_min,
                                              const glm::vec3& crop_max,

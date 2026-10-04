@@ -116,8 +116,11 @@ namespace lfs::core::tensor_ops {
             const int x = cell(p[0], cell_size);
             const int y = cell(p[1], cell_size);
             const int z = cell(p[2], cell_size);
-            // Prune with a margin, since cells come from rounded divisions.
+            // Prune with a margin, since cells come from rounded divisions. Cell indices clamp far from the
+            // origin, where they no longer describe where a point is, so pruning stops there.
             const float reach = radius * 1.001f + cell_size * 1e-3f;
+            constexpr int kUnclamped = 268435456 - 2 * kCellsPerRadius;
+            const bool prune = abs(x) < kUnclamped && abs(y) < kUnclamped && abs(z) < kUnclamped;
             const auto gap = [&](const float value, const int index) {
                 const float low = static_cast<float>(index) * cell_size;
                 return fmaxf(0.0f, fmaxf(low - value, value - (low + cell_size)));
@@ -131,7 +134,7 @@ namespace lfs::core::tensor_ops {
                 const int cy = y + neighbor / side % side - kCellsPerRadius;
                 const int cz = z + neighbor / (side * side) - kCellsPerRadius;
                 const float gx = gap(p[0], cx), gy = gap(p[1], cy), gz = gap(p[2], cz);
-                if (gx * gx + gy * gy + gz * gz > reach * reach)
+                if (prune && gx * gx + gy * gy + gz * gz > reach * reach)
                     continue;
                 const auto bucket = hash_cell(cx, cy, cz, bucket_mask);
                 for (int32_t j = starts[bucket]; j >= 0 && static_cast<size_t>(j) < count && keys[j] == bucket; ++j) {

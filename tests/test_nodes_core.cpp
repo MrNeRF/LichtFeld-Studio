@@ -1719,6 +1719,10 @@ namespace {
                 EXPECT_EQ(host<int>(lfs::core::radius_neighbor_counts(points, references.gt(0), radius, limit, &queries)), masked);
             }
         }
+        // Cell indices clamp far from the origin; coincident points there still count each other.
+        const auto far = tensor({1e9f, 0, 0, 1e9f, 0, 0, 1e9f, 0, 0}, {3, 3});
+        EXPECT_EQ(host<int>(lfs::core::radius_neighbor_counts(far, Tensor::full_bool({3}, true, device()), 1.0f, 2)),
+                  (std::vector<int>{2, 2, 2}));
         EXPECT_THROW(lfs::core::radius_neighbor_counts(points, references, 1.0f, 0), std::exception);
         const auto empty = lfs::core::radius_neighbor_counts(Tensor::empty({0, 3}, device()), Tensor::full_bool({0}, true, device()), 1.0f, 3);
         EXPECT_EQ(empty.numel(), 0u);

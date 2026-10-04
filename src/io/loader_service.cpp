@@ -78,7 +78,8 @@ namespace lfs::io {
 
     Result<void> migrateSplatTensorsToAllocator(lfs::core::SplatData& model,
                                                 const SplatTensorAllocator& allocator,
-                                                const bool trim_pool) {
+                                                const bool trim_pool,
+                                                const bool propagate_out_of_memory) {
         if (!allocator) {
             return {};
         }
@@ -171,9 +172,11 @@ namespace lfs::io {
             }
             if (trim_pool)
                 lfs::core::Tensor::trim_memory_pool();
-        } catch (const lfs::core::MemoryAllocationError&) {
-            // Out of device memory is not corrupt data; callers may free memory and retry.
-            throw;
+        } catch (const lfs::core::MemoryAllocationError& e) {
+            if (propagate_out_of_memory)
+                throw;
+            return make_error(ErrorCode::RESOURCE_EXHAUSTED,
+                              std::format("Out of memory migrating splat tensors to renderer storage: {}", e.what()));
         } catch (const std::exception& e) {
             return make_error(ErrorCode::CORRUPTED_DATA,
                               std::format("Failed to migrate splat tensors to renderer storage: {}", e.what()));

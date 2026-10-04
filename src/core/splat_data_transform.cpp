@@ -540,18 +540,19 @@ namespace lfs::core {
             throw std::runtime_error("SH transformation is only supported up to degree 3.");
         }
 
-        // 5. Update scene scale
-        Tensor scene_center = splat_data._means.mean({0}, false);
-        Tensor dists = splat_data._means.sub(scene_center).norm(2.0f, {1}, false);
-        auto sorted_dists = dists.sort(0, false);
-        float new_scene_scale = sorted_dists.first[num_points / 2].item();
-
-        if (std::abs(new_scene_scale - splat_data._scene_scale) > splat_data._scene_scale * 0.1f) {
-            splat_data._scene_scale = new_scene_scale;
-        }
+        splat_data._scene_scale = transformed_scene_scale(splat_data._means, splat_data._scene_scale);
 
         LOG_DEBUG("Transformed {} gaussians", num_points);
         return splat_data;
+    }
+
+    float transformed_scene_scale(const Tensor& means, const float scene_scale) {
+        if (!means.is_valid() || means.size(0) == 0)
+            return scene_scale;
+        const Tensor centre = means.mean({0}, false);
+        const Tensor distances = means.sub(centre).norm(2.0f, {1}, false);
+        const float median = distances.sort(0, false).first[means.size(0) / 2].item();
+        return std::abs(median - scene_scale) > scene_scale * 0.1f ? median : scene_scale;
     }
 
     float transform_canonical(Tensor& means, Tensor& rotation, Tensor& scaling, Tensor& sh0, Tensor& shN,

@@ -59,10 +59,11 @@ namespace lfs::vis {
         Geometry transform_geometry(Geometry geometry, const glm::mat4& matrix) {
             if (geometry.splats && geometry.splats->means.shape()[0] != 0) {
                 auto& splats = *geometry.splats;
-                if (const float scale = core::transform_canonical(splats.means, splats.rotation, splats.scaling, splats.sh0,
-                                                                  splats.shN, splats.sh_degree, matrix);
-                    scale > 0.0f)
-                    splats.scene_scale *= scale;
+                // A similarity scales the scene scale; any other transform measures it again, as transform() does.
+                const float scale = core::transform_canonical(splats.means, splats.rotation, splats.scaling, splats.sh0,
+                                                              splats.shN, splats.sh_degree, matrix);
+                splats.scene_scale = scale > 0.0f ? splats.scene_scale * scale
+                                                  : core::transformed_scene_scale(splats.means, splats.scene_scale);
             }
             const auto transform_positions = [&](const core::Tensor& positions) {
                 return positions.matmul(matrix_tensor(glm::mat3(matrix), positions.device())) +
@@ -99,9 +100,11 @@ namespace lfs::vis {
                     &splats.scaling_raw(), &splats.rotation_raw(), &splats.opacity_raw()};
         }
 
-        // Callers keep `right` alive, so no other allocation can share its address.
+        // Callers keep `right` alive, so no other allocation can share its address; contiguity rules out a
+        // differently strided view of the same storage.
         bool same_tensor(const core::Tensor& left, const core::Tensor& right) {
-            return left.is_valid() && right.is_valid() && left.numel() > 0 && left.shape() == right.shape() &&
+            return left.is_valid() && right.is_valid() && left.numel() > 0 && left.is_contiguous() &&
+                   right.is_contiguous() && left.shape() == right.shape() &&
                    left.dtype() == right.dtype() && left.data_ptr() == right.data_ptr();
         }
 
@@ -257,7 +260,7 @@ namespace lfs::vis {
                 switch (backend ? core::splat_publication(*backend) : core::SplatPublication::Copied) {
                 case core::SplatPublication::RendererStorage:
                     if (allocator) {
-                        if (auto moved = lfs::io::migrateSplatTensorsToAllocator(*result.splats, allocator, false); !moved)
+                        if (auto moved = lfs::io::migrateSplatTensorsToAllocator(*result.splats, allocator, false, true); !moved)
                             throw std::runtime_error(moved.error().format());
                         break;
                     }
@@ -364,6 +367,20 @@ namespace lfs::vis {
                        : nullptr;
         }
 
+        // Every node of a group's graph, since a group served from the cache reports only itself.
+        bool groupKeepsElements(const NodeTree& tree, const TreeResolver& resolver, const int depth = 0) {
+            return depth < 16 && std::ranges::all_of(tree.nodes, [&](const Node& node) {
+                       if (node.type_id == "lfs.group") {
+                           const auto* nested = groupTree(node, resolver);
+                           return nested && groupKeepsElements(*nested, resolver, depth + 1);
+                       }
+                       const auto type = tree.registry().find(node.type_id);
+                       return type && (node.muted || type->keeps_elements ||
+                                       std::ranges::none_of(type->outputs, [](const SocketDecl& output) {
+                                           return output.type == GEOMETRY_SOCKET;
+                                       })); });
+        }
+
         bool keepsElements(const NodeTree& tree, const EvalResult& evaluated, const TreeResolver& resolver) {
             return std::ranges::all_of(evaluated.nodes, [&](const auto& entry) {
                 // Nodes inside groups report as "Group/Inner".
@@ -375,6 +392,10 @@ namespace lfs::vis {
                     path.remove_prefix(slash + 1);
                 }
                 const auto* node = owner ? owner->find_node(path) : nullptr;
+                if (node && node->type_id == "lfs.group" && !node->muted) {
+                    const auto* nested = groupTree(*node, resolver);
+                    return nested && groupKeepsElements(*nested, resolver);
+                }
                 const auto type = node ? owner->registry().find(node->type_id) : nullptr;
                 if (!type)
                     return false;

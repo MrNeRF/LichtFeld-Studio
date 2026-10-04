@@ -620,6 +620,16 @@ TEST_F(NodesModifierManager, ObjectInfoRelativeSpaceMatchesSplatTransform) {
         expect_near(actual.rotation, expected->rotation_raw(), "rotation");
         expect_near(actual.scaling, expected->scaling_raw(), "scaling");
         expect_near(actual.shN, expected->shN_canonical(), "shN");
+
+        // A transform that is not a similarity measures the scene scale again, as transform() does.
+        const glm::mat4 stretch = glm::scale(glm::mat4(1.0f), glm::vec3(10.0f, 1.0f, 1.0f));
+        scene.getScene().setNodeTransform("Reference", stretch);
+        manager.markDirty(host);
+        const auto stretched = manager.evaluate(host);
+        ASSERT_TRUE(stretched.ok);
+        auto stretched_expected = reference();
+        lfs::core::transform(*stretched_expected, stretch);
+        EXPECT_FLOAT_EQ(stretched.geometry.splats->scene_scale, stretched_expected->get_scene_scale());
     });
 }
 
@@ -838,6 +848,102 @@ TEST_F(NodesModifierManager, SelectionPreviewSurvivesGroupsAndReroutes) {
         const auto preview = manager.selectionPreview(host, modifier.uuid, "Opacity");
         ASSERT_TRUE(preview);
         EXPECT_EQ(preview->cpu().to_vector_bool(), (std::vector<bool>{true, false, true, false, false, false}));
+    });
+}
+
+// A group served from the cache reports only itself; its inner Separate and Join still break the
+// row correspondence.
+TEST_F(NodesModifierManager, CachedGroupWithStructuralNodesKeepsRowsUnproven) {
+    using namespace lfs::nodes;
+    for_each_worker_target([](const lfs::core::Device device) {
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto host = scene.getScene().getNodeUuid(scene.getScene().addSplat("Host", model(6, device)));
+        auto& manager = scene.modifierManager();
+        const auto resolver = [&](const std::string_view uuid) { return manager.tree(uuid); };
+        auto& inner = manager.newTree("Split and rejoin");
+        inner.add_node("lfs.separate_geometry", "Separate");
+        inner.add_node("lfs.join_geometry", "Join");
+        ASSERT_TRUE(inner.remove_link(
+            {inner.input_node().name, "Geometry", inner.output_node().name, "Geometry"}));
+        ASSERT_TRUE(inner.add_link({inner.input_node().name, "Geometry", "Separate", "Geometry"}));
+        ASSERT_TRUE(inner.add_link({"Separate", "Inverted", "Join", "Geometry"}));
+        ASSERT_TRUE(inner.add_link({"Separate", "Selection", "Join", "Geometry"}));
+        ASSERT_TRUE(inner.add_link({"Join", "Geometry", inner.output_node().name, "Geometry"}));
+        auto& tree = manager.newTree("Grouped split");
+        tree.add_node("lfs.group", "Group");
+        tree.add_node("lfs.set_opacity", "Opacity").input_values["Opacity"] = 0.25f;
+        ASSERT_TRUE(manager.setGroupGraph(tree.uuid, "Group", inner.uuid));
+        ASSERT_TRUE(tree.remove_link(
+            {tree.input_node().name, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Group", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(tree.add_link({"Group", "Geometry", "Opacity", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(tree.add_link({"Opacity", "Geometry", tree.output_node().name, "Geometry"}));
+        manager.addModifier(host, tree.uuid);
+        ASSERT_TRUE(manager.evaluate(host).ok);
+        EXPECT_FALSE(manager.evaluate(host).rows_follow_source);
+
+        const auto before = tree.to_json();
+        tree.find_node("Opacity")->input_values["Opacity"] = 0.75f;
+        manager.recordTreeEdit(tree.uuid, before);
+        const auto result = manager.evaluate(host);
+        ASSERT_TRUE(result.ok);
+        EXPECT_FALSE(result.rows_follow_source);
+    });
+}
+
+// A node may return a differently strided view of its input's storage; it must not be mistaken for the
+// untouched input when publishing.
+TEST_F(NodesModifierManager, TransposedShNViewIsPublishedAsChanged) {
+    using namespace lfs::nodes;
+    using lfs::core::Device;
+    using lfs::core::Tensor;
+    for_each_worker_target([](const Device device) {
+        std::vector<float> sh(7 * 3 * 3);
+        for (std::size_t i = 0; i < sh.size(); ++i)
+            sh[i] = 0.01f * static_cast<float>(i);
+        const auto on_device = [&](Tensor value) { return value.to(device); };
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto id = scene.getScene().addSplat(
+            "Host", std::make_unique<lfs::core::SplatData>(
+                        1, on_device(Tensor::zeros({7, 3}, Device::CPU)), on_device(Tensor::zeros({7, 1, 3}, Device::CPU)),
+                        on_device(Tensor::from_vector(sh, {7, 3, 3}, Device::CPU)),
+                        on_device(Tensor::zeros({7, 3}, Device::CPU)),
+                        on_device(Tensor::cat({Tensor::ones({7, 1}, Device::CPU), Tensor::zeros({7, 3}, Device::CPU)}, 1)),
+                        on_device(Tensor::zeros({7, 1}, Device::CPU)), 1.0f));
+        const auto host = scene.getScene().getNodeUuid(id);
+        auto& manager = scene.modifierManager();
+        NodeTypeInfo transpose;
+        transpose.id = "test.transpose_shn";
+        transpose.inputs = {{"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)}};
+        transpose.outputs = transpose.inputs;
+        transpose.evaluate = [](NodeContext& context) {
+            auto geometry = *context.input("Geometry").get_if<Geometry>();
+            geometry.splats->shN = geometry.splats->shN.transpose(1, 2);
+            context.set_output("Geometry", std::move(geometry));
+        };
+        manager.registry().register_type(std::move(transpose));
+        auto& tree = manager.newTree("Transpose");
+        tree.add_node("test.transpose_shn", "Transpose").muted = true;
+        ASSERT_TRUE(tree.remove_link(
+            {tree.input_node().name, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Transpose", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Transpose", "Geometry", tree.output_node().name, "Geometry"}));
+        manager.addModifier(host, tree.uuid);
+        ASSERT_TRUE(manager.evaluate(host).ok);
+
+        const auto before = tree.to_json();
+        tree.find_node("Transpose")->muted = false;
+        manager.recordTreeEdit(tree.uuid, before);
+        ASSERT_TRUE(manager.evaluate(host).ok);
+        const auto* node = scene.getScene().getNodeById(id);
+        ASSERT_NE(node->evaluated_model, nullptr);
+        const auto expected = Tensor::from_vector(sh, {7, 3, 3}, Device::CPU).transpose(1, 2).contiguous().to_vector();
+        const auto actual = node->evaluated_model->shN_canonical().cpu().contiguous().to_vector();
+        ASSERT_EQ(actual.size(), expected.size());
+        for (std::size_t i = 0; i < actual.size(); ++i)
+            ASSERT_NEAR(actual[i], expected[i], 1e-3f) << i;
     });
 }
 
