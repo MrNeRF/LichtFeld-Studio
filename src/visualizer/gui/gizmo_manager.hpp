@@ -53,6 +53,7 @@ namespace lfs::vis {
             void updateToolState(const UIContext& ctx, bool ui_hidden);
 
             void renderNodeTransformGizmo(const UIContext& ctx, const ViewportLayout& viewport);
+            void renderNodeGraphGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void renderViewportGizmo(const ViewportLayout& viewport);
@@ -142,6 +143,7 @@ namespace lfs::vis {
             glm::vec3 gizmo_pivot_{0.0f};
             glm::mat3 gizmo_cumulative_rotation_{1.0f};
             glm::vec3 gizmo_cumulative_scale_{1.0f};
+            bool node_graph_gizmo_active_ = false;
 
             // Cropbox gizmo
             bool cropbox_gizmo_active_ = false;

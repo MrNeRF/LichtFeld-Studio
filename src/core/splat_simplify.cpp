@@ -239,6 +239,8 @@ namespace lfs::core {
         }
 
         [[nodiscard]] float activated_scale(const float raw) {
+            if (raw == -std::numeric_limits<float>::infinity())
+                return 0.0f;
             return std::max(std::exp(clamp_scale_raw(raw)), kMinScale);
         }
 
@@ -349,7 +351,8 @@ namespace lfs::core {
             out.means = Tensor::from_vector(rows.means, {static_cast<size_t>(rows.count), size_t{3}}, Device::CPU);
             std::vector<float> scaling_raw(rows.scales.size());
             for (size_t i = 0; i < rows.scales.size(); ++i)
-                scaling_raw[i] = std::log(std::max(rows.scales[i], kMinScale));
+                scaling_raw[i] = rows.scales[i] == 0.0f ? -std::numeric_limits<float>::infinity()
+                                                        : std::log(std::max(rows.scales[i], kMinScale));
 
             std::vector<float> opacity_raw(rows.opacity.size());
             for (size_t i = 0; i < rows.opacity.size(); ++i)
@@ -575,17 +578,21 @@ namespace lfs::core {
 
         void decompose_sigma_to_raw_scale_quat(const std::array<float, 9>& sigma,
                                                std::array<float, 3>& scaling_raw,
-                                               std::array<float, 4>& rotation_raw) {
+                                               std::array<float, 4>& rotation_raw,
+                                               const bool allow_collapsed) {
             const auto eig = eigen_symmetric_3x3(sigma);
-            std::array<float, 3> evals = {
-                std::max(eig.values[0], kMinEval),
-                std::max(eig.values[1], kMinEval),
-                std::max(eig.values[2], kMinEval),
-            };
-
-            scaling_raw[0] = std::log(std::max(std::sqrt(evals[0]), kMinScale));
-            scaling_raw[1] = std::log(std::max(std::sqrt(evals[1]), kMinScale));
-            scaling_raw[2] = std::log(std::max(std::sqrt(evals[2]), kMinScale));
+            // A rotated rank-deficient covariance can acquire tiny positive
+            // eigenvalues from Float32 roundoff. Do not give its null space
+            // thickness; retain the ordinary regularization for volume splats.
+            const float zero_tolerance = allow_collapsed
+                                             ? std::max({eig.values[0], eig.values[1], eig.values[2], 0.0f}) *
+                                                   (8.0f * std::numeric_limits<float>::epsilon())
+                                             : 0.0f;
+            for (size_t axis = 0; axis < 3; ++axis) {
+                const float variance = std::max(eig.values[axis], allow_collapsed ? 0.0f : kMinEval);
+                scaling_raw[axis] = variance <= zero_tolerance ? -std::numeric_limits<float>::infinity()
+                                                               : std::log(std::max(std::sqrt(variance), kMinScale));
+            }
             rotmat_to_quat(eig.vectors, rotation_raw);
         }
 
@@ -891,8 +898,10 @@ namespace lfs::core {
                 std::vector<float> weights;
                 weights.reserve(group.size());
                 float total_weight = 0.0f;
+                bool has_collapsed = false;
                 for (int idx : group) {
                     const size_t idx3 = static_cast<size_t>(idx) * 3;
+                    has_collapsed |= input.scales[idx3] == 0 || input.scales[idx3 + 1] == 0 || input.scales[idx3 + 2] == 0;
                     const float sx = std::max(input.scales[idx3 + 0], kMinScale);
                     const float sy = std::max(input.scales[idx3 + 1], kMinScale);
                     const float sz = std::max(input.scales[idx3 + 2], kMinScale);
@@ -902,21 +911,40 @@ namespace lfs::core {
                     weights.push_back(w);
                     total_weight += w;
                 }
-                if (total_weight < 1e-30f)
+                if (total_weight < 1e-30f && !has_collapsed) {
                     total_weight = 1e-30f;
+                } else if (total_weight < 1e-30f) {
+                    // Point/line splats have tiny regularized mass. Normalize
+                    // relative weights instead of moving their centre to zero.
+                    const float largest_weight = *std::max_element(weights.begin(), weights.end());
+                    total_weight = 0.0f;
+                    for (float& w : weights) {
+                        w = largest_weight > 0 ? w / largest_weight : 1.0f;
+                        total_weight += w;
+                    }
+                }
                 for (float& w : weights)
                     w /= total_weight;
 
                 // Compute weighted center
                 const size_t o3 = static_cast<size_t>(out_row) * 3;
+                const size_t origin_row = static_cast<size_t>(group.front()) * 3;
+                const float ox = has_collapsed ? input.means[origin_row] : 0.0f;
+                const float oy = has_collapsed ? input.means[origin_row + 1] : 0.0f;
+                const float oz = has_collapsed ? input.means[origin_row + 2] : 0.0f;
                 float cx = 0.0f, cy = 0.0f, cz = 0.0f;
                 for (size_t g = 0; g < group.size(); ++g) {
                     const int idx = group[g];
                     const size_t idx3 = static_cast<size_t>(idx) * 3;
-                    cx += weights[g] * input.means[idx3 + 0];
-                    cy += weights[g] * input.means[idx3 + 1];
-                    cz += weights[g] * input.means[idx3 + 2];
+                    cx += weights[g] * (input.means[idx3 + 0] - ox);
+                    cy += weights[g] * (input.means[idx3 + 1] - oy);
+                    cz += weights[g] * (input.means[idx3 + 2] - oz);
                 }
+                // Coincident collapsed splats must stay exactly coincident:
+                // rounding the centre would introduce a spurious covariance.
+                cx += ox;
+                cy += oy;
+                cz += oz;
                 out.means[o3 + 0] = cx;
                 out.means[o3 + 1] = cy;
                 out.means[o3 + 2] = cz;
@@ -928,9 +956,10 @@ namespace lfs::core {
                     const size_t idx3 = static_cast<size_t>(idx) * 3;
                     const size_t idx4 = static_cast<size_t>(idx) * 4;
 
-                    const float sx = std::max(input.scales[idx3 + 0], kMinScale);
-                    const float sy = std::max(input.scales[idx3 + 1], kMinScale);
-                    const float sz = std::max(input.scales[idx3 + 2], kMinScale);
+                    // The mass floor above is not geometric thickness.
+                    const float sx = input.scales[idx3 + 0];
+                    const float sy = input.scales[idx3 + 1];
+                    const float sz = input.scales[idx3 + 2];
 
                     float qw = input.rotation[idx4 + 0];
                     float qx = input.rotation[idx4 + 1];
@@ -964,13 +993,15 @@ namespace lfs::core {
                 sigma[1] = sigma[3] = 0.5f * (sigma[1] + sigma[3]);
                 sigma[2] = sigma[6] = 0.5f * (sigma[2] + sigma[6]);
                 sigma[5] = sigma[7] = 0.5f * (sigma[5] + sigma[7]);
-                sigma[0] += kEpsCov;
-                sigma[4] += kEpsCov;
-                sigma[8] += kEpsCov;
+                if (!has_collapsed) {
+                    sigma[0] += kEpsCov;
+                    sigma[4] += kEpsCov;
+                    sigma[8] += kEpsCov;
+                }
 
                 std::array<float, 3> scaling_raw{};
                 std::array<float, 4> rotation{};
-                decompose_sigma_to_raw_scale_quat(sigma, scaling_raw, rotation);
+                decompose_sigma_to_raw_scale_quat(sigma, scaling_raw, rotation, has_collapsed);
 
                 out.scales[o3 + 0] = activated_scale(scaling_raw[0]);
                 out.scales[o3 + 1] = activated_scale(scaling_raw[1]);

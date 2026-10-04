@@ -231,6 +231,7 @@ namespace lfs::python {
                                     bool rad_streamable,
                                     int spz_version,
                                     bool include_provenance,
+                                    bool apply_modifiers,
                                     int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations);
     LFS_PYTHON_RUNTIME_API void set_export_callback(ExportCallback cb);
     LFS_PYTHON_RUNTIME_API void invoke_export(int format, const std::string& path,
@@ -239,6 +240,7 @@ namespace lfs::python {
                                               bool rad_streamable = true,
                                               int spz_version = 4,
                                               bool include_provenance = true,
+                                              bool apply_modifiers = true,
                                               int lod_levels = 4, float lod_ratio = 0.5f, int chunk_count_k = 512,
                                               float chunk_extent = 16.0f, int chunk_min_k = 8, int kmeans_iterations = 10);
 

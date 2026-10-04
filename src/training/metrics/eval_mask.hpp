@@ -19,6 +19,8 @@ namespace lfs::training {
         bool invert_masks = false;
         float mask_threshold = 0.5f;
         lfs::core::param::MaskMode mask_mode = lfs::core::param::MaskMode::None;
+        bool apply_undistortion = true;
+        bool replace_gt_image = true;
     };
 
     struct LoadedMetricsMask {
@@ -36,6 +38,9 @@ namespace lfs::training {
             .mask_mode = params.optimization.mask_mode,
         };
     }
+
+    [[nodiscard]] lfs::core::Tensor erode_metrics_mask(
+        const lfs::core::Tensor& mask, int radius);
 
     /// Classify a decoded mask to a UInt8 {0,1} keep mask.
     /// UInt8/Bool carry authored 0..255 samples (keep = value > 250).
@@ -61,5 +66,17 @@ namespace lfs::training {
     [[nodiscard]] std::expected<LoadedMetricsMask, std::string> load_alpha_masked_metrics_inputs(
         const lfs::core::Camera& camera,
         const MetricsMaskLoadConfig& config);
+
+    /// Soft Float32 [H, W] alpha of an RGBA camera image at the evaluation size, undistorted like the
+    /// training alpha. Throws when the image cannot be decoded.
+    [[nodiscard]] lfs::core::Tensor load_eval_alpha(
+        const lfs::core::Camera& camera,
+        const MetricsMaskLoadConfig& config);
+
+    // Composites an RGB target ([3, H, W], uint8 or float) with its alpha ([H, W]) over background, a [3] colour
+    // or a [3, H, W] image, so that it shows what a render with that background shows where it is transparent.
+    [[nodiscard]] lfs::core::Tensor composite_over_background(const lfs::core::Tensor& rgb,
+                                                              const lfs::core::Tensor& alpha,
+                                                              const lfs::core::Tensor& background);
 
 } // namespace lfs::training

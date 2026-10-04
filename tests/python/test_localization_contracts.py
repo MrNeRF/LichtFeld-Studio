@@ -107,6 +107,13 @@ def test_shipped_locale_files_are_strict_utf8_without_bom_or_replacement_charact
         assert "\ufffd" not in decoded, f"{path.name}: replacement character"
 
 
+def test_locale_strings_avoid_unsupported_hyphen_characters():
+    for path in sorted(LOCALES.glob("*.json")):
+        decoded = path.read_text(encoding="utf-8")
+        assert "\u2011" not in decoded, f"{path.name}: non-breaking hyphen"
+        assert "\u00ad" not in decoded, f"{path.name}: soft hyphen"
+
+
 def test_rml_translation_directives_resolve():
     directive = re.compile(r"@tr:([A-Za-z0-9_.-]+)")
     directives = {
@@ -551,3 +558,21 @@ if __name__ == "__main__":
     for contract in contracts:
         contract()
         print(f"PASS {contract.__name__}")
+
+
+def test_locale_strings_use_real_line_breaks():
+    """A JSON "\\\\n" decodes to a backslash and an n, which dialogs print literally."""
+    def strings(node, key=""):
+        if isinstance(node, dict):
+            for child_key, child in node.items():
+                yield from strings(child, f"{key}.{child_key}" if key else child_key)
+        elif isinstance(node, str):
+            yield key, node
+
+    escaped = [
+        f"{path.name}:{key}"
+        for path in sorted(LOCALES.glob("*.json"))
+        for key, text in strings(json.loads(path.read_text(encoding="utf-8")))
+        if "\\n" in text
+    ]
+    assert not escaped, escaped

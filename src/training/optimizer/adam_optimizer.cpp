@@ -2094,4 +2094,9 @@ namespace lfs::training {
         state->step_count = 0;
     }
 
+    void AdamOptimizer::reset_all_states() {
+        for (const auto type : all_param_types())
+            reset_state(type);
+    }
+
 } // namespace lfs::training

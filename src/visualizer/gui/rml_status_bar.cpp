@@ -650,9 +650,8 @@ namespace lfs::vis::gui {
             }));
         };
 
-        // Step, loss and splat count change with every training step and FPS with
-        // every frame. The periodic refresh reads them, so they never force a
-        // redraw of their own.
+        // Published training progress wakes the GUI; read its latest values on
+        // that frame. FPS is measurement only and never publishes store changes.
         bind(store.total_iterations);
         bind(store.max_gaussians);
         bind(store.training_running);
@@ -665,10 +664,6 @@ namespace lfs::vis::gui {
         bind(store.selection_generation);
         bind(store.viewer_backend);
         bind(store.language_generation);
-        subscriptions_.push_back(store.fps.subscribe([this](const float& fps) {
-            reactive_fps_available_ = true;
-            reactive_fps_value_ = fps;
-        }));
         bind(store.mode_text);
         subscriptions_.push_back(store.perf_hud.subscribe([this](const lfs::vis::AppStore::PerfHud& state) {
             setModelBool("gpu_panel_active", model_.gpu_panel_active, state.visible);
@@ -1207,16 +1202,11 @@ namespace lfs::vis::gui {
         }
     }
 
-    bool RmlStatusBar::updateContent(const PanelDrawContext& ctx, const bool force_refresh) {
+    bool RmlStatusBar::updateContent(const PanelDrawContext& ctx) {
         if (!document_)
             return false;
 
         const auto now = std::chrono::steady_clock::now();
-        if (!force_refresh && next_refresh_at_ != std::chrono::steady_clock::time_point{} &&
-            now < next_refresh_at_) {
-            return false;
-        }
-
         model_dirty_ = false;
 
         const auto& p = lfs::vis::theme().palette;
@@ -1681,22 +1671,15 @@ namespace lfs::vis::gui {
                 element->SetAttribute("title", LOC(gpuDeviceMemoryTooltipKey(mem)));
         }
 
-        // FPS: prefer scene-render rate when scene frames are in the measurement
-        // window; when only GUI frames are presented, show that rate as ui-fps
-        // so a GUI-only spin is not invisible. True idle (no samples) stays a dim 0.
-        const float scene_fps = reactive_fps_available_ ? reactive_fps_value_
-                                                        : (rm ? rm->getAverageFPS() : 0.0f);
-        const float presented_fps = rm ? rm->getPresentedAverageFPS() : 0.0f;
-        const bool ui_only_fps = scene_fps <= 0.0f && presented_fps > 0.0f;
-        const float fps = std::round(ui_only_fps ? presented_fps : scene_fps);
-        ThemeColor fps_col = ui_only_fps || fps <= 0.0f
-                                 ? p.text_dim
-                                 : (fps >= 30.0f ? p.success : (fps >= 15.0f ? p.warning : p.error));
-        setModelString("fps_value", model_.fps_value, std::format("{:.0f}", fps));
-        setModelString("fps_color", model_.fps_color, colorToRml(fps_col));
+        const auto rates = rm ? rm->guiFrameRates() : FrameRates{};
+        const float scene_fps = rates.view;
+        const float presented_fps = rates.ui;
+        setModelString("fps_value", model_.fps_value,
+                       std::format("{} {:.0f} · {} {:.0f}", LOC("status_bar.ui"), presented_fps,
+                                   LOC("status_bar.view"), scene_fps));
+        setModelString("fps_color", model_.fps_color, colorToRml(p.text_dim));
         setModelString("fps_label", model_.fps_label,
-                       ui_only_fps ? std::format(" {}", LOC("status_bar.ui_fps"))
-                                   : std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
+                       std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
         const auto* backend_manager = ctx.ui && ctx.ui->viewer ? ctx.ui->viewer->getRenderingManager() : nullptr;
         if (backend_manager)
             updateBackendContent(backend_manager->activeViewerBackend());
@@ -1981,51 +1964,6 @@ namespace lfs::vis::gui {
         });
     }
 
-    void RmlStatusBar::renderCached(const PanelDrawContext& ctx, const float x, const float y,
-                                    const float w_px, const float h_px,
-                                    const int screen_w, const int screen_h) {
-        if (!rml_context_ || !document_)
-            return;
-        if (w_px <= 0.0f || h_px <= 0.0f || screen_w <= 0 || screen_h <= 0)
-            return;
-
-        const auto* backend_manager = ctx.ui && ctx.ui->viewer ? ctx.ui->viewer->getRenderingManager() : nullptr;
-        if (backend_manager)
-            updateBackendContent(backend_manager->activeViewerBackend());
-        else
-            updateBackendContent();
-        const float overlay_height = overlayHeight();
-        const int render_w = static_cast<int>(w_px);
-        const int render_h = static_cast<int>(std::ceil(h_px + overlay_height));
-        const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
-        const bool dp_changed = dp_ratio != last_dp_ratio_;
-        const bool theme_current =
-            has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
-        const auto now = std::chrono::steady_clock::now();
-        const auto runtime_revision = lfs::vis::runtimeServiceRevision();
-        if (runtime_revision != last_runtime_service_revision_) {
-            last_runtime_service_revision_ = runtime_revision;
-            model_dirty_ = true;
-        }
-        const bool refresh_due =
-            next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
-            now >= next_refresh_at_;
-        const bool can_reuse = theme_current && !dp_changed && !model_dirty_ && !refresh_due &&
-                               !tooltip_.revealDue() &&
-                               render_w == last_render_w_ &&
-                               render_h == last_render_h_;
-        if (!can_reuse) {
-            render(ctx, x, y, w_px, h_px, screen_w, screen_h);
-            return;
-        }
-
-        trackRenderedContextFrame(x, y, overlay_height);
-
-        queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
-                                 screen_w, screen_h,
-                                 render_w, render_h, direct_cache_.texture == 0);
-    }
-
     void RmlStatusBar::render(const PanelDrawContext& ctx, const float x, const float y,
                               const float w_px, const float h_px,
                               const int screen_w, const int screen_h) {
@@ -2064,7 +2002,7 @@ namespace lfs::vis::gui {
             size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
             next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
             now >= next_refresh_at_;
-        const bool content_changed = updateContent(ctx, refresh_due);
+        const bool content_changed = updateContent(ctx);
         const bool section_signature_changed = section_signature_ != last_section_signature_;
         const bool needs_render = size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
                                   content_changed || tooltip_.revealDue() ||
@@ -2104,7 +2042,7 @@ namespace lfs::vis::gui {
 
         queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
                                  screen_w, screen_h,
-                                 render_w, render_h, true);
+                                 render_w, render_h, needs_render || direct_cache_.texture == 0);
     }
 
 } // namespace lfs::vis::gui

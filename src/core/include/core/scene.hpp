@@ -158,6 +158,9 @@ namespace lfs::core {
         std::unique_ptr<lfs::core::SplatData> model;
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
         std::shared_ptr<lfs::core::MeshData> mesh;
+        std::shared_ptr<lfs::core::SplatData> evaluated_model;
+        std::shared_ptr<lfs::core::PointCloud> evaluated_point_cloud;
+        std::shared_ptr<lfs::core::MeshData> evaluated_mesh;
         std::unique_ptr<CropBoxData> cropbox;
         std::unique_ptr<EllipsoidData> ellipsoid;
         std::unique_ptr<KeyframeData> keyframe;
@@ -298,6 +301,10 @@ namespace lfs::core {
             NodeId id,
             bool keep_children = false);
         void replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model);
+        void replaceNodePointCloud(const std::string& name,
+                                   std::shared_ptr<lfs::core::PointCloud> point_cloud);
+        void replaceNodeMesh(const std::string& name,
+                             std::shared_ptr<lfs::core::MeshData> mesh);
         // Swap a node's model in place, returning the previous model so the caller can
         // recycle its (e.g. Vulkan-external) backing storage. Cheap: no disk/parse/upload,
         // just a pointer swap + MODEL_CHANGED. Used by the PLY-sequence streaming player.
@@ -367,6 +374,19 @@ namespace lfs::core {
         [[nodiscard]] NodeId getNodeIdByUuid(const Uuid& uuid) const;
         [[nodiscard]] Uuid getNodeUuid(NodeId id) const;
         void markPayloadDiverged(NodeId id);
+
+        void setNodeEvaluatedPayload(NodeId id, std::shared_ptr<lfs::core::SplatData> model,
+                                     std::shared_ptr<lfs::core::PointCloud> point_cloud = {},
+                                     std::shared_ptr<lfs::core::MeshData> mesh = {});
+        void setNodeEvaluatedPayload(const Uuid& uuid, std::shared_ptr<lfs::core::SplatData> model,
+                                     std::shared_ptr<lfs::core::PointCloud> point_cloud = {},
+                                     std::shared_ptr<lfs::core::MeshData> mesh = {});
+        void clearNodeEvaluatedPayload(NodeId id);
+        void clearNodeEvaluatedPayload(const Uuid& uuid);
+        [[nodiscard]] bool hasEvaluatedPayload(NodeId id) const;
+        [[nodiscard]] const lfs::core::SplatData* effectiveModel(const SceneNode& node) const;
+        [[nodiscard]] const lfs::core::PointCloud* effectivePointCloud(const SceneNode& node) const;
+        [[nodiscard]] const lfs::core::MeshData* effectiveMesh(const SceneNode& node) const;
 
         [[nodiscard]] bool isNodeEffectivelyVisible(NodeId id) const;
         [[nodiscard]] glm::vec3 getNodeBoundsCenter(NodeId id) const;
@@ -524,6 +544,13 @@ namespace lfs::core {
         }
         [[nodiscard]] uint64_t selectionGeneration() const noexcept { return selection_generation_; }
 
+        // Install before publishing a live scene to workers. Detached and restore
+        // staging scenes have no consumer and must not invalidate the live view.
+        using RenderInvalidationCallback = void (*)();
+        void setRenderInvalidationCallback(RenderInvalidationCallback callback) noexcept {
+            render_invalidation_callback_ = callback;
+        }
+
         enum class MergeStorageMode {
             Clone,
             BorrowSingleIdentity,
@@ -650,6 +677,7 @@ namespace lfs::core {
 
         [[nodiscard]] lfs::core::SplatData* getTrainingModel();
         [[nodiscard]] const lfs::core::SplatData* getTrainingModel() const;
+        [[nodiscard]] const lfs::core::SplatData* getEffectiveTrainingModel() const;
         [[nodiscard]] bool isTrainingModelEffectivelyVisible() const;
         [[nodiscard]] size_t getTrainingModelGaussianCount() const;
         [[nodiscard]] size_t getVisibleGaussianCount() const;
@@ -687,11 +715,11 @@ namespace lfs::core {
             cached_transform_indices_.reset();
             cached_visible_selection_indices_.reset();
             invalidateVisibleSelectionMaskCache();
-            render_generation_.fetch_add(1, std::memory_order_acq_rel);
+            publishRenderInvalidation();
         }
         void invalidateTransformCache() {
             transform_cache_valid_.store(false, std::memory_order_release);
-            render_generation_.fetch_add(1, std::memory_order_acq_rel);
+            publishRenderInvalidation();
         }
         void markDirty() { invalidateCache(); }
         void markTransformDirty(NodeId node);
@@ -796,6 +824,12 @@ namespace lfs::core {
         mutable uint64_t consolidated_generation_ = 0;
         bool preserve_source_models_ = false;
         mutable std::atomic<uint64_t> render_generation_{0};
+        RenderInvalidationCallback render_invalidation_callback_ = nullptr;
+        void publishRenderInvalidation() {
+            render_generation_.fetch_add(1, std::memory_order_acq_rel);
+            if (render_invalidation_callback_)
+                render_invalidation_callback_();
+        }
         mutable uint64_t selection_generation_ = 0;
 
         mutable std::shared_mutex selection_mutex_;

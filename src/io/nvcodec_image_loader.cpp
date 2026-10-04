@@ -9,6 +9,7 @@
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/pinned_memory_allocator.hpp"
 #include "core/shared_image_ops.hpp"
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -702,6 +703,21 @@ namespace lfs::io {
             vram_account.set_owner(this);
         }
 
+        // nvImageCodec otherwise frees its pinned staging with cudaFreeHost, which waits for the whole
+        // device; the caching allocator keeps the block and fences its reuse on the stream instead.
+        static int pinned_malloc(void*, void** ptr, const size_t size, cudaStream_t) {
+            if (!ptr || size == 0)
+                return 1;
+            *ptr = lfs::core::PinnedMemoryAllocator::instance().allocate(size);
+            return *ptr ? 0 : 1;
+        }
+
+        static int pinned_free(void*, void* ptr, size_t, cudaStream_t stream) {
+            if (ptr)
+                lfs::core::PinnedMemoryAllocator::instance().deallocate(ptr, stream);
+            return 0;
+        }
+
         static int device_malloc(void* context, void** ptr, const size_t size, cudaStream_t stream) {
             auto* impl = static_cast<Impl*>(context);
             if (!impl || !ptr || size == 0 || !impl->decode_pool) {
@@ -823,6 +839,13 @@ namespace lfs::io {
         bool sentinel_test_skip_cuda_retry = false;
         cudaMemPool_t decode_pool = nullptr;
         nvimgcodecDeviceAllocator_t device_allocator{};
+        nvimgcodecPinnedAllocator_t pinned_allocator{NVIMGCODEC_STRUCTURE_TYPE_PINNED_ALLOCATOR,
+                                                     sizeof(nvimgcodecPinnedAllocator_t),
+                                                     nullptr,
+                                                     &Impl::pinned_malloc,
+                                                     &Impl::pinned_free,
+                                                     nullptr,
+                                                     0};
         size_t device_budget_bytes = 0;
         std::atomic<size_t> device_bytes_in_use{0};
         NvCodecVramAccount vram_account;
@@ -846,6 +869,7 @@ namespace lfs::io {
             retry_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_EXECUTION_PARAMS;
             retry_params.struct_size = sizeof(nvimgcodecExecutionParams_t);
             retry_params.device_allocator = decode_pool ? &device_allocator : nullptr;
+            retry_params.pinned_allocator = &pinned_allocator;
             retry_params.max_num_cpu_threads = max_num_cpu_threads;
             retry_params.device_id = device_id;
             retry_params.num_backends = 1;
@@ -1091,7 +1115,7 @@ namespace lfs::io {
             sizeof(nvimgcodecExecutionParams_t),
             nullptr,
             impl_->decode_pool ? &impl_->device_allocator : nullptr,
-            nullptr,
+            &impl_->pinned_allocator,
             options.max_num_cpu_threads,
             nullptr,
             options.device_id,

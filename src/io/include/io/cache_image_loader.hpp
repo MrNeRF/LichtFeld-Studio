@@ -44,6 +44,16 @@ namespace lfs::io {
         bool skip_blob_cache = false;
     };
 
+    // CPU decode at native resolution, then the same GPU Lanczos downscale the nvImageCodec
+    // path uses. Returns [3, H, W] in the requested dtype; decode_16bit keeps 16-bit samples
+    // until the GPU conversion.
+    LFS_IO_API lfs::core::Tensor load_rgb_image_cpu_decoded(
+        const std::filesystem::path& path, const LoadParams& params, bool decode_16bit = false);
+    // Same for RGBA sources; returns float32 [4, H, W] with alpha in [0, 1].
+    LFS_IO_API lfs::core::Tensor load_rgba_image_cpu_decoded(
+        const std::filesystem::path& path, int resize_factor, int max_width, void* cuda_stream = nullptr,
+        bool decode_16bit = false);
+
     struct CachedImageData {
         std::shared_ptr<lfs::core::Tensor> tensor;
         int width = 0;

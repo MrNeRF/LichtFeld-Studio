@@ -1276,6 +1276,7 @@ namespace lfs::python {
                        bool rad_streamable,
                        int spz_version,
                        bool include_provenance,
+                       bool apply_modifiers,
                        int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
         if (!g_export_callback)
             return;
@@ -1290,7 +1291,7 @@ namespace lfs::python {
                           rad_flip_y,
                           rad_streamable,
                           spz_version,
-                          include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
+                          include_provenance, apply_modifiers, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
     }
 
     void cancel_active_operator() {

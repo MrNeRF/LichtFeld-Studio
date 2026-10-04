@@ -50,6 +50,13 @@ EXPR(Add, __float_as_uint(ops::add_op{}(x, y)))
 EXPR(Sub, __float_as_uint(ops::sub_op{}(x, y)))
 EXPR(Mul, __float_as_uint(ops::mul_op{}(x, y)))
 EXPR(Div, __float_as_uint(ops::div_op{}(x, y)))
+// Explicit PTX keeps round-to-nearest and denormals even in a fast-math build.
+__device__ __forceinline__ float precise_divide(float x, float y) {
+    float result;
+    asm("div.rn.f32 %0, %1, %2;" : "=f"(result) : "f"(x), "f"(y));
+    return result;
+}
+EXPR(PreciseDiv, __float_as_uint(precise_divide(x, y)))
 EXPR(Mod, __float_as_uint(ops::mod_op{}(x, y)))
 EXPR(Pow, __float_as_uint(ops::pow_op{}(x, y)))
 EXPR(Min, __float_as_uint(ops::minimum_op{}(x, y)))

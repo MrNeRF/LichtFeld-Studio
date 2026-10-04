@@ -63,7 +63,7 @@
     "spdlog",
     "tbb",
     "tiff",
-    "tinyexr",
+    "openexr",
     "vulkan",
     {
       "name": "vulkan-loader",
@@ -94,7 +94,11 @@
     "tests": {
       "description": "Dependencies used only by the C++ test targets",
       "dependencies": [
-        "gtest"
+        "gtest",
+        {
+          "name": "openexr",
+          "features": ["cpp"]
+        }
       ]
     },
     "vulkan-validation": {

@@ -120,10 +120,46 @@ namespace lfs::core {
 
     // For each Float32 [N,3] point, return whether a reference point is within
     // the inclusive radius. references is a Bool or UInt8 [N] mask; nonzero
-    // entries participate, including the point itself. Nonfinite points never
+    // entries participate, including the point itself unless exclude_self is set.
+    // Distinct points at identical positions still match. Nonfinite points never
     // match. Inputs share a device/backend; the Bool [N] result preserves it.
     // Radius must be positive, finite and normal (GPU subnormal arithmetic can
     // flush to zero). Scratch space is O(N), independent
     // of scene extent. Dense neighborhoods can still require quadratic work.
-    LFS_CORE_API Tensor radius_neighbors(const Tensor& points, const Tensor& references, float radius);
+    // An optional Bool/UInt8 [N] query mask skips unused queries (false output)
+    // without removing those points from the reference set.
+    LFS_CORE_API Tensor radius_neighbors(const Tensor& points, const Tensor& references, float radius,
+                                         bool exclude_self = false, const Tensor* queries = nullptr);
+
+    // Exact reference counts within radius, excluding the query point itself.
+    // Int32 [N], saturated at max_count (> 0). Same input/device contract as
+    // radius_neighbors; an optional query mask leaves unused counts at zero.
+    LFS_CORE_API Tensor radius_neighbor_counts(const Tensor& points, const Tensor& references, float radius,
+                                               int32_t max_count, const Tensor* queries = nullptr);
+
+    // Minimum value among all points in the inclusive radius, including the
+    // query point itself. values is Int32 or Float32 [N]; the result has the
+    // same dtype, shape, device and backend. Nonfinite query points retain
+    // their own value. Scratch space is O(N), independent of scene extent.
+    LFS_CORE_API Tensor radius_neighbor_min(const Tensor& points, const Tensor& values, float radius);
+
+    // Exact nearest target for each Float32 [N,3] query. Int32 [N] indices,
+    // ties choose the first target; empty targets/nonfinite queries return -1.
+    // A sparse grid searches expanding shells and falls back to an exact scan
+    // for sparse/distant queries. No pairwise matrix; O(N+M) scratch.
+    LFS_CORE_API Tensor nearest_point_indices(const Tensor& queries, const Tensor& targets);
+
+    // Count pinhole frusta containing each Float32 [N,3] world position.
+    // cameras is Float32 [C,16]: normalized world-to-image 3x4 rows, followed
+    // by the world camera centre and padding. +Z is forward. Image bounds
+    // are inclusive; max_distance=0 disables the distance limit. Int32 [N].
+    // All cameras are uploaded together and processed in one dispatch.
+    LFS_CORE_API Tensor camera_frustum_counts(const Tensor& points, const Tensor& cameras, float max_distance = 0);
+
+    // Approximate mean distance to the nearest three other points. Search 27
+    // cells, expanding once to 125 when fewer than three are found. Each cell
+    // visits at most 128 hash entries, bounding work even for coincident clouds.
+    // Float32 [N,3] -> Float32 [N], same device/backend. A point with no local
+    // neighbours uses four times cell_width. Nonfinite points produce zero.
+    LFS_CORE_API Tensor point_neighbor_spacing(const Tensor& points, float cell_width);
 } // namespace lfs::core

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "screen/screen.hpp"
 
 #include <cstdint>
@@ -79,10 +80,10 @@ namespace lfs::vis::screen {
         Corner corner;
     };
 
-    [[nodiscard]] std::optional<CornerHit> cornerAt(const LayoutGeometry& geometry, float x, float y,
-                                                    float size);
+    [[nodiscard]] LFS_VIS_API std::optional<CornerHit> cornerAt(const LayoutGeometry& geometry, float x, float y,
+                                                                float size);
 
-    class AreaGestures {
+    class LFS_VIS_API AreaGestures {
     public:
         explicit AreaGestures(GestureMetrics metrics = {}) : metrics_(metrics) {}
 

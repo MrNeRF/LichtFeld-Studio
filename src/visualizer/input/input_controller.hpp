@@ -107,6 +107,9 @@ namespace lfs::vis {
         // Input bindings (customizable hotkeys/mouse)
         input::InputBindings& getBindings() { return bindings_; }
         const input::InputBindings& getBindings() const { return bindings_; }
+        [[nodiscard]] bool isPanDrag(input::MouseButton button, int modifiers) const {
+            return bindings_.getActionForDrag(getCurrentToolMode(), button, modifiers, held_keys_) == input::Action::CAMERA_PAN;
+        }
         void loadInputProfile(const std::string& name) { bindings_.loadProfile(name); }
         [[nodiscard]] CameraNavigationMode cameraNavigationMode() const { return camera_navigation_mode_; }
         void setCameraNavigationMode(CameraNavigationMode mode);
@@ -116,6 +119,8 @@ namespace lfs::vis {
         // Trackpad navigation reads two-finger swipes over the viewport as
         // orbit/pan/zoom. Mouse drags and pinch zoom work in both modes.
         [[nodiscard]] const TrackpadPreferenceState& trackpadPreferences() const { return trackpad_; }
+        [[nodiscard]] int trackpadTouchCount() const { return trackpad_touches_; }
+        [[nodiscard]] float wheelZoomSpeed() const { return viewport().camera.getZoomSpeed(); }
         void setTrackpadPreferences(const TrackpadPreferenceState& state) { trackpad_ = state; }
         void restoreProjectNavigation(
             CameraNavigationMode mode,
@@ -135,23 +140,31 @@ namespace lfs::vis {
 
         // Check if continuous input is active (WASD keys or camera drag)
         [[nodiscard]] bool isContinuousInputActive() const {
+            return isCameraDragging() || needsCameraAnimationFrame();
+        }
+        [[nodiscard]] bool isCameraDragging() const {
+            return dragViewport() && (drag_mode_ == DragMode::Orbit || drag_mode_ == DragMode::Pan ||
+                                      drag_mode_ == DragMode::Rotate);
+        }
+        // A held pointer gesture only changes the camera when motion arrives.
+        // Stored drag velocity is not an animation until the button is released.
+        [[nodiscard]] bool needsCameraAnimationFrame() const {
             const bool movement_active = keys_movement_[0] || keys_movement_[1] || keys_movement_[2] ||
                                          keys_movement_[3] || keys_movement_[4] || keys_movement_[5];
-            const bool camera_drag = dragViewport() && (drag_mode_ == DragMode::Orbit ||
-                                                        drag_mode_ == DragMode::Pan ||
-                                                        drag_mode_ == DragMode::Rotate);
             auto& keyboard_camera = activeKeyboardViewport().camera;
             const bool orbit_coasting =
-                orbitCoastViewport() && orbitCoastViewport()->camera.hasOrbitMomentum();
+                drag_mode_ != DragMode::Orbit && orbitCoastViewport() &&
+                orbitCoastViewport()->camera.hasOrbitMomentum();
             const bool pan_coasting =
-                panCoastViewport() && panCoastViewport()->camera.hasPanMomentum();
+                drag_mode_ != DragMode::Pan && panCoastViewport() &&
+                panCoastViewport()->camera.hasPanMomentum();
             const bool wasd_coasting =
                 (wasdMomentumViewport() && wasdMomentumViewport()->camera.hasWasdMomentum()) ||
                 keyboard_camera.hasWasdMomentum();
             const bool drone_settling =
                 (wasdMomentumViewport() && wasdMomentumViewport()->camera.hasDroneMotion()) ||
                 keyboard_camera.hasDroneMotion();
-            return movement_active || camera_drag || orbit_coasting || pan_coasting ||
+            return movement_active || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
         [[nodiscard]] bool isCameraNavigating() const {
@@ -302,6 +315,8 @@ namespace lfs::vis {
         Viewport* panCoastViewport() const { return rememberedViewport(pan_coast_view_); }
         ViewId wasd_momentum_view_ = kNoView;
         Viewport* wasdMomentumViewport() const { return rememberedViewport(wasd_momentum_view_); }
+        std::chrono::steady_clock::time_point drag_momentum_updated_at_ = std::chrono::steady_clock::now();
+        void decayHeldDragMomentum();
 
         // Cached whole-scene radius (half the bounds diagonal) that scales WASD
         // speed and caps pan distance by splat size; 0 means "recompute" (after scene
@@ -377,12 +392,17 @@ namespace lfs::vis {
             Default,
             Resize,
             Hand,
-            DepthWindow
+            DepthWindow,
+            Eyedropper,
+            Paint
         };
         CursorType current_cursor_ = CursorType::Default;
         int depth_window_cursor_ = 0;
         SDL_Cursor* resize_cursor_ = nullptr;
         SDL_Cursor* hand_cursor_ = nullptr;
+        bool node_paint_dragging_ = false;
+        bool node_paint_erasing_ = false;
+        std::optional<glm::vec3> node_paint_last_world_;
 
         // Double-click detection
         static constexpr double DOUBLE_CLICK_TIME = 0.3;

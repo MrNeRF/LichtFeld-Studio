@@ -13,7 +13,10 @@ import pytest
 
 # Find the build directory and add to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-BUILD_DIR = Path(os.environ.get("LFS_TEST_BUILD_DIR", PROJECT_ROOT / "build"))
+# Use the developer environment's build unless a test build is selected explicitly.
+BUILD_DIR = Path(
+    os.environ.get("LFS_TEST_BUILD_DIR", os.environ.get("LFS_BUILD_DIR", PROJECT_ROOT / "build"))
+)
 SOURCE_MODULE_PATH = PROJECT_ROOT / "src" / "python"
 
 # Add the source Python modules first so tests exercise the working tree.

@@ -119,6 +119,8 @@ struct LpipsPoolParams {
     int n, channels, h, w;
     int y0, y1, x0, x1;
     float inverse_count;
+    device const float* weights;
+    int weights_width, weights_y0, weights_x0;
 };
 
 static float lpips_tap(constant LpipsPoolParams& p, device const half* data, const int base, const int row,
@@ -167,9 +169,9 @@ kernel void lpips_pool_reduce(constant LpipsPoolParams& p [[buffer(0)]], uint in
             const float d0 = a0 * ix0 - b0 * iy0;
             const float d1 = a1 * ix1 - b1 * iy1;
             if (score0)
-                score += wv * d0 * d0;
+                score += wv * d0 * d0 * (p.weights ? p.weights[(row0 + p.weights_y0) * p.weights_width + col + p.weights_x0] : 1.0f);
             if (score1)
-                score += wv * d1 * d1;
+                score += wv * d1 * d1 * (p.weights ? p.weights[(row0 + 1 + p.weights_y0) * p.weights_width + col + p.weights_x0] : 1.0f);
             if (pool) {
                 const int o = ((ni * p.channels + c) * out_h + r) * out_w + col / 2;
                 p.pooled_x[o] = half(fmax(fmax(a0, a1), fmax(lpips_tap(p, p.x, base, row0, col + 1),

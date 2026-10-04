@@ -48,7 +48,7 @@ namespace lfs::vis {
         [[nodiscard]] double secondsUntilTrainingRefresh(float refresh_interval_sec) const;
         // A camera/rest render also satisfies the preview refresh. Schedule the
         // next one from this actual submit, not an earlier deferred request.
-        void noteTrainingRender() { last_training_render_ = std::chrono::steady_clock::now(); }
+        void restartTrainingRefresh() { last_training_render_ = std::chrono::steady_clock::now(); }
         [[nodiscard]] DirtyMask requiredDirtyMask(bool has_viewport_output,
                                                   bool has_renderable_content,
                                                   SplitViewMode split_view_mode) const;

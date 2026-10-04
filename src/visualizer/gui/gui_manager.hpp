@@ -127,6 +127,7 @@ namespace lfs::vis {
             void notifyCameraThumbnailBatchReady();
             void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
             void prepareInput();
+            void prepareLayout();
             RmlUIManager::InputDispatchResult dispatchInputEvent(const SDL_Event& event) {
                 if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST)
                     screen_host_.cancelInput();
@@ -229,6 +230,7 @@ namespace lfs::vis {
             bool isModalWindowOpen() const;
             [[nodiscard]] bool isHardwareSelectionRingActive() const;
             [[nodiscard]] bool selectionCursorNeedsRender(float mouse_x, float mouse_y) const;
+            [[nodiscard]] SDL_Cursor* pipetteCursor() const noexcept { return pipette_cursor_; }
             [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
             [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
@@ -352,7 +354,6 @@ namespace lfs::vis {
             bool consumeCameraThumbnailRefresh();
 
             [[nodiscard]] bool isVramHudOverlayVisible() const;
-            [[nodiscard]] bool isVramHudPublishDue(std::chrono::steady_clock::time_point now) const;
             [[nodiscard]] PanelAnimationVisibility panelAnimationVisibility() const;
             [[nodiscard]] bool drainVulkanFramesForInteractiveTransition(
                 lfs::vis::WindowManager& window_manager,
@@ -406,10 +407,10 @@ namespace lfs::vis {
             bool show_main_panel_ = true;
             bool show_vram_hud_ = false;
             bool perf_hud_expanded_ = true;
-            bool vram_hud_visible_published_ = false;
             bool perf_hud_visible_published_ = false;
-            std::chrono::steady_clock::time_point next_vram_hud_publish_{};
             PerfSampler perf_sampler_;
+            std::chrono::steady_clock::time_point last_hud_sample_{};
+            bool last_hud_expanded_ = false;
             std::chrono::steady_clock::time_point ui_toggle_next_allowed_at_{};
             bool ui_toggle_pending_ = false;
             bool ui_visibility_resize_active_ = false;

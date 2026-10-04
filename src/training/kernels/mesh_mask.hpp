@@ -1,0 +1,32 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#pragma once
+
+#include "core/tensor.hpp"
+#include "lfs/training/ops/masks.hpp"
+
+#include <array>
+#include <cuda_runtime.h>
+
+namespace lfs::training::kernels {
+
+    using MeshMaskCamera = lfs::gpu_ops::MeshMaskCamera;
+
+    [[nodiscard]] lfs::core::Tensor rasterize_mesh_coverage(
+        const lfs::core::Tensor& vertices,
+        const lfs::core::Tensor& indices,
+        const MeshMaskCamera& camera,
+        float z_near,
+        cudaStream_t stream = nullptr);
+
+    [[nodiscard]] lfs::core::Tensor rasterize_mesh_coverage(
+        const lfs::core::Tensor& vertices,
+        const lfs::core::Tensor& indices,
+        const MeshMaskCamera& camera,
+        const lfs::core::Tensor& inverse_sample_map,
+        const lfs::core::UndistortParams& distortion,
+        float z_near,
+        cudaStream_t stream = nullptr);
+
+} // namespace lfs::training::kernels

@@ -6,6 +6,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/shared_image_ops.hpp"
 #include "io/pipelined_image_loader.hpp"
 
 #include <stb_image.h>
@@ -89,13 +90,13 @@ namespace lfs::io {
 
         lfs::core::UndistortParams undistort_for(const lfs::core::UndistortParams& params,
                                                  const Tensor& image,
-                                                 const int max_width) {
+                                                 const int resize_factor, const int max_width) {
             const size_t rank = image.ndim();
-            return lfs::core::scale_undistort_params(
+            return lfs::core::prepare_undistort_params(
                 params,
                 static_cast<int>(image.shape()[rank - 1]),
                 static_cast<int>(image.shape()[rank - 2]),
-                max_width);
+                resize_factor, max_width);
         }
 
         // Inversion precedes binarization; threshold compares with >=.
@@ -109,27 +110,23 @@ namespace lfs::io {
 
         std::pair<Tensor, Tensor> decode_rgba(const std::filesystem::path& path,
                                               const LoadParams& params,
-                                              lfs::core::TensorUpload& upload) {
-            auto [data, width, height, channels] =
-                lfs::core::load_image_with_alpha(path, params.resize_factor, params.max_width);
-            if (!data || channels != 4)
-                throw std::runtime_error("Failed to load RGBA image");
-            const auto rgba = to_device(upload, host_uint8(data, image_shape(height, width, 4),
-                                                           lfs::core::free_image));
-
-            Tensor rgb = rgba.slice(2, 0, 3).permute({2, 0, 1});
-            if (!params.output_uint8)
-                rgb = rgb.to(DataType::Float32).mul(UINT8_SCALE);
-            Tensor alpha = rgba.slice(2, 3, 4).squeeze(2).to(DataType::Float32).mul(UINT8_SCALE);
+                                              const bool decode_16bit) {
+            const auto rgba = load_rgba_image_cpu_decoded(path, params.undistort ? 1 : params.resize_factor,
+                                                          params.undistort ? 0 : params.max_width, nullptr, decode_16bit);
+            Tensor rgb = rgba.slice(0, 0, 3).contiguous();
+            if (params.output_uint8)
+                rgb = float_to_uint8(rgb);
+            Tensor alpha = rgba.slice(0, 3, 4).squeeze(0).contiguous();
             if (params.undistort) {
                 if (params.output_uint8)
                     rgb = rgb.to(DataType::Float32).div(255.0f);
-                const auto scaled = undistort_for(*params.undistort, alpha, params.max_width);
+                const auto scaled = undistort_for(*params.undistort, alpha, params.resize_factor, params.max_width);
                 rgb = lfs::core::undistort_image(rgb.contiguous(), scaled, nullptr);
                 alpha = lfs::core::undistort_mask(alpha.contiguous(), scaled, nullptr);
                 if (params.output_uint8)
                     rgb = float_to_uint8(rgb);
             }
+            alpha = alpha.clamp(0.0f, 1.0f).mul(65535.0f).add(0.5f).to(DataType::Int32).to(DataType::Float32).div(65535.0f);
             return {rgb.contiguous(), alpha};
         }
 
@@ -176,8 +173,23 @@ namespace lfs::io {
             std::lock_guard stats_lock(stats_mutex_);
             ++stats_.cpu_decode_calls;
         }
+        if (!params.undistort && !encoded)
+            return load_rgb_image_cpu_decoded(path, params, config_.use_16bit_color);
         Tensor host;
-        if (config_.use_16bit_color) {
+        if (params.undistort) {
+            auto [data, width, height, channels] = lfs::core::load_image_float(path);
+            if (!data)
+                throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
+            const std::unique_ptr<float, decltype(&lfs::core::free_image_float)> owner(data, lfs::core::free_image_float);
+            host = Tensor::from_blob(data, image_shape(height, width, channels), lfs::core::Device::CPU, DataType::Float32).clone();
+            if (channels <= 2) {
+                auto gray = host.slice(2, 0, 1);
+                host = Tensor::cat({gray, gray, gray}, 2);
+            } else if (channels == 4) {
+                host = host.slice(2, 0, 3);
+            }
+            host = host.permute({2, 0, 1}).contiguous();
+        } else if (config_.use_16bit_color) {
             auto [data, width, height, channels] = lfs::core::load_image_u16(path, params.resize_factor, params.max_width);
             if (!data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
@@ -196,22 +208,24 @@ namespace lfs::io {
             host = host_uint8_planar(data, height, width, channels, lfs::core::free_image);
         }
         Tensor image = to_device(upload, host);
-        if (config_.use_16bit_color) {
+        if (!params.undistort && config_.use_16bit_color) {
             image = image.to(DataType::Float32).mul(UINT16_SCALE);
             if (params.output_uint8)
                 image = float_to_uint8(image);
-        } else if (!params.output_uint8) {
+        } else if (!params.undistort && !params.output_uint8) {
             image = image.to(DataType::Float32).mul(UINT8_SCALE);
         }
 
         if (params.undistort) {
-            const bool restore_uint8 = image.dtype() == DataType::UInt8;
-            if (restore_uint8)
+            const bool restore_uint8 = params.output_uint8;
+            if (image.dtype() == DataType::UInt8)
                 image = image.to(DataType::Float32).div(255.0f);
             image = lfs::core::undistort_image(
-                image.contiguous(), undistort_for(*params.undistort, image, params.max_width), nullptr);
+                image.contiguous(), undistort_for(*params.undistort, image, params.resize_factor, params.max_width), nullptr);
             if (restore_uint8)
                 image = float_to_uint8(image);
+            else
+                image = image.clamp(0.0f, 1.0f).mul(65535.0f).add(0.5f).to(DataType::Int32).to(DataType::Float32).div(65535.0f);
         }
         return image.contiguous();
     }
@@ -275,7 +289,7 @@ namespace lfs::io {
 
             try {
                 if (item.alpha_as_mask) {
-                    auto [rgb, alpha] = decode_rgba(item.path, params, upload);
+                    auto [rgb, alpha] = decode_rgba(item.path, params, config_.use_16bit_color);
                     try_complete_pair(item.sequence_id, item.loader_generation, std::move(rgb),
                                       finish_mask(std::move(alpha), item.alpha_mask_params));
                 } else if (item.is_mask) {
@@ -302,7 +316,7 @@ namespace lfs::io {
                     }
                     if (item.undistort) {
                         mask = lfs::core::undistort_mask(
-                            mask.contiguous(), undistort_for(*item.undistort, mask, params.max_width), nullptr);
+                            mask.contiguous(), undistort_for(*item.undistort, mask, params.resize_factor, params.max_width), nullptr);
                     }
                     try_complete_pair(item.sequence_id, item.loader_generation, std::nullopt,
                                       finish_mask(std::move(mask), item.mask_params));
@@ -343,12 +357,11 @@ namespace lfs::io {
                     };
                     prior = resize_prior(prior, target_h, target_w);
                     if (item.undistort) {
-                        const auto scaled = undistort_for(*item.undistort, prior, params.max_width);
+                        const auto scaled = undistort_for(*item.undistort, prior, params.resize_factor, params.max_width);
                         if (item.is_depth) {
-                            prior = lfs::core::undistort_mask(prior, scaled, nullptr);
+                            prior = lfs::core::undistort_depth_area(prior, scaled, nullptr);
                         } else {
-                            prior = lfs::core::undistort_image(prior, scaled, nullptr);
-                            prior = resize_prior(prior, static_cast<int>(prior.shape()[1]), static_cast<int>(prior.shape()[2]));
+                            prior = lfs::core::undistort_normal_area(prior, scaled, nullptr);
                         }
                     }
                     const size_t rank = prior.ndim();

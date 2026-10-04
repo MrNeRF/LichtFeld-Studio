@@ -124,7 +124,7 @@ namespace lfs::vis {
             result =
                 this->state().split_view_service_.toggleMode(settings, SplitViewMode::PLYComparison);
             applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode);
-            markViewDirty(view_source_.activeView(), DirtyFlag::SPLIT_VIEW);
+            markViewDirty(view_source_.activeView(), DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
 
             storeActiveSettingsLocked(settings);
         }
@@ -150,7 +150,7 @@ namespace lfs::vis {
             result =
                 this->state().split_view_service_.toggleMode(settings, SplitViewMode::GTComparison);
             applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode);
-            markViewDirty(view_source_.activeView(), DirtyFlag::SPLIT_VIEW | DirtyFlag::SPLATS);
+            markViewDirty(view_source_.activeView(), DirtyFlag::SPLIT_VIEW | DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
 
             storeActiveSettingsLocked(settings);
         }
@@ -212,7 +212,7 @@ namespace lfs::vis {
                     previous_mode,
                     settings.split_view_mode);
             }
-            markViewDirty(view_source_.activeView(), DirtyFlag::ALL);
+            markViewDirty(view_source_.activeView(), DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
 
             storeActiveSettingsLocked(settings);
         }
@@ -227,7 +227,7 @@ namespace lfs::vis {
         LOG_DEBUG("Current camera ID set to: {}", cam_id);
 
         if (isGTComparisonActive() && cam_id >= 0) {
-            markViewDirty(view_source_.activeView(), DirtyFlag::SPLIT_VIEW);
+            markViewDirty(view_source_.activeView(), DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
         }
     }
 
@@ -236,7 +236,7 @@ namespace lfs::vis {
         auto settings = activeSettingsLocked();
         settings.split_position = std::clamp(position, 0.0f, 1.0f);
         LOG_TRACE("Split position changed to: {}", position);
-        markViewDirty(view_source_.activeView(), DirtyFlag::SPLIT_POSITION);
+        markViewDirty(view_source_.activeView(), DirtyFlag::SPLIT_POSITION, lfs::vis::FrameReason::SettingsChange);
 
         storeActiveSettingsLocked(settings);
     }
@@ -271,9 +271,9 @@ namespace lfs::vis {
                       settings.equirectangular ? "enabled" : "disabled");
         }
         if (settings.scene() != settings_)
-            markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND);
+            markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND, lfs::vis::FrameReason::SceneChange);
         else
-            markViewDirty(view_source_.activeView(), DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND);
+            markViewDirty(view_source_.activeView(), DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND, lfs::vis::FrameReason::SceneChange);
 
         storeActiveSettingsLocked(settings);
     }
@@ -282,7 +282,7 @@ namespace lfs::vis {
         LOG_DEBUG("RenderingManager window resize: deferring viewport refresh");
         std::lock_guard lock(views_mutex_);
         for (auto& [id, view] : view_states_)
-            view->dirty_mask_.fetch_or(view->frame_lifecycle_service_.deferViewportRefresh());
+            markViewDirty(id, view->frame_lifecycle_service_.deferViewportRefresh(), FrameReason::SceneChange);
     }
 
     void RenderingManager::handleGridSettingsChanged(const ui::GridSettingsChanged& event) {
@@ -293,7 +293,7 @@ namespace lfs::vis {
         settings.grid_opacity = event.opacity;
         LOG_TRACE("Grid settings updated - enabled: {}, plane: {}, opacity: {}",
                   event.enabled, settings.grid_plane, event.opacity);
-        markViewDirty(view_source_.activeView(), DirtyFlag::OVERLAY);
+        markViewDirty(view_source_.activeView(), DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
 
         storeActiveSettingsLocked(settings);
     }
@@ -301,7 +301,7 @@ namespace lfs::vis {
     void RenderingManager::handleTrainingStarted() {
         // The worker completion handoff only invalidates overlay state. Any
         // renderer setup is consumed by the next render cadence tick.
-        markDirty(DirtyFlag::OVERLAY);
+        markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
     }
 
     void RenderingManager::handleTrainingCompleted() {
@@ -309,7 +309,7 @@ namespace lfs::vis {
         // destruction to renderVulkanFrame, which runs on the Vulkan thread and
         // also has the final trainer/viewer completion ordering in hand.
         vksplat_terminal_release_pending_.store(true, std::memory_order_release);
-        markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::OVERLAY);
+        markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
     }
 
     void RenderingManager::handleSceneLoaded() {
@@ -323,7 +323,7 @@ namespace lfs::vis {
         cancelDepthWindowDragBeforeSplitModeChange(current_mode, target_mode);
 
         LOG_DEBUG("Scene loaded, marking render dirty");
-        markDirty();
+        markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         invalidateCameraMetricsRequests(true);
         camera_interaction_service_.clearCurrentCamera();
         camera_interaction_service_.clearHoveredCamera();
@@ -346,7 +346,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleSceneChanged(const uint32_t mutation_flags) {
-        markDirty(dirtyMaskForSceneMutations(mutation_flags));
+        markDirty(dirtyMaskForSceneMutations(mutation_flags), lfs::vis::FrameReason::SceneChange);
     }
 
     void RenderingManager::handleSceneCleared() {
@@ -372,16 +372,16 @@ namespace lfs::vis {
         camera_interaction_service_.clearCurrentCamera();
         camera_interaction_service_.clearHoveredCamera();
         applySplitModeChange(result);
-        markDirty();
+        markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
     }
 
     void RenderingManager::handlePLYVisibilityChanged() {
-        markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
+        markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
     }
 
     void RenderingManager::handlePLYAdded() {
         LOG_DEBUG("PLY added, marking render dirty");
-        markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
+        markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
     }
 
     void RenderingManager::handlePLYRemoved() {
@@ -408,7 +408,7 @@ namespace lfs::vis {
             result = this->state().split_view_service_.handlePLYRemoved(settings,
                                                                         services().sceneOrNull());
             applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode);
-            markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW);
+            markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SceneChange);
 
             storeActiveSettingsLocked(settings);
         }
@@ -422,7 +422,7 @@ namespace lfs::vis {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         auto settings = activeSettingsLocked();
         settings.use_crop_box = enabled;
-        markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+        markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
         storeActiveSettingsLocked(settings);
     }
@@ -431,7 +431,7 @@ namespace lfs::vis {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         auto settings = activeSettingsLocked();
         settings.use_ellipsoid = enabled;
-        markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+        markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
         storeActiveSettingsLocked(settings);
     }
@@ -444,7 +444,7 @@ namespace lfs::vis {
         LOG_DEBUG("Point cloud mode: {}, voxel size: {}",
                   event.enabled ? "enabled" : "disabled", event.voxel_size);
         this->state().viewport_artifact_service_.clearViewportOutput();
-        markViewDirty(view_source_.activeView(), DirtyFlag::SPLATS);
+        markViewDirty(view_source_.activeView(), DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
 
         storeActiveSettingsLocked(settings);
     }

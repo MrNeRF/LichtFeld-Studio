@@ -322,6 +322,18 @@ namespace lfs::vis {
         LOG_DEBUG("TrainerManager created");
     }
 
+    std::size_t TrainerManager::initialSplatLiveEstimate(
+        const lfs::core::param::TrainingParameters& params,
+        const std::size_t min_capacity) noexcept {
+        std::size_t live_estimate = min_capacity;
+        if (params.optimization.random) {
+            live_estimate = std::max(
+                live_estimate,
+                static_cast<std::size_t>(std::max(params.optimization.init_num_pts, 1)));
+        }
+        return std::max(live_estimate, std::size_t{1});
+    }
+
     lfs::Result<lfs::core::SplatTensorAllocator>
     TrainerManager::createTrainingSplatTensorAllocator(
         const lfs::core::param::TrainingParameters& params,
@@ -339,14 +351,7 @@ namespace lfs::vis {
 
         // size the exportable block to live N (+ 1.5× headroom), not
         // max_cap. Virtual-reserve max_cap so densify can grow in place.
-        std::size_t live_estimate = min_capacity;
-        if (live_estimate == 0 && params.optimization.random) {
-            live_estimate = static_cast<std::size_t>(
-                std::max(params.optimization.init_num_pts, 1));
-        }
-        if (live_estimate == 0) {
-            live_estimate = 1;
-        }
+        const std::size_t live_estimate = initialSplatLiveEstimate(params, min_capacity);
 
         const std::size_t exportable_capacity =
             lfs::core::SplatExportableStorage::growthCapacity(live_estimate, configured_capacity);
@@ -690,6 +695,8 @@ namespace lfs::vis {
             const auto& params = trainer->getParams();
             pending_opt_params_ = params.optimization;
             pending_dataset_params_ = params.dataset;
+            if (auto* const param_mgr = services().paramsOrNull())
+                param_mgr->getDatasetConfig() = params.dataset;
             // A new training run has no resumable elapsed-time authority.
             clearRestoredProjectMetrics();
             accumulated_training_time_ =
@@ -2145,6 +2152,36 @@ namespace lfs::vis {
         return trainer_->computeCameraMetrics(*cam, include_ssim, appearance);
     }
 
+    lfs::core::param::DatasetConfig& TrainerManager::getEditableDatasetParams() {
+        if (auto* const param_mgr = services().paramsOrNull())
+            return param_mgr->getDatasetConfig();
+        return pending_dataset_params_;
+    }
+
+    const lfs::core::param::DatasetConfig& TrainerManager::getEditableDatasetParams() const {
+        if (const auto* const param_mgr = services().paramsOrNull())
+            return param_mgr->getDatasetConfig();
+        return pending_dataset_params_;
+    }
+
+    bool TrainerManager::isDatasetEditable() const {
+        return !hasTrainer() || (getState() == TrainingState::Ready && getCurrentIteration() == 0);
+    }
+
+    lfs::core::param::TrainingParameters TrainerManager::getEditableTrainingParams(
+        const ParameterManager& parameter_manager) const {
+        const auto& configured_dataset = parameter_manager.getDatasetConfig();
+        auto params = parameter_manager.createForDataset(
+            configured_dataset.data_path,
+            configured_dataset.output_path);
+        if (hasTrainer() && trainer_->isInitialized() && !isDatasetEditable()) {
+            params.dataset = trainer_->getParams().dataset;
+        } else if (services().paramsOrNull() || hasTrainer() || !pending_dataset_params_.data_path.empty()) {
+            params.dataset = getEditableDatasetParams();
+        }
+        return params;
+    }
+
     lfs::core::param::TrainingParameters TrainerManager::pendingParamsCandidate() const {
         auto params = trainer_->getParams();
         if (trainer_->isInitialized() && params.resume_checkpoint.has_value()) {
@@ -2156,8 +2193,14 @@ namespace lfs::vis {
 
         params.dataset = pending_dataset_params_;
         if (auto* const param_mgr = services().paramsOrNull()) {
-            params.optimization = param_mgr->copyActiveParams();
+            const auto editable_params = getEditableTrainingParams(*param_mgr);
+            params.dataset = editable_params.dataset;
+            params.optimization = editable_params.optimization;
+            params.server = editable_params.server;
+            LOG_DEBUG("Applied params: strategy={}, iter={}, max_cap={}",
+                      params.optimization.strategy, params.optimization.iterations, params.optimization.max_cap);
         } else {
+            params.dataset = pending_dataset_params_;
             params.optimization = pending_opt_params_;
         }
         return params;

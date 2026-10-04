@@ -23,8 +23,8 @@ namespace lfs::vis::input {
 
         std::atomic<bool> g_persistence_enabled{true};
 
-        constexpr int PROFILE_VERSION = 32; // Maximize area shortcut.
-        constexpr Action LAST_ACTION = Action::TOGGLE_MAXIMIZE_AREA;
+        constexpr int PROFILE_VERSION = 33; // Node editor shortcut.
+        constexpr Action LAST_ACTION = Action::TOGGLE_NODE_EDITOR;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
 
         bool isViewNavigationAction(const Action action) {
@@ -603,7 +603,8 @@ namespace lfs::vis::input {
                   def.action == Action::ASSET_GALLERY_COPY_LINK ||
                   def.action == Action::ASSET_REFRESH)) ||
                 (version < 31 && isViewNavigationAction(def.action)) ||
-                (version < 32 && def.action == Action::TOGGLE_MAXIMIZE_AREA);
+                (version < 32 && def.action == Action::TOGGLE_MAXIMIZE_AREA) ||
+                (version < 33 && def.action == Action::TOGGLE_NODE_EDITOR);
             if (!should_add) {
                 continue;
             }
@@ -1112,6 +1113,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_HOME, MODIFIER_NONE}, Action::VIEW_FRAME_ALL, "Frame all"},
             {KeyTrigger{KEY_Q, MODIFIER_CTRL | MODIFIER_ALT}, Action::TOGGLE_QUAD_VIEW, "Four views"},
             {KeyTrigger{KEY_SPACE, MODIFIER_CTRL}, Action::TOGGLE_MAXIMIZE_AREA, "Maximize Area"},
+            {KeyTrigger{KEY_F3, MODIFIER_SHIFT}, Action::TOGGLE_NODE_EDITOR, "Toggle Node Editor"},
             // Selection mode shortcuts
             {KeyTrigger{KEY_T, MODIFIER_CTRL}, Action::CYCLE_SELECTION_VIS, "Sel vis"},
             {KeyTrigger{KEY_1, MODIFIER_CTRL}, Action::SELECT_MODE_CENTERS, "Centers"},
@@ -1338,6 +1340,7 @@ namespace lfs::vis::input {
         case Action::VIEW_FRAME_ALL: return "Frame All";
         case Action::TOGGLE_QUAD_VIEW: return "Toggle Four Views";
         case Action::TOGGLE_MAXIMIZE_AREA: return "Maximize Area";
+        case Action::TOGGLE_NODE_EDITOR: return "Toggle Node Editor";
         case Action::UNGROUP_SELECTED_SCENE_NODE: return "Ungroup Selected Scene Node";
         default: return "Unknown";
         }
@@ -1444,6 +1447,7 @@ namespace lfs::vis::input {
         case Action::VIEW_FRAME_ALL: return "view_frame_all";
         case Action::TOGGLE_QUAD_VIEW: return "toggle_quad_view";
         case Action::TOGGLE_MAXIMIZE_AREA: return "toggle_maximize_area";
+        case Action::TOGGLE_NODE_EDITOR: return "toggle_node_editor";
         case Action::UNGROUP_SELECTED_SCENE_NODE: return "ungroup_selected_scene_node";
         default: return {};
         }
@@ -2099,6 +2103,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_SPLIT_VIEWPORT:
         case Action::TOGGLE_QUAD_VIEW:
         case Action::TOGGLE_MAXIMIZE_AREA:
+        case Action::TOGGLE_NODE_EDITOR:
         case Action::TOGGLE_GT_COMPARISON:
         case Action::TOGGLE_CAMERA_FRUSTUMS:
         case Action::TOGGLE_GRID:

@@ -2,8 +2,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/tensor_fused.hpp"
+#include "core/tensor_random.hpp"
 #include "internal/tensor_impl.hpp"
 #include <atomic>
+#include <format>
 #if LFS_HAS_CUDA
 #include <curand.h>
 #include <curand_kernel.h>
@@ -22,6 +25,42 @@
 #endif
 
 namespace lfs::core {
+
+    Tensor random_from_indices(const Tensor& indices, const uint32_t seed) {
+        LFS_ASSERT_MSG(indices.is_valid() && indices.ndim() == 1 && indices.dtype() == DataType::Int32,
+                       std::format("random_from_indices requires Int32 [N] (valid={}, rank={}, dtype={})",
+                                   indices.is_valid(), indices.ndim(), int(indices.dtype())));
+        if (!indices.numel())
+            return internal::allocate_like(indices, indices.shape(), DataType::Float32);
+        if (indices.device() == Device::GPU) {
+            static const auto kernel = [] {
+                fused::Builder builder(1);
+                const auto index = builder.input(DataType::Int32, 1);
+                const auto key = builder.input(DataType::UInt32, 1);
+                auto hash = index.load().cast(DataType::UInt32) ^ key.at({0});
+                hash = (hash ^ (hash >> 16u)) * 0x7feb352du;
+                hash = (hash ^ (hash >> 15u)) * 0x846ca68bu;
+                hash = hash ^ (hash >> 16u);
+                builder.output((hash >> 8u).cast(DataType::Float32) * 0x1p-24f, DataType::Float32);
+                return fused::Kernel(builder);
+            }();
+            auto key = Tensor::empty({1}, Device::CPU, DataType::UInt32);
+            key.ptr<uint32_t>()[0] = seed;
+            return kernel({indices.numel()}, {indices, key})[0];
+        }
+        const auto contiguous = indices.contiguous();
+        auto output = Tensor::empty(indices.shape(), Device::CPU);
+        const auto* source = contiguous.ptr<int32_t>();
+        auto* destination = output.ptr<float>();
+        for (size_t i = 0; i < indices.numel(); ++i) {
+            uint32_t hash = static_cast<uint32_t>(source[i]) ^ seed;
+            hash = (hash ^ (hash >> 16u)) * 0x7feb352du;
+            hash = (hash ^ (hash >> 15u)) * 0x846ca68bu;
+            hash ^= hash >> 16u;
+            destination[i] = static_cast<float>(hash >> 8u) * 0x1p-24f;
+        }
+        return output;
+    }
 
     // ============= RandomGenerator Implementation =============
 

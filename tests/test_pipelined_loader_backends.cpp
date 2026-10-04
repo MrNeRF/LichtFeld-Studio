@@ -5,6 +5,7 @@
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/shared_image_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include "io/pipelined_image_loader.hpp"
 
@@ -199,25 +200,35 @@ namespace {
 
         expect_close(load(request("rgb16.png"), true).image, host(planar(rgb16_, 3, UINT16_SCALE), chw), 0.0f);
 
+        // CPU-decoded images are downscaled on the GPU with a size-2 Lanczos kernel.
         auto resized = request("rgb8.png");
         resized.params.max_width = 7;
-        auto [data, width, height, channels] = load_image(path("rgb8.png"), 1, 7);
-        ASSERT_NE(data, nullptr);
-        const Tensor expected = Tensor::from_blob(data, {size_t(height), size_t(width), 3}, Device::CPU, DataType::UInt8)
-                                    .permute({2, 0, 1})
-                                    .to(DataType::Float32)
-                                    .mul(UINT8_SCALE)
-                                    .contiguous();
-        free_image(data);
+        const auto [target_width, target_height] = resized_image_dimensions(WIDTH, HEIGHT, 1, 7);
+        Tensor expected;
+        {
+            GpuBackendScope scope(GetParam());
+            const auto source = Tensor::from_blob(rgb8_.data(), {size_t(HEIGHT), size_t(WIDTH), 3}, Device::CPU,
+                                                  DataType::UInt8)
+                                    .to(Device::GPU);
+            expected = shared_image_ops(GetParam())
+                           ->resize(source, target_height, target_width, lfs::gpu_ops::Resample::LanczosRGB, 2)
+                           .cpu();
+        }
         expect_close(load(resized).image, expected, 0.0f);
 
         auto undistorted = request("rgb8.png");
         const auto camera = distorted_camera();
         undistorted.undistort = &camera;
         undistorted.params.undistort = &camera;
-        expect_close(load(undistorted).image,
-                     undistort_image(host(planar(rgb8_, 3, UINT8_SCALE), chw), camera, nullptr),
-                     1.5e-4f);
+        // Warped RGB is bounded and quantized to the lossless 16-bit cache grid.
+        const auto warped = undistort_image(host(planar(rgb8_, 3, UINT8_SCALE), chw), camera, nullptr)
+                                .clamp(0.0f, 1.0f)
+                                .mul(65535.0f)
+                                .add(0.5f)
+                                .to(DataType::Int32)
+                                .to(DataType::Float32)
+                                .mul(UINT16_SCALE);
+        expect_close(load(undistorted).image, warped, 1.5e-4f);
     }
 
     TEST_P(PipelinedLoaderBackends, MasksMatchHostReference) {

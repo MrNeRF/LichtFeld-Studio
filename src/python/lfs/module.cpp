@@ -4,6 +4,7 @@
 
 #include "preferences.hpp"
 #include <algorithm>
+#include <cmath>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -28,6 +29,7 @@
 #include "py_mesh.hpp"
 #include "py_mesh2splat.hpp"
 #include "py_nn.hpp"
+#include "py_nodes.hpp"
 #include "py_operator.hpp"
 #include "py_packages.hpp"
 #include "py_params.hpp"
@@ -2195,11 +2197,11 @@ NB_MODULE(lichtfeld, m) {
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
            bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance,
-           int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
+           bool apply_modifiers, int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
             if (format >= 9 && format <= 12)
                 throw std::runtime_error("Use prepare_gallery_scene() to prepare a gallery upload.");
             lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable,
-                                       spz_version, include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
+                                       spz_version, include_provenance, apply_modifiers, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
         },
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
         nb::arg("rad_flip_y") = false,
@@ -2207,6 +2209,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("spz_version") = 4,
         nb::arg("include_provenance") = true,
         nb::kw_only(),
+        nb::arg("apply_modifiers") = true,
         nb::arg("lod_levels") = 4,
         nb::arg("lod_ratio") = 0.5f,
         nb::arg("chunk_count_k") = 512,
@@ -2217,6 +2220,7 @@ NB_MODULE(lichtfeld, m) {
         "For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. "
         "spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. "
         "include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. "
+        "apply_modifiers (default true) exports the evaluated Node Editor result; false exports the stored payload. "
         "Ignored for COLMAP and SPZ v3.");
 
     m.def(
@@ -2228,8 +2232,11 @@ NB_MODULE(lichtfeld, m) {
                 throw std::runtime_error("No parameter manager available");
             }
             lfs::core::param::TrainingParameters params;
-            params.dataset = param_manager->getDatasetConfig();
-            params.optimization = param_manager->copyActiveParams();
+            if (auto* const trainer_manager = lfs::python::get_trainer_manager()) {
+                params = trainer_manager->getEditableTrainingParams(*param_manager);
+            } else {
+                params = param_manager->createForDataset({}, {});
+            }
             if (const auto result = lfs::core::param::save_training_parameters_to_json(params, output_path); !result) {
                 throw std::runtime_error("Failed to save config: " + result.error());
             }
@@ -3225,6 +3232,9 @@ NB_MODULE(lichtfeld, m) {
     // Register Tensor class
     lfs::python::register_tensor(m);
 
+    auto nodes_module = m.def_submodule("nodes", "Geometry node trees and modifiers");
+    lfs::python::register_nodes(nodes_module);
+
     auto nn_module = m.def_submodule("nn", "Neural network inference");
     lfs::python::register_nn(nn_module);
 
@@ -3521,24 +3531,36 @@ NB_MODULE(lichtfeld, m) {
         },
         "Print the scene graph tree");
 
-    // Frame callback for animations
-    m.def(
-        "on_frame", [](nb::callable cb) {
-            const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
-            lfs::python::set_frame_callback([callback](float dt) {
-                try {
-                    (*callback)(dt);
-                } catch (nb::python_error& e) {
-                    (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
-                    lfs::python::clear_frame_callback();
-                } catch (const std::exception& e) {
-                    (void)lfs::python::contain_cxx_callback(e.what(), lfs::python::PyCallbackPolicy::DisableAndReport);
-                    lfs::python::clear_frame_callback();
-                }
-            });
-            LOG_INFO("Frame callback registered");
+    // Frame callback for animations. Legacy registrations without an explicit
+    // duration expire after ten seconds and emit a single process-wide warning.
+    const auto register_frame_callback = [](nb::callable cb, nb::object duration_s) {
+        std::optional<double> duration;
+        if (!duration_s.is_none()) {
+            duration = nb::cast<double>(duration_s);
+            if (!std::isfinite(*duration) || *duration <= 0.0)
+                throw nb::value_error("duration_s must be a positive finite number");
+        }
+        const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
+        lfs::python::set_frame_callback([callback](float dt) {
+            try {
+                (*callback)(dt);
+            } catch (nb::python_error& e) {
+                (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
+                lfs::python::clear_frame_callback();
+            } catch (const std::exception& e) {
+                (void)lfs::python::contain_cxx_callback(e.what(), lfs::python::PyCallbackPolicy::DisableAndReport);
+                lfs::python::clear_frame_callback();
+            }
         },
-        nb::arg("callback"), "Register a callback to be called each frame with delta time (seconds)");
+                                        duration);
+        LOG_INFO("Frame callback registered");
+    };
+    m.def("on_frame", register_frame_callback,
+          nb::arg("callback"), nb::arg("duration_s") = nb::none(),
+          "Register a frame callback with an optional positive lifetime in seconds (defaults to 10 seconds).");
+    m.def("set_frame_callback", register_frame_callback,
+          nb::arg("callback"), nb::arg("duration_s") = nb::none(),
+          "Register a frame callback with an optional positive lifetime in seconds (defaults to 10 seconds).");
 
     m.def(
         "stop_animation", []() {
@@ -3825,6 +3847,12 @@ Example:
         lfs::vis::op::OperatorRegistry::instance().invalidatePollCache(dep);
         lfs::vis::gui::PanelRegistry::instance().invalidate_poll_cache(dep);
     });
+
+    try {
+        nb::module_::import_("lfs_plugins.node_posterize");
+    } catch (const nb::python_error& error) {
+        LOG_WARN("Could not register the built-in Posterize node: {}", error.what());
+    }
 
     // Module metadata
     m.attr("__version__") = GIT_TAGGED_VERSION;

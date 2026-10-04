@@ -81,8 +81,6 @@ namespace lfs::vis::gui {
         void reloadResources();
         void render(const PanelDrawContext& ctx, float x, float y, float w, float h,
                     int screen_w, int screen_h);
-        void renderCached(const PanelDrawContext& ctx, float x, float y, float w, float h,
-                          int screen_w, int screen_h);
         [[nodiscard]] LFS_VIS_API bool animationFrameDue(
             std::chrono::steady_clock::time_point now) const;
         [[nodiscard]] LFS_VIS_API std::optional<double> secondsUntilAnimationFrame(
@@ -103,7 +101,7 @@ namespace lfs::vis::gui {
             float h = 0.0f;
         };
 
-        bool updateContent(const PanelDrawContext& ctx, bool force_refresh);
+        bool updateContent(const PanelDrawContext& ctx);
         LFS_VIS_API void updateBackendContent();
         LFS_VIS_API void updateBackendContent(std::optional<rendering::ViewerBackend> published_backend);
         LFS_VIS_API bool applyHoverTooltip(int doc_w, int bar_h, int maximum_overlay_height,
@@ -320,14 +318,11 @@ namespace lfs::vis::gui {
         bool model_animation_active_ = false;
         bool rml_animation_active_ = false;
         bool animation_active_ = false;
-        bool reactive_fps_available_ = false;
-        float reactive_fps_value_ = 0.0f;
         std::vector<lfs::core::reactive::SubscriptionToken> subscriptions_;
         int fit_level_ = 0;
         float last_dp_ratio_ = 0.0f;
         uint32_t section_signature_ = 0;
         uint32_t last_section_signature_ = 0;
-        std::uint64_t last_runtime_service_revision_ = 0;
         int last_render_w_ = 0;
         int last_render_h_ = 0;
         int last_document_h_ = 0;

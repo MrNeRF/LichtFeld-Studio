@@ -226,8 +226,9 @@ namespace lfs::core {
         return load(LoadOp::Normal, args);
     }
 
-    Tensor Tensor::uniform(TensorShape shape, float low, float high, Device device, DataType dtype) {
+    Tensor Tensor::uniform(TensorShape shape, float low, float high, Device device, DataType dtype, std::optional<uint64_t> seed) {
         LoadArgs args;
+        args.random_seed = seed;
         args.shape = shape;
         args.device = device;
         args.dtype = dtype;

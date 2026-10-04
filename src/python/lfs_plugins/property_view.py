@@ -90,10 +90,11 @@ BOOL_PROPS = (
     "random",
     "enable_eval",
     "eval_all",
+    "eval_mask_invert",
     "background_improvements",
 )
 
-SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space")
+SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space", "eval_space")
 MIGRATED_PROP_IDS = NUMBER_PROPS + BOOL_PROPS + SELECT_PROPS
 
 # These registered properties are intentionally represented by bespoke widgets or
@@ -110,6 +111,7 @@ BESPOKE_OR_HIDDEN = {
     "headless": "runtime-only read-only flag",
     "prune_ratio": "scrub slider",
     "steps_scaler": "driven by apply_step_scaling via the iterations lock; raw edits desync step counts",
+    "eval_mask": "mesh file browser and path display",
 }
 
 AUTO_ADVANCED_RUN_ID = "advanced_registry"
@@ -214,6 +216,12 @@ BASIC_RUNS = (
 DATASET_RUNS = (
     _run("dataset_eval", "enable_eval", visibility_condition_id="has_dataset"),
     _run("dataset_eval_train", "eval_all", visibility_condition_id="dep_eval"),
+    _run("dataset_eval_space", "eval_space", visibility_condition_id="dep_undistort"),
+    _run(
+        "dataset_eval_mask_invert",
+        "eval_mask_invert",
+        visibility_condition_id="dep_eval_mask",
+    ),
 )
 
 OPTIMIZATION_RUNS = (
@@ -306,8 +314,8 @@ APPEARANCE_RUNS = _basic_runs(
     _run("appearance_tuning", "ppisp_lr", "ppisp_reg_weight", "ppisp_warmup_steps",
          visibility_condition_id="dep_ppisp_params"),
 )
-EVALUATION_RUNS = tuple(run for run in DATASET_RUNS if run.id in {"dataset_eval", "dataset_eval_train"})
-DATASET_RUNS = tuple(run for run in DATASET_RUNS if run.id not in {"dataset_eval", "dataset_eval_train"})
+EVALUATION_RUNS = tuple(run for run in DATASET_RUNS if run.id in {"dataset_eval", "dataset_eval_train", "dataset_eval_space"})
+DATASET_RUNS = tuple(run for run in DATASET_RUNS if run.id not in {"dataset_eval", "dataset_eval_train", "dataset_eval_space"})
 
 SECTIONS = (
     SectionSpec("basic_params", "training.section.method", METHOD_RUNS),

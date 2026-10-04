@@ -324,6 +324,8 @@ def operation_actions(entry: Any) -> list[dict[str, Any]]:
         {"action": "export_as", "label": "projects.action.export_as"},
         {"action": "update_thumbnail", "label": "projects.action.update_thumbnail"},
         {"action": "rename", "label": "projects.action.rename"},
+        {"action": "clean", "label": "project_cleanup.title"},
+        {"action": "compact_content", "label": "projects.contents.compact"},
     ]
 
 
@@ -597,6 +599,7 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
         r = row("removed:" + str(len(rows)), kind, label, removed.get("bytes", 0))
         r.update(pending=True, undo=True, removal_id=removed["id"], detail=tr("projects.contents.removed"))
     storage = value(details, "storage", None)
+    row("clean", "clean", tr("project_cleanup.title"), action="clean", action_label="project_cleanup.title")
     ratio = float(value(storage, "dead_ratio", 0) or 0)
     if ratio >= 0.01 or pending:
         compact = row("compact", "compact", tr("projects.contents.reclaimable").format(percent=f"{ratio * 100:.0f}"),

@@ -44,6 +44,9 @@ namespace lfs::vis {
         // Import params: overwrites both session and current for active strategy
         void importParams(const lfs::core::param::OptimizationParameters& params);
 
+        // Import editable configuration, preserving loaded dataset paths and omitted fields.
+        std::expected<void, lfs::Error> importConfigFile(const std::filesystem::path& path, bool import_dataset = true);
+
         // Import a fully resolved training configuration (e.g., checkpoint restore).
         void importTrainingParams(const lfs::core::param::TrainingParameters& params);
 
@@ -136,6 +139,7 @@ namespace lfs::vis {
 
         // Dataset config (CLI overrides JSON defaults)
         lfs::core::param::DatasetConfig dataset_config_;
+        lfs::core::param::ServerConfig server_config_;
         std::vector<lfs::core::param::OutputFormat> export_formats_;
 
         mutable std::mutex params_mutex_;

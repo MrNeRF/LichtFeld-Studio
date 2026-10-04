@@ -378,8 +378,6 @@ namespace lfs::python {
                 store.scene_generation.set(nb::cast<std::uint64_t>(value));
             else if (field == "selection_generation")
                 store.selection_generation.set(nb::cast<std::uint64_t>(value));
-            else if (field == "fps")
-                store.fps.set(nb::cast<float>(value));
             else if (field == "mode_text")
                 store.mode_text.set(nb::cast<std::string>(value));
             else if (field == "active_tool")
@@ -448,8 +446,6 @@ namespace lfs::python {
                 return nb::cast(store.scene_generation.get());
             if (field == "selection_generation")
                 return nb::cast(store.selection_generation.get());
-            if (field == "fps")
-                return nb::cast(store.fps.get());
             if (field == "mode_text")
                 return nb::cast(store.mode_text.get());
             if (field == "active_tool")
@@ -517,8 +513,6 @@ namespace lfs::python {
                 return subscribe_observable(store.scene_generation, std::move(callback));
             if (field == "selection_generation")
                 return subscribe_observable(store.selection_generation, std::move(callback));
-            if (field == "fps")
-                return subscribe_observable(store.fps, std::move(callback));
             if (field == "mode_text")
                 return subscribe_observable(store.mode_text, std::move(callback));
             if (field == "active_tool")

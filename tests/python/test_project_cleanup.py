@@ -137,3 +137,81 @@ def test_native_error_shows_plain_user_message(cleanup):
     cleanup.state["error"] = "lfs::Error[Cancelled/IO]\n  user_message: Project cleanup was canceled.\n  detail: internal"
     cleanup.controller.poll()
     assert cleanup.updates[-1][2] == '<div class="modal-note">Project cleanup was canceled.</div>'
+
+
+def closed_cleanup(cleanup):
+    operations = []
+    completed = []
+    cleanup.menu.lf.io.clean_project_file = lambda *args: cleanup.calls.append(args)
+    c = cleanup.module.ProjectCleanup(str(cleanup.path),
+        lambda operation, finish, **kwargs: operations.append((operation, finish, kwargs)),
+        lambda: completed.append(True))
+    cleanup.state["path"] = str(cleanup.path.parent / "unrelated.licht")
+    return c, operations, completed
+
+
+@pytest.mark.parametrize("copy", [False, True])
+def test_closed_cleanup_uses_selected_file_without_saving_active_project(cleanup, copy):
+    c, operations, completed = closed_cleanup(cleanup)
+    cleanup.menu.lf.project_is_dirty = lambda: True
+    cleanup.menu.lf.is_training_active = lambda: True
+    c.start()
+    assert c.plan is cleanup.plan
+    assert not cleanup.menu.lf.confirm_dialogs
+    c.choose("project_cleanup.copy" if copy else "project_cleanup.clean_here")
+    operation, finish, guards = operations[0]
+    assert guards == {"expected_commit_uuid": "commit-3"}
+    operation(None, lambda: False)
+    args = cleanup.calls[0]
+    assert args[:3] == (str(cleanup.path), str(cleanup.path.parent / "copy.licht") if copy else "", "commit-3")
+    if copy:
+        (cleanup.path.parent / "copy.licht").write_bytes(b"clean")
+    finish(None)
+    c.poll()
+    assert c.finished
+    assert completed == [True]
+
+
+def test_closed_cleanup_rejects_project_opened_after_preview(cleanup):
+    c, operations, _completed = closed_cleanup(cleanup)
+    c.start()
+    cleanup.state["path"] = str(cleanup.path)
+    c.choose("project_cleanup.clean_here")
+    assert operations == []
+    assert c.finished
+
+
+def test_closed_cleanup_cancellation_and_failure_do_not_use_active_writer(cleanup):
+    c, operations, completed = closed_cleanup(cleanup)
+    c.start()
+    c.choose("project_cleanup.clean_here")
+    c.cancel()
+    operation, finish, _guards = operations[0]
+    operation(None, lambda: False)
+    assert cleanup.calls[0][-1]() is True
+    assert "cancel" not in cleanup.calls
+    finish(RuntimeError("user_message: Cleanup canceled"))
+    c.poll()
+    assert c.finished
+    assert completed == []
+    assert "Cleanup canceled" in cleanup.updates[-1][2]
+
+
+def test_selected_active_project_keeps_existing_save_and_cleanup_flow(cleanup):
+    c = cleanup.module.ProjectCleanup(str(cleanup.path), lambda *_args: pytest.fail("closed writer used"))
+    c.start()
+    assert not c.closed_file
+    c.choose("project_cleanup.clean_here")
+    assert cleanup.calls == [("", "commit-3")]
+
+
+def test_closed_cleanup_reports_operation_that_cannot_start(cleanup):
+    c, _operations, _completed = closed_cleanup(cleanup)
+    c.start()
+    def reject(*_args, **_kwargs):
+        raise RuntimeError("The selected file changed")
+    c.run_closed = reject
+    c.choose("project_cleanup.clean_here")
+    assert c.finished and not c.cleaning
+    assert cleanup.calls == []
+    assert "The selected file changed" in cleanup.updates[-1][2]

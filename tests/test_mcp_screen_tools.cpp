@@ -2,10 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/mcp_screen_tools.hpp"
+#include "input/injected_pointer.hpp"
 #include "mcp/mcp_protocol.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "visualizer/visualizer_impl.hpp"
 
+#include <SDL3/SDL_init.h>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
@@ -17,7 +19,72 @@ namespace {
 
     using json = nlohmann::json;
 
-    constexpr std::array<const char*, 13> kScreenToolNames = {
+    TEST(McpInjectedPointer, PositionSurvivesFramesAndNativeEventsCannotStealGesture) {
+        using namespace lfs::vis::input;
+        ASSERT_TRUE(SDL_InitSubSystem(SDL_INIT_EVENTS));
+        injectPointerMove(415, 628);
+        SDL_Event move{};
+        move.type = SDL_EVENT_MOUSE_MOTION;
+        pushInjectedPointerEvent(move);
+        SDL_Event native = move;
+        native.common.timestamp = move.common.timestamp + 1;
+        EXPECT_FALSE(prepareInjectedPointerEvent(native));
+        ASSERT_TRUE(prepareInjectedPointerEvent(move));
+        finishInjectedPointerFrame();
+        EXPECT_FALSE(injectedPointer());
+        ASSERT_TRUE(lastInjectedPointer());
+        EXPECT_EQ(lastInjectedPointer()->x, 415);
+        EXPECT_EQ(lastInjectedPointer()->y, 628);
+        injectPointerButton(SDL_BUTTON_LEFT, true);
+        SDL_Event down{};
+        down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        pushInjectedPointerEvent(down);
+        ASSERT_TRUE(prepareInjectedPointerEvent(down));
+        finishInjectedPointerFrame();
+        ASSERT_TRUE(injectedPointer());
+        EXPECT_EQ(injectedPointer()->x, 415);
+        EXPECT_FALSE(prepareInjectedPointerEvent(native));
+        injectPointerButton(SDL_BUTTON_LEFT, false);
+        SDL_Event up{};
+        up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        pushInjectedPointerEvent(up);
+        ASSERT_TRUE(prepareInjectedPointerEvent(up));
+        finishInjectedPointerFrame();
+        EXPECT_FALSE(injectedPointer());
+        EXPECT_TRUE(prepareInjectedPointerEvent(native));
+        SDL_QuitSubSystem(SDL_INIT_EVENTS);
+    }
+
+    TEST(McpInjectedPointer, HoverSurvivesFramesUntilDeadlineOrNextGesture) {
+        using namespace lfs::vis::input;
+        ASSERT_TRUE(SDL_InitSubSystem(SDL_INIT_EVENTS));
+        const auto move = []() {
+            injectPointerMove(250, 300);
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_MOTION;
+            pushInjectedPointerEvent(event);
+            EXPECT_TRUE(prepareInjectedPointerEvent(event));
+        };
+        move();
+        retainInjectedPointerFor(std::chrono::seconds(1));
+        for (int frame = 0; frame < 5; ++frame) {
+            finishInjectedPointerFrame();
+            ASSERT_TRUE(injectedPointer());
+            EXPECT_EQ(injectedPointer()->buttons, 0u);
+        }
+        // An expired lease restores real input, even without another event.
+        retainInjectedPointerFor(std::chrono::milliseconds(0));
+        finishInjectedPointerFrame();
+        EXPECT_FALSE(injectedPointer());
+        move();
+        retainInjectedPointerFor(std::chrono::seconds(1));
+        move();
+        finishInjectedPointerFrame();
+        EXPECT_FALSE(injectedPointer());
+        SDL_QuitSubSystem(SDL_INIT_EVENTS);
+    }
+
+    constexpr std::array<const char*, 14> kScreenToolNames = {
         "screen.get",
         "screen.split",
         "screen.join",
@@ -31,6 +98,7 @@ namespace {
         "view.set_camera",
         "view.get_settings",
         "view.set_settings",
+        "ui.pointer",
     };
 
     class McpScreenToolsTest : public ::testing::Test {

@@ -272,7 +272,9 @@ struct FastPreprocessParams {
     device float4* normals;
     device atomic_uint* max_screen_share;
     uint n, grid_w, grid_h, depth_bits;
-    uint mip_filter, unused0, unused1, unused2;
+    uint mip_filter;
+    float dilation_scale;
+    uint unused1, unused2;
     float fx, fy, cx, cy;
     float clip_left, clip_right, clip_top, clip_bottom;
     float near_plane, far_plane;
@@ -327,7 +329,7 @@ kernel void fast_preprocess(constant FastPreprocessParams& p [[buffer(0)]], cons
 
     const bool mip = p.mip_filter != 0u;
     const float det_raw = mip ? fmax(cov2d.x * cov2d.z - cov2d.y * cov2d.y, 0.0f) : 0.0f;
-    const float kernel_size = mip ? kFastDilationMip : kFastDilation;
+    const float kernel_size = (mip ? kFastDilationMip : kFastDilation) * p.dilation_scale;
     cov2d.x += kernel_size;
     cov2d.z += kernel_size;
     const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;

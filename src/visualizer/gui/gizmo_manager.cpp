@@ -12,9 +12,12 @@
 #include "gui/gui_manager.hpp"
 #include "gui/rotation_gizmo.hpp"
 #include "gui/scale_gizmo.hpp"
+#include "gui/screen_host.hpp"
 #include "gui/translation_gizmo.hpp"
 #include "gui/ui_widgets.hpp"
+#include "gui/viewport_gizmo_geometry.hpp"
 #include "input/input_controller.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_id.hpp"
@@ -29,6 +32,8 @@
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
+#include "visualizer/nodes/viewport_coordinates.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
 #include <SDL3/SDL.h>
@@ -91,6 +96,7 @@ namespace lfs::vis::gui {
         constexpr int NODE_GIZMO_ID_BASE = 100;
         constexpr int CROPBOX_GIZMO_ID_BASE = 200;
         constexpr int ELLIPSOID_GIZMO_ID_BASE = 300;
+        constexpr int NODE_GRAPH_GIZMO_ID_BASE = 400;
 
         [[nodiscard]] int viewGizmoId(int base, ViewId view) {
             return base + static_cast<int>(view) * 16;
@@ -137,7 +143,8 @@ namespace lfs::vis::gui {
             const float size,
             const float margin_x,
             const float margin_y) {
-            if (!panel.valid() || size <= 0.0f) {
+            if (!panel.valid() || size <= 0.0f ||
+                !viewportGizmoFits(panel.size.x, panel.size.y, viewportGizmoUiScale())) {
                 return std::nullopt;
             }
 
@@ -483,7 +490,7 @@ namespace lfs::vis::gui {
             sm->setNodeTransform(node->name, local_transform);
             scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
             if (rm)
-                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
             auto entry = std::make_unique<op::CropBoxUndoEntry>(
                 *sm, rm, node->name, before_data, before_transform, show_before, use_before);
@@ -508,7 +515,7 @@ namespace lfs::vis::gui {
         sm->setNodeTransform(node->name, local_transform);
         scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         if (rm)
-            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
         auto entry = std::make_unique<op::EllipsoidUndoEntry>(
             *sm, rm, node->name, before_data, before_transform, show_before, use_before);
@@ -766,7 +773,7 @@ namespace lfs::vis::gui {
         if (!effectively_visible) {
             rm->setCropboxGizmoActive(false);
             rm->setEllipsoidGizmoActive(false);
-            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
             return;
         }
         if (crop_tool_shape_ == CropToolShape::Box) {
@@ -778,7 +785,7 @@ namespace lfs::vis::gui {
                 true, crop_tool_ellipsoid_radii_, crop_tool_visualizer_transform_, affects_render, parent_node_index);
             rm->setCropboxGizmoActive(false);
         }
-        rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+        rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
     }
 
     void GizmoManager::setCropToolShape(const std::string& shape) {
@@ -1927,6 +1934,188 @@ namespace lfs::vis::gui {
         overlay_drawlist.PopClipRect();
     }
 
+    void GizmoManager::renderNodeGraphGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
+        auto* const render_manager = ctx.viewer ? ctx.viewer->getRenderingManager() : nullptr;
+        auto* const scene_manager = ctx.viewer ? ctx.viewer->getSceneManager() : nullptr;
+        auto* const gui_manager = ctx.viewer ? ctx.viewer->getGuiManager() : nullptr;
+        const bool editor_visible = gui_manager && gui_manager->screenHost().isEditorVisible("node_editor");
+        if (scene_manager)
+            scene_manager->modifierManager().setViewportEditorVisible(editor_visible);
+        auto state = scene_manager && editor_visible
+                         ? scene_manager->modifierManager().viewportNodeGizmo()
+                         : std::optional<NodeViewportGizmo>{};
+        if (!render_manager || !state) {
+            if (render_manager) {
+                render_manager->setNodeBoxGizmoState(false, glm::mat4(1.0f), glm::mat4(1.0f), false);
+                render_manager->setNodeEllipsoidGizmoState(false, glm::mat4(1.0f), glm::mat4(1.0f), false);
+                render_manager->updateSettings(render_manager->getSettings(), DirtyFlag::OVERLAY);
+            }
+            if (node_graph_gizmo_active_ && scene_manager)
+                scene_manager->modifierManager().endViewportNodeGizmoDrag(true);
+            node_graph_gizmo_active_ = false;
+            return;
+        }
+
+        const auto active_panel = resolveActiveGizmoPanel(ctx.viewer, viewport);
+        if (!active_panel || !active_panel->valid())
+            return;
+        const auto settings = render_manager->settingsForView(viewport.view);
+        auto& vp = *active_panel->viewport;
+        const glm::mat4 view = vp.getViewMatrix();
+        const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x),
+                                 static_cast<int>(active_panel->size.y));
+        const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
+            vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
+        glm::mat4 gizmo_matrix = state->world_transform;
+        const glm::vec3 pivot_world(gizmo_matrix[3]);
+        const glm::mat3 orientation = userFacingLocalRotation(gizmo_matrix);
+
+        NativeOverlayDrawList overlay_drawlist;
+        const glm::vec2 clip_min(active_panel->pos.x, active_panel->pos.y);
+        const glm::vec2 clip_max = clip_min + active_panel->size;
+        overlay_drawlist.PushClipRect(clip_min, clip_max, true);
+        const auto& frame_input = viewer_->getWindowManager()->frameInput();
+        const bool interactive_view = transform_gizmo_view_ != kNoView
+                                          ? viewport.view == transform_gizmo_view_
+                                          : viewport.view == viewer_->activeView().id;
+        NativeGizmoInput input = nativeGizmoInputFromFrame(frame_input);
+        if (!interactive_view || !state->editable) {
+            input.mouse_left_clicked = false;
+            input.mouse_left_down = false;
+        }
+        const bool snap = nativeControlModifierDown(frame_input);
+        bool changed = false;
+        bool using_gizmo = false;
+        bool hovered = false;
+
+        if (!state->editable) {
+            // Linked target inputs are still visualized, but do not expose handles.
+        } else if (node_gizmo_operation_ == GizmoOperation::Translate) {
+            TranslationGizmoConfig config;
+            config.id = viewGizmoId(NODE_GRAPH_GIZMO_ID_BASE, viewport.view);
+            config.viewport_pos = active_panel->pos;
+            config.viewport_size = active_panel->size;
+            config.view = view;
+            config.projection = projection;
+            config.pivot_world = pivot_world;
+            config.orientation_world = transform_space_ == TransformSpace::World ? glm::mat3(1.0f)
+                                                                                 : orientation;
+            config.draw_list = &overlay_drawlist;
+            config.input = input;
+            config.input_enabled = state->editable;
+            config.snap = snap;
+            config.snap_units = TRANSLATE_SNAP_UNITS;
+            const auto result = drawTranslationGizmo(config);
+            changed = result.changed;
+            using_gizmo = result.active;
+            hovered = result.hovered;
+            if (changed)
+                gizmo_matrix[3] += glm::vec4(result.delta_translation, 0.0f);
+        } else if (node_gizmo_operation_ == GizmoOperation::Rotate) {
+            RotationGizmoConfig config;
+            config.id = viewGizmoId(NODE_GRAPH_GIZMO_ID_BASE, viewport.view);
+            config.viewport_pos = active_panel->pos;
+            config.viewport_size = active_panel->size;
+            config.view = view;
+            config.projection = projection;
+            config.pivot_world = pivot_world;
+            config.orientation_world = transform_space_ == TransformSpace::World ? glm::mat3(1.0f)
+                                                                                 : orientation;
+            config.draw_list = &overlay_drawlist;
+            config.input = input;
+            config.input_enabled = state->editable;
+            config.snap = snap;
+            config.snap_degrees = ROTATION_SNAP_DEGREES;
+            const auto result = drawRotationGizmo(config);
+            changed = result.changed;
+            using_gizmo = result.active;
+            hovered = result.hovered;
+            if (changed)
+                gizmo_matrix = glm::translate(glm::mat4(1.0f), pivot_world) *
+                               glm::mat4(result.delta_rotation) *
+                               glm::translate(glm::mat4(1.0f), -pivot_world) * gizmo_matrix;
+        } else {
+            ScaleGizmoConfig config;
+            config.id = viewGizmoId(NODE_GRAPH_GIZMO_ID_BASE, viewport.view);
+            config.viewport_pos = active_panel->pos;
+            config.viewport_size = active_panel->size;
+            config.view = view;
+            config.projection = projection;
+            config.pivot_world = pivot_world;
+            config.orientation_world = orientation;
+            config.draw_list = &overlay_drawlist;
+            config.input = input;
+            config.input_enabled = state->editable;
+            config.snap = snap;
+            config.snap_ratio = SCALE_SNAP_RATIO;
+            const auto result = drawScaleGizmo(config);
+            changed = result.changed;
+            using_gizmo = result.active;
+            hovered = result.hovered;
+            if (changed) {
+                glm::vec3 delta = result.delta_scale;
+                if (state->kind == NodeViewportGizmoKind::Transform) {
+                    int axis = 0;
+                    for (int candidate = 1; candidate < 3; ++candidate)
+                        if (std::abs(delta[candidate] - 1.0f) > std::abs(delta[axis] - 1.0f))
+                            axis = candidate;
+                    delta = glm::vec3(delta[axis]);
+                }
+                gizmo_matrix[0] *= delta.x;
+                gizmo_matrix[1] *= delta.y;
+                gizmo_matrix[2] *= delta.z;
+            }
+        }
+
+        if (hovered || using_gizmo)
+            guiFocusState().want_capture_mouse = true;
+        if (interactive_view) {
+            if (using_gizmo)
+                transform_gizmo_view_ = viewport.view;
+            else if (!frame_input.mouse_down[0] && transform_gizmo_view_ == viewport.view)
+                transform_gizmo_view_ = kNoView;
+        }
+        auto& manager = scene_manager->modifierManager();
+        if (using_gizmo && !node_graph_gizmo_active_) {
+            node_graph_gizmo_active_ = manager.beginViewportNodeGizmoDrag();
+        }
+        if (changed && node_graph_gizmo_active_ && manager.updateViewportNodeGizmo(gizmo_matrix)) {
+            state = manager.viewportNodeGizmo();
+            if (state)
+                gizmo_matrix = state->world_transform;
+        }
+        if (!using_gizmo && node_graph_gizmo_active_) {
+            manager.endViewportNodeGizmoDrag(false);
+            node_graph_gizmo_active_ = false;
+        }
+
+        glm::mat4 falloff_transform = gizmo_matrix;
+        bool has_falloff = state->falloff > 0.0f;
+        if (has_falloff) {
+            nodes::NodeViewportTransform outer{
+                .translation = state->local_translation,
+                .rotation_degrees = state->local_rotation,
+                .scale = state->local_scale,
+            };
+            if (state->kind == NodeViewportGizmoKind::Box)
+                outer.scale += glm::vec3(state->falloff * 2.0f);
+            else
+                outer.scale *= 1.0f + state->falloff;
+            const nodes::ViewportCoordinates coordinates(scene_manager->getScene(), state->host_id);
+            if (coordinates.valid())
+                falloff_transform = coordinates.transformToWorld(outer);
+            else
+                has_falloff = false;
+        }
+        const bool box = state->kind == NodeViewportGizmoKind::Box;
+        const bool ellipsoid = state->kind == NodeViewportGizmoKind::Ellipsoid;
+        render_manager->setNodeBoxGizmoState(box, gizmo_matrix, falloff_transform,
+                                             box && has_falloff);
+        render_manager->setNodeEllipsoidGizmoState(ellipsoid, gizmo_matrix, falloff_transform,
+                                                   ellipsoid && has_falloff);
+        overlay_drawlist.PopClipRect();
+    }
+
     void GizmoManager::renderCropToolBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
         auto* const render_manager = ctx.viewer->getRenderingManager();
         if (!render_manager || crop_tool_shape_ != CropToolShape::Box || !ensureCropToolState())
@@ -2423,7 +2612,7 @@ namespace lfs::vis::gui {
                 gizmo_ops::applyTranslation(gizmo_context_, scene, new_pivot_world);
             }
 
-            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         }
 
         if (!is_using && cropbox_gizmo_active_) {
@@ -2954,7 +3143,7 @@ namespace lfs::vis::gui {
                 gizmo_ops::applyTranslation(gizmo_context_, scene, new_pivot_world);
             }
 
-            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
         }
 
         if (!is_using && ellipsoid_gizmo_active_) {
@@ -3068,6 +3257,8 @@ namespace lfs::vis::gui {
         ViewportGizmoPanelTarget* hovered_panel = nullptr;
         if (!ui_wants_mouse) {
             for (auto& panel : panels) {
+                if (!viewportGizmoFits(panel.size.x, panel.size.y, ui_scale))
+                    continue;
                 const float gizmo_x = panel.pos.x + panel.size.x - gizmo_size - gizmo_margin_x;
                 const float gizmo_y = panel.pos.y + gizmo_margin_y;
                 const bool mouse_in_gizmo = mouse_x >= gizmo_x &&
@@ -3105,7 +3296,7 @@ namespace lfs::vis::gui {
                     active_viewport.camera.startRotateAroundCenter(capture_mouse_pos, time);
                     if (SDL_Window* const window = viewer_->getWindow()) {
                         float fx, fy;
-                        SDL_GetMouseState(&fx, &fy);
+                        input::mouseStateInWindowCoordinates(window, &fx, &fy);
                         gizmo_drag_start_cursor_ = {fx, fy};
                         SDL_SetWindowRelativeMouseMode(window, true);
                     }
@@ -3195,7 +3386,7 @@ namespace lfs::vis::gui {
             node->cropbox->flash_intensity = 1.0f - static_cast<float>(elapsed_ms) / DURATION_MS;
         }
         sm->getScene().invalidateCache();
-        rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+        rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
     }
 
     void GizmoManager::deactivateAllTools() {
@@ -3303,6 +3494,8 @@ namespace lfs::vis::gui {
         const float gizmo_margin_x = VIEWPORT_GIZMO_MARGIN_X * ui_scale;
         const float gizmo_margin_y = VIEWPORT_GIZMO_MARGIN_Y * ui_scale;
         for (const auto& panel : panels) {
+            if (!viewportGizmoFits(panel.size.x, panel.size.y, ui_scale))
+                continue;
             const float gizmo_x = panel.pos.x + panel.size.x - gizmo_size - gizmo_margin_x;
             const float gizmo_y = panel.pos.y + gizmo_margin_y;
             if (x >= gizmo_x && x <= gizmo_x + gizmo_size &&

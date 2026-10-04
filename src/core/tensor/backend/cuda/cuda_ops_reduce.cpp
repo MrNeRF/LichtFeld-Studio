@@ -160,6 +160,15 @@ namespace lfs::core::internal {
             segment_count, segment_size, chain, program.op, context.cuda_stream);
     }
 
+    bool CudaBackendOps::arg_extreme(const StorageRef input, const StorageRef values, const StorageRef indices,
+                                     const ArgExtremeProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(arg_extreme);
+        tensor_ops::launch_arg_extreme(cuda_const_pointer<float>(input), cuda_pointer<float>(values),
+                                       cuda_pointer<int64_t>(indices), program.outer, program.reduce, program.inner,
+                                       program.maximum, context.cuda_stream);
+        return true;
+    }
+
     size_t CudaBackendOps::count_nonzero_bool(
         const StorageRef input, const size_t count, const ExecContext context) {
         LFS_FACADE_TRACE(count_nonzero_bool);

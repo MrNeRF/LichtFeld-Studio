@@ -18,14 +18,64 @@ namespace lfs::core::internal {
         }
     } // namespace
 
+    void CudaBackendOps::point_neighbor_spacing(const StorageRef points, const StorageRef references,
+                                                const StorageRef heads, const StorageRef next, const StorageRef output,
+                                                const size_t count, const size_t buckets, const float cell_width,
+                                                const ExecContext context) {
+        LFS_FACADE_TRACE(point_neighbor_spacing);
+        tensor_ops::launch_point_neighbor_spacing(cuda_pointer<const float>(points), cuda_pointer<const uint8_t>(references),
+                                                  cuda_pointer<int32_t>(heads), cuda_pointer<int32_t>(next), cuda_pointer<float>(output),
+                                                  count, buckets, cell_width, context.cuda_stream);
+    }
+
     void CudaBackendOps::radius_neighbors(const StorageRef points, const StorageRef references,
                                           const StorageRef heads, const StorageRef next, const StorageRef output,
                                           const size_t count, const size_t buckets, const float radius,
+                                          const bool exclude_self, const std::optional<StorageRef> queries,
                                           const ExecContext context) {
         LFS_FACADE_TRACE(radius_neighbors);
         tensor_ops::launch_radius_neighbors(cuda_pointer<const float>(points), cuda_pointer<const uint8_t>(references),
                                             cuda_pointer<int32_t>(heads), cuda_pointer<int32_t>(next), cuda_pointer<bool>(output),
-                                            count, buckets, radius, context.cuda_stream);
+                                            count, buckets, radius, exclude_self,
+                                            queries ? cuda_pointer<const uint8_t>(*queries) : nullptr, context.cuda_stream);
+    }
+
+    void CudaBackendOps::radius_neighbor_counts(const StorageRef points, const StorageRef references,
+                                                const StorageRef heads, const StorageRef next, const StorageRef output,
+                                                const size_t count, const size_t buckets, const float radius,
+                                                const int32_t max_count, const std::optional<StorageRef> queries,
+                                                const ExecContext context) {
+        LFS_FACADE_TRACE(radius_neighbor_counts);
+        tensor_ops::launch_radius_neighbor_counts(cuda_pointer<const float>(points), cuda_pointer<const uint8_t>(references),
+                                                  cuda_pointer<int32_t>(heads), cuda_pointer<int32_t>(next), cuda_pointer<int32_t>(output),
+                                                  count, buckets, radius, max_count,
+                                                  queries ? cuda_pointer<const uint8_t>(*queries) : nullptr, context.cuda_stream);
+    }
+
+    void CudaBackendOps::radius_neighbor_min(const StorageRef points, const StorageRef values,
+                                             const StorageRef references, const StorageRef heads,
+                                             const StorageRef next, const StorageRef output,
+                                             const size_t count, const size_t buckets, const float radius,
+                                             const ExecContext context) {
+        LFS_FACADE_TRACE(radius_neighbor_min);
+        tensor_ops::launch_radius_neighbor_min(
+            cuda_pointer<const float>(points), cuda_pointer<const void>(values),
+            values.dtype == DataType::Float32, cuda_pointer<const uint8_t>(references),
+            cuda_pointer<int32_t>(heads), cuda_pointer<int32_t>(next), cuda_pointer<void>(output),
+            count, buckets, radius, context.cuda_stream);
+    }
+
+    void CudaBackendOps::nearest_point_indices(StorageRef q, StorageRef t, StorageRef h, StorageRef n, StorageRef o,
+                                               size_t nq, size_t nt, size_t buckets, float width, ExecContext context) {
+        LFS_FACADE_TRACE(nearest_point_indices);
+        tensor_ops::launch_nearest_point_indices(cuda_pointer<const float>(q), cuda_pointer<const float>(t),
+                                                 cuda_pointer<int32_t>(h), cuda_pointer<int32_t>(n), cuda_pointer<int32_t>(o), nq, nt, buckets, width, context.cuda_stream);
+    }
+    void CudaBackendOps::camera_frustum_counts(StorageRef p, StorageRef c, StorageRef o, size_t n, size_t cameras,
+                                               float maximum, ExecContext context) {
+        LFS_FACADE_TRACE(camera_frustum_counts);
+        tensor_ops::launch_camera_frustum_counts(cuda_pointer<const float>(p), cuda_pointer<const float>(c),
+                                                 cuda_pointer<int32_t>(o), n, cameras, maximum, context.cuda_stream);
     }
 
     // CUDA builds rasterize point clouds with the renderer's own kernel.

@@ -44,6 +44,7 @@ namespace lfs::gpu_ops {
         bool mip_filter = false;
         bool render_normal = false;
         bool render_depth = true;
+        float dilation_scale = 1.0f;
     };
 
     // One enabled group is one parameter updated exactly once.

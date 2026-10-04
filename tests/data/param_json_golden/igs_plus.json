@@ -21,6 +21,9 @@
   "enable_save_eval_images": true,
   "enable_sparsity": false,
   "eval_all": false,
+  "eval_mask": "",
+  "eval_mask_invert": false,
+  "eval_space": "distorted",
   "eval_steps": [
     7000,
     30000

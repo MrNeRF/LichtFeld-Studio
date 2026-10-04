@@ -233,6 +233,61 @@ TEST_F(SelectionServiceInteractionsTest, SelectionAfterVisibilityChangeUsesRefre
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 0, 1, 0}));
 }
 
+TEST_F(SelectionServiceInteractionsTest, ColourPickMapsEvaluatedElementBackToStoredPayloadWhenTopologyMatches) {
+    constexpr float c0 = 0.28209479177387814f;
+    auto& scene = scene_manager_->getScene();
+    auto* const node = scene.getNode("test");
+    ASSERT_NE(node, nullptr);
+    node->model->sh0() = Tensor::from_vector(
+                             {(0.1f - 0.5f) / c0, (0.2f - 0.5f) / c0, (0.3f - 0.5f) / c0,
+                              (0.8f - 0.5f) / c0, (0.6f - 0.5f) / c0, (0.4f - 0.5f) / c0},
+                             {2, 1, 3}, Device::GPU)
+                             .to(DataType::Float32);
+    auto evaluated = make_test_splat({10.0f, 0.0f, 0.0f, 20.0f, 0.0f, 0.0f});
+    evaluated->sh0() = Tensor::from_vector(
+                           {(0.0f - 0.5f) / c0, (1.0f - 0.5f) / c0, (0.0f - 0.5f) / c0,
+                            (0.0f - 0.5f) / c0, (0.0f - 0.5f) / c0, (1.0f - 0.5f) / c0},
+                           {2, 1, 3}, Device::GPU)
+                           .to(DataType::Float32);
+    scene.setNodeEvaluatedPayload(node->uuid,
+                                  std::shared_ptr<lfs::core::SplatData>(std::move(evaluated)),
+                                  {}, {});
+    service_->setTestingHoveredGaussianId(1);
+
+    const auto picked = service_->pickAtScreen(50.0f, 50.0f);
+    ASSERT_TRUE(picked.has_value()) << picked.error().message;
+    EXPECT_TRUE(picked->colour_from_stored_payload);
+    ASSERT_EQ(picked->stored_index, std::optional<std::size_t>(1));
+    EXPECT_NEAR(picked->colour.r, 0.8f, 1e-5f);
+    EXPECT_NEAR(picked->colour.g, 0.6f, 1e-5f);
+    EXPECT_NEAR(picked->colour.b, 0.4f, 1e-5f);
+    EXPECT_NEAR(picked->world_position.x, 20.0f, 1e-5f);
+}
+
+TEST_F(SelectionServiceInteractionsTest, ColourPickFallsBackToEvaluatedPayloadWhenTopologyChanged) {
+    constexpr float c0 = 0.28209479177387814f;
+    auto& scene = scene_manager_->getScene();
+    auto* const node = scene.getNode("test");
+    ASSERT_NE(node, nullptr);
+    auto evaluated = make_test_splat({5.0f, 0.0f, 0.0f});
+    evaluated->sh0() = Tensor::from_vector(
+                           {(0.25f - 0.5f) / c0, (0.5f - 0.5f) / c0, (0.75f - 0.5f) / c0},
+                           {1, 1, 3}, Device::GPU)
+                           .to(DataType::Float32);
+    scene.setNodeEvaluatedPayload(node->uuid,
+                                  std::shared_ptr<lfs::core::SplatData>(std::move(evaluated)),
+                                  {}, {});
+    service_->setTestingHoveredGaussianId(0);
+
+    const auto picked = service_->pickAtScreen(50.0f, 50.0f);
+    ASSERT_TRUE(picked.has_value()) << picked.error().message;
+    EXPECT_FALSE(picked->colour_from_stored_payload);
+    EXPECT_FALSE(picked->stored_index.has_value());
+    EXPECT_NEAR(picked->colour.r, 0.25f, 1e-5f);
+    EXPECT_NEAR(picked->colour.g, 0.5f, 1e-5f);
+    EXPECT_NEAR(picked->colour.b, 0.75f, 1e-5f);
+}
+
 TEST_F(SelectionServiceInteractionsTest, DeleteSelectedGaussiansMapsFullSelectionMaskAcrossHiddenNodes) {
     const auto copy_id = scene_manager_->getScene().addSplat(
         "copy",

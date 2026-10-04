@@ -9,6 +9,7 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 
 #include <RmlUi/Core/EventListener.h>
+#include <chrono>
 #include <core/export.hpp>
 #include <cstddef>
 #include <deque>
@@ -82,6 +83,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool hasPendingRequest() const;
         [[nodiscard]] bool hasPendingRenderWork() const;
         [[nodiscard]] bool needsAnimationFrame() const;
+        [[nodiscard]] std::optional<double> secondsUntilNextUpdate() const;
         [[nodiscard]] std::string animationDemandDescription() const;
 
     private:
@@ -147,6 +149,7 @@ namespace lfs::vis::gui {
         int height_ = 0;
         CachedVulkanContextRender direct_cache_;
         bool render_needed_ = true;
+        std::optional<std::chrono::steady_clock::time_point> next_update_at_;
         bool dialog_position_valid_ = false;
         float last_dialog_left_ = 0.0f;
         float last_dialog_top_ = 0.0f;

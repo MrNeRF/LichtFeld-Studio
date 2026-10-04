@@ -5,6 +5,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
+import shutil
+import sys
 import unittest
 from pathlib import Path
 
@@ -59,6 +63,24 @@ class NeutralTrainerIncludeTest(unittest.TestCase):
         finally:
             forbidden.unlink()
         self.assertIn((1, "trainer-cuda-include", "kernels/depth_loss.hpp"), findings)
+
+    def test_directory_scan_includes_objective_cpp(self) -> None:
+        # Metal viewer code is Objective-C++; a directory scan must not skip it.
+        probe = Path(__file__).resolve().parent.parent / "src/visualizer/rendering/neutrality_probe"
+        probe.mkdir()
+        try:
+            (probe / "probe.mm").write_text("bool f(B b) { return b == core::GpuBackend::Metal; }\n", encoding="utf-8")
+            argv, sys.argv = sys.argv, ["check_backend_neutrality.py", "--root", str(probe)]
+            output = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(output):
+                    failed = gate.main()
+            finally:
+                sys.argv = argv
+        finally:
+            shutil.rmtree(probe)
+        self.assertTrue(failed, output.getvalue())
+        self.assertIn("probe.mm:1: [backend-branch]", output.getvalue())
 
 
 if __name__ == "__main__":

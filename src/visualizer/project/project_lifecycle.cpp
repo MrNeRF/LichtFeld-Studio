@@ -5,6 +5,7 @@
 
 #include "project_lifecycle.hpp"
 #include "io/project_operations.hpp"
+#include "io/sfm_observation_chapter.hpp"
 
 #include "core/assert.hpp"
 #include "core/checkpoint_format.hpp"
@@ -1704,6 +1705,8 @@ namespace lfs::vis::project {
                     .sequencer =
                         std::move(
                             session->sequencer),
+                    .nodes =
+                        std::move(session->nodes),
                     .metrics =
                         std::move(session->metrics),
                     .selected_node_uuids =
@@ -1877,7 +1880,7 @@ namespace lfs::vis::project {
         [[nodiscard]] bool isSessionSoftDirtyChapter(
             const std::string_view fourcc) {
             return fourcc == "GUIL" || fourcc == "VIEW" ||
-                   fourcc == "EDTR" || fourcc == "SEQR" ||
+                   fourcc == "EDTR" || fourcc == "SEQR" || fourcc == "NODE" ||
                    fourcc == "METR";
         }
 
@@ -6361,6 +6364,11 @@ namespace lfs::vis::project {
             document_->edit_scene_graph() =
                 std::move(*captured_scene);
         }
+        if (auto synced = lfs::io::project::sync_sfm_observations(
+                *document_, lfs::io::project::capture_sfm_observation_cameras(scene));
+            !synced) {
+            return synced;
+        }
         // Entering Edit Mode clears the SCNG training binding. Existing CKPT
         // chapters remain live historical data (not resumable without a
         // binding) and survive saves and compaction.
@@ -6949,6 +6957,11 @@ namespace lfs::vis::project {
                     session->sequencer.to_bytes())) {
                 document_->edit_sequencer() =
                     std::move(session->sequencer);
+            }
+            if (!sameBytes(
+                    document_->nodes().to_bytes(),
+                    session->nodes.to_bytes())) {
+                document_->edit_nodes() = std::move(session->nodes);
             }
             auto current_metrics =
                 document_->metrics().to_bytes();
@@ -7779,6 +7792,7 @@ namespace lfs::vis::project {
                     .view = candidate->view(),
                     .sequencer =
                         candidate->sequencer(),
+                    .nodes = candidate->nodes(),
                     .metrics = candidate->metrics(),
                 },
                 &candidate->references(),

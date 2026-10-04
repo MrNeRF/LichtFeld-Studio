@@ -257,6 +257,7 @@ namespace lfs::vis {
         dataset_config_ = lfs::core::param::DatasetConfig{};
         dataset_config_.centralize_dataset = "off";
         dataset_config_.loading_params = lfs::core::param::LoadingParams{};
+        server_config_ = lfs::core::param::ServerConfig{};
         export_formats_.clear();
         dirty_.store(false, std::memory_order_release);
     }
@@ -303,6 +304,7 @@ namespace lfs::vis {
 
         // Apply CLI overrides to dataset config
         const auto& ds = params.dataset;
+        server_config_ = params.server;
         if (ds.resize_factor > 0)
             dataset_config_.resize_factor = ds.resize_factor;
         if (ds.max_width >= 0)
@@ -350,6 +352,25 @@ namespace lfs::vis {
         LOG_INFO("Imported params: strategy={}, iter={}, sh={}", params.strategy, params.iterations, params.sh_degree);
     }
 
+    std::expected<void, lfs::Error> ParameterManager::importConfigFile(const std::filesystem::path& path, const bool import_dataset) {
+        const auto defaults = createForDataset(dataset_config_.data_path, dataset_config_.output_path);
+        auto candidate = lfs::core::param::read_training_parameters_from_json(path, defaults);
+        if (!candidate)
+            return std::unexpected(candidate.error());
+
+        if (!import_dataset)
+            candidate->dataset = dataset_config_;
+        // Config files change settings, not the loaded dataset or its output destination.
+        candidate->dataset.data_path = dataset_config_.data_path;
+        candidate->dataset.output_path = dataset_config_.output_path;
+        candidate->dataset.output_path_explicit = dataset_config_.output_path_explicit;
+        // The upstream parser validates the entire configuration before applying it.
+        candidate->optimization.apply_step_scaling();
+        importTrainingParams(*candidate);
+        markDirty();
+        return {};
+    }
+
     void ParameterManager::importTrainingParams(const lfs::core::param::TrainingParameters& params) {
         if (const auto result = ensureLoaded(); !result) {
             LOG_ERROR("Failed to load params: {}", result.error());
@@ -380,6 +401,7 @@ namespace lfs::vis {
         }
 
         dataset_config_ = params.dataset;
+        server_config_ = params.server;
         export_formats_ = params.export_formats;
         dirty_.store(false, std::memory_order_release);
 
@@ -434,6 +456,7 @@ namespace lfs::vis {
         params.dataset = dataset_config_;
         params.dataset.data_path = data_path;
         params.dataset.output_path = output_path;
+        params.server = server_config_;
         params.export_formats = export_formats_;
         return params;
     }

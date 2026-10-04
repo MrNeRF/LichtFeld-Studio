@@ -107,7 +107,7 @@ namespace lfs::vis::gui {
         bool enabled_visible_ = true;
         uint64_t last_scene_gen_ = 0;
         uint64_t last_prepare_frame_ = 0;
-        bool content_dirty_ = false;
+        bool content_dirty_ = true;
         float layout_width_ = -1.0f;
         float layout_height_ = -1.0f;
         float layout_scale_ = -1.0f;

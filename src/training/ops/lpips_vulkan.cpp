@@ -253,6 +253,10 @@ namespace lfs::training {
             p.stride = pack(params.y0, params.y1);
             p.padding = pack(params.x0, params.x1);
             p.inverse_count = params.inverse_count;
+            p.g = params.weights ? vk::address(storage_ref(*params.weights)) : 0;
+            p.out_width = params.weights_width;
+            p.out_height = params.weights_y0;
+            p.out_channels = params.weights_x0;
             size_t dispatch_count = p.count;
             if (do_pool)
                 dispatch_count = std::max(dispatch_count, pooled_x.numel());
@@ -264,6 +268,8 @@ namespace lfs::training {
                 writes.push_back(storage_ref(pooled_x));
                 writes.push_back(storage_ref(pooled_y));
             }
+            if (params.weights)
+                reads.push_back(storage_ref(*params.weights));
             dispatch(context, 3, p, reads, writes, dispatch_count);
         }
     } // namespace

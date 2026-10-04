@@ -360,6 +360,26 @@ namespace lfs::io::project {
             };
         }
 
+        Json default_nodes() {
+            return Json{
+                {"schema_version", 1},
+                {"trees", Json::array()},
+                {"stacks", Json::object()},
+            };
+        }
+
+        lfs::Result<void> validate_nodes(const Json& root) {
+            if (!root.is_object() || root.value("schema_version", 0) != 1 ||
+                !root.contains("trees") || !root["trees"].is_array() ||
+                !root.contains("stacks") || !root["stacks"].is_object()) {
+                return fail<void>(
+                    lfs::ErrorCode::DataLoss,
+                    "NODE must contain schema_version 1, a trees array, and a stacks object",
+                    "NODE");
+            }
+            return {};
+        }
+
         lfs::Result<Json> root_copy(
             const JsonChapterDom& dom,
             const std::string_view field) {
@@ -1128,6 +1148,9 @@ namespace lfs::io::project {
         case SessionJsonChapterKind::Sequencer:
             root = default_sequencer();
             break;
+        case SessionJsonChapterKind::Nodes:
+            root = default_nodes();
+            break;
         }
         const auto text = root.dump(2);
         auto dom = JsonChapterDom::parse(text);
@@ -1179,6 +1202,8 @@ namespace lfs::io::project {
             return validate_view(*root);
         case SessionJsonChapterKind::Sequencer:
             return validate_sequencer(*root);
+        case SessionJsonChapterKind::Nodes:
+            return validate_nodes(*root);
         }
         return fail<void>(
             lfs::ErrorCode::ContractViolation,

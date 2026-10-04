@@ -125,7 +125,7 @@ namespace lfs::io::project {
                    fourcc == FOURCC_SCNG || fourcc == FOURCC_SELM ||
                    fourcc == FOURCC_REFS || fourcc == FOURCC_GUIL ||
                    fourcc == FOURCC_VIEW || fourcc == FOURCC_EDTR ||
-                   fourcc == FOURCC_SEQR || fourcc == FOURCC_METR;
+                   fourcc == FOURCC_SEQR || fourcc == FOURCC_NODE || fourcc == FOURCC_METR;
         }
 
         bool same_path(const std::filesystem::path& lhs,

@@ -200,6 +200,13 @@ namespace lfs::core {
                         LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
                     }
                 }
+                if (json.contains("eval_space")) {
+                    const auto eval_space = json.at("eval_space").get<std::string>();
+                    if (!eval_space_from_string(eval_space)) {
+                        throw std::invalid_argument(
+                            "eval_space must be 'distorted' or 'undistorted'");
+                    }
+                }
                 read_registered_optimization_properties(json, params, skip_missing);
                 if (const auto image_count_scaler = stored_image_count_scaler(json, params.steps_scaler))
                     params.image_count_scaler = *image_count_scaler;
@@ -286,6 +293,19 @@ namespace lfs::core {
                 }
             }
 
+            [[nodiscard]] lfs::Error config_import_error(std::string detail, const std::filesystem::path& path) {
+                lfs::SmallFields fields;
+                fields.add("path", path_to_utf8(path));
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::IO,
+                    .user_message = "The config file could not be imported.",
+                    .detail = std::move(detail),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                    .fields = std::move(fields),
+                });
+            }
+
             std::expected<nlohmann::json, std::string> read_json_file(const std::filesystem::path& path) {
                 if (!std::filesystem::exists(path)) {
                     return std::unexpected(std::format("Config file not found: {}", path_to_utf8(path)));
@@ -370,6 +390,17 @@ namespace lfs::core {
             return std::max(0, total_iterations - tail_iters);
         }
 
+        std::string normalize_eval_mask_path(const std::string_view path) {
+            if (path.empty())
+                return {};
+            std::error_code error;
+            auto absolute = std::filesystem::absolute(utf8_to_path(std::string(path)), error);
+            if (error)
+                return std::string(path);
+            auto canonical = std::filesystem::weakly_canonical(absolute, error);
+            return path_to_utf8((error ? absolute : canonical).lexically_normal());
+        }
+
         nlohmann::json OptimizationParameters::to_json() const {
             nlohmann::json opt_json;
             write_registered_optimization_properties(opt_json, *this);
@@ -388,6 +419,8 @@ namespace lfs::core {
             opt_json["bg_color"] = {bg_color[0], bg_color[1], bg_color[2]};
             if (!bg_image_path.empty())
                 opt_json["bg_image_path"] = path_to_utf8(bg_image_path);
+            if (!eval_mask.empty())
+                opt_json["eval_mask"] = normalize_eval_mask_path(eval_mask);
             if (!explore_starvation_weighting)
                 opt_json["explore_starvation_weighting"] = false;
 
@@ -454,6 +487,18 @@ namespace lfs::core {
 
             if (!is_valid_strategy_name(strategy))
                 return std::format("strategy must be one of mcmc, mrnf, or igs+ (got '{}')", strategy);
+            if (eval_mask_invert && eval_mask.empty())
+                return "eval_mask_invert requires eval_mask";
+            if (!eval_mask.empty() && !enable_eval)
+                return "eval_mask requires evaluation to be enabled";
+            if (!eval_mask.empty()) {
+                const auto path = utf8_to_path(eval_mask);
+                if (!path.is_absolute())
+                    return "eval_mask must be an absolute path";
+                std::error_code error;
+                if (!std::filesystem::is_regular_file(path, error))
+                    return std::format("eval_mask file does not exist: {}", eval_mask);
+            }
             if (iterations == 0 || iterations > MAX_ITERATION_VALUE)
                 return std::format("iterations must be within [1, {}] (got {})", MAX_ITERATION_VALUE, iterations);
             if (refine_every == 0 || refine_every > MAX_ITERATION_VALUE)
@@ -581,6 +626,8 @@ namespace lfs::core {
                 normal_loss_space != NormalLossSpace::CameraOpenGL &&
                 normal_loss_space != NormalLossSpace::World)
                 return "normal_loss_space must be 'auto', 'camera-opencv', 'camera-opengl', or 'world'";
+            if (eval_space != EvalSpace::Distorted && eval_space != EvalSpace::Undistorted)
+                return "eval_space must be 'distorted' or 'undistorted'";
             if (normal_start_fraction > normal_end_fraction)
                 return std::format(
                     "normal_start_fraction must not exceed normal_end_fraction ({} > {})",
@@ -621,9 +668,10 @@ namespace lfs::core {
                 return std::format("freeze_lr_scale must be within [0, 1] (got {})", freeze_lr_scale);
             }
             if (!add_splat_paths.empty()) {
-                if (resume_checkpoint.has_value() ||
-                    resume_project.has_value() ||
-                    project_path.has_value()) {
+                if (!add_splats_applied &&
+                    (resume_checkpoint.has_value() ||
+                     resume_project.has_value() ||
+                     project_path.has_value())) {
                     return "--add-splat cannot be used together with --resume";
                 }
                 if (!add_splat_freeze.empty() && add_splat_freeze.size() != add_splat_paths.size()) {
@@ -633,7 +681,7 @@ namespace lfs::core {
                     if (path.empty()) {
                         return "--add-splat path cannot be empty";
                     }
-                    if (!std::filesystem::exists(path)) {
+                    if (!add_splats_applied && !std::filesystem::exists(path)) {
                         return std::format("Added splat does not exist: '{}'",
                                            lfs::core::path_to_utf8(path));
                     }
@@ -811,6 +859,7 @@ namespace lfs::core {
                 }
             }
             apply_optimization_json_overlay(params, json, false);
+            params.eval_mask = normalize_eval_mask_path(params.eval_mask);
             // Legacy GUI saves recorded the image factor in steps_scaler.
             if (!stored_image_count_scaler(json, params.steps_scaler))
                 params.image_count_scaler = params.steps_scaler > 0.f ? params.steps_scaler : 1.f;
@@ -880,6 +929,68 @@ namespace lfs::core {
         std::expected<OptimizationParameters, std::string> read_optim_params_from_json(const std::filesystem::path& path) {
             ExplicitTrainingOverrides unused;
             return read_optim_params_from_json(path, unused);
+        }
+
+        std::expected<TrainingParameters, lfs::Error> read_training_parameters_from_json(
+            const std::filesystem::path& path,
+            const TrainingParameters& defaults) {
+            auto json_result = read_json_file(path);
+            if (!json_result) {
+                return std::unexpected(config_import_error(std::move(json_result.error()), path));
+            }
+
+            const auto& json = *json_result;
+            const auto& opt_json = json.contains("optimization") ? json["optimization"] : json;
+            if (!opt_json.is_object()) {
+                return std::unexpected(config_import_error("Optimization parameters must be a JSON object", path));
+            }
+
+            try {
+                TrainingParameters params = defaults;
+                params.optimization = OptimizationParameters::mrnf_defaults();
+                if (opt_json.contains("strategy")) {
+                    const auto strategy = opt_json.at("strategy").get<std::string>();
+                    const auto canonical = canonical_strategy_name(strategy);
+                    if (!canonical.empty()) {
+                        params.optimization = OptimizationParameters::defaults_for_strategy(canonical);
+                    }
+                }
+                apply_optimization_json_overlay(params.optimization, opt_json, true);
+
+                if (json.contains("dataset")) {
+                    if (!json["dataset"].is_object()) {
+                        return std::unexpected(config_import_error("Dataset parameters must be a JSON object", path));
+                    }
+                    apply_dataset_json_overlay(params.dataset, json["dataset"]);
+                }
+                if (json.contains("server")) {
+                    if (!json["server"].is_object()) {
+                        return std::unexpected(config_import_error("Server parameters must be a JSON object", path));
+                    }
+                    const auto& server_json = json["server"];
+                    if (server_json.contains("tcp_server_connection_port")) {
+                        params.server.tcp_server_connection_port =
+                            server_json["tcp_server_connection_port"].get<int>();
+                    }
+                    if (server_json.contains("tcp_broadcast_connection_port")) {
+                        params.server.tcp_broadcast_connection_port =
+                            server_json["tcp_broadcast_connection_port"].get<int>();
+                    }
+                    if (server_json.contains("tcp_connection")) {
+                        params.server.tcp_connection = server_json["tcp_connection"].get<bool>();
+                    }
+                }
+
+                if (const auto error = params.optimization.validate(); !error.empty()) {
+                    return std::unexpected(config_import_error("Invalid optimization parameters: " + error, path));
+                }
+                if (const auto error = params.dataset.validate(); !error.empty()) {
+                    return std::unexpected(config_import_error("Invalid dataset parameters: " + error, path));
+                }
+                return params;
+            } catch (const std::exception& e) {
+                return std::unexpected(config_import_error(std::format("Error parsing training parameters: {}", e.what()), path));
+            }
         }
 
         std::expected<void, std::string> save_training_parameters_to_json(
@@ -1001,6 +1112,7 @@ namespace lfs::core {
             json["loading_params"] = loading_params.to_json();
             json["invert_masks"] = invert_masks;
             json["mask_threshold"] = mask_threshold;
+            json["centralize_dataset"] = centralize_dataset;
             if (!output_name.empty())
                 json["output_name"] = output_name;
 
@@ -1041,6 +1153,9 @@ namespace lfs::core {
             }
             if (j.contains("mask_threshold")) {
                 dataset.mask_threshold = j["mask_threshold"].get<float>();
+            }
+            if (j.contains("centralize_dataset")) {
+                dataset.centralize_dataset = j["centralize_dataset"].get<std::string>();
             }
 
             return dataset;

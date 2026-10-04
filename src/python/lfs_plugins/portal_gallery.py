@@ -21,6 +21,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from .private_directory import mkdir_private
 from .http import urlopen
 from .portal_retry import retry_call
 from .portal_account import _default_client_version
@@ -415,7 +416,7 @@ class PortalGalleryClient:
         destination = Path(destination)
         final = Path(final_destination) if final_destination else destination
         disk_preflight([(destination, total * 2), (final, total + (final.stat().st_size if final.exists() else 0))])
-        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        mkdir_private(destination.parent, parents=True, exist_ok=True)
         partial = destination.with_name('.' + destination.name + '.part')
         if partial.is_symlink() or destination.is_symlink():
             raise ValueError("Download destination was redirected")
@@ -572,7 +573,7 @@ class PortalGalleryClient:
         destination = Path(destination)
         final = Path(final_destination) if final_destination else destination
         disk_preflight([(destination, total * 2), (final, total)])
-        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        mkdir_private(destination.parent, parents=True, exist_ok=True)
         partial = destination.with_name("." + destination.name + ".part")
         if partial.is_symlink() or destination.is_symlink():
             raise ValueError("Download destination was redirected")

@@ -146,7 +146,8 @@ namespace lfs::training::vulkan {
         p.depth_bits = std::min(23u, 32u - tile_bits);
         p.active_bases = params.sh.active_bases;
         p.rest = params.sh.layout_bases - 1;
-        p.mip = params.mip_filter;
+        // Keep the push block within its existing size: low bit is mip, remaining bits encode dilation.
+        p.mip = (std::bit_cast<uint32_t>(params.dilation_scale) & ~1u) | uint32_t(params.mip_filter);
         p.render_normal = params.render_normal;
         p.render_depth = params.render_depth;
         p.fx = params.intrinsics.fx;

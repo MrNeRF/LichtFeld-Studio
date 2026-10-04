@@ -18,14 +18,20 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace lfs::core {
 
     LFS_CORE_API std::tuple<int, int, int>
     get_image_info(std::filesystem::path p);
+    // Target size for the resize_factor/max_width rules shared by every image loader.
+    LFS_CORE_API std::pair<int, int>
+    resized_image_dimensions(int source_width, int source_height, int resize_factor, int max_width);
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
     load_image_with_alpha(std::filesystem::path p, int res_div = -1, int max_width = 0);
+    LFS_CORE_API std::tuple<uint16_t*, int, int, int>
+    load_image_with_alpha_u16(std::filesystem::path p, int res_div = -1, int max_width = 0);
     // Decodes an encoded image held in memory to RGB; res_div and max_width
     // resize as in load_image.
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>

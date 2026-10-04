@@ -460,7 +460,7 @@ namespace lfs::vis::gui {
             pw != last_layout_w_ || ph != last_layout_h_ ||
             renderPadding() != last_layout_padding_;
         const bool need_layout =
-            theme_dirty || size_dirty || content_dirty_ || render_needed_ || animation_active_;
+            theme_dirty || size_dirty || content_dirty_ || render_needed_ || animation_active_ || scheduledUpdateDue();
         if (!need_layout)
             return;
 
@@ -491,7 +491,7 @@ namespace lfs::vis::gui {
             applyPanelSpaceClass();
             last_layout_padding_ = padding;
         }
-        if (!dims_changed && !content_dirty_ && !render_needed_ && !animation_active_)
+        if (!dims_changed && !content_dirty_ && !render_needed_ && !animation_active_ && !scheduledUpdateDue())
             return false;
         rml_context_->Update();
         last_layout_w_ = pw;
@@ -512,7 +512,7 @@ namespace lfs::vis::gui {
             (clip_y_min_ >= 0.0f && clip_y_max_ > clip_y_min_);
 
         const bool dirty = render_needed_ || content_dirty_ || theme_dirty ||
-                           size_dirty || animation_active_;
+                           size_dirty || animation_active_ || scheduledUpdateDue();
         if (!dirty)
             return;
         direct_cache_dirty_ = true;
@@ -611,6 +611,12 @@ namespace lfs::vis::gui {
 
         const double next_delay = rml_context_->GetNextUpdateDelay();
         next_update_delay_ = next_delay;
+        next_update_at_.reset();
+        if (std::isfinite(next_delay) && next_delay > 0.0) {
+            next_update_at_ = std::chrono::steady_clock::now() +
+                              std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                  std::chrono::duration<double>(next_delay));
+        }
         animation_active_ = (next_delay == 0.0);
         last_fbo_w_ = pw;
         last_fbo_h_ = ph;
@@ -648,8 +654,10 @@ namespace lfs::vis::gui {
     }
 
     std::optional<double> RmlPanelHost::nextScheduledUpdateDelay() const {
-        if (std::isfinite(next_update_delay_) && next_update_delay_ > 0.0)
-            return next_update_delay_;
+        if (next_update_at_)
+            return std::max(0.0, std::chrono::duration<double>(
+                                     *next_update_at_ - std::chrono::steady_clock::now())
+                                     .count());
         return std::nullopt;
     }
 
@@ -793,7 +801,7 @@ namespace lfs::vis::gui {
         if (!document_ || !rml_context_ || last_fbo_w_ <= 0 || last_fbo_h_ <= 0)
             return false;
         forwardInput(x, y);
-        if (render_needed_ || content_dirty_ || animation_active_ || tooltip_.revealDue())
+        if (render_needed_ || content_dirty_ || animation_active_ || scheduledUpdateDue() || tooltip_.revealDue())
             return false;
         if (!has_theme_signature_ || rml_theme::currentThemeSignature() != last_theme_signature_)
             return false;
@@ -1354,7 +1362,7 @@ namespace lfs::vis::gui {
             }
             if (input.mouse_clicked[1])
                 had_input = true;
-            if (input.mouse_wheel != 0.0f) {
+            if (input.mouse_wheel != 0.0f || input.mouse_wheel_x != 0.0f) {
                 if (manual_dropdown_box) {
                     const float max_scroll = std::max(
                         0.0f,
@@ -1371,13 +1379,23 @@ namespace lfs::vis::gui {
                 deliver_button_down(0);
             if (!replayed_button_events && input.mouse_clicked[1])
                 deliver_button_down(1);
-            if (input.mouse_wheel != 0.0f) {
+            if (input.mouse_wheel != 0.0f || input.mouse_wheel_x != 0.0f) {
                 rml_context_->ProcessMouseWheel(
                     Rml::Vector2f(-input.mouse_wheel_x, -input.mouse_wheel), mods);
                 // Re-resolve hover against the new scroll offset so row text
                 // doesn't render against a stale layout for one frame.
                 rml_context_->ProcessMouseMove(rml_mx, rml_my, mods);
                 had_input = true;
+            }
+            if (input.pinch_scale != 1.0f) {
+                if (auto* target = rml_context_->GetHoverElement()) {
+                    Rml::Dictionary parameters;
+                    parameters["scale"] = input.pinch_scale;
+                    parameters["mouse_x"] = local_x;
+                    parameters["mouse_y"] = local_y;
+                    target->DispatchEvent("pinch", parameters);
+                    had_input = true;
+                }
             }
             if (input.mouse_clicked[0])
                 sync_text_focus();
@@ -1414,7 +1432,9 @@ namespace lfs::vis::gui {
 
         updateResizeCursorOverride(hovered);
 
-        if (hovered) {
+        // Dragging over a titled element must not trigger a tooltip layout pass.
+        // Restart the hover delay only after all buttons have been released.
+        if (hovered && !input.mouse_down[0] && !input.mouse_down[1] && !input.mouse_down[2]) {
             if (auto* const hover = rml_context_->GetHoverElement())
                 tooltip_.setHover(resolveRmlTooltip(hover), hover);
             else

@@ -178,6 +178,7 @@ namespace lfs::training {
 
         // Control notifications for external mutations
         void reset_state(ParamType type);
+        void reset_all_states();
 
         /// Telemetry: times the capacity=0 / no-headroom slow grow path has fired
         /// (process-wide). Loud LOG_WARN is emitted at each site; tests assert this counter.

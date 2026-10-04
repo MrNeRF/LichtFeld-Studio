@@ -178,6 +178,16 @@ namespace lfs::vis {
         auto& ctrl = panel->controller_;
         auto& ui = panel->ui_state_;
 
+        if (id == "generic-tracks") {
+            for (auto* key = event.GetTargetElement(); key && key != el; key = key->GetParentNode()) {
+                if (!key->HasAttribute("data-time"))
+                    continue;
+                ctrl.seek(key->GetAttribute<float>("data-time", 0));
+                event.StopPropagation();
+                return;
+            }
+        }
+
         if (id == "btn-skip-back")
             ctrl.seekToFirstKeyframe();
         else if (id == "btn-prev-keyframe")
@@ -577,6 +587,8 @@ namespace lfs::vis {
         assert(document_);
         clearElementCache();
         el_panel_ = document_->GetElementById("panel");
+        if (auto* tracks = document_->GetElementById("generic-tracks"))
+            tracks->AddEventListener(Rml::EventId::Click, &transport_listener_);
         el_floating_header_ = document_->GetElementById("floating-header");
         el_ruler_ = document_->GetElementById("ruler");
         el_track_bar_ = document_->GetElementById("track-bar");
@@ -829,6 +841,31 @@ namespace lfs::vis {
             return;
 
         const auto& p = lfs::vis::theme().palette;
+
+        if (auto* rows = document_->GetElementById("generic-tracks")) {
+            std::string html;
+            if (const auto* clip = timeline.animationClip()) {
+                auto ids = clip->trackIds();
+                std::sort(ids.begin(), ids.end());
+                for (const auto id : ids) {
+                    const auto* track = clip->getTrack(id);
+                    const auto& path = track->targetPath();
+                    auto label = path;
+                    if (path.starts_with("nodes/")) {
+                        const auto tree_end = path.find('/', 6);
+                        if (tree_end != std::string::npos)
+                            label = path.substr(tree_end + 1);
+                    }
+                    html += "<div class=\"animation-track\" title=\"" + Rml::StringUtilities::EncodeRml(path) +
+                            "\"><span class=\"animation-track-label\">" + Rml::StringUtilities::EncodeRml(label) + "</span>";
+                    for (const auto& key : track->keyframes())
+                        html += fmt::format("<button class=\"animation-key\" data-track=\"{}\" data-time=\"{}\" style=\"left:{:.2f}px;\" title=\"{} s\">◆</button>",
+                                            id, key.time, timeToX(key.time, 0, timeline_width), key.time);
+                    html += "</div>";
+                }
+            }
+            rows->SetInnerRML(html);
+        }
 
         if (count == 0) {
             while (!keyframe_elements_.empty()) {

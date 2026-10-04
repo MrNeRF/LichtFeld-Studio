@@ -17,6 +17,7 @@
 #include "core/tensor/backend/cuda/kernels/packed128.cuh"
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/backend/cuda/kernels/warp_reduce.cuh"
+#include "cub_workspace.hpp"
 #include "internal/gpu_config.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_impl.hpp"
@@ -30,6 +31,113 @@
 #include <thrust/transform.h>
 
 namespace lfs::core::tensor_ops {
+
+    namespace {
+        __device__ uint64_t extreme_key(float value, uint32_t position, bool maximum) {
+            uint32_t bits = __float_as_uint(value);
+            uint32_t order;
+            if ((bits & 0x7fffffffu) > 0x7f800000u) {
+                order = position == 0 ? 0xfffffffeu : 0xffffffffu;
+            } else {
+                if ((bits & 0x7fffffffu) == 0)
+                    bits = 0; // Signed zeros tie; recover the selected value from the input.
+                order = bits & 0x80000000u ? ~bits : bits | 0x80000000u;
+                if (!maximum)
+                    order = ~order;
+            }
+            return (uint64_t{order} << 32) | uint64_t{~position};
+        }
+
+        __device__ uint64_t warp_extreme(uint64_t key) {
+            for (int offset = 16; offset > 0; offset /= 2) {
+                const uint64_t other = __shfl_down_sync(0xffffffffu, key, offset);
+                key = key > other ? key : other;
+            }
+            return key;
+        }
+
+        __device__ void store_extreme(const float* input, float* values, int64_t* indices,
+                                      size_t output, size_t reduce, size_t inner, uint64_t key) {
+            const uint32_t position = ~static_cast<uint32_t>(key);
+            indices[output] = position;
+            values[output] = input[(output / inner * reduce + position) * inner + output % inner];
+        }
+
+        // Contiguous lines use a warp per chunk; strided lines assign adjacent
+        // outputs to adjacent threads so each reduction step reads coalesced data.
+        template <bool Contiguous>
+        __global__ void arg_extreme_kernel(const float* input, float* values, int64_t* indices,
+                                           uint64_t* partial, size_t outputs, size_t reduce,
+                                           size_t inner, size_t chunk_size, size_t chunks, bool maximum) {
+            const size_t thread = size_t{blockIdx.x} * blockDim.x + threadIdx.x;
+            const size_t job = Contiguous ? thread / 32 : thread;
+            const size_t output = job / chunks;
+            if (output >= outputs)
+                return;
+            const size_t chunk = job % chunks;
+            const size_t end = min(reduce, (chunk + 1) * chunk_size);
+            const size_t lane = Contiguous ? threadIdx.x % 32 : 0;
+            const size_t base = output / inner * reduce * inner + output % inner;
+            uint64_t key = 0;
+            for (size_t position = chunk * chunk_size + lane; position < end; position += Contiguous ? 32 : 1) {
+                const uint64_t candidate = extreme_key(input[base + position * inner], position, maximum);
+                key = key > candidate ? key : candidate;
+            }
+            if constexpr (Contiguous)
+                key = warp_extreme(key);
+            if (lane == 0) {
+                if (chunks == 1)
+                    store_extreme(input, values, indices, output, reduce, inner, key);
+                else
+                    partial[job] = key;
+            }
+        }
+
+        __global__ void arg_extreme_finish(const float* input, float* values, int64_t* indices,
+                                           const uint64_t* partial, size_t outputs, size_t reduce,
+                                           size_t inner, size_t chunks) {
+            const size_t output = (size_t{blockIdx.x} * blockDim.x + threadIdx.x) / 32;
+            if (output >= outputs)
+                return;
+            const size_t lane = threadIdx.x % 32;
+            uint64_t key = 0;
+            for (size_t chunk = lane; chunk < chunks; chunk += 32) {
+                const uint64_t candidate = partial[output * chunks + chunk];
+                key = key > candidate ? key : candidate;
+            }
+            key = warp_extreme(key);
+            if (lane == 0)
+                store_extreme(input, values, indices, output, reduce, inner, key);
+        }
+    } // namespace
+
+    void launch_arg_extreme(const float* input, float* values, int64_t* indices,
+                            size_t outer, size_t reduce, size_t inner, bool maximum, cudaStream_t stream) {
+        const size_t outputs = outer * inner;
+        if (outputs == 0)
+            return;
+        const size_t chunk_size = inner == 1 ? 4096 : 1024;
+        const size_t chunks = (reduce + chunk_size - 1) / chunk_size;
+        ScopedDeviceBuffer scratch;
+        if (chunks > 1)
+            scratch.allocate(outputs * chunks * sizeof(uint64_t), stream, "tensor.arg_extreme.keys");
+        auto* partial = scratch.as<uint64_t>();
+        constexpr int threads = 256;
+        if (inner == 1) {
+            arg_extreme_kernel<true><<<(outputs * chunks + 7) / 8, threads, 0, stream>>>(
+                input, values, indices, partial, outputs, reduce, inner, chunk_size, chunks, maximum);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.arg_extreme.contiguous");
+        } else {
+            arg_extreme_kernel<false><<<(outputs * chunks + threads - 1) / threads, threads, 0, stream>>>(
+                input, values, indices, partial, outputs, reduce, inner, chunk_size, chunks, maximum);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.arg_extreme.strided");
+        }
+        if (chunks > 1) {
+            arg_extreme_finish<<<(outputs + 7) / 8, threads, 0, stream>>>(
+                input, values, indices, partial, outputs, reduce, inner, chunks);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.arg_extreme.finish");
+        }
+    }
 
     // ============= OPTIMIZED FULL REDUCTION TO SCALAR =============
 

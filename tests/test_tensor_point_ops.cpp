@@ -807,6 +807,17 @@ namespace {
         EXPECT_EQ(points.cpu().to_vector(), xyz);
     }
 
+    TEST_P(TensorPointOps, SpatialExcludesOnlyTheSameIndex) {
+        const auto points = points3D({0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 2.f, 0.f, 0.f, 8.f, 0.f, 0.f});
+        const auto all = bytes({1, 1, 1, 1});
+        EXPECT_EQ(radius_neighbors(points, all, 1.0f, true).cpu().to_vector_bool(),
+                  (std::vector<bool>{true, true, false, false}));
+        EXPECT_EQ(radius_neighbors(points, bytes({1, 0, 0, 0}), 1.0f, true).cpu().to_vector_bool(),
+                  (std::vector<bool>{false, true, false, false}));
+        EXPECT_EQ(radius_neighbors(points, all, 1.0f).cpu().to_vector_bool(),
+                  (std::vector<bool>{true, true, true, true}));
+    }
+
     TEST_P(TensorPointOps, SpatialAcceptsOffsetStridedInputsAndBooleanReferences) {
         const auto padded_points = Tensor::from_vector(
             {99.f, 99.f, 99.f, 99.f, 99.f, -1.f, 0.f, 0.f,

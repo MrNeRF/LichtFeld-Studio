@@ -4,6 +4,7 @@
 #include "app/mcp_runtime_tools.hpp"
 #include "app/mcp_app_utils.hpp"
 #include "app/mcp_event_handlers.hpp"
+#include "app/mcp_node_tools.hpp"
 
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
@@ -40,7 +41,42 @@ namespace lfs::app {
         using json = nlohmann::json;
         using mcp::McpResourceContent;
 
-        constexpr std::array<std::string_view, 7> kRuntimeJobIds = {
+        json frame_snapshot_json(const vis::FrameLedgerSnapshot& snapshot) {
+            json presents_by_reason = json::object();
+            json view_renders_by_reason = json::object();
+            json holders = json::array();
+            json last_frame_reasons = json::array();
+            for (std::size_t i = 0; i < static_cast<std::size_t>(vis::FrameReason::Count); ++i) {
+                const auto reason = static_cast<vis::FrameReason>(i);
+                presents_by_reason[vis::frameReasonName(reason)] = snapshot.presents_by_reason[i];
+                view_renders_by_reason[vis::frameReasonName(reason)] = snapshot.view_renders_by_reason[i];
+                if (snapshot.last_frame_reasons.test(i))
+                    last_frame_reasons.push_back(vis::frameReasonName(reason));
+            }
+            for (const auto& holder : snapshot.live_holders) {
+                holders.push_back(json{{"reason", vis::frameReasonName(holder.reason)},
+                                       {"scope", holder.scope == vis::FrameScope::Gui ? "gui" : "view"},
+                                       {"detail", holder.detail},
+                                       {"age_ms", std::chrono::duration<double, std::milli>(holder.age).count()}});
+            }
+            return json{{"frames_presented", snapshot.frames_presented},
+                        {"views_rendered", snapshot.views_rendered[0]},
+                        {"views_rendered_by_view", snapshot.views_rendered},
+                        {"presents_by_reason", std::move(presents_by_reason)},
+                        {"view_renders_by_reason", std::move(view_renders_by_reason)},
+                        {"frames_without_reason", snapshot.frames_without_reason},
+                        {"wakes_without_frame", snapshot.wakes_without_frame},
+                        {"holders_expired", snapshot.holders_expired},
+                        {"preview_skipped_no_step", snapshot.preview_skipped_no_step},
+                        {"stale_detections", snapshot.stale_detections},
+                        {"requests_dropped", snapshot.requests_dropped},
+                        {"last_frame_reasons", std::move(last_frame_reasons)},
+                        {"last_frame_details", snapshot.last_frame_details},
+                        {"live_holders", std::move(holders)}};
+        }
+
+        constexpr std::array<std::string_view, 8> kRuntimeJobIds = {
+            "nodes.evaluate",
             "editor.python",
             "training.main",
             "export.scene",
@@ -75,6 +111,8 @@ namespace lfs::app {
         }
 
         std::string_view runtime_job_label(const std::string_view job_id) {
+            if (job_id == "nodes.evaluate")
+                return "Node evaluation";
             if (job_id == "editor.python") {
                 return "Python Editor";
             }
@@ -100,6 +138,8 @@ namespace lfs::app {
         }
 
         json runtime_job_event_types_json(const std::string_view job_id) {
+            if (job_id == "nodes.evaluate")
+                return json::array({"nodes.evaluation.started", "nodes.evaluation.progress", "nodes.evaluation.completed", "nodes.evaluation.failed"});
             if (job_id == "editor.python") {
                 return json::array({"editor.started", "editor.completed"});
             }
@@ -171,6 +211,11 @@ namespace lfs::app {
                 });
             }
 
+            json node_tools = json::array();
+            for (const auto& tool : mcp::ToolRegistry::instance().list_tools())
+                if (tool.metadata.category == "nodes")
+                    node_tools.push_back(mcp::tool_to_json(tool).at("name"));
+
             return json{
                 {"catalog_uri", "lichtfeld://runtime/catalog"},
                 {"state_uri", "lichtfeld://runtime/state"},
@@ -180,6 +225,7 @@ namespace lfs::app {
                 {"supported_event_types", supported_runtime_event_types_json()},
                 {"jobs", std::move(jobs)},
                 {"events", std::move(events)},
+                {"nodes", {{"tools", std::move(node_tools)}, {"resources", json::array({"lichtfeld://nodes/types", "lichtfeld://nodes/trees", "lichtfeld://nodes/trees/<uuid>", "lichtfeld://nodes/stacks", "lichtfeld://nodes/stacks/<node uuid>", "lichtfeld://nodes/editor"})}, {"job_id", "nodes.evaluate"}}},
             };
         }
 
@@ -665,6 +711,12 @@ namespace lfs::app {
 
             auto* const gui = viewer_impl->getGuiManager();
 
+            if (job_id == "nodes.evaluate") {
+                auto result = node_evaluation_job(*viewer_impl);
+                add_runtime_job_links(result);
+                return result;
+            }
+
             if (job_id == "editor.python") {
                 return editor_job_json(include_output, output_max_chars, output_tail);
             }
@@ -740,6 +792,18 @@ namespace lfs::app {
                 }
             }
 
+            json frames = json::object();
+            if (viewer) {
+                if (auto* const rendering = viewer->getRenderingManager()) {
+                    const auto snapshot = rendering->frameDemandLedger().snapshot();
+                    frames = frame_snapshot_json(snapshot);
+                    frames["view_ids"] = rendering->ledgerViews();
+                    const auto rates = rendering->getFrameRates();
+                    frames["ui_fps"] = rates.ui;
+                    frames["viewport_fps"] = rates.view;
+                }
+            }
+
             return json{
                 {"catalog_uri", "lichtfeld://runtime/catalog"},
                 {"state_uri", "lichtfeld://runtime/state"},
@@ -751,6 +815,7 @@ namespace lfs::app {
                 {"active_job_count", active_jobs},
                 {"cancellable_job_count", cancellable_jobs},
                 {"jobs", std::move(jobs)},
+                {"frames", std::move(frames)},
             };
         }
 
@@ -1090,6 +1155,38 @@ namespace lfs::app {
                     (*payload)["event_count"] = static_cast<int64_t>(RuntimeEventJournal::instance().size());
                     return *payload;
                 });
+            });
+
+        registry.register_tool(
+            mcp::McpTool{
+                .name = "runtime.frame_ledger",
+                .description = "Read frame-demand counters, current holders, and the latest frame reasons",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"reset", json{{"type", "boolean"}, {"description", "Reset counters before taking the snapshot (default: false)"}}}},
+                    .required = {}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "runtime",
+                    .kind = "query",
+                    .runtime = "any",
+                    .thread_affinity = "any_thread",
+                }},
+            [viewer](const json& args) -> json {
+                const bool reset = args.value("reset", false);
+                auto* const rendering = viewer ? viewer->getRenderingManager() : nullptr;
+                if (!rendering)
+                    return json{{"success", false}, {"error", "Rendering manager is unavailable"}};
+                auto& ledger = rendering->frameDemandLedger();
+                if (reset)
+                    ledger.resetCounters();
+                const auto snapshot = ledger.snapshot();
+                auto frames = frame_snapshot_json(snapshot);
+                frames["view_ids"] = rendering->ledgerViews();
+                const auto rates = rendering->getFrameRates();
+                frames["ui_fps"] = rates.ui;
+                frames["viewport_fps"] = rates.view;
+                return json{{"success", true}, {"frames", std::move(frames)}};
             });
 
         registry.register_tool(

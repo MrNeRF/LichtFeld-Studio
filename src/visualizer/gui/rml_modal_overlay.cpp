@@ -146,6 +146,7 @@ namespace lfs::vis::gui {
         }
         if (SDL_IsMainThread())
             activatePending();
+        lfs::python::request_redraw();
     }
 
     void RmlModalOverlay::activatePending() {
@@ -196,7 +197,16 @@ namespace lfs::vis::gui {
         // While a modal is already visible, the queue must not be treated as
         // an animation source: doing so spins the frame loop for a static
         // modal until the user makes that choice.
-        return !active_.has_value() && hasPendingRequest();
+        const auto delay = secondsUntilNextUpdate();
+        return (!active_.has_value() && hasPendingRequest()) || (delay && *delay <= 0.0);
+    }
+
+    std::optional<double> RmlModalOverlay::secondsUntilNextUpdate() const {
+        if (active_ && next_update_at_)
+            return std::max(0.0, std::chrono::duration<double>(
+                                     *next_update_at_ - std::chrono::steady_clock::now())
+                                     .count());
+        return std::nullopt;
     }
 
     std::string RmlModalOverlay::animationDemandDescription() const {
@@ -419,6 +429,7 @@ namespace lfs::vis::gui {
         }
         active_->buttons = buttons;
         updateButtons(buttons);
+        lfs::python::request_redraw();
         render_needed_ = true;
         dialog_position_valid_ = false;
         return true;
@@ -468,6 +479,7 @@ namespace lfs::vis::gui {
 
             auto on_result = std::move(active_->on_result);
             active_.reset();
+            lfs::python::request_redraw();
             rml_manager_->deactivateInput(rml_context_);
             render_needed_ = true;
             dialog_position_valid_ = false;
@@ -520,6 +532,7 @@ namespace lfs::vis::gui {
 
         auto on_cancel = std::move(active_->on_cancel);
         active_.reset();
+        lfs::python::request_redraw();
         rml_manager_->deactivateInput(rml_context_);
         render_needed_ = true;
         dialog_position_valid_ = false;
@@ -649,7 +662,9 @@ namespace lfs::vis::gui {
         if (w <= 0 || h <= 0)
             return;
 
-        bool needs_update = render_needed_ || theme_changed;
+        const auto scheduled_delay = secondsUntilNextUpdate();
+        bool needs_update = render_needed_ || theme_changed ||
+                            (scheduled_delay && *scheduled_delay <= 0.0);
         if (w != width_ || h != height_) {
             width_ = w;
             height_ = h;
@@ -686,6 +701,14 @@ namespace lfs::vis::gui {
             }
         }
 
+        if (needs_update || position_changed) {
+            next_update_at_.reset();
+            const double delay = rml_context_->GetNextUpdateDelay();
+            if (std::isfinite(delay))
+                next_update_at_ = std::chrono::steady_clock::now() +
+                                  std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                      std::chrono::duration<double>(delay));
+        }
         const bool refresh_cache = needs_update || position_changed || direct_cache_.texture == 0;
         render_needed_ = false;
         LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.queue");

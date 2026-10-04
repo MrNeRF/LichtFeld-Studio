@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
@@ -1258,7 +1259,7 @@ namespace lfs::vis {
                 lfs::core::Tensor gt_tensor;
                 if (request.mode == GTComparisonMode::RGB) {
                     auto [pixels, width, height, channels] = lfs::core::load_image(
-                        request.image_path, -1, request.preview_max_dimension);
+                        request.image_path, -1, request.undistort_requested ? 0 : request.preview_max_dimension);
                     const std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> owner(
                         pixels, &lfs::core::free_image);
                     if (pixels && width > 0 && height > 0 && channels > 0) {
@@ -1285,12 +1286,14 @@ namespace lfs::vis {
                                 if (gt_tensor.dtype() == lfs::core::DataType::UInt8) {
                                     gt_tensor = gt_tensor.to(lfs::core::DataType::Float32) / 255.0f;
                                 }
-                                const auto scaled = lfs::core::scale_undistort_params(
+                                const auto scaled = lfs::core::prepare_undistort_params(
                                     request.undistort_params,
                                     lfs::rendering::imageWidth(gt_tensor, gt_layout),
                                     lfs::rendering::imageHeight(gt_tensor, gt_layout),
+                                    1,
                                     request.preview_max_dimension);
-                                gt_tensor = lfs::core::internal::undistort_image_tensor(gt_tensor, scaled, false);
+                                gt_tensor = lfs::core::undistort_image(
+                                    gt_tensor.clamp(0.0f, 1.0f).contiguous(), scaled, nullptr);
                             }
                             gt_tensor = lfs::rendering::flipImageVertical(gt_tensor, gt_layout);
                             // Static GT display images must be decoupled from the CUDA pool
@@ -1306,12 +1309,13 @@ namespace lfs::vis {
                             -1, request.preview_max_dimension);
                         if (depth.is_valid() && depth.ndim() == 2) {
                             if (request.undistort_requested) {
-                                const auto scaled = lfs::core::scale_undistort_params(
+                                const auto scaled = lfs::core::prepare_undistort_params(
                                     request.undistort_params,
                                     static_cast<int>(depth.shape()[1]),
                                     static_cast<int>(depth.shape()[0]),
+                                    1,
                                     request.preview_max_dimension);
-                                depth = lfs::core::internal::undistort_image_tensor(depth, scaled, true);
+                                depth = lfs::core::undistort_depth_area(depth, scaled, nullptr);
                             }
                             image = makeDepthDisplayTensor(
                                 depth, request.depth_visualization_mode, request.background_color);
@@ -1329,12 +1333,13 @@ namespace lfs::vis {
                             const auto normal_layout = lfs::rendering::detectImageLayout(normal);
                             if (request.undistort_requested &&
                                 normal_layout != lfs::rendering::ImageLayout::Unknown) {
-                                const auto scaled = lfs::core::scale_undistort_params(
+                                const auto scaled = lfs::core::prepare_undistort_params(
                                     request.undistort_params,
                                     lfs::rendering::imageWidth(normal, normal_layout),
                                     lfs::rendering::imageHeight(normal, normal_layout),
+                                    1,
                                     request.preview_max_dimension);
-                                normal = lfs::core::internal::undistort_image_tensor(normal, scaled, false);
+                                normal = lfs::core::undistort_normal_area(normal, scaled, nullptr);
                             }
                             image = makeNormalDisplayTensor(normal);
                             image = resizeChwDisplayTensor(image, request.image_size);
@@ -1399,7 +1404,7 @@ namespace lfs::vis {
             }
 
             if (applied) {
-                markDirty(DirtyFlag::SPLIT_VIEW);
+                markDirty(DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
             }
         }
     }
@@ -1502,16 +1507,29 @@ namespace lfs::vis {
         // includes the viewer turn itself.
         return static_cast<float>(std::max<double>(
             view.framerate_controller_.getSettings().training_frame_refresh_time_sec,
-            idlePreviewIntervalSec(0.0, viewer_turn_ms) + viewer_turn_ms * 1e-3));
+            idlePreviewIntervalSec(viewer_turn_ms) + viewer_turn_ms * 1e-3));
     }
 
-    void RenderingManager::pollTrainingRefresh(const bool is_training) {
+    void RenderingManager::pollTrainingRefresh(const bool is_training, const int current_iteration) {
         std::lock_guard lock(views_mutex_);
         for (auto& [id, view] : view_states_) {
             const DirtyMask dirty = view->frame_lifecycle_service_.handleTrainingRefresh(
                 is_training, trainingRefreshIntervalSec(*view));
+            if (!is_training)
+                view->has_training_preview_iteration_ = false;
+            if (!dirty)
+                continue;
+            if (is_training && view->has_training_preview_iteration_ &&
+                current_iteration <= view->last_training_preview_iteration_) {
+                frame_demand_ledger_.countSkippedPreview();
+                continue;
+            }
+            if (is_training) {
+                view->last_training_preview_iteration_ = current_iteration;
+                view->has_training_preview_iteration_ = true;
+            }
             view->training_refresh_dirty_.fetch_or(dirty, std::memory_order_relaxed);
-            view->dirty_mask_.fetch_or(dirty, std::memory_order_relaxed);
+            markViewDirty(id, dirty, FrameReason::TrainingPreview);
         }
     }
 
@@ -1554,7 +1572,7 @@ namespace lfs::vis {
         import_render_generation_ = generation;
         import_render_frames_ = 0;
         import_render_result_.reset();
-        markDirty(DirtyFlag::ALL);
+        markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
     }
 
     bool RenderingManager::importUsesCombinedModel() const {
@@ -1616,7 +1634,7 @@ namespace lfs::vis {
             .provisional_import_node = context.provisional_import_node};
         try {
             for (unsigned slot = 0; slot < OutputSlotRing::kFrameRingSize && !import_render_result_; ++slot) {
-                markDirty(DirtyFlag::ALL);
+                markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
                 static_cast<void>(renderVulkanFrame(preparation));
             }
         } catch (const std::exception& error) {
@@ -1631,7 +1649,7 @@ namespace lfs::vis {
 
     void RenderingManager::cancelImportRenderCheck() {
         if (import_render_check_)
-            markDirty(DirtyFlag::ALL); // Publish the prepared scene through the normal viewport pass.
+            markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange); // Publish the prepared scene through the normal viewport pass.
         import_render_check_ = false;
         import_render_result_.reset();
     }
@@ -1645,7 +1663,7 @@ namespace lfs::vis {
         else if (++import_render_frames_ == OutputSlotRing::kFrameRingSize)
             import_render_result_ = std::string{};
         else
-            markDirty(DirtyFlag::ALL);
+            markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
     }
 
     RenderingManager::VulkanFrameResult
@@ -1711,8 +1729,11 @@ namespace lfs::vis {
 
         SceneManager* const scene_manager = context.scene_manager;
         auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
+        // The live trainer path deliberately bypasses scene evaluated payloads.
+        // Use it only while optimization is advancing; a paused session renders
+        // through the scene so its Node Editor modifier payload is visible.
         const bool is_training = scene_manager && scene_manager->hasDataset() &&
-                                 trainer_manager && trainer_manager->isTrainingActive();
+                                 trainer_manager && trainer_manager->isRunning();
         const bool training_initializing = trainer_manager &&
                                            trainer_manager->getState() == TrainingState::Starting;
         if (!is_training && scene_renderer_) {
@@ -1731,7 +1752,7 @@ namespace lfs::vis {
             // emitted only after the trainer's B3 cleanup has detached its
             // arena backing, so this also drops the viewer's final import.
             rendererTrainingInterop(*scene_renderer_).releaseScratchOnIdle(true);
-            vksplat_idle_frame_count_ = 0;
+            vksplat_idle_since_ = {};
         }
 
         const auto framebuffer_region =
@@ -1748,11 +1769,10 @@ namespace lfs::vis {
         if (context.viewport_region) {
             current_size = framebuffer_region.size;
         }
-        // Minimized / zero-extent: no presentable viewport work. Never start
-        // model reads or publish
-        // new viewer borrows â€” the trainer continues headless on the existing
-        // handshake fences only. Restore re-enters the normal frame path
-        // (first frame may block once for a stable model, same as cold start).
+        // Minimized / zero-extent: no presentable viewport work. Never hold a
+        // resize training pause, never start model reads, and never publish
+        // new viewer borrows — the trainer continues headless on the existing
+        // handshake fences only. Restore re-enters the normal frame path.
         if (current_size.x <= 0 || current_size.y <= 0) {
             if (scene_renderer_) {
                 rendererTrainingInterop(*scene_renderer_).setLiveSubmitCallback({});
@@ -1916,7 +1936,7 @@ namespace lfs::vis {
         const auto resize_result =
             view_state.frame_lifecycle_service_.handleViewportResize(current_size);
         if (resize_result.dirty) {
-            markDirty(resize_result.dirty);
+            markViewDirty(context.view, resize_result.dirty, lfs::vis::FrameReason::SceneChange);
         }
         const bool resize_deferring = !context.preparing_import && view_state.frame_lifecycle_service_.isResizeDeferring();
         const auto requested_upscaler = sceneUpscalerBackendFromId(frame_settings.scene_upscaler)
@@ -2059,7 +2079,8 @@ namespace lfs::vis {
         // discrete layout resizes. On contention, retain the previous matching
         // frame and retry on the next cadence tick; the GUI commits a staged
         // layout only after matches_viewport_extent reports a fresh output.
-        // First frame / no cache still falls back to one blocking acquire below.
+        // This also applies without a cached frame: model growth can hold the
+        // exclusive lock while waiting for chunk binding on this viewer thread.
         const bool training_try_lock = is_training;
         if (is_training && scene_renderer_ &&
             (view_state.dirty_mask_.load(std::memory_order_relaxed) & ~DirtyFlag::SPLATS) != 0) {
@@ -2069,9 +2090,9 @@ namespace lfs::vis {
             (void)rendererTrainingInterop(*scene_renderer_).waitForArenaHandoff(kNavigationArenaWait);
         }
         auto render_lock = acquireLiveModelRenderLock(scene_manager, training_try_lock);
-        bool render_lock_contended = training_try_lock && !render_lock.has_value() &&
-                                     scene_manager && scene_manager->getTrainerManager() &&
-                                     scene_manager->getTrainerManager()->getTrainer();
+        const bool render_lock_contended = training_try_lock && !render_lock.has_value() &&
+                                           scene_manager && scene_manager->getTrainerManager() &&
+                                           scene_manager->getTrainerManager()->getTrainer();
 
         const lfs::core::SplatData* model = nullptr;
         SceneRenderState scene_state;
@@ -2109,8 +2130,8 @@ namespace lfs::vis {
                 }
                 return;
             }
-            model = scene_manager->getModelForRendering();
             scene_state = scene_manager->buildRenderState();
+            model = scene_state.combined_model;
         };
         if (!render_lock_contended) {
             sample_model_under_lock();
@@ -2150,8 +2171,8 @@ namespace lfs::vis {
                 has_visible_gaussian_model || has_point_cloud || has_meshes || has_environment;
         };
         refresh_content_flags();
-        size_t model_ptr = comparison_identity != 0 ? comparison_identity
-                                                    : reinterpret_cast<size_t>(model);
+        const size_t model_ptr = comparison_identity != 0 ? comparison_identity
+                                                          : reinterpret_cast<size_t>(model);
         // Edit-mode handoff moves the same SplatData into a scene node. Its
         // address does not change, but the trainer's GPU handshake is gone.
         // Use dataset ownership, not Running/Paused, so completion alone does
@@ -2205,7 +2226,7 @@ namespace lfs::vis {
                 clearVulkanViewportImageState(view_state);
                 view_state.last_logged_vksplat_render_error_.clear();
                 view_state.viewport_artifact_service_.clearViewportOutput();
-                markViewDirty(context.view, DirtyFlag::ALL);
+                markViewDirty(context.view, DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
             }
         }
 
@@ -2339,9 +2360,9 @@ namespace lfs::vis {
                  has_meshes,
                  has_environment,
                  render_lock_contended);
-        // Step-boundary contention during densify: retain last splat image, re-queue
+        // On contention, retain any previous output and re-queue
         // dirty so the next cadence tick retries after the exclusive lock drops.
-        if (render_lock_contended && (has_cached_viewport_output || training_initializing)) {
+        if (render_lock_contended) {
             DirtyMask retry_dirty = frame_dirty;
             if (training_refresh_only) {
                 retry_dirty &= ~training_refresh_dirty;
@@ -2349,23 +2370,10 @@ namespace lfs::vis {
             if (retry_dirty != 0) {
                 view_state.dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
             }
-            LOG_PERF("renderVulkanFrame: {} lock contended (retaining cached splat)",
+            LOG_PERF("renderVulkanFrame: {} lock contended (deferring preview)",
                      training_initializing ? "training initialization" : "step-boundary");
             render_lock.reset();
             return cached_frame_result();
-        }
-        if (render_lock_contended && !has_cached_viewport_output) {
-            // A normal running-training cold start may block once for a stable
-            // first frame. Starting is handled above and never waits for the
-            // initialization worker, even when no previous frame exists.
-            render_lock = acquireLiveModelRenderLock(scene_manager, /*try_lock=*/false);
-            render_lock_contended = !render_lock.has_value();
-            if (render_lock) {
-                sample_model_under_lock();
-                refresh_content_flags();
-                model_ptr = reinterpret_cast<size_t>(model);
-                (void)view_state.frame_lifecycle_service_.handleModelChange(model_ptr, view_state.viewport_artifact_service_, model_source);
-            }
         }
         // Scene state is authoritative here (contended frames returned above): nothing
         // visible must clear the viewport even when a cached frame exists â€” a consolidated
@@ -2380,7 +2388,7 @@ namespace lfs::vis {
             view_state.viewport_artifact_service_.clearViewportOutput();
             clearVulkanMeshFrame(view_state);
             render_lock.reset();
-            return {.matches_viewport_extent = true};
+            return {.matches_viewport_extent = true, .rendered = true};
         }
 
         const DirtyMask split_deferred_dirty = frame_dirty & ~DirtyFlag::SPLIT_POSITION;
@@ -3222,7 +3230,7 @@ namespace lfs::vis {
                                                                              .camera = camera});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
-                                markDirty(DirtyFlag::SPLIT_VIEW);
+                                markViewDirty(context.view, DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
                                 if (lookup.stale_image && !lookup.grace_elapsed) {
                                     gt_image = lookup.stale_image;
                                 } else {
@@ -3299,7 +3307,7 @@ namespace lfs::vis {
                                                                              .camera = camera});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
-                                markDirty(DirtyFlag::SPLIT_VIEW);
+                                markViewDirty(context.view, DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
                                 gt_loading = true;
                                 if (lookup.stale_image && !lookup.grace_elapsed) {
                                     gt_image = lookup.stale_image;
@@ -3330,7 +3338,7 @@ namespace lfs::vis {
                                                                              .camera = camera});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
-                                markDirty(DirtyFlag::SPLIT_VIEW);
+                                markViewDirty(context.view, DirtyFlag::SPLIT_VIEW, lfs::vis::FrameReason::SettingsChange);
                                 gt_loading = true;
                                 if (lookup.stale_image && !lookup.grace_elapsed) {
                                     gt_image = lookup.stale_image;
@@ -4042,7 +4050,8 @@ namespace lfs::vis {
                     .completion_value = render_result->completion_value,
                     .size = view_state.vulkan_viewport_image_size_,
                     .flip_y = view_state.vulkan_viewport_image_flip_y_,
-                    .matches_viewport_extent = true};
+                    .matches_viewport_extent = true,
+                    .rendered = true};
             };
             if (auto vk_result = try_vulkan(); vk_result) {
                 if (scene_manager && vk_result->matches_viewport_extent)
@@ -4278,7 +4287,7 @@ namespace lfs::vis {
                         // when requested. Resetting it again after a parked
                         // retry adds that delay to every subsequent interval.
                         if (is_training && (frame_dirty & ~DirtyFlag::SPLATS) != 0)
-                            view_state.frame_lifecycle_service_.noteTrainingRender();
+                            view_state.frame_lifecycle_service_.restartTrainingRefresh();
                         view_state.vksplat_stale_frame_guard_.onSuccess();
                         render_lock.reset();
                         note_lod_page_generation(render_result.lod_page_generation);
@@ -4483,7 +4492,8 @@ namespace lfs::vis {
                                             .image_generation = view_state.vulkan_viewport_image_generation_,
                                             .size = view_state.vulkan_viewport_image_size_,
                                             .flip_y = view_state.vulkan_viewport_image_flip_y_,
-                                            .matches_viewport_extent = true};
+                                            .matches_viewport_extent = true,
+                                            .rendered = true};
                                 }
                                 LOG_WARN("Scene PPISP correction produced no valid viewport image; falling back to uncorrected external image");
                             } else {
@@ -4571,7 +4581,8 @@ namespace lfs::vis {
                                 .size = view_state.vulkan_viewport_image_size_,
                                 .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
                                 .flip_y = view_state.vulkan_viewport_image_flip_y_,
-                                .matches_viewport_extent = true};
+                                .matches_viewport_extent = true,
+                                .rendered = true};
                     };
 
                     const DirtyMask non_overlay_dirty = frame_dirty & ~DirtyFlag::SELECTION;
@@ -4896,6 +4907,7 @@ namespace lfs::vis {
             }
             if (scene_manager)
                 noteImportRenderFrame(scene_manager->getScene().renderGeneration(), render_error);
+            result.rendered = true;
             return result;
         }
 
@@ -5015,7 +5027,8 @@ namespace lfs::vis {
                 .image_generation = view_state.vulkan_viewport_image_generation_,
                 .size = view_state.vulkan_viewport_image_size_,
                 .flip_y = view_state.vulkan_viewport_image_flip_y_,
-                .matches_viewport_extent = true};
+                .matches_viewport_extent = true,
+                .rendered = true};
     }
 
     std::expected<void, std::string> RenderingManager::ensureVksplatTrainingSharedScratchReady(

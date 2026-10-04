@@ -22,6 +22,7 @@
 #include <cstring>
 #include <cuda_runtime.h>
 #include <spdlog/spdlog.h>
+#include <stdexcept>
 
 namespace lfs::training {
 
@@ -293,14 +294,19 @@ namespace lfs::training {
             const float* tangential_ptr = nullptr;
             const float* thin_prism_ptr = nullptr;
 
-            auto upload_dist = [&](const core::Tensor& src, size_t n, core::Tensor& dest) {
-                if (!src.is_valid() || src.numel() == 0 || n == 0) {
+            auto upload_fixed_dist = [&](const core::Tensor& src, const size_t fixed_size,
+                                         core::Tensor& dest) {
+                if (!src.is_valid() || src.numel() == 0) {
                     dest = {};
                     return;
                 }
-                const size_t copy_n = std::min(n, static_cast<size_t>(src.numel()));
+                if (src.ndim() != 1 || src.dtype() != core::DataType::Float32 ||
+                    src.numel() > fixed_size) {
+                    throw std::runtime_error("Invalid camera distortion coefficient tensor");
+                }
+                const size_t copy_n = src.numel();
                 if (src.device() == core::Device::GPU && src.is_contiguous() &&
-                    src.numel() == copy_n) {
+                    copy_n == fixed_size) {
                     dest = src;
                     if (dest.stream() != fwd_stream) {
                         dest.set_stream(fwd_stream);
@@ -314,38 +320,54 @@ namespace lfs::training {
                 if (host.device() != core::Device::CPU) {
                     host = host.cpu();
                 }
-                caches.staging.copy_to(dest, host.ptr<float>(), copy_n, fwd_stream);
+                std::array<float, 6> padded{};
+                std::memcpy(padded.data(), host.ptr<float>(), copy_n * sizeof(float));
+                caches.staging.copy_to(
+                    dest, padded.data(), fixed_size, fwd_stream);
             };
 
             {
                 switch (camera_model) {
                 case CameraModelType::THIN_PRISM_FISHEYE:
-                    if (radial_dist.is_valid() && radial_dist.numel() == 4) {
-                        upload_dist(radial_dist, 4, caches.radial);
+                    if (radial_dist.is_valid() && radial_dist.numel() > 0) {
+                        if (radial_dist.numel() != 4) {
+                            throw std::runtime_error(
+                                "Thin-prism fisheye requires four radial coefficients");
+                        }
+                        upload_fixed_dist(radial_dist, 4, caches.radial);
                         radial_cuda = caches.radial;
                     }
-                    if (tangential_dist.is_valid() && tangential_dist.numel() == 4) {
-                        upload_dist(tangential_dist, 4, caches.thin_prism);
+                    if (tangential_dist.is_valid() && tangential_dist.numel() > 0) {
+                        if (tangential_dist.numel() != 4) {
+                            throw std::runtime_error(
+                                "Thin-prism fisheye requires four tangential and prism coefficients");
+                        }
+                        upload_fixed_dist(tangential_dist, 4, caches.thin_prism);
                         thin_prism_cuda = caches.thin_prism;
                     }
                     break;
                 case CameraModelType::FISHEYE:
-                    if (radial_dist.is_valid() && radial_dist.numel() >= 4) {
-                        upload_dist(radial_dist.numel() == 4 ? radial_dist : radial_dist.slice(0, 0, 4),
-                                    4, caches.radial);
+                    if (radial_dist.is_valid() && radial_dist.numel() > 0) {
+                        upload_fixed_dist(radial_dist, 4, caches.radial);
                         radial_cuda = caches.radial;
                     }
                     break;
                 case CameraModelType::PINHOLE: {
                     if (radial_dist.is_valid() && radial_dist.numel() > 0) {
-                        const size_t n_rad = std::min(radial_dist.numel(), size_t(6));
-                        upload_dist(radial_dist.numel() == n_rad ? radial_dist : radial_dist.slice(0, 0, n_rad),
-                                    n_rad, caches.radial);
+                        const size_t radial_count = radial_dist.numel();
+                        if (radial_count > 3 && radial_count != 6) {
+                            throw std::runtime_error(
+                                "Pinhole cameras require at most three polynomial radial coefficients or six rational radial coefficients");
+                        }
+                        upload_fixed_dist(radial_dist, 6, caches.radial);
                         radial_cuda = caches.radial;
                     }
-                    if (tangential_dist.is_valid() && tangential_dist.numel() >= 2) {
-                        upload_dist(tangential_dist.numel() == 2 ? tangential_dist : tangential_dist.slice(0, 0, 2),
-                                    2, caches.tangential);
+                    if (tangential_dist.is_valid() && tangential_dist.numel() > 0) {
+                        if (tangential_dist.numel() != 2) {
+                            throw std::runtime_error(
+                                "Pinhole cameras require two tangential coefficients");
+                        }
+                        upload_fixed_dist(tangential_dist, 2, caches.tangential);
                         tangential_cuda = caches.tangential;
                     }
                     break;

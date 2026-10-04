@@ -52,15 +52,6 @@ namespace lfs::vis {
             }
         };
 
-        struct LFS_VIS_API VramHud {
-            bool visible = false;
-            std::shared_ptr<const lfs::diagnostics::VramProfilerSnapshot> snapshot;
-
-            [[nodiscard]] bool operator==(const VramHud& other) const noexcept {
-                return visible == other.visible && snapshot == other.snapshot;
-            }
-        };
-
         struct LFS_VIS_API PerfHudSnapshot {
             std::size_t vram_process_bytes = 0;
             std::size_t vram_used_bytes = 0;
@@ -72,6 +63,7 @@ namespace lfs::vis {
             float process_cpu_percent = -1.0f;
             std::vector<float> per_core_cpu_percent;
             float rate = 0.0f;
+            float ui_fps = 0.0f;
             bool gpu_utilization_valid = false;
             bool cpu_valid = false;
             bool ledger_valid = false; // false when profiler off → badge unknown (not GAP)
@@ -211,11 +203,9 @@ namespace lfs::vis {
             EvalLpips,
             SceneGeneration,
             SelectionGeneration,
-            Fps,
             ModeText,
             CameraMetricsValue,
             GTMetricsOverlayConfigValue,
-            VramHudValue,
             PerfHudValue,
             ActiveTool,
             ActiveSubmode,
@@ -256,11 +246,9 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::optional<float>> eval_lpips;
         lfs::core::reactive::Observable<std::uint64_t> scene_generation;
         lfs::core::reactive::Observable<std::uint64_t> selection_generation;
-        lfs::core::reactive::Observable<float> fps;
         lfs::core::reactive::Observable<std::string> mode_text;
         lfs::core::reactive::Observable<std::optional<CameraMetrics>> camera_metrics;
         lfs::core::reactive::Observable<GTMetricsOverlayConfig> gt_metrics_overlay_config;
-        lfs::core::reactive::Observable<VramHud> vram_hud;
         lfs::core::reactive::Observable<PerfHud> perf_hud;
         lfs::core::reactive::Observable<std::string> active_tool;
         lfs::core::reactive::Observable<std::string> active_submode;

@@ -145,7 +145,7 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
             uint y=p.height==0?0:pixel/p.width, x=pixel%p.width;
             uint y0=pair_lo(p.stride), y1=pair_hi(p.stride), x0=pair_lo(p.padding), x1=pair_hi(p.padding);
             if(y>=y0&&y<y1&&x>=x0&&x<x1) {
-                InterlockedAdd(((Ptr<float,Access.ReadWrite>)p.d)[0],contribution*p.inverse_count);
+                InterlockedAdd(((Ptr<float, Access.ReadWrite>)p.d)[0], contribution * p.inverse_count * (p.g != 0 ? ((Ptr<float, Access.Read>)p.g)[(y + p.out_height) * p.out_width + x + p.out_channels] : 1.0f));
             }
         }
         if(p.e!=0 && p.f!=0) {

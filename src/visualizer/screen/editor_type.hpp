@@ -51,6 +51,7 @@ namespace lfs::vis::screen {
         inline constexpr std::string_view kScene = "scene";
         inline constexpr std::string_view kProperties = "properties";
         inline constexpr std::string_view kConsole = "console";
+        inline constexpr std::string_view kNodeEditor = "node_editor";
     } // namespace editors
 
     struct EditorType {

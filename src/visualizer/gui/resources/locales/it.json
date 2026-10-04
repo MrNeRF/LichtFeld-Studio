@@ -1,4 +1,10 @@
 {
+  "node_editor.add_input": "Aggiungi ingresso",
+  "node_editor.add_output": "Aggiungi uscita",
+  "node_editor.paint": "Dipingi",
+  "node_editor.paint_done": "Termina pittura",
+  "node_editor.pick_colour": "Preleva colore",
+  "node_editor.colour_offset_hint": "Trascina per tingere; doppio clic per ripristinare il neutro",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Memoria GPU del processo riportata dal sistema operativo o dal driver GPU.",
   "ui.vram_process_unavailable_tooltip": "Memoria GPU del processo non disponibile. L’utilizzo del dispositivo include altre applicazioni.",
@@ -415,6 +421,7 @@
     "tooltip.cropbox_lr_scale": "Controlla quanto continuano a imparare gli splat fuori dal crop box. Usa valori bassi per focalizzare l'addestramento nel ROI; più alti se il contesto esterno deve ancora adattarsi. Conta solo con un crop box attivo.",
     "tooltip.cropbox_loss_weight": "Controlla quanto i pixel fuori dal crop box influenzano l'addestramento. Riducilo per concentrarti sul ROI; aumentalo quando la scena circostante deve ancora influenzare il risultato. Conta solo con un crop box attivo.",
     "tooltip.normal_loss_space": "Normal prior space: auto, camera-opencv, camera-opengl, or world",
+    "tooltip.eval_space": "Chooses whether evaluation uses the original distorted images or the undistorted training images.",
     "tooltip.growth_grad_threshold": "Imposta quanto forte deve essere un segnale di raffinamento prima che uno splat possa crescere. Valori più bassi permettono a più aree di crescere; più alti concentrano la crescita su errori visibili più forti.",
     "tooltip.grow_fraction": "Controlla quanti candidati idonei crescono a ogni passo di raffinamento. Aumenta quando il modello necessita capacità più rapidamente; riduci se la crescita è troppo aggressiva o rumorosa.",
     "tooltip.opacity_decay": "Riduce gradualmente l'opacità durante il raffinamento, più forte all'inizio dell'addestramento. Aumenta per pulire splat deboli; riduci se superfici utili sbiadiscono.",
@@ -551,6 +558,8 @@
     "options.normal_loss_space.camera_opencv": "Camera (OpenCV)",
     "options.normal_loss_space.camera_opengl": "Camera (OpenGL)",
     "options.normal_loss_space.world": "World",
+    "options.eval_space.distorted": "Distorted",
+    "options.eval_space.undistorted": "Undistorted",
     "options.depth_loss.ssi": "SSI (automatico)",
     "options.depth_loss.ssi_disparity": "SSI (prior di disparità)",
     "options.depth_loss.ssi_depth": "SSI (prior di profondità)",
@@ -571,6 +580,10 @@
       "bg_image_path": "Un'immagine di sfondo personalizzata per il training. Usala quando la scena deve essere ottimizzata rispetto a una background plate nota.",
       "bg_image_browse": "Sfoglia per un'immagine di sfondo",
       "bg_image_clear": "Rimuovi l'immagine di sfondo selezionata",
+      "eval_mask": "Una mesh la cui copertura proiettata seleziona i pixel per la valutazione.",
+      "eval_mask_invert": "Valuta i pixel esterni alla copertura proiettata della mesh.",
+      "eval_mask_browse": "Scegli una mesh di valutazione",
+      "eval_mask_clear": "Rimuovi la mesh di valutazione selezionata",
       "dataset_path": "La radice del dataset attualmente usata per l'addestramento.",
       "dataset_images": "La cartella delle immagini all'interno del dataset.",
       "dataset_output": "Percorso in cui vengono scritti checkpoint e artefatti addestrati. Usalo per verificare che l'esecuzione salvi nella cartella progetto/output prevista.",
@@ -881,11 +894,8 @@
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
-    "viewer_backend": "Backend del viewer",
-    "viewer_backend_description": "Si applica subito. Auto preferisce Metal sui Mac compatibili e Vulkan sugli altri sistemi. I fotogrammi non supportati usano Vulkan.",
     "tensor_backend": "Tensor backend",
     "tensor_restart": "Controlla il calcolo dei tensori sulla GPU, indipendentemente dal renderer del viewer. Le modifiche si applicano dopo il riavvio di LichtFeld Studio. Automatico sceglie CUDA, Metal o Vulkan in base alla build e alla GPU.",
-    "backend_unavailable": "Il backend selezionato non è disponibile su questo dispositivo. Le impostazioni non sono state modificate.",
     "tensor_device": "Vulkan device",
     "tensor_device_hint": "Leave empty for automatic selection, or enter a device index or UUID. CUDA rendering must use the CUDA device.",
     "tensor_validation": "Vulkan diagnostics",
@@ -1008,7 +1018,10 @@
     "reset_all_settings_confirmation": "Ripristinare lingua, tema, scala dell'interfaccia, ricostruzione della scena, preferenze di input, server MCP, layout e stato della finestra ai valori predefiniti? L'azione viene applicata subito. Se è aperto un progetto .licht, il layout salvato verrà sostituito al prossimo salvataggio; contenuti del progetto, dataset, esportazioni, plugin e cache non vengono modificati.",
     "reset_all_settings_success": "Tutte le preferenze, il layout e lo stato della finestra sono stati reimpostati immediatamente.",
     "window_manager_unavailable": "Il gestore della finestra non è disponibile.",
-    "window_state_reset_failed": "Non è stato possibile ripristinare la geometria predefinita della finestra."
+    "window_state_reset_failed": "Non è stato possibile ripristinare la geometria predefinita della finestra.",
+    "viewer_backend": "Backend del viewer",
+    "viewer_backend_description": "Si applica subito. Auto preferisce Metal sui Mac compatibili e Vulkan sugli altri sistemi. I fotogrammi non supportati usano Vulkan.",
+    "backend_unavailable": "Il backend selezionato non è disponibile su questo dispositivo. Le impostazioni non sono state modificate."
   },
   "main_panel": {
     "console": "Console",
@@ -1698,7 +1711,8 @@
     "action.view_toggle_perspective": "Alterna prospettica/ortografica",
     "action.view_frame_all": "Inquadra tutto",
     "action.toggle_quad_view": "Attiva/disattiva quattro viste",
-    "action.toggle_maximize_area": "Massimizza area"
+    "action.toggle_maximize_area": "Massimizza area",
+    "action.toggle_node_editor": "Mostra editor nodi"
   },
   "debug_info": {
     "clear_history": "Cancella Cronologia",
@@ -1755,6 +1769,9 @@
     "ppisp_sidecar_path": "Percorso sidecar:",
     "enable_eval": "Abilita valutazione:",
     "eval_all": "Valuta tutte le immagini:",
+    "eval_space": "Eval Space:",
+    "eval_mask": "Mesh di valutazione:",
+    "eval_mask_invert": "Inverti maschera:",
     "opacity_penalty_weight": "  Peso penalità opacità:",
     "opacity_penalty_power": "  Potenza penalità opacità:",
     "mask_threshold": "  Soglia maschera:",
@@ -2073,13 +2090,6 @@
     "reload": "Ricarica"
   },
   "status_bar": {
-    "renderer_backend": "Renderer",
-    "tensor_backend": "Tensori",
-    "renderer_backend_tooltip": "Backend di rendering della scena.",
-    "tensor_backend_tooltip": "Backend di calcolo dei tensori.",
-    "backend_requested": "Richiesto: {}",
-    "backend_no_frame": "Renderer configurato; nessun fotogramma della scena.",
-    "backend_fallback": "Metal non è disponibile per questo fotogramma; è in uso Vulkan.",
     "preview_reduced": "Risoluzione anteprima ridotta (memoria GPU)",
     "safe_mode": "MODALITÀ SICURA",
     "mcp_preferences": "Modifica",
@@ -2117,7 +2127,16 @@
     "gpu_budget": "Budget GPU",
     "strategy_default": "Predefinito",
     "split": "Divisione:",
-    "ui_fps": "UI FPS",
+    "mcp_name": "MCP",
+    "ui": "UI",
+    "view": "Vista",
+    "renderer_backend": "Renderer",
+    "tensor_backend": "Tensori",
+    "renderer_backend_tooltip": "Backend di rendering della scena.",
+    "tensor_backend_tooltip": "Backend di calcolo dei tensori.",
+    "backend_requested": "Richiesto: {}",
+    "backend_no_frame": "Renderer configurato; nessun fotogramma della scena.",
+    "backend_fallback": "Metal non è disponibile per questo fotogramma; è in uso Vulkan.",
     "renderer_backend_short": "R",
     "tensor_backend_short": "T"
   },
@@ -2572,13 +2591,13 @@
     "log_entry_word": "voce",
     "log_entries_word": "voci",
     "logs_exported": "Esportati {} in {}.",
-    "config_load_failed": "Impossibile caricare '{}':\\n\\n{}",
-    "export_failed": "Esportazione non riuscita:\\n\\n{}",
+    "config_load_failed": "Impossibile caricare '{}':\n\n{}",
+    "export_failed": "Esportazione non riuscita:\n\n{}",
     "video_export_failed": "Esportazione video non riuscita:\n\n{}",
     "video_reconstruction_native_fallback": "La ricostruzione video {}/{} non è disponibile; l’esportazione usa Native.",
     "video_reconstruction_version_unsupported": "Questo progetto usa una versione non supportata della selezione di ricostruzione video. La scena è stata aperta con ricostruzione Native; il salvataggio sostituirà quella selezione.",
-    "conversion_failed": "Conversione non riuscita:\\n\\n{}",
-    "checkpoint_save_failed": "Impossibile salvare il checkpoint all'iterazione {}:\\n\\n{}",
+    "conversion_failed": "Conversione non riuscita:\n\n{}",
+    "checkpoint_save_failed": "Impossibile salvare il checkpoint all'iterazione {}:\n\n{}",
     "lod_enabled_no_tree": "Abilitato, nessun albero",
     "lod_disabled": "RAD LOD assente",
     "lod_scale": "Scala LOD x{:.1f}",
@@ -3159,5 +3178,1816 @@
   "runtime.import_batch_failed.other": "{} file non sono stati caricati",
   "runtime.import_out_of_memory": "Memoria GPU insufficiente",
   "runtime.import_batch_kept": "Gli altri file sono stati caricati e rimangono disponibili nella scena.",
-  "runtime.import_render_failed": "Impossibile preparare questo file per la visualizzazione"
+  "runtime.import_render_failed": "Impossibile preparare questo file per la visualizzazione",
+  "nodes.edit_stored_splats_blocked": "Applica o nascondi i modificatori dei nodi per modificare gli splat memorizzati",
+  "editor.node_editor": "Editor nodi",
+  "node_editor.toggle": "Mostra editor nodi",
+  "node_editor.preview_selection": "Preview Selection",
+  "node_editor.toggle_sidebar": "Toggle sidebar",
+  "node_editor.edit_mode_notice": "Node modifiers are available in edit mode",
+  "node_editor.select_node_notice": "Select a splat, mesh or point cloud node",
+  "node_editor.add_modifier_notice": "Aggiungi un modificatore di nodi per iniziare",
+  "node_editor.type_splat": "Splat",
+  "node_editor.type_point_cloud": "Point Cloud",
+  "node_editor.type_mesh": "Mesh",
+  "node_editor.type_unsupported": "Unsupported",
+  "node_editor.new_graph": "Nuovo grafo di nodi",
+  "node_editor.modifier_actions": "Azioni modificatore",
+  "node_editor.target": "Target",
+  "node_editor.modifiers": "Modifiers",
+  "node_editor.add_modifier": "Add Modifier",
+  "node_editor.show_viewport": "Show in viewport",
+  "node_editor.move_up": "Move up",
+  "node_editor.move_down": "Move down",
+  "node_editor.apply": "Apply",
+  "node_editor.remove": "Remove",
+  "node_editor.status_errors": "errors",
+  "node_editor.status_ok": "OK",
+  "node_editor.status_disabled": "Disabled",
+  "node_editor.capture_selection": "Capture selection",
+  "node_editor.default_tree_name": "Grafo di nodi",
+  "node_editor.add": "+ Aggiungi",
+  "node_editor.modifiers_on": "Modificatori attivi",
+  "node_editor.modifiers_off": "Modificatori disattivi",
+  "node_editor.frame": "Inquadra",
+  "node_editor.open": "Apri…",
+  "node_editor.save": "Salva…",
+  "node_editor.selected_share": "{}% selezionato",
+  "node_editor.cached": "in cache",
+  "node_editor.updating": "Aggiornamento…",
+  "node_editor.updating_node": "Aggiornamento… {}/{} {}",
+  "node_editor.error_count": "{} errori",
+  "node_editor.unchanged": "Invariato",
+  "node_editor.splats": "splat",
+  "node_editor.points": "punti",
+  "node_editor.vertices": "vertici",
+  "node_editor.result": "Risultato: {} {} · {}",
+  "node_editor.last_run": "Ultima esecuzione: {}",
+  "node_editor.node_on": "Attivo",
+  "node_editor.file_read_error": "Impossibile leggere il grafo di nodi",
+  "node_editor.file_write_error": "Impossibile salvare il grafo di nodi",
+  "node_editor.search_nodes": "Cerca nodi…",
+  "node_editor.settings_count_one": "{} impostazione",
+  "node_editor.settings_count_other": "{} impostazioni",
+  "node_editor.arrange": "Disponi",
+  "node_editor.arrange_shortcut": "Shift+L",
+  "node_editor.running": "In esecuzione…",
+  "node_editor.queued": "In attesa",
+  "node_editor.no_results": "Nessun nodo corrispondente",
+  "node_editor.optional_selection": "Opzionale: senza connessione seleziona tutto",
+  "node_editor.captured_count": "Acquisiti: {} selezionati",
+  "nodes": {
+    "paint_selection": {
+      "label": "Dipingi selezione",
+      "description": "Dipinge una selezione geometrica dinamica direttamente sulle superfici della scena.",
+      "help": "Seleziona il nodo, attiva Dipingi e trascina su una superficie; Alt/Option cancella.\nUsa [ e ] per ridimensionare il pennello. I tratti restano validi se cambia il numero di elementi.",
+      "inputs": {
+        "Softness": "Frazione del raggio di ogni campione usata per la sfumatura, 0–1. 0 dà un bordo netto; 0,5 è il valore predefinito."
+      },
+      "input_labels": {
+        "Softness": "Morbidezza"
+      },
+      "outputs": {
+        "Selection": "Intensità della selezione: 0 escluso, 1 selezionato; i valori intermedi creano transizioni morbide."
+      },
+      "output_labels": {
+        "Selection": "Selezione"
+      },
+      "properties": {
+        "data": "Tratti sulla superficie memorizzati come campioni locali dell’oggetto. Vuoto per impostazione predefinita.",
+        "invert": "Inverte la selezione dipinta. Disattivato mantiene le aree dipinte; attivato seleziona il resto."
+      },
+      "property_labels": {
+        "data": "Tratti",
+        "invert": "Inverti"
+      }
+    },
+    "boolean": {
+      "label": "Booleano",
+      "description": "Fornisce un interruttore comune per più impostazioni collegate.",
+      "help": "Usalo per attivare più opzioni insieme.\nCollega Valore a un ingresso booleano; per impostazione iniziale è spento.",
+      "inputs": {
+        "Value": "Interruttore condiviso. Spento per impostazione iniziale: falso o non selezionato; acceso: vero o selezionato."
+      },
+      "input_labels": {
+        "Value": "Valore"
+      },
+      "outputs": {
+        "Value": "Acceso per gli elementi selezionati, spento per gli altri. Collega a Selezione o a un ingresso booleano."
+      },
+      "output_labels": {
+        "Value": "Valore"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "boolean_math": {
+      "label": "Logica booleana",
+      "description": "Combina selezioni tramite intersezione, unione o inversione.",
+      "help": "Usa E per l'intersezione oppure O per includere entrambe.\nL'operazione «Non» inverte A e ignora B.",
+      "inputs": {
+        "A": "Primo valore booleano o selezione. Inizialmente spento; acceso include l'elemento.",
+        "B": "Secondo valore booleano o selezione. Inizialmente spento; acceso include l'elemento."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Result": "Acceso per gli elementi selezionati, spento per gli altri. Collega a Selezione o a un ingresso booleano."
+      },
+      "output_labels": {
+        "Result": "Risultato"
+      },
+      "properties": {
+        "operation": "Combinazione di A e B. E, iniziale, mantiene l'intersezione; l'operazione Non inverte A e ignora B."
+      },
+      "property_labels": {
+        "operation": "Operazione"
+      }
+    },
+    "box_selection": {
+      "label": "Selezione a scatola",
+      "description": "Seleziona la parte della scena dentro una scatola, con bordi morbidi opzionali.",
+      "help": "Sposta Centro e adatta Dimensione al soggetto.\nInizia con Attenuazione 0 per un confine netto.",
+      "inputs": {
+        "Centre": "Centro X, Y e Z in unità locali di scena. Il valore iniziale (0, 0, 0) è l'origine dell'oggetto.",
+        "Size": "Larghezza, altezza e profondità totali non negative in unità di scena. (1, 1, 1) dà una scatola unitaria.",
+        "Rotation": "Rotazione intorno a X, Y e Z in gradi. Il valore iniziale (0, 0, 0) lascia invariato l'orientamento.",
+        "Falloff": "Bordo morbido fuori dalla scatola, in unità di scena. Il valore iniziale 0 dà un confine netto."
+      },
+      "input_labels": {
+        "Centre": "Centro",
+        "Size": "Dimensione",
+        "Rotation": "Rotazione",
+        "Falloff": "Attenuazione"
+      },
+      "outputs": {
+        "Selection": "Forza di selezione: 0 escluso, 1 interamente selezionato; i valori intermedi creano transizioni morbide."
+      },
+      "output_labels": {
+        "Selection": "Selezione"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour": {
+      "label": "Colore",
+      "description": "Fornisce un colore da condividere tra i nodi collegati.",
+      "help": "Scegli un colore e collegalo alle impostazioni da condividere.\nIl colore iniziale è grigio medio.",
+      "inputs": {
+        "Colour": "Colore RGB, di solito 0–1 per canale: 0 nero, 1 bianco. Il valore iniziale (0,5, 0,5, 0,5) è grigio medio."
+      },
+      "input_labels": {
+        "Colour": "Colore"
+      },
+      "outputs": {
+        "Colour": "Colore RGB risultante: 0 nero, 1 bianco per canale. Alcuni calcoli possono superare l'intervallo."
+      },
+      "output_labels": {
+        "Colour": "Colore"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_attribute": {
+      "label": "Attributo colore",
+      "description": "Legge il colore base di ogni splat o punto per modificarlo o selezionare in base al colore.",
+      "help": "Collega Colore a Separa colore per esaminare i canali.\nLeggi il colore base, non i riflessi dipendenti dalla vista.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Colour": "Colore RGB risultante: 0 nero, 1 bianco per canale. Alcuni calcoli possono superare l'intervallo."
+      },
+      "output_labels": {
+        "Colour": "Colore"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_correct": {
+      "label": "Correzione colore",
+      "description": "Corregge: esposizione, livelli, contrasto, saturazione, tinta, bilanciamento del bianco e toni a tre vie.",
+      "help": "Inizia con Esposizione, poi regola Contrasto e Saturazione.\nCollega una Selezione per correggere solo una parte.\nCentra le ruote per ombre, mezzitoni e luci neutri.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Dove applichi la modifica, 0–1: 0 invariato, 1 effetto completo. Senza collegamento riguarda tutto.",
+        "Exposure": "Luminosità in stop: +1 raddoppia la luce, −1 la dimezza. Il valore iniziale 0 non cambia nulla.",
+        "Black Point": "Luminosità in ingresso resa nera. 0 conserva i neri; aumentare approfondisce le ombre.",
+        "White Point": "Luminosità in ingresso resa bianca. 1 conserva i bianchi; ridurre schiarisce le luci.",
+        "Midpoint": "Luminosità in ingresso resa grigio medio, 0,01–0,99. 0,5 è neutro; ridurre schiarisce i mezzitoni.",
+        "Contrast": "Differenza fra chiaro e scuro. 1 invariato, 0 tono uniforme; oltre 1 aumenta il contrasto.",
+        "Saturation": "Intensità del colore. 0 elimina il colore, 1 lo conserva; oltre 1 lo rafforza.",
+        "Hue Shift": "Rotazione della ruota cromatica in gradi. 0 invariato; 180 porta ogni colore al suo opposto.",
+        "Temperature": "Bilanciamento caldo/freddo, −1 a 1. Negativo raffredda, positivo scalda; 0 è neutro.",
+        "Tint": "Bilanciamento verde/magenta, −1 a 1. Negativo aggiunge magenta, positivo verde; 0 è neutro.",
+        "Shadows": "Scostamento nelle zone scure, −1 a 1 per canale. 0 neutro; negativo rimuove quel colore.",
+        "Midtones": "Scostamento nei mezzitoni, −1 a 1 per canale. 0 neutro; positivo aggiunge quel colore.",
+        "Highlights": "Scostamento nelle zone chiare, −1 a 1 per canale. 0 neutro; positivo aggiunge quel colore.",
+        "Gamma": "Luminosità dei mezzitoni, maggiore di 0. 1 neutro; oltre 1 schiarisce, sotto 1 scurisce."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Exposure": "Esposizione",
+        "Black Point": "Punto nero",
+        "White Point": "Punto bianco",
+        "Midpoint": "Punto medio",
+        "Contrast": "Contrasto",
+        "Saturation": "Saturazione",
+        "Hue Shift": "Spostamento tonalità",
+        "Temperature": "Temperatura",
+        "Tint": "Tinta",
+        "Shadows": "Ombre",
+        "Midtones": "Mezzitoni",
+        "Highlights": "Luci",
+        "Gamma": "Gamma"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "auto_range": "Misura punti nero e bianco dalla scena. Inizialmente spento, così li controlli tu."
+      },
+      "property_labels": {
+        "auto_range": "Intervallo automatico"
+      }
+    },
+    "colour_key": {
+      "label": "Chiave colore",
+      "description": "Seleziona le parti della scena con colori simili a quello che scegli.",
+      "help": "Scegli Colore e aumenta Tolleranza fino a includere il soggetto.\nAggiungi un po' di Morbidezza per evitare un bordo netto.",
+      "inputs": {
+        "Colour": "Colore RGB da cercare, di solito 0–1 per canale. Nero iniziale; scegli qui il colore desiderato.",
+        "Tolerance": "Distanza RGB ammessa da Colore. 0 richiede quel colore esatto; il valore iniziale 0,1 ammette piccole variazioni.",
+        "Softness": "Larghezza della transizione morbida. 0 dà bordi netti; valori maggiori ammorbidiscono la selezione."
+      },
+      "input_labels": {
+        "Colour": "Colore",
+        "Tolerance": "Tolleranza",
+        "Softness": "Morbidezza"
+      },
+      "outputs": {
+        "Selection": "Forza di selezione: 0 escluso, 1 interamente selezionato; i valori intermedi creano transizioni morbide."
+      },
+      "output_labels": {
+        "Selection": "Selezione"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "combine_colour": {
+      "label": "Combina colore",
+      "description": "Compone un colore da valori RGB o HSV separati.",
+      "help": "Collega tre valori e scegli RGB o HSV.\nIn HSV, R, G e B indicano tonalità, saturazione e luminosità.",
+      "inputs": {
+        "R": "Rosso in RGB o tonalità in HSV, di solito 0–1. Lo 0 iniziale dà niente rosso oppure tonalità rossa in HSV.",
+        "G": "Verde in RGB o saturazione in HSV, di solito 0–1. Lo 0 iniziale dà niente verde oppure grigio in HSV.",
+        "B": "Blu in RGB o luminosità in HSV, di solito 0–1. Lo 0 iniziale dà niente blu oppure nero in HSV."
+      },
+      "input_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "outputs": {
+        "Colour": "Colore RGB risultante: 0 nero, 1 bianco per canale. Alcuni calcoli possono superare l'intervallo."
+      },
+      "output_labels": {
+        "Colour": "Colore"
+      },
+      "properties": {
+        "mode": "Interpretazione cromatica. RGB iniziale usa rosso, verde e blu; HSV usa tonalità, saturazione e luminosità."
+      },
+      "property_labels": {
+        "mode": "Modalità"
+      }
+    },
+    "combine_xyz": {
+      "label": "Combina XYZ",
+      "description": "Compone una posizione o direzione dai valori X, Y e Z.",
+      "help": "Usalo per cambiare una coordinata mantenendo le altre due.\nCollega il risultato a un ingresso Vettore.",
+      "inputs": {
+        "X": "Coordinata X nelle unità necessarie. Lo 0 iniziale non contribuisce lungo questo asse.",
+        "Y": "Coordinata Y nelle unità necessarie. Lo 0 iniziale non contribuisce lungo questo asse.",
+        "Z": "Coordinata Z nelle unità necessarie. Lo 0 iniziale non contribuisce lungo questo asse."
+      },
+      "input_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "outputs": {
+        "Vector": "Valori X, Y e Z risultanti nelle unità del tuo calcolo."
+      },
+      "output_labels": {
+        "Vector": "Vettore"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "compare": {
+      "label": "Confronta",
+      "description": "Seleziona parti della scena confrontando due valori, come altezza e livello del suolo.",
+      "help": "Collega l'altezza ad A e il suolo a B, poi scegli Minore di.\nEpsilon riguarda solo Uguale e Diverso.",
+      "inputs": {
+        "A": "Primo numero nelle unità del tuo calcolo. Valore iniziale 0.",
+        "B": "Secondo numero nelle unità del tuo calcolo. Valore iniziale 0.",
+        "Epsilon": "Tolleranza per Uguale e Diverso, nelle unità di A e B. 0 richiede uguaglianza esatta; valore iniziale 0,001."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Epsilon": "Epsilon"
+      },
+      "outputs": {
+        "Result": "Acceso per gli elementi selezionati, spento per gli altri. Collega a Selezione o a un ingresso booleano."
+      },
+      "output_labels": {
+        "Result": "Risultato"
+      },
+      "properties": {
+        "operation": "Confronto da eseguire. Uguale iniziale; Minore di o Maggiore di seleziona un lato di B."
+      },
+      "property_labels": {
+        "operation": "Operazione"
+      }
+    },
+    "decimate": {
+      "label": "Riduci per importanza",
+      "description": "Riduce gli splat conservando quelli più grandi e opachi nella tua selezione.",
+      "help": "Inizia con Frazione mantenuta 0,5 per conservarne circa metà.\nGli splat non selezionati restano; punteggi uguali possono superare la quantità prevista.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Splat da ridurre: pesi da 0,5 in su. Senza collegamento comprende tutti gli splat.",
+        "Keep Fraction": "Quota selezionata da mantenere, 0,001–1. 0,5 conserva circa metà, 1 conserva tutto."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Keep Fraction": "Frazione mantenuta"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "delete_geometry": {
+      "label": "Elimina geometria",
+      "description": "Rimuove dalla scena gli splat, punti o vertici selezionati.",
+      "help": "Collega una selezione prima di collegare Geometria.\nSenza Selezione collegata elimini tutto, incluse le facce che toccano i vertici rimossi.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Cosa rimuovi: pesi da 0,5 in su. Senza collegamento elimini tutto e l'uscita resta vuota."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "ellipsoid_selection": {
+      "label": "Selezione ellissoidale",
+      "description": "Seleziona una parte sferica o allungata della scena, con bordi morbidi opzionali.",
+      "help": "Regola Centro e Raggi intorno al soggetto.\nRaggi uguali danno una sfera; Attenuazione 0 dà un confine netto.",
+      "inputs": {
+        "Centre": "Centro X, Y e Z in unità locali di scena. Il valore iniziale (0, 0, 0) è l'origine dell'oggetto.",
+        "Radii": "Raggio per asse in unità di scena, non negativo. Il valore iniziale (1, 1, 1) crea una sfera unitaria.",
+        "Rotation": "Rotazione intorno a X, Y e Z in gradi. Il valore iniziale (0, 0, 0) lascia invariato l'orientamento.",
+        "Falloff": "Bordo morbido fuori dall'ellissoide, relativo ai raggi. Lo 0 iniziale dà un confine netto."
+      },
+      "input_labels": {
+        "Centre": "Centro",
+        "Radii": "Raggi",
+        "Rotation": "Rotazione",
+        "Falloff": "Attenuazione"
+      },
+      "outputs": {
+        "Selection": "Forza di selezione: 0 escluso, 1 interamente selezionato; i valori intermedi creano transizioni morbide."
+      },
+      "output_labels": {
+        "Selection": "Selezione"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group": {
+      "label": "Gruppo",
+      "description": "Valuta un grafo di nodi riutilizzabile.",
+      "help": "Scegli un grafo nella barra laterale. Ingressi e uscite seguono la sua interfaccia.\nTutte le istanze condividono lo stesso grafo.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "UUID del grafo referenziato."
+      },
+      "property_labels": {
+        "tree": "Grafo"
+      }
+    },
+    "frame": {
+      "label": "Cornice",
+      "description": "Raggruppa visivamente i nodi correlati.",
+      "help": "Rilascia i nodi nella cornice. Spostando la cornice si spostano i suoi membri.\nI nodi di impaginazione non cambiano il risultato.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "Titolo della cornice.",
+        "colour": "Colore del tema o valore RGB.",
+        "note": "Testo facoltativo sotto il titolo."
+      },
+      "property_labels": {
+        "label": "Etichetta",
+        "colour": "Colore",
+        "note": "Nota"
+      }
+    },
+    "reroute": {
+      "label": "Deviazione",
+      "description": "Reindirizza un collegamento senza modificarne il valore.",
+      "help": "Collega qualsiasi tipo di presa; la deviazione adotta il tipo a monte.\nI nodi di impaginazione non cambiano il risultato.",
+      "inputs": {
+        "Input": "Valore da trasmettere."
+      },
+      "input_labels": {
+        "Input": "Ingresso"
+      },
+      "outputs": {
+        "Output": "Valore di ingresso invariato."
+      },
+      "output_labels": {
+        "Output": "Uscita"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "Nota",
+      "description": "Aggiunge al grafo una scheda di testo modificabile.",
+      "help": "Fai doppio clic sulla scheda o modifica il testo nella barra laterale.\nI nodi di impaginazione non cambiano il risultato.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "Testo visualizzato sulla scheda.",
+        "width": "Larghezza della scheda; l’altezza si adatta al testo."
+      },
+      "property_labels": {
+        "text": "Testo",
+        "width": "Larghezza"
+      }
+    },
+    "group_input": {
+      "label": "Ingresso gruppo",
+      "description": "Porta la geometria dell'oggetto ospite nel tuo grafo di nodi.",
+      "help": "Collega Geometria al primo nodo di modifica.\nIn una pila ricevi il risultato del modificatore precedente.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Geometria ospite o risultato del modificatore precedente. Collega al primo nodo di modifica."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_output": {
+      "label": "Uscita gruppo",
+      "description": "Restituisce alla scena la geometria finale del tuo grafo di nodi.",
+      "help": "Collega l'ultimo nodo di modifica a Geometria.\nSolo il ramo che raggiunge questo nodo contribuisce al risultato.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria."
+      },
+      "input_labels": {
+        "Geometry": "Geometria"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "hsv_range": {
+      "label": "Intervallo HSV",
+      "description": "Seleziona splat per intervallo di colore, ad esempio il verde di un prato, con bordi morbidi.",
+      "help": "Scegli la tonalità e amplia Intervallo tonalità fino a includere l'intero oggetto.\nAlza Saturazione min per ignorare i grigi e Valore min per ignorare le ombre.\nAttiva Anteprima selezione per vedere il risultato nella vista.",
+      "inputs": {
+        "Hue": "Centro cromatico, 0–1: 0 rosso, 0,17 giallo, 0,33 verde, 0,5 ciano, 0,67 blu, 0,83 magenta.",
+        "Hue Range": "Distanza ammessa ai lati di Tonalità, 0–0,5 della ruota. 0,07 comprende una famiglia di colori.",
+        "Hue Softness": "Sfumatura fuori dall'intervallo di tonalità, in giri della ruota. Lo 0 iniziale dà un limite netto.",
+        "Saturation Min": "Minima saturazione inclusa, 0–1. Lo 0 iniziale include i grigi; aumenta per escluderli.",
+        "Saturation Max": "Massima saturazione inclusa, 0–1. L'1 iniziale include colori completamente saturi.",
+        "Value Min": "Minima luminosità inclusa, 0–1. Lo 0 iniziale include il nero; aumenta per escludere le ombre.",
+        "Value Max": "Massima luminosità inclusa, 0–1. L'1 iniziale include il bianco; riduci per escludere le luci.",
+        "Softness": "Larghezza della transizione morbida. 0 dà bordi netti; valori maggiori ammorbidiscono la selezione."
+      },
+      "input_labels": {
+        "Hue": "Tonalità",
+        "Hue Range": "Intervallo tonalità",
+        "Hue Softness": "Morbidezza tonalità",
+        "Saturation Min": "Saturazione min",
+        "Saturation Max": "Saturazione max",
+        "Value Min": "Valore min",
+        "Value Max": "Valore max",
+        "Softness": "Morbidezza"
+      },
+      "outputs": {
+        "Selection": "Forza di selezione: 0 escluso, 1 interamente selezionato; i valori intermedi creano transizioni morbide."
+      },
+      "output_labels": {
+        "Selection": "Selezione"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "index": {
+      "label": "Indice",
+      "description": "Fornisce la posizione di ogni splat, punto o vertice nell'elenco corrente, partendo da zero.",
+      "help": "Usalo con Matematica o Confronta per selezionare numeri specifici.\nEliminare o unire geometria può cambiare questi numeri.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Index": "Posizione corrente nell'elenco, da 0. Unire o eliminare geometria può rinumerare gli elementi."
+      },
+      "output_labels": {
+        "Index": "Indice"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "inside_mesh": {
+      "label": "Dentro la mesh",
+      "description": "Seleziona la parte della scena racchiusa da una mesh di riferimento.",
+      "help": "Collega una mesh chiusa da Informazioni oggetto a Mesh.\nFori e autointersezioni possono rendere ambiguo l'interno.",
+      "inputs": {
+        "Mesh": "Mesh chiusa che definisce l'interno. Collega Informazioni oggetto; senza collegamento non seleziona nulla."
+      },
+      "input_labels": {
+        "Mesh": "Mesh"
+      },
+      "outputs": {
+        "Selection": "Acceso per gli elementi selezionati, spento per gli altri. Collega a Selezione o a un ingresso booleano."
+      },
+      "output_labels": {
+        "Selection": "Selezione"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "integer": {
+      "label": "Intero",
+      "description": "Fornisce un numero intero comune per più impostazioni collegate.",
+      "help": "Collega Valore a conteggi o impostazioni intere.\nInizia da 0; i pulsanti cambiano il valore di uno alla volta.",
+      "inputs": {
+        "Value": "Intero condiviso. Valore iniziale 0; sono ammessi numeri negativi e positivi."
+      },
+      "input_labels": {
+        "Value": "Valore"
+      },
+      "outputs": {
+        "Value": "Numero risultante nelle unità del calcolo. Collega a un ingresso numerico compatibile."
+      },
+      "output_labels": {
+        "Value": "Valore"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "invert_colour": {
+      "label": "Inverti colore",
+      "description": "Inverte i colori, schiarendo le zone scure e sostituendo ogni colore con il suo opposto.",
+      "help": "Collega una Selezione per invertire solo una parte.\nApplicalo due volte per ripristinare il colore base, salvo dettagli già persi per taglio.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Dove applichi la modifica, 0–1: 0 invariato, 1 effetto completo. Senza collegamento riguarda tutto."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "join_geometry": {
+      "label": "Unisci geometria",
+      "description": "Unisce più ingressi; gli splat con gradi SH diversi vengono completati fino al più alto.",
+      "help": "Collega più uscite Geometria allo stesso ingresso.\nUsalo per riunire i rami dopo Separa geometria.\nLe copie sovrapposte restano splat, punti o facce distinti.",
+      "inputs": {
+        "Geometry": "Sorgenti geometriche da unire. Accetta più collegamenti; senza collegamento il risultato è vuoto."
+      },
+      "input_labels": {
+        "Geometry": "Geometria"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "map_range": {
+      "label": "Mappa intervallo",
+      "description": "Converte un intervallo in un altro, ad esempio altezza 0–2 m in una sfumatura da 1 a 0.",
+      "help": "Imposta Min origine e Max origine sull'intervallo iniziale.\nMin destinazione 1 e Max destinazione 0 invertono la sfumatura.\nLascia Limita attivo per rispettare i limiti di uscita.",
+      "inputs": {
+        "Value": "Numero da convertire nelle unità d'origine. Valore iniziale 0; collega Posizione o un altro valore.",
+        "From Min": "Limite inferiore dell'intervallo d'origine, nelle unità di Valore. Inizialmente 0.",
+        "From Max": "Limite superiore dell'intervallo d'origine nelle unità di Valore. Inizialmente 1; diverso da Min origine.",
+        "To Min": "Risultato a Min origine. Inizialmente 0; usa 1 qui e 0 a Max destinazione per invertire la sfumatura.",
+        "To Max": "Risultato a Max origine. Inizialmente 1; usa 0 qui e 1 a Min destinazione per invertire la sfumatura."
+      },
+      "input_labels": {
+        "Value": "Valore",
+        "From Min": "Min origine",
+        "From Max": "Max origine",
+        "To Min": "Min destinazione",
+        "To Max": "Max destinazione"
+      },
+      "outputs": {
+        "Result": "Numero risultante nelle unità del calcolo. Collega a un ingresso numerico compatibile."
+      },
+      "output_labels": {
+        "Result": "Risultato"
+      },
+      "properties": {
+        "clamp": "Mantiene il risultato nell'intervallo d'uscita. Inizialmente attivo; spento ammette valori oltre i limiti."
+      },
+      "property_labels": {
+        "clamp": "Limita"
+      }
+    },
+    "math": {
+      "label": "Matematica",
+      "description": "Somma, moltiplica, confronta o arrotonda numeri — ad esempio per scalare l'opacità con l'altezza.",
+      "help": "Scegli un'operazione e collega valori ad A e B.\nInizia con Moltiplica per regolare la forza di una selezione.",
+      "inputs": {
+        "A": "Primo numero nelle unità del tuo calcolo. Valore iniziale 0.",
+        "B": "Secondo numero nelle unità del tuo calcolo. Valore iniziale 0."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Value": "Numero risultante nelle unità del calcolo. Collega a un ingresso numerico compatibile."
+      },
+      "output_labels": {
+        "Value": "Valore"
+      },
+      "properties": {
+        "operation": "Calcolo da eseguire. Somma iniziale; operazioni come Valore assoluto usano solo A."
+      },
+      "property_labels": {
+        "operation": "Operazione"
+      }
+    },
+    "mesh_to_points": {
+      "label": "Mesh in punti",
+      "description": "Trasforma i vertici di una mesh in punti, mantenendo i colori dei vertici disponibili.",
+      "help": "Collega una mesh da Informazioni oggetto.\nOttieni un punto per vertice, non una distribuzione uniforme sulla superficie.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria."
+      },
+      "input_labels": {
+        "Geometry": "Geometria"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "mesh_to_splats": {
+      "label": "Mesh in splat",
+      "description": "Ricopre la superficie di una mesh con splat piatti e colorati.",
+      "help": "La densità iniziale dà circa 20.000 splat su una sfera unitaria.\nAumenta Densità per i dettagli; Numero max limita il totale.\nI colori dei vertici hanno priorità su materiali e texture.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Density": "Splat per unità quadrata di scena. Circa 1.592 iniziali danno 20.000 su una sfera unitaria; 0 non ne crea.",
+        "Max Count": "Massimo di splat da creare, 0–2.000.000. Il limite iniziale è 2.000.000; 0 non crea nulla.",
+        "Opacity": "Opacità degli splat, 0–1: 0 trasparente, 1 opaco. Il valore iniziale 0,95 è quasi opaco."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Density": "Densità",
+        "Max Count": "Numero max",
+        "Opacity": "Opacità"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "seed": "Seme intero per un motivo ripetibile. Inizialmente 0; cambiarlo produce un altro motivo."
+      },
+      "property_labels": {
+        "seed": "Seme"
+      }
+    },
+    "mix_colour": {
+      "label": "Miscela colori",
+      "description": "Miscela due colori o li combina con un'operazione cromatica.",
+      "help": "Collega i colori ad A e B; Fattore 0,5 li miscela in parti uguali.\nInizia con Miscela prima di provare Moltiplica o Somma.",
+      "inputs": {
+        "A": "Primo colore RGB, di solito 0–1 per canale. Inizialmente nero.",
+        "B": "Secondo colore RGB, di solito 0–1 per canale. Inizialmente nero.",
+        "Factor": "Forza della miscela, 0–1. 0 mantiene A, 1 applica tutta l'operazione; 0,5 dà metà intensità."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Factor": "Fattore"
+      },
+      "outputs": {
+        "Colour": "Colore RGB risultante: 0 nero, 1 bianco per canale. Alcuni calcoli possono superare l'intervallo."
+      },
+      "output_labels": {
+        "Colour": "Colore"
+      },
+      "properties": {
+        "mode": "Combinazione cromatica. Miscela iniziale; Somma, Sottrai e Moltiplica precedono Fattore."
+      },
+      "property_labels": {
+        "mode": "Modalità"
+      }
+    },
+    "named_attribute": {
+      "label": "Attributo nominato",
+      "description": "Legge un valore salvato tramite il suo nome per controllare le modifiche.",
+      "help": "Inserisci il nome esatto dell'attributo e scegli il tipo.\nUn attributo mancante non può fornire valori.",
+      "inputs": {
+        "Name": "Nome esatto dell'attributo, incluse maiuscole e minuscole. Vuoto iniziale; inseriscilo prima di usare l'uscita."
+      },
+      "input_labels": {
+        "Name": "Nome"
+      },
+      "outputs": {
+        "Attribute": "Valori letti dall'attributo nominato, nelle sue unità salvate."
+      },
+      "output_labels": {
+        "Attribute": "Attributo"
+      },
+      "properties": {
+        "type": "Tipo di valore da leggere. Float iniziale legge un decimale per elemento."
+      },
+      "property_labels": {
+        "type": "Tipo"
+      }
+    },
+    "neighbour_count": {
+      "label": "Numero di vicini",
+      "description": "Conta gli splat o punti vicini per trovare zone poco dense della scena.",
+      "help": "Collega Conteggio a Confronta per selezionare valori bassi.\nPer gli splat, inizia con Raggio 3 e Relativo alla dimensione.\nUn punto non conta mai se stesso.",
+      "inputs": {
+        "Radius": "Distanza dei vicini. Inizialmente 1 unità di scena, o multiplo con Relativo alla dimensione. 0 non conta nulla."
+      },
+      "input_labels": {
+        "Radius": "Raggio"
+      },
+      "outputs": {
+        "Count": "Numero di vicini entro Raggio, escluso il punto stesso. 0 significa isolato."
+      },
+      "output_labels": {
+        "Count": "Conteggio"
+      },
+      "properties": {
+        "relative_to_size": "Dimensione dello splat come unità di raggio. Spento usa unità di scena; i punti usano sempre unità di scena."
+      },
+      "property_labels": {
+        "relative_to_size": "Relativo alla dimensione"
+      }
+    },
+    "opacity": {
+      "label": "Opacità",
+      "description": "Legge l'opacità di ogni splat per trovare zone deboli o solide.",
+      "help": "Collega Opacità a Confronta per selezionare gli splat deboli.\n0 significa trasparente, 1 opaco.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Opacity": "Opacità prima del rendering: 0 trasparente, 1 opaco."
+      },
+      "output_labels": {
+        "Opacity": "Opacità"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "points_to_splats": {
+      "label": "Punti in splat",
+      "description": "Trasforma una nuvola di punti in splat rotondi e colorati.",
+      "help": "Lascia Raggio a 0 per stimare la dimensione dai punti vicini.\nImposta un raggio positivo in unità di scena se restano vuoti.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Radius": "Raggio in unità di scena. Lo 0 iniziale stima metà distanza dei vicini; positivo fissa una dimensione.",
+        "Opacity": "Opacità degli splat, 0–1: 0 trasparente, 1 opaco. Lo 0,9 iniziale mantiene un po' di trasparenza."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Radius": "Raggio",
+        "Opacity": "Opacità"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "position": {
+      "label": "Posizione",
+      "description": "Legge dove si trova ogni splat, punto o vertice nel tuo oggetto.",
+      "help": "Collega Posizione a Separa XYZ per selezionare per altezza o distanza lungo un asse.\nLe coordinate sono locali all'oggetto.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Posizione locale X, Y e Z in unità di scena."
+      },
+      "output_labels": {
+        "Position": "Posizione"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "posterize": {
+      "label": "Posterizza",
+      "description": "Riduce i colori della scena a pochi livelli uniformi.",
+      "help": "Inizia con Livelli 4 per quattro gradini per canale.\nCollega una Selezione per limitare l'effetto.\nGli splat selezionati perdono le variazioni cromatiche dipendenti dalla vista.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Dove applichi la modifica, 0–1: 0 invariato, 1 effetto completo. Senza collegamento riguarda tutto.",
+        "Levels": "Livelli per canale RGB, 2–32. 2 dà solo valori bassi e alti; inizialmente 4."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Levels": "Livelli"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "random_value": {
+      "label": "Valore casuale",
+      "description": "Assegna a ogni splat o punto un valore casuale ripetibile per variare le modifiche.",
+      "help": "Imposta Min e Max sull'intervallo desiderato.\nCambia Seme per un altro motivo; anche riordinare la geometria può cambiarlo.",
+      "inputs": {
+        "Min": "Minimo valore casuale nelle tue unità. Inizialmente 0; tienilo sotto Max.",
+        "Max": "Massimo valore casuale nelle tue unità. Inizialmente 1; tienilo sopra Min."
+      },
+      "input_labels": {
+        "Min": "Min",
+        "Max": "Max"
+      },
+      "outputs": {
+        "Value": "Numero risultante nelle unità del calcolo. Collega a un ingresso numerico compatibile."
+      },
+      "output_labels": {
+        "Value": "Valore"
+      },
+      "properties": {
+        "seed": "Seme intero per un motivo ripetibile. Inizialmente 0; cambiarlo produce un altro motivo."
+      },
+      "property_labels": {
+        "seed": "Seme"
+      }
+    },
+    "recolour": {
+      "label": "Ricolora",
+      "description": "Cambia il colore degli splat selezionati mantenendone, se vuoi, luce e ombra.",
+      "help": "Scegli Colore e inizia con Peso 0,3 per una tinta leggera.\nLascia Mantieni ombreggiatura attivo per preservare l'illuminazione.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Dove applichi la modifica, 0–1: 0 invariato, 1 effetto completo. Senza collegamento riguarda tutto.",
+        "Colour": "Colore RGB desiderato, di solito 0–1 per canale. Blu iniziale. Mantieni ombreggiatura conserva luce e ombra.",
+        "Weight": "Forza di ricolorazione, 0–1. 0 mantiene l'originale, 1 applica tutto il nuovo colore; inizialmente 1."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Colour": "Colore",
+        "Weight": "Peso"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "keep_shading": "Mantiene luce e ombra cambiando colore. Inizialmente attivo; spento applica un colore uniforme.",
+        "fade_view_dependent": "Attenua il colore dipendente dalla vista ricolorando. Inizialmente attivo; spento conserva le variazioni."
+      },
+      "property_labels": {
+        "keep_shading": "Mantieni ombreggiatura",
+        "fade_view_dependent": "Attenua dipendenza dalla vista"
+      }
+    },
+    "remove_floaters": {
+      "label": "Rimuovi splat sospesi",
+      "description": "Elimina splat dispersi nel vuoto, come puntini nel cielo o foschia sotto il terreno.",
+      "help": "Attiva prima Anteprima: mostra solo ciò che verrebbe rimosso.\nRaggio di isolamento 3 con Relativo alla dimensione valuta ogni splat alla sua scala e salva lo sfondo rado.\nCollega una Selezione per limitare la pulizia, ad esempio alle altezze sotto il suolo.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Dove provi la rimozione: pesi da 0,5 in su. Senza collegamento verifica ogni splat.",
+        "Min Opacity": "Rimuovi sotto questa opacità, 0–1. 0 disattiva; lo 0,02 iniziale rimuove gli splat molto deboli.",
+        "Max Size": "Rimuovi se l'asse più lungo supera questa dimensione in unità di scena. Lo 0 iniziale disattiva la prova.",
+        "Isolation Radius": "Distanza dei vicini: multiplo della dimensione con Relativo alla dimensione, altrimenti unità di scena. 0 disattiva.",
+        "Min Neighbours": "Rimuove splat con meno vicini nel raggio. 1 elimina solo splat completamente isolati."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Min Opacity": "Opacità min",
+        "Max Size": "Dimensione max",
+        "Isolation Radius": "Raggio di isolamento",
+        "Min Neighbours": "Vicini min"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "preview": "Mostra solo gli splat da rimuovere, invariati. Inizialmente spento mostra il risultato ripulito.",
+        "relative_to_size": "Dimensione dello splat come unità di raggio. Inizialmente attivo protegge le zone rade; spento usa unità di scena."
+      },
+      "property_labels": {
+        "preview": "Anteprima",
+        "relative_to_size": "Relativo alla dimensione"
+      }
+    },
+    "scale": {
+      "label": "Scala",
+      "description": "Legge la dimensione di ogni splat lungo i suoi tre assi locali.",
+      "help": "Collega Scala a Separa XYZ per confrontare le dimensioni degli assi.\nI valori sono unità di scena, non moltiplicatori.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Scale": "Dimensione lungo i tre assi locali di ogni splat, in unità di scena."
+      },
+      "output_labels": {
+        "Scale": "Scala"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "scale_clamp": {
+      "label": "Limita proporzioni",
+      "description": "Accorcia i Gaussians ad ago che creano strisce lontano dal percorso di acquisizione.",
+      "help": "Usalo se compaiono strisce sottili fuori dal percorso della camera.\nInizia con Rapporto max 16; valori minori accorciano più aghi.\nGli splat piatti sulle superfici restano invariati, salvo attivare «Includi piatti».\nGli assi di dimensione zero restano collassati; il limite di rapporto si applica solo agli altri assi.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Dove applichi la modifica, 0–1: 0 invariato, 1 effetto completo. Senza collegamento riguarda tutto.",
+        "Max Aspect": "Rapporto massimo tra asse lungo e medio. 16 è un buon inizio; valori minori accorciano più aghi."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Max Aspect": "Rapporto max"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "include_flat": "Limita anche l'appiattimento (asse lungo/corto). Disattivo per default: le superfici sono fatte di splat piatti."
+      },
+      "property_labels": {
+        "include_flat": "Includi piatti"
+      }
+    },
+    "separate_colour": {
+      "label": "Separa colore",
+      "description": "Divide un colore in valori RGB o HSV per modificarli o confrontarli separatamente.",
+      "help": "Scegli HSV per isolare tonalità, saturazione o luminosità.\nIn HSV le uscite R, G e B portano questi valori in quest'ordine.",
+      "inputs": {
+        "Colour": "Colore da separare, di solito 0–1 per canale RGB. Nero iniziale, con tutti i canali a 0."
+      },
+      "input_labels": {
+        "Colour": "Colore"
+      },
+      "outputs": {
+        "R": "Rosso in RGB o tonalità in HSV. La tonalità percorre la ruota cromatica da 0 a 1.",
+        "G": "Verde in RGB o saturazione in HSV. In HSV 0 è grigio e 1 completamente saturo.",
+        "B": "Blu in RGB o luminosità in HSV. In HSV 0 è nero e 1 piena luminosità."
+      },
+      "output_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "properties": {
+        "mode": "Interpretazione cromatica. RGB iniziale usa rosso, verde e blu; HSV usa tonalità, saturazione e luminosità."
+      },
+      "property_labels": {
+        "mode": "Modalità"
+      }
+    },
+    "separate_geometry": {
+      "label": "Separa geometria",
+      "description": "Separa la selezione dal resto per modificarli diversamente e riunirli.",
+      "help": "Collega una Selezione e modifica le due uscite separatamente.\nRiunisci i rami con Unisci geometria.\nI pesi morbidi diventano una separazione sì/no alla soglia di 0,5.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Pesi da 0,5 in su vanno a Selezione, gli altri a Invertita. Senza collegamento seleziona tutto."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione"
+      },
+      "outputs": {
+        "Selection": "Geometria con peso di selezione di almeno 0,5. Modifica questo ramo separatamente.",
+        "Inverted": "Geometria con peso di selezione sotto 0,5. È la parte fuori dalla tua selezione."
+      },
+      "output_labels": {
+        "Selection": "Selezione",
+        "Inverted": "Invertita"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_xyz": {
+      "label": "Separa XYZ",
+      "description": "Divide una posizione o direzione nei valori X, Y e Z.",
+      "help": "Collega Posizione, poi l'asse verticale a Confronta o Mappa intervallo.\nVerifica quale asse punta verso l'alto nella tua scena.",
+      "inputs": {
+        "Vector": "Valori X, Y e Z nelle tue unità. Il valore iniziale (0, 0, 0) dà zero su ogni asse."
+      },
+      "input_labels": {
+        "Vector": "Vettore"
+      },
+      "outputs": {
+        "X": "Coordinata X in ingresso, stesse unità. 0 si trova sul piano degli altri due assi.",
+        "Y": "Coordinata Y in ingresso, stesse unità. 0 si trova sul piano degli altri due assi.",
+        "Z": "Coordinata Z in ingresso, stesse unità. 0 si trova sul piano degli altri due assi."
+      },
+      "output_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_colour": {
+      "label": "Imposta colore",
+      "description": "Sostituisce il colore base degli splat selezionati con il colore che fornisci.",
+      "help": "Scegli Colore o collega i colori di un altro nodo.\nLascia Cancella dipendenza dalla vista attivo per un colore dipinto uniforme.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Dove applichi la modifica, 0–1: 0 invariato, 1 effetto completo. Senza collegamento riguarda tutto.",
+        "Colour": "Colore RGB, di solito 0–1 per canale: 0 nero, 1 bianco. Il valore iniziale (0,5, 0,5, 0,5) è grigio medio."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Colour": "Colore"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "clear_view_dependent": "Elimina colore dipendente dalla vista sugli splat scelti. Attivo dà colore uniforme; spento conserva riflessi."
+      },
+      "property_labels": {
+        "clear_view_dependent": "Cancella dipendenza dalla vista"
+      }
+    },
+    "set_opacity": {
+      "label": "Imposta opacità",
+      "description": "Cambia la trasparenza apparente degli splat selezionati.",
+      "help": "Inizia con Opacità 0,5 per renderli traslucidi.\nUsa Selezione per una miscela morbida con l'opacità originale.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Dove applichi la modifica, 0–1: 0 invariato, 1 effetto completo. Senza collegamento riguarda tutto.",
+        "Opacity": "Nuova opacità, 0–1: 0 trasparente, 1 opaco. L'1 iniziale rende opachi gli splat selezionati."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Opacity": "Opacità"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_position": {
+      "label": "Imposta posizione",
+      "description": "Sposta splat, punti o vertici selezionati in nuove posizioni, con uno scostamento opzionale.",
+      "help": "Collega Posizione a Posizione e imposta Scostamento per uno spostamento relativo.\nSenza quel collegamento, la posizione iniziale è l'origine.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Dove applichi la modifica, 0–1: 0 invariato, 1 effetto completo. Senza collegamento riguarda tutto.",
+        "Position": "Nuova posizione locale in unità di scena. Origine iniziale; collega Posizione per mantenere le posizioni.",
+        "Offset": "Movimento aggiunto X, Y e Z in unità locali. Il valore iniziale (0, 0, 0) non aggiunge movimento."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Position": "Posizione",
+        "Offset": "Scostamento"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_scale": {
+      "label": "Imposta scala",
+      "description": "Imposta la dimensione degli splat selezionati lungo i tre assi locali.",
+      "help": "Collega Scala tramite Matematica vettoriale per moltiplicare le dimensioni esistenti.\nSenza collegamenti, i valori sostituiscono le dimensioni in unità di scena, non le moltiplicano.\nDimensioni nulle o negative fanno collassare un asse. Una dimensione positiva lo ripristina solo con selezione completa; con selezione parziale resta collassato.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Dove applichi la modifica, 0–1: 0 invariato, 1 effetto completo. Senza collegamento riguarda tutto.",
+        "Scale": "Nuova dimensione per asse locale in unità di scena. (1, 1, 1) dà splat tondi di dimensione unitaria."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Scale": "Scala"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_sh_degree": {
+      "label": "Imposta grado SH",
+      "description": "Limita il colore dello splat secondo la vista; gradi minori riducono molto i file.",
+      "help": "Usa Grado 0 per colori uniformi ed esportazioni più piccole.\nAumentare il grado permette più dettagli ma non recupera colori scartati.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Degree": "Grado SH, 0–3. Lo 0 iniziale elimina colore dipendente dalla vista; gradi superiori ammettono più dettaglio angolare."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Degree": "Grado"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "sharpen": {
+      "label": "Nitidezza",
+      "description": "Restringe gli splat selezionati per rendere più nitidi i dettagli sfumati.",
+      "help": "Inizia con Intensità 0,25 e lascia Mantieni copertura attivo.\nValori alti possono mostrare vuoti tra gli splat.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Selection": "Dove applichi la modifica, 0–1: 0 invariato, 1 effetto completo. Senza collegamento riguarda tutto.",
+        "Amount": "Riduzione di dimensione, 0–0,95. 0 nessun effetto; lo 0,25 iniziale riduce ogni asse del 25%."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Amount": "Intensità"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "keep_coverage": "Aumenta l'opacità restringendo gli splat per mantenere copertura. Inizialmente attivo; spento può renderli trasparenti."
+      },
+      "property_labels": {
+        "keep_coverage": "Mantieni copertura"
+      }
+    },
+    "simplify": {
+      "label": "Semplifica",
+      "description": "Combina splat per ridurne il numero mantenendo l'aspetto generale della scena.",
+      "help": "Inizia con Rapporto 0,5 per puntare a metà degli splat.\nPuò richiedere più tempo; rapporti minori perdono dettagli fini.\nGli assi con covarianza nulla restano collassati; unire posizioni o orientamenti diversi può creare un’estensione reale.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Ratio": "Quota di splat da mantenere, 0,01–1. Lo 0,5 iniziale punta alla metà; 1 mantiene il numero originale."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Ratio": "Rapporto"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "splats_to_points": {
+      "label": "Splat in punti",
+      "description": "Trasforma centri e colori base degli splat in una nuvola di punti.",
+      "help": "Usalo per esportare i centri o trattare la scena come punti.\nNon conserva dimensione, opacità o colore dipendente dalla vista.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria."
+      },
+      "input_labels": {
+        "Geometry": "Geometria"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "stored_selection": {
+      "label": "Selezione salvata",
+      "description": "Riutilizza una selezione catturata nella vista.",
+      "help": "Nascondi questo modificatore con l'icona dell'occhio, seleziona gli splat nella vista (pennello, lazo o riquadro), premi Cattura selezione e mostralo di nuovo.\nRipeti la cattura se qualcosa prima di questo nodo cambia il numero di splat.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Selection": "Acceso per gli elementi selezionati, spento per gli altri. Collega a Selezione o a un ingresso booleano."
+      },
+      "output_labels": {
+        "Selection": "Selezione"
+      },
+      "properties": {
+        "data": "Selezione catturata dalla vista. Vuota prima di Cattura selezione; salvata separatamente per modificatore.",
+        "size": "Numero di elementi alla cattura. 0 significa vuoto; ricattura se il numero cambia.",
+        "invert": "Inverte la selezione catturata. Spento mantiene gli elementi scelti; acceso seleziona il resto."
+      },
+      "property_labels": {
+        "data": "Dati",
+        "size": "Dimensione",
+        "invert": "Inverti"
+      }
+    },
+    "transform_geometry": {
+      "label": "Trasforma geometria",
+      "description": "Sposta, ruota e ridimensiona l'intera geometria insieme.",
+      "help": "Inizia con Traslazione oppure Scala 1 per conservare la dimensione.\nLa rotazione usa gradi intorno all'origine dell'oggetto.",
+      "inputs": {
+        "Geometry": "Geometria da modificare. Collega una sorgente; senza collegamento non arriva geometria.",
+        "Translation": "Movimento X, Y e Z in unità di scena. Il valore iniziale (0, 0, 0) non cambia le posizioni.",
+        "Rotation": "Rotazione intorno a X, Y e Z in gradi. Il valore iniziale (0, 0, 0) lascia invariato l'orientamento.",
+        "Scale": "Moltiplicatore di dimensione. 1 conserva, 0 collassa all'origine; valori negativi specchiano."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Translation": "Traslazione",
+        "Rotation": "Rotazione",
+        "Scale": "Scala"
+      },
+      "outputs": {
+        "Geometry": "Geometria risultante. Collega a un altro nodo di modifica o a Uscita gruppo."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "value": {
+      "label": "Valore",
+      "description": "Fornisce un numero comune per più impostazioni collegate.",
+      "help": "Collega Valore a diversi ingressi numerici per controllarli insieme.\nInizia da 0 e trascina il numero per modificarlo.",
+      "inputs": {
+        "Value": "Numero condiviso. Inizialmente 0; sono ammessi valori negativi e positivi."
+      },
+      "input_labels": {
+        "Value": "Valore"
+      },
+      "outputs": {
+        "Value": "Numero risultante nelle unità del calcolo. Collega a un ingresso numerico compatibile."
+      },
+      "output_labels": {
+        "Value": "Valore"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector": {
+      "label": "Vettore",
+      "description": "Fornisce valori X, Y e Z condivisi tra più nodi.",
+      "help": "Usalo per una posizione, uno scostamento o una direzione comuni.\nLe tre coordinate sono inizialmente 0.",
+      "inputs": {
+        "Vector": "Valori X, Y e Z nelle tue unità. Il valore iniziale (0, 0, 0) dà zero su ogni asse."
+      },
+      "input_labels": {
+        "Vector": "Vettore"
+      },
+      "outputs": {
+        "Vector": "Valori X, Y e Z risultanti nelle unità del tuo calcolo."
+      },
+      "output_labels": {
+        "Vector": "Vettore"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector_math": {
+      "label": "Matematica vettoriale",
+      "description": "Somma, sottrae e misura posizioni e direzioni — ad esempio la distanza da un punto.",
+      "help": "Usa Scala per uno scostamento o Distanza tra due posizioni.\nLunghezza, Distanza e Prodotto scalare usano Valore; le altre operazioni usano Vettore.",
+      "inputs": {
+        "A": "Primo valore a tre componenti nelle unità del calcolo. Inizialmente (0, 0, 0).",
+        "B": "Secondo valore a tre componenti nelle unità del calcolo. Inizialmente (0, 0, 0).",
+        "Scale": "Moltiplicatore per Scala. 1 mantiene A, 0 dà zero e −1 inverte la direzione."
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Scale": "Scala"
+      },
+      "outputs": {
+        "Vector": "Valori X, Y e Z risultanti nelle unità del tuo calcolo.",
+        "Value": "Numero risultante nelle unità del calcolo. Collega a un ingresso numerico compatibile."
+      },
+      "output_labels": {
+        "Vector": "Vettore",
+        "Value": "Valore"
+      },
+      "properties": {
+        "operation": "Calcolo vettoriale. Somma iniziale; Lunghezza, Distanza e Prodotto scalare producono Valore, non Vettore."
+      },
+      "property_labels": {
+        "operation": "Operazione"
+      }
+    },
+    "object_info": {
+      "label": "Informazioni oggetto",
+      "description": "Porta la geometria di un altro oggetto nel grafo come riferimento o parte aggiuntiva.",
+      "help": "Scegli il nome esatto o UUID dell'oggetto di riferimento.\nUsa lo spazio Relativo per posizionarlo rispetto all'oggetto modificato.\nEvita riferimenti a oggetti che dipendono da questo modificatore.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "Geometria di riferimento nello spazio scelto, inclusi i modificatori visibili."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "object": "Nome esatto o UUID dell'oggetto. Vuoto iniziale; scegli un riferimento prima della valutazione.",
+        "transform_space": "Spazio di riferimento. Originale mantiene coordinate locali; Relativo trasforma nello spazio dell'oggetto modificato."
+      },
+      "property_labels": {
+        "object": "Oggetto",
+        "transform_space": "Spazio di trasformazione"
+      }
+    },
+    "float_curve": {
+      "label": "Curva di valori",
+      "description": "Rimappa i numeri con una curva morbida modificabile.",
+      "help": "Rimappa i numeri con una curva morbida modificabile.\nTrascina, aggiungi o elimina i punti di controllo. L’interpolazione Fritsch–Carlson evita sovraelongazioni tra punti monotoni.",
+      "inputs": {
+        "Value": "Numero per elemento da rimappare tramite la curva."
+      },
+      "input_labels": {
+        "Value": "Valore"
+      },
+      "outputs": {
+        "Value": "Numero rimappato dalla curva."
+      },
+      "output_labels": {
+        "Value": "Valore"
+      },
+      "properties": {
+        "points": "Punti di controllo ordinati come coppie X e Y.",
+        "clamp": "Limita gli ingressi tra il primo e l’ultimo punto di controllo."
+      },
+      "property_labels": {
+        "points": "Curva",
+        "clamp": "Limita"
+      }
+    },
+    "rgb_curves": {
+      "label": "Curve RGB",
+      "description": "Rimappa i colori con curve combinate e per canale.",
+      "help": "Rimappa i colori con curve combinate e per canale.\nSelezione × Fattore miscela il risultato. La correzione non lineare modifica solo il colore base DC degli splat, non le bande SH direzionali. Funziona anche su punti e mesh.",
+      "inputs": {
+        "Geometry": "Geometria da modificare; collega un’uscita geometrica.",
+        "Selection": "Peso di miscelazione per elemento, 0–1; senza collegamento include tutti.",
+        "Factor": "Intensità aggiuntiva della curva, 0–1."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Factor": "Fattore"
+      },
+      "outputs": {
+        "Geometry": "Geometria dopo la modifica."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "combined": "Curva applicata prima a tutti i canali di colore.",
+        "r": "Curva del canale rosso.",
+        "g": "Curva del canale verde.",
+        "b": "Curva del canale blu."
+      },
+      "property_labels": {
+        "combined": "Combinata",
+        "r": "Rosso",
+        "g": "Verde",
+        "b": "Blu"
+      }
+    },
+    "colour_ramp": {
+      "label": "Rampa di colori",
+      "description": "Associa valori numerici a colori e trasparenza.",
+      "help": "Associa valori numerici a colori e trasparenza.\nDistribuisci le tappe tra 0 e 1. Scegli un’interpolazione costante, lineare o smussata.",
+      "inputs": {
+        "Fac": "Posizione nella rampa di colori, normalmente da 0 a 1."
+      },
+      "input_labels": {
+        "Fac": "Fattore"
+      },
+      "outputs": {
+        "Colour": "Colore RGB generato.",
+        "Alpha": "Trasparenza della rampa, 0–1."
+      },
+      "output_labels": {
+        "Colour": "Colore",
+        "Alpha": "Alfa"
+      },
+      "properties": {
+        "stops": "Tappe ordinate: posizione, rosso, verde, blu e alfa.",
+        "interpolation": "Transizione tra tappe adiacenti: costante, lineare o smussata."
+      },
+      "property_labels": {
+        "stops": "Rampa",
+        "interpolation": "Interpolazione"
+      }
+    },
+    "gradient_texture": {
+      "label": "Texture gradiente",
+      "description": "Crea un gradiente da coordinate spaziali.",
+      "help": "Crea un gradiente da coordinate spaziali.\nUsa Posizione come coordinate. Lineare usa X, diagonale usa X e Y; sferico e radiale si riferiscono all’origine.",
+      "inputs": {
+        "Vector": "Coordinate X, Y e Z; senza collegamento usa le posizioni degli elementi."
+      },
+      "input_labels": {
+        "Vector": "Vettore"
+      },
+      "outputs": {
+        "Fac": "Valore del gradiente generato; può uscire dall’intervallo 0–1."
+      },
+      "output_labels": {
+        "Fac": "Fattore"
+      },
+      "properties": {
+        "type": "Forma del gradiente: lineare, quadratica, smussata, diagonale, sferica o radiale."
+      },
+      "property_labels": {
+        "type": "Tipo"
+      }
+    },
+    "distance": {
+      "label": "Distanza",
+      "description": "Misura la distanza di ogni elemento da un punto, una retta o un piano.",
+      "help": "Misura la distanza di ogni elemento da un punto, una retta o un piano.\nIl piano restituisce una distanza con segno; punto e retta restituiscono distanze non negative.",
+      "inputs": {
+        "Vector": "Coordinate X, Y e Z; senza collegamento usa le posizioni degli elementi.",
+        "Point": "Punto di destinazione o punto appartenente alla retta o al piano.",
+        "Direction": "Direzione della retta o direzione di vista della fotocamera.",
+        "Normal": "Direzione normale al piano di destinazione."
+      },
+      "input_labels": {
+        "Vector": "Vettore",
+        "Point": "Punto",
+        "Direction": "Direzione",
+        "Normal": "Normale"
+      },
+      "outputs": {
+        "Distance": "Distanza in unità di scena; con segno in modalità piano."
+      },
+      "output_labels": {
+        "Distance": "Distanza"
+      },
+      "properties": {
+        "mode": "Misura fino a un punto, una retta o un piano."
+      },
+      "property_labels": {
+        "mode": "Modalità"
+      }
+    },
+    "noise_texture": {
+      "label": "Texture rumore",
+      "description": "Genera rumore frattale tridimensionale riproducibile.",
+      "help": "Genera rumore frattale tridimensionale riproducibile.\nSenza collegamento usa le posizioni. Dettaglio ammette 0–15 ottave frazionarie; Rugosità ne controlla l’ampiezza.",
+      "inputs": {
+        "Vector": "Coordinate X, Y e Z; senza collegamento usa le posizioni degli elementi.",
+        "Scale": "Moltiplicatore di dimensioni o coordinate; 1 mantiene la dimensione originale.",
+        "Detail": "Numero di ottave da 0 a 15, con miscelazione frazionaria.",
+        "Roughness": "Frazione di ampiezza mantenuta a ogni ottava successiva.",
+        "Distortion": "Intensità della deformazione delle coordinate.",
+        "Seed": "Seme per riprodurre il motivo di rumore."
+      },
+      "input_labels": {
+        "Vector": "Vettore",
+        "Scale": "Scala",
+        "Detail": "Dettaglio",
+        "Roughness": "Rugosità",
+        "Distortion": "Distorsione",
+        "Seed": "Seme"
+      },
+      "outputs": {
+        "Fac": "Valore di campionamento del gradiente o rumore prodotto, 0–1.",
+        "Colour": "Colore RGB generato."
+      },
+      "output_labels": {
+        "Fac": "Fattore",
+        "Colour": "Colore"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "store_named_attribute": {
+      "label": "Memorizza attributo con nome",
+      "description": "Memorizza valori sugli elementi della geometria.",
+      "help": "Memorizza valori sugli elementi della geometria.\nRileggi usando lo stesso nome. Gli elementi non selezionati mantengono il valore precedente o 0. Gli attributi di splat e punti attraversano i modificatori; quelli dei vertici si perdono applicando il modificatore.",
+      "inputs": {
+        "Geometry": "Geometria da modificare; collega un’uscita geometrica.",
+        "Selection": "Peso di miscelazione per elemento, 0–1; senza collegamento include tutti.",
+        "Name": "Nome per la lettura successiva con Attributo con nome.",
+        "Value": "Numeri, vettori o colori per elemento da memorizzare."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Name": "Nome",
+        "Value": "Valore"
+      },
+      "outputs": {
+        "Geometry": "Geometria dopo la modifica."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {
+        "data_type": "Memorizza il valore come numero, vettore o colore."
+      },
+      "property_labels": {
+        "data_type": "Tipo di dati"
+      }
+    },
+    "remove_clumps": {
+      "label": "Rimuovi piccoli gruppi",
+      "description": "Elimina piccoli gruppi connessi di splat o punti.",
+      "help": "Elimina piccoli gruppi connessi di splat o punti.\nIl raggio moltiplica la spaziatura locale mediana. La GPU trova le componenti connesse e rimuove solo quelle sotto la dimensione minima. Le mesh non sono supportate.",
+      "inputs": {
+        "Geometry": "Geometria da modificare; collega un’uscita geometrica.",
+        "Selection": "Gli elementi con valore almeno 0,5 sono selezionati.",
+        "Radius": "Raggio di connessione come multiplo della spaziatura locale mediana.",
+        "Min Size": "I gruppi con meno elementi sono candidati alla rimozione."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Radius": "Raggio",
+        "Min Size": "Dimensione minima"
+      },
+      "outputs": {
+        "Geometry": "Geometria dopo la modifica.",
+        "Selection": "Elementi appartenenti a gruppi sotto la dimensione minima."
+      },
+      "output_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione"
+      },
+      "properties": {
+        "delete": "Elimina i candidati; disattiva per usare solo l’uscita Selezione."
+      },
+      "property_labels": {
+        "delete": "Elimina"
+      }
+    },
+    "merge_by_distance": {
+      "label": "Unisci per distanza",
+      "description": "Unisce elementi vicini per compattare la geometria.",
+      "help": "Unisce elementi vicini per compattare la geometria.\nUnisce solo gli elementi selezionati. Media punti e vertici, rimappa le facce ed elimina quelle degeneri. Per gli splat conserva il membro più opaco di ciascun gruppo.",
+      "inputs": {
+        "Geometry": "Geometria da modificare; collega un’uscita geometrica.",
+        "Selection": "Gli elementi con valore almeno 0,5 sono selezionati.",
+        "Distance": "Distanza massima che collega elementi dello stesso gruppo."
+      },
+      "input_labels": {
+        "Geometry": "Geometria",
+        "Selection": "Selezione",
+        "Distance": "Distanza"
+      },
+      "outputs": {
+        "Geometry": "Geometria dopo la modifica."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "geometry_proximity": {
+      "label": "Prossimità geometrica",
+      "description": "Trova il punto, centro di splat o vertice più vicino nella destinazione.",
+      "help": "Trova il punto, centro di splat o vertice più vicino nella destinazione.\nCollega una geometria di destinazione nello stesso sistema di coordinate. Misura fino agli elementi, non alla superficie tra vertici.",
+      "inputs": {
+        "Target": "Geometria di destinazione con punti, splat o vertici; non può essere vuota."
+      },
+      "input_labels": {
+        "Target": "Destinazione"
+      },
+      "outputs": {
+        "Distance": "Distanza in unità di scena; con segno in modalità piano.",
+        "Position": "Posizione ottenuta nelle coordinate della geometria o della fotocamera."
+      },
+      "output_labels": {
+        "Distance": "Distanza",
+        "Position": "Posizione"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "instance_on_points": {
+      "label": "Istanze sui punti",
+      "description": "Posiziona una copia trasformata di splat su ogni ancoraggio selezionato.",
+      "help": "Posiziona una copia trasformata di splat su ogni ancoraggio selezionato.\nGli ancoraggi possono essere punti, vertici o centri di splat; l’istanza deve contenere splat. Rotazioni Euler in gradi e scale trasformano insieme forma e colore SH. Limite: 50 milioni di splat.\nI fattori negativi usano il valore assoluto per la dimensione e riflettono posizioni, orientamento e colore SH. Una trasformazione collassata lascia invariato il colore SH.",
+      "inputs": {
+        "Points": "Geometria i cui elementi forniscono gli ancoraggi.",
+        "Instance": "Geometria di splat da duplicare; altri tipi non sono supportati.",
+        "Selection": "Gli elementi con valore almeno 0,5 sono selezionati.",
+        "Rotation": "Angoli Euler attorno a X, Y e Z in gradi per ancoraggio; 0 mantiene l’orientamento.",
+        "Scale": "Un numero o tre fattori: 1 mantiene la dimensione, 0 appiattisce un asse e i valori negativi lo specchiano."
+      },
+      "input_labels": {
+        "Points": "Punti",
+        "Instance": "Istanza",
+        "Selection": "Selezione",
+        "Rotation": "Rotazione",
+        "Scale": "Scala"
+      },
+      "outputs": {
+        "Geometry": "Geometria dopo la modifica."
+      },
+      "output_labels": {
+        "Geometry": "Geometria"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "camera_info": {
+      "label": "Informazioni fotocamera",
+      "description": "Legge posizione, orientamento e obiettivo di una fotocamera del dataset.",
+      "help": "Legge posizione, orientamento e obiettivo di una fotocamera del dataset.\nScegli per indice o nome dell’immagine. Le uscite sono in coordinate globali; la scena deve contenere fotocamere del dataset.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "Posizione ottenuta nelle coordinate della geometria o della fotocamera.",
+        "Direction": "Direzione della retta o direzione di vista della fotocamera.",
+        "Up": "Vettore unitario verso il bordo superiore dell’immagine.",
+        "FOV": "Campo visivo verticale in gradi.",
+        "Image Size": "Larghezza e altezza dell’immagine in pixel; Z vale 0."
+      },
+      "output_labels": {
+        "Position": "Posizione",
+        "Direction": "Direzione",
+        "Up": "Alto",
+        "FOV": "Campo visivo",
+        "Image Size": "Dimensione immagine"
+      },
+      "properties": {
+        "camera": "Indice della fotocamera o nome esatto dell’immagine; 0 sceglie la prima."
+      },
+      "property_labels": {
+        "camera": "Fotocamera"
+      }
+    },
+    "camera_coverage": {
+      "label": "Copertura fotocamere",
+      "description": "Conta le fotocamere il cui campo visivo contiene ogni elemento.",
+      "help": "Conta le fotocamere il cui campo visivo contiene ogni elemento.\nCollega Conteggio a Confronta. Verifica i limiti dell’immagine e la profondità positiva, non le occlusioni. Distanza massima 0 disattiva il limite. Funziona con splat, punti e vertici; richiede fotocamere del dataset.",
+      "inputs": {
+        "Max Distance": "Distanza massima dalla fotocamera in unità globali; 0 disattiva il limite."
+      },
+      "input_labels": {
+        "Max Distance": "Distanza massima"
+      },
+      "outputs": {
+        "Count": "Numero di fotocamere del dataset la cui immagine contiene l’elemento.",
+        "Ratio": "Proporzione di fotocamere che contengono l’elemento, 0–1."
+      },
+      "output_labels": {
+        "Count": "Conteggio",
+        "Ratio": "Proporzione"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "view_distance": {
+      "label": "Distanza dalla fotocamera",
+      "description": "Misura la distanza nel mondo da una fotocamera o vista acquisita.",
+      "help": "Misura la distanza nel mondo da una fotocamera o vista acquisita.\nScegli una fotocamera o premi Acquisisci vista. La cattura non segue i successivi movimenti della vista. Funziona con splat, punti e vertici; richiede fotocamere del dataset.",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Distance": "Distanza dalla fotocamera scelta in unità globali."
+      },
+      "output_labels": {
+        "Distance": "Distanza"
+      },
+      "properties": {
+        "camera": "Indice della fotocamera o nome esatto dell’immagine; 0 sceglie la prima.",
+        "source": "Usa una fotocamera del dataset o l’ultima vista acquisita.",
+        "captured_transform": "Matrice da fotocamera a mondo salvata; vuota fino alla prima acquisizione."
+      },
+      "property_labels": {
+        "camera": "Fotocamera",
+        "source": "Origine",
+        "captured_transform": "Trasformazione acquisita"
+      }
+    },
+    "scene_time": {
+      "label": "Tempo della scena",
+      "description": "Restituisce il tempo dell’indicatore di riproduzione del sequencer.",
+      "help": "Usa Secondi o Fotogramma per animare i campi.\nSolo i grafi dipendenti dal tempo vengono ricalcolati durante la riproduzione.\nL’esportazione video attende la geometria calcolata per ogni fotogramma.",
+      "inputs": {},
+      "properties": {},
+      "outputs": {
+        "Seconds": "Tempo dell’indicatore di riproduzione in secondi.",
+        "Frame": "Tempo dell’indicatore moltiplicato per la frequenza dei fotogrammi del sequencer."
+      },
+      "output_labels": {
+        "Seconds": "Secondi",
+        "Frame": "Fotogramma"
+      }
+    }
+  },
+  "node_editor.how_to_use": "Come usarlo",
+  "node_editor.learn_more": "Approfondisci",
+  "node_editor.modifiers_paused_while_training": "I modificatori sono sospesi durante l’addestramento",
+  "export_dialog.apply_modifiers": "Applica modificatori",
+  "node_editor.capture_view": "Acquisisci vista",
+  "node_editor.curve_hint": "Trascina i punti; clic per aggiungere, doppio clic o Canc per rimuovere.",
+  "node_editor.ramp_hint": "Trascina le tappe; clic per aggiungere, doppio clic o Canc per rimuovere. Seleziona una tappa per modificare RGBA.",
+  "node_editor.keyframe_hint": "Inserisci fotogramma chiave · Ctrl+clic oppure I al passaggio del puntatore"
 }

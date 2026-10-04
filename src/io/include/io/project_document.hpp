@@ -304,6 +304,8 @@ namespace lfs::io::project {
         [[nodiscard]] EditorSessionChapter& edit_editor() noexcept;
         [[nodiscard]] const SequencerSessionChapter& sequencer() const noexcept;
         [[nodiscard]] SequencerSessionChapter& edit_sequencer() noexcept;
+        [[nodiscard]] const NodesSessionChapter& nodes() const noexcept;
+        [[nodiscard]] NodesSessionChapter& edit_nodes() noexcept;
         [[nodiscard]] const MetricsChapter& metrics() const noexcept;
         [[nodiscard]] MetricsChapter& edit_metrics() noexcept;
 
@@ -340,6 +342,11 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         set_ppisp(const lfs::core::Uuid& instance_uuid,
                   LazyChunkValue payload);
+        // The single SfM observation chapter (SFMO), or null.
+        [[nodiscard]] const LazyChunkValue* find_sfm_observations() const noexcept;
+        // Replaces the SFMO chapter; nullopt removes it.
+        [[nodiscard]] lfs::Result<void>
+        set_sfm_observations(std::optional<LazyChunkValue> payload);
         [[nodiscard]] lfs::Result<void>
         set_georeference(const ProjectGeoreference& value);
         [[nodiscard]] lfs::Result<void>

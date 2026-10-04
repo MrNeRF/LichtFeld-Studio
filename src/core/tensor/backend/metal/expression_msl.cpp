@@ -148,7 +148,8 @@ static uint lfs_int_divide(uint a, uint b, bool modulo) {
                 case ExprOp::Add: return bits(x + " + " + y);
                 case ExprOp::Sub: return bits(x + " - " + y);
                 case ExprOp::Mul: return bits(x + " * " + y);
-                case ExprOp::Div: return bits(x + " / " + y);
+                case ExprOp::Div:
+                case ExprOp::PreciseDiv: return bits(x + " / " + y);
                 case ExprOp::Mod: return bits("fmod(" + x + ", " + y + ")");
                 case ExprOp::Pow: return bits(y + " == 2.0f ? " + x + " * " + x + " : pow(" + x + ", " + y + ")");
                 case ExprOp::Min: return bits("lfs_minmax(" + x + ", " + y + ", false)");

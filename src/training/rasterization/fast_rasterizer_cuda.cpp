@@ -539,7 +539,8 @@ namespace lfs::training {
                  max_screen_share.ndim() == 1 &&
                  max_screen_share.numel() >= static_cast<size_t>(n_primitives))
                     ? max_screen_share.ptr<float>()
-                    : nullptr);
+                    : nullptr,
+                params.dilation_scale);
         } catch (const std::exception& e) {
             // Dump all input data for debugging
             dump_crash_data(

@@ -73,6 +73,54 @@ namespace {
         ASSERT_TRUE(file.good());
     }
 
+    // Minimal uncompressed RGB EXR, independent of the decoder library. Its
+    // negative and HDR samples detect accidental clipping or colour transforms.
+    void write_float_exr(const std::filesystem::path& path) {
+        std::vector<std::uint8_t> data;
+        append_u32(data, 20000630);
+        append_u32(data, 2);
+        const auto text = [](std::vector<std::uint8_t>& out, const char* value) {
+            out.insert(out.end(), value, value + std::strlen(value) + 1);
+        };
+        const auto attribute = [&](const char* name, const char* type, const std::vector<std::uint8_t>& value) {
+            text(data, name);
+            text(data, type);
+            append_u32(data, static_cast<std::uint32_t>(value.size()));
+            data.insert(data.end(), value.begin(), value.end());
+        };
+        std::vector<std::uint8_t> channels;
+        for (const char* name : {"B", "G", "R"}) {
+            text(channels, name);
+            append_u32(channels, 2); // FLOAT
+            append_u32(channels, 0); // pLinear and reserved bytes
+            append_u32(channels, 1);
+            append_u32(channels, 1);
+        }
+        channels.push_back(0);
+        attribute("channels", "chlist", channels);
+        attribute("compression", "compression", {0});
+        std::vector<std::uint8_t> window;
+        for (const auto value : {0u, 0u, 1u, 0u})
+            append_u32(window, value);
+        attribute("dataWindow", "box2i", window);
+        attribute("displayWindow", "box2i", window);
+        attribute("lineOrder", "lineOrder", {0});
+        attribute("pixelAspectRatio", "float", {0, 0, 128, 63});
+        attribute("screenWindowCenter", "v2f", std::vector<std::uint8_t>(8));
+        attribute("screenWindowWidth", "float", {0, 0, 128, 63});
+        data.push_back(0);
+        const auto chunk_offset = static_cast<std::uint32_t>(data.size() + 8);
+        append_u32(data, chunk_offset);
+        append_u32(data, 0);
+        append_u32(data, 0); // scanline y
+        append_u32(data, 24);
+        for (const auto value : {0x3f000000u, 0x40000000u, 0x3f800000u, 0x3e800000u, 0xbe800000u, 0x41200000u})
+            append_u32(data, value);
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        ASSERT_TRUE(file.good());
+    }
+
     std::vector<std::uint8_t> read_file(const std::filesystem::path& path) {
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         EXPECT_TRUE(file);
@@ -420,6 +468,40 @@ TEST(ImageIoTest, FloatTiffInferenceRangeNormalization) {
     EXPECT_FLOAT_EQ(decoded[0], 128.0f / 255.0f);
     EXPECT_FLOAT_EQ(decoded[1], 64.0f / 255.0f);
     lfs::core::free_image_float(decoded);
+}
+
+TEST(ImageIoTest, ExrPreservesLinearHdrAndHighBitdepthPaths) {
+    const auto path = unique_temp_path("hdr", ".exr");
+    write_float_exr(path);
+    const auto [probe_width, probe_height, probe_channels] = lfs::core::get_image_info(path);
+    EXPECT_EQ(probe_width, 2);
+    EXPECT_EQ(probe_height, 1);
+    EXPECT_EQ(probe_channels, 3);
+    auto [rgba, width, height, channels] = lfs::core::load_image_float(path);
+    ASSERT_NE(rgba, nullptr);
+    EXPECT_EQ(width, 2);
+    EXPECT_EQ(height, 1);
+    EXPECT_EQ(channels, 4);
+    const float expected[] = {-0.25f, 1.0f, 0.5f, 1.0f, 10.0f, 0.25f, 2.0f, 1.0f};
+    for (size_t i = 0; i < std::size(expected); ++i)
+        EXPECT_FLOAT_EQ(rgba[i], expected[i]);
+    lfs::core::free_image_float(rgba);
+    auto [rgb, rgb_width, rgb_height] = lfs::core::load_image_rgb_high_bitdepth(path);
+    ASSERT_NE(rgb, nullptr);
+    EXPECT_EQ(rgb_width, 2);
+    EXPECT_EQ(rgb_height, 1);
+    for (size_t p = 0; p < 2; ++p)
+        for (size_t c = 0; c < 3; ++c)
+            EXPECT_FLOAT_EQ(rgb[p * 3 + c], expected[p * 4 + c]);
+    lfs::core::free_image_float(rgb);
+    auto [gray, gray_width, gray_height] = lfs::core::load_image_gray_high_bitdepth(path);
+    ASSERT_NE(gray, nullptr);
+    EXPECT_EQ(gray_width, 2);
+    EXPECT_EQ(gray_height, 1);
+    EXPECT_FLOAT_EQ(gray[0], -0.25f);
+    EXPECT_FLOAT_EQ(gray[1], 10.0f);
+    lfs::core::free_image_float(gray);
+    std::filesystem::remove(path);
 }
 
 TEST(ImageIoTest, GalleryEnvironmentValidatesBeforeAllocationAndPreservesFloats) {

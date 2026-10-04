@@ -432,6 +432,7 @@ namespace lfs::core {
         Device device = Device::GPU;
         DataType dtype = DataType::Float32;
         bool use_pinned = true;
+        std::optional<uint64_t> random_seed;
         std::variant<
             std::monostate,
             float,
@@ -991,16 +992,19 @@ namespace lfs::core {
                            DataType dtype = DataType::Float32);
         static Tensor randn(TensorShape shape, Device device = Device::GPU,
                             DataType dtype = DataType::Float32);
+        // Explicit seeds are local to the call and leave the global RNG untouched.
         static Tensor uniform(TensorShape shape, float low = 0.0f, float high = 1.0f,
-                              Device device = Device::GPU, DataType dtype = DataType::Float32);
+                              Device device = Device::GPU, DataType dtype = DataType::Float32,
+                              std::optional<uint64_t> seed = std::nullopt);
         static Tensor normal(TensorShape shape, float mean = 0.0f, float std = 1.0f,
                              Device device = Device::GPU, DataType dtype = DataType::Float32);
         static Tensor randint(TensorShape shape, int low, int high,
                               Device device = Device::GPU, DataType dtype = DataType::Int32);
         static Tensor bernoulli(TensorShape shape, float p = 0.5f,
                                 Device device = Device::GPU, DataType dtype = DataType::Float32);
+        // Explicit seeds are local to the call and leave the global RNG untouched.
         static Tensor multinomial(const Tensor& weights, int num_samples,
-                                  bool replacement = false);
+                                  bool replacement = false, std::optional<uint64_t> seed = std::nullopt);
         static Tensor arange(float end);
         static Tensor arange(float start, float end, float step = 1.0f);
         static Tensor linspace(float start, float end, size_t steps, Device device = Device::GPU);

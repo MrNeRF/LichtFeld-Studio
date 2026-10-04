@@ -34,6 +34,7 @@ namespace lfs::vis::gui {
         int screen_h = 0;
         float mouse_wheel = 0;
         float mouse_wheel_x = 0;
+        float pinch_scale = 1.0f;
         std::vector<FrameMouseButtonEvent> mouse_button_events;
         bool key_ctrl = false;
         bool key_shift = false;

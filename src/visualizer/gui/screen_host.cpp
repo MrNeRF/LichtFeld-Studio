@@ -82,6 +82,9 @@ namespace lfs::vis::gui {
                     services_.view_command(id, action);
                 chrome_dirty_ = true;
             });
+        assert(services_.scene_manager);
+        node_editor_ = std::make_unique<NodeEditor>(*services_.rml, *services_.scene_manager,
+                                                    services_.context_menu);
         installPanelEditorTypes(services_.screens->editorTypes());
 
         chrome_context_ = services_.rml->createContext("screen_chrome", 800, 600);
@@ -154,6 +157,7 @@ namespace lfs::vis::gui {
     }
 
     void ScreenHost::shutdown() {
+        node_editor_.reset();
         chrome_tooltip_.setHover({}, nullptr);
         if (services_.rml) {
             services_.rml->releaseCachedVulkanContext(chrome_cache_);
@@ -242,6 +246,8 @@ namespace lfs::vis::gui {
             return scene_;
         if (editor == screen::editors::kConsole)
             return console_;
+        if (editor == screen::editors::kNodeEditor)
+            return *node_editor_;
         return panel_;
     }
 
@@ -402,6 +408,18 @@ namespace lfs::vis::gui {
         return done;
     }
 
+    bool ScreenHost::toggleEditor(const std::string_view editor) {
+        bool shown = false;
+        mutate([&](screen::Screen& screen) {
+            if (screen.findEditor(editor).valid()) {
+                screen.closeEditor(editor);
+            } else {
+                shown = screen.openEditor(editor).valid();
+            }
+        });
+        return shown;
+    }
+
     void ScreenHost::openEditorMenu(const screen::AreaId id, const float x, const float y) {
         if (!services_.context_menu)
             return;
@@ -414,7 +432,8 @@ namespace lfs::vis::gui {
         bool panels_started = false;
         for (const auto& type : services_.screens->editorTypes().list()) {
             const bool builtin = type.id == screen::editors::kView3D || type.id == screen::editors::kScene ||
-                                 type.id == screen::editors::kProperties || type.id == screen::editors::kConsole;
+                                 type.id == screen::editors::kProperties || type.id == screen::editors::kConsole ||
+                                 type.id == screen::editors::kNodeEditor;
             items.push_back({.label = localizedLabel(type),
                              .action = "editor:" + type.id,
                              .separator_before = !builtin && !panels_started,
@@ -755,6 +774,7 @@ namespace lfs::vis::gui {
                     v = false;
                 area_input.mouse_wheel = 0.0f;
                 area_input.mouse_wheel_x = 0.0f;
+                area_input.pinch_scale = 1.0f;
                 area_input.mouse_button_events.clear();
             }
             editor.draw({.area = frame, .ui = ui, .draw = draw, .input = area_input, .live = live});

@@ -5,6 +5,7 @@
 
 #include "core/assert.hpp"
 #include "kernels/mask_preprocess.hpp"
+#include "kernels/mesh_mask.hpp"
 
 namespace lfs::training {
     namespace {
@@ -49,10 +50,17 @@ namespace lfs::training {
             }
         }
 
+        core::Tensor mesh_coverage(In vertices, In indices, const MeshMaskCamera& camera,
+                                   In samples, const core::UndistortParams* distortion, float z_near) {
+            return distortion ? kernels::rasterize_mesh_coverage(vertices, indices, camera, samples, *distortion, z_near)
+                              : kernels::rasterize_mesh_coverage(vertices, indices, camera, z_near);
+        }
+
         const MaskOps kCudaMaskOps{
             .photometric_weight = photometric_weight,
             .opacity_penalty = opacity_penalty,
             .alpha_consistency = alpha_consistency,
+            .mesh_coverage = mesh_coverage,
         };
     } // namespace
 

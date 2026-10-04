@@ -329,7 +329,7 @@ namespace lfs::vis {
 
         if (hover_changed) {
             LOG_DEBUG("Camera hover changed: {} -> {}", previous_hovered_camera, hovered_camera);
-            markDirty(DirtyFlag::OVERLAY);
+            markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
         }
 
         return hovered_camera;

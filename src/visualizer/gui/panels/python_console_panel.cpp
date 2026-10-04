@@ -1269,6 +1269,8 @@ namespace {
                 } else {
                     output->write(filtered);
                 }
+                if (state.outputVisible())
+                    lfs::python::request_redraw();
             });
         });
     }
@@ -1639,6 +1641,7 @@ namespace lfs::vis::gui::panels {
             pane.host->syncDirectLayout(w, h);
         }
 
+        state.setVisible(true);
         const int active_tab = std::clamp(state.getActiveTab(), 0, 2);
         if (auto* output = state.getOutputTerminal()) {
             if (active_tab == 0) {

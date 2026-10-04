@@ -47,8 +47,20 @@ Pull narrower resources only when needed:
 - `export.scene`
 - `export.video`
 - `operator.modal`
+- `nodes.evaluate`
 
 ## Default Playbooks
+
+### Build A Node Graph
+
+- read `lichtfeld://nodes/types`, `lichtfeld://nodes/trees`, and `lichtfeld://scene/nodes`
+- `nodes_tree_create`, then `nodes_node_add`, `nodes_node_set_input`, `nodes_link` / `nodes_unlink` using exact descriptor identifiers
+- `nodes_modifier_add` with the target scene node and the graph, each by unique name or UUID
+- `nodes_editor_open`, `nodes_editor_show`, `nodes_editor_arrange`; inspect `lichtfeld://nodes/editor`
+- `nodes_evaluate`, then watch `nodes.evaluate` through `runtime_job_wait` or `runtime_events_tail`
+- for reusable parts, add stable sockets with `nodes_interface_add`, select a connected subset with `nodes_group_make`, then use `nodes_group_set_graph` or `nodes_group_make_single_user` for instances; inspect resolved sockets before linking
+- use `nodes_editor_enter_group` / `nodes_editor_exit_group` to edit the referenced graph in context, and verify the breadcrumb in `lichtfeld://nodes/editor`
+- inspect `lichtfeld://nodes/stacks/<scene UUID>` before `nodes_modifier_apply`; changes use shared undo/redo
 
 ### Load Dataset And Train
 

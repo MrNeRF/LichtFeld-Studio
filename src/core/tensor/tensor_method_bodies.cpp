@@ -101,6 +101,7 @@ namespace lfs::core {
             // Element-wise operation without broadcasting
             if (device_ == Device::GPU) {
                 pin_operands({this, &other});
+                prepare_inputs_for_stream({this, &other}, result.stream());
                 internal::backend_ops_for(*this).binary(
                     internal::pointwise_program(dtype_, out_dtype, op),
                     internal::storage_ref(*this), internal::storage_ref(other),
@@ -117,6 +118,7 @@ namespace lfs::core {
             pin_operands({this, &other});
 
             if (device_ == Device::GPU) {
+                prepare_inputs_for_stream({this, &other}, result.stream());
                 internal::backend_ops_for(*this).broadcast_binary(
                     internal::pointwise_program(dtype_, out_dtype, op),
                     internal::storage_ref(*this), internal::strided_layout(*this),

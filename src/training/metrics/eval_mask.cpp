@@ -5,10 +5,14 @@
 #include "eval_mask.hpp"
 
 #include "core/image_io.hpp"
+#include "core/nn/ops.hpp"
 #include "core/shared_image_ops.hpp"
+#include "core/tensor_image.hpp"
+#include "io/cache_image_loader.hpp"
 #include "lfs/training/ops/masks.hpp"
 #include "lfs/training/ops/registry.hpp"
 
+#include <cassert>
 #include <stdexcept>
 #include <utility>
 
@@ -19,72 +23,62 @@ namespace lfs::training {
             return mode == lfs::core::param::MaskMode::SegmentAndIgnore;
         }
 
-        [[nodiscard]] lfs::core::Tensor finalize_binary_metrics_mask(lfs::core::Tensor mask) {
-            return mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
+        [[nodiscard]] lfs::core::Tensor finalize_binary_metrics_mask(
+            lfs::core::Tensor mask, const float threshold = 0.5f) {
+            return mask.ge(threshold).to(lfs::core::DataType::UInt8).contiguous();
         }
 
         [[nodiscard]] std::expected<LoadedMetricsMask, std::string> load_rgba_metrics_inputs(
             const lfs::core::Camera& camera,
             const MetricsMaskLoadConfig& config) {
             try {
-                auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
-                    camera.image_path(), config.resize_factor, config.max_width);
-
-                if (!img_data || channels != 4) {
-                    if (img_data) {
-                        lfs::core::free_image(img_data);
-                    }
-                    return std::unexpected("failed to decode RGBA image");
-                }
-
-                const auto H = static_cast<size_t>(height);
-                const auto W = static_cast<size_t>(width);
-
-                auto cpu_tensor = lfs::core::Tensor::from_blob(
-                    img_data, lfs::core::TensorShape({H, W, 4}),
-                    lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-                // The implicit transfer stream overload completes the upload before returning.
-                auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::GPU);
-                lfs::core::free_image(img_data);
-
-                auto rgb = lfs::core::Tensor::zeros(
+                const bool undistort = camera.is_undistort_prepared() && config.apply_undistortion;
+                const auto rgba = lfs::io::load_rgba_image_cpu_decoded(
+                    camera.image_path(),
+                    undistort ? 1 : config.resize_factor,
+                    undistort ? 0 : config.max_width);
+                const auto H = rgba.shape()[1];
+                const auto W = rgba.shape()[2];
+                const auto rgb_float = rgba.slice(0, 0, 3).contiguous();
+                auto mask = rgba.slice(0, 3, 4).squeeze(0).contiguous();
+                auto rgb = lfs::core::Tensor::empty(
                     lfs::core::TensorShape({3, H, W}),
                     lfs::core::Device::GPU, lfs::core::DataType::UInt8);
-                auto mask = lfs::core::Tensor::zeros(
-                    lfs::core::TensorShape({H, W}),
-                    lfs::core::Device::GPU, lfs::core::DataType::Float32);
-
-                lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->rgba_split(gpu_uint8, rgb, mask);
-                gpu_uint8 = lfs::core::Tensor();
+                lfs::core::shared_image_ops(lfs::core::default_gpu_backend())->convert(rgb_float, rgb, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW, H, W, 3, {});
 
                 const bool sai = is_segment_and_ignore(config.mask_mode);
                 if (config.invert_masks) {
                     lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->mask(mask, lfs::gpu_ops::MaskTransform::Invert, 0.f);
                 }
                 // SegmentAndIgnore must keep authored bands through undistort.
-                // Binary modes still snap before the warp, then re-binarize after.
-                if (!sai && config.mask_threshold > 0.0f) {
+                // Binary modes threshold the final area values after the warp.
+                if (!sai && !undistort && config.mask_threshold > 0.0f) {
                     lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->mask(mask, lfs::gpu_ops::MaskTransform::Threshold, config.mask_threshold);
                 }
 
-                if (camera.is_undistort_prepared()) {
-                    const auto scaled = lfs::core::scale_undistort_params(
+                if (undistort) {
+                    const auto scaled = lfs::core::prepare_undistort_params(
                         camera.undistort_params(),
                         static_cast<int>(W), static_cast<int>(H),
+                        config.resize_factor,
                         config.max_width);
                     auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
-                    rgb_float = lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->undistort(rgb_float, scaled, false);
+                    rgb_float = lfs::core::undistort_image(
+                        rgb_float, scaled, nullptr);
                     auto rgb_uint8 = lfs::core::Tensor::empty(
-                        rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                        rgb_float.shape(), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
                     lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->convert(rgb_float, rgb_uint8, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW, rgb_float.shape()[1], rgb_float.shape()[2], rgb_float.shape()[0], {});
                     rgb = std::move(rgb_uint8);
-                    mask = lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->undistort(mask, scaled, true);
+                    mask = lfs::core::undistort_mask_area(mask, scaled, nullptr);
                 }
 
                 if (sai) {
                     mask = classify_keep_mask_for_metrics(mask);
                 } else {
-                    mask = finalize_binary_metrics_mask(std::move(mask));
+                    const float threshold = undistort && config.mask_threshold > 0.0f
+                                                ? config.mask_threshold
+                                                : 0.5f;
+                    mask = finalize_binary_metrics_mask(std::move(mask), threshold);
                 }
                 return LoadedMetricsMask{.gt_image = std::move(rgb), .mask = std::move(mask)};
             } catch (const std::exception& e) {
@@ -101,7 +95,8 @@ namespace lfs::training {
                 config.max_width,
                 config.invert_masks,
                 config.mask_threshold,
-                !sai);
+                !sai,
+                config.apply_undistortion);
             if (!mask.is_valid()) {
                 return {};
             }
@@ -144,7 +139,8 @@ namespace lfs::training {
         if (!loaded) {
             return {};
         }
-        gt_image = std::move(loaded->gt_image);
+        if (config.replace_gt_image)
+            gt_image = std::move(loaded->gt_image);
         return std::move(loaded->mask);
     }
 
@@ -169,6 +165,53 @@ namespace lfs::training {
         const lfs::core::Camera& camera,
         const MetricsMaskLoadConfig& config) {
         return load_rgba_metrics_inputs(camera, config);
+    }
+
+    lfs::core::Tensor erode_metrics_mask(const lfs::core::Tensor& mask, const int radius) {
+        const int side = 2 * radius + 1;
+        const auto input = mask.to(lfs::core::DataType::Float32).unsqueeze(0).unsqueeze(0);
+        const auto weight = lfs::core::Tensor::ones({1, 1, size_t(side), size_t(side)}, mask.device());
+        lfs::core::nn::Conv2dParams params;
+        params.pad_h = params.pad_w = radius;
+        return lfs::core::nn::conv2d(input, weight, nullptr, params).squeeze(0).squeeze(0).ge(float(side * side) - 0.5f).to(lfs::core::DataType::UInt8).contiguous();
+    }
+    lfs::core::Tensor load_eval_alpha(
+        const lfs::core::Camera& camera,
+        const MetricsMaskLoadConfig& config) {
+        const bool undistort = camera.is_undistort_prepared() && config.apply_undistortion;
+        const auto rgba = lfs::io::load_rgba_image_cpu_decoded(
+            camera.image_path(),
+            undistort ? 1 : config.resize_factor,
+            undistort ? 0 : config.max_width);
+        assert(rgba.ndim() == 3 && rgba.shape()[0] == 4 && rgba.dtype() == lfs::core::DataType::Float32);
+        auto alpha = rgba.slice(0, 3, 4).squeeze(0).contiguous();
+        if (undistort) {
+            const auto scaled = lfs::core::prepare_undistort_params(
+                camera.undistort_params(),
+                static_cast<int>(rgba.shape()[2]), static_cast<int>(rgba.shape()[1]),
+                config.resize_factor,
+                config.max_width);
+            alpha = lfs::core::undistort_mask_area(alpha, scaled, nullptr);
+        }
+        return alpha;
+    }
+
+    lfs::core::Tensor composite_over_background(const lfs::core::Tensor& rgb,
+                                                const lfs::core::Tensor& alpha,
+                                                const lfs::core::Tensor& background) {
+        using lfs::core::DataType;
+        assert(rgb.ndim() == 3 && rgb.shape()[0] == 3);
+        assert(rgb.dtype() == DataType::Float32 || rgb.dtype() == DataType::UInt8);
+        const size_t height = rgb.shape()[1], width = rgb.shape()[2];
+        assert(alpha.dtype() == DataType::Float32 && alpha.numel() == height * width);
+        assert(background.dtype() == DataType::Float32 &&
+               (background.numel() == 3 || background.numel() == 3 * height * width));
+        const auto color = rgb.dtype() == DataType::UInt8 ? rgb.to(DataType::Float32) / 255.0f : rgb;
+        const auto coverage = alpha.reshape({1, static_cast<int>(height), static_cast<int>(width)}).clamp(0.0f, 1.0f);
+        const auto backdrop = background.numel() == 3
+                                  ? background.reshape({3, 1, 1})
+                                  : background.reshape({3, static_cast<int>(height), static_cast<int>(width)});
+        return (color * coverage + backdrop * (coverage.neg() + 1.0f)).contiguous();
     }
 
 } // namespace lfs::training

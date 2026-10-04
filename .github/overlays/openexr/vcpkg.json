@@ -1,0 +1,20 @@
+{
+  "name": "openexr",
+  "version": "3.4.15",
+  "description": "Pinned OpenEXRCore; the C++ API is optional and used by codec tests",
+  "homepage": "https://openexr.com/",
+  "license": "BSD-3-Clause",
+  "supports": "!uwp",
+  "dependencies": [
+    "libdeflate",
+    "openjph",
+    { "name": "vcpkg-cmake", "host": true },
+    { "name": "vcpkg-cmake-config", "host": true }
+  ],
+  "features": {
+    "cpp": {
+      "description": "Build the C++ reference reader/writer used by EXR codec tests",
+      "dependencies": [ "imath" ]
+    }
+  }
+}

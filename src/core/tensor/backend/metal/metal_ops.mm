@@ -2209,30 +2209,119 @@ namespace lfs::core::internal {
         encode_copy(*context, key_order, output, program.sample_count * sizeof(int64_t));
     }
 
-    void MetalBackendOps::radius_neighbors(const StorageRef points, const StorageRef references, const StorageRef heads,
-                                           const StorageRef next, const StorageRef output, const size_t count,
-                                           const size_t buckets, const float radius, ExecContext) {
-        LFS_FACADE_TRACE(radius_neighbors);
+    static void radius_query(const StorageRef points, const StorageRef references, const StorageRef heads,
+                             const StorageRef next, const StorageRef output, const size_t count,
+                             const size_t buckets, const float radius, const bool exclude_self,
+                             const std::optional<StorageRef> queries, const int32_t max_count, const bool spacing = false,
+                             const std::optional<StorageRef> values = std::nullopt) {
         struct RadiusParams {
-            uint64_t points, references, heads, next, output;
+            uint64_t points, references, heads, next, output, queries, values;
             uint32_t count, bucket_mask;
             float radius;
-            uint32_t padding;
+            uint32_t exclude_self;
+            uint32_t query_begin, query_end;
         };
         const auto context = acquire_context();
-        const RadiusParams params{
+        RadiusParams params{
             .points = address_of(*context, points),
             .references = address_of(*context, references),
             .heads = address_of(*context, heads),
             .next = address_of(*context, next),
             .output = address_of(*context, output),
+            .queries = queries ? address_of(*context, *queries) : 0,
+            .values = values ? address_of(*context, *values) : 0,
             .count = checked_u32(count, "Metal radius query count exceeds uint32"),
             .bucket_mask = checked_u32(buckets - 1, "Metal radius bucket count exceeds uint32"),
             .radius = radius,
+            .exclude_self = static_cast<uint32_t>(max_count ? max_count : exclude_self),
         };
-        const std::array uses{points, references, heads, next, output};
-        dispatch_addressed(*context, uses, context->pipeline("radius_neighbors", {{0, 0}}), params, count);
-        dispatch_addressed(*context, uses, context->pipeline("radius_neighbors", {{0, 1}}), params, count);
+        std::vector<StorageRef> uses{points, references, heads, next, output};
+        if (queries)
+            uses.push_back(*queries);
+        if (values)
+            uses.push_back(*values);
+        const size_t batch = exclude_self && !max_count ? 8192 : count;
+        for (size_t begin = 0; begin < count; begin += batch) {
+            params.query_begin = static_cast<uint32_t>(begin);
+            params.query_end = static_cast<uint32_t>(std::min(begin + batch, count));
+            dispatch_addressed(*context, uses, context->pipeline("radius_neighbors", {{0, 0}}), params, params.query_end - begin);
+            if (exclude_self && !max_count)
+                context->wait(context->flush());
+        }
+        const size_t query_batch = exclude_self && !max_count ? 8192 : count;
+        const uint32_t mode = values ? (values->dtype == DataType::Float32 ? 5u : 4u)
+                                     : spacing ? 3u : (max_count ? 2u : 1u);
+        for (size_t begin = 0; begin < count; begin += query_batch) {
+            params.query_begin = static_cast<uint32_t>(begin);
+            params.query_end = static_cast<uint32_t>(std::min(begin + query_batch, count));
+            dispatch_addressed(*context, uses, context->pipeline("radius_neighbors", {{0, mode}}),
+                               params, params.query_end - begin);
+            // Boolean queries retain their bounded-batch scheduling. Saturating
+            // counts and bounded spacing searches do not require host waits.
+            if (exclude_self && !max_count)
+                context->wait(context->flush());
+        }
+    }
+
+    void MetalBackendOps::point_neighbor_spacing(const StorageRef points, const StorageRef references, const StorageRef heads,
+                                                 const StorageRef next, const StorageRef output, const size_t count,
+                                                 const size_t buckets, const float cell_width, ExecContext) {
+        LFS_FACADE_TRACE(point_neighbor_spacing);
+        radius_query(points, references, heads, next, output, count, buckets, cell_width, false, std::nullopt, 0, true);
+    }
+
+    void MetalBackendOps::radius_neighbors(const StorageRef points, const StorageRef references, const StorageRef heads,
+                                           const StorageRef next, const StorageRef output, const size_t count,
+                                           const size_t buckets, const float radius, const bool exclude_self,
+                                           const std::optional<StorageRef> queries, ExecContext) {
+        LFS_FACADE_TRACE(radius_neighbors);
+        radius_query(points, references, heads, next, output, count, buckets, radius, exclude_self, queries, 0);
+    }
+
+    void MetalBackendOps::radius_neighbor_counts(const StorageRef points, const StorageRef references, const StorageRef heads,
+                                                 const StorageRef next, const StorageRef output, const size_t count,
+                                                 const size_t buckets, const float radius, const int32_t max_count,
+                                                 const std::optional<StorageRef> queries, ExecContext) {
+        LFS_FACADE_TRACE(radius_neighbor_counts);
+        radius_query(points, references, heads, next, output, count, buckets, radius, true, queries, max_count);
+    }
+
+
+    namespace {
+        struct ProximityParams {
+            uint64_t queries,targets,heads,next,output;
+            uint32_t nq,nt,mask; float width,maximum; uint32_t padding=0;
+        };
+        static_assert(sizeof(ProximityParams)==64);
+    }
+    void MetalBackendOps::nearest_point_indices(StorageRef q,StorageRef t,StorageRef h,StorageRef n,StorageRef o,
+                                                 size_t nq,size_t nt,size_t buckets,float width,ExecContext) {
+        LFS_FACADE_TRACE(nearest_point_indices);
+        const auto context=acquire_context();
+        const ProximityParams p{address_of(*context,q),address_of(*context,t),address_of(*context,h),address_of(*context,n),address_of(*context,o),
+                                checked_u32(nq,"proximity queries"),checked_u32(nt,"proximity targets"),checked_u32(buckets-1,"proximity buckets"),width,0};
+        const std::array uses{q,t,h,n,o};
+        dispatch_addressed(*context,uses,context->pipeline("proximity_build"),p,nt);
+        dispatch_addressed(*context,uses,context->pipeline("proximity_query"),p,nq);
+    }
+    void MetalBackendOps::camera_frustum_counts(StorageRef points,StorageRef cameras,StorageRef output,
+                                                size_t n,size_t count,float maximum,ExecContext) {
+        LFS_FACADE_TRACE(camera_frustum_counts);
+        const auto context=acquire_context();
+        const ProximityParams p{address_of(*context,points),address_of(*context,cameras),0,0,address_of(*context,output),
+                                checked_u32(n,"coverage points"),checked_u32(count,"coverage cameras"),0,0,maximum};
+        const std::array uses{points,cameras,output};
+        dispatch_addressed(*context,uses,context->pipeline("camera_coverage"),p,n);
+    }
+
+    void MetalBackendOps::radius_neighbor_min(const StorageRef points, const StorageRef values,
+                                              const StorageRef references, const StorageRef heads,
+                                              const StorageRef next, const StorageRef output,
+                                              const size_t count, const size_t buckets, const float radius,
+                                              ExecContext) {
+        LFS_FACADE_TRACE(radius_neighbor_min);
+        radius_query(points, references, heads, next, output, count, buckets, radius, false,
+                     std::nullopt, 0, false, values);
     }
 
     void MetalBackendOps::rasterize_points(const PointRasterProgram& program, ExecContext) {
@@ -2507,14 +2596,15 @@ namespace lfs::core::internal {
     void MetalBackendOps::affine_splat_geometry(const StorageRef scales, const StorageRef rotations,
                                                 const StorageRef out_scales, const StorageRef out_rotations,
                                                 const splat_transform::LinearTransform& linear, const size_t n,
-                                                ExecContext) {
+                                                std::optional<StorageRef> matrices, ExecContext) {
         LFS_FACADE_TRACE(affine_splat_geometry);
         struct AffineSplatParams {
             uint64_t scales, rotations, out_scales, out_rotations;
             splat_transform::LinearTransform linear;
             uint32_t count;
+            uint64_t matrices;
         };
-        static_assert(sizeof(AffineSplatParams) == 72);
+        static_assert(sizeof(AffineSplatParams) == 80);
         const auto context = acquire_context();
         const AffineSplatParams params{
             .scales = address_of(*context, scales),
@@ -2523,8 +2613,10 @@ namespace lfs::core::internal {
             .out_rotations = address_of(*context, out_rotations),
             .linear = linear,
             .count = checked_u32(n, "Metal affine splat count exceeds uint32"),
+            .matrices = matrices ? address_of(*context,*matrices) : 0,
         };
-        const std::array uses{scales, rotations, out_scales, out_rotations};
+        std::vector<StorageRef> uses{scales, rotations, out_scales, out_rotations};
+        if(matrices) uses.push_back(*matrices);
         dispatch_addressed(*context, uses, context->pipeline("affine_splat_geometry"), params, n);
     }
 

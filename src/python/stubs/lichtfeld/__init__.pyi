@@ -18,6 +18,7 @@ from . import (
     mcp as mcp,
     mesh as mesh,
     nn as nn,
+    nodes as nodes,
     ops as ops,
     packages as packages,
     pipeline as pipeline,
@@ -1979,6 +1980,11 @@ class MaskMode(enum.Enum):
 
     ALPHA_CONSISTENT = 4
 
+class EvalSpace(enum.Enum):
+    DISTORTED = 0
+
+    UNDISTORTED = 1
+
 class DensifyErrorMap(enum.Enum):
     SSIM = 0
 
@@ -2172,6 +2178,20 @@ class OptimizationParams:
 
     @eval_all.setter
     def eval_all(self, arg: bool, /) -> None: ...
+
+    @property
+    def eval_mask(self) -> str:
+        """Absolute mesh path used to select evaluated pixels"""
+
+    @eval_mask.setter
+    def eval_mask(self, arg: str, /) -> None: ...
+
+    @property
+    def eval_mask_invert(self) -> bool:
+        """Evaluate pixels outside the mesh coverage"""
+
+    @eval_mask_invert.setter
+    def eval_mask_invert(self, arg: bool, /) -> None: ...
 
     @property
     def background_improvements(self) -> bool:
@@ -2515,10 +2535,21 @@ class OptimizationParams:
 
     @property
     def undistort(self) -> bool:
-        """Undistort images on-the-fly before training"""
+        """
+        Remove lens distortion before training: each image and its mask, depth and normal map are resampled once from full resolution into a distortion-free pinhole camera, which training then uses. Alternative to --gut for distorted or non-pinhole cameras
+        """
 
     @undistort.setter
     def undistort(self, arg: bool, /) -> None: ...
+
+    @property
+    def eval_space(self) -> EvalSpace:
+        """
+        Reference images for evaluation with --undistort: distorted = the original images, with the render warped into the original lens; undistorted = the undistorted training images
+        """
+
+    @eval_space.setter
+    def eval_space(self, arg: EvalSpace, /) -> None: ...
 
     @property
     def save_steps(self) -> list[int]:
@@ -2674,8 +2705,15 @@ def run(path: str) -> None:
 def list_scene() -> None:
     """Print the scene graph tree"""
 
-def on_frame(callback: Callable) -> None:
-    """Register a callback to be called each frame with delta time (seconds)"""
+def on_frame(callback: Callable, duration_s: object | None = None) -> None:
+    """
+    Register a frame callback with an optional positive lifetime in seconds (defaults to 10 seconds).
+    """
+
+def set_frame_callback(callback: Callable, duration_s: object | None = None) -> None:
+    """
+    Register a frame callback with an optional positive lifetime in seconds (defaults to 10 seconds).
+    """
 
 def stop_animation() -> None:
     """Stop any running animation (clears frame callback)"""

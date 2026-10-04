@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "sequencer_controller.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -58,6 +59,24 @@ namespace lfs::vis {
 
     bool SequencerController::hasPlayableContent() const {
         return hasTimelineCameraContent(timeline_) || hasPlySequence();
+    }
+
+    void SequencerController::animationTracksChanged() {
+        timeline_.setClipDuration(std::max(timeline_.clipDuration(), timeline_.totalDuration()));
+        markTimelineChanged();
+    }
+
+    ModifierResult SequencerController::prepareExportFrame(
+        ModifierManager& nodes, const float seconds, const float fps) const {
+        return nodes.evaluateAtTime(seconds, fps);
+    }
+
+    void SequencerController::setFramesPerSecond(const float fps) {
+        const float next = clampSequenceFps(fps);
+        if (frames_per_second_ != next) {
+            frames_per_second_ = next;
+            markTimelineChanged();
+        }
     }
 
     float SequencerController::playbackStartTime() const {
@@ -486,7 +505,9 @@ namespace lfs::vis {
     }
 
     nlohmann::json SequencerController::saveToJson() const {
-        return timeline_.saveToJson();
+        auto json = timeline_.saveToJson();
+        json["frames_per_second"] = frames_per_second_;
+        return json;
     }
 
     bool SequencerController::loadFromJson(const std::string& path) {
@@ -506,6 +527,7 @@ namespace lfs::vis {
         deselectKeyframe();
         if (!timeline_.loadFromJson(json))
             return false;
+        frames_per_second_ = clampSequenceFps(json.value("frames_per_second", DEFAULT_SEQUENCE_FPS));
         rebuildLoopKeyframe();
         markTimelineChanged();
         return true;

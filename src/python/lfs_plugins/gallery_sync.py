@@ -18,6 +18,7 @@ import time
 import urllib.error
 from pathlib import Path
 
+from .private_directory import mkdir_private
 from .portal_account import PortalHTTPError, PortalProtocolError, _locked_sidecar
 from .portal_gallery import (PortalGalleryClient, GalleryTransferCanceled, GalleryProcessingPaused,
     GalleryProcessingTimeout, GalleryTransferInvalid, PROCESSING_TIMEOUT, DEFAULT_MAX_FILE_BYTES, disk_preflight, domain_tokens, UNSUPPORTED_PORTAL, _fingerprint)
@@ -1324,7 +1325,7 @@ class GallerySync:
                     raise ValueError("The recovery copy destination already exists. Try again.")
                 disk_preflight([(backup, Path(project_path).stat().st_size),
                                 (project_path, expected_stamp[2] + job['total'])])
-                directory.mkdir(mode=0o700, exist_ok=True)
+                mkdir_private(directory, exist_ok=True)
                 if file_stamp(project_path) != expected_stamp:
                     raise ValueError("The local project changed. Review it before updating.")
                 source_identity.validate()
@@ -1412,7 +1413,7 @@ class GallerySync:
                 if not for_update:
                     preflight.append((self._download_destination(job), Path(job['path']).stat().st_size))
                 disk_preflight(preflight)
-                target.parent.mkdir(mode=0o700, exist_ok=True)
+                mkdir_private(target.parent, exist_ok=True)
                 with self._lock:
                     record["path"] = str(target)
                 self._save()  # Keep partial preparations discoverable after a restart.
@@ -1453,7 +1454,7 @@ class GallerySync:
                     # Keep a private asset independently of disposable import
                     # staging. Saved projects/recovery copies reference it.
                     assets = self.root / "environments"
-                    assets.mkdir(mode=0o700, exist_ok=True)
+                    mkdir_private(assets, exist_ok=True)
                     if assets.is_symlink() or getattr(assets, "is_junction", lambda: False)():
                         raise ValueError("The HDR asset folder was redirected.")
                     asset = assets / (identifier + ".lfsenv")
@@ -2079,7 +2080,7 @@ class GallerySync:
                         job.update(completed=done, total=total)
                         self.version += 1
                 client.download(job["sceneId"], job["path"], cancel=self._cancel, on_progress=progress)
-                target.parent.mkdir(mode=0o700, exist_ok=True)
+                mkdir_private(target.parent, exist_ok=True)
                 if target.parent.is_symlink() or target.is_symlink() or temporary.is_symlink():
                     raise ValueError("The HDR background folder was redirected.")
                 from .portable_project import ProjectFile

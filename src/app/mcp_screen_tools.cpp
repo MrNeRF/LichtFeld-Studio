@@ -83,7 +83,7 @@ namespace lfs::app {
 
         void notify_screen_changed(vis::VisualizerImpl* impl) {
             if (auto* rendering = impl->getRenderingManager())
-                rendering->markDirty(vis::DirtyFlag::ALL);
+                rendering->markDirty(vis::DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
         }
 
         vis::ViewInfo view_info_from_space(const vis::screen::View3DSpace& space) {
@@ -486,8 +486,8 @@ namespace lfs::app {
                                 {"settings", vis::screen::viewSettingsToJson(space->settings)}};
                 });
             });
+        register_pointer_tool(registry, viewer);
     }
-
     void register_gui_screen_resources(ResourceRegistry& registry, vis::Visualizer* viewer) {
         auto* const impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
         if (!impl)

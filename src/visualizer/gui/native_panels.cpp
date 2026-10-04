@@ -252,8 +252,10 @@ namespace lfs::vis::gui::native_panels {
         : gizmo_(gizmo) {}
 
     void NodeTransformGizmoPanel::draw(const PanelDrawContext& ctx) {
-        if (ctx.ui && ctx.viewport)
+        if (ctx.ui && ctx.viewport) {
             gizmo_->renderNodeTransformGizmo(*ctx.ui, *ctx.viewport);
+            gizmo_->renderNodeGraphGizmo(*ctx.ui, *ctx.viewport);
+        }
     }
 
     CropBoxGizmoPanel::CropBoxGizmoPanel(GizmoManager* gizmo)

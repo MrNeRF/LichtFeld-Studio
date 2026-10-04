@@ -1,4 +1,10 @@
 {
+  "node_editor.add_input": "入力を追加",
+  "node_editor.add_output": "出力を追加",
+  "node_editor.paint": "ペイント",
+  "node_editor.paint_done": "ペイント終了",
+  "node_editor.pick_colour": "色を採取",
+  "node_editor.colour_offset_hint": "ドラッグで色合いを調整、ダブルクリックでニュートラルに戻す",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "OS または GPU ドライバーが報告するプロセスの GPU メモリ。",
   "ui.vram_process_unavailable_tooltip": "プロセスの GPU メモリは取得できません。デバイスの使用量には他のアプリケーションも含まれます。",
@@ -415,6 +421,7 @@
     "tooltip.cropbox_lr_scale": "crop box 外の splat がどれだけ学習し続けるかを制御します。ROI 内に集中するには低くし、外側の文脈も適応させる必要がある場合は高くします。active crop box がある場合だけ意味があります。",
     "tooltip.cropbox_loss_weight": "crop box 外の画像ピクセルがトレーニングにどれだけ影響するかを制御します。ROI に集中するには下げ、周辺シーンも結果に影響させたい場合は上げます。active crop box がある場合だけ意味があります。",
     "tooltip.normal_loss_space": "Normal prior space: auto, camera-opencv, camera-opengl, or world",
+    "tooltip.eval_space": "Chooses whether evaluation uses the original distorted images or the undistorted training images.",
     "tooltip.growth_grad_threshold": "splat が成長候補になる前に必要な refinement 信号の強さを設定します。低い値ほど多くの領域が成長でき、高い値ほど強い可視エラーだけに成長を集中します。",
     "tooltip.grow_fraction": "各 refinement ステップで成長する eligible candidate の数を制御します。モデルがより早く容量を必要とする場合は上げ、成長が攻撃的またはノイズっぽい場合は下げます。",
     "tooltip.opacity_decay": "refinement 中に opacity を徐々に下げます。トレーニング序盤ほど強く効きます。弱い splat を掃除するには上げ、有用な表面が薄れる場合は下げます。",
@@ -551,6 +558,8 @@
     "options.normal_loss_space.camera_opencv": "Camera (OpenCV)",
     "options.normal_loss_space.camera_opengl": "Camera (OpenGL)",
     "options.normal_loss_space.world": "World",
+    "options.eval_space.distorted": "Distorted",
+    "options.eval_space.undistorted": "Undistorted",
     "options.depth_loss.ssi": "SSI（自動）",
     "options.depth_loss.ssi_disparity": "SSI（視差事前分布）",
     "options.depth_loss.ssi_depth": "SSI（深度事前分布）",
@@ -571,6 +580,10 @@
       "bg_image_path": "training 用の custom background image です。既知の background plate に合わせて scene を最適化したい場合に使います。",
       "bg_image_browse": "背景画像を参照",
       "bg_image_clear": "選択した背景画像をクリア",
+      "eval_mask": "投影範囲によって評価対象のピクセルを選択するメッシュです。",
+      "eval_mask_invert": "投影されたメッシュ範囲の外側のピクセルを評価します。",
+      "eval_mask_browse": "評価メッシュを選択",
+      "eval_mask_clear": "選択した評価メッシュをクリア",
       "dataset_path": "トレーニングで現在使われているデータセットのルートです。",
       "dataset_images": "データセット内の画像ディレクトリです。",
       "dataset_output": "チェックポイントとトレーニング済み成果物を書き込むパスです。意図したプロジェクト/出力フォルダに保存されるか確認するために使います。",
@@ -881,11 +894,8 @@
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
-    "viewer_backend": "ビューアのバックエンド",
-    "viewer_backend_description": "すぐに適用されます。Auto は対応する Mac では Metal、それ以外では Vulkan を優先します。未対応のフレームには Vulkan を使用します。",
     "tensor_backend": "Tensor backend",
     "tensor_restart": "ビューアのレンダラーとは独立して GPU 上のテンソル計算を制御します。変更は LichtFeld Studio の再起動後に適用されます。自動はこのビルドと GPU に応じて CUDA、Metal、Vulkan を選択します。",
-    "backend_unavailable": "選択したバックエンドはこのデバイスでは利用できません。設定は変更されていません。",
     "tensor_device": "Vulkan device",
     "tensor_device_hint": "Leave empty for automatic selection, or enter a device index or UUID. CUDA rendering must use the CUDA device.",
     "tensor_validation": "Vulkan diagnostics",
@@ -1008,7 +1018,10 @@
     "reset_all_settings_confirmation": "言語、テーマ、UI スケール、シーン再構成、入力設定、MCP サーバー、レイアウト、ウィンドウ状態を既定値に戻しますか？直ちに適用されます。.licht プロジェクトが開いている場合、次回保存時に保存済みレイアウトが置き換えられます。プロジェクト内容、データセット、エクスポート、プラグイン、キャッシュは影響を受けません。",
     "reset_all_settings_success": "すべての設定、レイアウト、ウィンドウ状態を直ちにリセットしました。",
     "window_manager_unavailable": "ウィンドウマネージャーを利用できません。",
-    "window_state_reset_failed": "ウィンドウを既定の配置に戻せませんでした。"
+    "window_state_reset_failed": "ウィンドウを既定の配置に戻せませんでした。",
+    "viewer_backend": "ビューアのバックエンド",
+    "viewer_backend_description": "すぐに適用されます。Auto は対応する Mac では Metal、それ以外では Vulkan を優先します。未対応のフレームには Vulkan を使用します。",
+    "backend_unavailable": "選択したバックエンドはこのデバイスでは利用できません。設定は変更されていません。"
   },
   "main_panel": {
     "console": "コンソール",
@@ -1698,7 +1711,8 @@
     "action.view_toggle_perspective": "透視/平行投影を切り替え",
     "action.view_frame_all": "全体をフレーム",
     "action.toggle_quad_view": "4分割ビューを切り替え",
-    "action.toggle_maximize_area": "エリアを最大化"
+    "action.toggle_maximize_area": "エリアを最大化",
+    "action.toggle_node_editor": "ノードエディターを切り替え"
   },
   "debug_info": {
     "clear_history": "履歴をクリア",
@@ -1755,6 +1769,9 @@
     "ppisp_sidecar_path": "sidecar のパス:",
     "enable_eval": "評価を有効化:",
     "eval_all": "すべての画像を評価:",
+    "eval_space": "Eval Space:",
+    "eval_mask": "評価メッシュ:",
+    "eval_mask_invert": "評価マスクを反転:",
     "opacity_penalty_weight": "  不透明度ペナルティ重み:",
     "opacity_penalty_power": "  不透明度ペナルティ指数:",
     "mask_threshold": "  マスクしきい値:",
@@ -2073,13 +2090,6 @@
     "reload": "再読み込み"
   },
   "status_bar": {
-    "renderer_backend": "レンダラー",
-    "tensor_backend": "テンソル",
-    "renderer_backend_tooltip": "シーン描画のバックエンド。",
-    "tensor_backend_tooltip": "テンソル計算のバックエンド。",
-    "backend_requested": "要求: {}",
-    "backend_no_frame": "設定済みのレンダラー。シーンのフレームはまだありません。",
-    "backend_fallback": "このフレームではMetalを使用できないため、Vulkanを使用しています。",
     "preview_reduced": "プレビュー解像度を低下（GPUメモリ）",
     "safe_mode": "セーフモード",
     "mcp_preferences": "編集",
@@ -2117,7 +2127,16 @@
     "gpu_budget": "GPU メモリ予算",
     "strategy_default": "デフォルト",
     "split": "分割:",
-    "ui_fps": "UI FPS",
+    "mcp_name": "MCP",
+    "ui": "UI",
+    "view": "ビュー",
+    "renderer_backend": "レンダラー",
+    "tensor_backend": "テンソル",
+    "renderer_backend_tooltip": "シーン描画のバックエンド。",
+    "tensor_backend_tooltip": "テンソル計算のバックエンド。",
+    "backend_requested": "要求: {}",
+    "backend_no_frame": "設定済みのレンダラー。シーンのフレームはまだありません。",
+    "backend_fallback": "このフレームではMetalを使用できないため、Vulkanを使用しています。",
     "renderer_backend_short": "R",
     "tensor_backend_short": "T"
   },
@@ -2572,13 +2591,13 @@
     "log_entry_word": "ログ",
     "log_entries_word": "ログ",
     "logs_exported": "{}を{}にエクスポートしました。",
-    "config_load_failed": "'{}'を読み込めませんでした：\\n\\n{}",
-    "export_failed": "エクスポートに失敗しました：\\n\\n{}",
+    "config_load_failed": "'{}'を読み込めませんでした：\n\n{}",
+    "export_failed": "エクスポートに失敗しました：\n\n{}",
     "video_export_failed": "動画のエクスポートに失敗しました：\n\n{}",
     "video_reconstruction_native_fallback": "動画再構成 {}/{} は利用できないため、Native でエクスポートします。",
     "video_reconstruction_version_unsupported": "このプロジェクトは未対応の動画再構成選択バージョンを使用しています。シーンは Native 再構成で開かれました。保存すると、その選択は置き換えられます。",
-    "conversion_failed": "変換に失敗しました：\\n\\n{}",
-    "checkpoint_save_failed": "反復{}でチェックポイントを保存できませんでした：\\n\\n{}",
+    "conversion_failed": "変換に失敗しました：\n\n{}",
+    "checkpoint_save_failed": "反復{}でチェックポイントを保存できませんでした：\n\n{}",
     "lod_enabled_no_tree": "有効（ツリーなし）",
     "lod_disabled": "RAD LODなし",
     "lod_scale": "LODスケール x{:.1f}",
@@ -3159,5 +3178,1816 @@
   "runtime.import_batch_failed.other": "{} 個のファイルを読み込めませんでした",
   "runtime.import_out_of_memory": "GPU メモリが不足しています",
   "runtime.import_batch_kept": "他のファイルは読み込まれており、引き続きシーンで使用できます。",
-  "runtime.import_render_failed": "このファイルを描画する準備ができませんでした"
+  "runtime.import_render_failed": "このファイルを描画する準備ができませんでした",
+  "nodes.edit_stored_splats_blocked": "保存済みスプラットを編集するには、ノードモディファイアを適用するか非表示にしてください",
+  "editor.node_editor": "ノードエディター",
+  "node_editor.toggle": "ノードエディターを切り替え",
+  "node_editor.preview_selection": "Preview Selection",
+  "node_editor.toggle_sidebar": "Toggle sidebar",
+  "node_editor.edit_mode_notice": "Node modifiers are available in edit mode",
+  "node_editor.select_node_notice": "Select a splat, mesh or point cloud node",
+  "node_editor.add_modifier_notice": "ノードモディファイアーを追加して開始",
+  "node_editor.type_splat": "Splat",
+  "node_editor.type_point_cloud": "Point Cloud",
+  "node_editor.type_mesh": "Mesh",
+  "node_editor.type_unsupported": "Unsupported",
+  "node_editor.new_graph": "新しいノードグラフ",
+  "node_editor.modifier_actions": "モディファイアー操作",
+  "node_editor.target": "Target",
+  "node_editor.modifiers": "Modifiers",
+  "node_editor.add_modifier": "Add Modifier",
+  "node_editor.show_viewport": "Show in viewport",
+  "node_editor.move_up": "Move up",
+  "node_editor.move_down": "Move down",
+  "node_editor.apply": "Apply",
+  "node_editor.remove": "Remove",
+  "node_editor.status_errors": "errors",
+  "node_editor.status_ok": "OK",
+  "node_editor.status_disabled": "Disabled",
+  "node_editor.capture_selection": "Capture selection",
+  "node_editor.default_tree_name": "ノードグラフ",
+  "node_editor.add": "+ 追加",
+  "node_editor.modifiers_on": "モディファイア有効",
+  "node_editor.modifiers_off": "モディファイア無効",
+  "node_editor.frame": "全体表示",
+  "node_editor.open": "開く…",
+  "node_editor.save": "保存…",
+  "node_editor.selected_share": "{}% 選択",
+  "node_editor.cached": "キャッシュ済み",
+  "node_editor.updating": "更新中…",
+  "node_editor.updating_node": "更新中… {}/{} {}",
+  "node_editor.error_count": "{} 件のエラー",
+  "node_editor.unchanged": "変更なし",
+  "node_editor.splats": "スプラット",
+  "node_editor.points": "点",
+  "node_editor.vertices": "頂点",
+  "node_editor.result": "結果: {} {} · {}",
+  "node_editor.last_run": "前回の実行: {}",
+  "node_editor.node_on": "有効",
+  "node_editor.file_read_error": "ノードグラフを読み込めませんでした",
+  "node_editor.file_write_error": "ノードグラフを保存できませんでした",
+  "node_editor.search_nodes": "ノードを検索…",
+  "node_editor.settings_count_one": "{} 個の設定",
+  "node_editor.settings_count_other": "{} 個の設定",
+  "node_editor.arrange": "整列",
+  "node_editor.arrange_shortcut": "Shift+L",
+  "node_editor.running": "実行中…",
+  "node_editor.queued": "待機中",
+  "node_editor.no_results": "一致するノードがありません",
+  "node_editor.optional_selection": "省略可能: 未接続の場合はすべてを選択",
+  "node_editor.captured_count": "取得済み: {} 選択",
+  "nodes": {
+    "paint_selection": {
+      "label": "選択をペイント",
+      "description": "シーンのサーフェス上にライブの幾何学的な選択範囲を直接描きます。",
+      "help": "ノードを選択してペイントをオンにし、サーフェス上をドラッグします。Alt/Option ドラッグで消去します。\n[ と ] でブラシサイズを変更できます。要素数が変わってもストロークは保持されます。",
+      "inputs": {
+        "Softness": "各サンプル半径のうちエッジのフェードに使う割合（0～1）。0 は硬い境界、初期値は 0.5 です。"
+      },
+      "input_labels": {
+        "Softness": "柔らかさ"
+      },
+      "outputs": {
+        "Selection": "選択の強さです。0 は未選択、1 は完全選択で、中間値は滑らかに遷移します。"
+      },
+      "output_labels": {
+        "Selection": "選択"
+      },
+      "properties": {
+        "data": "ホストのローカルサンプルとして保存されるサーフェスストロークです。初期状態は空です。",
+        "invert": "ペイントした選択を反転します。初期値オフは描いた範囲を保ち、オンは残りを選びます。"
+      },
+      "property_labels": {
+        "data": "ストローク",
+        "invert": "反転"
+      }
+    },
+    "boolean": {
+      "label": "真偽値",
+      "description": "複数の接続先を一つのオン／オフ値で切り替えます。",
+      "help": "複数の設定をまとめて切り替えるときに使います。\n値を真偽値入力に接続してください。初期値はオフです。",
+      "inputs": {
+        "Value": "共通のオン／オフ値です。初期値のオフは偽または未選択、オンは真または選択を表します。"
+      },
+      "input_labels": {
+        "Value": "値"
+      },
+      "outputs": {
+        "Value": "選択した要素はオン、それ以外はオフです。選択または真偽値入力に接続してください。"
+      },
+      "output_labels": {
+        "Value": "値"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "boolean_math": {
+      "label": "真偽演算",
+      "description": "選択範囲を組み合わせ、重なる部分、いずれかの範囲、または反転した範囲を選びます。",
+      "help": "重なる部分には And、どちらかに含まれる部分には Or を使います。\nNot は A を反転し、B を無視します。",
+      "inputs": {
+        "A": "一つ目の真偽値または選択です。初期値はオフで、オンにすると要素を含みます。",
+        "B": "二つ目の真偽値または選択です。初期値はオフで、オンにすると要素を含みます。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Result": "選択した要素はオン、それ以外はオフです。選択または真偽値入力に接続してください。"
+      },
+      "output_labels": {
+        "Result": "結果"
+      },
+      "properties": {
+        "operation": "A と B の組み合わせ方です。初期値 And は共通部分、Not は A の反転で B を無視します。"
+      },
+      "property_labels": {
+        "operation": "演算"
+      }
+    },
+    "box_selection": {
+      "label": "ボックス選択",
+      "description": "箱の内側にあるシーンの部分を選び、必要に応じて境界をぼかします。",
+      "help": "中心とサイズを調整して対象を囲んでください。\nまず減衰を 0 にすると境界が明確になります。",
+      "inputs": {
+        "Centre": "ローカルのシーン単位で指定する X、Y、Z の中心です。初期値 (0, 0, 0) はオブジェクトの原点です。",
+        "Size": "シーン単位で指定する幅、高さ、奥行きです。非負の値を使います。初期値 (1, 1, 1) は単位立方体です。",
+        "Rotation": "X、Y、Z 軸周りの回転を度で指定します。初期値 (0, 0, 0) では向きを変えません。",
+        "Falloff": "箱の外側の柔らかい境界幅をシーン単位で指定します。初期値 0 では境界が明確になります。"
+      },
+      "input_labels": {
+        "Centre": "中心",
+        "Size": "サイズ",
+        "Rotation": "回転",
+        "Falloff": "減衰"
+      },
+      "outputs": {
+        "Selection": "選択の強さです。0 は未選択、1 は完全な選択で、中間の値は滑らかな変化を作ります。"
+      },
+      "output_labels": {
+        "Selection": "選択"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour": {
+      "label": "色",
+      "description": "接続した複数のノードで同じ色を共有します。",
+      "help": "色を選び、共有したい設定に色出力を接続してください。\n初期値は中間の灰色です。",
+      "inputs": {
+        "Colour": "RGB 色で、通常は各成分 0～1 です。0 は黒、1 は白、初期値 (0.5, 0.5, 0.5) は中間の灰色です。"
+      },
+      "input_labels": {
+        "Colour": "色"
+      },
+      "outputs": {
+        "Colour": "結果の RGB 色です。各成分は 0 が黒、1 が白で、計算によってはこの範囲を超えます。"
+      },
+      "output_labels": {
+        "Colour": "色"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_attribute": {
+      "label": "色属性",
+      "description": "各スプラットや点の基本色を読み取り、色による編集や選択に使います。",
+      "help": "色を色分離に接続すると各成分を確認できます。\n視点による反射ではなく、基本色を読み取ります。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Colour": "結果の RGB 色です。各成分は 0 が黒、1 が白で、計算によってはこの範囲を超えます。"
+      },
+      "output_labels": {
+        "Colour": "色"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "colour_correct": {
+      "label": "色補正",
+      "description": "露出、レベル、コントラスト、彩度、色相、ホワイトバランス、シャドウ・中間調・ハイライトの色を補正します。",
+      "help": "露出で明るさを決めてから、コントラストと彩度を調整してください。\n選択を接続するとシーンの一部だけを補正できます。\nカラーホイールを中央に戻すと、暗部、中間調、明部の補正が中立になります。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "編集の強さを 0～1 で指定します。0 は変更なし、1 は完全な適用です。未接続では全体に適用します。",
+        "Exposure": "明るさを露出段数で指定します。+1 は二倍、−1 は半分です。初期値 0 では明るさを変えません。",
+        "Black Point": "黒に変換する入力の明るさです。初期値 0 は元の黒を保ち、上げると影が深くなります。",
+        "White Point": "白に変換する入力の明るさです。初期値 1 は元の白を保ち、下げると明部が明るくなります。",
+        "Midpoint": "中間の灰色に変換する入力の明るさで、0.01～0.99 です。0.5 が中立で、下げると中間調が明るくなります。",
+        "Contrast": "明暗の差です。1 は変更なし、0 は一様な色調、1 より大きい値はコントラストを強めます。",
+        "Saturation": "色の強さです。0 は無彩色、1 は変更なし、1 より大きい値は色を強めます。",
+        "Hue Shift": "色相の回転を度で指定します。0 は変更なし、180 はカラーホイールの反対色です。",
+        "Temperature": "寒色と暖色のバランスを −1～1 で指定します。負は寒色、正は暖色で、0 が中立です。",
+        "Tint": "緑とマゼンタのバランスを −1～1 で指定します。負はマゼンタ、正は緑を加え、0 が中立です。",
+        "Shadows": "暗部の色補正を成分ごとに −1～1 で指定します。0 が中立で、負の値はその色を減らします。",
+        "Midtones": "中間調の色補正を成分ごとに −1～1 で指定します。0 が中立で、正の値はその色を加えます。",
+        "Highlights": "明部の色補正を成分ごとに −1～1 で指定します。0 が中立で、正の値はその色を加えます。",
+        "Gamma": "中間調の明るさを正の値で指定します。1 が中立、1 より大きいと明るく、小さいと暗くなります。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Exposure": "露出",
+        "Black Point": "黒点",
+        "White Point": "白点",
+        "Midpoint": "中間点",
+        "Contrast": "コントラスト",
+        "Saturation": "彩度",
+        "Hue Shift": "色相シフト",
+        "Temperature": "色温度",
+        "Tint": "色かぶり",
+        "Shadows": "暗部",
+        "Midtones": "中間調",
+        "Highlights": "明部",
+        "Gamma": "Gamma"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {
+        "auto_range": "シーンから黒点と白点を求めます。初期値はオフで、両方を手動で指定します。"
+      },
+      "property_labels": {
+        "auto_range": "自動範囲"
+      }
+    },
+    "colour_key": {
+      "label": "色キー",
+      "description": "指定した色に近い色を持つシーンの部分を選びます。",
+      "help": "色を選び、対象が含まれるまで許容差を上げてください。\n柔らかさを少し加えると境界が自然になります。",
+      "inputs": {
+        "Colour": "一致させる RGB 色で、通常は各成分 0～1 です。初期値は黒です。対象の色を選んでください。",
+        "Tolerance": "指定色からの RGB 距離の許容値です。0 は完全一致、初期値 0.1 は小さな違いを許容します。",
+        "Softness": "色の柔らかい境界幅です。初期値 0 では境界が明確で、上げると選択の境界が柔らかくなります。"
+      },
+      "input_labels": {
+        "Colour": "色",
+        "Tolerance": "許容差",
+        "Softness": "柔らかさ"
+      },
+      "outputs": {
+        "Selection": "選択の強さです。0 は未選択、1 は完全な選択で、中間の値は滑らかな変化を作ります。"
+      },
+      "output_labels": {
+        "Selection": "選択"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "combine_colour": {
+      "label": "色合成",
+      "description": "別々の RGB または HSV の値から一つの色を作ります。",
+      "help": "三つの値を接続し、RGB または HSV モードを選んでください。\nHSV モードでは R、G、B 入力が色相、彩度、明るさを表します。",
+      "inputs": {
+        "R": "RGB では赤、HSV では色相で、通常は 0～1 です。初期値 0 は赤なし、または赤の色相です。",
+        "G": "RGB では緑、HSV では彩度で、通常は 0～1 です。初期値 0 は緑なし、または灰色です。",
+        "B": "RGB では青、HSV では明るさで、通常は 0～1 です。初期値 0 は青なし、または黒です。"
+      },
+      "input_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "outputs": {
+        "Colour": "結果の RGB 色です。各成分は 0 が黒、1 が白で、計算によってはこの範囲を超えます。"
+      },
+      "output_labels": {
+        "Colour": "色"
+      },
+      "properties": {
+        "mode": "色の解釈方法です。初期値 RGB は赤、緑、青、HSV は色相、彩度、明るさを使います。"
+      },
+      "property_labels": {
+        "mode": "モード"
+      }
+    },
+    "combine_xyz": {
+      "label": "XYZ 合成",
+      "description": "別々の X、Y、Z の値から位置や方向を作ります。",
+      "help": "二つの座標を保ったまま一つだけ変えるときに使います。\n結果をベクトル入力に接続してください。",
+      "inputs": {
+        "X": "必要な単位で指定する X 座標です。初期値 0 はこの軸の寄与なしを表します。",
+        "Y": "必要な単位で指定する Y 座標です。初期値 0 はこの軸の寄与なしを表します。",
+        "Z": "必要な単位で指定する Z 座標です。初期値 0 はこの軸の寄与なしを表します。"
+      },
+      "input_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "outputs": {
+        "Vector": "結果の X、Y、Z の値です。単位は計算により異なります。"
+      },
+      "output_labels": {
+        "Vector": "ベクトル"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "compare": {
+      "label": "比較",
+      "description": "高さと地面の位置など、二つの値を比較してシーンの部分を選びます。",
+      "help": "高さを A、地面の位置を B に接続し、Less Than を選んでください。\nイプシロンは Equal と Not Equal にのみ作用します。",
+      "inputs": {
+        "A": "計算に使う一つ目の数値です。単位は演算により異なり、初期値は 0 です。",
+        "B": "計算に使う二つ目の数値です。単位は演算により異なり、初期値は 0 です。",
+        "Epsilon": "Equal と Not Equal の許容差です。単位は A、B と同じです。0 は完全一致で、初期値は 0.001 です。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Epsilon": "Epsilon"
+      },
+      "outputs": {
+        "Result": "選択した要素はオン、それ以外はオフです。選択または真偽値入力に接続してください。"
+      },
+      "output_labels": {
+        "Result": "結果"
+      },
+      "properties": {
+        "operation": "比較方法です。初期値は Equal です。Less Than や Greater Than で B の片側を選べます。"
+      },
+      "property_labels": {
+        "operation": "演算"
+      }
+    },
+    "decimate": {
+      "label": "間引き",
+      "description": "選択範囲の大きく不透明なスプラットを優先して残し、数を減らします。",
+      "help": "保持率を 0.5 にすると、選択したスプラットの約半分を残せます。\n選択外は常に残ります。同点のスプラットがあると指定数より多く残る場合があります。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "間引くスプラットです。重み 0.5 以上を対象とし、未接続では全体を対象にします。",
+        "Keep Fraction": "選択したスプラットの保持率で、0.001～1 です。0.5 は約半分、1 はすべて保持します。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Keep Fraction": "保持率"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "delete_geometry": {
+      "label": "ジオメトリ削除",
+      "description": "選択したスプラット、点、メッシュ頂点をシーンから削除します。",
+      "help": "ジオメトリより先に選択を接続してください。\n選択が未接続だとすべて削除します。削除した頂点に接する面も消えます。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "削除する部分です。重み 0.5 以上を削除します。未接続では全体を削除し、出力は空になります。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "ellipsoid_selection": {
+      "label": "楕円体選択",
+      "description": "球や引き伸ばした球の内側にある部分を選び、必要に応じて境界をぼかします。",
+      "help": "中心と半径を調整して対象を囲んでください。\n半径をすべて同じにすると球になります。減衰 0 では境界が明確になります。",
+      "inputs": {
+        "Centre": "ローカルのシーン単位で指定する X、Y、Z の中心です。初期値 (0, 0, 0) はオブジェクトの原点です。",
+        "Radii": "各軸の半径をシーン単位の非負の値で指定します。初期値 (1, 1, 1) は単位球です。",
+        "Rotation": "X、Y、Z 軸周りの回転を度で指定します。初期値 (0, 0, 0) では向きを変えません。",
+        "Falloff": "楕円体の外側の柔らかい境界幅を半径に対する比率で指定します。初期値 0 では境界が明確です。"
+      },
+      "input_labels": {
+        "Centre": "中心",
+        "Radii": "半径",
+        "Rotation": "回転",
+        "Falloff": "減衰"
+      },
+      "outputs": {
+        "Selection": "選択の強さです。0 は未選択、1 は完全な選択で、中間の値は滑らかな変化を作ります。"
+      },
+      "output_labels": {
+        "Selection": "選択"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group": {
+      "label": "グループ",
+      "description": "再利用可能なノードグラフを評価します。",
+      "help": "サイドバーでグラフを選択します。入出力はそのグラフのインターフェースに従います。\nすべてのインスタンスが同じグラフを共有します。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "tree": "参照するグラフの UUID。"
+      },
+      "property_labels": {
+        "tree": "グラフ"
+      }
+    },
+    "frame": {
+      "label": "フレーム",
+      "description": "関連するノードを視覚的にまとめます。",
+      "help": "ノードをフレーム内にドロップします。フレームを移動するとメンバーも移動します。\nレイアウトノードは評価結果を変更しません。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "label": "フレームの見出し。",
+        "colour": "テーマカラーのプリセットまたは RGB 値。",
+        "note": "見出しの下に表示する任意のテキスト。"
+      },
+      "property_labels": {
+        "label": "ラベル",
+        "colour": "カラー",
+        "note": "メモ"
+      }
+    },
+    "reroute": {
+      "label": "リルート",
+      "description": "値を変更せずにリンクを迂回させます。",
+      "help": "任意のソケット型を接続できます。上流の型を自動的に使用します。\nレイアウトノードは評価結果を変更しません。",
+      "inputs": {
+        "Input": "そのまま渡す値。"
+      },
+      "input_labels": {
+        "Input": "入力"
+      },
+      "outputs": {
+        "Output": "変更されていない入力値。"
+      },
+      "output_labels": {
+        "Output": "出力"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "note": {
+      "label": "メモ",
+      "description": "編集可能なテキストカードをグラフに追加します。",
+      "help": "カードをダブルクリックするか、サイドバーでテキストを編集します。\nレイアウトノードは評価結果を変更しません。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {},
+      "output_labels": {},
+      "properties": {
+        "text": "カードに表示するテキスト。",
+        "width": "キャンバス単位でのカード幅。高さはテキストに合わせて調整されます。"
+      },
+      "property_labels": {
+        "text": "テキスト",
+        "width": "幅"
+      }
+    },
+    "group_input": {
+      "label": "グループ入力",
+      "description": "対象オブジェクトのジオメトリをノードグラフに取り込みます。",
+      "help": "ジオメトリを最初の編集ノードに接続してください。\nモディファイアを重ねた場合は、一つ前の結果を受け取ります。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "対象のジオメトリ、または前のモディファイアの結果です。最初の編集ノードに接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "group_output": {
+      "label": "グループ出力",
+      "description": "ノードグラフの最終的なジオメトリをシーンに返します。",
+      "help": "最後の編集ノードをジオメトリに接続してください。\nこのノードにつながる経路だけがモディファイアの結果になります。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "hsv_range": {
+      "label": "HSV 範囲",
+      "description": "芝生の緑など、色の範囲でスプラットを選び、境界を柔らかくします。",
+      "help": "色相を選び、対象全体が含まれるまで色相範囲を広げてください。\n彩度最小を上げると灰色を、明度最小を上げると影を除外できます。\n選択プレビューをオンにするとビューポートで結果を確認できます。",
+      "inputs": {
+        "Hue": "色範囲の中心を 0～1 で指定します。0 赤、0.17 黄、0.33 緑、0.5 シアン、0.67 青、0.83 マゼンタです。",
+        "Hue Range": "色相の両側に含める幅で、ホイールの 0～0.5 周です。0.07 は一つの色の系統を捉えます。",
+        "Hue Softness": "色相範囲の外側をぼかす幅で、ホイールの周数で指定します。初期値 0 では境界が明確です。",
+        "Saturation Min": "含める彩度の下限で、0～1 です。初期値 0 は灰色を含み、上げると灰色を除外します。",
+        "Saturation Max": "含める彩度の上限で、0～1 です。初期値 1 は最大の彩度まで含みます。",
+        "Value Min": "含める明るさの下限で、0～1 です。初期値 0 は黒を含み、上げると影を除外します。",
+        "Value Max": "含める明るさの上限で、0～1 です。初期値 1 は白を含み、下げると明部を除外します。",
+        "Softness": "色の柔らかい境界幅です。初期値 0 では境界が明確で、上げると選択の境界が柔らかくなります。"
+      },
+      "input_labels": {
+        "Hue": "色相",
+        "Hue Range": "色相範囲",
+        "Hue Softness": "色相の柔らかさ",
+        "Saturation Min": "彩度最小",
+        "Saturation Max": "彩度最大",
+        "Value Min": "明度最小",
+        "Value Max": "明度最大",
+        "Softness": "柔らかさ"
+      },
+      "outputs": {
+        "Selection": "選択の強さです。0 は未選択、1 は完全な選択で、中間の値は滑らかな変化を作ります。"
+      },
+      "output_labels": {
+        "Selection": "選択"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "index": {
+      "label": "インデックス",
+      "description": "各スプラット、点、メッシュ頂点に、現在の並び順に応じたゼロ始まりの番号を与えます。",
+      "help": "数値演算や比較と組み合わせて番号で選択できます。\nジオメトリの削除や結合で番号が変わる場合があります。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Index": "現在の並び順を 0 から数えた番号です。ジオメトリの結合や削除で番号が変わる場合があります。"
+      },
+      "output_labels": {
+        "Index": "インデックス"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "inside_mesh": {
+      "label": "メッシュ内側",
+      "description": "参照メッシュに囲まれたシーンの部分を選びます。",
+      "help": "オブジェクト情報から閉じたメッシュをメッシュ入力に接続してください。\n穴や自己交差があると内側を判定できない場合があります。",
+      "inputs": {
+        "Mesh": "内側を定める閉じた参照メッシュです。オブジェクト情報を接続してください。未接続では何も選べません。"
+      },
+      "input_labels": {
+        "Mesh": "メッシュ"
+      },
+      "outputs": {
+        "Selection": "選択した要素はオン、それ以外はオフです。選択または真偽値入力に接続してください。"
+      },
+      "output_labels": {
+        "Selection": "選択"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "integer": {
+      "label": "整数",
+      "description": "複数の接続先で一つの整数を共有します。",
+      "help": "値を個数や整数の設定に接続してください。\n0 から始め、ステップボタンで一つずつ変更できます。",
+      "inputs": {
+        "Value": "共有する整数です。初期値は 0 で、負と正の数を指定できます。"
+      },
+      "input_labels": {
+        "Value": "値"
+      },
+      "outputs": {
+        "Value": "計算結果の数値です。単位は演算により異なります。対応する数値入力に接続してください。"
+      },
+      "output_labels": {
+        "Value": "値"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "invert_colour": {
+      "label": "色反転",
+      "description": "暗い部分を明るくし、色を反対の色に置き換えます。",
+      "help": "選択を接続すると一部だけ反転できます。\n途中で色が切り詰められていなければ、二回適用すると基本色が元に戻ります。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "編集の強さを 0～1 で指定します。0 は変更なし、1 は完全な適用です。未接続では全体に適用します。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "join_geometry": {
+      "label": "ジオメトリ結合",
+      "description": "複数の入力を一つにまとめ、SH 次数が異なるスプラットは最大の次数に揃えます。",
+      "help": "同じ入力に複数のジオメトリ出力を接続してください。\nジオメトリ分離の後で、別々に編集した部分を戻すときに使います。\n重なったコピーは別々のスプラット、点、面のまま残ります。",
+      "inputs": {
+        "Geometry": "結合するジオメトリです。複数の接続を受け付けます。未接続では結果が空になります。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "map_range": {
+      "label": "範囲変換",
+      "description": "値の範囲を変換し、高さ 0～2 m を強さ 1～0 の変化などに置き換えます。",
+      "help": "変換元最小と最大を元の範囲に合わせてください。\n変換先最小を 1、最大を 0 にすると変化を反転できます。\n制限をオンにすると結果が変換先の範囲内に収まります。",
+      "inputs": {
+        "Value": "変換元の単位で指定する数値です。初期値は 0 です。位置や他の値を接続してください。",
+        "From Min": "変換元の範囲の下端です。単位は値と同じで、初期値は 0 です。",
+        "From Max": "変換元の範囲の上端です。初期値は 1 で、変換元最小と異なる値にしてください。",
+        "To Min": "変換元最小に対応する結果です。初期値は 0 です。ここを 1、変換先最大を 0 にすると反転します。",
+        "To Max": "変換元最大に対応する結果です。初期値は 1 です。ここを 0、変換先最小を 1 にすると反転します。"
+      },
+      "input_labels": {
+        "Value": "値",
+        "From Min": "変換元最小",
+        "From Max": "変換元最大",
+        "To Min": "変換先最小",
+        "To Max": "変換先最大"
+      },
+      "outputs": {
+        "Result": "計算結果の数値です。単位は演算により異なります。対応する数値入力に接続してください。"
+      },
+      "output_labels": {
+        "Result": "結果"
+      },
+      "properties": {
+        "clamp": "結果を変換先の範囲に制限します。初期値はオンで、オフにすると範囲外の値を許可します。"
+      },
+      "property_labels": {
+        "clamp": "制限"
+      }
+    },
+    "math": {
+      "label": "数値演算",
+      "description": "数値の加算、乗算、比較、丸めを行います — 例えば高さで不透明度を変えます。",
+      "help": "演算を選び、A と B に値を接続してください。\n選択の強さを変えるには、まず Multiply を使ってください。",
+      "inputs": {
+        "A": "計算に使う一つ目の数値です。単位は演算により異なり、初期値は 0 です。",
+        "B": "計算に使う二つ目の数値です。単位は演算により異なり、初期値は 0 です。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B"
+      },
+      "outputs": {
+        "Value": "計算結果の数値です。単位は演算により異なります。対応する数値入力に接続してください。"
+      },
+      "output_labels": {
+        "Value": "値"
+      },
+      "properties": {
+        "operation": "数値の演算方法です。初期値は Add で、Absolute などは A のみ使います。"
+      },
+      "property_labels": {
+        "operation": "演算"
+      }
+    },
+    "mesh_to_points": {
+      "label": "メッシュを点に",
+      "description": "メッシュの頂点を点群に変換し、頂点色があれば保持します。",
+      "help": "オブジェクト情報からメッシュを接続してください。\n面全体に均等に点を置くのではなく、頂点ごとに一つの点を作ります。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "mesh_to_splats": {
+      "label": "メッシュをスプラットに",
+      "description": "メッシュの表面を色付きの平たいスプラットで覆います。",
+      "help": "初期の密度では単位球に約 20,000 個のスプラットを作ります。\n細部には密度を上げてください。最大数で総数を制限できます。\n頂点色はマテリアルの色やテクスチャより優先されます。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Density": "表面積の単位平方当たりのスプラット数です。初期値約 1,592 は単位球で約 20,000 個、0 は作成なしです。",
+        "Max Count": "作成するスプラットの上限で、0～2,000,000 です。初期値は 2,000,000、0 では作成しません。",
+        "Opacity": "スプラットの不透明度で、0～1 です。0 は透明、1 は不透明、初期値 0.95 はほぼ不透明です。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Density": "密度",
+        "Max Count": "最大数",
+        "Opacity": "不透明度"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {
+        "seed": "再現可能な模様のための整数シードです。初期値は 0 で、変えると別の模様になります。"
+      },
+      "property_labels": {
+        "seed": "シード"
+      }
+    },
+    "mix_colour": {
+      "label": "色混合",
+      "description": "二つの色を混ぜたり、指定した色演算で組み合わせたりします。",
+      "help": "A と B に色を接続してください。係数 0.5 では均等に混ざります。\nまず Mix を使い、その後 Multiply や Add を試してください。",
+      "inputs": {
+        "A": "一つ目の RGB 色で、通常は各成分 0～1 です。初期値は黒です。",
+        "B": "二つ目の RGB 色で、通常は各成分 0～1 です。初期値は黒です。",
+        "Factor": "混合の強さで、0～1 です。0 は A を保持、1 は演算を完全適用、0.5 は半分の強さです。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Factor": "係数"
+      },
+      "outputs": {
+        "Colour": "結果の RGB 色です。各成分は 0 が黒、1 が白で、計算によってはこの範囲を超えます。"
+      },
+      "output_labels": {
+        "Colour": "色"
+      },
+      "properties": {
+        "mode": "色の組み合わせ方です。初期値は Mix で、Add、Subtract、Multiply の結果に係数を適用します。"
+      },
+      "property_labels": {
+        "mode": "モード"
+      }
+    },
+    "named_attribute": {
+      "label": "名前付き属性",
+      "description": "保存された値を名前で読み取り、編集の制御に使います。",
+      "help": "正確な属性名を入力し、種類を選んでください。\n存在しない属性からは値を取得できません。",
+      "inputs": {
+        "Name": "保存された属性の正確な名前です。大文字と小文字を区別します。初期値は空で、使用前に入力してください。"
+      },
+      "input_labels": {
+        "Name": "名前"
+      },
+      "outputs": {
+        "Attribute": "指定した属性から読み取った値です。保存された単位を保持します。"
+      },
+      "output_labels": {
+        "Attribute": "属性"
+      },
+      "properties": {
+        "type": "読み取る値の種類です。初期値 Float は各要素から一つの小数値を読み取ります。"
+      },
+      "property_labels": {
+        "type": "種類"
+      }
+    },
+    "neighbour_count": {
+      "label": "近傍数",
+      "description": "近くのスプラットや点を数え、シーンのまばらな部分を見つけます。",
+      "help": "個数を比較に接続して、近傍の少ない部分を選んでください。\nスプラットでは半径 3 とサイズ基準から始めてください。\n自分自身は数えません。",
+      "inputs": {
+        "Radius": "近傍の距離です。初期値は 1 で、シーン単位またはサイズ基準の倍率です。0 では数えません。"
+      },
+      "input_labels": {
+        "Radius": "半径"
+      },
+      "outputs": {
+        "Count": "半径内の近傍数です。自分自身は含まず、0 は孤立を表します。"
+      },
+      "output_labels": {
+        "Count": "個数"
+      },
+      "properties": {
+        "relative_to_size": "各スプラットのサイズを半径の単位にします。初期値はオフでシーン単位を使います。点は常にシーン単位です。"
+      },
+      "property_labels": {
+        "relative_to_size": "サイズ基準"
+      }
+    },
+    "opacity": {
+      "label": "不透明度",
+      "description": "各スプラットの不透明度を読み取り、薄い部分や濃い部分を見つけます。",
+      "help": "不透明度を比較に接続すると薄いスプラットを選べます。\n0 は透明、1 は不透明です。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Opacity": "描画前の不透明度です。0 は透明、1 は不透明です。"
+      },
+      "output_labels": {
+        "Opacity": "不透明度"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "points_to_splats": {
+      "label": "点をスプラットに",
+      "description": "点群を色付きの丸いスプラットに変換します。",
+      "help": "半径を 0 にすると近くの点の間隔からサイズを推定します。\n自動サイズで隙間ができる場合は、シーン単位で正の半径を指定してください。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Radius": "シーン単位の半径です。初期値 0 は近傍の間隔の半分を推定し、正の値は一定の半径を指定します。",
+        "Opacity": "スプラットの不透明度で、0～1 です。0 は透明、1 は不透明、初期値 0.9 は少し透けます。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Radius": "半径",
+        "Opacity": "不透明度"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "position": {
+      "label": "位置",
+      "description": "各スプラット、点、メッシュ頂点のオブジェクト内の位置を読み取ります。",
+      "help": "位置を XYZ 分離に接続すると、高さや軸方向の距離で選択できます。\n座標はオブジェクトのローカル空間を使います。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "ローカルのシーン単位で表した X、Y、Z の位置です。"
+      },
+      "output_labels": {
+        "Position": "位置"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "posterize": {
+      "label": "ポスタライズ",
+      "description": "シーンの色を少数の段階に減らします。",
+      "help": "階調数 4 から始めると、各色成分を四段階にできます。\n選択を接続すると効果を一部に限定できます。\n選択したスプラットでは視点による色の変化がなくなります。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "編集の強さを 0～1 で指定します。0 は変更なし、1 は完全な適用です。未接続では全体に適用します。",
+        "Levels": "RGB 各成分の階調数で、2～32 です。2 は最小と最大のみ、初期値は 4 です。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Levels": "階調数"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "random_value": {
+      "label": "乱数",
+      "description": "各スプラットや点に再現可能な乱数を与え、編集にばらつきを加えます。",
+      "help": "必要な範囲を最小と最大で指定してください。\nシードを変えると別の模様になります。ジオメトリの並べ替えでも変わる場合があります。",
+      "inputs": {
+        "Min": "乱数の下限を必要な単位で指定します。初期値は 0 で、最大より小さくしてください。",
+        "Max": "乱数の上限を必要な単位で指定します。初期値は 1 で、最小より大きくしてください。"
+      },
+      "input_labels": {
+        "Min": "最小",
+        "Max": "最大"
+      },
+      "outputs": {
+        "Value": "計算結果の数値です。単位は演算により異なります。対応する数値入力に接続してください。"
+      },
+      "output_labels": {
+        "Value": "値"
+      },
+      "properties": {
+        "seed": "再現可能な模様のための整数シードです。初期値は 0 で、変えると別の模様になります。"
+      },
+      "property_labels": {
+        "seed": "シード"
+      }
+    },
+    "recolour": {
+      "label": "色変更",
+      "description": "選択したスプラットの色を変え、必要に応じて明暗を保持します。",
+      "help": "色を選び、重み 0.3 から始めると穏やかに色付けできます。\n明暗を保持をオンにすると陰影の細部が残ります。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "編集の強さを 0～1 で指定します。0 は変更なし、1 は完全な適用です。未接続では全体に適用します。",
+        "Colour": "目的の RGB 色で、通常は各成分 0～1 です。初期値は青です。明暗を保持で陰影を残せます。",
+        "Weight": "色変更の強さで、0～1 です。0 は元の色、1 は新しい色を完全適用します。初期値は 1 です。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Colour": "色",
+        "Weight": "重み"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {
+        "keep_shading": "色を変えるときに元の明暗を保ちます。初期値はオンで、オフにすると一様な色になります。",
+        "fade_view_dependent": "色変更に合わせて視点による色の変化を弱めます。初期値はオンで、オフにすると元の変化を保ちます。"
+      },
+      "property_labels": {
+        "keep_shading": "明暗を保持",
+        "fade_view_dependent": "視点依存色を弱める"
+      }
+    },
+    "remove_floaters": {
+      "label": "浮遊スプラット除去",
+      "description": "空の斑点や地面の下のかすみなど、何もない空間に浮くスプラットを削除します。",
+      "help": "まずプレビューをオンにしてください。削除される部分だけを表示します。\n隔離半径 3 とサイズ基準で各スプラットの大きさに合わせて判定し、まばらな背景を保ちます。\n選択を接続すると、地面より下などに処理を限定できます。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "削除判定を行う範囲です。重み 0.5 以上を対象とし、未接続では全スプラットを調べます。",
+        "Min Opacity": "この不透明度未満を削除します。0～1 で、0 は判定なし、初期値 0.02 は非常に薄いスプラットを削除します。",
+        "Max Size": "最長軸がこのシーン単位の長さを超えるスプラットを削除します。初期値 0 はこの判定を無効にします。",
+        "Isolation Radius": "近傍を探す距離です。サイズ基準では各スプラットのサイズの倍率、それ以外はシーン単位です。0 で判定を無効にします。",
+        "Min Neighbours": "半径内の近傍がこの数より少ないスプラットを削除します。1 は完全に孤立したスプラットだけを削除します。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Min Opacity": "最小不透明度",
+        "Max Size": "最大サイズ",
+        "Isolation Radius": "隔離半径",
+        "Min Neighbours": "最小近傍数"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {
+        "preview": "削除されるスプラットだけを変更せずに表示します。初期値はオフで、除去後の結果を表示します。",
+        "relative_to_size": "各スプラットのサイズを半径の単位にします。初期値オンはまばらな部分を保ち、オフではシーン単位を使います。"
+      },
+      "property_labels": {
+        "preview": "プレビュー",
+        "relative_to_size": "サイズ基準"
+      }
+    },
+    "scale": {
+      "label": "サイズ",
+      "description": "各スプラットの三つのローカル軸に沿った大きさを読み取ります。",
+      "help": "サイズを XYZ 分離に接続すると軸ごとの大きさを比較できます。\n値は倍率ではなくシーン単位です。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Scale": "各スプラットの三つのローカル軸の大きさをシーン単位で表します。"
+      },
+      "output_labels": {
+        "Scale": "サイズ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "scale_clamp": {
+      "label": "縦横比制限",
+      "description": "撮影経路から離れたときに筋として見える、針状の Gaussian を短くします。",
+      "help": "撮影経路の外で細い筋が見える場合に使います。\n最大縦横比 16 から始めてください。小さい値ほど多くの針を短くします。\n表面の平たい splat は「平面も含める」をオンにしない限り変更されません。\n大きさがゼロの軸はつぶれたまま維持され、縦横比の制限は残りの軸だけに適用されます。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "編集の強さを 0～1 で指定します。0 は変更なし、1 は完全な適用です。未接続では全体に適用します。",
+        "Max Aspect": "最長軸と中間軸の比の上限です。まず 16 から始めてください。小さい値ほど多くの針を短くします。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Max Aspect": "最大縦横比"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {
+        "include_flat": "平たさ（最長軸と最短軸の比）も制限します。表面は平たい splat で構成されるため、初期設定はオフです。"
+      },
+      "property_labels": {
+        "include_flat": "平面も含める"
+      }
+    },
+    "separate_colour": {
+      "label": "色分離",
+      "description": "色を RGB または HSV の値に分け、各成分を編集や比較に使います。",
+      "help": "色相、彩度、明るさを分けるには HSV を選んでください。\nHSV モードでは R、G、B 出力にその順で値が入ります。",
+      "inputs": {
+        "Colour": "分離する RGB 色で、通常は各成分 0～1 です。初期値は全成分 0 の黒です。"
+      },
+      "input_labels": {
+        "Colour": "色"
+      },
+      "outputs": {
+        "R": "RGB では赤成分、HSV では色相です。色相はホイール一周を 0～1 で表します。",
+        "G": "RGB では緑成分、HSV では彩度です。HSV では 0 が灰色、1 が最大の彩度です。",
+        "B": "RGB では青成分、HSV では明るさです。HSV では 0 が黒、1 が最大の明るさです。"
+      },
+      "output_labels": {
+        "R": "R",
+        "G": "G",
+        "B": "B"
+      },
+      "properties": {
+        "mode": "色の解釈方法です。初期値 RGB は赤、緑、青、HSV は色相、彩度、明るさを使います。"
+      },
+      "property_labels": {
+        "mode": "モード"
+      }
+    },
+    "separate_geometry": {
+      "label": "ジオメトリ分離",
+      "description": "選択部分と残りに分け、それぞれ編集してから再び結合できるようにします。",
+      "help": "選択を接続し、二つの出力を別々に編集してください。\nジオメトリ結合で一つに戻せます。\n柔らかい選択の重みは 0.5 を境に二つに分かれます。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "重み 0.5 以上は選択、それ未満は反転側に送ります。未接続ではすべて選択します。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択"
+      },
+      "outputs": {
+        "Selection": "選択の重みが 0.5 以上のジオメトリです。この枝を別に編集できます。",
+        "Inverted": "選択の重みが 0.5 未満のジオメトリで、選択範囲の外側です。"
+      },
+      "output_labels": {
+        "Selection": "選択",
+        "Inverted": "反転"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "separate_xyz": {
+      "label": "XYZ 分離",
+      "description": "位置や方向を X、Y、Z の値に分けます。",
+      "help": "位置を接続し、高さの軸を比較や範囲変換に送ってください。\nシーンでどの軸が上向きか確認してください。",
+      "inputs": {
+        "Vector": "必要な単位で指定する X、Y、Z の値です。初期値 (0, 0, 0) はすべての軸でゼロです。"
+      },
+      "input_labels": {
+        "Vector": "ベクトル"
+      },
+      "outputs": {
+        "X": "入力の X 座標で、単位は入力と同じです。0 は YZ 平面上にあります。",
+        "Y": "入力の Y 座標で、単位は入力と同じです。0 は XZ 平面上にあります。",
+        "Z": "入力の Z 座標で、単位は入力と同じです。0 は XY 平面上にあります。"
+      },
+      "output_labels": {
+        "X": "X",
+        "Y": "Y",
+        "Z": "Z"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_colour": {
+      "label": "色設定",
+      "description": "選択したスプラットの基本色を指定した色に置き換えます。",
+      "help": "色を選ぶか、別のノードから色を接続してください。\n均一に塗った色にするには、視点依存色を削除をオンにしてください。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "編集の強さを 0～1 で指定します。0 は変更なし、1 は完全な適用です。未接続では全体に適用します。",
+        "Colour": "RGB 色で、通常は各成分 0～1 です。0 は黒、1 は白、初期値 (0.5, 0.5, 0.5) は中間の灰色です。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Colour": "色"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {
+        "clear_view_dependent": "選択したスプラットの視点依存色を削除します。初期値オンは一様な色、オフは反射を保持します。"
+      },
+      "property_labels": {
+        "clear_view_dependent": "視点依存色を削除"
+      }
+    },
+    "set_opacity": {
+      "label": "不透明度設定",
+      "description": "選択したスプラットの透け方を変えます。",
+      "help": "不透明度 0.5 から始めると半透明にできます。\n選択を使うと元の不透明度と滑らかに混ぜられます。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "編集の強さを 0～1 で指定します。0 は変更なし、1 は完全な適用です。未接続では全体に適用します。",
+        "Opacity": "新しい不透明度で、0～1 です。0 は透明、1 は不透明です。初期値 1 は選択部分を不透明にします。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Opacity": "不透明度"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_position": {
+      "label": "位置設定",
+      "description": "選択したスプラット、点、メッシュ頂点を新しい位置へ移し、必要に応じてオフセットを加えます。",
+      "help": "位置ノードを位置入力に接続し、オフセットを指定すると相対的に移動できます。\n未接続の位置入力は原点になります。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "編集の強さを 0～1 で指定します。0 は変更なし、1 は完全な適用です。未接続では全体に適用します。",
+        "Position": "ローカルのシーン単位で指定する新しい位置です。初期値は原点で、位置を接続すると元の位置を保てます。",
+        "Offset": "ローカルのシーン単位で加える X、Y、Z の移動量です。初期値 (0, 0, 0) は移動なしです。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Position": "位置",
+        "Offset": "オフセット"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_scale": {
+      "label": "サイズ設定",
+      "description": "選択したスプラットの三つのローカル軸の大きさを設定します。",
+      "help": "元の大きさを倍率で変えるには、サイズをベクトル演算経由で接続してください。\n未接続の値は倍率ではなく、シーン単位の大きさに置き換えます。\nゼロ以下のサイズは軸をつぶします。正のサイズで復元できるのは完全に選択した場合だけで、部分的な選択ではつぶれたままです。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "編集の強さを 0～1 で指定します。0 は変更なし、1 は完全な適用です。未接続では全体に適用します。",
+        "Scale": "シーン単位で指定する各軸の新しい大きさです。初期値 (1, 1, 1) は単位サイズの丸いスプラットです。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Scale": "サイズ"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "set_sh_degree": {
+      "label": "SH 次数設定",
+      "description": "見る方向によるスプラットの色変化を制限します。低い次数ほどファイルが大幅に小さくなります。",
+      "help": "次数 0 では色が一定になり、書き出しサイズも小さくなります。\n次数を上げても、失われた色の情報は戻りません。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Degree": "SH 次数で、0～3 です。初期値 0 は視点依存色をなくし、高い値は角度による細部を表せます。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Degree": "次数"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "sharpen": {
+      "label": "鮮鋭化",
+      "description": "選択したスプラットを小さくし、ぼやけた細部をくっきりさせます。",
+      "help": "強さ 0.25 から始め、被覆を保持をオンにしてください。\n強すぎるとスプラット間に隙間が見える場合があります。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Selection": "編集の強さを 0～1 で指定します。0 は変更なし、1 は完全な適用です。未接続では全体に適用します。",
+        "Amount": "縮小する割合で、0～0.95 です。0 は変更なし、初期値 0.25 は各軸を 25% 縮めます。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Amount": "強さ"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {
+        "keep_coverage": "縮小時に不透明度を上げ、隙間を抑えます。初期値はオンで、オフでは結果がより透ける場合があります。"
+      },
+      "property_labels": {
+        "keep_coverage": "被覆を保持"
+      }
+    },
+    "simplify": {
+      "label": "簡略化",
+      "description": "全体の見た目を保ちながらスプラットをまとめ、個数を減らします。",
+      "help": "割合 0.5 から始めると個数の半減を目指せます。\n他のノードより時間がかかる場合があります。低い割合では細部が失われます。\n共分散がゼロの軸はつぶれたまま維持されます。異なる位置や向きを統合すると、実際の広がりが生じることがあります。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Ratio": "目標の保持率で、0.01～1 です。初期値 0.5 は半数を目指し、1 は元の数を保ちます。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Ratio": "割合"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "splats_to_points": {
+      "label": "スプラットを点に",
+      "description": "スプラットの中心と基本色を点群に変換します。",
+      "help": "中心点の書き出しや、点としての処理に使います。\nサイズ、不透明度、視点による色の変化は保持しません。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "stored_selection": {
+      "label": "保存済み選択",
+      "description": "ビューポートで取り込んだ選択範囲を再利用します。",
+      "help": "目のアイコンでこのモディファイアを隠し、ビューポートでスプラットを選択（ブラシ、投げ縄、ボックス）して選択を取り込むを押し、再表示します。\nこのノードより前でスプラット数が変わった場合は再度取り込んでください。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Selection": "選択した要素はオン、それ以外はオフです。選択または真偽値入力に接続してください。"
+      },
+      "output_labels": {
+        "Selection": "選択"
+      },
+      "properties": {
+        "data": "取り込んだビューポートの選択です。選択を取り込むまで空で、モディファイアごとに保存します。",
+        "size": "選択を取り込んだ時点の要素数です。0 は空で、数が変わった場合は取り込み直してください。",
+        "invert": "保存した選択を反転します。初期値オフは選択部分を保ち、オンは残りを選びます。"
+      },
+      "property_labels": {
+        "data": "データ",
+        "size": "サイズ",
+        "invert": "反転"
+      }
+    },
+    "transform_geometry": {
+      "label": "ジオメトリ変換",
+      "description": "ジオメトリ全体をまとめて移動、回転、拡大縮小します。",
+      "help": "移動で位置を変え、スケール 1 で元の大きさを保てます。\n回転はオブジェクトの原点を中心に、度で指定します。",
+      "inputs": {
+        "Geometry": "編集するジオメトリです。入力元を接続してください。未接続ではジオメトリがありません。",
+        "Translation": "シーン単位で指定する X、Y、Z の移動量です。初期値 (0, 0, 0) は位置を変えません。",
+        "Rotation": "X、Y、Z 軸周りの回転を度で指定します。初期値 (0, 0, 0) では向きを変えません。",
+        "Scale": "大きさの倍率です。1 は元のサイズ、0 は原点に縮約、負の値は反転します。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Translation": "移動",
+        "Rotation": "回転",
+        "Scale": "サイズ"
+      },
+      "outputs": {
+        "Geometry": "結果のジオメトリです。別の編集ノードやグループ出力に接続してください。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "value": {
+      "label": "値",
+      "description": "複数の接続先で一つの数値を共有します。",
+      "help": "複数の数値入力に接続するとまとめて調整できます。\n0 から始め、数値をドラッグして変更してください。",
+      "inputs": {
+        "Value": "共有する数値です。初期値は 0 で、負と正の数を指定できます。"
+      },
+      "input_labels": {
+        "Value": "値"
+      },
+      "outputs": {
+        "Value": "計算結果の数値です。単位は演算により異なります。対応する数値入力に接続してください。"
+      },
+      "output_labels": {
+        "Value": "値"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector": {
+      "label": "ベクトル",
+      "description": "一組の X、Y、Z の値を複数のノードで共有します。",
+      "help": "共通の位置、オフセット、方向に使います。\n初期値は三つとも 0 です。",
+      "inputs": {
+        "Vector": "必要な単位で指定する X、Y、Z の値です。初期値 (0, 0, 0) はすべての軸でゼロです。"
+      },
+      "input_labels": {
+        "Vector": "ベクトル"
+      },
+      "outputs": {
+        "Vector": "結果の X、Y、Z の値です。単位は計算により異なります。"
+      },
+      "output_labels": {
+        "Vector": "ベクトル"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "vector_math": {
+      "label": "ベクトル演算",
+      "description": "位置と方向を加算、減算、計測します — 例えば点からの距離を求めます。",
+      "help": "Scale でオフセットの大きさを変え、Distance で二点の距離を求められます。\nLength、Distance、Dot は値出力を使い、他の演算はベクトル出力を使います。",
+      "inputs": {
+        "A": "一つ目の三成分の値です。単位は計算により異なり、初期値は (0, 0, 0) です。",
+        "B": "二つ目の三成分の値です。単位は計算により異なり、初期値は (0, 0, 0) です。",
+        "Scale": "Scale 演算の倍率です。1 は A を保持、0 はゼロ、−1 は方向を反転します。"
+      },
+      "input_labels": {
+        "A": "A",
+        "B": "B",
+        "Scale": "サイズ"
+      },
+      "outputs": {
+        "Vector": "結果の X、Y、Z の値です。単位は計算により異なります。",
+        "Value": "計算結果の数値です。単位は演算により異なります。対応する数値入力に接続してください。"
+      },
+      "output_labels": {
+        "Vector": "ベクトル",
+        "Value": "値"
+      },
+      "properties": {
+        "operation": "ベクトルの演算方法です。初期値は Add です。Length、Distance、Dot はベクトルではなく値を出力します。"
+      },
+      "property_labels": {
+        "operation": "演算"
+      }
+    },
+    "object_info": {
+      "label": "オブジェクト情報",
+      "description": "別のシーンオブジェクトのジオメトリを参照や追加の部品として取り込みます。",
+      "help": "参照先の正確な名前または UUID を選んでください。\n相対空間では、編集対象のオブジェクトを基準に配置します。\nこのモディファイアに依存するオブジェクトは参照しないでください。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Geometry": "選んだ空間での参照オブジェクトのジオメトリです。表示中のモディファイアも含みます。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {
+        "object": "読み取るシーンオブジェクトの正確な名前または UUID です。初期値は空で、評価前に参照先を選んでください。",
+        "transform_space": "Original は元のローカル座標を保ち、Relative は編集対象オブジェクトの空間に変換します。"
+      },
+      "property_labels": {
+        "object": "オブジェクト",
+        "transform_space": "変換空間"
+      }
+    },
+    "float_curve": {
+      "label": "値カーブ",
+      "description": "編集可能な滑らかなカーブで数値を変換します。",
+      "help": "編集可能な滑らかなカーブで数値を変換します。\n制御点をドラッグ、追加、削除して調整します。Fritsch–Carlson補間により、単調な点の間で値が行き過ぎるのを防ぎます。",
+      "inputs": {
+        "Value": "カーブで変換する要素ごとの数値。"
+      },
+      "input_labels": {
+        "Value": "値"
+      },
+      "outputs": {
+        "Value": "カーブで変換された数値。"
+      },
+      "output_labels": {
+        "Value": "値"
+      },
+      "properties": {
+        "points": "XとYのペアで表した順序付き制御点。",
+        "clamp": "入力を最初と最後の制御点の範囲に制限します。"
+      },
+      "property_labels": {
+        "points": "カーブ",
+        "clamp": "制限"
+      }
+    },
+    "rgb_curves": {
+      "label": "RGBカーブ",
+      "description": "全体およびチャンネル別のカーブで色を変換します。",
+      "help": "全体およびチャンネル別のカーブで色を変換します。\n選択×係数で結果を混合します。非線形補正はスプラットの基本色DCのみを変更し、視点依存のSHバンドを維持します。ポイントとメッシュにも対応します。",
+      "inputs": {
+        "Geometry": "編集するジオメトリ。ジオメトリ出力を接続してください。",
+        "Selection": "要素ごとの混合の重み、0～1。未接続時はすべての要素が対象です。",
+        "Factor": "カーブの効果を調整する追加の強度、0～1。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Factor": "係数"
+      },
+      "outputs": {
+        "Geometry": "編集後のジオメトリ。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {
+        "combined": "最初にすべての色チャンネルへ適用するカーブ。",
+        "r": "赤チャンネルに適用するカーブ。",
+        "g": "緑チャンネルに適用するカーブ。",
+        "b": "青チャンネルに適用するカーブ。"
+      },
+      "property_labels": {
+        "combined": "全体",
+        "r": "赤",
+        "g": "緑",
+        "b": "青"
+      }
+    },
+    "colour_ramp": {
+      "label": "カラーランプ",
+      "description": "数値に色と透明度を割り当てます。",
+      "help": "数値に色と透明度を割り当てます。\n0～1の範囲にストップを配置します。一定、線形、スムーズ補間を選択できます。",
+      "inputs": {
+        "Fac": "カラーランプ内の位置。通常は0～1です。"
+      },
+      "input_labels": {
+        "Fac": "係数"
+      },
+      "outputs": {
+        "Colour": "生成されたRGBカラー。",
+        "Alpha": "ランプから取得した透明度、0～1。"
+      },
+      "output_labels": {
+        "Colour": "カラー",
+        "Alpha": "アルファ"
+      },
+      "properties": {
+        "stops": "位置、赤、緑、青、アルファからなる順序付きストップ。",
+        "interpolation": "隣接ストップ間の補間方法。一定、線形、スムーズ。"
+      },
+      "property_labels": {
+        "stops": "ランプ",
+        "interpolation": "補間"
+      }
+    },
+    "gradient_texture": {
+      "label": "グラデーションテクスチャ",
+      "description": "空間座標からグラデーションを生成します。",
+      "help": "空間座標からグラデーションを生成します。\n位置を座標として使用します。線形はX、対角はXとY、球状と放射状は原点を基準にします。",
+      "inputs": {
+        "Vector": "X、Y、Z座標。未接続時は要素の位置を使用します。"
+      },
+      "input_labels": {
+        "Vector": "ベクトル"
+      },
+      "outputs": {
+        "Fac": "生成されたグラデーション値。0～1の範囲外になる場合があります。"
+      },
+      "output_labels": {
+        "Fac": "係数"
+      },
+      "properties": {
+        "type": "グラデーションの形状。線形、二次、スムーズ、対角、球状、放射状。"
+      },
+      "property_labels": {
+        "type": "種類"
+      }
+    },
+    "distance": {
+      "label": "距離",
+      "description": "各要素から点、直線、平面までの距離を測定します。",
+      "help": "各要素から点、直線、平面までの距離を測定します。\n平面モードは符号付き距離を返します。点と直線モードは0以上の距離を返します。",
+      "inputs": {
+        "Vector": "X、Y、Z座標。未接続時は要素の位置を使用します。",
+        "Point": "ターゲットの点、または直線や平面上の点。",
+        "Direction": "直線の方向、またはカメラの視線方向。",
+        "Normal": "ターゲット平面の法線方向。"
+      },
+      "input_labels": {
+        "Vector": "ベクトル",
+        "Point": "点",
+        "Direction": "方向",
+        "Normal": "法線"
+      },
+      "outputs": {
+        "Distance": "シーン単位の距離。平面モードでは符号付きです。"
+      },
+      "output_labels": {
+        "Distance": "距離"
+      },
+      "properties": {
+        "mode": "点、直線、平面のいずれかまでの距離を測定します。"
+      },
+      "property_labels": {
+        "mode": "モード"
+      }
+    },
+    "noise_texture": {
+      "label": "ノイズテクスチャ",
+      "description": "再現可能な3次元フラクタルノイズを生成します。",
+      "help": "再現可能な3次元フラクタルノイズを生成します。\n未接続時は位置を使用します。詳細度は小数を含む0～15オクターブに対応し、粗さで各オクターブの振幅を調整します。",
+      "inputs": {
+        "Vector": "X、Y、Z座標。未接続時は要素の位置を使用します。",
+        "Scale": "サイズまたは座標の倍率。1で元の大きさを維持します。",
+        "Detail": "0～15のオクターブ数。小数部分は滑らかに混合します。",
+        "Roughness": "次のオクターブで保持する振幅の割合。",
+        "Distortion": "座標を歪ませる強度。",
+        "Seed": "再現可能なノイズパターンを選択するシード。"
+      },
+      "input_labels": {
+        "Vector": "ベクトル",
+        "Scale": "スケール",
+        "Detail": "詳細度",
+        "Roughness": "粗さ",
+        "Distortion": "歪み",
+        "Seed": "シード"
+      },
+      "outputs": {
+        "Fac": "グラデーションの参照値または生成されたノイズ値、0～1。",
+        "Colour": "生成されたRGBカラー。"
+      },
+      "output_labels": {
+        "Fac": "係数",
+        "Colour": "カラー"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "store_named_attribute": {
+      "label": "名前付き属性を保存",
+      "description": "ジオメトリの要素に値を保存します。",
+      "help": "ジオメトリの要素に値を保存します。\n同じ属性名で後から読み出せます。未選択の要素は既存値または0を保持します。スプラットとポイントの属性は後続のモディファイアでも使えますが、メッシュ頂点の属性は適用時に失われます。",
+      "inputs": {
+        "Geometry": "編集するジオメトリ。ジオメトリ出力を接続してください。",
+        "Selection": "要素ごとの混合の重み、0～1。未接続時はすべての要素が対象です。",
+        "Name": "名前付き属性ノードで後から読み出すための名前。",
+        "Value": "保存する要素ごとの数値、ベクトル、カラー。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Name": "名前",
+        "Value": "値"
+      },
+      "outputs": {
+        "Geometry": "編集後のジオメトリ。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {
+        "data_type": "値を数値、ベクトル、カラーのいずれかとして保存します。"
+      },
+      "property_labels": {
+        "data_type": "データ型"
+      }
+    },
+    "remove_clumps": {
+      "label": "小さな塊を除去",
+      "description": "スプラットやポイントの小さな連結グループを除去します。",
+      "help": "スプラットやポイントの小さな連結グループを除去します。\n半径は局所的な間隔の中央値に対する倍率です。GPUで連結成分を求め、最小サイズ未満のグループのみを除去します。メッシュには対応しません。",
+      "inputs": {
+        "Geometry": "編集するジオメトリ。ジオメトリ出力を接続してください。",
+        "Selection": "値が0.5以上の要素を選択します。",
+        "Radius": "局所的な間隔の中央値に対する接続半径の倍率。",
+        "Min Size": "要素数がこの値未満のグループを除去候補にします。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Radius": "半径",
+        "Min Size": "最小サイズ"
+      },
+      "outputs": {
+        "Geometry": "編集後のジオメトリ。",
+        "Selection": "最小サイズ未満のグループに属する要素。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択"
+      },
+      "properties": {
+        "delete": "候補を削除します。選択出力だけを使う場合は無効にしてください。"
+      },
+      "property_labels": {
+        "delete": "削除"
+      }
+    },
+    "merge_by_distance": {
+      "label": "距離で結合",
+      "description": "近接する要素を結合してジオメトリをまとめます。",
+      "help": "近接する要素を結合してジオメトリをまとめます。\n選択された要素のみを結合します。点と頂点を平均化し、面の参照を更新して退化面を削除します。スプラットは各グループで最も不透明な要素を残します。",
+      "inputs": {
+        "Geometry": "編集するジオメトリ。ジオメトリ出力を接続してください。",
+        "Selection": "値が0.5以上の要素を選択します。",
+        "Distance": "要素を同じグループとして接続する最大距離。"
+      },
+      "input_labels": {
+        "Geometry": "ジオメトリ",
+        "Selection": "選択",
+        "Distance": "距離"
+      },
+      "outputs": {
+        "Geometry": "編集後のジオメトリ。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "geometry_proximity": {
+      "label": "ジオメトリ近接",
+      "description": "最も近いターゲットの点、スプラット中心、メッシュ頂点を検索します。",
+      "help": "最も近いターゲットの点、スプラット中心、メッシュ頂点を検索します。\n同じ座標系のターゲットジオメトリを接続します。頂点間の面ではなく、要素そのものまでの距離を測定します。",
+      "inputs": {
+        "Target": "ポイント、スプラット、メッシュ頂点を含むターゲット。空にはできません。"
+      },
+      "input_labels": {
+        "Target": "ターゲット"
+      },
+      "outputs": {
+        "Distance": "シーン単位の距離。平面モードでは符号付きです。",
+        "Position": "ジオメトリまたはカメラの座標系で得られた位置。"
+      },
+      "output_labels": {
+        "Distance": "距離",
+        "Position": "位置"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "instance_on_points": {
+      "label": "ポイントにインスタンス配置",
+      "description": "選択した各アンカーに変換済みスプラットのコピーを配置します。",
+      "help": "選択した各アンカーに変換済みスプラットのコピーを配置します。\nアンカーはポイント、メッシュ頂点、スプラット中心に対応します。インスタンスはスプラット専用です。度単位のオイラー回転とスケールで形状とSH色を同時に変換します。上限は5000万スプラットです。\n負の倍率では絶対値で大きさを決め、位置・向き・SH色を反転します。軸をつぶす変換ではSH色は変更されません。",
+      "inputs": {
+        "Points": "要素をアンカー位置として使用するジオメトリ。",
+        "Instance": "複製するスプラットジオメトリ。他の種類には対応しません。",
+        "Selection": "値が0.5以上の要素を選択します。",
+        "Rotation": "各アンカーのX、Y、Z軸回りのオイラー角、度単位。0で向きを維持します。",
+        "Scale": "スケールは数値または3軸の倍率です。1は大きさを維持し、0は軸を潰し、負の値は反転します。"
+      },
+      "input_labels": {
+        "Points": "ポイント",
+        "Instance": "インスタンス",
+        "Selection": "選択",
+        "Rotation": "回転",
+        "Scale": "スケール"
+      },
+      "outputs": {
+        "Geometry": "編集後のジオメトリ。"
+      },
+      "output_labels": {
+        "Geometry": "ジオメトリ"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "camera_info": {
+      "label": "カメラ情報",
+      "description": "データセットのカメラの位置、向き、レンズ情報を取得します。",
+      "help": "データセットのカメラの位置、向き、レンズ情報を取得します。\nインデックスまたは画像名でカメラを選択します。出力はワールド座標です。シーンにデータセットのカメラが必要です。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Position": "ジオメトリまたはカメラの座標系で得られた位置。",
+        "Direction": "直線の方向、またはカメラの視線方向。",
+        "Up": "画像の上方向を指す単位ベクトル。",
+        "FOV": "垂直画角、度単位。",
+        "Image Size": "画像の幅と高さ、ピクセル単位。Zは0です。"
+      },
+      "output_labels": {
+        "Position": "位置",
+        "Direction": "方向",
+        "Up": "上方向",
+        "FOV": "画角",
+        "Image Size": "画像サイズ"
+      },
+      "properties": {
+        "camera": "カメラのインデックスまたは正確な画像名。0は最初のカメラです。"
+      },
+      "property_labels": {
+        "camera": "カメラ"
+      }
+    },
+    "camera_coverage": {
+      "label": "カメラカバレッジ",
+      "description": "各要素が視錐台内に入るカメラの数を数えます。",
+      "help": "各要素が視錐台内に入るカメラの数を数えます。\n数を比較ノードに接続します。画像範囲と正の奥行きを判定しますが、遮蔽は判定しません。最大距離0で距離制限を無効にします。スプラット、ポイント、メッシュ頂点に対応し、データセットのカメラが必要です。",
+      "inputs": {
+        "Max Distance": "ワールド単位の最大カメラ距離。0で制限を無効にします。"
+      },
+      "input_labels": {
+        "Max Distance": "最大距離"
+      },
+      "outputs": {
+        "Count": "画像範囲内にこの要素を含むデータセットのカメラ数。",
+        "Ratio": "この要素を含むカメラの全体に対する割合、0～1。"
+      },
+      "output_labels": {
+        "Count": "数",
+        "Ratio": "割合"
+      },
+      "properties": {},
+      "property_labels": {}
+    },
+    "view_distance": {
+      "label": "カメラからの距離",
+      "description": "カメラまたは保存したビューからのワールド空間の距離を測定します。",
+      "help": "カメラまたは保存したビューからのワールド空間の距離を測定します。\nカメラを選択するか「ビューを保存」を押します。保存したカメラはその後のビュー移動に追従しません。スプラット、ポイント、メッシュ頂点に対応し、データセットのカメラが必要です。",
+      "inputs": {},
+      "input_labels": {},
+      "outputs": {
+        "Distance": "選択したカメラからの距離、ワールド単位。"
+      },
+      "output_labels": {
+        "Distance": "距離"
+      },
+      "properties": {
+        "camera": "カメラのインデックスまたは正確な画像名。0は最初のカメラです。",
+        "source": "データセットのカメラまたは最後に保存したビューを使用します。",
+        "captured_transform": "保存したカメラからワールドへの変換行列。保存前は空です。"
+      },
+      "property_labels": {
+        "camera": "カメラ",
+        "source": "ソース",
+        "captured_transform": "保存した変換"
+      }
+    },
+    "scene_time": {
+      "label": "シーン時間",
+      "description": "シーケンサーの再生ヘッドの時刻を出力します。",
+      "help": "秒またはフレームを使ってフィールドをアニメーション化します。\n再生中は時間に依存するグラフだけが再評価されます。\n動画の書き出しでは各フレームのジオメトリの評価完了を待ちます。",
+      "inputs": {},
+      "properties": {},
+      "outputs": {
+        "Seconds": "再生ヘッドの時刻（秒）。",
+        "Frame": "再生ヘッドの時刻にシーケンサーのフレームレートを掛けた値。"
+      },
+      "output_labels": {
+        "Seconds": "秒",
+        "Frame": "フレーム"
+      }
+    }
+  },
+  "node_editor.how_to_use": "使い方",
+  "node_editor.learn_more": "詳しく見る",
+  "node_editor.modifiers_paused_while_training": "トレーニング中はモディファイアが一時停止します",
+  "export_dialog.apply_modifiers": "モディファイアを適用",
+  "node_editor.capture_view": "ビューを保存",
+  "node_editor.curve_hint": "点をドラッグして調整。クリックで追加、ダブルクリックまたはDeleteで削除。",
+  "node_editor.ramp_hint": "ストップをドラッグして移動。クリックで追加、ダブルクリックまたはDeleteで削除。選択するとRGBAを編集できます。",
+  "node_editor.keyframe_hint": "キーフレームを挿入 · Ctrl+クリック、またはポインターを重ねて I"
 }

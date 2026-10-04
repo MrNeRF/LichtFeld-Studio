@@ -9,5 +9,5 @@ namespace lfs::core::cuda {
     void transform_splat_geometry(const splat_transform::LinearTransform& matrix,
                                   const float* scales, const float* rotations,
                                   float* out_scales, float* out_rotations,
-                                  std::size_t count, cudaStream_t stream);
+                                  std::size_t count, cudaStream_t stream, const float* matrices = nullptr);
 }

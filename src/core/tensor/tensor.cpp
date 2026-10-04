@@ -569,6 +569,14 @@ namespace lfs::core {
                     lazy->materializer = {};
 
                     try {
+                        // Materializers launch on the current stream. Without one they would
+                        // use the legacy stream, unordered with this tensor's declared home.
+#if LFS_HAS_CUDA
+                        std::optional<CUDAStreamGuard> home_stream;
+                        if (device_ == Device::GPU && internal::gpu_backend_tag(*this) == GpuBackend::CUDA && stream() != nullptr && getCurrentCUDAStream() == nullptr &&
+                            !is_stream_retired(stream()))
+                            home_stream.emplace(stream());
+#endif
                         materialized = internal::lazy_planner_execute_plan_for_tensor(*this, materializer);
                         validate_materialized(materialized);
                         lazy->result = materialized;
@@ -628,7 +636,12 @@ namespace lfs::core {
                 state_->name = preserved_name;
             }
             const cudaStream_t materialized_stream = published.state_->stream;
-            state_->stream = materialized_stream != nullptr ? materialized_stream : preserved_stream;
+            bool keep_home = materialized_stream == nullptr && preserved_stream != nullptr;
+#if LFS_HAS_CUDA
+            // A retired home no longer orders anything; the producer is the truth.
+            keep_home = keep_home && !is_stream_retired(preserved_stream);
+#endif
+            state_->stream = keep_home ? preserved_stream : materialized_stream;
         } else {
             state_->tracked = preserved_tracked;
             state_->name = preserved_name;
@@ -868,7 +881,7 @@ namespace lfs::core {
                 // from the old home before changing allocator ownership metadata.
                 internal::backend_ops_for(*this).bridge(
                     internal::ExecContext{state_->stream}, internal::ExecContext{stream});
-                if (!has_external_storage()) {
+                if (!has_external_storage() && data_ != nullptr) {
                     internal::backend_ops_for(*this).rehome_stream(
                         internal::storage_ref(*this), internal::ExecContext{stream});
                 }
@@ -1613,6 +1626,14 @@ namespace lfs::core {
         if (!is_contiguous_) {
             return contiguous().to(dtype);
         }
+
+        // Convert on the current stream, or this tensor's own when none is set,
+        // after the work that produced this tensor.
+        std::optional<CUDAStreamGuard> conversion_stream;
+#if LFS_HAS_CUDA
+        if (device_ == Device::GPU && internal::gpu_backend_tag(*this) == GpuBackend::CUDA)
+            conversion_stream.emplace(prepare_inputs_for_stream({this}));
+#endif
 
 // Macro for type conversions using launch_convert_type
 #define CONVERT_DTYPE_CUDA(FROM_TYPE, TO_TYPE, FROM_DTYPE, TO_DTYPE)         \

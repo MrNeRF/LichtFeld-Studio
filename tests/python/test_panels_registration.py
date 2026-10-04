@@ -149,6 +149,7 @@ def _install_recording_lf(monkeypatch):
         "VIEW_FRAME_ALL",
         "TOGGLE_QUAD_VIEW",
         "TOGGLE_MAXIMIZE_AREA",
+        "TOGGLE_NODE_EDITOR",
     )
     tool_mode = IntEnum("ToolMode", {name: i for i, name in enumerate(tool_mode_names)})
     action_enum = IntEnum("Action", {name: i for i, name in enumerate(action_names)})

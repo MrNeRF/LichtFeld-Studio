@@ -182,11 +182,11 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Push push) {
         const int top = max(int(centerY - float(p.kernelSize) * scaleY + 0.5), 0);
         const int right = min(int(centerX + float(p.kernelSize) * scaleX + 0.5), int(p.inputWidth));
         const int bottom = min(int(centerY + float(p.kernelSize) * scaleY + 0.5), int(p.inputHeight));
-        const uint channels = p.layout == 1 ? 1u : 3u;
+        const uint channels = p.channels;
         const uint inputPlane = p.inputHeight * p.inputWidth;
         Ptr<float, Access.Read> cx = (Ptr<float, Access.Read>)p.coefficientX;
         Ptr<float, Access.Read> cy = (Ptr<float, Access.Read>)p.coefficientY;
-        float3 accum = 0.0;
+        float4 accum = 0.0;
         for (int y = top; y < bottom; ++y) {
             const float wy = cy[py * p.strideY + uint(y - top)];
             for (int x = left; x < right; ++x) {
@@ -196,7 +196,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Push push) {
                     float value;
                     if (p.layout == 2) value = f32[c * inputPlane + pixel];
                     else if (p.layout == 1) value = p.bytes != 0 ? float(loadByte(p.source, pixel)) / 255.0 : f32[pixel];
-                    else value = p.bytes != 0 ? float(loadByte(p.source, pixel * 3 + c)) / 255.0 : f32[pixel * 3 + c];
+                    else value = p.bytes != 0 ? float(loadByte(p.source, pixel * channels + c)) / 255.0 : f32[pixel * channels + c];
                     accum[c] += value * weight;
                 }
             }

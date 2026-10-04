@@ -28,6 +28,7 @@
 namespace lfs::vis {
 
     class AppearanceTensorModel;
+    class ModifierManager;
 
     namespace op {
         class SceneSnapshot;
@@ -95,6 +96,10 @@ namespace lfs::vis {
         // Scene access
         core::Scene& getScene() { return scene_; }
         const core::Scene& getScene() const { return scene_; }
+        ModifierManager& modifierManager() { return *modifier_manager_; }
+        const ModifierManager& modifierManager() const { return *modifier_manager_; }
+        void setModifierSelectionPreview(const core::Uuid& node_uuid,
+                                         std::optional<core::Tensor> selection);
 
         // Service accessors (via service locator)
         TrainerManager* getTrainerManager() { return services().trainerOrNull(); }
@@ -330,6 +335,8 @@ namespace lfs::vis {
             Skip,
         };
 
+        std::unique_ptr<ModifierManager> modifier_manager_;
+
         struct GaussianDeletionSlice {
             std::string node_name;
             size_t begin = 0;
@@ -386,6 +393,7 @@ namespace lfs::vis {
         void scheduleConsolidatedCompaction();
         [[nodiscard]] std::expected<GaussianDeletionPlan, std::string> buildSelectedGaussianDeletionPlan();
         [[nodiscard]] std::expected<void, std::string> applySelectedGaussianDeletionPlan(const GaussianDeletionPlan& plan);
+        [[nodiscard]] bool hasEvaluatedSplatEditConflict() const;
 
         core::Scene scene_;
         // Lock ordering: state_mutex_ before selection_.mutex() when both needed
@@ -459,6 +467,11 @@ namespace lfs::vis {
         mutable const lfs::core::SplatData* cached_render_model_ = nullptr;
         mutable ContentType cached_render_content_type_ = ContentType::Empty;
         mutable bool cached_render_metadata_only_ = false;
+        mutable std::mutex modifier_preview_mutex_;
+        core::Uuid modifier_preview_node_;
+        std::optional<core::Tensor> modifier_preview_selection_;
+        std::uint64_t modifier_preview_generation_ = 0;
+        mutable std::uint64_t cached_render_modifier_preview_generation_ = 0;
     };
 
 } // namespace lfs::vis

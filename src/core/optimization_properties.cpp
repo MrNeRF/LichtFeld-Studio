@@ -723,6 +723,30 @@ namespace lfs::core::param {
                        "Train on every image and evaluate all of them; no image is held out")
             .locale("training_params.eval_all")
             .tooltip("training.tooltip.eval_all")
+            .all_strategies()
+            .enum_prop(&OptimizationParameters::eval_space,
+                       "eval_space", "Eval Space", d.eval_space,
+                       {{"Distorted", EvalSpace::Distorted, "training.options.eval_space.distorted", "distorted"},
+                        {"Undistorted", EvalSpace::Undistorted, "training.options.eval_space.undistorted", "undistorted"}},
+                       "Reference images for evaluation with --undistort: distorted = the original "
+                       "images, with the render warped into the original lens; undistorted = the "
+                       "undistorted training images")
+            .locale("training_params.eval_space")
+            .tooltip("training.tooltip.eval_space")
+            .all_strategies()
+            .string_prop(&OptimizationParameters::eval_mask,
+                         "eval_mask", "Evaluation Mesh", d.eval_mask,
+                         "Absolute mesh path used to select evaluated pixels")
+            .locale("training_params.eval_mask")
+            .tooltip("training.tooltip.eval_mask")
+            .flags(PROP_NEEDS_RESTART)
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::eval_mask_invert,
+                       "eval_mask_invert", "Invert Evaluation Mask", d.eval_mask_invert,
+                       "Evaluate pixels outside the mesh coverage")
+            .locale("training_params.eval_mask_invert")
+            .tooltip("training.tooltip.eval_mask_invert")
+            .flags(PROP_NEEDS_RESTART)
 
             // Random initialization
             .all_strategies()
@@ -794,7 +818,10 @@ namespace lfs::core::param {
             .all_strategies()
             .bool_prop(&OptimizationParameters::undistort,
                        "undistort", "Undistort", d.undistort,
-                       "Undistort images on-the-fly before training")
+                       "Remove lens distortion before training: each image and its mask, depth and "
+                       "normal map are resampled once from full resolution into a distortion-free "
+                       "pinhole camera, which training then uses. Alternative to --gut for distorted "
+                       "or non-pinhole cameras")
             .locale("training_params.undistort")
             .tooltip("training.tooltip.undistort")
             .flags(PROP_NEEDS_RESTART)

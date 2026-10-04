@@ -155,7 +155,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # (each comma becomes a separate ld argument). Use colons so the whole
     # list reaches ld as a single argument.
     set(_LFS_EXCLUDE_STATIC_ARCHIVES
-        "libpng16.a:libpng.a:libz.a:libjpeg.a:libturbojpeg.a:libtiff.a:libwebp.a:libwebpdecoder.a:libsharpyuv.a:liblzma.a:libdeflate.a:libzstd.a"
+        "libpng16.a:libpng.a:libz.a:libjpeg.a:libturbojpeg.a:libtiff.a:libwebp.a:libwebpdecoder.a:libsharpyuv.a:liblzma.a:libdeflate.a:libzstd.a:libOpenEXRCore-3_4.a:libOpenEXRCore.a:libImath-3_2.a:libImath-3_1.a:libopenjph.a"
     )
     string(APPEND CMAKE_EXE_LINKER_FLAGS    " -Wl,--exclude-libs,${_LFS_EXCLUDE_STATIC_ARCHIVES}")
     string(APPEND CMAKE_SHARED_LINKER_FLAGS " -Wl,--exclude-libs,${_LFS_EXCLUDE_STATIC_ARCHIVES}")
@@ -553,7 +553,7 @@ find_package(TIFF REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(WebP REQUIRED)
-find_package(tinyexr CONFIG REQUIRED)
+find_package(OpenEXR 3.4.15 CONFIG REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(libdeflate CONFIG REQUIRED)
@@ -720,6 +720,10 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_runtime_tools.cpp
     src/app/mcp_sequencer_tools.cpp
     src/app/mcp_screen_tools.cpp
+    src/app/mcp_node_tools.cpp
+    src/app/mcp_node_resources.cpp
+    src/app/mcp_node_editor_tools.cpp
+    src/app/mcp_pointer_tool.cpp
     src/app/mcp_ui_registry_tools.cpp
     src/app/converter.cpp
     src/app/converter_output_paths.cpp
@@ -939,6 +943,15 @@ if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
     else()
         set(_vcpkg_debug_dlls)
     endif()
+
+    # Core-only builds install none of these DLLs. Test-enabled builds also
+    # install the C++ oracle; keep its DLLs out of the application directory.
+    set(_lfs_exr_cpp_dll_pattern "^$")
+    if(TARGET OpenEXR::OpenEXR)
+        set(_lfs_exr_cpp_dll_pattern "/(OpenEXR|OpenEXRUtil|Iex|IlmThread|Imath)-3_[0-9]+(_d)?[.]dll$")
+    endif()
+    list(FILTER _vcpkg_release_dlls EXCLUDE REGEX "${_lfs_exr_cpp_dll_pattern}")
+    list(FILTER _vcpkg_debug_dlls EXCLUDE REGEX "${_lfs_exr_cpp_dll_pattern}")
 
     # Always copy release DLLs - needed for both Release and Debug builds
     if(_vcpkg_release_dlls)
@@ -1486,6 +1499,8 @@ if(LFS_MACOS_PORTABLE_APP)
 else()
     install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
 endif()
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/resources/licenses/"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/LichtFeld-Studio/licenses")
 
 set(INSTALL_RESOURCE_DIR "${CMAKE_INSTALL_DATADIR}/LichtFeld-Studio")
 if(_LFS_VULKAN_RASTERIZER_SPV_DIR)
@@ -1672,6 +1687,7 @@ if(BUILD_PORTABLE)
             # Copy vcpkg DLLs
             if(EXISTS \"${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin\")
                 file(GLOB _vcpkg \"${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/*.dll\")
+                list(FILTER _vcpkg EXCLUDE REGEX \"${_lfs_exr_cpp_dll_pattern}\")
                 foreach(_v IN LISTS _vcpkg)
                     file(INSTALL \"\${_v}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
                 endforeach()

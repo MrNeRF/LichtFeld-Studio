@@ -298,8 +298,7 @@ namespace lfs::vis {
                     std::optional<std::uint32_t> owed;
                     if (camera_navigating_) {
                         const auto stats = arena_->turn_stats();
-                        owed = trainingTurnsPerViewerFrame(stats.viewer_turn_ms + stats.viewer_record_ms, stats.training_step_ms,
-                                                           kTrainingFramesPerNavigationRender);
+                        owed = trainingTurnsPerViewerFrame(stats.viewer_turn_ms + stats.viewer_record_ms, stats.training_step_ms);
                     }
                     releaseViewerArenaFrame(*arena_, frame_id_, handoff_token_, owed);
                 }
@@ -310,9 +309,9 @@ namespace lfs::vis {
             // wait after them; the arena admits its next tenant only after that
             // wait's event completes. A device sync alone cannot observe Vulkan
             // work still reading the shared scratch.
-            void noteVulkanRelease(cudaExternalSemaphore_t semaphore, std::uint64_t value) const {
+            void awaitVulkanRelease(cudaExternalSemaphore_t semaphore, std::uint64_t value) const {
                 if (arena_ && frame_active_ && semaphore != nullptr) {
-                    arena_->note_external_release(semaphore, value, lfs::core::getCurrentCUDAStream());
+                    arena_->await_external_release(semaphore, value, lfs::core::getCurrentCUDAStream());
                 }
             }
 
@@ -7884,7 +7883,7 @@ namespace lfs::vis {
                 ring_.publishCompletion(ring_slot, completion_value);
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
                 if (overlay_arena_guard) {
-                    overlay_arena_guard->noteVulkanRelease(renderCompleteFence(), completion_value);
+                    overlay_arena_guard->awaitVulkanRelease(renderCompleteFence(), completion_value);
                 }
 #endif
             }
@@ -7902,7 +7901,7 @@ namespace lfs::vis {
         ring_.publishCompletion(ring_slot, completion_value);
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (overlay_arena_guard) {
-            overlay_arena_guard->noteVulkanRelease(renderCompleteFence(), completion_value);
+            overlay_arena_guard->awaitVulkanRelease(renderCompleteFence(), completion_value);
         }
 #endif
         if (live_submit_callback_) {
@@ -9073,7 +9072,7 @@ namespace lfs::vis {
                                                           {target.value, lod_feedback_model_generation_, lod_feedback_tree_generation_});
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
                 if (shared_arena_guard) {
-                    shared_arena_guard->noteVulkanRelease(renderCompleteFence(), completion_value);
+                    shared_arena_guard->awaitVulkanRelease(renderCompleteFence(), completion_value);
                 }
 #endif
                 if (live_submit_callback_) {
@@ -9103,7 +9102,7 @@ namespace lfs::vis {
         resident_model_snapshot_ = makeModelInputSnapshot(splat_data);
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (shared_arena_guard) {
-            shared_arena_guard->noteVulkanRelease(renderCompleteFence(), completion_value);
+            shared_arena_guard->awaitVulkanRelease(renderCompleteFence(), completion_value);
         }
 #endif
         if (live_submit_callback_) {
