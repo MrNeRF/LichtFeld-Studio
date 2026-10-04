@@ -85,8 +85,60 @@ namespace lfs::vis {
             return geometry;
         }
 
+        constexpr std::size_t kShN = 2;
+
+        std::array<const core::Tensor*, 6> attributes(const lfs::nodes::SplatsComponent& splats) {
+            return {&splats.means, &splats.sh0, &splats.shN, &splats.scaling, &splats.rotation, &splats.opacity};
+        }
+
+        std::array<core::Tensor*, 6> attributes(core::SplatData& splats) {
+            return {&splats.means_raw(), &splats.sh0_raw(), &splats.shN_raw(),
+                    &splats.scaling_raw(), &splats.rotation_raw(), &splats.opacity_raw()};
+        }
+
+        // Callers keep `right` alive, so no other allocation can share its address.
+        bool same_tensor(const core::Tensor& left, const core::Tensor& right) {
+            return left.is_valid() && right.is_valid() && left.numel() > 0 && left.shape() == right.shape() &&
+                   left.dtype() == right.dtype() && left.data_ptr() == right.data_ptr();
+        }
+
+        // Splats for publication; attributes that are still the source's own tensors come from what was
+        // published for them last time.
+        std::shared_ptr<core::SplatData> publishable(const Geometry& output, const lfs::nodes::SplatsComponent* source,
+                                                     const ModifierPublishedAttributes* record) {
+            std::array<core::Tensor, 6> reused;
+            if (source && record) {
+                const auto out = attributes(*output.splats);
+                const auto in = attributes(*source);
+                for (std::size_t i = 0; i < reused.size(); ++i)
+                    if (record->published[i].is_valid() && same_tensor(*out[i], *in[i]) &&
+                        same_tensor(record->source[i], *in[i]))
+                        reused[i] = record->published[i];
+            }
+            std::shared_ptr<core::SplatData> splats;
+            if (reused[kShN].is_valid()) {
+                const auto& s = *output.splats;
+                splats = std::make_shared<core::SplatData>(
+                    s.sh_degree, s.means, s.sh0.ndim() == 2 ? s.sh0.unsqueeze(1) : s.sh0, reused[kShN], s.scaling,
+                    s.rotation, s.opacity.ndim() == 1 ? s.opacity.unsqueeze(1) : s.opacity, s.scene_scale,
+                    core::SplatData::ShNLayout::Swizzled);
+                if (record->shN_bounds.is_valid())
+                    splats->set_active_sh_degree(s.sh_degree, record->shN_bounds);
+                else
+                    splats->set_active_sh_degree(s.sh_degree);
+            } else {
+                splats = std::shared_ptr<core::SplatData>(lfs::nodes::splat_data_from_geometry(output).release());
+            }
+            const auto targets = attributes(*splats);
+            for (std::size_t i = 0; i < reused.size(); ++i)
+                if (i != kShN && reused[i].is_valid())
+                    *targets[i] = reused[i];
+            return splats;
+        }
+
         void preparePayload(const ModifierObjectSnapshot& node, ModifierHostResult& result,
-                            const core::SplatTensorAllocator& allocator) {
+                            const core::SplatTensorAllocator& allocator, const lfs::nodes::SplatsComponent* source,
+                            ModifierPublishedAttributes* record) {
             std::shared_ptr<core::SplatData> splats;
             std::shared_ptr<core::PointCloud> points;
             std::shared_ptr<core::MeshData> mesh;
@@ -145,8 +197,7 @@ namespace lfs::vis {
                             component.rotation = component.rotation.to(core::Device::GPU);
                             component.opacity = component.opacity.to(core::Device::GPU);
                         }
-                        splats = std::shared_ptr<core::SplatData>(
-                            lfs::nodes::splat_data_from_geometry(output).release());
+                        splats = publishable(output, source, record);
                     } else {
                         splats = std::shared_ptr<core::SplatData>(
                             lfs::nodes::splat_data_from_geometry(output).release());
@@ -165,6 +216,7 @@ namespace lfs::vis {
             // also separates them from the worker cache.
             if (result.splats) {
                 const auto backend = core::gpu_backend_of(result.splats->means_raw());
+                bool shared = true;
                 switch (backend ? core::splat_publication(*backend) : core::SplatPublication::Copied) {
                 case core::SplatPublication::RendererStorage:
                     if (allocator) {
@@ -175,9 +227,26 @@ namespace lfs::vis {
                     [[fallthrough]];
                 case core::SplatPublication::Copied:
                     result.splats = std::make_shared<core::SplatData>(result.splats->clone());
+                    shared = false;
                     break;
                 case core::SplatPublication::Shared:
                     break;
+                }
+                if (record) {
+                    ModifierPublishedAttributes next;
+                    if (shared && source && result.evaluation.geometry.splats) {
+                        const auto out = attributes(*result.evaluation.geometry.splats);
+                        const auto in = attributes(*source);
+                        const auto published = attributes(*result.splats);
+                        for (std::size_t i = 0; i < next.published.size(); ++i)
+                            if (same_tensor(*out[i], *in[i])) {
+                                next.source[i] = *in[i];
+                                next.published[i] = *published[i];
+                            }
+                        if (next.published[kShN].is_valid())
+                            next.shN_bounds = result.splats->shN_value_bounds();
+                    }
+                    *record = std::move(next);
                 }
             }
             if (result.points) {
@@ -386,9 +455,10 @@ namespace lfs::vis {
                          std::unordered_map<std::string, EvalCache>& caches,
                          std::function<const Geometry&(const ModifierObjectSnapshot&)> source,
                          const std::unordered_map<core::Uuid, ModifierHostResult>& previous,
+                         std::unordered_map<core::Uuid, ModifierPublishedAttributes>& published,
                          const EvalControl& control,
                          std::function<void(const core::Uuid&, const std::string&, const NodeTree&)> stack_started)
-                : request_(request), registry_(registry), caches_(caches), source_(std::move(source)), previous_(previous), control_(control), stack_started_(std::move(stack_started)) {}
+                : request_(request), registry_(registry), caches_(caches), source_(std::move(source)), previous_(previous), published_(published), control_(control), stack_started_(std::move(stack_started)) {}
 
             std::uint64_t generation() const override { return request_.generation; }
             std::span<const EvaluationCamera> cameras() const override { return request_.cameras; }
@@ -530,8 +600,15 @@ namespace lfs::vis {
                                                   modifier.uuid, result, control_.cancelled,
                                                   [this](const std::string_view uuid) { return resolveTree(uuid); });
                         }
-                        if ((result.enabled || request_.bake) && !control_.cancelled())
-                            preparePayload(object, result, request_.splat_allocator);
+                        if ((result.enabled || request_.bake) && !control_.cancelled()) {
+                            // A bake hands its payload to the scene, so it shares nothing with the viewport's.
+                            const lfs::nodes::SplatsComponent* source = nullptr;
+                            if (!request_.bake)
+                                if (const auto& geometry = source_(object); geometry.splats)
+                                    source = &*geometry.splats;
+                            preparePayload(object, result, request_.splat_allocator, source,
+                                           request_.bake ? nullptr : &published_[object.uuid]);
+                        }
                     }
                 }
                 result.evaluation.total_time_ms =
@@ -563,6 +640,7 @@ namespace lfs::vis {
             std::unordered_map<std::string, EvalCache>& caches_;
             std::function<const Geometry&(const ModifierObjectSnapshot&)> source_;
             const std::unordered_map<core::Uuid, ModifierHostResult>& previous_;
+            std::unordered_map<core::Uuid, ModifierPublishedAttributes>& published_;
             const EvalControl& control_;
             std::function<void(const core::Uuid&, const std::string&, const NodeTree&)> stack_started_;
             std::unordered_set<core::Uuid> active_;
@@ -720,6 +798,7 @@ namespace lfs::vis {
                 previous_meshes = std::move(source_meshes_);
                 sources_.clear();
                 previous_hosts_.clear();
+                published_.clear();
                 source_generation_ = request.source_generation;
             }
             // Sources are copied only for objects this request evaluates or reads.
@@ -760,7 +839,7 @@ namespace lfs::vis {
                     progress_.completed = progress_.finished_nodes.size();
                     progress_.node.clear(); },
                 .propagate_out_of_memory = true};
-            SnapshotHost host(request, registry_, caches_, source, previous_hosts_, control,
+            SnapshotHost host(request, registry_, caches_, source, previous_hosts_, published_, control,
                               [&](const core::Uuid& uuid, const std::string& modifier, const lfs::nodes::NodeTree& tree) {
                                   std::unordered_map<std::string, std::vector<std::string>> parents;
                                   for (const auto& link : tree.links)
@@ -809,6 +888,7 @@ namespace lfs::vis {
                 // of an object is removed or hidden. A bake covers one object only.
                 if (!request.bake) {
                     std::erase_if(sources_, [&](const auto& entry) { return !used_sources.contains(entry.first); });
+                    std::erase_if(published_, [&](const auto& entry) { return !used_sources.contains(entry.first); });
                     std::erase_if(source_meshes_, [&](const auto& entry) { return !used_sources.contains(entry.first); });
                     if (source_meshes_.empty())
                         source_devices_.clear();
@@ -835,6 +915,7 @@ namespace lfs::vis {
                 source_meshes_.clear();
                 source_devices_.clear();
                 previous_hosts_.clear();
+                published_.clear();
                 result.hosts.clear();
                 core::Tensor::trim_memory_pool();
                 attempt();

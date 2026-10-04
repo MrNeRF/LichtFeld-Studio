@@ -7,6 +7,7 @@
 #include "core/splat_data_transform.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 #include "scene/scene_manager.hpp"
 #include "sequencer/interpolation.hpp"
 #include "sequencer/sequencer_controller.hpp"
@@ -1650,6 +1651,68 @@ TEST_F(NodesModifierManager, CachedRequestReusesPublishedPayloadWithoutSharingWo
     EXPECT_TRUE(cached.unchanged);
     EXPECT_EQ(node->evaluated_model, payload);
     EXPECT_TRUE(manager.performance()["node_runs"].empty());
+}
+
+// An edit that changes only opacity republishes the other attributes from the previous payload's
+// storage where the payload is shared with the renderer, and every published value stays exact.
+TEST_F(NodesModifierManager, OpacityEditRepublishesUntouchedAttributes) {
+    using lfs::core::Device;
+    using lfs::core::Tensor;
+    for_each_worker_target([](const Device device) {
+        const auto values = [&](const std::vector<std::size_t>& shape, const float scale, const int seed) {
+            std::size_t count = 1;
+            for (const auto extent : shape)
+                count *= extent;
+            std::vector<float> data(count);
+            for (std::size_t i = 0; i < count; ++i)
+                data[i] = scale * std::sin(0.37f * static_cast<float>(i) + static_cast<float>(seed));
+            return Tensor::from_vector(data, lfs::core::TensorShape(shape), Device::CPU).to(device);
+        };
+        lfs::vis::SceneManager scene;
+        scene.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        const auto id = scene.getScene().addSplat(
+            "Host", std::make_unique<lfs::core::SplatData>(
+                        1, values({7, 3}, 2.0f, 1), values({7, 1, 3}, 0.5f, 2), values({7, 3, 3}, 0.3f, 3),
+                        values({7, 3}, 0.2f, 4), values({7, 4}, 1.0f, 5), values({7, 1}, 1.0f, 6), 1.0f));
+        const auto uuid = scene.getScene().getNodeUuid(id);
+        auto& manager = scene.modifierManager();
+        auto& tree = manager.newTree("Opacity");
+        tree.add_node("lfs.set_opacity", "Opacity").input_values["Opacity"] = 0.25f;
+        ASSERT_TRUE(tree.remove_link(
+            {tree.input_node().name, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Opacity", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Opacity", "Geometry", tree.output_node().name, "Geometry"}));
+        manager.addModifier(uuid, tree.uuid);
+        ASSERT_TRUE(manager.evaluate(uuid).ok);
+        const auto* node = scene.getScene().getNodeById(id);
+        const auto first = node->evaluated_model;
+        ASSERT_NE(first, nullptr);
+
+        const auto before = tree.to_json();
+        tree.find_node("Opacity")->input_values["Opacity"] = 0.75f;
+        manager.recordTreeEdit(tree.uuid, before);
+        const auto result = manager.evaluate(uuid);
+        ASSERT_TRUE(result.ok);
+        const auto second = node->evaluated_model;
+        ASSERT_NE(second, nullptr);
+        ASSERT_NE(second, first);
+        const auto backend = lfs::core::gpu_backend_of(second->means_raw());
+        if (backend && lfs::core::splat_publication(*backend) == lfs::core::SplatPublication::Shared) {
+            EXPECT_EQ(second->means_raw().data_ptr(), first->means_raw().data_ptr());
+            EXPECT_EQ(second->shN_raw().data_ptr(), first->shN_raw().data_ptr());
+            EXPECT_NE(second->opacity_raw().data_ptr(), first->opacity_raw().data_ptr());
+        }
+        const auto expected = lfs::nodes::splat_data_from_geometry(result.geometry);
+        const auto expect_equal = [](const Tensor& actual, const Tensor& wanted, const char* name) {
+            EXPECT_EQ(actual.cpu().contiguous().to_vector(), wanted.cpu().contiguous().to_vector()) << name;
+        };
+        expect_equal(second->means_raw(), expected->means_raw(), "means");
+        expect_equal(second->sh0_raw(), expected->sh0_raw(), "sh0");
+        expect_equal(second->shN_canonical(), expected->shN_canonical(), "shN");
+        expect_equal(second->scaling_raw(), expected->scaling_raw(), "scaling");
+        expect_equal(second->rotation_raw(), expected->rotation_raw(), "rotation");
+        expect_equal(second->opacity_raw(), expected->opacity_raw(), "opacity");
+    });
 }
 
 TEST_F(NodesModifierManager, WorkerDiscardsSupersededResultsAndInstallsOnViewer) {

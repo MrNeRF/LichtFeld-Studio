@@ -6,6 +6,7 @@
 #include "core/tensor_upload.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -61,6 +62,15 @@ namespace lfs::vis {
 
     // A single queue owner. Only immutable captures cross into the worker; only
     // fence-complete results cross back. Live Scene and DOM are never accessed.
+    // Renderer-ready tensors last published for the attributes that were still the source object's
+    // own tensors (means, sh0, shN, scaling, rotation, opacity), so an edit that leaves an attribute
+    // untouched republishes it without a copy, pack or encode.
+    struct ModifierPublishedAttributes {
+        std::array<core::Tensor, 6> source;
+        std::array<core::Tensor, 6> published;
+        core::Tensor shN_bounds;
+    };
+
     class ModifierEvaluationWorker {
     public:
         explicit ModifierEvaluationWorker(const lfs::nodes::NodeTypeRegistry& registry);
@@ -98,6 +108,7 @@ namespace lfs::vis {
         std::unordered_map<core::Uuid, std::shared_ptr<const core::MeshData>> source_meshes_;
         std::unordered_map<core::Uuid, ModifierHostResult> previous_hosts_;
         std::uint64_t source_generation_ = 0;
+        std::unordered_map<core::Uuid, ModifierPublishedAttributes> published_;
         lfs::nodes::GeometryDeviceCache source_devices_;
         bool holding_freed_memory_ = false;
         std::jthread thread_;

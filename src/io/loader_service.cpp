@@ -106,8 +106,11 @@ namespace lfs::io {
                 return {};
             }
 
+            // Tensors already in renderer storage, such as attributes republished unchanged, stay as they are.
             const auto copy_to_allocator =
                 [&](const lfs::core::Tensor& source, const std::string_view name) -> lfs::core::Tensor {
+                if (source.is_valid() && source.numel() > 0 && source.is_contiguous() && splat_tensor_renderer_ready(source))
+                    return source;
                 lfs::core::Tensor source_contiguous = source.is_contiguous() ? source : source.contiguous();
                 const auto& shape = source_contiguous.shape();
                 const size_t capacity = shape.rank() > 0 ? shape[0] : source_contiguous.numel();
