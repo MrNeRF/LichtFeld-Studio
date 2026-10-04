@@ -43,6 +43,10 @@
 namespace lfs::training {
 
     namespace {
+        // LPIPS tiles exactly, so its activation budget only trades speed for memory; 384 MiB keeps
+        // 10 MP evaluation at full speed instead of reserving 1.5 GiB on top of training.
+        constexpr std::size_t kEvalLpipsActivationBudget = 384ULL << 20;
+
         struct TensorLayoutInfo {
             int n;
             int c;
@@ -165,6 +169,8 @@ namespace lfs::training {
     } // namespace
 
     lfs::core::Tensor image_for_metrics_and_save(const lfs::core::Tensor& image) {
+        if (image.device() == lfs::core::Device::CUDA)
+            return kernels::quantize_to_8bit_grid(image);
         return image.clamp(0.0f, 1.0f)
             .mul(255.0f)
             .add(0.5f)
@@ -1150,7 +1156,7 @@ namespace lfs::training {
             try {
                 auto loaded = lfs::core::nn::models::Lpips::load(
                     weights_path, lfs::core::Device::CUDA, lfs::core::DataType::Float16,
-                    lfs::core::nn::models::InputScaling::Identity);
+                    lfs::core::nn::models::InputScaling::Identity, kEvalLpipsActivationBudget);
                 if (loaded) {
                     _lpips_metric.emplace(std::move(*loaded));
                 } else {
@@ -1276,7 +1282,7 @@ namespace lfs::training {
             view.masked = mask.is_valid();
             evaluated_images++;
 
-            const auto gt_float = image_as_float01(gt_image).clamp(0.0f, 1.0f);
+            const auto gt_float = image_as_float01(gt_image).clamp(0.0f, 1.0f).contiguous();
             std::optional<float> lpips;
             if (_lpips_metric) {
                 try {

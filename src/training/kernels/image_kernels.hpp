@@ -34,6 +34,9 @@ namespace lfs::training::kernels {
         float skip_below = 0.0f,
         cudaStream_t stream = nullptr);
 
+    // Rounds float values in [0, 1] to the nearest 8-bit level, as saving and reloading the image would.
+    lfs::core::Tensor quantize_to_8bit_grid(const lfs::core::Tensor& image);
+
     // out = rgb * alpha + background * (1 - alpha) for a CHW image (3 channels, uint8 or float in [0, 1]) and
     // an HW alpha. background_image ([3, H, W]) wins over background_color ([3]) when both are given.
     void launch_composite_over_background(
