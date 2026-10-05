@@ -246,7 +246,6 @@ body {
 
 #resolution-info,
 #resolution-input {
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     color: #cdd6f4;
 }
@@ -302,7 +301,6 @@ body {
     box-sizing: border-box;
     border-width: 1dp;
     border-radius: 6dp;
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     cursor: ew-resize;
     transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
@@ -327,7 +325,6 @@ body {
     z-index: 1;
     width: 100%;
     text-align: right;
-    font-family: "JetBrains Mono";
     font-size: 12dp;
 }
 
@@ -426,7 +423,6 @@ body {
 #sequence-fps-input {
     width: 100%;
     text-align: right;
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     color: #cdd6f4;
 }
@@ -750,7 +746,6 @@ body {
 
 #duration,
 #duration-input {
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     color: #cdd6f4;
 }

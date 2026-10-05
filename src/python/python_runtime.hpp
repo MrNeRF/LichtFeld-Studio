@@ -772,6 +772,15 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void update_selection(bool has_selection, int count);
     LFS_PYTHON_RUNTIME_API void flush_signals();
 
+    // UIList lookup crosses the extension/native layout boundary. Caller holds
+    // the GIL; the returned Python instance is a new reference, or nullptr.
+    using GetUIListInstanceCallback = void* (*)(const char* id);
+    using WrapUIListLayoutCallback = void* (*)(void* layout);
+    LFS_PYTHON_RUNTIME_API void set_uilist_callbacks(GetUIListInstanceCallback get_instance,
+                                                     WrapUIListLayoutCallback wrap_layout);
+    LFS_PYTHON_RUNTIME_API void* get_uilist_instance(const char* id);
+    LFS_PYTHON_RUNTIME_API void* wrap_uilist_layout(void* layout);
+
     // Viewport draw overlay - bridge from visualizer to Python draw handlers
     // view_matrix/proj_matrix: column-major 4x4, others: float arrays
     using HasViewportDrawHandlersCallback = bool (*)();

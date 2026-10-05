@@ -88,7 +88,7 @@ namespace lfs::gpu_ops {
     struct BackwardAdam {
         std::array<BackwardAdamParam, 6> groups;
         Out scale_reg_loss, opacity_reg_loss;
-        In sparsity_sigmoid, sparsity_z, sparsity_u, far_mask;
+        In sparsity_sigmoid, sparsity_z, sparsity_u;
 
         float beta1 = 0.9f;
         float beta2 = 0.999f;
@@ -98,10 +98,6 @@ namespace lfs::gpu_ops {
         float opacity_reg_weight = 0.f;
         float sparsity_rho = 0.f;
         float sparsity_grad_loss = 0.f;
-        float median_extent = 0.f;
-        float r_min = 1.f;
-        float r_max = 300.f;
-        bool per_splat_mean_step = false;
     };
 
     struct RasterResult {

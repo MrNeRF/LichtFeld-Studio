@@ -18,8 +18,6 @@ namespace lfs::io {
 
 namespace lfs::training {
 
-    class CameraDataset;
-
     /**
      * @brief Strategy interface for Gaussian splatting optimization.
      *
@@ -33,8 +31,6 @@ namespace lfs::training {
         virtual void initialize(const lfs::core::param::OptimizationParameters& optimParams) = 0;
 
         virtual void pre_step(int /*iter*/, RenderOutput& /*render_output*/) {}
-
-        virtual void post_render(int /*iter*/, RenderOutput& /*render_output*/) {}
 
         virtual void post_backward(int iter, RenderOutput& render_output) = 0;
 
@@ -69,10 +65,6 @@ namespace lfs::training {
         // Update the strategy's cached optimization parameters after checkpoint params are resolved.
         virtual void set_optimization_params(const lfs::core::param::OptimizationParameters&) {}
 
-        // Optional hook for strategies that need the training dataset (e.g., for view-based scoring)
-        virtual void set_training_dataset(std::shared_ptr<CameraDataset>) {}
-        virtual std::shared_ptr<CameraDataset> get_training_dataset() const { return {}; }
-
         virtual void set_image_loader(lfs::io::PipelinedImageLoader*) {}
 
         // Optional FastGS edge-scoring contract. The main backward writes one
@@ -81,9 +73,6 @@ namespace lfs::training {
         // view before adding it to its refine window.
         virtual lfs::core::Tensor edge_score_scratch(int /*iter*/) { return {}; }
         virtual void on_edge_score_accumulated(int /*iter*/) {}
-
-        // Whether post_render/post_backward read RenderOutput::depth this step.
-        virtual bool reads_render_depth(int /*iter*/) const { return false; }
     };
 
     class ICheckpointStateAdopter {

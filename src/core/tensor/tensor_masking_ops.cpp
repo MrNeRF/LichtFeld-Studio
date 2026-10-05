@@ -775,9 +775,9 @@ namespace lfs::core {
 
         pin_operands({&flat, &indices_int32});
         result = internal::allocate_like(*this, indices.shape(), dtype_);
-        const float* src = flat.ptr<float>();
+        const float* src = std::as_const(flat).ptr<float>();
         float* dst = result.ptr<float>();
-        const int* idx = indices_int32.ptr<int>();
+        const int* idx = std::as_const(indices_int32).ptr<int>();
         size_t total = flat.numel();
 
         // IMPORTANT: Use sequential execution to avoid TBB threading issues with CUDA

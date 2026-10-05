@@ -57,7 +57,7 @@ namespace lfs::training {
                 entry.lr = step.lr;
                 entry.bias_correction1_rcp = step.bc1_rcp;
                 entry.bias_correction2_sqrt_rcp = step.bc2_sqrt_rcp;
-                entry.apply_mean_step = step.apply_mean_step ? 1 : 0;
+
                 entry.apply_screen_share = step.apply_screen_share ? 1 : 0;
             }
             fast_lfs::optimizer::adam_step_joint_contiguous_batched(
@@ -73,13 +73,7 @@ namespace lfs::training {
                 hyper.beta2,
                 hyper.eps,
                 lfs::core::getCurrentCUDAStream(),
-                optional_ptr<float>(masks.raw_scales),
-                count(masks.raw_scales),
-                modifiers.median_extent,
-                modifiers.r_min,
-                modifiers.r_max,
-                optional_ptr<bool>(masks.far_mask),
-                count(masks.far_mask),
+
                 optional_ptr<float>(masks.screen_share),
                 count(masks.screen_share),
                 modifiers.screen_share_limit,
@@ -145,12 +139,7 @@ namespace lfs::training {
                 lfs::core::getCurrentCUDAStream());
         }
 
-        void validate_far_mask(const bool* pointer) {
-            LFS_VALIDATE_CUDA_DEVICE_POINTER(pointer, "mean_step_far_mask");
-        }
-
         const lfs::gpu_ops::AdamOps kCudaAdamOps{
-            .validate_far_mask = validate_far_mask,
             .step_batch = adam_step_batch,
             .step_sh = adam_step_sh,
             .encode_zero = adam_encode_zero,

@@ -5,8 +5,8 @@
 // CUDA kernels, on the inputs of the parity fixtures (capture_adam, capture_sh,
 // capture_morton) plus larger, Q16 and skipped-row cases.
 //
-// Bookkeeping, permutations, copies, bounds and the linear codecs (joint
-// moment re-encode, Q16) are exact. An Adam step's code may differ by one
+// Bookkeeping, copies and bounds are exact. Linear codec re-encoding may
+// differ by one code within one float ULP of a rounding boundary. An Adam step's code may differ by one
 // where the value it rounds lies within kAdamTie of a half step: the GPU's
 // fast log and exp differ from the CPU's in the last bits.
 
@@ -184,7 +184,7 @@ namespace {
         }
     };
 
-    void expect_codes(const std::vector<uint8_t>& actual_bytes, const Codes& expected, double window,
+    void expect_codes(const std::vector<uint8_t>& actual_bytes, const Codes& expected, std::optional<double> window,
                       const std::string& name) {
         const Codes actual(expected.bits, actual_bytes);
         ASSERT_EQ(actual.bytes.size(), expected.bytes.size()) << name;
@@ -194,7 +194,8 @@ namespace {
             if (a == e)
                 continue;
             const float x = expected.unrounded[i];
-            const bool tie = !std::isnan(x) && std::abs(x - std::floor(x) - 0.5f) <= window &&
+            const double tolerance = window.value_or(std::nextafter(x, std::numeric_limits<float>::infinity()) - x);
+            const bool tie = !std::isnan(x) && std::abs(x - std::floor(x) - 0.5f) <= tolerance &&
                              (a == e + 1 || e == a + 1);
             ASSERT_TRUE(tie) << name << " code " << i << ": " << a << " vs " << e << " from " << x;
         }
@@ -245,8 +246,8 @@ namespace {
     // ---- CPU Adam: adam_step_joint_contiguous_batched_cu, apply_shN_grads_packed_joint ----
 
     struct HostMasks {
-        std::vector<uint8_t> frozen, crop, far;
-        std::vector<float> raw_scales, share;
+        std::vector<uint8_t> frozen, crop;
+        std::vector<float> share;
     };
 
     // Rate after the frozen and crop-box factors; false when the step is skipped.
@@ -272,7 +273,7 @@ namespace {
         Codes packed{16, {}};
         int primitives = 0, attributes = 0;
         float lr = 0.f;
-        bool mean_step = false, screen_share = false;
+        bool screen_share = false;
     };
 
     void host_step_batch(HostStep& s, const HostMasks& m, const ops::AdamHyper& h, const ops::AdamModifiers& mod,
@@ -288,13 +289,6 @@ namespace {
                 const int prim = b * 256 + lane;
                 float rate = s.lr;
                 const bool apply = host_rate(m, mod, prim, rate);
-                if (s.mean_step && static_cast<size_t>(prim) < m.far.size() && m.far[prim] &&
-                    static_cast<size_t>(prim) * 3 + 2 < m.raw_scales.size() && mod.median_extent > 0.f) {
-                    const float extent = std::exp((m.raw_scales[prim * 3] + m.raw_scales[prim * 3 + 1] +
-                                                   m.raw_scales[prim * 3 + 2]) *
-                                                  (1.0f / 3.0f));
-                    rate *= std::clamp(extent / mod.median_extent, mod.r_min, mod.r_max);
-                }
                 const float step = rate * bc1_rcp;
                 for (int i = 0; i < s.attributes; ++i) {
                     const size_t cell = static_cast<size_t>(prim) * s.attributes + i;
@@ -417,24 +411,16 @@ namespace {
         constexpr size_t n = 700;
         constexpr ops::AdamModifiers modifiers{.frozen_lr_scale = 0.25f,
                                                .cropbox_lr_scale = 0.5f,
-                                               .median_extent = 1.5f,
-                                               .r_min = 1.f,
-                                               .r_max = 300.f,
                                                .screen_share_limit = 0.3f,
                                                .screen_share_penalty = 0.05f};
         constexpr ops::AdamHyper hyper{};
-        HostMasks hm{period_mask(n, 5), period_mask(n, 7), period_mask(n, 3), pattern(n * 3, 2.f, 17),
-                     pattern(n, 0.4f, 23)};
+        HostMasks hm{period_mask(n, 5), period_mask(n, 7), pattern(n, 0.4f, 23)};
         for (float& share : hm.share)
             share = std::abs(share);
         const Tensor frozen = upload(hm.frozen, {n}, DataType::Bool);
         const Tensor crop = upload(hm.crop, {n}, DataType::Bool);
-        const Tensor far = upload(hm.far, {n}, DataType::Bool);
-        const Tensor raw_scales = upload(hm.raw_scales, {n, 3}, DataType::Float32);
         const Tensor share = gpu_f(hm.share);
-        const ops::AdamMasks masks{frozen, crop, raw_scales, far, share};
-        adam->validate_far_mask(far.ptr<bool>());
-        EXPECT_THROW(adam->validate_far_mask(nullptr), std::invalid_argument);
+        const ops::AdamMasks masks{frozen, crop, share};
 
         constexpr std::array<int, 5> attrs{3, 3, 3, 4, 1};
         std::vector<HostStep> expected(attrs.size());
@@ -447,7 +433,6 @@ namespace {
             s.attributes = attrs[i];
             s.gradient = pattern(count * attrs[i], 1e-3f, static_cast<int>(10 * i + 1));
             s.lr = 0.01f * static_cast<float>(i + 1);
-            s.mean_step = i == 0;
             s.screen_share = i == 2;
             tensors.push_back({gpu_f(pattern(count * attrs[i], 0.5f, static_cast<int>(10 * i))),
                                Tensor::zeros({count, size_t(attrs[i]) * 4}, Device::GPU, DataType::UInt8),
@@ -456,7 +441,7 @@ namespace {
         }
         for (size_t i = 0; i < attrs.size(); ++i) {
             auto& t = tensors[i];
-            steps.push_back({.parameter = t[0], .packed = t[1], .bounds = t[2], .gradient = t[3], .primitives = expected[i].primitives, .attributes = expected[i].attributes, .bits = 16, .lr = expected[i].lr, .bc1_rcp = 10.f, .bc2_sqrt_rcp = static_cast<float>(1.0 / std::sqrt(0.001)), .apply_mean_step = expected[i].mean_step, .apply_screen_share = expected[i].screen_share});
+            steps.push_back({.parameter = t[0], .packed = t[1], .bounds = t[2], .gradient = t[3], .primitives = expected[i].primitives, .attributes = expected[i].attributes, .bits = 16, .lr = expected[i].lr, .bc1_rcp = 10.f, .bc2_sqrt_rcp = static_cast<float>(1.0 / std::sqrt(0.001)), .apply_screen_share = expected[i].screen_share});
         }
         for (int iteration = 0; iteration < 2; ++iteration) {
             for (size_t i = 0; i < attrs.size(); ++i) {
@@ -484,10 +469,10 @@ namespace {
         const uint32_t cells = quant::n_value_cells_per_prim(rest);
         const ops::AdamModifiers modifiers{.frozen_lr_scale = frozen_lr_scale, .cropbox_lr_scale = 0.5f};
         constexpr ops::AdamHyper hyper{};
-        const HostMasks hm{period_mask(n, 5), period_mask(n, 7), {}, {}, {}};
+        const HostMasks hm{period_mask(n, 5), period_mask(n, 7), {}};
         const Tensor frozen = upload(hm.frozen, {n}, DataType::Bool);
         const Tensor crop = upload(hm.crop, {n}, DataType::Bool);
-        const ops::AdamMasks masks{frozen, crop, {}, {}, {}};
+        const ops::AdamMasks masks{frozen, crop, {}};
         const ops::ShStepParams params{.primitives = static_cast<int>(n),
                                        .layout_slots = static_cast<int>(slots),
                                        .active_bases = q16 ? 9 : 4,
@@ -1057,7 +1042,20 @@ namespace {
             Tensor permuted_bounds = Tensor::zeros({bounds.size()}, Device::GPU);
             morton->permute_joint(packed_gpu, bounds_gpu, perm_gpu, permuted, permuted_bounds, codec);
             const auto one_shot = host<uint8_t>(permuted);
-            expect_equal(one_shot, expected.bytes, name + " packed");
+            // CUDA and the portable backend must produce identical codes. The CPU
+            // oracle can straddle a half-code boundary by one float ULP.
+            if (lfs::core::gpu_backend_available(GpuBackend::CUDA)) {
+                lfs::test::DefaultGpuBackendForTesting cuda_backend(GpuBackend::CUDA);
+                auto cuda_packed = upload(packed, {packed.size()}, DataType::UInt8);
+                auto cuda_bounds = gpu_f(bounds);
+                auto cuda_perm = upload(perm, {perm.size()}, DataType::Int64);
+                auto cuda_out = Tensor::zeros({packed.size()}, Device::GPU, DataType::UInt8);
+                auto cuda_out_bounds = Tensor::zeros({bounds.size()}, Device::GPU);
+                lfs::training::training_ops(GpuBackend::CUDA).morton->permute_joint(cuda_packed, cuda_bounds, cuda_perm, cuda_out, cuda_out_bounds, codec);
+                expect_equal(one_shot, host<uint8_t>(cuda_out), name + " CUDA packed");
+                expect_equal(host<float>(cuda_out_bounds), expected_bounds, name + " CUDA bounds");
+            }
+            expect_codes(one_shot, expected, std::nullopt, name + " packed");
             expect_equal(host<float>(permuted_bounds), expected_bounds, name + " bounds");
             if (!swizzled)
                 continue;

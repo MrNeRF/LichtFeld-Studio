@@ -8340,6 +8340,8 @@ namespace lfs::vis::gui {
             return true;
         if (global_context_menu_ && global_context_menu_->needsAnimationFrame())
             return true;
+        if (sequencer_ui_.needsAnimationFrame(!ui_hidden_))
+            return true;
         if (video_widget_ && video_widget_->isVideoPlaying())
             return true;
         if (ui_layout_settle_frames_ > 0)

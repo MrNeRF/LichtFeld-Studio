@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -31,8 +32,10 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <random>
 #include <string>
 #include <thread>
 #include <torch/torch.h>
@@ -300,6 +303,39 @@ TEST(EvalMetricsImage, QuantizesWithImageSaverRounding) {
     lfs::core::free_image(saved);
     std::error_code ec;
     std::filesystem::remove(path, ec);
+}
+
+TEST(MetricsEvaluatorTest, GpuQuantizationMatchesTensorExpressionBitwise) {
+    std::vector<float> values{0.0f, 1.0f, -0.0f, -1.0f, 2.0f, std::numeric_limits<float>::infinity(),
+                              -std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()};
+    for (int level = 0; level < 256; ++level) {
+        float boundary = (static_cast<float>(level) + 0.5f) / 255.0f;
+        for (int step = 0; step < 1024; ++step)
+            boundary = std::nextafter(boundary, 0.0f);
+        for (int step = 0; step < 2048; ++step) {
+            values.push_back(boundary);
+            boundary = std::nextafter(boundary, 1.0f);
+        }
+    }
+    std::mt19937 generator(7);
+    std::uniform_real_distribution<float> uniform(-0.25f, 1.25f);
+    for (int i = 0; i < (1 << 20); ++i)
+        values.push_back(uniform(generator));
+
+    const auto input = Tensor::from_vector(values, {values.size()}, Device::CUDA);
+    const auto expression = input.clamp(0.0f, 1.0f)
+                                .mul(255.0f)
+                                .add(0.5f)
+                                .to(DataType::UInt8)
+                                .to(DataType::Float32)
+                                .div(255.0f)
+                                .contiguous()
+                                .to_vector();
+    const auto quantized = image_for_metrics_and_save(input).to_vector();
+    ASSERT_EQ(quantized.size(), expression.size());
+    for (std::size_t i = 0; i < values.size(); ++i)
+        ASSERT_EQ(std::bit_cast<std::uint32_t>(quantized[i]), std::bit_cast<std::uint32_t>(expression[i]))
+            << "value " << values[i];
 }
 
 TEST(GeomMetricHelpers, MatchingNormalsYieldZeroAngle) {

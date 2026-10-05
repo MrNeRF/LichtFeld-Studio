@@ -528,8 +528,7 @@ namespace {
     // and regularizer tensors (absent unless a test sets them).
     struct AdamState {
         std::array<Tensor, 6> moments, bounds;
-        Tensor none, frozen, crop, screen_share, scale_loss, opacity_loss, sparsity_sigmoid, sparsity_z, sparsity_u,
-            far_mask;
+        Tensor none, frozen, crop, screen_share, scale_loss, opacity_loss, sparsity_sigmoid, sparsity_z, sparsity_u;
         float frozen_lr_scale = 0.0f, cropbox_lr_scale = 1.0f, screen_share_limit = 0.0f, screen_share_penalty = 0.0f;
     };
 
@@ -578,7 +577,6 @@ namespace {
                 .sparsity_sigmoid = state.sparsity_sigmoid,
                 .sparsity_z = state.sparsity_z,
                 .sparsity_u = state.sparsity_u,
-                .far_mask = state.far_mask,
                 .beta1 = setup.beta1,
                 .beta2 = setup.beta2,
                 .eps = setup.eps};
@@ -734,7 +732,7 @@ namespace {
         }
         const Rendered frozen = render(s, base, v, nullptr);
         const auto lists = frozen.lists;
-        auto derivative = [&](std::vector<double> Params::*member, const size_t index) {
+        auto derivative = [&](std::vector<double> Params::* member, const size_t index) {
             constexpr double h = 1e-5;
             Params p = base;
             (p.*member)[index] += h;
@@ -743,7 +741,7 @@ namespace {
             const double down = loss(render(s, p, v, &lists), w);
             return (up - down) / (2 * h);
         };
-        auto all = [&](std::vector<double> Params::*member, const size_t size) {
+        auto all = [&](std::vector<double> Params::* member, const size_t size) {
             std::vector<double> out(size);
             for (size_t i = 0; i < size; ++i)
                 out[i] = derivative(member, i);
@@ -986,7 +984,7 @@ namespace {
 
     double sigmoid(const double x) { return 1.0 / (1.0 + std::exp(-x)); }
 
-    // Masks, regularizers, sparsity, the per-splat mean step and the
+    // Masks, regularizers, sparsity and the
     // screen-share hinge on top of the render gradient, under the unit step.
     TEST_P(PortableFastRaster, FusedAdamTermsMatchReference) {
         Scene s = make_scene(24, 1, 48, 40, 61u, -2.3f, -1.6f);
@@ -997,24 +995,22 @@ namespace {
         const View view = make_view(s, false);
         const ReferenceGrads render = reference_grads(s, view, w, false);
 
-        std::vector<uint8_t> frozen(n, 0), crop(n, 0), far(n, 0);
+        std::vector<uint8_t> frozen(n, 0), crop(n, 0);
         std::vector<float> sparsity(n), z(n), u(n);
         std::mt19937 rng(3u);
         std::uniform_real_distribution<float> uniform(0.0f, 1.0f);
         for (size_t i = 0; i < n; ++i) {
             frozen[i] = i % 7 == 3;
             crop[i] = i % 5 == 1;
-            far[i] = i % 3 == 0;
             sparsity[i] = uniform(rng);
             z[i] = uniform(rng);
             u[i] = uniform(rng) - 0.5f;
         }
         constexpr float scale_w = 0.3f, flatten_w = 0.2f, opacity_w = 0.4f, rho = 0.7f, grad_loss = 0.5f;
-        constexpr float median = 0.1f, r_min = 1.0f, r_max = 300.0f, limit = 0.01f, penalty = 0.5f;
+        constexpr float limit = 0.01f, penalty = 0.5f;
         AdamState state;
         state.frozen = upload_mask(frozen);
         state.crop = upload_mask(crop);
-        state.far_mask = upload_mask(far);
         state.frozen_lr_scale = 0.0f;
         state.cropbox_lr_scale = 0.5f;
         state.scale_loss = Tensor::zeros({1}, Device::GPU);
@@ -1036,10 +1032,6 @@ namespace {
         adam.opacity_reg_weight = opacity_w;
         adam.sparsity_rho = rho;
         adam.sparsity_grad_loss = grad_loss;
-        adam.per_splat_mean_step = true;
-        adam.median_extent = median;
-        adam.r_min = r_min;
-        adam.r_max = r_max;
         const Tensor grad_image = plane(w.image, 3, s.height, s.width);
         Tensor none;
         fast_ops().backward(frame.saved, {.image = grad_image, .alpha = none, .depth = none, .normal = none}, none,
@@ -1052,8 +1044,6 @@ namespace {
         for (size_t i = 0; i < n; ++i) {
             const double row = frozen[i] ? 0.0 : (crop[i] ? 0.5 : 1.0);
             const double* sc = &base.scales[3 * i];
-            const double ratio =
-                far[i] ? std::clamp(std::exp((sc[0] + sc[1] + sc[2]) / 3.0) / median, double{r_min}, double{r_max}) : 1.0;
             const int axis = (sc[0] <= sc[1] && sc[0] <= sc[2]) ? 0 : (sc[1] <= sc[2] ? 1 : 2);
             const Splat splat = project(s, base, view, static_cast<int>(i), true);
             double expected_share = 0.0;
@@ -1067,7 +1057,7 @@ namespace {
             EXPECT_NEAR(share[i], expected_share, 1e-5) << "screen share " << i;
             const double hinge = share[i] > limit ? penalty * std::log2(share[i] / limit) : 0.0;
             for (int k = 0; k < 3; ++k) {
-                means[3 * i + k] = row * ratio * render.means[3 * i + k];
+                means[3 * i + k] = row * render.means[3 * i + k];
                 double grad = render.scales[3 * i + k] + scale_w * std::exp(sc[k]) / (3.0 * n) + hinge;
                 if (k == axis)
                     grad += 3.0 * flatten_w * std::exp(sc[k]) / (3.0 * n);
@@ -1130,7 +1120,7 @@ namespace {
         const float inf = std::numeric_limits<float>::infinity();
         struct Case {
             const char* name;
-            std::vector<float> Scene::*field;
+            std::vector<float> Scene::* field;
             int width;
             float value;
         };

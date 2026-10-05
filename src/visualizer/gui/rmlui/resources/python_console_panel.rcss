@@ -556,7 +556,6 @@ button.disabled {
 }
 
 .pkg-row {
-    font-family: "JetBrains Mono";
     font-size: 12dp;
 }
 

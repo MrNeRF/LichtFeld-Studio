@@ -849,8 +849,6 @@ namespace lfs::training {
             bwd_shN_bounds_ptr,
             bwd_shN_n_cells,
             bwd_shN_bits,
-            fused_adam.mean_step_far_mask,
-            fused_adam.mean_step_far_mask_n,
             edge_weight,
             edge_score);
 
@@ -939,15 +937,7 @@ namespace lfs::training {
         fused.opacity = fast_adam_group(adam.groups[static_cast<std::size_t>(AdamSlot::Opacity)]);
         fused.sh0 = fast_adam_group(adam.groups[static_cast<std::size_t>(AdamSlot::Sh0)]);
         fused.shN = fast_adam_group(adam.groups[static_cast<std::size_t>(AdamSlot::ShN)]);
-        fused.per_splat_mean_step = adam.per_splat_mean_step;
-        fused.mean_step_median_extent = adam.median_extent;
-        fused.mean_step_r_min = adam.r_min;
-        fused.mean_step_r_max = adam.r_max;
-        if (adam.far_mask.is_valid() && adam.far_mask.numel() > 0 && fused.means.n_primitives > 0) {
-            fused.mean_step_far_mask = adam.far_mask.ptr<bool>();
-            fused.mean_step_far_mask_n = std::min(
-                static_cast<int>(adam.far_mask.numel()), fused.means.n_primitives);
-        }
+
         fused.enabled = fused.means.enabled || fused.scaling.enabled || fused.rotation.enabled ||
                         fused.opacity.enabled || fused.sh0.enabled || fused.shN.enabled;
         return fused;

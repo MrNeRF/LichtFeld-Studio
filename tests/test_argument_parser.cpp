@@ -768,54 +768,6 @@ TEST(ArgumentParserTest, MortonReorderIntervalFlag) {
     EXPECT_EQ((*parsed_1000)->optimization.morton_reorder_interval, 1000u);
 }
 
-TEST(ArgumentParserTest, MrnfKnobFlagsParseAndPopulateExplicitOverrides) {
-    const auto data_path = make_test_path("lfs_arg_parser_mrnf_knobs_data");
-    const auto output_path = make_test_path("lfs_arg_parser_mrnf_knobs_output");
-
-    const char* argv[] = {
-        "LichtFeld-Studio",
-        "--headless",
-        "--data-path",
-        data_path.c_str(),
-        "--output-path",
-        output_path.c_str(),
-        "--no-growth-ratio-rank",
-        "--no-background-improvements",
-        "--growth-ratio-pow",
-        "0.5",
-        "--fill-pacing-iter",
-        "12000",
-        "--far-seed-dose",
-        "500"};
-
-    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
-    ASSERT_TRUE(parsed.has_value()) << parsed.error();
-
-    EXPECT_FALSE((*parsed)->optimization.growth_ratio_rank);
-    EXPECT_FALSE((*parsed)->optimization.background_improvements);
-    EXPECT_FLOAT_EQ((*parsed)->optimization.growth_ratio_pow, 0.5f);
-    EXPECT_EQ((*parsed)->optimization.fill_pacing_iter, 12000u);
-    EXPECT_EQ((*parsed)->optimization.far_seed_dose, 500u);
-    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("growth_ratio_rank"));
-    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("background_improvements"));
-    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("growth_ratio_pow"));
-    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("fill_pacing_iter"));
-    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("far_seed_dose"));
-
-    lfs::core::param::TrainingParameters restored;
-    restored.optimization.growth_ratio_rank = true;
-    restored.optimization.background_improvements = true;
-    restored.optimization.growth_ratio_pow = 0.75f;
-    restored.optimization.fill_pacing_iter = 15'000;
-    restored.optimization.far_seed_dose = 2'000;
-    apply_explicit_training_overrides(restored, (*parsed)->overrides);
-    EXPECT_FALSE(restored.optimization.growth_ratio_rank);
-    EXPECT_FALSE(restored.optimization.background_improvements);
-    EXPECT_FLOAT_EQ(restored.optimization.growth_ratio_pow, 0.5f);
-    EXPECT_EQ(restored.optimization.fill_pacing_iter, 12000u);
-    EXPECT_EQ(restored.optimization.far_seed_dose, 500u);
-}
-
 TEST(ArgumentParserTest, SafeModeIsProcessLocalAndNotATrainingConfigurationOption) {
     const auto data_path = make_test_path("lfs_arg_parser_safe_mode_data");
     const auto output_path = make_test_path("lfs_arg_parser_safe_mode_output");
@@ -2300,13 +2252,12 @@ TEST(ArgumentParserTest, IterationsAloneRescalesTimetable) {
 // Catches step scaling applied after explicit CLI step values.
 TEST(ArgumentParserTest, ScalingPrecedesAbsoluteStepOverrides) {
     const char* argv[]{"LichtFeld-Studio", "--steps-scaler", "0.5", "--sh-degree-interval", "1000",
-                       "--morton-reorder-interval", "3000", "--fill-pacing-iter", "1234", "--eval", "--eval-steps", "1000"};
+                       "--morton-reorder-interval", "3000", "--eval", "--eval-steps", "1000"};
     const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed) << parsed.error();
     const auto& opt = (*parsed)->optimization;
     EXPECT_EQ(opt.sh_degree_interval, 1000u);
     EXPECT_EQ(opt.morton_reorder_interval, 3000u);
-    EXPECT_EQ(opt.fill_pacing_iter, 1234u);
     EXPECT_EQ(opt.eval_steps, std::vector<size_t>{1000});
     EXPECT_EQ(opt.iterations, 15000u);
     EXPECT_EQ(opt.stop_refine, 14250u);
@@ -2315,7 +2266,6 @@ TEST(ArgumentParserTest, ScalingPrecedesAbsoluteStepOverrides) {
     lfs::core::param::TrainingParameters restored;
     apply_explicit_training_overrides(restored, (*parsed)->overrides);
     EXPECT_EQ(restored.optimization.morton_reorder_interval, 3000u);
-    EXPECT_EQ(restored.optimization.fill_pacing_iter, 1234u);
     EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>{1000});
 }
 

@@ -2571,7 +2571,6 @@ namespace lfs::training {
             }
 
             // Re-initialize strategy with new parameters
-            strategy_->set_training_dataset(train_dataset_);
             strategy_->initialize(get_runtime_optimization_params());
             apply_frozen_ranges_to_optimizer(
                 splat,
@@ -3543,6 +3542,27 @@ namespace lfs::training {
         return request_id;
     }
 
+    // Step-boundary saves and explicit requests consume the shared prestaged
+    // slot, so the at-iteration hook reserves again when its chapters are gone.
+    void Trainer::reserve_project_hook_chapters() {
+        {
+            std::lock_guard lock(project_snapshot_mutex_);
+            if (prestaged_project_chapters_)
+                return;
+        }
+        auto chapters = reserve_project_snapshot_chapters();
+        std::lock_guard lock(project_snapshot_mutex_);
+        if (prestaged_project_chapters_)
+            return;
+        if (!chapters) {
+            LOG_ERROR("Cannot reserve .licht snapshot UUID for save-project-at-iter: {}",
+                      lfs::format_for_developer(chapters.error()));
+            return;
+        }
+        prestaged_project_chapters_ = std::move(*chapters);
+        prestaged_project_request_id_ = 0;
+    }
+
     void Trainer::cancel_project_snapshot_request(
         const std::uint64_t request_id,
         const lfs::Error& reason) {
@@ -3863,6 +3883,8 @@ namespace lfs::training {
             return;
         }
 
+        if (request_id == 0)
+            reserve_project_hook_chapters();
         lfs::core::Uuid snapshot_uuid;
         {
             std::lock_guard lock(
@@ -6145,8 +6167,7 @@ namespace lfs::training {
                             const bool render_depth =
                                 render_normal ||
                                 (params_.optimization.use_depth_loss &&
-                                 params_.optimization.depth_loss_weight > 0.0f) ||
-                                strategy_->reads_render_depth(iter);
+                                 params_.optimization.depth_loss_weight > 0.0f);
                             const MutationStamp forward_stamp{
                                 static_cast<std::uint64_t>(iter), mutation_epoch_,
                                 StepPhase::Forward, fastgs_strategy_hooks_at_start};
@@ -7272,25 +7293,23 @@ namespace lfs::training {
                                         error_map,
                                         edge_weight_scoring_active_ ? edge_weight_map : none,
                                         edge_weight_scoring_active_ ? edge_score_scratch : none,
-                                        {.groups = prepared.groups,
-                                         .scale_reg_loss = scale_loss,
-                                         .opacity_reg_loss = opacity_loss,
-                                         .sparsity_sigmoid = sparsity_sigmoid,
-                                         .sparsity_z = sparsity_z,
-                                         .sparsity_u = sparsity_u,
-                                         .far_mask = prepared.far_mask,
-                                         .beta1 = prepared.beta1,
-                                         .beta2 = prepared.beta2,
-                                         .eps = prepared.eps,
-                                         .scale_reg_weight = fused_extra_gradients.scale_reg_weight,
-                                         .flatten_reg_weight = fused_extra_gradients.flatten_reg_weight,
-                                         .opacity_reg_weight = fused_extra_gradients.opacity_reg_weight,
-                                         .sparsity_rho = fused_extra_gradients.sparsity_rho,
-                                         .sparsity_grad_loss = fused_extra_gradients.sparsity_grad_loss,
-                                         .median_extent = prepared.median_extent,
-                                         .r_min = prepared.r_min,
-                                         .r_max = prepared.r_max,
-                                         .per_splat_mean_step = prepared.per_splat_mean_step},
+                                        {
+                                            .groups = prepared.groups,
+                                            .scale_reg_loss = scale_loss,
+                                            .opacity_reg_loss = opacity_loss,
+                                            .sparsity_sigmoid = sparsity_sigmoid,
+                                            .sparsity_z = sparsity_z,
+                                            .sparsity_u = sparsity_u,
+
+                                            .beta1 = prepared.beta1,
+                                            .beta2 = prepared.beta2,
+                                            .eps = prepared.eps,
+                                            .scale_reg_weight = fused_extra_gradients.scale_reg_weight,
+                                            .flatten_reg_weight = fused_extra_gradients.flatten_reg_weight,
+                                            .opacity_reg_weight = fused_extra_gradients.opacity_reg_weight,
+                                            .sparsity_rho = fused_extra_gradients.sparsity_rho,
+                                            .sparsity_grad_loss = fused_extra_gradients.sparsity_grad_loss,
+                                        },
                                         densification_type);
                                     if (fastgs_adam_enabled(prepared)) {
                                         optimizer.commit_fastgs_fused_adam(iter);
@@ -7310,9 +7329,6 @@ namespace lfs::training {
                     }
 
                     lfs::core::pop_gpu_range(); // End rasterize
-                    if (strategy_ && !in_sparsification) {
-                        strategy_->post_render(iter, r_output);
-                    }
                 }
 
                 if (tiles_processed == 0) {
@@ -7746,6 +7762,9 @@ namespace lfs::training {
                                                             val_dataset_,
                                                             background_,
                                                             evaluation_image_loader.get());
+                        if (PerfBenchCollector::enabled() && metrics.valid) {
+                            PerfBenchCollector::instance().set_psnr(metrics.psnr);
+                        }
                         if (evaluator_->has_appearance()) {
                             const int n = eval_ppisp_applied_.load();
                             const int k = eval_ppisp_exif_.load();
@@ -8511,6 +8530,9 @@ namespace lfs::training {
                                                     val_dataset_,
                                                     background_,
                                                     evaluation_image_loader.get());
+                if (PerfBenchCollector::enabled() && metrics.valid) {
+                    PerfBenchCollector::instance().set_psnr(metrics.psnr);
+                }
                 LOG_INFO("{}", metrics.to_string());
                 if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
                     training_ops_->photometric->shrink_to_required(photo_saved_);

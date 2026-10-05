@@ -27,7 +27,7 @@ namespace lfs::training {
     namespace {
         using namespace lfs::core::internal;
         using namespace lfs::gpu_ops;
-        constexpr uint32_t kNoise = 0, kDecay = 1, kFold = 2, kFoldError = 3, kProject = 4, kGatherCenter = 5, kFar = 6, kMae = 7, kSeed = 8, kGatherSeeds = 9, kStarvation = 10, kPrune = 11, kParent = 12, kGumbel = 13, kGatherIndices = 14, kGeomean = 15;
+        constexpr uint32_t kNoise = 0, kDecay = 1, kFoldError = 3, kPrune = 11, kParent = 12, kGumbel = 13, kGatherIndices = 14;
         struct Push {
             uint64_t a, b, c, d, e, f, g, h, i, j, k, l, seed;
             uint32_t count, count_a, count_b, count_c, count_d, width, height, channels;
@@ -133,7 +133,7 @@ namespace lfs::training {
                 reads.push_back(ref(frozen));
             launch(p, kNoise, reads, writes, groups(n));
         }
-        void decay(Out opacity, Out scales, In frozen, In far, const DecayParams& args) {
+        void decay(Out opacity, Out scales, In frozen, const DecayParams& args) {
             size_t n = scales.shape()[0];
             if (!n)
                 return;
@@ -141,19 +141,14 @@ namespace lfs::training {
             p.a = vk::address(ref(opacity));
             p.b = vk::address(ref(scales));
             p.c = frozen.is_valid() ? vk::address(ref(frozen)) : 0;
-            p.d = far.is_valid() ? vk::address(ref(far)) : 0;
             p.count = n32(n);
             p.count_a = opt_count(frozen);
-            p.count_b = opt_count(far);
             p.x = args.opacity_decay;
             p.y = args.scale_decay;
-            p.z = args.far_decay_scale;
             p.w = args.train_t;
             std::vector<StorageRef> rw{ref(opacity), ref(scales)}, reads;
             if (frozen.is_valid())
                 reads.push_back(ref(frozen));
-            if (far.is_valid())
-                reads.push_back(ref(far));
             reads.insert(reads.end(), rw.begin(), rw.end());
             launch(p, kDecay, reads, rw, groups(n));
         }
@@ -178,26 +173,6 @@ namespace lfs::training {
             out.median_size = ext[1] * 2.0f;
             out.max_extent = ext[2];
             return out;
-        }
-        ScalarValidity median_extent(In scales) {
-            if (!scales.is_valid() || !scales.numel())
-                return {};
-            size_t n = scales.shape()[0];
-            Tensor ext = Tensor::empty({n}, core::Device::GPU, core::DataType::Float32);
-            Push p{};
-            p.a = vk::address(ref(scales));
-            p.b = vk::address(ref(ext));
-            p.count = n32(n);
-            const std::array reads{ref(scales)};
-            const std::array writes{ref(ext)};
-            launch(p, kGeomean, reads, writes, groups(n));
-            auto values = read_floats(ext);
-            values.erase(std::remove_if(values.begin(), values.end(), [](float x) { return !std::isfinite(x) || !(x > 0.0f); }), values.end());
-            if (values.empty())
-                return {};
-            std::sort(values.begin(), values.end());
-            float median = values[values.size() / 2];
-            return {median, std::isfinite(median) && median > 0.0f};
         }
         void gumbel(GumbelTopKScratch*, In weights, Out indices, const GumbelParams& args) {
             size_t n = weights.numel(), k = indices.numel();
@@ -254,24 +229,6 @@ namespace lfs::training {
                 gather_reads.push_back(ref(sources));
             launch(p, kGatherIndices, gather_reads, gather_writes, groups(k));
         }
-        void fold(Out vis, Out maxw, Out dens, Out ratio, float power) {
-            size_t n = vis.numel();
-            if (!n)
-                return;
-            Push p{};
-            p.a = vk::address(ref(vis));
-            p.b = vk::address(ref(maxw));
-            p.c = vk::address(ref(dens));
-            p.d = ratio.is_valid() ? vk::address(ref(ratio)) : 0;
-            p.count = n32(n);
-            p.y = power;
-            std::vector<StorageRef> reads{ref(vis), ref(maxw), ref(dens)}, writes{ref(vis), ref(maxw), ref(dens)};
-            if (ratio.is_valid()) {
-                reads.push_back(ref(ratio));
-                writes.push_back(ref(ratio));
-            }
-            launch(p, kFold, reads, writes, groups(n));
-        }
         void fold_error(Out maxw, Out dens) {
             size_t n = maxw.numel();
             if (!n)
@@ -283,133 +240,6 @@ namespace lfs::training {
             const std::array reads{ref(maxw), ref(dens)};
             const std::array writes{ref(maxw), ref(dens)};
             launch(p, kFoldError, reads, writes, groups(n));
-        }
-        void project(In means, In view, Out xy, Out radii, const ProjectParams& args) {
-            size_t n = means.shape()[0];
-            if (!n)
-                return;
-            Push p{};
-            p.a = vk::address(ref(means));
-            p.b = vk::address(ref(view));
-            p.c = vk::address(ref(xy));
-            p.d = vk::address(ref(radii));
-            p.count = n32(n);
-            p.width = n32(args.image.w);
-            p.height = n32(args.image.h);
-            p.x = args.near_plane;
-            p.y = args.intrinsics.fx;
-            p.z = args.intrinsics.fy;
-            p.u0 = args.intrinsics.cx;
-            p.u1 = args.intrinsics.cy;
-            const std::array reads{ref(means), ref(view)};
-            const std::array writes{ref(xy), ref(radii)};
-            launch(p, kProject, reads, writes, groups(n));
-        }
-        void gather_center(In xy, In radii, In error, Out scores) {
-            size_t n = xy.shape()[0];
-            if (!n)
-                return;
-            Push p{};
-            p.a = vk::address(ref(xy));
-            p.b = vk::address(ref(radii));
-            p.c = vk::address(ref(error));
-            p.d = vk::address(ref(scores));
-            p.count = n32(n);
-            p.height = n32(error.shape()[0]);
-            p.width = n32(error.shape()[1]);
-            const std::array reads{ref(xy), ref(radii), ref(error)};
-            const std::array writes{ref(scores)};
-            launch(p, kGatherCenter, reads, writes, groups(n));
-        }
-        void far_mask(In means, Out mask, std::array<float, 3> center, float radius) {
-            size_t n = means.shape()[0];
-            if (!n)
-                return;
-            Push p{};
-            p.a = vk::address(ref(means));
-            p.b = vk::address(ref(mask));
-            p.count = n32(n);
-            p.x = center[0];
-            p.y = center[1];
-            p.z = center[2];
-            p.w = radius * radius;
-            const std::array reads{ref(means)};
-            const std::array writes{ref(mask)};
-            launch(p, kFar, reads, writes, groups(n));
-        }
-        void mean_abs_error(In pred, In target, Out error) {
-            size_t c = pred.shape()[0], pixels = pred.shape()[1] * pred.shape()[2];
-            if (!c || !pixels)
-                return;
-            Push p{};
-            p.a = vk::address(ref(pred));
-            p.b = vk::address(ref(target));
-            p.c = vk::address(ref(error));
-            p.count = n32(pixels);
-            p.channels = n32(c);
-            const std::array reads{ref(pred), ref(target)};
-            const std::array writes{ref(error)};
-            launch(p, kMae, reads, writes, groups(pixels));
-        }
-        void seed_weights(In error, In alpha, Out weights) {
-            size_t n = weights.numel();
-            if (!n)
-                return;
-            Push p{};
-            p.a = vk::address(ref(error));
-            p.b = vk::address(ref(alpha));
-            p.c = vk::address(ref(weights));
-            p.count = n32(n);
-            const std::array reads{ref(error), ref(alpha)};
-            const std::array writes{ref(weights)};
-            launch(p, kSeed, reads, writes, groups(n));
-        }
-        void gather_seeds(In indices, In target, In alpha, In depth, Out rgb, Out sampled_alpha, Out sampled_depth) {
-            size_t n = indices.numel();
-            if (!n)
-                return;
-            Push p{};
-            p.a = vk::address(ref(indices));
-            p.b = vk::address(ref(target));
-            p.c = vk::address(ref(alpha));
-            p.d = depth.is_valid() ? vk::address(ref(depth)) : 0;
-            p.e = vk::address(ref(rgb));
-            p.f = vk::address(ref(sampled_alpha));
-            p.g = vk::address(ref(sampled_depth));
-            p.count = n32(n);
-            p.count_a = n32(alpha.numel());
-            p.channels = n32(target.shape()[0]);
-            std::vector<StorageRef> reads{ref(indices), ref(target), ref(alpha)}, writes{ref(rgb), ref(sampled_alpha), ref(sampled_depth)};
-            if (depth.is_valid())
-                reads.push_back(ref(depth));
-            launch(p, kGatherSeeds, reads, writes, groups(n));
-        }
-        float sorted_median(In values) {
-            if (!values.is_valid() || !values.numel())
-                return 0.0f;
-            auto v = read_floats(values);
-            // CUB's radix order: -0 before +0 and NaNs by sign at the ends.
-            const auto key = [](float x) {
-                const uint32_t bits = std::bit_cast<uint32_t>(x);
-                return (bits & 0x80000000u) ? ~bits : bits | 0x80000000u;
-            };
-            const auto mid = v.begin() + v.size() / 2;
-            std::nth_element(v.begin(), mid, v.end(), [&](float a, float b) { return key(a) < key(b); });
-            float median = *mid;
-            return std::isfinite(median) ? median : 0.0f;
-        }
-        void starvation(Out weights, In visibility, float median) {
-            size_t n = weights.numel();
-            if (!n)
-                return;
-            Push p{};
-            p.a = vk::address(ref(weights));
-            p.b = vk::address(ref(visibility));
-            p.count = n32(n);
-            p.x = median;
-            const std::array reads{ref(weights), ref(visibility)};
-            const std::array writes{ref(weights)};
-            launch(p, kStarvation, reads, writes, groups(n));
         }
         size_t compact_bool(In mask, Out indices, size_t count) {
             if (!mask.numel() || !count)
@@ -461,7 +291,7 @@ namespace lfs::training {
                 reads.push_back(ref(edge));
             launch(p, kParent, reads, writes, groups(n));
         }
-        const MrnfOps kOps{.noise = noise, .decay = decay, .percentile_bounds = percentile_bounds, .median_extent = median_extent, .gumbel = gumbel, .fold = fold, .fold_error = fold_error, .project_centers = project, .gather_center_error = gather_center, .far_mask = far_mask, .mean_abs_error = mean_abs_error, .seed_weights = seed_weights, .gather_seeds = gather_seeds, .sorted_median = sorted_median, .starvation_weights = starvation, .compact_bool_indices = compact_bool, .prune_bounds = prune, .replace_parent_weights = parent_weights};
+        const MrnfOps kOps{.noise = noise, .decay = decay, .percentile_bounds = percentile_bounds, .gumbel = gumbel, .fold_error = fold_error, .compact_bool_indices = compact_bool, .prune_bounds = prune, .replace_parent_weights = parent_weights};
     } // namespace
     const MrnfOps& vulkan_mrnf_ops() { return kOps; }
 } // namespace lfs::training

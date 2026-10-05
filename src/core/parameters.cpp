@@ -207,6 +207,10 @@ namespace lfs::core {
                             "eval_space must be 'distorted' or 'undistorted'");
                     }
                 }
+                if (const auto removed = json.find("background_improvements");
+                    removed != json.end() && removed->is_boolean() && removed->get<bool>()) {
+                    LOG_WARN("Ignoring background_improvements: the option was removed and MRNF trains with its default profile");
+                }
                 read_registered_optimization_properties(json, params, skip_missing);
                 if (const auto image_count_scaler = stored_image_count_scaler(json, params.steps_scaler))
                     params.image_count_scaler = *image_count_scaler;
@@ -241,8 +245,6 @@ namespace lfs::core {
                     params.bg_image_path =
                         utf8_to_path(json.at("bg_image_path").get<std::string>());
                 }
-                if (json.contains("explore_starvation_weighting"))
-                    params.explore_starvation_weighting = json.at("explore_starvation_weighting");
 
                 if (json.contains("depth_loss_mode") &&
                     (params.depth_loss_mode == "pearson" ||
@@ -333,7 +335,6 @@ namespace lfs::core {
             iterations = apply(iterations);
             start_refine = apply(start_refine);
             stop_refine = apply(stop_refine);
-            fill_pacing_iter = apply(fill_pacing_iter);
             reset_every = apply(reset_every);
             refine_every = apply(refine_every);
             morton_reorder_interval = apply(morton_reorder_interval);
@@ -421,8 +422,6 @@ namespace lfs::core {
                 opt_json["bg_image_path"] = path_to_utf8(bg_image_path);
             if (!eval_mask.empty())
                 opt_json["eval_mask"] = normalize_eval_mask_path(eval_mask);
-            if (!explore_starvation_weighting)
-                opt_json["explore_starvation_weighting"] = false;
 
             return opt_json;
         }
@@ -491,14 +490,10 @@ namespace lfs::core {
                 return "eval_mask_invert requires eval_mask";
             if (!eval_mask.empty() && !enable_eval)
                 return "eval_mask requires evaluation to be enabled";
-            if (!eval_mask.empty()) {
-                const auto path = utf8_to_path(eval_mask);
-                if (!path.is_absolute())
-                    return "eval_mask must be an absolute path";
-                std::error_code error;
-                if (!std::filesystem::is_regular_file(path, error))
-                    return std::format("eval_mask file does not exist: {}", eval_mask);
-            }
+            // The mask file is checked where it is read, so settings stored in a project stay valid
+            // when the file moves.
+            if (!eval_mask.empty() && !utf8_to_path(eval_mask).is_absolute())
+                return "eval_mask must be an absolute path";
             if (iterations == 0 || iterations > MAX_ITERATION_VALUE)
                 return std::format("iterations must be within [1, {}] (got {})", MAX_ITERATION_VALUE, iterations);
             if (refine_every == 0 || refine_every > MAX_ITERATION_VALUE)
@@ -588,7 +583,6 @@ namespace lfs::core {
                 std::pair{"prune_ratio", prune_ratio},
                 std::pair{"normal_start_fraction", normal_start_fraction},
                 std::pair{"normal_end_fraction", normal_end_fraction},
-                std::pair{"far_scene_min_fraction", far_scene_min_fraction},
             };
             for (const auto& [name, value] : probability_fields) {
                 if (auto error = invalid_probability(value, name); !error.empty())
@@ -812,12 +806,6 @@ namespace lfs::core {
             p.scale_reg = 0.0f;
             p.use_error_map = true;
             p.use_edge_map = true;
-            p.background_improvements = false;
-            p.far_scene_min_fraction = 0.0f;
-            p.growth_ratio_rank = true;
-            p.growth_ratio_pow = 0.75f;
-            p.fill_pacing_iter = 15'000;
-            p.far_seed_dose = 2'000;
             return p;
         }
 

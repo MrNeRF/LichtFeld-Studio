@@ -28,20 +28,20 @@ namespace lfs::training {
 
         struct Params {
             uint64_t parameter, packed, bounds, gradient, value_bounds;
-            uint64_t frozen, crop, raw_scales, far_mask, screen_share;
+            uint64_t frozen, crop, screen_share;
             uint64_t indices, scratch;
             uint32_t primitives, attributes, bits, operation;
             uint32_t slots, active_bases, value_bits, value_cells;
             uint32_t index_count, layout, entry_count, stage;
-            uint32_t frozen_count, crop_count, scale_count, far_count;
+            uint32_t frozen_count, crop_count;
             uint32_t screen_count;
             float lr, bc1, bc2, beta1, beta2, eps;
-            float frozen_scale, crop_scale, median_extent, r_min;
-            float r_max, screen_limit, screen_penalty, step_size;
+            float frozen_scale, crop_scale;
+            float screen_limit, screen_penalty, step_size;
         };
-        static_assert(sizeof(Params) == 224);
-        static_assert(offsetof(Params, primitives) == 96);
-        static_assert(offsetof(Params, lr) == 164);
+        static_assert(sizeof(Params) == 184);
+        static_assert(offsetof(Params, primitives) == 80);
+        static_assert(offsetof(Params, lr) == 140);
 
         struct Push {
             uint64_t parameters;
@@ -166,14 +166,6 @@ namespace lfs::training {
             return tensor.is_valid() ? vk::checked_u32(tensor.numel(), "Adam mask count exceeds 32-bit indexing") : 0;
         }
 
-        void validate_far_mask(const bool* pointer) {
-            if (!pointer)
-                throw std::invalid_argument("mean-step far mask must not be null");
-            const auto context = acquire_vulkan_context();
-            LFS_ASSERT_MSG(context->memory().owns_address(pointer),
-                           "Vulkan Adam far-mask pointer is not a live Vulkan allocation");
-        }
-
         void step_rows(std::span<const JointStep> steps, const AdamMasks& masks,
                        const AdamHyper& hyper, const AdamModifiers& modifiers, const bool fused) {
             std::vector<const JointStep*> present;
@@ -197,13 +189,11 @@ namespace lfs::training {
                 p.gradient = address(step->gradient);
                 p.frozen = optional<bool>(masks.frozen);
                 p.crop = optional<bool>(masks.crop_damping);
-                p.raw_scales = optional<float>(masks.raw_scales);
-                p.far_mask = optional<bool>(masks.far_mask);
+
                 p.screen_share = optional<float>(masks.screen_share);
                 p.frozen_count = optional_count(masks.frozen);
                 p.crop_count = optional_count(masks.crop_damping);
-                p.scale_count = optional_count(masks.raw_scales);
-                p.far_count = optional_count(masks.far_mask);
+
                 p.screen_count = optional_count(masks.screen_share);
                 p.primitives = vk::checked_u32(step->primitives, "Adam row count exceeds 32-bit indexing");
                 p.attributes = static_cast<uint32_t>(step->attributes);
@@ -217,16 +207,13 @@ namespace lfs::training {
                 p.eps = hyper.eps;
                 p.frozen_scale = modifiers.frozen_lr_scale;
                 p.crop_scale = modifiers.cropbox_lr_scale;
-                p.median_extent = modifiers.median_extent;
-                p.r_min = modifiers.r_min;
-                p.r_max = modifiers.r_max;
+
                 p.screen_limit = modifiers.screen_share_limit;
                 p.screen_penalty = modifiers.screen_share_penalty;
-                p.entry_count = (step->apply_mean_step ? 1u : 0u) | (step->apply_screen_share ? 2u : 0u);
+                p.entry_count = (step->apply_screen_share ? 2u : 0u);
                 std::vector<StorageRef> reads{ref(step->parameter), ref(step->packed), ref(step->bounds),
                                               ref(step->gradient)};
-                for (const Tensor* tensor : {&masks.frozen, &masks.crop_damping, &masks.raw_scales,
-                                             &masks.far_mask, &masks.screen_share}) {
+                for (const Tensor* tensor : {&masks.frozen, &masks.crop_damping, &masks.screen_share}) {
                     if (tensor->is_valid() && tensor->numel() != 0)
                         reads.push_back(ref(*tensor));
                 }
@@ -319,7 +306,6 @@ namespace lfs::training {
         }
 
         const AdamOps kVulkanAdamOps{
-            .validate_far_mask = validate_far_mask,
             .step_batch = step_batch,
             .step_sh = step_sh,
             .encode_zero = encode_zero,

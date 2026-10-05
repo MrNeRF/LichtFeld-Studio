@@ -108,7 +108,7 @@ namespace {
     };
 
     struct Masks {
-        Tensor frozen, crop, raw_scales, far, share;
+        Tensor frozen, crop, share;
 
         static Masks make(const size_t n, const bool enabled) {
             if (!enabled) {
@@ -117,23 +117,18 @@ namespace {
             return {
                 bool_mask(n, 5),
                 bool_mask(n, 7),
-                pattern({n, size_t{3}}, 2.0f, 17),
-                bool_mask(n, 3),
                 pattern({n}, 0.4f, 23).abs(),
             };
         }
 
         [[nodiscard]] ops::AdamMasks view() const {
-            return {frozen, crop, raw_scales, far, share};
+            return {frozen, crop, share};
         }
     };
 
     constexpr ops::AdamModifiers kModifiers{
         .frozen_lr_scale = 0.25f,
         .cropbox_lr_scale = 0.5f,
-        .median_extent = 1.5f,
-        .r_min = 1.0f,
-        .r_max = 300.0f,
         .screen_share_limit = 0.3f,
         .screen_share_penalty = 0.05f,
     };
@@ -149,7 +144,7 @@ namespace {
     }
 
     ops::JointStep joint_step(Group& g, const int bits, const int step,
-                              const bool mean_step, const bool share) {
+                              const bool share) {
         return {
             .parameter = g.parameter,
             .packed = g.packed,
@@ -161,7 +156,6 @@ namespace {
             .lr = 0.01f,
             .bc1_rcp = bc1(step),
             .bc2_sqrt_rcp = bc2(step),
-            .apply_mean_step = mean_step,
             .apply_screen_share = share,
         };
     }
@@ -307,7 +301,6 @@ TEST_F(AdamOpsBytes, StepBatchMatchesLauncherAndSkipsAbsentSteps) {
                     .lr = 0.01f * static_cast<float>(i + 1),
                     .bias_correction1_rcp = bc1(step),
                     .bias_correction2_sqrt_rcp = bc2(step),
-                    .apply_mean_step = i == 0 ? 1 : 0,
                     .apply_screen_share = i == 2 ? 1 : 0,
                 });
             }
@@ -316,15 +309,12 @@ TEST_F(AdamOpsBytes, StepBatchMatchesLauncherAndSkipsAbsentSteps) {
                 masks.frozen.ptr<bool>(), static_cast<int>(masks.frozen.numel()), kModifiers.frozen_lr_scale,
                 masks.crop.ptr<bool>(), static_cast<int>(masks.crop.numel()), kModifiers.cropbox_lr_scale,
                 kBeta1, kBeta2, kEps, lfs::core::getCurrentCUDAStream(),
-                masks.raw_scales.ptr<float>(), static_cast<int>(masks.raw_scales.numel()),
-                kModifiers.median_extent, kModifiers.r_min, kModifiers.r_max,
-                masks.far.ptr<bool>(), static_cast<int>(masks.far.numel()),
                 masks.share.ptr<float>(), static_cast<int>(masks.share.numel()),
                 kModifiers.screen_share_limit, kModifiers.screen_share_penalty);
 
             std::vector<ops::JointStep> steps;
             for (size_t i = 0; i < attrs.size(); ++i) {
-                auto step_i = joint_step(actual[i], 16, step, i == 0, i == 2);
+                auto step_i = joint_step(actual[i], 16, step, i == 2);
                 step_i.lr = 0.01f * static_cast<float>(i + 1);
                 if (with_absent && i == 1) {
                     steps.push_back({.parameter = absent, .packed = absent, .bounds = absent, .gradient = absent});

@@ -313,9 +313,6 @@ namespace {
             const auto font_path = std::filesystem::path(PROJECT_ROOT_PATH) /
                                    "src/visualizer/gui/assets/fonts/Inter-Regular.ttf";
             ASSERT_TRUE(Rml::LoadFontFace(font_path.string()));
-            ASSERT_TRUE(Rml::LoadFontFace((std::filesystem::path(PROJECT_ROOT_PATH) /
-                                           "src/rendering/resources/assets/JetBrainsMono-Regular.ttf")
-                                              .string()));
         }
 
         static void TearDownTestSuite() {

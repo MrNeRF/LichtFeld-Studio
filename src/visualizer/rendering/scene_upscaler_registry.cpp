@@ -52,7 +52,7 @@ namespace lfs::vis {
                 .input_scale = 0.50f,
             },
         };
-        constexpr std::array DESCRIPTORS{
+        const std::array DESCRIPTORS{
             SceneUpscalerDescriptor{
                 .backend = SceneUpscalerBackend::Native,
                 .id = "native",

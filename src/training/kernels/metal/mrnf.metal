@@ -226,13 +226,10 @@ struct MrnfDecayParams {
     device float* raw_opacity;
     device float* log_scales;
     device const uchar* frozen;
-    device const uchar* far_mask;
     uint frozen_count;
-    uint far_count;
     uint count;
     float opacity_decay;
     float scale_decay;
-    float far_decay_scale;
     float train_t;
 };
 
@@ -241,10 +238,7 @@ kernel void mrnf_decay(constant MrnfDecayParams& p [[buffer(0)]], uint i [[threa
         return;
     float opacity_decay = p.opacity_decay;
     float scale_decay = p.scale_decay;
-    if (mrnf_flag(p.far_mask, p.far_count, i)) {
-        opacity_decay *= p.far_decay_scale;
-        scale_decay *= p.far_decay_scale;
-    }
+
     const float t_shrink = 1.0f - p.train_t;
     const float opacity_delta = opacity_decay * t_shrink;
     const float raw = p.raw_opacity[i];
@@ -258,47 +252,16 @@ kernel void mrnf_decay(constant MrnfDecayParams& p [[buffer(0)]], uint i [[threa
 }
 
 struct MrnfFoldParams {
-    device float* visibility;
     device float* weight_max;
     device float* densification;
-    device float* ratio_max;
     uint count;
-    float ratio_power;
 };
-
-kernel void mrnf_fold(constant MrnfFoldParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
-    if (i >= p.count)
-        return;
-    const float vis = p.densification[i];
-    const float err = p.densification[p.count + i];
-    p.visibility[i] += vis;
-    p.weight_max[i] = fmax(p.weight_max[i], err);
-    if (p.ratio_max != nullptr) {
-        const float ratio = vis >= 0.05f ? (p.ratio_power > 0.0f ? err / pow(vis, p.ratio_power) : err / vis) : 0.0f;
-        p.ratio_max[i] = fmax(p.ratio_max[i], ratio);
-    }
-    p.densification[i] = 0.0f;
-    p.densification[p.count + i] = 0.0f;
-}
 
 kernel void mrnf_fold_error(constant MrnfFoldParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
     if (i >= p.count)
         return;
     p.weight_max[i] = fmax(p.weight_max[i], p.densification[p.count + i]);
     p.densification[p.count + i] = 0.0f;
-}
-
-struct MrnfGeomeanParams {
-    device const float* raw_scales;
-    device float* extents;
-    uint count;
-};
-
-kernel void mrnf_geomean_extent(constant MrnfGeomeanParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
-    if (i >= p.count)
-        return;
-    const float g = exp((p.raw_scales[i * 3] + p.raw_scales[i * 3 + 1] + p.raw_scales[i * 3 + 2]) * (1.0f / 3.0f));
-    p.extents[i] = mrnf_is_finite(g) && g > 0.0f ? g : 0.0f;
 }
 
 struct MrnfGumbelParams {
@@ -337,156 +300,6 @@ kernel void mrnf_gather_indices(constant MrnfGatherIndicesParams& p [[buffer(0)]
         return;
     const long position = p.order != nullptr ? p.order[i] : long(i);
     p.output[i] = p.sources != nullptr ? p.sources[position] : position;
-}
-
-struct MrnfProjectParams {
-    device const float* means;
-    device const float* view;
-    device float* means2d;
-    device float* radii;
-    uint count;
-    int width;
-    int height;
-    float fx, fy, cx, cy;
-    float near_plane;
-};
-
-kernel void mrnf_project_centers(constant MrnfProjectParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
-    if (i >= p.count)
-        return;
-    device const float* m = p.view;
-    const float x = p.means[i * 3], y = p.means[i * 3 + 1], z = p.means[i * 3 + 2];
-    const float cam_x = m[0] * x + m[1] * y + m[2] * z + m[3];
-    const float cam_y = m[4] * x + m[5] * y + m[6] * z + m[7];
-    const float cam_z = m[8] * x + m[9] * y + m[10] * z + m[11];
-    if (!mrnf_is_finite(cam_x) || !mrnf_is_finite(cam_y) || !mrnf_is_finite(cam_z) || !(cam_z > p.near_plane)) {
-        p.means2d[i * 2] = 0.0f;
-        p.means2d[i * 2 + 1] = 0.0f;
-        p.radii[i] = 0.0f;
-        return;
-    }
-    const float px = p.fx * (cam_x / cam_z) + p.cx;
-    const float py = p.fy * (cam_y / cam_z) + p.cy;
-    p.means2d[i * 2] = px;
-    p.means2d[i * 2 + 1] = py;
-    p.radii[i] = px >= 0.0f && py >= 0.0f && px < float(p.width) && py < float(p.height) ? 1.0f : 0.0f;
-}
-
-struct MrnfCenterErrorParams {
-    device const float* means2d;
-    device const float* radii;
-    device const float* error;
-    device float* scores;
-    uint count;
-    int width;
-    int height;
-};
-
-kernel void mrnf_gather_center_error(constant MrnfCenterErrorParams& p [[buffer(0)]],
-                                     uint i [[thread_position_in_grid]]) {
-    if (i >= p.count)
-        return;
-    if (p.radii[i] <= 0.0f) {
-        p.scores[i] = 0.0f;
-        return;
-    }
-    const int x = clamp(int(floor(p.means2d[i * 2])), 0, p.width - 1);
-    const int y = clamp(int(floor(p.means2d[i * 2 + 1])), 0, p.height - 1);
-    p.scores[i] = p.error[uint(y) * uint(p.width) + uint(x)];
-}
-
-struct MrnfFarMaskParams {
-    device const float* means;
-    device uchar* mask;
-    float3 center;
-    uint count;
-    float radius_sq;
-};
-
-kernel void mrnf_far_mask(constant MrnfFarMaskParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
-    if (i >= p.count)
-        return;
-    const float dx = p.means[i * 3] - p.center.x;
-    const float dy = p.means[i * 3 + 1] - p.center.y;
-    const float dz = p.means[i * 3 + 2] - p.center.z;
-    p.mask[i] = (dx * dx + dy * dy + dz * dz) > p.radius_sq ? 1 : 0;
-}
-
-struct MrnfMeanAbsErrorParams {
-    device const float* predicted;
-    device const float* target;
-    device float* error;
-    uint pixels;
-    uint channels;
-};
-
-kernel void mrnf_mean_abs_error(constant MrnfMeanAbsErrorParams& p [[buffer(0)]],
-                                uint i [[thread_position_in_grid]]) {
-    if (i >= p.pixels)
-        return;
-    float sum = 0.0f;
-    for (uint c = 0; c < p.channels; ++c)
-        sum += fabs(p.predicted[c * p.pixels + i] - p.target[c * p.pixels + i]);
-    p.error[i] = sum / float(p.channels);
-}
-
-struct MrnfSeedWeightsParams {
-    device const float* error;
-    device const float* alpha;
-    device float* weights;
-    uint count;
-};
-
-kernel void mrnf_seed_weights(constant MrnfSeedWeightsParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
-    if (i < p.count)
-        p.weights[i] = p.error[i] * (1.0f - p.alpha[i]);
-}
-
-struct MrnfGatherSeedsParams {
-    device const long* indices;
-    device const float* target;
-    device const float* alpha;
-    device const float* depth;
-    device float* rgb;
-    device float* sampled_alpha;
-    device float* sampled_depth;
-    uint count;
-    uint pixels;
-    int channels;
-};
-
-kernel void mrnf_gather_seeds(constant MrnfGatherSeedsParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
-    if (i >= p.count)
-        return;
-    const long index = p.indices[i];
-    const uint pixel = index >= 0 && ulong(index) < p.pixels ? uint(index) : 0u;
-    const int channels = p.channels > 0 ? p.channels : 1;
-    for (int c = 0; c < 3; ++c)
-        p.rgb[i * 3 + uint(c)] = p.target[uint(min(c, channels - 1)) * p.pixels + pixel];
-    p.sampled_alpha[i] = p.alpha[pixel];
-    p.sampled_depth[i] = p.depth != nullptr ? p.depth[pixel] : 0.0f;
-}
-
-struct MrnfStarvationParams {
-    device float* weights;
-    device const float* visibility;
-    uint count;
-    float median;
-};
-
-kernel void mrnf_starvation_weights(constant MrnfStarvationParams& p [[buffer(0)]],
-                                    uint i [[thread_position_in_grid]]) {
-    if (i >= p.count)
-        return;
-    const float vis = p.visibility[i];
-    if (vis == 0.0f) {
-        p.weights[i] = 0.0f;
-        return;
-    }
-    const float starved = fmin(fmax(1.0f - vis / fmax(p.median, 1.19209290e-07f), 0.0f), 1.0f);
-    // kStarvEps and kStarvGamma of mrnf.hpp.
-    const float term = starved > 0.0f ? pow(starved, 1.72f) : 0.0f;
-    p.weights[i] *= 0.0026f + term;
 }
 
 struct MrnfPruneBoundsParams {

@@ -562,11 +562,18 @@ namespace lfs::vis::gui {
         return overlay_ && (overlay_->isContextMenuOpen() || overlay_->isPopupOpen());
     }
 
-    bool SequencerUIManager::needsAnimationFrame() const {
+    bool SequencerUIManager::needsAnimationFrame(const bool ui_visible) const {
+        if (controller_.isPlaying() || controller_.state() == PlaybackState::SCRUBBING ||
+            plySequenceStreamHasWork()) {
+            return true;
+        }
+
+        // Hidden panels cannot consume localization, preview, or overlay updates.
+        const auto* const gui = viewer_ ? viewer_->getGuiManager() : nullptr;
+        if (!ui_visible || !gui || !gui->isSequencerVisible())
+            return false;
+
         return (panel_ && panel_->needsLocalizationFrame()) ||
-               controller_.isPlaying() ||
-               controller_.state() == PlaybackState::SCRUBBING ||
-               plySequenceStreamHasWork() ||
                keyframe_gizmo_active_ ||
                viewport_keyframe_edit_snapshot_.has_value() ||
                (ui_state_.show_pip_preview &&

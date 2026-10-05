@@ -33,7 +33,6 @@ class TestOptimizationParams:
                 "masking": "supported",
                 "segmentation": "supported",
                 "background_modes": "supported",
-                "background_improvements": "supported",
                 "exposure_correction": "supported",
                 "bilateral_grid": "supported",
                 "ppisp": "supported",

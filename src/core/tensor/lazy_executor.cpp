@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace lfs::core::internal {
 
@@ -365,7 +366,7 @@ namespace lfs::core::internal {
             }
             const Tensor source = *recipe.source;
             // ptr<> materializes deferred sources.
-            const float* in_probe = source.is_valid() ? source.ptr<float>() : nullptr;
+            const float* in_probe = source.is_valid() ? std::as_const(source).ptr<float>() : nullptr;
             if (!source.is_valid() || in_probe == nullptr ||
                 source.dtype() != DataType::Float32 ||
                 !source.is_contiguous()) {
@@ -418,7 +419,7 @@ namespace lfs::core::internal {
             }
 
             if (source.device() == Device::GPU) {
-                const float* in_ptr = source.ptr<float>();
+                const float* in_ptr = std::as_const(source).ptr<float>();
                 assert(in_ptr != nullptr);
                 // prepare_inputs_for_stream only takes initializer_list; pin source then each rhs.
 #if LFS_HAS_CUDA
@@ -444,7 +445,7 @@ namespace lfs::core::internal {
                 return true;
             }
 
-            const float* in_ptr = source.ptr<float>();
+            const float* in_ptr = std::as_const(source).ptr<float>();
             if (in_ptr == nullptr)
                 return false;
             Tensor out = internal::allocate_like(

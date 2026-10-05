@@ -481,8 +481,11 @@ def test_cached_native_panels_request_a_frame_for_language_changes():
     sequencer_panel = (ROOT / "src" / "visualizer" / "sequencer" / "rml_sequencer_panel.cpp").read_text(encoding="utf-8")
     assert "bool RmlSequencerPanel::needsLocalizationFrame() const" in sequencer_panel
     sequencer_manager = (ROOT / "src" / "visualizer" / "gui" / "sequencer_ui_manager.cpp").read_text(encoding="utf-8")
-    sequencer_demand = sequencer_manager[sequencer_manager.index("bool SequencerUIManager::needsAnimationFrame() const") :]
-    assert "panel_->needsLocalizationFrame()" in sequencer_demand.split("controller_.isPlaying()", 1)[0]
+    sequencer_demand = sequencer_manager[
+        sequencer_manager.index("bool SequencerUIManager::needsAnimationFrame(") :
+        sequencer_manager.index("bool SequencerUIManager::plySequenceStreamHasWork() const")
+    ]
+    assert "panel_->needsLocalizationFrame()" in sequencer_demand
 
 
 def test_rendering_labels_preserve_fullwidth_colons():

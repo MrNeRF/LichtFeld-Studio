@@ -242,8 +242,7 @@ namespace lfs::vis::op {
             return false;
         }
 
-        const auto& ctx = python::context();
-        const uint64_t gen = ctx.scene_generation;
+        const uint64_t gen = python::get_scene_generation();
         const bool has_sel = scene_manager_ && scene_manager_->hasSelectedNode();
         const auto* cc = lfs::event::command_center();
         const bool training = cc ? cc->snapshot().is_running : false;

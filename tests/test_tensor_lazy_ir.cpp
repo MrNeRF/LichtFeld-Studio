@@ -16,6 +16,7 @@
 #include <span>
 #include <torch/torch.h>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 using namespace lfs::core;
@@ -1111,6 +1112,27 @@ TEST(TensorLazyIrTest, OnModeCpuAffineFoldMatchesExpected) {
 
     const auto diagnostics = internal::lazy_executor_diagnostics_snapshot_for_testing();
     EXPECT_GT(diagnostics.fused_launches, 0u);
+}
+
+TEST(TensorLazyIrTest, FusedChainReadsOperandsWithoutDetachingTheirSnapshots) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    LazyTestGuard guard;
+    internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+    internal::lazy_executor_reset_diagnostics_for_testing();
+
+    auto source = Tensor::full({1 << 16}, 3.0f, Device::CUDA, DataType::Float32);
+    auto other = Tensor::full({1 << 16}, 1.0f, Device::CUDA, DataType::Float32);
+    const auto source_cell = internal::lazy_executor_snapshot_operand(source);
+    const auto other_cell = internal::lazy_executor_snapshot_operand(other);
+
+    const auto result = source.sub(other).abs().mul(2.0f).to_vector();
+    ASSERT_EQ(result.size(), size_t{1} << 16);
+    EXPECT_EQ(result.front(), 4.0f);
+    EXPECT_GT(internal::lazy_executor_diagnostics_snapshot_for_testing().fused_launches, 0u);
+    EXPECT_EQ(std::as_const(*source_cell).data_ptr(), std::as_const(source).data_ptr());
+    EXPECT_EQ(std::as_const(*other_cell).data_ptr(), std::as_const(other).data_ptr());
 }
 
 TEST(TensorLazyIrTest, OnModeGpuAffineFoldIdentityIsCorrect) {

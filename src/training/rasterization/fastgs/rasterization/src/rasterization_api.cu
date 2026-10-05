@@ -474,8 +474,6 @@ namespace fast_lfs::rasterization {
         const float* shN_value_bounds_ptr,
         unsigned shN_value_n_cells,
         unsigned shN_value_bits,
-        const bool* mean_step_far_mask,
-        int mean_step_far_mask_n,
         const float* edge_weight_map,
         float* edge_score_out) {
 
@@ -668,8 +666,6 @@ namespace fast_lfs::rasterization {
                 reinterpret_cast<const float2*>(shN_value_bounds_ptr),
                 shN_value_n_cells,
                 shN_value_bits,
-                mean_step_far_mask,
-                mean_step_far_mask_n,
                 edge_weight_map,
                 edge_score_out,
                 stream);
