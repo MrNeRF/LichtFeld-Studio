@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // GPU threshold/reachability/fade/budget LOD selection on tensor buffers.
-#include "../vulkan/shader/src/slang/config.slang"
+#include "../slang/config.slang"
 
 struct Uniforms {
     uint32_t node_count;

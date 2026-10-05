@@ -12,7 +12,7 @@ namespace lfs::rendering {
     using glm::max;
     using glm::min;
     using glm::pow;
-#include "../shader/src/slang/display_color.inc"
+#include "../../slang/display_color.inc"
 #undef LFS_COLOR_INLINE
 #undef LFS_COLOR_VEC3
 #undef LFS_COLOR_UINT

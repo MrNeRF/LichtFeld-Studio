@@ -9,11 +9,11 @@ target_compile_features(lfs_tensor_rasterizer PUBLIC cxx_std_23)
 set_target_properties(lfs_tensor_rasterizer PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(lfs_tensor_rasterizer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(lfs_tensor_rasterizer PUBLIC lfs_core)
-# The viewer's near clip is the Vulkan reference's, read from its config.
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/shader/src/slang/config.slang" _viewer_config)
+# The viewer's near clip is the Vulkan reference's, read from the shared config.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../slang/config.slang" _viewer_config)
 string(REGEX MATCH "#define NEAR_CLIP ([0-9.]+)f" _near_clip "${_viewer_config}")
 if(NOT _near_clip)
-    message(FATAL_ERROR "Missing NEAR_CLIP in the Vulkan viewer config")
+    message(FATAL_ERROR "Missing NEAR_CLIP in the shared viewer config")
 endif()
 target_compile_definitions(lfs_tensor_rasterizer PUBLIC LFS_SPLAT_NEAR_CLIP=${CMAKE_MATCH_1}f)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_scan SOURCE splat_scan.slang COMPUTE scan_blocks scan_add)
@@ -55,6 +55,6 @@ cmake_path(ABSOLUTE_PATH CMAKE_CURRENT_SOURCE_DIR NORMALIZE OUTPUT_VARIABLE _ras
 cmake_path(GET _rasterizer_dir PARENT_PATH _rasterizer_dir)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/splat_types.slang" "${CMAKE_CURRENT_SOURCE_DIR}/splat_overlay.slang"
-    "${_rasterizer_dir}/vulkan/shader/src/slang/config.slang"
-    "${_rasterizer_dir}/vulkan/shader/src/slang/portal_compact.inc"
-    "${_rasterizer_dir}/vulkan/shader/src/slang/display_color.inc")
+    "${_rasterizer_dir}/slang/config.slang"
+    "${_rasterizer_dir}/slang/portal_compact.inc"
+    "${_rasterizer_dir}/slang/display_color.inc")

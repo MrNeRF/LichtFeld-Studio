@@ -10,12 +10,12 @@
 #define LFS_PORTAL_INLINE
 #define LFS_PORTAL_VEC3 float3
 #define LFS_PORTAL_VEC4 float4
-#include "../vulkan/shader/src/slang/portal_compact.inc"
+#include "../slang/portal_compact.inc"
 #define LFS_COLOR_INLINE
 #define LFS_COLOR_VEC3 float3
 #define LFS_COLOR_UINT uint
 #define LFS_COLOR_MIX lerp
-#include "../vulkan/shader/src/slang/display_color.inc"
+#include "../slang/display_color.inc"
 
 static const float kPi = 3.14159265358979323846f;
 
