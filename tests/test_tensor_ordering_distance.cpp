@@ -6,7 +6,6 @@
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include <array>
-#include <chrono>
 #include <limits>
 
 #include <gtest/gtest.h>
@@ -198,68 +197,4 @@ TEST(TensorOrderingTest, ArgExtremeKernelMatchesCpu) {
     EXPECT_TRUE(std::signbit(min_values.cpu().to_vector()[0]));
     EXPECT_EQ(ties.argmax().cpu().to_vector_int64(), (std::vector<int64_t>{4}));
     EXPECT_EQ(ties.argmin().cpu().to_vector_int64(), (std::vector<int64_t>{4}));
-}
-
-TEST(TensorOrderingTest, DISABLED_ArgExtremeTiming) {
-    for (const auto& shape : std::vector<std::vector<size_t>>{{65536, 112}, {1, 4194304}, {65536, 448}}) {
-        const Tensor x = Tensor::rand(TensorShape(shape), Device::GPU);
-        auto& backend = internal::backend_ops_for(x);
-        for (int i = 0; i < 3; ++i)
-            (void)x.max_with_indices(1);
-        backend.synchronize_device();
-        const auto start = std::chrono::steady_clock::now();
-        for (int i = 0; i < 20; ++i)
-            (void)x.max_with_indices(1);
-        backend.synchronize_device();
-        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 20;
-        std::cout << "arg_extreme " << TensorShape(shape).str() << " " << ms << " ms\n";
-    }
-}
-
-TEST(TensorOrderingTest, DISABLED_SortTiming) {
-    for (const size_t count : {size_t(1) << 20, size_t(5) << 20}) {
-        const Tensor random = Tensor::rand({count}, Device::GPU);
-        // Small non-negative integers as biased floats, the shape of label keys.
-        const Tensor labels = (random * 1048576.0f).floor() + 8388608.0f;
-        auto& backend = internal::backend_ops_for(random);
-        for (const auto* keys : {&random, &labels}) {
-            for (int i = 0; i < 3; ++i)
-                (void)keys->sort(0);
-            backend.synchronize_device();
-            const auto start = std::chrono::steady_clock::now();
-            for (int i = 0; i < 10; ++i)
-                (void)keys->sort(0);
-            backend.synchronize_device();
-            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 10;
-            std::cout << "sort " << count << (keys == &random ? " uniform " : " labels ") << ms << " ms\n";
-        }
-    }
-}
-
-TEST(TensorOrderingTest, DISABLED_GroupingPrimitiveTiming) {
-    const size_t count = size_t(5) << 20;
-    const Tensor random = Tensor::rand({count}, Device::GPU);
-    // Node evaluation holds freed buffers for reuse; measure the same way, once the backend is live.
-    Tensor::hold_freed_memory();
-    const Tensor ints = (random * 1000.0f).to(DataType::Int32);
-    const Tensor mask = random.gt(0.5f);
-    const Tensor order = random.sort(0).second.to(DataType::Int32);
-    auto& backend = internal::backend_ops_for(random);
-    const auto time = [&](const char* name, auto&& run) {
-        for (int i = 0; i < 3; ++i)
-            run();
-        backend.synchronize_device();
-        const auto start = std::chrono::steady_clock::now();
-        for (int i = 0; i < 10; ++i)
-            run();
-        backend.synchronize_device();
-        std::cout << name << " " << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 10 << " ms\n";
-    };
-    time("cumsum_int32", [&] { (void)ints.cumsum(0); });
-    time("nonzero", [&] { (void)mask.nonzero(); });
-    time("index_select_int32", [&] { (void)ints.index_select(0, order); });
-    time("index_copy_int32", [&] { auto out = Tensor::zeros({count}, Device::GPU, DataType::Int32); out.index_copy_(0, order, ints); });
-    time("item", [&] { (void)ints.slice(0, 0, 1).item<int>(); });
-    time("any_item", [&] { (void)mask.any().item<bool>(); });
-    Tensor::release_freed_memory();
 }

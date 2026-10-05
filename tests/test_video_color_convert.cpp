@@ -66,16 +66,6 @@ TEST_F(VideoColorConvertTest, TensorPermuteCHWtoHWC) {
     }
 }
 
-// BT.601 YUV to RGB reference implementation
-void yuvToRgbReference(const int y, const int u, const int v, int& r, int& g, int& b) {
-    const int c = y - 16;
-    const int d = u - 128;
-    const int e = v - 128;
-    r = std::clamp((298 * c + 409 * e + 128) >> 8, 0, 255);
-    g = std::clamp((298 * c - 100 * d - 208 * e + 128) >> 8, 0, 255);
-    b = std::clamp((298 * c + 516 * d + 128) >> 8, 0, 255);
-}
-
 TEST_F(VideoColorConvertCudaTest, Nv12ToRgbSolidRed) {
     constexpr int WIDTH = 4;
     constexpr int HEIGHT = 4;
