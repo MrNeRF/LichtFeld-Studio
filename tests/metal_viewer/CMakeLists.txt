@@ -50,6 +50,8 @@ if(TARGET lfs_tensor_rasterizer)
     # Slang tensor-program passes against the native Metal kernels they replace.
     lfs_add_metal_contract(tensor_raster_parity tensor_raster_parity.mm TensorRasterParity)
     target_link_libraries(tensor_raster_parity PRIVATE lfs_tensor_rasterizer)
+    # Native kernel source, for kernel-by-kernel comparisons on identical inputs.
+    target_include_directories(tensor_raster_parity PRIVATE "${CMAKE_BINARY_DIR}/src/rendering/rasterizer/metal/generated")
     set_target_properties(tensor_raster_parity PROPERTIES OBJCXX_STANDARD 23)
 endif()
 add_test(NAME MetalViewerPerspectiveDepthSnapshot

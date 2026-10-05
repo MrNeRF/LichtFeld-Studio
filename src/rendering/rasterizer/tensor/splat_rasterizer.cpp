@@ -72,6 +72,11 @@ namespace lfs::rendering {
         // reuse; the viewer rarely regrows, so release them a frame later,
         // once their last reads have completed.
         bool trim = false;
+        std::function<void(const char*)> marker;
+        void mark(const char* stage) {
+            if (marker)
+                marker(stage);
+        }
         uint32_t reserved_splats = 0, reserved_capacity = 0;
         // Depth-batch scratch, sized from the instances of a completed frame.
         Tensor depth_jobs, partial_color, partial_depth, partial_pick;
@@ -215,6 +220,7 @@ namespace lfs::rendering {
         s.upload(s.raster, frame);
         if (auto r = s.binner.bin(projected, s.raster, count, frame.tiles, (frame.flags & kSourceSorted) != 0); !r)
             return r;
+        s.mark("ranges");
         auto program = s.blend(mode, frame.flags);
         if (!program)
             return lfs::Result<void>::failure(std::move(program).error());
@@ -242,10 +248,13 @@ namespace lfs::rendering {
             // then the remaining chunks in parallel; then their composition.
             if (auto r = s.binner.depth_batches(s.raster, frame.tiles, s.depth_jobs); !r)
                 return r;
+            s.mark("jobs");
             if (auto r = dispatch("tile_blend", kDepthPrefix, {.groups = {frame.tiles * 8, 1, 1}, .group = {32, 1, 1}}); !r)
                 return r;
+            s.mark("prefix");
             if (auto r = dispatch("tile_blend", 0, {.group = {32, 1, 1}, .indirect = &s.binner.dispatch_args(), .indirect_offset = 18}); !r)
                 return r;
+            s.mark("chunks");
             if (auto r = dispatch("tile_depth_compose", 0, {.groups = {frame.tiles * 8, 1, 1}, .group = {32, 1, 1}}); !r)
                 return r;
         } else {
@@ -253,6 +262,7 @@ namespace lfs::rendering {
             if (auto r = dispatch("tile_blend", 0, {.groups = {frame.tiles * (single ? 8u : 4u), 1, 1}, .group = {single ? 32u : 64u, 1, 1}}); !r)
                 return r;
         }
+        s.mark(batches ? "compose" : "blend");
         s.read_status(count);
         return {};
     }
@@ -287,7 +297,13 @@ namespace lfs::rendering {
             !r)
             return r;
         s.presented = true;
+        s.mark("present");
         return {};
+    }
+
+    void SplatRasterizer::set_stage_marker(std::function<void(const char*)> marker) {
+        impl_->marker = marker;
+        impl_->binner.set_stage_marker(std::move(marker));
     }
 
     const Tensor& SplatRasterizer::status() const { return impl_->binner.status(); }

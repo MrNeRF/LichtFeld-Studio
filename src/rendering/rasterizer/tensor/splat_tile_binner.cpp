@@ -69,6 +69,11 @@ namespace lfs::rendering {
         };
         std::vector<ScanLevel> scan_levels;
         uint32_t sorted = 0;
+        StageMarker marker;
+        void mark(const char* stage) {
+            if (marker)
+                marker(stage);
+        }
 
         lfs::Result<void> run(M& module, const M::Dispatch& dispatch) { return module.dispatch(dispatch); }
 
@@ -225,6 +230,7 @@ namespace lfs::rendering {
                                           .groups = {groups, 1, 1}, .group = {256, 1, 1}});
                 !r)
                 return r;
+            s.mark("source");
         }
         const std::array bindings{M::Binding{0, &splats}, M::Binding{8, &counts, RW}, M::Binding{16, &offsets, RW},
                                   M::Binding{24, &s.status, RW}, M::Binding{32, &s.dispatch_args, RW},
@@ -242,6 +248,7 @@ namespace lfs::rendering {
             if (auto r = s.scan_counts(counts, offsets, count, 0); !r)
                 return r;
         }
+        s.mark("counts");
         if (auto r = s.run(*s.tiles, {.function = "tile_status", .arguments = arguments, .group = {1, 1, 1}}); !r)
             return r;
         // Depth bits first (4 passes, unless the sources are already in depth
@@ -254,10 +261,12 @@ namespace lfs::rendering {
                                           .groups = {groups, 1, 1}, .group = {256, 1, 1}});
                 !r)
                 return r;
+            s.mark("instances");
             for (uint32_t pass = 0; pass < passes; ++pass)
                 if (auto r = s.sort_pass(tile_sort, pass); !r)
                     return r;
         }
+        s.mark("sort");
         s.sorted = passes % 2;
         s.ranges.zero_();
         if (count != 0) {
@@ -283,6 +292,8 @@ namespace lfs::rendering {
         return s.run(*s.tiles, {.function = "tile_depth_batches", .arguments = {bytes(parameters), bindings},
                                 .groups = {ceil_div(tiles, 256), 1, 1}, .group = {256, 1, 1}});
     }
+
+    void SplatTileBinner::set_stage_marker(StageMarker marker) { impl_->marker = std::move(marker); }
 
     const Tensor& SplatTileBinner::dispatch_args() const { return impl_->dispatch_args; }
     const Tensor& SplatTileBinner::status() const { return impl_->status; }

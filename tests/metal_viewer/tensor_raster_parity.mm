@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 // The single-source Slang rasterizer passes, run through the tensor library on
 // Metal, against the native Metal kernels they replace, on identical inputs.
+#include "core/gpu_elapsed.hpp"
 #include "core/gpu_kernel_module.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
@@ -11,6 +12,8 @@
 #include "splat_rasterizer.hpp"
 #include "splat_tile_binner.hpp"
 #include "tile_rasterizer.hpp"
+#include "tile_shader_source.hpp"
+#include "core/tensor_metal_reader.hpp"
 
 #include <algorithm>
 #include <array>
@@ -21,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <map>
 #include <memory>
 #include <random>
 #include <stdexcept>
@@ -200,6 +204,8 @@ namespace {
     // projection + SplatRasterizer, on the same scene and camera.
     // Replays a dumped viewer frame (count, Projection, raster parameters,
     // ProjectedSplat records) through both rasterizers: timing and image.
+    void compare_blend_kernels(id<MTLDevice> device, const Tensor& projected, uint32_t count,
+                               lfs::rendering::SplatRasterParameters raster, double slang_ms[3]);
     int run_replay(id<MTLDevice> device, const char* path) {
         const lfs::core::GpuBackendScope scope(GpuBackend::Metal);
         FILE* file = std::fopen(path, "rb");
@@ -255,6 +261,36 @@ namespace {
         }
         (void)download<uint64_t>(slang.status(), 1);
         const double slang_wall = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - slang_start).count() / (kFrames - 3);
+        // GPU time per stage over steady frames, from timestamps at each stage boundary.
+        {
+            std::vector<std::string> names;
+            std::map<std::string, double> stage_ms;
+            constexpr int kProfiled = 20;
+            for (int frame = 0; frame < kProfiled; ++frame) {
+                lfs::core::GpuElapsed elapsed(GpuBackend::Metal, 24);
+                names.clear();
+                size_t marks = 0;
+                require(elapsed.mark(marks++, nullptr), "timestamp failed");
+                slang.set_stage_marker([&](const char* stage) {
+                    names.emplace_back(stage);
+                    require(elapsed.mark(marks++, nullptr), "timestamp failed");
+                });
+                require(bool(slang.rasterize(projected, nullptr, count, lfs::rendering::SplatRasterMode::Gaussian, raster)), "rasterize failed");
+                require(bool(slang.present({})), "present failed");
+                slang.set_stage_marker({});
+                require(elapsed.wait_event(marks - 1), "timestamp wait failed");
+                for (size_t i = 0; i < names.size(); ++i)
+                    stage_ms[names[i]] += elapsed.milliseconds(i, i + 1).value_or(0.f) / kProfiled;
+            }
+            double total = 0;
+            for (const auto& name : names) {
+                std::printf("  stage %-10s %.3f ms\n", name.c_str(), stage_ms[name]);
+                total += stage_ms[name];
+            }
+            std::printf("  stage total      %.3f ms\n", total);
+            double slang_blend[3] = {stage_ms["prefix"], stage_ms["chunks"], stage_ms["compose"]};
+            compare_blend_kernels(device, projected, count, raster, slang_blend);
+        }
         const auto slang_color = download<uint16_t>(slang.color(), size_t(width) * height * 4);
         const auto* nc = reinterpret_cast<const _Float16*>(native_color.data());
         const auto* sc = reinterpret_cast<const _Float16*>(slang_color.data());
@@ -289,6 +325,104 @@ namespace {
                     width, height, count, (unsigned long long)native_status.required_instances, native_wall, gpu_ms / (kFrames - 6),
                     slang_wall, max_color * 255, 100.0 * over_one / (size_t(width) * height));
         return 0;
+    }
+
+    // Native and Slang depth-batch blend kernels on identical binned input:
+    // GPU time per kernel, one submission each.
+    void compare_blend_kernels(id<MTLDevice> device, const Tensor& projected, uint32_t count,
+                               lfs::rendering::SplatRasterParameters raster, double slang_ms[3]) {
+        const uint32_t tiles = raster.tiles, width = raster.width, height = raster.height;
+        lfs::rendering::SplatTileBinner binner(GpuBackend::Metal);
+        require(bool(binner.reserve(count, tiles, raster.capacity)), "binner reserve failed");
+        // Required instances of this frame, then depth-batch scratch as the rasterizer sizes it.
+        raster.flags = 128 | 4096 | 256;
+        require(bool(binner.bin(projected, tensor(std::vector<lfs::rendering::SplatRasterParameters>{raster}), count, tiles, true)), "bin failed");
+        const uint64_t required = download<uint64_t>(binner.status(), 1)[0];
+        const uint32_t parallel = uint32_t(std::min<uint64_t>(raster.capacity, required + required / 8));
+        const size_t slots = (parallel + 575) / 576 + tiles;
+        raster.flags |= 512;
+        raster.mask_limits[2] = parallel;
+        const auto raster_tensor = tensor(std::vector<lfs::rendering::SplatRasterParameters>{raster});
+        require(bool(binner.bin(projected, raster_tensor, count, tiles, true)), "bin failed");
+        auto jobs = Tensor::empty({slots * 2}, Device::GPU, DataType::Int32);
+        require(bool(binner.depth_batches(raster_tensor, tiles, jobs)), "jobs failed");
+        auto partial_color = Tensor::zeros({slots * 256 * 4}, Device::GPU, DataType::Float32);
+        auto partial_depth = Tensor::zeros({slots * 256 * 4}, Device::GPU, DataType::Float32);
+        auto partial_pick = Tensor::zeros({slots * 256}, Device::GPU, DataType::UInt32);
+        auto status = binner.status();
+        (void)download<uint64_t>(status, 1);
+
+        auto options = [MTLCompileOptions new];
+        options.languageVersion = MTLLanguageVersion2_4;
+        options.mathMode = MTLMathModeRelaxed;
+        NSError* error = nil;
+        id<MTLLibrary> library = [device newLibraryWithSource:@(kTileRasterizerSource) options:options error:&error];
+        require(library != nil, "native library failed");
+        const auto pipeline = [&](NSString* name, uint32_t flags) {
+            auto constants = [MTLFunctionConstantValues new];
+            const uint32_t mode = 0;
+            const bool key32 = false;
+            [constants setConstantValue:&mode type:MTLDataTypeUInt atIndex:0];
+            [constants setConstantValue:&flags type:MTLDataTypeUInt atIndex:1];
+            [constants setConstantValue:&key32 type:MTLDataTypeBool atIndex:2];
+            NSError* e = nil;
+            id<MTLFunction> function = [library newFunctionWithName:name constantValues:constants error:&e];
+            require(function != nil, "native function failed");
+            auto descriptor = [MTLComputePipelineDescriptor new];
+            descriptor.computeFunction = function;
+            descriptor.maxTotalThreadsPerThreadgroup = 64;
+            descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth = YES;
+            return [device newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&e];
+        };
+        const uint32_t flags = raster.flags & ~256u;
+        const std::array<id<MTLComputePipelineState>, 3> pipelines{pipeline(@"tile_blend", flags | 1024), pipeline(@"tile_blend", flags),
+                                                                   pipeline(@"tile_depth_compose", flags)};
+        const auto texture = [&](MTLPixelFormat format) {
+            auto descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:width height:height mipmapped:NO];
+            descriptor.storageMode = MTLStorageModePrivate;
+            descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+            return [device newTextureWithDescriptor:descriptor];
+        };
+        const std::array<id<MTLTexture>, 3> targets{texture(MTLPixelFormatRGBA16Float), texture(MTLPixelFormatRGBA32Float), texture(MTLPixelFormatR32Uint)};
+        auto dummy = [device newBufferWithLength:256 options:MTLResourceStorageModePrivate];
+        lfs::core::MetalTensorReader reader;
+        const std::array<const Tensor*, 5> inputs{&projected, &binner.indices(), &binner.ranges(), &jobs, &binner.dispatch_args()};
+        std::array<Tensor*, 4> outputs{&status, &partial_color, &partial_depth, &partial_pick};
+        double native_ms[3] = {};
+        constexpr int kRuns = 20;
+        for (int run = 0; run < kRuns + 2; ++run)
+            for (int stage = 0; stage < 3; ++stage) {
+                auto command = reader.submitWrites(inputs, outputs, [&](id<MTLCommandBuffer> command, std::span<const lfs::core::MetalTensorView> in,
+                                                                        std::span<const lfs::core::MetalTensorView> out) {
+                    auto e = [command computeCommandEncoder];
+                    [e setComputePipelineState:pipelines[stage]];
+                    [e setBuffer:in[0].buffer offset:in[0].offset atIndex:0];
+                    [e setBuffer:in[1].buffer offset:in[1].offset atIndex:1];
+                    [e setBuffer:in[2].buffer offset:in[2].offset atIndex:2];
+                    [e setBuffer:out[0].buffer offset:out[0].offset atIndex:3];
+                    [e setBytes:&raster length:sizeof(raster) atIndex:4];
+                    for (NSUInteger j = 5; j <= 11; ++j)
+                        [e setBuffer:dummy offset:0 atIndex:j];
+                    [e setBytes:&count length:4 atIndex:12];
+                    [e setBuffer:in[3].buffer offset:in[3].offset atIndex:13];
+                    [e setBuffer:out[1].buffer offset:out[1].offset atIndex:14];
+                    [e setBuffer:out[2].buffer offset:out[2].offset atIndex:15];
+                    [e setBuffer:out[3].buffer offset:out[3].offset atIndex:16];
+                    for (NSUInteger j = 0; j < 3; ++j)
+                        [e setTexture:targets[j] atIndex:j];
+                    if (stage == 1)
+                        [e dispatchThreadgroupsWithIndirectBuffer:in[4].buffer indirectBufferOffset:in[4].offset + 18 * 4 threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+                    else
+                        [e dispatchThreadgroups:MTLSizeMake(size_t(tiles) * 8, 1, 1) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+                    [e endEncoding];
+                });
+                [command waitUntilCompleted];
+                require(command.status == MTLCommandBufferStatusCompleted, "native kernel failed");
+                if (run >= 2)
+                    native_ms[stage] += (command.GPUEndTime - command.GPUStartTime) * 1e3 / kRuns;
+            }
+        std::printf("  kernels on identical input   native: prefix=%.3f chunks=%.3f compose=%.3f ms | slang: prefix=%.3f chunks=%.3f compose=%.3f ms\n",
+                    native_ms[0], native_ms[1], native_ms[2], slang_ms[0], slang_ms[1], slang_ms[2]);
     }
 
     int run_frames(id<MTLDevice> device) {

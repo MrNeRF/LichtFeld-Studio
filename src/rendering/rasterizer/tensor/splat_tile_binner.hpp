@@ -7,6 +7,7 @@
 #include "core/tensor.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -43,6 +44,11 @@ namespace lfs::rendering {
         // Writes the depth-batch job of every chunk slot of the last bin() into
         // `jobs` (Int32 pairs); slots of tiles below the split stay -1.
         [[nodiscard]] lfs::Result<void> depth_batches(const core::Tensor& raster, uint32_t tiles, core::Tensor& jobs);
+
+        // Diagnostics: called after each binning stage is recorded ("source",
+        // "counts", "instances", "sort"), e.g. to place GPU timestamps.
+        using StageMarker = std::function<void(const char* stage)>;
+        void set_stage_marker(StageMarker marker);
 
         // Results of the last bin(), valid on the tensor timeline.
         [[nodiscard]] const core::Tensor& status() const;  // RasterStatus bytes

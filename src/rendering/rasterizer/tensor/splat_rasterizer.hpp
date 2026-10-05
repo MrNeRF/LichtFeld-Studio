@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace lfs::rendering {
@@ -62,6 +63,11 @@ namespace lfs::rendering {
         // overflowing frame keeps the previous image of the same extent; the
         // rasterizer sets has_previous and extent.
         [[nodiscard]] lfs::Result<void> present(const SplatPresentParameters& parameters);
+
+        // Diagnostics: called after each recorded stage of rasterize() and
+        // present() (binning stages, "ranges", "jobs", "prefix", "chunks",
+        // "compose" or "blend", "present"), e.g. to place GPU timestamps.
+        void set_stage_marker(std::function<void(const char* stage)> marker);
 
         // Byte views carved from one per-extent allocation.
         [[nodiscard]] const core::Tensor& status() const;       // RasterStatus bytes
