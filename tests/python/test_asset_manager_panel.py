@@ -3916,7 +3916,7 @@ def test_missing_filter_removes_the_shown_missing_entries_only(panel_module, mon
     }))
     index = AssetIndex(library_path=catalog, default_folder_path=tmp_path)
     assert index.load()
-    index.reconcile_all()
+    index.verify_projects_batch([present_id, missing_id, other_missing_id])
     panel = panel_module.AssetManagerPanel()
     panel._asset_index = index
     monkeypatch.setattr(panel, "refresh_catalog", lambda **kwargs: None)
