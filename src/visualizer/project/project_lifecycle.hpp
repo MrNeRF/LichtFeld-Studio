@@ -61,7 +61,8 @@ namespace lfs::vis {
     class VisualizerImplResetTest_TrainingSnapshotCancelTerminalizesBeforeSettlement_Test;
     class VisualizerImplResetTest_FailedAutosaveSettlementAppliesBackoffBeforeRetry_Test;
     class VisualizerImplResetTest_PendingCloseSuppressesBackgroundAutosave_Test;
-    class VisualizerImplResetTest_StoppingTrainerBlocksIdleCompactionAndAutosave_Test;
+    class VisualizerImplResetTest_StoppingTrainerBlocksAutosave_Test;
+    class VisualizerImplResetTest_IdleMaintenanceKeepsEverySave_Test;
     class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
     class VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
     class VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;
@@ -175,7 +176,6 @@ namespace lfs::vis::project {
         std::uint64_t autosave_interval_seconds = 5 * 60;
         std::uint64_t autosave_dirty_epoch_threshold = 20;
         std::uint64_t autosave_quiet_seconds = 2;
-        std::uint64_t compaction_idle_seconds = 30;
         std::vector<ProjectMruEntry> mru;
         std::vector<DismissedRecoveryEntry> dismissed_recovery;
 
@@ -390,7 +390,8 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotCancelTerminalizesBeforeSettlement_Test;
         friend class lfs::vis::VisualizerImplResetTest_FailedAutosaveSettlementAppliesBackoffBeforeRetry_Test;
         friend class lfs::vis::VisualizerImplResetTest_PendingCloseSuppressesBackgroundAutosave_Test;
-        friend class lfs::vis::VisualizerImplResetTest_StoppingTrainerBlocksIdleCompactionAndAutosave_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StoppingTrainerBlocksAutosave_Test;
+        friend class lfs::vis::VisualizerImplResetTest_IdleMaintenanceKeepsEverySave_Test;
         friend class lfs::vis::VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;
@@ -607,7 +608,7 @@ namespace lfs::vis::project {
                     ProjectDocumentAutosaveOptions>
                 autosave = std::nullopt);
         [[nodiscard]] lfs::Result<void>
-        startCompaction(bool automatic, bool clean = false,
+        startCompaction(bool clean = false,
                         const std::filesystem::path& destination = {},
                         const lfs::core::Uuid& expected_commit = {});
         [[nodiscard]] lfs::Result<void>
@@ -823,7 +824,6 @@ namespace lfs::vis::project {
             project_write_parameter_serial_ = 0;
         std::filesystem::path
             project_write_destination_;
-        bool project_write_automatic_ = false;
         std::string last_project_write_error_;
         std::optional<lfs::ErrorCode> last_project_write_error_code_;
         std::optional<lfs::Error> last_project_write_typed_error_;

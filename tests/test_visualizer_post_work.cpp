@@ -8394,7 +8394,7 @@ contract["test_selection_submode_follows_native_mode"](lf)
     // Catches background maintenance grabbing the master writer lock while a
     // stopping trainer still owes its terminal append (lost training generation).
     TEST_F(VisualizerImplResetTest,
-           StoppingTrainerBlocksIdleCompactionAndAutosave) {
+           StoppingTrainerBlocksAutosave) {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
@@ -8474,8 +8474,6 @@ contract["test_selection_submode_follows_native_mode"](lf)
                         std::chrono::steady_clock::
                             now() +
                         std::chrono::hours(1);
-                    lifecycle->settings_
-                        .compaction_idle_seconds = 1;
                     lifecycle->last_mutation_at_ =
                         std::chrono::steady_clock::
                             now() -
@@ -8495,24 +8493,6 @@ contract["test_selection_submode_follows_native_mode"](lf)
                         std::chrono::hours(1);
                 };
 
-            // Idle compaction would take the master
-            // writer lock the terminal append needs.
-            lifecycle->compaction_suggested_ = true;
-            lifecycle->scene_dirty_.store(
-                false, std::memory_order_release);
-            lifecycle->payload_dirty_.store(
-                false, std::memory_order_release);
-            prime_maintenance();
-            lifecycle->updateMaintenance();
-            EXPECT_FALSE(viewer.jobs().anyRunning(
-                JobType::ProjectWrite));
-            EXPECT_FALSE(
-                lifecycle->project_write_job_
-                    .has_value());
-
-            // Hard dirt blocks compaction, so this leg
-            // proves the autosave path stays parked too.
-            lifecycle->compaction_suggested_ = false;
             ASSERT_NE(
                 scene.addGroup("Hard dirt"),
                 lfs::core::NULL_NODE);
@@ -8530,6 +8510,45 @@ contract["test_selection_submode_follows_native_mode"](lf)
 
             viewer.getTrainerManager()
                 ->clearTrainer();
+        }
+    }
+
+    // Catches idle maintenance compacting the project, which keeps only the current save and
+    // removes every save the Contents list offers to restore.
+    TEST_F(VisualizerImplResetTest, IdleMaintenanceKeepsEverySave) {
+        const auto project_path = temporary_.path / "idle-saves.licht";
+        write_empty_project(project_path);
+        const auto save_count = [&] {
+            return lfs::test::licht::require_result(
+                       lfs::io::project::inspect_project_details(project_path))
+                .save_history.size();
+        };
+        {
+            VisualizerImpl viewer(projectOptions());
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+            const auto writes_finished = [&] {
+                return pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_,
+                                 [&] { return !viewer.jobs().anyRunning(JobType::ProjectWrite); });
+            };
+            auto& scene = viewer.getScene();
+            for (const char* name : {"First edit", "Second edit"}) {
+                ASSERT_NE(scene.addGroup(name), lfs::core::NULL_NODE);
+                ASSERT_TRUE(viewer.projectSave(false));
+                ASSERT_TRUE(writes_finished());
+            }
+            const auto saves = save_count();
+            ASSERT_GE(saves, 2u);
+
+            auto* const lifecycle = viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_FALSE(lifecycle->hasDirtyProject());
+            lifecycle->compaction_suggested_ = true;
+            lifecycle->next_storage_check_at_ = std::chrono::steady_clock::now() + std::chrono::hours(1);
+            lifecycle->last_mutation_at_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle->updateMaintenance();
+            ASSERT_TRUE(writes_finished());
+            EXPECT_EQ(save_count(), saves);
         }
     }
 
