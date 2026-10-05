@@ -4,7 +4,7 @@
 # Single-source splat rasterizer: Slang passes run through the tensor library
 # on Metal and Vulkan. It replaces the native Metal and vksplat rasterizers
 # pass by pass.
-add_library(lfs_tensor_rasterizer STATIC splat_projector.cpp splat_tile_binner.cpp splat_rasterizer.cpp splat_lod_selector.cpp splat_selection_query.cpp)
+add_library(lfs_tensor_rasterizer STATIC splat_projector.cpp splat_tile_binner.cpp splat_rasterizer.cpp splat_lod_selector.cpp splat_selection_query.cpp point_cloud_renderer.cpp)
 target_compile_features(lfs_tensor_rasterizer PUBLIC cxx_std_23)
 set_target_properties(lfs_tensor_rasterizer PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(lfs_tensor_rasterizer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -46,6 +46,8 @@ lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut32 SOURCE splat_blend.s
     DEFINES LFS_BLEND_MODE=3 LFS_BLEND_SINGLE_SIMD=1)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_blend_gut64 SOURCE splat_blend.slang COMPUTE ${_blend_entries} DEFINES LFS_BLEND_MODE=3)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_present SOURCE splat_present.slang COMPUTE present_viewer)
+lfs_add_gpu_program(lfs_tensor_rasterizer point_cloud SOURCE point_cloud.slang
+    COMPUTE extractPointDepth VERTEX pointVertex FRAGMENT pointColorFragment pointDepthFragment)
 # Parity tests load the passes directly against the native kernels.
 target_include_directories(lfs_tensor_rasterizer PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/gpu_programs/splat_project")
 # Shared includes of the Slang passes; the program rules depend only on their sources.

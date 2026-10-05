@@ -8,8 +8,8 @@
 #include "core/tensor_metal_reader.hpp"
 #include "core/tensor_upload.hpp"
 #include "metal_frame_budget.hpp"
-#include "metal_present_source.hpp"
 #include "metal_rad_pager.hpp"
+#include "point_cloud_renderer.hpp"
 #include "generic_readback_ticket_ring.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "scene_overlay_params.hpp"
@@ -38,6 +38,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 #ifdef LFS_GRAPHICS_VULKAN
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan_metal.h>
@@ -121,12 +122,6 @@ namespace lfs::vis {
             std::memcpy(&result, &m, sizeof(m));
             return result;
         }
-        struct PointParameters {
-            simd_float4x4 view_projection, view, crop_to_local;
-            simd_float4 crop_min, crop_max, voxel_focal_ortho;
-            simd_uint4 counts;
-        };
-        static_assert(sizeof(PointParameters) == 256);
 #ifdef LFS_GRAPHICS_VULKAN
         struct Image {
             VkDevice device = VK_NULL_HANDLE;
@@ -216,7 +211,6 @@ namespace lfs::vis {
             bool rad_bootstrap = false;
             uint64_t rad_signature = 0;
             id<MTLCommandBuffer> command;
-            id<MTLTexture> point_depth;
             bool gpu_lod_active = false;
             uint64_t gpu_tree_signature = 0;
             uint32_t gpu_capacity = 0, gpu_source_count = 0, gpu_chunks = 0;
@@ -262,8 +256,6 @@ namespace lfs::vis {
         core::Tensor projected, gut_geometry;
         bool profiling_enabled = false;
         std::function<void()> retry_callback;
-        id<MTLRenderPipelineState> point_pipeline;
-        id<MTLDepthStencilState> point_depth_state;
         id<MTLSharedEvent> event;
 #ifdef LFS_GRAPHICS_VULKAN
         VkSemaphore completion = VK_NULL_HANDLE;
@@ -305,6 +297,8 @@ namespace lfs::vis {
             std::unique_ptr<rendering::SplatRasterizer> raster;
             std::unique_ptr<rendering::SplatLodSelector> lod;
             core::GpuBackend backend{};
+            std::unique_ptr<rendering::SplatPointRenderer> points;
+            core::GpuBackend point_backend{};
             std::array<core::Tensor, 3> page_maps; // chunk_to_page, page_age, page_to_chunk
             std::deque<core::TensorUpload> uploads;
         };
@@ -435,27 +429,6 @@ namespace lfs::vis {
             export_objects(ctx.device(), &exports);
             if (!native_device.mtlDevice || native_device.mtlDevice.registryID != reader.device().registryID)
                 throw std::runtime_error(std::format("Metal tensors and desktop presentation must use the same GPU (presentation_registry={}, tensor_registry={}, presentation_device_present={})", native_device.mtlDevice.registryID, reader.device().registryID, native_device.mtlDevice != nil));
-            NSError* error = nil;
-            auto options = [MTLCompileOptions new];
-            options.languageVersion = MTLLanguageVersion2_4;
-            auto library = [reader.device() newLibraryWithSource:[NSString stringWithUTF8String:kMetalPresentSource] options:options error:&error];
-            if (!library)
-                throw std::runtime_error(std::format("Metal presentation shader compilation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
-            auto point_descriptor = [MTLRenderPipelineDescriptor new];
-            point_descriptor.vertexFunction = [library newFunctionWithName:@"point_vertex"];
-            point_descriptor.fragmentFunction = [library newFunctionWithName:@"point_fragment"];
-            point_descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
-            point_descriptor.colorAttachments[1].pixelFormat = MTLPixelFormatR32Float;
-            point_descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
-            point_pipeline = [reader.device() newRenderPipelineStateWithDescriptor:point_descriptor error:&error];
-            if (!point_pipeline)
-                throw std::runtime_error(std::format("Metal point pipeline creation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
-            auto depth_descriptor = [MTLDepthStencilDescriptor new];
-            depth_descriptor.depthCompareFunction = MTLCompareFunctionLess;
-            depth_descriptor.depthWriteEnabled = YES;
-            point_depth_state = [reader.device() newDepthStencilStateWithDescriptor:depth_descriptor];
-            if (!point_depth_state)
-                throw std::runtime_error(std::format("Metal point depth state unavailable (device={}, compare_function={}, depth_write={})", reader.device().name.UTF8String, uint32_t(depth_descriptor.depthCompareFunction), bool(depth_descriptor.depthWriteEnabled)));
             event = [reader.device() newSharedEvent];
             if (!event)
                 throw lfs::Exception(nativeError(std::format("Metal presentation timeline allocation failed (device={}, allocated={}, recommended={})", reader.device().name.UTF8String, reader.device().currentAllocatedSize, reader.device().recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
@@ -502,27 +475,6 @@ namespace lfs::vis {
                     throw std::invalid_argument(std::format("Metal viewport context changed without reset (existing_context={:#x}, requested_context={:#x})", reinterpret_cast<uintptr_t>(context), reinterpret_cast<uintptr_t>(&ctx)));
                 return;
             }
-            NSError* error = nil;
-            auto options = [MTLCompileOptions new];
-            options.languageVersion = MTLLanguageVersion2_4;
-            auto library = [reader.device() newLibraryWithSource:[NSString stringWithUTF8String:kMetalPresentSource] options:options error:&error];
-            if (!library)
-                throw std::runtime_error(std::format("Metal presentation shader compilation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
-            auto point_descriptor = [MTLRenderPipelineDescriptor new];
-            point_descriptor.vertexFunction = [library newFunctionWithName:@"point_vertex"];
-            point_descriptor.fragmentFunction = [library newFunctionWithName:@"point_fragment"];
-            point_descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
-            point_descriptor.colorAttachments[1].pixelFormat = MTLPixelFormatR32Float;
-            point_descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
-            point_pipeline = [reader.device() newRenderPipelineStateWithDescriptor:point_descriptor error:&error];
-            if (!point_pipeline)
-                throw std::runtime_error(std::format("Metal point pipeline creation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
-            auto depth_descriptor = [MTLDepthStencilDescriptor new];
-            depth_descriptor.depthCompareFunction = MTLCompareFunctionLess;
-            depth_descriptor.depthWriteEnabled = YES;
-            point_depth_state = [reader.device() newDepthStencilStateWithDescriptor:depth_descriptor];
-            if (!point_depth_state)
-                throw std::runtime_error(std::format("Metal point depth state unavailable (device={}, compare_function={}, depth_write={})", reader.device().name.UTF8String, uint32_t(depth_descriptor.depthCompareFunction), bool(depth_descriptor.depthWriteEnabled)));
             event = [reader.device() newSharedEvent];
             if (!event)
                 throw lfs::Exception(nativeError(std::format("Metal presentation timeline allocation failed (device={}, allocated={}, recommended={})", reader.device().name.UTF8String, reader.device().currentAllocatedSize, reader.device().recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
@@ -679,13 +631,6 @@ namespace lfs::vis {
                 f.raster_status = [device newBufferWithLength:sizeof(RasterStatus) options:MTLResourceStorageModeShared];
                 if (!f.raster_status)
                     throw lfs::Exception(nativeError("Metal raster status staging allocation failed", lfs::ErrorCode::ResourceExhausted));
-            } else {
-                auto depth_descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float width:f.size.x height:f.size.y mipmapped:NO];
-                depth_descriptor.storageMode = MTLStorageModePrivate;
-                depth_descriptor.usage = MTLTextureUsageRenderTarget;
-                f.point_depth = [device newTextureWithDescriptor:depth_descriptor];
-                if (!f.point_depth)
-                    throw lfs::Exception(nativeError(std::format("Metal point depth allocation failed (extent={}x{})", f.size.x, f.size.y), lfs::ErrorCode::ResourceExhausted));
             }
 #ifdef LFS_GRAPHICS_VULKAN
             f.color.init(*context, device, f.size.x, f.size.y, MTLPixelFormatRGBA8Unorm, VK_FORMAT_R8G8B8A8_UNORM);
@@ -886,11 +831,17 @@ namespace lfs::vis {
             r.colors->dtype() != core::DataType::Float32 || r.positions->ndim() != 2 || r.colors->ndim() != 2 ||
             r.positions->size(1) != 3 || r.colors->size(1) != 3 || r.positions->size(0) != r.colors->size(0))
             return false;
+        const auto backend = core::gpu_backend_of(*r.positions);
+        if (!backend || core::gpu_backend_of(*r.colors) != backend)
+            return false;
         const size_t count = r.positions->size(0);
         for (auto t : {r.selection_mask, r.preview_selection_mask, r.deleted_mask})
-            if (t && t->is_valid() && (!resident(t) || t->bytes() < count || (t->dtype() != core::DataType::UInt8 && t->dtype() != core::DataType::Bool)))
+            if (t && t->is_valid() && (!resident(t) || core::gpu_backend_of(*t) != backend || t->bytes() < count ||
+                                       (t->dtype() != core::DataType::UInt8 && t->dtype() != core::DataType::Bool)))
                 return false;
-        if (r.transform_indices && r.transform_indices->is_valid() && (!resident(r.transform_indices) || r.transform_indices->bytes() < count * 4 || r.transform_indices->dtype() != core::DataType::Int32))
+        if (r.transform_indices && r.transform_indices->is_valid() &&
+            (!resident(r.transform_indices) || core::gpu_backend_of(*r.transform_indices) != backend ||
+             r.transform_indices->bytes() < count * 4 || r.transform_indices->dtype() != core::DataType::Int32))
             return false;
         return count <= std::numeric_limits<uint32_t>::max() && r.size.x > 0 && r.size.y > 0;
     }
@@ -905,7 +856,7 @@ namespace lfs::vis {
             i.drainRetiredTargets();
             i.stampConsumers();
             const auto slot = output;
-            (void)i.target(slot);
+            auto& state = i.target(slot);
             rendering::ViewportRenderRequest request;
             request.frame_view.size = r.size;
             auto& f = i.acquire(slot, request, uint32_t(r.positions->size(0)), true);
@@ -913,80 +864,79 @@ namespace lfs::vis {
             const size_t nodes = r.model_transforms ? r.model_transforms->size() : 0;
             if (nodes > std::numeric_limits<uint32_t>::max())
                 throw std::runtime_error(std::format("Metal point object count exceeds indexing (nodes={}, max={})", nodes, std::numeric_limits<uint32_t>::max()));
-            const auto allocate = [&](id<MTLBuffer> __strong& buffer, size_t bytes) {
-                if (!buffer || buffer.length < bytes)
-                    buffer = [i.reader.device() newBufferWithLength:std::max<size_t>(bytes, 16) options:MTLResourceStorageModeShared];
-                if (!buffer)
-                    throw lfs::Exception(nativeError(std::format("Metal point allocation failed (bytes={}, allocated={}, recommended={})", bytes, i.reader.device().currentAllocatedSize, i.reader.device().recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
-            };
-            allocate(f.objects, std::max<size_t>(1, nodes) * sizeof(SceneObject));
-            auto objects = static_cast<SceneObject*>(f.objects.contents);
+            std::vector<SceneObject> objects(nodes);
             for (size_t n = 0; n < nodes; ++n) {
                 const bool visible = !r.node_visibility_mask || n >= r.node_visibility_mask->size() || (*r.node_visibility_mask)[n];
                 objects[n] = {matrix((*r.model_transforms)[n]), {}, {uint32_t(visible), 0, 0, 0}};
             }
             const auto palette = r.selection_colors ? *r.selection_colors : rendering::defaultSelectionColorTable();
-            allocate(f.selection_colors, sizeof(palette));
-            std::memcpy(f.selection_colors.contents, palette.data(), sizeof(palette));
             uint32_t flags = (r.orthographic ? 8u : 0u) | (valid(r.transform_indices) ? 16u : 0u) |
                              (valid(r.selection_mask) ? 32u : 0u) | (valid(r.preview_selection_mask) ? 64u : 0u) |
                              (r.preview_selection_additive ? 128u : 0u) | (uint32_t(r.depth_visualization_mode) == 1 ? 256u : 0u) |
                              (valid(r.deleted_mask) ? 512u : 0u);
-            PointParameters p{matrix(r.view_projection), matrix(r.view), matrix(glm::mat4(1)), {}, {}, {r.voxel_size * r.scaling_modifier, r.focal_y, float(r.size.y) / std::max(r.ortho_scale, 1e-5f), float(r.depth_view)}, {uint32_t(nodes), 0, flags, 511}};
+            rendering::PointParameters p;
+            const auto store = [](std::array<float, 16>& destination, const glm::mat4& source) {
+                std::memcpy(destination.data(), glm::value_ptr(source), sizeof(source));
+            };
+            store(p.view_projection, r.view_projection);
+            store(p.view, r.view);
+            store(p.crop_to_local, glm::mat4(1));
+            p.voxel_focal_ortho = {r.voxel_size * r.scaling_modifier, r.focal_y,
+                                   float(r.size.y) / std::max(r.ortho_scale, 1e-5f), float(r.depth_view)};
+            p.counts = {uint32_t(nodes), 0, flags, 511};
 #ifdef LFS_GRAPHICS_VULKAN
-            VkPhysicalDeviceProperties props{};
-            vkGetPhysicalDeviceProperties(context.physicalDevice(), &props);
-            p.counts.w = uint32_t(std::min(511.f, props.limits.pointSizeRange[1]));
-#else
-            p.counts.w = 511; // Metal clamps point_size to 511
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceProperties(context.physicalDevice(), &properties);
+            p.counts[3] = uint32_t(std::min(511.0f, properties.limits.pointSizeRange[1]));
 #endif
             if (r.crop) {
-                p.counts.z |= 1u | (r.crop->inverse ? 2u : 0u) | (r.crop->desaturate ? 4u : 0u);
-                p.crop_to_local = matrix(r.crop->to_local);
+                p.counts[2] |= 1u | (r.crop->inverse ? 2u : 0u) | (r.crop->desaturate ? 4u : 0u);
+                store(p.crop_to_local, r.crop->to_local);
                 p.crop_min = {r.crop->min.x, r.crop->min.y, r.crop->min.z, 0};
                 p.crop_max = {r.crop->max.x, r.crop->max.y, r.crop->max.z, 0};
             } else if (r.crop_ellipsoid) {
-                p.counts.z |= 1025u | (r.crop_ellipsoid->inverse ? 2u : 0u) | (r.crop_ellipsoid->desaturate ? 4u : 0u);
-                p.crop_to_local = matrix(r.crop_ellipsoid->to_local);
+                p.counts[2] |= 1025u | (r.crop_ellipsoid->inverse ? 2u : 0u) | (r.crop_ellipsoid->desaturate ? 4u : 0u);
+                store(p.crop_to_local, r.crop_ellipsoid->to_local);
                 p.crop_min = {r.crop_ellipsoid->radii.x, r.crop_ellipsoid->radii.y, r.crop_ellipsoid->radii.z, 0};
             }
-            p.crop_min.w = r.depth_view_min;
-            p.crop_max.w = r.depth_view_max;
-            std::array<const core::Tensor*, 6> tensors = {r.positions, r.colors, r.transform_indices, r.selection_mask, r.preview_selection_mask, r.deleted_mask};
+            p.crop_min[3] = r.depth_view_min;
+            p.crop_max[3] = r.depth_view_max;
+            const auto backend = *core::gpu_backend_of(*r.positions);
+            const core::GpuBackendScope scope(backend);
+            if (!state.points || state.point_backend != backend) {
+                state.points = std::make_unique<rendering::SplatPointRenderer>(backend);
+                state.point_backend = backend;
+            }
+            const rendering::SplatPointInputs inputs{
+                .positions = r.positions,
+                .colors = r.colors,
+                .transform_indices = r.transform_indices,
+                .selection = r.selection_mask,
+                .preview = r.preview_selection_mask,
+                .deleted = r.deleted_mask,
+                .objects = std::as_bytes(std::span(objects)),
+                .selection_palette = std::as_bytes(std::span(palette)),
+            };
+            if (auto rendered = state.points->render(inputs, p, uint32_t(r.size.x), uint32_t(r.size.y),
+                                                     {r.background_color.x, r.background_color.y, r.background_color.z,
+                                                      r.transparent_background ? 0.0f : 1.0f});
+                !rendered)
+                throw lfs::Exception(rendered.error());
             if (i.serial == std::numeric_limits<uint64_t>::max())
                 throw std::runtime_error(std::format("Metal point timeline exhausted (serial={})", i.serial));
             const uint64_t serial = i.serial + 1;
             const auto event = i.event;
-            f.command = i.reader.submit(tensors, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
+            const std::array<const core::Tensor*, 2> outputs{&state.points->color(), &state.points->linear_depth()};
+            f.command = i.reader.submit(outputs, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
                 if (i.next_readback)
                     [command encodeWaitForEvent:i.readback_event value:i.next_readback];
-                auto pass = [MTLRenderPassDescriptor new];
-                pass.colorAttachments[0].texture = f.color.texture;
-                pass.colorAttachments[0].loadAction = MTLLoadActionClear;
-                pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-                pass.colorAttachments[0].clearColor = MTLClearColorMake(r.background_color.x, r.background_color.y, r.background_color.z, r.transparent_background ? 0 : 1);
-                pass.colorAttachments[1].texture = f.depth.texture;
-                pass.colorAttachments[1].loadAction = MTLLoadActionClear;
-                pass.colorAttachments[1].storeAction = MTLStoreActionStore;
-                pass.colorAttachments[1].clearColor = MTLClearColorMake(-1, 0, 0, 0);
-                pass.depthAttachment.texture = f.point_depth;
-                pass.depthAttachment.loadAction = MTLLoadActionClear;
-                pass.depthAttachment.storeAction = MTLStoreActionDontCare;
-                pass.depthAttachment.clearDepth = 1;
-                auto encoder = [command renderCommandEncoderWithDescriptor:pass];
-                if (!encoder)
-                    throw std::runtime_error(std::format("Metal point render encoder failed (command_status={}, extent={}x{}, points={})", long(command.status), f.size.x, f.size.y, r.positions->size(0)));
-                [encoder setRenderPipelineState:i.point_pipeline];
-                [encoder setDepthStencilState:i.point_depth_state];
-                const NSUInteger bindings[] = {0, 1, 3, 4, 5, 7};
-                for (size_t n = 0; n < views.size(); ++n)
-                    [encoder setVertexBuffer:views[n].buffer ?: f.objects offset:views[n].buffer ? views[n].offset : 0 atIndex:bindings[n]];
-                [encoder setVertexBuffer:f.objects offset:0 atIndex:2];
-                [encoder setVertexBuffer:f.selection_colors offset:0 atIndex:6];
-                [encoder setVertexBytes:&p length:sizeof(p) atIndex:8];
-                [encoder setFragmentBytes:&p length:sizeof(p) atIndex:0];
-                [encoder drawPrimitives:MTLPrimitiveTypePoint vertexStart:0 vertexCount:r.positions->size(0)];
-                [encoder endEncoding];
+                const NSUInteger width = f.size.x, height = f.size.y;
+                auto blit = [command blitCommandEncoder];
+                [blit copyFromBuffer:views[0].buffer sourceOffset:views[0].offset sourceBytesPerRow:width * 4 sourceBytesPerImage:width * height * 4
+                          sourceSize:MTLSizeMake(width, height, 1) toTexture:f.color.texture destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                [blit copyFromBuffer:views[1].buffer sourceOffset:views[1].offset sourceBytesPerRow:width * 4 sourceBytesPerImage:width * height * 4
+                          sourceSize:MTLSizeMake(width, height, 1) toTexture:f.depth.texture destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                [blit endEncoding];
                 const auto completion_event = event;
                 const auto completion_value = serial;
                 [command encodeSignalEvent:completion_event value:completion_value];

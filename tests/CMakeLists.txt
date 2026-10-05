@@ -101,6 +101,7 @@ if(BUILD_TESTS)
     set_tests_properties(GpuProgramContracts PROPERTIES LABELS "tensor;gpu" TIMEOUT 120)
     if(TARGET lfs_tensor_rasterizer)
         add_executable(tensor_rasterizer_contracts
+            test_splat_point_renderer.cpp
             test_splat_tile_binner.cpp
             test_splat_rasterizer.cpp
             test_splat_lod_selector.cpp

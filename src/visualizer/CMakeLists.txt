@@ -423,13 +423,6 @@ if(LFS_GRAPHICS_VULKAN_BUILD)
 endif()
 if(LFS_TENSOR_METAL)
     enable_language(OBJCXX)
-    file(READ "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/vulkan/shader/src/slang/display_color.inc" LFS_METAL_DISPLAY_COLOR)
-    configure_file(rendering/metal_viewport_present.metal generated/metal_viewport_present.metal @ONLY)
-    file(READ "${CMAKE_CURRENT_BINARY_DIR}/generated/metal_viewport_present.metal" LFS_METAL_PRESENT_SOURCE)
-    configure_file(rendering/metal_present_source.hpp.in generated/metal_present_source.hpp @ONLY)
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-        "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/vulkan/shader/src/slang/display_color.inc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/rendering/metal_viewport_present.metal")
     set(_lfs_metal_arc_sources
         rendering/metal_viewport_renderer.mm
         rendering/metal_rad_pager.mm)
@@ -441,7 +434,6 @@ if(LFS_TENSOR_METAL)
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     unset(_lfs_metal_arc_sources)
     set_target_properties(lfs_visualizer PROPERTIES OBJCXX_STANDARD 23 OBJCXX_STANDARD_REQUIRED YES)
-    target_include_directories(lfs_visualizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_link_libraries(lfs_visualizer PRIVATE lfs_tensor_rasterizer "-framework Metal" "-framework Foundation")
     target_link_libraries(lfs_visualizer PRIVATE "-framework QuartzCore")
 endif()
