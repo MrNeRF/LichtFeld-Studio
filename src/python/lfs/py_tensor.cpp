@@ -18,6 +18,23 @@
 #include <nanobind/stl/optional.h>
 #include <sstream>
 
+namespace lfs::python {
+    struct NumpyFloat16 {
+        uint16_t bits;
+    };
+} // namespace lfs::python
+
+namespace nanobind {
+    template <>
+    struct ndarray_traits<lfs::python::NumpyFloat16> {
+        static constexpr bool is_complex = false;
+        static constexpr bool is_float = true;
+        static constexpr bool is_bool = false;
+        static constexpr bool is_int = false;
+        static constexpr bool is_signed = false;
+    };
+} // namespace nanobind
+
 namespace nb = nanobind;
 
 namespace lfs::python {
@@ -338,6 +355,7 @@ namespace lfs::python {
         case DataType::Int64: elem_size = 8; break;
         case DataType::UInt8:
         case DataType::Bool: elem_size = 1; break;
+        case DataType::UInt32: elem_size = 4; break;
         }
 
         if (copy) {
@@ -371,6 +389,22 @@ namespace lfs::python {
                         buffer, dims.size(), shape_vec.data(), owner));
                 }
             }
+            case DataType::Float16: {
+                if (dims.size() == 1) {
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16, nb::shape<-1>>(
+                        buffer, {dims[0]}, owner));
+                } else if (dims.size() == 2) {
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16, nb::shape<-1, -1>>(
+                        buffer, {dims[0], dims[1]}, owner));
+                } else if (dims.size() == 3) {
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16, nb::shape<-1, -1, -1>>(
+                        buffer, {dims[0], dims[1], dims[2]}, owner));
+                } else {
+                    std::vector<size_t> shape_vec(dims.begin(), dims.end());
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16>(
+                        buffer, dims.size(), shape_vec.data(), owner));
+                }
+            }
             case DataType::Int32: {
                 if (dims.size() == 1) {
                     return nb::cast(nb::ndarray<nb::numpy, int32_t, nb::shape<-1>>(
@@ -397,8 +431,20 @@ namespace lfs::python {
                         buffer, dims.size(), shape_vec.data(), owner));
                 }
             }
-            case DataType::UInt8:
-            case DataType::Bool: {
+            case DataType::UInt32: {
+                if (dims.size() == 1) {
+                    return nb::cast(nb::ndarray<nb::numpy, uint32_t, nb::shape<-1>>(
+                        buffer, {dims[0]}, owner));
+                } else if (dims.size() == 2) {
+                    return nb::cast(nb::ndarray<nb::numpy, uint32_t, nb::shape<-1, -1>>(
+                        buffer, {dims[0], dims[1]}, owner));
+                } else {
+                    std::vector<size_t> shape_vec(dims.begin(), dims.end());
+                    return nb::cast(nb::ndarray<nb::numpy, uint32_t>(
+                        buffer, dims.size(), shape_vec.data(), owner));
+                }
+            }
+            case DataType::UInt8: {
                 if (dims.size() == 1) {
                     return nb::cast(nb::ndarray<nb::numpy, uint8_t, nb::shape<-1>>(
                         buffer, {dims[0]}, owner));
@@ -411,8 +457,20 @@ namespace lfs::python {
                         buffer, dims.size(), shape_vec.data(), owner));
                 }
             }
+            case DataType::Bool: {
+                if (dims.size() == 1) {
+                    return nb::cast(nb::ndarray<nb::numpy, bool, nb::shape<-1>>(
+                        buffer, {dims[0]}, owner));
+                } else if (dims.size() == 2) {
+                    return nb::cast(nb::ndarray<nb::numpy, bool, nb::shape<-1, -1>>(
+                        buffer, {dims[0], dims[1]}, owner));
+                } else {
+                    std::vector<size_t> shape_vec(dims.begin(), dims.end());
+                    return nb::cast(nb::ndarray<nb::numpy, bool>(
+                        buffer, dims.size(), shape_vec.data(), owner));
+                }
+            }
             default:
-                std::free(buffer);
                 throw std::runtime_error("Unsupported dtype for numpy conversion");
             }
         } else {
@@ -439,6 +497,22 @@ namespace lfs::python {
                         data, dims.size(), shape_vec.data(), owner));
                 }
             }
+            case DataType::Float16: {
+                if (dims.size() == 1) {
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16, nb::shape<-1>>(
+                        data, {dims[0]}, owner));
+                } else if (dims.size() == 2) {
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16, nb::shape<-1, -1>>(
+                        data, {dims[0], dims[1]}, owner));
+                } else if (dims.size() == 3) {
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16, nb::shape<-1, -1, -1>>(
+                        data, {dims[0], dims[1], dims[2]}, owner));
+                } else {
+                    std::vector<size_t> shape_vec(dims.begin(), dims.end());
+                    return nb::cast(nb::ndarray<nb::numpy, NumpyFloat16>(
+                        data, dims.size(), shape_vec.data(), owner));
+                }
+            }
             case DataType::Int32: {
                 if (dims.size() == 1) {
                     return nb::cast(nb::ndarray<nb::numpy, int32_t, nb::shape<-1>>(
@@ -465,8 +539,20 @@ namespace lfs::python {
                         data, dims.size(), shape_vec.data(), owner));
                 }
             }
-            case DataType::UInt8:
-            case DataType::Bool: {
+            case DataType::UInt32: {
+                if (dims.size() == 1) {
+                    return nb::cast(nb::ndarray<nb::numpy, uint32_t, nb::shape<-1>>(
+                        data, {dims[0]}, owner));
+                } else if (dims.size() == 2) {
+                    return nb::cast(nb::ndarray<nb::numpy, uint32_t, nb::shape<-1, -1>>(
+                        data, {dims[0], dims[1]}, owner));
+                } else {
+                    std::vector<size_t> shape_vec(dims.begin(), dims.end());
+                    return nb::cast(nb::ndarray<nb::numpy, uint32_t>(
+                        data, dims.size(), shape_vec.data(), owner));
+                }
+            }
+            case DataType::UInt8: {
                 if (dims.size() == 1) {
                     return nb::cast(nb::ndarray<nb::numpy, uint8_t, nb::shape<-1>>(
                         data, {dims[0]}, owner));
@@ -476,6 +562,19 @@ namespace lfs::python {
                 } else {
                     std::vector<size_t> shape_vec(dims.begin(), dims.end());
                     return nb::cast(nb::ndarray<nb::numpy, uint8_t>(
+                        data, dims.size(), shape_vec.data(), owner));
+                }
+            }
+            case DataType::Bool: {
+                if (dims.size() == 1) {
+                    return nb::cast(nb::ndarray<nb::numpy, bool, nb::shape<-1>>(
+                        data, {dims[0]}, owner));
+                } else if (dims.size() == 2) {
+                    return nb::cast(nb::ndarray<nb::numpy, bool, nb::shape<-1, -1>>(
+                        data, {dims[0], dims[1]}, owner));
+                } else {
+                    std::vector<size_t> shape_vec(dims.begin(), dims.end());
+                    return nb::cast(nb::ndarray<nb::numpy, bool>(
                         data, dims.size(), shape_vec.data(), owner));
                 }
             }
