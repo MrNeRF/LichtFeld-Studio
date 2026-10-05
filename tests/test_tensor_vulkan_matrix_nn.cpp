@@ -470,6 +470,16 @@ namespace {
             else
                 ASSERT_GT(attended[i], 0.0f) << "index=" << i;
         }
+
+        const Tensor logits = upload(signed_pattern(5 * 40, 4), {5, 40});
+        const Tensor row_mask = upload(mask, {5, 40});
+        const std::vector<float> weights = lfs::core::nn::softmax(logits, &row_mask).cpu().to_vector();
+        for (size_t row = 0; row < 5; ++row) {
+            double sum = 0.0;
+            for (size_t column = 0; column < 40; ++column)
+                sum += weights[row * 40 + column];
+            ASSERT_NEAR(sum, row == 2 ? 0.0 : 1.0, 1.0e-5) << "row=" << row;
+        }
     }
 
 } // namespace

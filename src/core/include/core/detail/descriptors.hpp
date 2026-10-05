@@ -325,7 +325,7 @@ namespace lfs::core {
             int activation = 0;
         };
 
-        // Layer norm over rows of `cols` values.
+        // Layer norm over rows of `cols` values; RMS norm without a bias.
         struct NormProgram {
             size_t rows = 0, cols = 0;
             float eps = 0.0f;

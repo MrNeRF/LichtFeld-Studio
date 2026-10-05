@@ -326,10 +326,10 @@ namespace lfs::core::nn {
         const Tensor w_c = weight.contiguous();
         const Tensor b_c = bias.contiguous();
         if (runs_backend_kernels(in_c)) {
-            return dedicated::norm(in_c, w_c, b_c, eps);
+            return dedicated::norm(in_c, w_c, &b_c, eps);
         }
         if (runs_portable(in_c)) {
-            return portable::norm(in_c, w_c, b_c, eps);
+            return portable::norm(in_c, w_c, &b_c, eps);
         }
         auto out = empty_like_shape(in_c, in_c.shape());
         pin_operands({&in_c, &w_c, &b_c});
@@ -338,6 +338,66 @@ namespace lfs::core::nn {
         const int rows = static_cast<int>(in_c.numel() / static_cast<std::size_t>(cols));
         kernels::layer_norm(raw(in_c), raw(w_c), raw(b_c), raw_mut(out), rows, cols, eps,
                             in_c.dtype(), stream);
+        return out;
+    }
+
+    Tensor rms_norm(const Tensor& input, const Tensor& weight, float eps) {
+        require_nn_tensor(input, "rms_norm", "input");
+        require_nn_tensor(weight, "rms_norm", "weight");
+        require_same_dtype_device(input, weight, "rms_norm", "input", "weight");
+        const int cols = static_cast<int>(input.shape()[input.ndim() - 1]);
+        LFS_ASSERT_MSG(weight.numel() == static_cast<std::size_t>(cols),
+                       "rms_norm weight must match the last dim");
+        const Tensor in_c = input.contiguous();
+        const Tensor w_c = weight.contiguous();
+        if (runs_backend_kernels(in_c)) {
+            return dedicated::norm(in_c, w_c, nullptr, eps);
+        }
+        if (runs_portable(in_c)) {
+            return portable::norm(in_c, w_c, nullptr, eps);
+        }
+        auto out = empty_like_shape(in_c, in_c.shape());
+        pin_operands({&in_c, &w_c});
+        const cudaStream_t stream = prepare_inputs_for_stream({&in_c, &w_c}, out.stream());
+        out.set_stream(stream);
+        const int rows = static_cast<int>(in_c.numel() / static_cast<std::size_t>(cols));
+        kernels::rms_norm(raw(in_c), raw(w_c), raw_mut(out), rows, cols, eps, in_c.dtype(), stream);
+        return out;
+    }
+
+    Tensor softmax(const Tensor& input, const Tensor* mask) {
+        require_nn_tensor(input, "softmax", "input");
+        const Tensor in_c = input.contiguous();
+        const int cols = static_cast<int>(in_c.shape()[in_c.ndim() - 1]);
+        const int rows = static_cast<int>(in_c.numel() / static_cast<std::size_t>(cols));
+        Tensor mask_s;
+        const Tensor* mask_c = nullptr;
+        long long msr = cols;
+        long long msc = 1;
+        if (mask != nullptr && mask->is_valid()) {
+            require_nn_tensor(*mask, "softmax", "mask");
+            require_same_dtype_device(in_c, *mask, "softmax", "input", "mask");
+            mask_s = mask->contiguous();
+            mask_c = &mask_s;
+            if (mask_c->ndim() == in_c.ndim()) {
+                msr = static_cast<long long>(mask_c->shape()[mask_c->ndim() - 1] == 1
+                                                 ? 0
+                                                 : mask_c->shape()[mask_c->ndim() - 1]);
+                msc = mask_c->shape()[mask_c->ndim() - 1] == 1 ? 0 : 1;
+            } else if (mask_c->ndim() == 1) {
+                msr = 0;
+                msc = 1;
+            }
+        }
+        if (runs_portable(in_c)) {
+            return portable::softmax(in_c, mask_c);
+        }
+        auto out = empty_like_shape(in_c, in_c.shape());
+        pin_operands({&in_c});
+        const cudaStream_t stream = prepare_inputs_for_stream({&in_c}, out.stream());
+        out.set_stream(stream);
+        kernels::softmax(raw(in_c), mask_c ? raw(*mask_c) : nullptr, raw_mut(out), rows, cols, msr,
+                         msc, mask_c != nullptr, in_c.dtype(), stream);
         return out;
     }
 
@@ -409,6 +469,66 @@ namespace lfs::core::nn {
                            h, n_q, n_k, d, used_scale, sb, sh, sq, sk, m_c != nullptr, q_c.dtype(),
                            stream);
         return out;
+    }
+
+    Tensor window_partition(const Tensor& input, int window_size) {
+        require_nn_tensor(input, "window_partition", "input");
+        LFS_ASSERT_MSG(input.ndim() == 4, "window_partition expects [B, H, N, d]");
+        LFS_ASSERT_MSG(window_size > 0, "window_size must be positive");
+        const Tensor in_c = input.contiguous();
+        const int b = static_cast<int>(in_c.shape()[0]);
+        const int h = static_cast<int>(in_c.shape()[1]);
+        const int n = static_cast<int>(in_c.shape()[2]);
+        const int d = static_cast<int>(in_c.shape()[3]);
+        const int n_win = (n + window_size - 1) / window_size;
+        const int pad = n_win * window_size - n;
+        Tensor seq = in_c;
+        if (pad > 0) {
+            auto z = Tensor::zeros(
+                TensorShape{std::vector<std::size_t>{static_cast<std::size_t>(b),
+                                                     static_cast<std::size_t>(h),
+                                                     static_cast<std::size_t>(pad),
+                                                     static_cast<std::size_t>(d)}},
+                in_c.device(), in_c.dtype());
+            z.set_stream(in_c.stream());
+            seq = Tensor::cat({in_c, z}, 2);
+        }
+        auto viewed = seq.reshape(TensorShape{std::vector<std::size_t>{
+            static_cast<std::size_t>(b), static_cast<std::size_t>(h),
+            static_cast<std::size_t>(n_win), static_cast<std::size_t>(window_size),
+            static_cast<std::size_t>(d)}});
+        return viewed.permute({0, 2, 1, 3, 4})
+            .contiguous()
+            .reshape(TensorShape{std::vector<std::size_t>{
+                static_cast<std::size_t>(b * n_win), static_cast<std::size_t>(h),
+                static_cast<std::size_t>(window_size), static_cast<std::size_t>(d)}});
+    }
+
+    Tensor window_unpartition(const Tensor& windows, int window_size, int original_n) {
+        require_nn_tensor(windows, "window_unpartition", "windows");
+        LFS_ASSERT_MSG(windows.ndim() == 4, "window_unpartition expects [B*n_win, H, W, d]");
+        LFS_ASSERT_MSG(window_size > 0 && original_n >= 0, "window_unpartition sizes invalid");
+        const Tensor w_c = windows.contiguous();
+        const int n_win = (original_n + window_size - 1) / window_size;
+        LFS_ASSERT_MSG(n_win > 0 && w_c.shape()[0] % static_cast<std::size_t>(n_win) == 0,
+                       "window_unpartition batch is not divisible by n_windows");
+        const int b = static_cast<int>(w_c.shape()[0] / static_cast<std::size_t>(n_win));
+        const int h = static_cast<int>(w_c.shape()[1]);
+        const int d = static_cast<int>(w_c.shape()[3]);
+        auto viewed = w_c.reshape(TensorShape{std::vector<std::size_t>{
+            static_cast<std::size_t>(b), static_cast<std::size_t>(n_win),
+            static_cast<std::size_t>(h), static_cast<std::size_t>(window_size),
+            static_cast<std::size_t>(d)}});
+        auto folded = viewed.permute({0, 2, 1, 3, 4})
+                          .contiguous()
+                          .reshape(TensorShape{std::vector<std::size_t>{
+                              static_cast<std::size_t>(b), static_cast<std::size_t>(h),
+                              static_cast<std::size_t>(n_win * window_size),
+                              static_cast<std::size_t>(d)}});
+        if (original_n == n_win * window_size) {
+            return folded;
+        }
+        return folded.slice(2, 0, static_cast<std::size_t>(original_n)).contiguous();
     }
 
     Window2d window_partition_2d(const Tensor& input, int window_size) {
@@ -930,6 +1050,20 @@ namespace lfs::core::nn {
         return out;
     }
 
+    Tensor silu(const Tensor& input) {
+        require_nn_tensor(input, "silu", "input");
+        const Tensor in_c = input.contiguous();
+        if (runs_portable(in_c)) {
+            return portable::activate(in_c, Activation::Silu);
+        }
+        auto out = empty_like_shape(in_c, in_c.shape());
+        pin_operands({&in_c});
+        const cudaStream_t stream = prepare_inputs_for_stream({&in_c}, out.stream());
+        out.set_stream(stream);
+        kernels::silu(raw(in_c), raw_mut(out), in_c.numel(), in_c.dtype(), stream);
+        return out;
+    }
+
     Tensor relu(const Tensor& input) {
         require_nn_tensor(input, "relu", "input");
         const Tensor in_c = input.contiguous();
@@ -1262,6 +1396,32 @@ namespace lfs::core::nn {
         return out;
     }
 
+    Tensor residual_scale(const Tensor& x, const Tensor& hidden, const Tensor& gamma) {
+        require_nn_tensor(x, "residual_scale", "x");
+        require_nn_tensor(hidden, "residual_scale", "hidden");
+        require_nn_tensor(gamma, "residual_scale", "gamma");
+        require_same_dtype_device(x, hidden, "residual_scale", "x", "hidden");
+        require_same_dtype_device(x, gamma, "residual_scale", "x", "gamma");
+        LFS_ASSERT_MSG(x.shape() == hidden.shape(), "residual_scale x/hidden shape mismatch");
+        const int cols = static_cast<int>(x.shape()[x.ndim() - 1]);
+        LFS_ASSERT_MSG(gamma.numel() == static_cast<std::size_t>(cols),
+                       "residual_scale gamma must match the last dim");
+        const Tensor x_c = x.contiguous();
+        const Tensor h_c = hidden.contiguous();
+        const Tensor g_c = gamma.contiguous();
+        if (runs_portable(x_c)) {
+            return x_c.to(DataType::Float32).add(h_c.to(DataType::Float32).mul(g_c.to(DataType::Float32))).to(x_c.dtype());
+        }
+        auto out = empty_like_shape(x_c, x_c.shape());
+        pin_operands({&x_c, &h_c, &g_c});
+        const cudaStream_t stream = prepare_inputs_for_stream({&x_c, &h_c, &g_c}, out.stream());
+        out.set_stream(stream);
+        const int rows = static_cast<int>(x_c.numel() / static_cast<std::size_t>(cols));
+        kernels::residual_scale(raw(x_c), raw(h_c), raw(g_c), raw_mut(out), rows, cols, x_c.dtype(),
+                                stream);
+        return out;
+    }
+
 } // namespace lfs::core::nn
 
 #if !LFS_HAS_CUDA
@@ -1286,6 +1446,10 @@ namespace lfs::core::nn::kernels {
     std::size_t conv2d_weight_scratch_bytes(int, int, DataType) { unavailable(); }
     LFS_CUDA_NN_UNAVAILABLE(layer_norm, const void*, const void*, const void*, void*, int, int,
                             float, DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(rms_norm, const void*, const void*, void*, int, int, float, DataType,
+                            cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(softmax, const void*, const void*, void*, int, int, long long,
+                            long long, bool, DataType, cudaStream_t)
     LFS_CUDA_NN_UNAVAILABLE(attention, const void*, const void*, const void*, const void*, void*,
                             int, int, int, int, int, float, long long, long long, long long,
                             long long, bool, DataType, cudaStream_t)
@@ -1304,6 +1468,7 @@ namespace lfs::core::nn::kernels {
     LFS_CUDA_NN_UNAVAILABLE(avg_pool2d, const void*, void*, int, int, int, int, int, int, int, int,
                             int, int, int, int, bool, DataType, cudaStream_t)
     LFS_CUDA_NN_UNAVAILABLE(gelu, const void*, void*, std::size_t, int, DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(silu, const void*, void*, std::size_t, DataType, cudaStream_t)
     LFS_CUDA_NN_UNAVAILABLE(relu, const void*, void*, std::size_t, DataType, cudaStream_t)
     LFS_CUDA_NN_UNAVAILABLE(sigmoid, const void*, void*, std::size_t, DataType, cudaStream_t)
     LFS_CUDA_NN_UNAVAILABLE(window_partition_2d, const void*, void*, int, int, int, int, int, int,
@@ -1330,6 +1495,8 @@ namespace lfs::core::nn::kernels {
                             cudaStream_t)
     LFS_CUDA_NN_UNAVAILABLE(uv_grid, void*, int, int, float, float, float, float, DataType,
                             cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(residual_scale, const void*, const void*, const void*, void*, int, int,
+                            DataType, cudaStream_t)
 
 #undef LFS_CUDA_NN_UNAVAILABLE
 } // namespace lfs::core::nn::kernels

@@ -69,6 +69,13 @@ namespace lfs::core::nn::kernels {
     void layer_norm(const void* x, const void* weight, const void* bias, void* y,
                     int rows, int cols, float eps, DataType dtype, cudaStream_t stream);
 
+    void rms_norm(const void* x, const void* weight, void* y, int rows, int cols,
+                  float eps, DataType dtype, cudaStream_t stream);
+
+    void softmax(const void* x, const void* mask, void* y, int rows, int cols,
+                 long long mask_stride_row, long long mask_stride_col, bool has_mask,
+                 DataType dtype, cudaStream_t stream);
+
     void attention(const void* q, const void* k, const void* v, const void* mask, void* o,
                    int batch, int heads, int n_q, int n_k, int d, float scale,
                    long long mask_sb, long long mask_sh, long long mask_sq, long long mask_sk,
@@ -99,6 +106,8 @@ namespace lfs::core::nn::kernels {
 
     void gelu(const void* x, void* y, std::size_t n, int approx, DataType dtype,
               cudaStream_t stream);
+
+    void silu(const void* x, void* y, std::size_t n, DataType dtype, cudaStream_t stream);
 
     void relu(const void* x, void* y, std::size_t n, DataType dtype, cudaStream_t stream);
 
@@ -152,6 +161,10 @@ namespace lfs::core::nn::kernels {
 
     void uv_grid(void* output, int height, int width, float u0, float u1, float v0, float v1,
                  DataType dtype, cudaStream_t stream);
+
+    // y = x + hidden * gamma, gamma has `cols` elements.
+    void residual_scale(const void* x, const void* hidden, const void* gamma, void* y, int rows,
+                        int cols, DataType dtype, cudaStream_t stream);
 
     // ---- Dense matching (RoMa v1 and v2) ------------------------------------
 

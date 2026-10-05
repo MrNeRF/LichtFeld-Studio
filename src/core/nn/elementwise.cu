@@ -78,6 +78,45 @@ namespace lfs::core::nn::kernels {
             }
         }
 
+        __global__ void rms_norm_kernel(const void* __restrict__ x, const void* __restrict__ weight,
+                                        void* __restrict__ y, int rows, int cols, float eps,
+                                        bool is_half) {
+            const int row = static_cast<int>(blockIdx.x);
+            if (row >= rows) {
+                return;
+            }
+            const int tid = static_cast<int>(threadIdx.x);
+            const int nthreads = static_cast<int>(blockDim.x);
+            const long long base = static_cast<long long>(row) * cols;
+
+            float sumsq = 0.0f;
+            for (int c = tid; c < cols; c += nthreads) {
+                const float v = device::ld_strided(x, base + c, is_half);
+                sumsq += v * v;
+            }
+            __shared__ float red[32];
+            float w = warp_sum(sumsq);
+            if ((tid & 31) == 0) {
+                red[tid / 32] = w;
+            }
+            __syncthreads();
+            if (tid < 32) {
+                const float v = (tid < (nthreads + 31) / 32) ? red[tid] : 0.0f;
+                w = warp_sum(v);
+                if (tid == 0) {
+                    red[0] = w;
+                }
+            }
+            __syncthreads();
+            const float inv = rsqrtf(red[0] / static_cast<float>(cols) + eps);
+
+            for (int c = tid; c < cols; c += nthreads) {
+                const float v = device::ld_strided(x, base + c, is_half);
+                const float g = device::ld_strided(weight, c, is_half);
+                device::st_strided(y, base + c, v * inv * g, is_half);
+            }
+        }
+
         __global__ void unary_kernel(const void* __restrict__ x, void* __restrict__ y,
                                      std::size_t n, int kind, bool is_half) {
             for (std::size_t i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -90,6 +129,9 @@ namespace lfs::core::nn::kernels {
                     break;
                 case 1:
                     o = device::gelu_tanh(v);
+                    break;
+                case 2:
+                    o = device::silu(v);
                     break;
                 case 3:
                     o = fmaxf(v, 0.0f);
@@ -229,6 +271,17 @@ namespace lfs::core::nn::kernels {
         LFS_CUDA_LAUNCH_CHECK(stream, "nn.norm.layer");
     }
 
+    void rms_norm(const void* x, const void* weight, void* y, int rows, int cols, float eps,
+                  DataType dtype, cudaStream_t stream) {
+        if (rows <= 0 || cols <= 0) {
+            return;
+        }
+        const int threads = cols >= 256 ? 256 : 128;
+        rms_norm_kernel<<<rows, threads, 0, stream>>>(
+            x, weight, y, rows, cols, eps, dtype == DataType::Float16);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.norm.rms");
+    }
+
     void gelu(const void* x, void* y, std::size_t n, int approx, DataType dtype,
               cudaStream_t stream) {
         NvtxRange nvtx("nn.op/gelu");
@@ -238,6 +291,14 @@ namespace lfs::core::nn::kernels {
         unary_kernel<<<unary_grid(n), 256, 0, stream>>>(
             x, y, n, approx == 0 ? 0 : 1, dtype == DataType::Float16);
         LFS_CUDA_LAUNCH_CHECK(stream, "nn.act.gelu");
+    }
+
+    void silu(const void* x, void* y, std::size_t n, DataType dtype, cudaStream_t stream) {
+        if (n == 0) {
+            return;
+        }
+        unary_kernel<<<unary_grid(n), 256, 0, stream>>>(x, y, n, 2, dtype == DataType::Float16);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.act.silu");
     }
 
     void relu(const void* x, void* y, std::size_t n, DataType dtype, cudaStream_t stream) {
@@ -348,6 +409,20 @@ namespace lfs::core::nn::kernels {
                                             static_cast<float>(height - 1);
             device::st_strided(output, idx, uu, is_half);
             device::st_strided(output, static_cast<long long>(total) + idx, vv, is_half);
+        }
+    }
+
+    __global__ void residual_scale_kernel(const void* __restrict__ x, const void* __restrict__ hidden,
+                                          const void* __restrict__ gamma, void* __restrict__ y,
+                                          int rows, int cols, bool is_half) {
+        const int total = rows * cols;
+        for (int idx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x); idx < total;
+             idx += static_cast<int>(blockDim.x * gridDim.x)) {
+            const int c = idx % cols;
+            const float xv = device::ld_strided(x, idx, is_half);
+            const float hv = device::ld_strided(hidden, idx, is_half);
+            const float g = device::ld_strided(gamma, c, is_half);
+            device::st_strided(y, idx, xv + hv * g, is_half);
         }
     }
 
@@ -724,6 +799,20 @@ namespace lfs::core::nn::kernels {
         uv_grid_kernel<<<grid, block, 0, stream>>>(output, height, width, u0, u1, v0, v1,
                                                    dtype == DataType::Float16);
         LFS_CUDA_LAUNCH_CHECK(stream, "nn.uv_grid");
+    }
+
+    void residual_scale(const void* x, const void* hidden, const void* gamma, void* y, int rows,
+                        int cols, DataType dtype, cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/residual_scale");
+        const int total = rows * cols;
+        if (total <= 0) {
+            return;
+        }
+        const int block = 256;
+        const int grid = std::min(2048, (total + block - 1) / block);
+        residual_scale_kernel<<<grid, block, 0, stream>>>(x, hidden, gamma, y, rows, cols,
+                                                          dtype == DataType::Float16);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.residual_scale");
     }
 
     void sigmoid(const void* x, void* y, std::size_t n, DataType dtype, cudaStream_t stream) {

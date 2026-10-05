@@ -1837,6 +1837,13 @@ namespace {
                             1.0e-2f, 1.0e-2f);
         const Tensor rows = shaped(6 * 32, 106, {6, 32}), gamma = shaped(32, 107, {32}), beta = shaped(32, 108, {32});
         expect_same_on_both([&] { return nn::layer_norm(gpu(rows), gpu(gamma), gpu(beta)); }, 1.0e-5f, 1.0e-5f);
+        expect_same_on_both([&] { return nn::rms_norm(gpu(rows), gpu(gamma)); }, 1.0e-5f, 1.0e-5f);
+        const Tensor logits = shaped(4 * 9 * 17, 109, {4, 9, 17}), mask = shaped(4 * 9 * 17, 110, {4, 9, 17});
+        expect_same_on_both([&] {
+            const Tensor gm = gpu(mask);
+            return nn::softmax(gpu(logits), &gm);
+        },
+                            1.0e-5f, 1.0e-5f);
         const Tensor q = shaped(2 * 3 * 20 * 16, 111, {2, 3, 20, 16}), k = shaped(2 * 3 * 28 * 16, 112, {2, 3, 28, 16});
         const Tensor v = shaped(2 * 3 * 28 * 16, 113, {2, 3, 28, 16});
         expect_same_on_both([&] { return nn::attention(gpu(q), gpu(k), gpu(v)); }, matrix_tolerance, matrix_tolerance);
@@ -1869,7 +1876,7 @@ namespace {
             expect_same_on_both([&] { return nn::gelu(gpu(a), approx); }, 1.0e-6f, 1.0e-6f);
         expect_same_on_both([&] {
             const Tensor x = gpu(a);
-            return Tensor::cat({nn::relu(x), nn::sigmoid(x)}, 0);
+            return Tensor::cat({nn::silu(x), nn::relu(x), nn::sigmoid(x)}, 0);
         },
                             1.0e-6f, 1.0e-6f);
 
@@ -1889,6 +1896,7 @@ namespace {
         const Tensor coords = random_tensor(5 * 2, 0.0f, 1.0f, 123).reshape({5, 2}), gaussian = shaped(2 * 8, 124, {2, 8});
         expect_same_on_both([&] { return nn::fourier_pe(gpu(coords), gpu(gaussian)); }, 1.0e-5f, 1.0e-5f);
         expect_same_on_both([&] { return nn::uv_grid(12, 16, 1.5f, DataType::Float32, Device::GPU, nullptr); }, 1.0e-6f, 1.0e-6f);
+        expect_same_on_both([&] { return nn::residual_scale(gpu(rows), gpu(rows), gpu(gamma)); }, 1.0e-6f, 1.0e-6f);
     }
 
     // Metal's dedicated linear, attention and norm kernels at partial tiles,
@@ -2036,6 +2044,7 @@ namespace {
         // Rows past a threadgroup's eight, and widths off the SIMD width.
         const Tensor rows = shaped({13, 3, 77}, 215), gamma = shaped({77}, 216), beta = shaped({77}, 217);
         expect_same_on_both([&] { return nn::layer_norm(gpu(rows), gpu(gamma), gpu(beta)); }, 1.0e-5f, 1.0e-5f);
+        expect_same_on_both([&] { return nn::rms_norm(gpu(rows), gpu(gamma), 1.0e-3f); }, 1.0e-5f, 1.0e-5f);
         expect_same_on_both([&] {
             return nn::layer_norm(half(rows), half(gamma), half(beta)).to(DataType::Float32);
         },

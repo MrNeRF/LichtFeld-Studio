@@ -2,7 +2,7 @@
 // Dedicated neural-network kernels. Operands are Float16 or Float32
 // (kInputDType) and every kernel accumulates in FP32.
 
-// Layer norm over rows of `cols` values. A SIMD
+// Layer norm, or RMS norm without a bias, over rows of `cols` values. A SIMD
 // group normalizes one row.
 struct NnNormParams {
     device const uchar* input;
@@ -11,7 +11,7 @@ struct NnNormParams {
     device uchar* output;
     uint rows, cols;
     float eps;
-    uint padding;
+    uint has_bias;
 };
 
 kernel void nn_norm(constant NnNormParams& p [[buffer(0)]], uint group [[threadgroup_position_in_grid]],
@@ -21,10 +21,13 @@ kernel void nn_norm(constant NnNormParams& p [[buffer(0)]], uint group [[threadg
     if (row >= p.rows)
         return;
     const uint base = row * p.cols;
-    float sum = 0;
-    for (uint c = lane; c < p.cols; c += 32)
-        sum += load_float(p.input, base + c);
-    const float mean = simd_sum(sum) / float(p.cols);
+    float mean = 0;
+    if (p.has_bias != 0) {
+        float sum = 0;
+        for (uint c = lane; c < p.cols; c += 32)
+            sum += load_float(p.input, base + c);
+        mean = simd_sum(sum) / float(p.cols);
+    }
     float squares = 0;
     for (uint c = lane; c < p.cols; c += 32) {
         const float x = load_float(p.input, base + c) - mean;
@@ -33,7 +36,8 @@ kernel void nn_norm(constant NnNormParams& p [[buffer(0)]], uint group [[threadg
     const float deviation = sqrt(simd_sum(squares) / float(p.cols) + p.eps);
     for (uint c = lane; c < p.cols; c += 32) {
         float y = (load_float(p.input, base + c) - mean) / deviation * load_float(p.weight, c);
-        y += load_float(p.bias, c);
+        if (p.has_bias != 0)
+            y += load_float(p.bias, c);
         store_float(p.output, base + c, y);
     }
 }

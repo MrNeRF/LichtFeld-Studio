@@ -142,7 +142,7 @@ namespace lfs::core::internal {
         throw TensorError("Vulkan runs the neural-network ops as the portable composition");
     }
 
-    void VulkanBackendOps::nn_norm(StorageRef, StorageRef, StorageRef, StorageRef, const NormProgram&,
+    void VulkanBackendOps::nn_norm(StorageRef, StorageRef, std::optional<StorageRef>, StorageRef, const NormProgram&,
                                    ExecContext) {
         throw TensorError("Vulkan runs the neural-network ops as the portable composition");
     }

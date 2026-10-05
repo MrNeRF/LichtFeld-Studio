@@ -380,6 +380,82 @@ namespace lfs::core::nn::kernels {
             }
         }
 
+        __global__ void softmax_kernel(const void* __restrict__ x, const void* __restrict__ mask,
+                                       void* __restrict__ y, int rows, int cols,
+                                       long long mask_stride_row, long long mask_stride_col,
+                                       bool has_mask, bool is_half) {
+            const int row = static_cast<int>(blockIdx.x);
+            if (row >= rows) {
+                return;
+            }
+            const int tid = static_cast<int>(threadIdx.x);
+            const int nthreads = static_cast<int>(blockDim.x);
+            const long long base = static_cast<long long>(row) * cols;
+
+            float local_max = -FLT_MAX;
+            for (int c = tid; c < cols; c += nthreads) {
+                float v = device::ld_strided(x, base + c, is_half);
+                if (has_mask) {
+                    v += device::ld_strided(mask, row * mask_stride_row + c * mask_stride_col,
+                                            is_half);
+                }
+                local_max = fmaxf(local_max, v);
+            }
+            // The max and the sum get their own shared slots: reusing one buffer
+            // would let a warp that has finished the exponential loop overwrite
+            // the row max before a slower warp has read it.
+            __shared__ float red_max[32];
+            __shared__ float red_sum[32];
+            const int warps = (nthreads + 31) / 32;
+            float wmax = warp_max(local_max);
+            if ((tid & 31) == 0) {
+                red_max[tid / 32] = wmax;
+            }
+            __syncthreads();
+            if (tid < 32) {
+                const float v = (tid < warps) ? red_max[tid] : -FLT_MAX;
+                wmax = warp_max(v);
+                if (tid == 0) {
+                    red_max[0] = wmax;
+                }
+            }
+            __syncthreads();
+            const float row_max = red_max[0];
+
+            float local_sum = 0.0f;
+            for (int c = tid; c < cols; c += nthreads) {
+                float v = device::ld_strided(x, base + c, is_half);
+                if (has_mask) {
+                    v += device::ld_strided(mask, row * mask_stride_row + c * mask_stride_col,
+                                            is_half);
+                }
+                local_sum += expf(v - row_max);
+            }
+            float wsum = warp_sum(local_sum);
+            if ((tid & 31) == 0) {
+                red_sum[tid / 32] = wsum;
+            }
+            __syncthreads();
+            if (tid < 32) {
+                const float v = (tid < warps) ? red_sum[tid] : 0.0f;
+                wsum = warp_sum(v);
+                if (tid == 0) {
+                    red_sum[0] = wsum;
+                }
+            }
+            __syncthreads();
+            const float inv = red_sum[0] > 0.0f ? 1.0f / red_sum[0] : 0.0f;
+
+            for (int c = tid; c < cols; c += nthreads) {
+                float v = device::ld_strided(x, base + c, is_half);
+                if (has_mask) {
+                    v += device::ld_strided(mask, row * mask_stride_row + c * mask_stride_col,
+                                            is_half);
+                }
+                device::st_strided(y, base + c, expf(v - row_max) * inv, is_half);
+            }
+        }
+
         int tiled_smem_bytes(int br, int bc, int dpad) {
             return (br + bc + bc) * dpad * static_cast<int>(sizeof(float));
         }
@@ -893,6 +969,19 @@ namespace lfs::core::nn::kernels {
             q, k, v, mask, o, batch, heads, n_q, n_k, d, scale, mask_sb, mask_sh, mask_sq,
             mask_sk, has_mask, is_half);
         LFS_CUDA_LAUNCH_CHECK(stream, "nn.attention.tiled128");
+    }
+
+    void softmax(const void* x, const void* mask, void* y, int rows, int cols,
+                 long long mask_stride_row, long long mask_stride_col, bool has_mask,
+                 DataType dtype, cudaStream_t stream) {
+        if (rows <= 0 || cols <= 0) {
+            return;
+        }
+        const int threads = cols >= 256 ? 256 : (cols >= 128 ? 128 : 64);
+        softmax_kernel<<<rows, threads, 0, stream>>>(
+            x, mask, y, rows, cols, mask_stride_row, mask_stride_col, has_mask,
+            dtype == DataType::Float16);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.softmax");
     }
 
 } // namespace lfs::core::nn::kernels
