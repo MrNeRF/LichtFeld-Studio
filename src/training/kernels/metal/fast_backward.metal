@@ -14,6 +14,24 @@ constant constexpr float kFastGradClamp = 1e4f;
 
 static float fast_clamp_grad(const float g) { return fmin(fmax(g, -kFastGradClamp), kFastGradClamp); }
 
+struct FastClearGradParams {
+    device const uint* n_touched;
+    device float4* grads;
+    device float4* normal_grads;
+    uint n;
+};
+
+kernel void fast_clear_visible_grads(constant FastClearGradParams& p [[buffer(0)]],
+                                     const uint idx [[thread_position_in_grid]]) {
+    if (idx >= p.n || p.n_touched[idx] == 0u)
+        return;
+    p.grads[idx * 3u] = float4(0.0f);
+    p.grads[idx * 3u + 1u] = float4(0.0f);
+    p.grads[idx * 3u + 2u] = float4(0.0f);
+    if (kFastNormalChannel != 0u)
+        p.normal_grads[idx] = float4(0.0f);
+}
+
 struct FastBlendBackwardParams {
     device const uint2* ranges;
     device const uint* values;
@@ -498,7 +516,7 @@ static float4 fast_shN_slot_grad(const uint k, const bool compute, thread const 
 // SH rest slots per thread in fast_backward_sh: a primitive's twelve float4
 // slots spread over kFastShParts threads, so each keeps its updated moments in
 // registers between the bound reduction and the encode.
-constant constexpr uint kFastShSlotsPerThread = 3u;
+constant constexpr uint kFastShSlotsPerThread = 6u;
 constant constexpr uint kFastShParts = kShMaxSlots / kFastShSlotsPerThread;
 
 // Port of apply_shN_grads_packed_joint (8-bit moments on float4-slot cells) for
@@ -507,8 +525,8 @@ constant constexpr uint kFastShParts = kShMaxSlots / kFastShSlotsPerThread;
 static void fast_adam_shN(constant FastAdamGroup& g, const uint p, const uint part, const uint layout_rest,
                           const float3 grad_color, const float3 direction, const bool compute, const float beta1,
                           const float beta2, const float eps, threadgroup float4* scratch, const FastLane t) {
-    const bool q16 = g.value_bits == 16 && g.value_bounds != nullptr && g.value_cells > 0;
-    const bool f16 = g.value_bits == 16 && !q16;
+    const bool q16 = kFastShStorage == kFastShQ16;
+    const bool f16 = kFastShStorage == kFastShFloat16;
     const uint cells = q16 ? uint(g.value_cells) : 0u;
     const uint layout_slots = sh_float4_slots(layout_rest);
     const FastRowStep r = fast_row_step(g, p, 1.0f);

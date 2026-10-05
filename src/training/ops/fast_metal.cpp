@@ -37,8 +37,8 @@ namespace lfs::training {
         constexpr uint32_t kBlendThreads = 128;
         // kFastShParts and kFastShSlotsPerThread in fast_backward.metal:
         // fast_backward_sh spreads a primitive's SH rest slots over kShParts threads.
-        constexpr uint32_t kShParts = 4;
-        constexpr uint32_t kShSlotsPerThread = 3;
+        constexpr uint32_t kShParts = 2;
+        constexpr uint32_t kShSlotsPerThread = 6;
         // kFastBwdThreads in fast_backward.metal.
         constexpr uint32_t kBackwardThreads = 64;
         constexpr uint32_t kGradStride = 12;
@@ -579,6 +579,11 @@ namespace lfs::training {
             uint32_t grid_w, unused0, unused1, unused2;
         };
 
+        struct ClearGradParams {
+            uint64_t n_touched, grads, normal_grads;
+            uint32_t n;
+        };
+
         struct BackwardShParams {
             uint64_t means, camera, shN, sh_bounds, n_touched, color_depth, grads;
             AdamGroupParams sh0, shN_adam;
@@ -668,13 +673,16 @@ namespace lfs::training {
                 throw std::runtime_error("FastGS fused Adam state is not available");
 
             reserve(s.grads, size_t{f.n} * kGradStride, DataType::Float32);
-            fill(s.grads, size_t{f.n} * kGradStride, 0);
             if (normal_channel) {
                 reserve(s.normal_grads, size_t{f.n} * 4, DataType::Float32);
-                fill(s.normal_grads, size_t{f.n} * 4, 0);
             }
             const Tensor none;
             const Tensor& normal_grads_use = normal_channel ? s.normal_grads : none;
+            const ClearGradParams clear{mk::address(s.n_touched), mk::address(s.grads),
+                                        normal_channel ? mk::address(s.normal_grads) : 0, f.n};
+            launch("fast_clear_visible_grads", clear, {&s.n_touched, &s.grads, &normal_grads_use},
+                   core::GpuKernelModule::groups_for(f.n, 256), 1, 256,
+                   {{kNormalChannelConstant, normal_channel ? 1u : 0u}});
 
             if (f.n_instances > 0) {
                 const bool has_bg_image = present(f.bg_image);
