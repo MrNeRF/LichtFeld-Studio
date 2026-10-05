@@ -162,11 +162,6 @@ namespace lfs::vis::screen {
         // minimum size. Needs the geometry the drag is based on.
         bool moveDivider(const DividerGeometry& divider, float position);
 
-        // Sets the relative weights of a split's children directly.
-        bool setWeights(SplitId split, const std::vector<float>& weights);
-
-        [[nodiscard]] const Node* findSplit(SplitId split) const;
-
         // Solves the layout into pixel rects inside `bounds`. Edges are
         // snapped to whole units so neighbouring areas never overlap or leave
         // seams. With `maximized` set, that area alone covers the bounds.
