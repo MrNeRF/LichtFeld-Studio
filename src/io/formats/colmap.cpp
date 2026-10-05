@@ -1747,11 +1747,6 @@ namespace lfs::io {
         return result;
     }
 
-    PointCloud read_point3D_binary(const std::filesystem::path& file_path,
-                                   const LoadOptions& options = {}) {
-        return point3D_records_to_point_cloud(read_point3D_binary_records(file_path, options));
-    }
-
     Result<LoadOutcome<std::vector<ImageData>>> read_colmap_images_binary(
         const std::filesystem::path& file_path,
         const LoadOptions& options) {

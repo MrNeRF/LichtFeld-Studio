@@ -40,12 +40,6 @@ namespace lfs::io {
          */
         static std::expected<lfs::core::CheckpointHeader, std::string> loadHeader(
             const std::filesystem::path& path);
-
-        /**
-         * @brief Get iteration number from checkpoint without loading data
-         */
-        static std::expected<int, std::string> getIteration(
-            const std::filesystem::path& path);
     };
 
 } // namespace lfs::io

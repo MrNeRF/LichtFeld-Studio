@@ -1164,7 +1164,6 @@ namespace lfs::io {
     VideoPlayer::~VideoPlayer() = default;
 
     bool VideoPlayer::open(const std::filesystem::path& path) { return impl_->open(path); }
-    void VideoPlayer::close() { impl_->close(); }
     bool VideoPlayer::isOpen() const { return impl_->isOpen(); }
 
     void VideoPlayer::togglePlayPause() { impl_->togglePlayPause(); }

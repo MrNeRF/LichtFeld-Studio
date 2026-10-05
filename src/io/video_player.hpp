@@ -21,7 +21,6 @@ namespace lfs::io {
         VideoPlayer& operator=(const VideoPlayer&) = delete;
 
         bool open(const std::filesystem::path& path);
-        void close();
         bool isOpen() const;
 
         void togglePlayPause();
