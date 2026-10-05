@@ -676,13 +676,16 @@ namespace lfs::core::internal {
             return;
         }
         const auto context = acquire_vulkan_context();
-        const size_t blocks = (size + kLocalSize - 1) / kLocalSize;
-        const uint32_t mode = size <= 32 ? 0u : blocks == 1 ? 1u
-                                                            : 2u;
+        // A tile is kItems elements per invocation of one workgroup (scan.slang). Longer lines take the totals
+        // of their tiles first, scan those, and then scan each tile after the totals before it.
+        constexpr size_t kTile = kLocalSize * 16;
+        const size_t tiles = (size + kTile - 1) / kTile;
+        const uint32_t mode = size <= 32 ? 0u : tiles == 1 ? 1u
+                                                           : 2u;
         std::optional<vk::ScopedAllocation> totals_block;
         StorageRef totals{};
         if (mode == 2) {
-            totals_block.emplace(*context, lines * blocks * sizeof(uint32_t));
+            totals_block.emplace(*context, lines * tiles * sizeof(uint32_t));
             totals = totals_block->storage();
             totals.dtype = data.dtype;
         }
@@ -705,24 +708,28 @@ namespace lfs::core::internal {
                 vkCmdDispatch(command, groups, 1, 1);
             });
         };
-        const uint32_t groups = mode == 0 ? dispatch_groups(*context, lines)
-                                          : static_cast<uint32_t>(std::min<size_t>(lines * blocks, context->caps().max_workgroup_count[0]));
-        const std::array reads{data};
-        const std::array writes{data, totals};
-        dispatch(mode, groups, reads, std::span(writes).first(mode == 2 ? 2 : 1));
-        if (mode == 2) {
-            StridedLayout totals_layout{};
-            totals_layout.rank = 2;
-            totals_layout.dims[0] = lines;
-            totals_layout.dims[1] = blocks;
-            totals_layout.strides[0] = blocks;
-            totals_layout.strides[1] = 1;
-            totals_layout.element_count = lines * blocks;
-            cumsum(totals, totals_layout, 1, {});
-            const std::array add_reads{data, totals};
-            const std::array add_writes{data};
-            dispatch(3, dispatch_groups(*context, layout.element_count), add_reads, add_writes);
+        const auto tile_groups = static_cast<uint32_t>(
+            std::min<size_t>(lines * (mode == 2 ? tiles : 1), context->caps().max_workgroup_count[0]));
+        if (mode != 2) {
+            const std::array reads{data};
+            const std::array writes{data};
+            dispatch(mode, mode == 0 ? dispatch_groups(*context, lines) : tile_groups, reads, writes);
+            return;
         }
+        const std::array total_reads{data};
+        const std::array total_writes{totals};
+        dispatch(2, tile_groups, total_reads, total_writes);
+        StridedLayout totals_layout{};
+        totals_layout.rank = 2;
+        totals_layout.dims[0] = lines;
+        totals_layout.dims[1] = tiles;
+        totals_layout.strides[0] = tiles;
+        totals_layout.strides[1] = 1;
+        totals_layout.element_count = lines * tiles;
+        cumsum(totals, totals_layout, 1, {});
+        const std::array scan_reads{data, totals};
+        const std::array scan_writes{data};
+        dispatch(3, tile_groups, scan_reads, scan_writes);
     }
 
 } // namespace lfs::core::internal
