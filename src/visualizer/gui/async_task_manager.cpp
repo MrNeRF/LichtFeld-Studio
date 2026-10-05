@@ -147,10 +147,6 @@ namespace lfs::vis::gui {
             window_manager->wakeEventLoop();
     }
 
-    void truncateSHDegree(lfs::core::SplatData& splat, const int target_degree) {
-        splat.set_sh_degree(target_degree);
-    }
-
     struct BorrowExportPlan {
         core::Scene::MergeStorageMode storage_mode = core::Scene::MergeStorageMode::Clone;
         std::shared_mutex* model_mutex = nullptr;

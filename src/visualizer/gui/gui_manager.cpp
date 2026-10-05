@@ -3929,11 +3929,6 @@ namespace lfs::vis::gui {
             native_scene_panel_->setProjectActiveTab(tab);
     }
 
-    std::unordered_set<int> GuiManager::visibleCameraUids() const {
-        return native_scene_panel_ ? native_scene_panel_->visibleCameraUids()
-                                   : std::unordered_set<int>{};
-    }
-
     void GuiManager::notifyCameraThumbnailReady(const bool defer) {
         const auto now = std::chrono::steady_clock::now();
         const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -4039,10 +4034,6 @@ namespace lfs::vis::gui {
         pending_scene_tree_chrome_ = {};
         if (native_scene_panel_)
             native_scene_panel_->resetTreeChrome();
-    }
-
-    float GuiManager::tabStripScroll() const {
-        return screen_host_.properties().scroll();
     }
 
     void GuiManager::setTabStripScroll(const float value) {
@@ -8051,12 +8042,6 @@ namespace lfs::vis::gui {
         return rmlui_manager_.secondsUntilTooltipReveal();
     }
 
-    void GuiManager::captureKey(int physical_key, int logical_key, int mods) {
-        if (auto* input_controller = viewer_->getInputController()) {
-            input_controller->getBindings().captureKey(physical_key, logical_key, mods);
-        }
-    }
-
     void GuiManager::captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key) {
         if (auto* input_controller = viewer_->getInputController()) {
             input_controller->getBindings().captureMouseButton(button, mods, x, y, chord_key);
@@ -8371,75 +8356,6 @@ namespace lfs::vis::gui {
                 panelAnimationVisibility()))
             return true;
         return false;
-    }
-
-    std::string GuiManager::describeAnimationDemand() const {
-        if (!lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Performance))
-            return {};
-
-        const auto now = std::chrono::steady_clock::now();
-        if (last_animation_demand_description_at_ != std::chrono::steady_clock::time_point{} &&
-            now - last_animation_demand_description_at_ < std::chrono::seconds(1))
-            return animation_demand_description_cache_;
-
-        std::string result;
-        const auto add = [&result](const bool active, const std::string_view source) {
-            if (!active)
-                return;
-            if (!result.empty())
-                result += ',';
-            result += source;
-        };
-
-        add(ui_toggle_pending_ && now >= ui_toggle_next_allowed_at_, "ui_toggle");
-        add(cameraThumbnailRefreshDue(now), "camera_thumbnails");
-        add(fullscreen_toggle_pending_ && now >= fullscreen_toggle_next_allowed_at_,
-            "fullscreen_toggle");
-        add(interactive_transition_resume_training_ || now < interactive_transition_guard_until_,
-            "interactive_transition");
-        add(isViewportExportLocked(), "viewport_export");
-        add(static_cast<bool>(rmlui_manager_.dragPayload()), "drag_payload");
-        add(startup_overlay_.needsAnimationFrame(), "startup_overlay");
-        if (rml_modal_overlay_) {
-            if (const auto modal_demand = rml_modal_overlay_->animationDemandDescription();
-                !modal_demand.empty()) {
-                if (!result.empty())
-                    result += ',';
-                result += modal_demand;
-            }
-        }
-        add(rml_toast_overlay_ && rml_toast_overlay_->needsAnimationFrame(), "toast_overlay");
-        add(global_context_menu_ && global_context_menu_->needsAnimationFrame(), "context_menu");
-        add(video_widget_ && video_widget_->isVideoPlaying(), "video");
-        add(ui_layout_settle_frames_ > 0, "layout_settle");
-        add(rml_viewport_overlay_.needsAnimationFrame(), "viewport_overlay");
-        add(rml_menu_bar_.needsAnimationFrame(), "menu_bar");
-        if (const auto screen_demand = screen_host_.animationDemandDescription(); !screen_demand.empty()) {
-            if (!result.empty())
-                result += ' ';
-            result += screen_demand;
-        }
-        add(rml_status_bar_.animationFrameDue(now), "status_bar");
-
-        if (!python::is_plugin_preload_running()) {
-            const auto panel_sources = PanelRegistry::instance().describeAnimationDemand(
-                panelAnimationVisibility());
-            if (!panel_sources.empty()) {
-                if (!result.empty())
-                    result += ',';
-                result += "panels=";
-                result += panel_sources;
-            }
-        }
-
-        last_animation_demand_description_at_ = now;
-        animation_demand_description_cache_ = result.empty() ? "none" : std::move(result);
-        return animation_demand_description_cache_;
-    }
-
-    bool GuiManager::needsImmediateAnimationFrame() const {
-        return PanelRegistry::instance().needsImmediateAnimationFrameForVisiblePanels(
-            panelAnimationVisibility());
     }
 
     PanelAnimationVisibility GuiManager::panelAnimationVisibility() const {

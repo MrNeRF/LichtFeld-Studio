@@ -385,8 +385,6 @@ namespace lfs::vis::gui {
         bool has_panels(PanelSpace space) const;
 
         std::vector<PanelSummary> get_panels_for_space(PanelSpace space);
-        std::vector<PanelSummary> get_panel_summaries_for_space(
-            PanelSpace space, const PanelDrawContext& ctx, bool check_poll);
         std::vector<std::string> get_panel_names(PanelSpace space) const;
         std::optional<PanelDetails> get_panel(const std::string& id);
         std::shared_ptr<IPanel> get_panel_instance(const std::string& id) const;
@@ -418,14 +416,9 @@ namespace lfs::vis::gui {
         void preload_panel(const std::string& id);
         bool apply_floating_resize_cursor() const;
         void rescale_floating_panels(float previous_scale, float new_scale);
-        bool needsAnimationFrame() const;
         PanelAnimationDemand animationDemandForVisiblePanels(
             PanelAnimationVisibility visibility) const;
         bool needsAnimationFrameForVisiblePanels(PanelAnimationVisibility visibility) const;
-        [[nodiscard]] std::string describeAnimationDemand(
-            PanelAnimationVisibility visibility) const;
-        [[nodiscard]] bool needsImmediateAnimationFrameForVisiblePanels(
-            PanelAnimationVisibility visibility) const;
         // Min finite scheduled delay across visible panels (same visibility rules as
         // needsAnimationFrameForVisiblePanels). nullopt if none are scheduled.
         std::optional<double> nextScheduledAnimationDelayForVisiblePanels(

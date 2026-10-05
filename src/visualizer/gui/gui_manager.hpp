@@ -159,8 +159,6 @@ namespace lfs::vis {
 
             // State queries
             bool needsAnimationFrame(bool include_export_progress = true) const;
-            [[nodiscard]] std::string describeAnimationDemand() const;
-            [[nodiscard]] bool needsImmediateAnimationFrame() const;
             // Min finite scheduled GUI animation/update delay (seconds). Used by the
             // idle wait path so CSS transitions / timers wake on time without spinning.
             [[nodiscard]] std::optional<double> secondsUntilNextAnimationFrame(
@@ -203,7 +201,6 @@ namespace lfs::vis {
                 return window_states_;
             }
             [[nodiscard]] std::string scenePanelActiveTab() const;
-            [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
             void setScenePanelActiveTab(std::string_view tab);
             [[nodiscard]] bool selectAllSceneNodesIfFocused();
             [[nodiscard]] bool toggleSceneSelectionVisibilityIfFocused();
@@ -215,7 +212,6 @@ namespace lfs::vis {
                 const lfs::core::Scene& scene) const;
             void applySceneTreeChrome(const SceneTreeSessionChrome& chrome);
             void resetSceneTreeChrome();
-            [[nodiscard]] float tabStripScroll() const;
             void setTabStripScroll(float value);
 
             void requestExitConfirmation(
@@ -244,7 +240,6 @@ namespace lfs::vis {
             // Rebuild static @tr: RML content after a runtime language switch.
             // The reload is deferred until no RML interaction is active.
             void requestLocalizationUiRefresh();
-            void captureKey(int physical_key, int logical_key, int mods);
             void captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key = std::nullopt);
             void captureMouseButtonRelease(int button);
             void captureMouseMove(double x, double y);
@@ -529,8 +524,6 @@ namespace lfs::vis {
             uint64_t last_ui_layout_panel_visibility_revision_ = 0;
             std::optional<bool> console_flag_seen_;
             std::optional<bool> sequencer_flag_seen_;
-            mutable std::chrono::steady_clock::time_point last_animation_demand_description_at_{};
-            mutable std::string animation_demand_description_cache_;
             bool dock_resize_interaction_active_ = false;
             std::uint64_t last_pre_scene_panel_sync_generation_ = 0;
 

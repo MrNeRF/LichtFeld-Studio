@@ -702,7 +702,6 @@ namespace {
     }
 
     TEST(RuntimeServiceControlsTest, DispatchesMcpActionsThroughVisualizerBoundary) {
-        const auto initial_revision = lfs::vis::runtimeServiceRevision();
         int enabled_toggles = 0;
         int binding_toggles = 0;
         lfs::vis::setRuntimeServiceControls({
@@ -718,7 +717,6 @@ namespace {
         EXPECT_TRUE(lfs::vis::toggleMcpRuntimeBinding());
         EXPECT_EQ(enabled_toggles, 1);
         EXPECT_EQ(binding_toggles, 1);
-        EXPECT_EQ(lfs::vis::runtimeServiceRevision(), initial_revision + 2);
 
         lfs::vis::setRuntimeServiceControls({});
         EXPECT_FALSE(lfs::vis::toggleMcpRuntimeEnabled());

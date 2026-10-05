@@ -73,7 +73,6 @@ namespace lfs::vis::gui {
         void render(int screen_w, int screen_h,
                     float screen_x, float screen_y,
                     float vp_x, float vp_y, float vp_w, float vp_h);
-        void releaseRendererResources();
         void reloadResources();
         void preload();
 

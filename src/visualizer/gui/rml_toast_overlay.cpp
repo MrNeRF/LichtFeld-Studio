@@ -297,9 +297,4 @@ namespace lfs::vis::gui {
         });
     }
 
-    void RmlToastOverlay::releaseRendererResources() {
-        if (rml_manager_)
-            rml_manager_->releaseCachedContext(direct_cache_);
-    }
-
 } // namespace lfs::vis::gui

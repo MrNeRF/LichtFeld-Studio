@@ -60,12 +60,9 @@ namespace lfs::vis {
     namespace panel_config {
         inline constexpr float TRANSPORT_ROW_HEIGHT = 36.0f;
         inline constexpr float HEIGHT = 108.0f;
-        inline constexpr float PADDING_H = 16.0f;
-        inline constexpr float PADDING_BOTTOM = 18.0f;
         inline constexpr float INNER_PADDING = 8.0f;
         inline constexpr float INNER_PADDING_H = 16.0f;
         inline constexpr float RULER_HEIGHT = 16.0f;
-        inline constexpr float TIMELINE_HEIGHT = 24.0f;
         inline constexpr float KEYFRAME_RADIUS = 6.0f;
         inline constexpr float PLAYHEAD_WIDTH = 2.0f;
         // Drawn #playhead-handle is a 14dp circle; X-clamp span must match so the
@@ -73,8 +70,6 @@ namespace lfs::vis {
         inline constexpr float PLAYHEAD_HANDLE_WIDTH = 14.0f;
         inline constexpr float PLAYHEAD_HIT_RADIUS = 8.0f;
         inline constexpr float SCROLLBAR_HEIGHT = 6.0f;
-        inline constexpr float BUTTON_SIZE = 20.0f;
-        inline constexpr float BUTTON_SPACING = 4.0f;
 
         inline constexpr float MIN_ZOOM = 0.5f;
         inline constexpr float MAX_ZOOM = 4.0f;
