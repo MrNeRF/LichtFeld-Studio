@@ -2999,28 +2999,6 @@ NB_MODULE(lichtfeld, m) {
         capabilities["hdr_libplacebo"] = caps.hdr_libplacebo;
         capabilities["external_memory_interop"] = caps.external_memory_interop;
         capabilities["external_semaphore_interop"] = caps.external_semaphore_interop;
-        nb::dict unavailable_reasons;
-        if (caps.native_metal) {
-            if (!caps.mesh_rendering)
-                unavailable_reasons["mesh_rendering"] =
-                    "Mesh viewport rendering is not available in the Metal compositor yet";
-            if (!caps.environment_map)
-                unavailable_reasons["environment_map"] =
-                    "Environment-map backgrounds are not available in the Metal compositor yet";
-            if (!caps.split_view)
-                unavailable_reasons["split_view"] =
-                    "Split view is not available in the Metal compositor yet";
-            if (!caps.temporal_upscaling)
-                unavailable_reasons["temporal_upscaling"] =
-                    "Temporal upscaling and FSR are not available on the Metal tensor path";
-            if (!caps.mesh2splat)
-                unavailable_reasons["mesh2splat"] =
-                    "Mesh2Splat requires the Vulkan rasterizer and is disabled in Metal-only builds";
-            if (!caps.hdr_libplacebo)
-                unavailable_reasons["hdr_libplacebo"] =
-                    "libplacebo HDR output requires Vulkan and is disabled in Metal-only builds";
-        }
-        capabilities["unavailable_reasons"] = unavailable_reasons;
         return capabilities;
     };
     m.def("get_graphics_capabilities", get_graphics_capabilities,

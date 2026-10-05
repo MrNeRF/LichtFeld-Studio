@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "viewport_tensor_meshes.hpp"
+#include "viewport_geometry.hpp"
 
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
@@ -121,28 +122,6 @@ namespace lfs::vis {
             std::uint64_t last_frame = 0;
         };
 
-        // Same light frustum as VulkanMeshPass::computeLightVp.
-        glm::mat4 lightViewProjection(const Mesh& mesh, const glm::mat4& model, const glm::vec3& light_dir) {
-            glm::vec3 ws_min(std::numeric_limits<float>::max());
-            glm::vec3 ws_max(std::numeric_limits<float>::lowest());
-            for (int corner = 0; corner < 8; ++corner) {
-                const glm::vec3 local{(corner & 1) ? mesh.aabb_max.x : mesh.aabb_min.x,
-                                      (corner & 2) ? mesh.aabb_max.y : mesh.aabb_min.y,
-                                      (corner & 4) ? mesh.aabb_max.z : mesh.aabb_min.z};
-                const glm::vec3 world = glm::vec3(model * glm::vec4(local, 1.0f));
-                ws_min = glm::min(ws_min, world);
-                ws_max = glm::max(ws_max, world);
-            }
-            const glm::vec3 center = (ws_min + ws_max) * 0.5f;
-            const float radius = glm::length(ws_max - ws_min) * 0.5f;
-            const glm::vec3 dir = glm::length(light_dir) > 1e-6f ? glm::normalize(light_dir)
-                                                                 : glm::vec3(0.0f, 1.0f, 0.0f);
-            glm::vec3 up(0.0f, 1.0f, 0.0f);
-            if (std::abs(glm::dot(dir, up)) > 0.99f)
-                up = glm::vec3(0.0f, 0.0f, 1.0f);
-            const glm::mat4 view = glm::lookAt(center + dir * radius * 2.0f, center, up);
-            return glm::ortho(-radius, radius, -radius, radius, 0.01f, radius * 4.0f) * view;
-        }
     } // namespace
 
     struct TensorMeshPass::Impl {
@@ -281,7 +260,7 @@ namespace lfs::vis {
                 shadow.depth = Tensor::empty({std::size_t(resolution), std::size_t(resolution)}, Device::GPU, DataType::Float32);
                 shadow.resolution = resolution;
             }
-            shadow.light_vp = lightViewProjection(mesh, item.model, item.light_dir);
+            shadow.light_vp = meshShadowViewProjection(mesh.aabb_min, mesh.aabb_max, item.model, item.light_dir);
             Uniforms uniforms{};
             putMatrix(uniforms, kMvp, shadow.light_vp * item.model);
             auto uniform_tensor = uploads.upload(std::as_bytes(std::span(uniforms)), {kRecords, 4}, DataType::Float32);

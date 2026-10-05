@@ -1511,12 +1511,6 @@ namespace lfs::app {
                 return std::make_unique<lfs::io::video::VideoEncoder>();
             });
 
-            constexpr auto graphics_backend =
-#ifdef LFS_GRAPHICS_METAL
-                lfs::vis::GraphicsBackend::Metal;
-#else
-                lfs::vis::GraphicsBackend::Vulkan;
-#endif
             mcp::McpHttpServer mcp_http({.enable_resources = true});
             const auto mcp_preferences = vis::loadMcpPreferences();
             const auto mcp_port_override = params->mcp_port;
@@ -1577,7 +1571,6 @@ namespace lfs::app {
                     };
                 },
                 .gut = params->optimization.gut,
-                .graphics_backend = graphics_backend,
                 .startup_project = startup_project,
             });
 

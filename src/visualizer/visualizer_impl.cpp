@@ -257,8 +257,7 @@ namespace lfs::vis {
         : options_(options),
           window_manager_(std::make_unique<WindowManager>(options.title, options.width, options.height,
                                                           options.monitor_x, options.monitor_y,
-                                                          options.monitor_width, options.monitor_height,
-                                                          options.graphics_backend)) {
+                                                          options.monitor_width, options.monitor_height)) {
         viewer_thread_id_ = std::this_thread::get_id();
 
         LOG_DEBUG("Creating visualizer with window size {}x{}", options.width, options.height);

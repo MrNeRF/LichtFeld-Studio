@@ -26,8 +26,6 @@ namespace lfs::vis {
         ~ViewportReferenceRenderer();
         [[nodiscard]] bool initialize(GraphicsContext&);
         void prepare(GraphicsContext&, const ViewportFrameDesc&, ViewRenderState&);
-        [[nodiscard]] bool hasPreRenderWork(const ViewportFrameDesc&) const;
-        [[nodiscard]] bool recordPreRenderWork(const GraphicsFrame&, const ViewportFrameDesc&);
         void record(const GraphicsFrame&, const ViewportFrameDesc&);
         void recordFrame(const GraphicsFrame&, const ViewportFrameDesc&, ViewRenderState&);
         void prepareImport(GraphicsContext&, const ViewportFrameDesc&, ViewRenderState&, ViewportReferenceRenderer* resident);
@@ -35,6 +33,8 @@ namespace lfs::vis {
         [[nodiscard]] SceneUpscalerSelection sceneUpscalerSelection() const;
 
     private:
+        [[nodiscard]] bool hasPreRenderWork(const ViewportFrameDesc&) const;
+        [[nodiscard]] bool recordPreRenderWork(const GraphicsFrame&, const ViewportFrameDesc&);
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };

@@ -37,8 +37,7 @@ namespace lfs::vis::gui {
         std::size_t allocation_bytes = 0;
     };
 
-    // UI frame contract. The temporary reference implementation keeps native
-    // presentation access private; the replacement will use tensor programs.
+    // UI frame contract. Implementations keep native presentation access private.
     class LFS_VIS_API UiRenderer : public Rml::RenderInterface {
     public:
         ~UiRenderer() override = default;

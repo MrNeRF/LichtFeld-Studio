@@ -13,87 +13,14 @@
 #include "window/graphics_context.hpp"
 
 #include <limits>
+#include <utility>
 
 namespace lfs::vis {
-    namespace {
-        // Same parameters as the Vulkan manager's mesh frame.
-        ViewportEnvironment environmentFor(const FrameContext& frame_ctx, const RenderSettings& settings) {
-            ViewportEnvironment environment;
-            environment.enabled = environmentBackgroundUsesTransparentViewerCompositing(settings);
-            if (!environment.enabled)
-                return environment;
-            const auto vp_data = frame_ctx.makeViewportData();
-            const auto frame_view = frame_ctx.makeFrameView();
-            environment.map_path = settings.environment_map_path;
-            environment.camera_to_world = vp_data.rotation;
-            environment.viewport_size = glm::vec2(static_cast<float>(frame_view.size.x),
-                                                  static_cast<float>(frame_view.size.y));
-            if (frame_view.intrinsics_override.has_value() && !frame_view.orthographic) {
-                const auto& intr = *frame_view.intrinsics_override;
-                environment.intrinsics = glm::vec4(intr.focal_x, intr.focal_y, intr.center_x, intr.center_y);
-            } else {
-                const auto [fx, fy] =
-                    lfs::rendering::computePixelFocalLengths(frame_view.size, frame_view.focal_length_mm);
-                environment.intrinsics = glm::vec4(fx, fy, frame_view.size.x * 0.5f, frame_view.size.y * 0.5f);
-            }
-            environment.exposure = settings.environment_exposure;
-            environment.rotation_radians = glm::radians(settings.environment_rotation_degrees);
-            environment.equirectangular_view = settings.equirectangular;
-            return environment;
-        }
-        // Same payload as the Vulkan manager's populateMeshFrame.
-        ViewportMeshPassDesc meshesFor(const FrameContext& frame_ctx, const RenderSettings& settings) {
-            ViewportMeshPassDesc frame;
-            const auto& meshes = frame_ctx.scene_state.meshes;
-            if (meshes.empty())
-                return frame;
-            const auto vp_data = frame_ctx.makeViewportData();
-            frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
-            frame.camera_position = vp_data.translation;
-            const bool any_selected_mesh = std::any_of(meshes.begin(), meshes.end(),
-                                                       [](const auto& mesh) { return mesh.is_selected; });
-            const auto& selected_nodes = frame_ctx.scene_state.selected_node_mask;
-            const bool any_selected_node = std::any_of(selected_nodes.begin(), selected_nodes.end(),
-                                                       [](const bool selected) { return selected; });
-            const bool dim_non_emphasized = settings.desaturate_unselected && (any_selected_mesh || any_selected_node);
-            const glm::vec3 headlight_dir = glm::length(vp_data.translation) > 1e-6f
-                                                ? glm::normalize(vp_data.translation)
-                                                : settings.mesh_light_dir;
-            frame.items.reserve(meshes.size());
-            for (const auto& mesh : meshes) {
-                if (!mesh.mesh)
-                    continue;
-                frame.items.push_back({
-                    .mesh = mesh.mesh,
-                    .model = mesh.transform,
-                    .light_dir = headlight_dir,
-                    .light_intensity = settings.mesh_light_intensity,
-                    .ambient = settings.mesh_ambient,
-                    .backface_culling = settings.mesh_backface_culling,
-                    .is_emphasized = mesh.is_selected,
-                    .dim_non_emphasized = dim_non_emphasized,
-                    .flash_intensity = frame_ctx.selection_flash_intensity,
-                    .wireframe_overlay = settings.mesh_wireframe,
-                    .wireframe_color = settings.mesh_wireframe_color,
-                    .wireframe_width = settings.mesh_wireframe_width,
-                    .shadow_enabled = settings.mesh_shadow_enabled,
-                    .shadow_map_resolution = settings.mesh_shadow_resolution,
-                });
-            }
-            return frame;
-        }
-    } // namespace
-
     std::shared_ptr<lfs::core::Tensor> RenderingManager::composeSplitViewCpu(
         const SplitViewCpuDesc&, const glm::ivec2&) {
-        // Split view is an explicit Phase 3 capability on Metal. Keeping this
-        // empty prevents capture from manufacturing a view the user did not see.
+        // Split view is not available on Metal yet. Returning nothing keeps
+        // capture from manufacturing a view the user did not see.
         return {};
-    }
-
-    void RenderingManager::queueSharedScratchRetry(ViewRenderState& view,
-                                                   const DirtyMask retry_dirty) {
-        view.dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
     }
 
     float RenderingManager::trainingRefreshIntervalSec(const ViewRenderState& view) const {
@@ -115,16 +42,6 @@ namespace lfs::vis {
         }
     }
 
-    double RenderingManager::secondsUntilTrainingRefresh() const {
-        std::lock_guard lock(views_mutex_);
-        double remaining = std::numeric_limits<double>::infinity();
-        for (const auto& [id, view] : view_states_)
-            remaining = std::min(
-                remaining, view->frame_lifecycle_service_.secondsUntilTrainingRefresh(
-                               trainingRefreshIntervalSec(*view)));
-        return remaining;
-    }
-
     double RenderingManager::secondsUntilCameraSettle() const {
         return std::numeric_limits<double>::infinity();
     }
@@ -136,14 +53,6 @@ namespace lfs::vis {
         if (point_scene_renderer_ && point_scene_renderer_->takeRefinementRequest())
             markDirty(DirtyFlag::CAMERA, FrameReason::AsyncCompletion,
                       "tensor_renderer_refinement_ready");
-    }
-
-    void RenderingManager::beginImportRenderCheck(const uint64_t generation) {
-        import_render_check_ = true;
-        import_render_generation_ = generation;
-        import_render_frames_ = 0;
-        import_render_result_.reset();
-        markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
     }
 
     bool RenderingManager::importUsesCombinedModel() const { return true; }
@@ -180,12 +89,6 @@ namespace lfs::vis {
         import_render_check_ = false;
         import_render_preparing_ = false;
         import_render_result_.reset();
-    }
-
-    void RenderingManager::noteImportRenderFrame(const uint64_t generation, std::string error) {
-        if (!import_render_check_ || generation != import_render_generation_)
-            return;
-        import_render_result_ = std::move(error);
     }
 
     ViewportFrameResult RenderingManager::renderFrame(const RenderContext& context) {
@@ -228,7 +131,9 @@ namespace lfs::vis {
         }
 
         if (context.settings.split_view_mode != SplitViewMode::Disabled) {
-            LOG_WARN("Split view is unavailable on the Metal tensor compositor");
+            static bool warned = false;
+            if (!std::exchange(warned, true))
+                LOG_WARN("Split view is unavailable on the Metal tensor compositor");
         }
 
         auto frame_settings = context.settings;
@@ -272,8 +177,9 @@ namespace lfs::vis {
             view.dirty_mask_.exchange(0, std::memory_order_acq_rel);
             clearViewportImageState(view, size);
             view.viewport_artifact_service_.clearViewportOutput();
-            view.viewport_environment_ = environmentFor(frame_context, frame_settings);
-            view.viewport_meshes_ = meshesFor(frame_context, frame_settings);
+            view.viewport_environment_ = buildViewportEnvironment(
+                frame_context, frame_settings, environmentBackgroundUsesTransparentViewerCompositing(frame_settings));
+            view.viewport_meshes_ = buildViewportMeshes(frame_context, frame_settings);
             return {.size = size, .matches_viewport_extent = true, .rendered = true};
         }
 
@@ -312,10 +218,7 @@ namespace lfs::vis {
             depth = std::move(outputs->depth);
         } else {
             if ((frame_context.frame_dirty & DirtyFlag::SPLATS) != 0) {
-                point_cloud_colors_cache_key_ = nullptr;
-                point_cloud_colors_cache_size_ = 0;
-                point_cloud_colors_cache_ = lfs::core::Tensor{};
-                ++point_cloud_data_revision_;
+                invalidatePointCloudData();
             }
             if ((frame_context.frame_dirty & DirtyFlag::SELECTION) != 0)
                 ++point_cloud_preview_selection_revision_;
@@ -344,62 +247,18 @@ namespace lfs::vis {
                 positions = &scene_state.point_cloud->means;
                 colors = &scene_state.point_cloud->colors;
             }
-            const auto& frame_view = pc_request.frame_view;
-            const glm::mat4 view_matrix = frame_view.getViewMatrix();
-            const glm::mat4 projection = lfs::rendering::createProjectionMatrix(
-                frame_view.size, lfs::rendering::focalLengthToVFov(frame_view.focal_length_mm),
-                frame_view.orthographic, frame_view.ortho_scale, frame_view.near_plane, frame_view.far_plane);
-            // Same clip-space flip as the Vulkan compositor: images are top-left origin.
-            glm::mat4 clip_y_flip(1.0f);
-            clip_y_flip[1][1] = -1.0f;
-            PointSceneRenderer::RenderRequest request{};
+            auto request = buildPointSceneRequest(pc_request, frame_settings);
             request.positions = positions;
             request.colors = colors;
             request.positions_revision = point_cloud_data_revision_;
             request.colors_revision = point_cloud_data_revision_;
-            request.model_transforms = pc_request.scene.model_transforms;
-            request.transform_indices = pc_request.scene.transform_indices.get();
-            request.node_visibility_mask = &pc_request.scene.node_visibility_mask;
             if (splats_as_points && model->has_deleted_mask() && model->deleted_mask_matches_size()) {
                 request.deleted_mask = &model->deleted();
                 request.deleted_mask_revision = model->deleted_mask_version();
             }
-            request.selection_mask = pc_request.overlay.selection_mask.get();
-            request.preview_selection_mask = pc_request.overlay.transient_mask.mask;
-            request.selection_colors = &pc_request.overlay.selection_colors;
-            request.preview_selection_additive = pc_request.overlay.transient_mask.additive;
             request.selection_revision = point_cloud_preview_selection_revision_;
             request.preview_selection_revision = point_cloud_preview_selection_revision_;
-            if (pc_request.filters.crop_box) {
-                request.crop = PointSceneRenderer::CropBox{
-                    .to_local = pc_request.filters.crop_box->transform,
-                    .min = pc_request.filters.crop_box->min,
-                    .max = pc_request.filters.crop_box->max,
-                    .inverse = pc_request.filters.crop_inverse,
-                    .desaturate = pc_request.filters.crop_desaturate};
-            } else if (pc_request.filters.crop_ellipsoid) {
-                request.crop_ellipsoid = PointSceneRenderer::CropEllipsoid{
-                    .to_local = pc_request.filters.crop_ellipsoid->transform,
-                    .radii = pc_request.filters.crop_ellipsoid->radii,
-                    .inverse = pc_request.filters.crop_inverse,
-                    .desaturate = pc_request.filters.crop_desaturate};
-            }
-            request.view = view_matrix;
-            request.view_projection = clip_y_flip * projection * view_matrix;
-            request.size = frame_view.size;
-            request.background_color = frame_view.background_color;
-            request.transparent_background = pc_request.transparent_background;
             request.synchronize_output = context.preparing_import;
-            request.orthographic = frame_view.orthographic;
-            request.ortho_scale = frame_view.ortho_scale;
-            request.focal_y = lfs::core::fov2focal(
-                lfs::rendering::focalLengthToVFovRad(frame_view.focal_length_mm), frame_view.size.y);
-            request.voxel_size = pc_request.render.voxel_size;
-            request.scaling_modifier = pc_request.render.scaling_modifier;
-            request.depth_view = frame_settings.depth_view;
-            request.depth_view_min = frame_settings.depth_view_min;
-            request.depth_view_max = frame_settings.depth_view_max;
-            request.depth_visualization_mode = frame_settings.depth_visualization_mode;
             if (!point_scene_renderer_)
                 point_scene_renderer_ = createPointSceneRenderer(*context.graphics_context);
             auto rendered = point_scene_renderer_->render(request, view.main_render_target_);
@@ -422,8 +281,9 @@ namespace lfs::vis {
         ++view.vulkan_viewport_image_generation_;
         view.vulkan_viewport_image_ = image;
         view.viewport_depth_image_ = depth;
-        view.viewport_environment_ = environmentFor(frame_context, frame_settings);
-        view.viewport_meshes_ = meshesFor(frame_context, frame_settings);
+        view.viewport_environment_ = buildViewportEnvironment(
+                frame_context, frame_settings, environmentBackgroundUsesTransparentViewerCompositing(frame_settings));
+        view.viewport_meshes_ = buildViewportMeshes(frame_context, frame_settings);
         view.vulkan_viewport_image_size_ = size;
         view.vulkan_viewport_image_alloc_size_ = size;
         view.vulkan_viewport_coordinate_size_ = size;

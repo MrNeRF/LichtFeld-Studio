@@ -12,7 +12,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -32,8 +31,6 @@ namespace lfs::vis {
         bool mesh_rendering = false;
         bool wireframe = false;
         bool wide_lines = false;
-        float minimum_line_width = 1.0f;
-        float maximum_line_width = 1.0f;
         bool external_memory_interop = false;
         bool external_semaphore_interop = false;
         bool environment_map = true;
@@ -88,26 +85,13 @@ namespace lfs::vis {
         [[nodiscard]] virtual bool presentBootstrapFrame(float r, float g, float b, float a) = 0;
         [[nodiscard]] virtual bool hasActiveFrame() const noexcept = 0;
         [[nodiscard]] virtual lfs::Result<WindowCapture> captureFinalFrameRgba() = 0;
-        // The reference presenter completes synchronously. A tensor presenter
-        // may override this to resolve after its timeline readback completes.
-        [[nodiscard]] virtual std::future<lfs::Result<WindowCapture>> captureFinalFrameRgbaAsync() {
-            std::promise<lfs::Result<WindowCapture>> completion;
-            auto result = completion.get_future();
-            completion.set_value(captureFinalFrameRgba());
-            return result;
-        }
 
         [[nodiscard]] virtual bool waitForNextFrameSlot() = 0;
         [[nodiscard]] virtual bool waitForSubmittedFrames() = 0;
         [[nodiscard]] virtual bool waitIdle() = 0;
-        [[nodiscard]] virtual std::uint64_t lastSubmitSerial() const = 0;
-        [[nodiscard]] virtual std::uint64_t lastSuccessfulSubmitSerial() const = 0;
-        [[nodiscard]] virtual std::uint64_t completedSubmitSerial() const = 0;
-        [[nodiscard]] virtual bool waitForCompletedSubmitSerial(std::uint64_t serial) = 0;
 
         [[nodiscard]] virtual RendererTerminalState terminalState() const noexcept = 0;
         [[nodiscard]] virtual const std::string& lastError() const noexcept = 0;
-        virtual void noteFailure(const std::exception& exception) = 0;
         [[nodiscard]] virtual GraphicsCapabilities capabilities() const noexcept = 0;
         virtual void flushPipelineCache() = 0;
         [[nodiscard]] virtual lfs::core::SplatTensorAllocator

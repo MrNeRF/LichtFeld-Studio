@@ -30,13 +30,8 @@ namespace lfs::vis {
         [[nodiscard]] bool waitForNextFrameSlot() override;
         [[nodiscard]] bool waitForSubmittedFrames() override;
         [[nodiscard]] bool waitIdle() override;
-        [[nodiscard]] std::uint64_t lastSubmitSerial() const override;
-        [[nodiscard]] std::uint64_t lastSuccessfulSubmitSerial() const override;
-        [[nodiscard]] std::uint64_t completedSubmitSerial() const override;
-        [[nodiscard]] bool waitForCompletedSubmitSerial(std::uint64_t serial) override;
         [[nodiscard]] RendererTerminalState terminalState() const noexcept override;
         [[nodiscard]] const std::string& lastError() const noexcept override;
-        void noteFailure(const std::exception& exception) override;
         [[nodiscard]] GraphicsCapabilities capabilities() const noexcept override;
         void flushPipelineCache() override;
         [[nodiscard]] lfs::core::SplatTensorAllocator

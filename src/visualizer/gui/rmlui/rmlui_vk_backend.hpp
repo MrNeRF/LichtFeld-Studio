@@ -516,7 +516,6 @@ private:
             m_set_to_pool.clear();
         }
 
-        uint32_t Get_AllocatedDescriptorCount() const noexcept { return m_allocated_descriptor_count; }
 
         bool Alloc_Descriptor(VkDevice p_device, VkDescriptorSetLayout* p_layouts, VkDescriptorSet* p_sets,
                               uint32_t descriptor_count_for_creation = 1) noexcept {

@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: MIT */
 
 #include "gui/rmlui/rmlui_vk_backend.hpp"
+#include "gui/rmlui/rml_image_file.hpp"
 #include "core/error.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/vulkan/rmlui_shaders_spv.hpp"
-#include "internal/resource_paths.hpp"
 #include "io/project_container.hpp"
 #include "python/python_runtime.hpp"
 #include "window/vulkan_graphics_context.hpp"
@@ -28,7 +28,6 @@
 #include <format>
 #include <limits>
 #include <optional>
-#include <stb_image.h>
 #include <string.h>
 #include <string>
 #include <string_view>
@@ -1052,105 +1051,10 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
         return reinterpret_cast<Rml::TextureHandle>(texture);
     }
 
-    auto load_with_stbi = [&](const std::string& path) -> Rml::TextureHandle {
-        int width = 0;
-        int height = 0;
-        int channels = 0;
-        unsigned char* data = stbi_load(path.c_str(), &width, &height, &channels, 4);
-        if (!data)
-            return 0;
-
-        texture_dimensions.x = width;
-        texture_dimensions.y = height;
-
-        // Probe the file's native channel count. Single-channel images are masks:
-        // stbi expands them to (gray, gray, gray, 255) which renders as fully-opaque
-        // gray over the underlying image — useless as an overlay. The mask branch
-        // below instead drives the alpha from the gray value so an image-color CSS
-        // tint paints only the foreground.
-        int probe_w = 0, probe_h = 0, probe_channels = 0;
-        const bool is_single_channel =
-            stbi_info(path.c_str(), &probe_w, &probe_h, &probe_channels) &&
-            probe_channels == 1;
-
-        const int pixel_count = width * height;
-        if (is_single_channel) {
-            // Mask: the gray value becomes the alpha. RGB is set to the same value so
-            // the texture is premultiplied (matching the non-mask branch below and the
-            // backend's premultiplied-alpha blend), which keeps alpha==0 pixels fully
-            // transparent instead of adding their color over the image.
-            for (int i = 0; i < pixel_count; ++i) {
-                unsigned char* p = data + i * 4;
-                const unsigned char gray = p[0];
-                p[0] = gray;
-                p[1] = gray;
-                p[2] = gray;
-                p[3] = gray;
-            }
-        } else {
-            for (int i = 0; i < pixel_count; ++i) {
-                unsigned char* p = data + i * 4;
-                const unsigned int alpha = p[3];
-                p[0] = static_cast<unsigned char>((p[0] * alpha + 127) / 255);
-                p[1] = static_cast<unsigned char>((p[1] * alpha + 127) / 255);
-                p[2] = static_cast<unsigned char>((p[2] * alpha + 127) / 255);
-            }
-        }
-
-        const size_t image_size = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-        const Rml::TextureHandle handle = CreateTexture({data, image_size}, texture_dimensions, path);
-        stbi_image_free(data);
-        return handle;
-    };
-
-    if (const Rml::TextureHandle handle = load_with_stbi(source); handle)
-        return handle;
-
-    auto load_asset_fallback = [&](std::string asset_name) -> Rml::TextureHandle {
-        while (asset_name.rfind("../", 0) == 0)
-            asset_name.erase(0, 3);
-        while (asset_name.rfind("./", 0) == 0)
-            asset_name.erase(0, 2);
-        if (asset_name.empty())
-            return 0;
-
-        try {
-            const auto path = lfs::vis::getAssetPath(asset_name);
-            if (std::filesystem::exists(path))
-                return load_with_stbi(lfs::core::path_to_utf8(path));
-        } catch (...) {
-        }
-        return 0;
-    };
-
-    if (const Rml::TextureHandle handle = load_asset_fallback(source); handle)
-        return handle;
-
-    const std::string_view source_view(source);
-    constexpr std::string_view rmlui_icon_segment = "rmlui/icon/";
-    if (const auto pos = source_view.find(rmlui_icon_segment); pos != std::string_view::npos) {
-        if (const Rml::TextureHandle handle =
-                load_asset_fallback("icon/" + std::string(source_view.substr(pos + rmlui_icon_segment.size())));
-            handle)
-            return handle;
+    if (auto image = lfs::vis::gui::loadRmlImageFile(source)) {
+        texture_dimensions = {image->width, image->height};
+        return CreateTexture({image->rgba.data(), image->rgba.size()}, texture_dimensions, image->path);
     }
-    constexpr std::string_view icon_segment = "/icon/";
-    if (const auto pos = source_view.find(icon_segment); pos != std::string_view::npos) {
-        if (const Rml::TextureHandle handle =
-                load_asset_fallback("icon/" + std::string(source_view.substr(pos + icon_segment.size())));
-            handle)
-            return handle;
-    }
-
-#ifndef _WIN32
-    if (!source.empty() && source[0] != '/' && source.find("://") == Rml::String::npos) {
-        const std::string absolute_source = "/" + source;
-        if (std::filesystem::exists(absolute_source)) {
-            if (const Rml::TextureHandle handle = load_with_stbi(absolute_source); handle)
-                return handle;
-        }
-    }
-#endif
 
     Rml::FileInterface* file_interface = Rml::GetFileInterface();
     Rml::FileHandle file_handle = file_interface->Open(source);

@@ -55,8 +55,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Rendering
         rendering/camera_interaction_service.cpp
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/output_image_pool.cpp>
-        $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/output_slot_ring.cpp>
-        $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/readback_ticket_ring.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/mesh_offscreen_renderer.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/mesh_offscreen_renderer_unavailable.cpp>
         rendering/viewer_splat_tensor_allocator.cpp
@@ -353,6 +351,7 @@ target_sources(lfs_visualizer
         PRIVATE
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:gui/rmlui/rmlui_vk_backend.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:gui/rmlui/rmlui_tensor_backend.cpp>
+        gui/rmlui/rml_image_file.cpp
         rendering/scene_renderer.cpp
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/vksplat_input_packer.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/vulkan_external_tensor.cpp>

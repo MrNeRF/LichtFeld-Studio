@@ -17,8 +17,4 @@ namespace lfs::vis::gui {
     [[nodiscard]] LFS_VIS_API VulkanContext* getUiTextureContext();
     [[nodiscard]] LFS_VIS_API VkDescriptorSet referenceUiTextureDescriptor(const lfs::core::Tensor&);
 
-    // Compatibility name for Vulkan implementation code only. UI callers use
-    // UiTexture and never observe native resources.
-    using VulkanUiTexture = UiTexture;
-
 } // namespace lfs::vis::gui

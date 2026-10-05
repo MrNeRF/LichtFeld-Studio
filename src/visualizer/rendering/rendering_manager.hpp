@@ -56,8 +56,6 @@
 #include <utility>
 #include <vector>
 
-class PythonIntegrationTest_ParkedGtPanelWindowRequestsAreAtomicallyRefused_Test;
-
 namespace lfs::core {
     class Camera;
     class Scene;
@@ -65,17 +63,11 @@ namespace lfs::core {
     class Tensor;
 } // namespace lfs::core
 
-namespace lfs::io {
-    class PipelinedImageLoader;
-}
-
 namespace lfs::core::events::ui {
     struct GridSettingsChanged;
     struct PointCloudModeChanged;
     struct RenderSettingsChanged;
 } // namespace lfs::core::events::ui
-
-namespace lfs::core::events::cmd {} // namespace lfs::core::events::cmd
 
 namespace lfs::vis::op {
     struct DepthWindowModeSnapshot;
@@ -318,14 +310,12 @@ namespace lfs::vis {
         // lens. Leaving ortho keeps the focal length the user set.
         void setOrthographic(bool enabled, float viewport_height, float distance_to_pivot);
 
-        float getFovDegrees() const;
         float getFocalLengthMm() const;
         void setFocalLength(float focal_mm);
 
         void advanceSplitOffset();
         SplitViewInfo getSplitViewInfo() const;
         [[nodiscard]] std::optional<SplitViewInfo> getSplitViewInfoIfChanged(std::uint64_t& generation) const;
-        [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
         [[nodiscard]] bool isPLYComparisonActive() const;
         [[nodiscard]] bool depthWindowDragPreview(ViewId view = kNoView) const;
@@ -413,7 +403,6 @@ namespace lfs::vis {
 
         struct ContentBounds {
             float x, y, width, height;
-            bool letterboxed = false;
         };
         ContentBounds getContentBounds(ViewId view, const glm::ivec2& viewport_size) const;
 
@@ -917,15 +906,13 @@ namespace lfs::vis {
         const lfs::core::SplatData* lod_controller_model_ = nullptr;
         bool lod_controller_needs_sync_traversal_ = false;
         std::uint64_t lod_controller_page_map_generation_ = 0;
-        // Cached SH0→RGB derivation for the point-cloud Vulkan path. Refreshed
-        // only when the source sh0_raw() pointer/size changes so the Vulkan
-        // renderer's per-tensor upload cache stays warm across frames.
+        // Cached SH0→RGB derivation for the point-cloud path. Refreshed only when
+        // the source sh0_raw() pointer/size changes so the renderer's per-tensor
+        // upload cache stays warm across frames.
+        void invalidatePointCloudData();
         lfs::core::Tensor point_cloud_colors_cache_;
         const void* point_cloud_colors_cache_key_ = nullptr;
         std::size_t point_cloud_colors_cache_size_ = 0;
-        // Submit serial of the last frame that drew the point cloud; its buffers
-        // are released only after that frame has retired on the GPU.
-        std::uint64_t point_cloud_last_frame_serial_ = 0;
         std::uint64_t point_cloud_data_revision_ = 0;
         std::uint64_t point_cloud_preview_selection_revision_ = 0;
         GraphicsContext* last_graphics_context_ = nullptr;
@@ -950,10 +937,6 @@ namespace lfs::vis {
         glm::ivec2 gt_comparison_failed_placeholder_size_{0, 0};
         std::mutex wake_callback_mutex_;
         std::function<void()> wake_callback_;
-
-        // GT compare-panel camera for the frame currently presented, for the
-        // selection lane. Written and cleared at exactly the same sites as
-        // this->state().vulkan_gt_comparison_content_size_.
 
         FrameDemandLedger frame_demand_ledger_;
         std::vector<ViewId> ledger_views_;
@@ -988,10 +971,6 @@ namespace lfs::vis {
         uint64_t gt_comparison_image_request_generation_ = 0;
         std::condition_variable_any gt_comparison_image_cv_;
         std::jthread gt_comparison_image_worker_;
-        // #1574 GT depth/normal async hold-then-swap: at most one outstanding ticket.
-
-        // Granular dirty tracking
-
         CameraInteractionService camera_interaction_service_;
 
         RenderSettings activeSettingsLocked() const;
@@ -1026,7 +1005,6 @@ namespace lfs::vis {
 
         lfs::event::ScopedHandler event_handlers_;
 
-        friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
         friend class SceneManager;
     };
 

@@ -7,6 +7,8 @@
 #include "core/export.hpp"
 #include "core/scene.hpp"
 #include "render_pass.hpp"
+#include "scene_renderer.hpp"
+#include "viewport_draw_types.hpp"
 
 namespace lfs::vis {
 
@@ -36,6 +38,20 @@ namespace lfs::vis {
 
     [[nodiscard]] LFS_VIS_API lfs::rendering::PointCloudRenderRequest buildPointCloudRenderRequest(
         const FrameContext& ctx, glm::ivec2 render_size, const std::vector<glm::mat4>& model_transforms);
+
+    // Point renderer request for `frame`: camera, filters, selection and depth
+    // view. The caller supplies the points, revisions and deleted mask; the
+    // request keeps pointers into `frame`.
+    [[nodiscard]] LFS_VIS_API PointSceneRenderer::RenderRequest buildPointSceneRequest(
+        const lfs::rendering::PointCloudRenderRequest& frame, const RenderSettings& settings);
+
+    // Scene meshes for this frame's camera, lit by a headlight.
+    [[nodiscard]] LFS_VIS_API ViewportMeshPassDesc buildViewportMeshes(
+        const FrameContext& ctx, const RenderSettings& settings);
+
+    // Environment background for this frame's camera; `enabled` decides whether it draws.
+    [[nodiscard]] LFS_VIS_API ViewportEnvironment buildViewportEnvironment(
+        const FrameContext& ctx, const RenderSettings& settings, bool enabled);
 
     // Visible splat node shown in a PLY-comparison panel, or null when the
     // scene has fewer than two visible splat slots.

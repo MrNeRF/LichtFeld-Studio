@@ -105,12 +105,6 @@ namespace lfs::core::internal {
 
             void draw(std::span<const Module::Draw> draws, std::span<const ProgramArguments> arguments) override {
                 std::lock_guard lock(mutex_);
-                uint32_t count = 0;
-                vkGetPhysicalDeviceQueueFamilyProperties(context_->physical_device(), &count, nullptr);
-                std::vector<VkQueueFamilyProperties> families(count);
-                vkGetPhysicalDeviceQueueFamilyProperties(context_->physical_device(), &count, families.data());
-                if (!(families.at(context_->queue_family()).queueFlags & VK_QUEUE_GRAPHICS_BIT))
-                    throw Exception(make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::Tensor, .detail = std::format("Tensor queue family {} is compute-only; raster requires a graphics-capable tensor queue", context_->queue_family()), .detection = LFS_SOURCE_SITE_CURRENT()}));
                 const auto& first = draws.front();
                 const uint32_t width = static_cast<uint32_t>(first.color->size(1)), height = static_cast<uint32_t>(first.color->size(0));
                 const auto format = first.color->dtype() == DataType::UInt8 ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R32G32B32A32_SFLOAT;

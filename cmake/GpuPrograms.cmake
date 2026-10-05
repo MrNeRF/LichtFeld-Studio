@@ -12,7 +12,6 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 # MSL is generated at build time; Metal loads it using the system compiler. This
 # works with Command Line Tools, without the optional offline Metal Toolchain.
 function(lfs_add_gpu_program target name)
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
     cmake_parse_arguments(PROGRAM "" "SOURCE" "COMPUTE;VERTEX;FRAGMENT" ${ARGN})
     get_filename_component(source "${PROGRAM_SOURCE}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     set(directory "${CMAKE_CURRENT_BINARY_DIR}/gpu_programs/${name}")
@@ -39,7 +38,7 @@ function(lfs_add_gpu_program target name)
                 list(APPEND outputs "${output}" "${output}.json")
                 list(APPEND embed_args Vulkan "${cpp_stage}" "${entry}" "${output}" "${output}.json")
             endif()
-            if(APPLE)
+            if(LFS_TENSOR_METAL)
                 set(output "${directory}/${entry}.metal")
                 add_custom_command(OUTPUT "${output}" "${output}.json"
                     COMMAND "${LFS_GPU_SLANGC}" "${source}" -entry "${entry}" -stage "${slang_stage}"

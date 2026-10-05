@@ -44,13 +44,6 @@ namespace lfs::vis {
             DepthSample = 3,
         };
 
-        enum class PollStatus : std::uint8_t {
-            NotReady = 0,
-            Ready = 1,
-            Failed = 2,
-            UnknownTicket = 3,
-        };
-
         struct TicketMeta {
             std::uint64_t ticket_value = 0;
             std::size_t ring_cell = 0; // Globally unique submission cell across target columns.

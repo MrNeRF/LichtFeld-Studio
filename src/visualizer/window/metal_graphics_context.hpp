@@ -7,6 +7,7 @@
 #include "core/tensor.hpp"
 
 #include <atomic>
+#include <future>
 #include <memory>
 #include <mutex>
 
@@ -34,17 +35,11 @@ namespace lfs::vis {
         [[nodiscard]] bool presentBootstrapFrame(float r, float g, float b, float a) override;
         [[nodiscard]] bool hasActiveFrame() const noexcept override;
         [[nodiscard]] lfs::Result<WindowCapture> captureFinalFrameRgba() override;
-        [[nodiscard]] std::future<lfs::Result<WindowCapture>> captureFinalFrameRgbaAsync() override;
         [[nodiscard]] bool waitForNextFrameSlot() override;
         [[nodiscard]] bool waitForSubmittedFrames() override;
         [[nodiscard]] bool waitIdle() override;
-        [[nodiscard]] std::uint64_t lastSubmitSerial() const override;
-        [[nodiscard]] std::uint64_t lastSuccessfulSubmitSerial() const override;
-        [[nodiscard]] std::uint64_t completedSubmitSerial() const override;
-        [[nodiscard]] bool waitForCompletedSubmitSerial(std::uint64_t serial) override;
         [[nodiscard]] RendererTerminalState terminalState() const noexcept override;
         [[nodiscard]] const std::string& lastError() const noexcept override;
-        void noteFailure(const std::exception& exception) override;
         [[nodiscard]] GraphicsCapabilities capabilities() const noexcept override;
         void flushPipelineCache() override;
         [[nodiscard]] lfs::core::SplatTensorAllocator
@@ -53,6 +48,9 @@ namespace lfs::vis {
         void disconnectTensorBackend() override;
 
     private:
+        [[nodiscard]] std::future<lfs::Result<WindowCapture>> captureFinalFrameRgbaAsync();
+        [[nodiscard]] std::uint64_t completedSubmitSerial() const;
+        [[nodiscard]] bool waitForCompletedSubmitSerial(std::uint64_t serial);
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };

@@ -9,9 +9,7 @@
 #include <utility>
 
 namespace lfs::vis {
-#ifndef LFS_GRAPHICS_METAL
     std::unique_ptr<GraphicsContext> createGraphicsContext() { return std::make_unique<VulkanGraphicsContext>(); }
-#endif
     namespace {
         lfs::Error graphicsError(const lfs::ErrorCode code, std::string detail) {
             return lfs::make_error({
@@ -105,29 +103,16 @@ namespace lfs::vis {
     bool VulkanGraphicsContext::waitForNextFrameSlot() { return context_.waitForNextFrameSlot(); }
     bool VulkanGraphicsContext::waitForSubmittedFrames() { return context_.waitForSubmittedFrames(); }
     bool VulkanGraphicsContext::waitIdle() { return context_.deviceWaitIdle(); }
-    std::uint64_t VulkanGraphicsContext::lastSubmitSerial() const { return context_.lastFrameSubmitSerial(); }
-    std::uint64_t VulkanGraphicsContext::lastSuccessfulSubmitSerial() const {
-        return context_.lastSuccessfulFrameSubmitSerial();
-    }
-    std::uint64_t VulkanGraphicsContext::completedSubmitSerial() const {
-        return context_.retiredFrameSubmitSerial();
-    }
-    bool VulkanGraphicsContext::waitForCompletedSubmitSerial(const std::uint64_t serial) {
-        return context_.waitForRetiredFrameSubmitSerial(serial);
-    }
     RendererTerminalState VulkanGraphicsContext::terminalState() const noexcept {
         return context_.rendererTerminalState();
     }
     const std::string& VulkanGraphicsContext::lastError() const noexcept { return context_.lastError(); }
-    void VulkanGraphicsContext::noteFailure(const std::exception& exception) { context_.noteFailure(exception); }
     GraphicsCapabilities VulkanGraphicsContext::capabilities() const noexcept {
         return {
             .native_metal = false,
             .mesh_rendering = true,
             .wireframe = context_.hasFillModeNonSolid(),
             .wide_lines = context_.hasWideLines(),
-            .minimum_line_width = context_.minLineWidth(),
-            .maximum_line_width = context_.maxLineWidth(),
             .external_memory_interop = context_.externalMemoryInteropEnabled(),
             .external_semaphore_interop = context_.externalSemaphoreInteropEnabled(),
         };

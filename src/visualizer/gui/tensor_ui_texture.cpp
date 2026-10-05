@@ -94,19 +94,8 @@ namespace lfs::vis::gui {
                         static_cast<std::size_t>(y) * region.width * region.channels;
                     auto* target = host_rgba.data() +
                         (static_cast<std::size_t>(region.y + y) * width + region.x) * 4;
-                    for (int x = 0; x < region.width; ++x) {
-                        if (region.channels == 1) {
-                            target[0] = target[1] = target[2] = source[0];
-                            target[3] = 255;
-                        } else {
-                            target[0] = source[0];
-                            target[1] = source[1];
-                            target[2] = source[2];
-                            target[3] = region.channels == 4 ? source[3] : 255;
-                        }
-                        source += region.channels;
-                        target += 4;
-                    }
+                    expandToRgba8(source, target, static_cast<std::size_t>(region.width),
+                                  region.channels);
                 }
             }
             auto host = lfs::core::Tensor::from_blob(
@@ -128,23 +117,6 @@ namespace lfs::vis::gui {
             publish();
         }
     };
-
-    std::vector<UiTexture::Impl*> UiTexture::orphaned_impls_;
-
-    std::size_t UiTexture::serviceOrphanedImpls(bool) {
-        for (auto* impl : orphaned_impls_) {
-            if (impl)
-                impl->unpublish();
-            delete impl;
-        }
-        orphaned_impls_.clear();
-        return 0;
-    }
-
-    void UiTexture::orphanImpl(Impl* impl) {
-        if (impl)
-            orphaned_impls_.push_back(impl);
-    }
 
     UiTexture::~UiTexture() {
         reset();

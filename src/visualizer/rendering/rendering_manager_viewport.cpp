@@ -129,8 +129,7 @@ namespace lfs::vis {
             0.0f,
             0.0f,
             static_cast<float>(viewport_width),
-            static_cast<float>(viewport_height),
-            false};
+            static_cast<float>(viewport_height)};
 
         if (viewState(view).split_view_service_.isGTComparisonActive(settingsForView(viewState(view).id))) {
             glm::ivec2 content_dims{0, 0};
@@ -166,7 +165,6 @@ namespace lfs::vis {
                 bounds.x = static_cast<float>(std::max((viewport_width - content_width) / 2, 0));
                 bounds.y = 0.0f;
             }
-            bounds.letterboxed = true;
         }
         return bounds;
     }

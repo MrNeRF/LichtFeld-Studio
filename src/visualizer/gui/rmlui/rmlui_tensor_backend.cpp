@@ -6,8 +6,8 @@
 #include "core/gpu_kernel_module.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "gui/rmlui/rml_image_file.hpp"
 #include "gui/ui_texture.hpp"
-#include "internal/resource_paths.hpp"
 #include "rmlui_composite_program.hpp"
 #include "rmlui_draw_program.hpp"
 #include "rmlui_mask_program.hpp"
@@ -22,7 +22,6 @@
 #include <cstring>
 #include <filesystem>
 #include <optional>
-#include <stb_image.h>
 #include <system_error>
 #include <unordered_map>
 #include <utility>
@@ -103,7 +102,6 @@ namespace lfs::vis::gui {
         std::unique_ptr<Module> draw_program;
         std::unique_ptr<Module> composite_program;
         std::unique_ptr<Module> mask_program;
-        const GraphicsFrame* frame = nullptr;
         Tensor* base = nullptr;
         Tensor dummy_texture;
         Tensor clip_mask;
@@ -125,7 +123,6 @@ namespace lfs::vis::gui {
         Rml::LayerHandle next_layer = 1;
         std::size_t geometry_bytes = 0;
         std::size_t texture_bytes = 0;
-        bool cache_capture = false;
         uint64_t texture_generation = 0;
         bool preview_used = false;
 
@@ -347,7 +344,6 @@ namespace lfs::vis::gui {
         if (!impl_->graphics || !impl_->draw_program || !impl_->composite_program ||
             !impl_->mask_program)
             return false;
-        impl_->frame = &frame;
         impl_->base = impl_->graphics->finalImageTensor(frame);
         impl_->layer_stack = {0};
         impl_->pending.clear();
@@ -360,7 +356,6 @@ namespace lfs::vis::gui {
 
     void TensorRmlUiRenderer::endFrame() {
         impl_->flush();
-        impl_->frame = nullptr;
         impl_->base = nullptr;
         impl_->recycleLayers();
         impl_->layer_stack = {0};
@@ -467,83 +462,14 @@ namespace lfs::vis::gui {
             texture->name = source;
             return reinterpret_cast<Rml::TextureHandle>(texture.release());
         }
-        const auto load = [&](const std::string& path) -> Rml::TextureHandle {
-            int width = 0, height = 0, channels = 0;
-            std::unique_ptr<unsigned char, decltype(&stbi_image_free)> pixels(
-                stbi_load(path.c_str(), &width, &height, &channels, 4), stbi_image_free);
-            if (!pixels)
-                return {};
-            const std::size_t count = std::size_t(width) * height;
-            for (std::size_t i = 0; i < count; ++i) {
-                auto* p = pixels.get() + i * 4;
-                if (channels == 1) {
-                    p[3] = p[0];
-                    p[1] = p[2] = p[0];
-                } else {
-                    p[0] = uint8_t((uint32_t(p[0]) * p[3] + 127) / 255);
-                    p[1] = uint8_t((uint32_t(p[1]) * p[3] + 127) / 255);
-                    p[2] = uint8_t((uint32_t(p[2]) * p[3] + 127) / 255);
-                }
-            }
-            dimensions = {width, height};
-            const auto handle = GenerateTexture({pixels.get(), count * 4}, dimensions);
-            if (auto* texture = reinterpret_cast<Texture*>(handle))
-                texture->linear = true; // loaded images sample like the Vulkan linear sampler
-            return handle;
-        };
-
-        if (const auto handle = load(source); handle)
-            return handle;
-
-#ifndef _WIN32
-        // RmlUi canonicalizes file URLs by dropping the root slash before this
-        // callback. Recover such absolute POSIX paths before trying assets.
-        if (!source.empty() && source[0] != '/' && source.find("://") == Rml::String::npos) {
-            const std::string absolute_source = "/" + source;
-            if (std::filesystem::exists(absolute_source)) {
-                if (const auto handle = load(absolute_source); handle)
-                    return handle;
-            }
-        }
-#endif
-
-        const auto load_asset = [&](std::string name) -> Rml::TextureHandle {
-            while (name.starts_with("../"))
-                name.erase(0, 3);
-            while (name.starts_with("./"))
-                name.erase(0, 2);
-            if (name.empty())
-                return {};
-            try {
-                const auto path = lfs::vis::getAssetPath(name);
-                if (std::filesystem::exists(path))
-                    return load(path.string());
-            } catch (...) {
-                // LFS-CENSUS-OK(empty-catch): optional asset fallbacks deliberately ignore path lookup failures.
-            }
+        auto image = loadRmlImageFile(source);
+        if (!image)
             return {};
-        };
-
-        if (const auto handle = load_asset(source); handle)
-            return handle;
-        const std::string_view source_view(source);
-        constexpr std::string_view rmlui_icon_segment = "rmlui/icon/";
-        if (const auto pos = source_view.find(rmlui_icon_segment);
-            pos != std::string_view::npos) {
-            if (const auto handle = load_asset(
-                    "icon/" + std::string(source_view.substr(
-                                  pos + rmlui_icon_segment.size())));
-                handle)
-                return handle;
-        }
-        constexpr std::string_view icon_segment = "/icon/";
-        if (const auto pos = source_view.find(icon_segment); pos != std::string_view::npos) {
-            if (const auto handle = load_asset(
-                    "icon/" + std::string(source_view.substr(pos + icon_segment.size())));
-                handle)
-                return handle;
-        }
-        return {};
+        dimensions = {image->width, image->height};
+        const auto handle = GenerateTexture({image->rgba.data(), image->rgba.size()}, dimensions);
+        if (auto* texture = reinterpret_cast<Texture*>(handle))
+            texture->linear = true; // loaded images sample like the Vulkan linear sampler
+        return handle;
     }
 
     void TensorRmlUiRenderer::ReleaseTexture(Rml::TextureHandle handle) {
@@ -641,7 +567,7 @@ namespace lfs::vis::gui {
         if (!filters.empty()) {
             static bool warned = false;
             if (!std::exchange(warned, true))
-                LOG_WARN("RmlUi tensor filters beyond frosted glass are not implemented yet");
+                LOG_WARN("RmlUi filters, including frosted glass, are not implemented by the tensor UI renderer");
         }
         CompositeParameters parameters{.width = uint32_t(source->size(1)),
                                        .height = uint32_t(source->size(0)),
@@ -723,11 +649,9 @@ namespace lfs::vis::gui {
             endCacheCapture();
             return;
         }
-        impl_->cache_capture = true;
         impl_->capture_area = impl_->clampedRect(float(x), float(y), float(x + width), float(y + height));
     }
     void TensorRmlUiRenderer::endCacheCapture() {
-        impl_->cache_capture = false;
         impl_->capture_area.reset();
     }
     uint64_t TensorRmlUiRenderer::previewTextureGeneration() const {

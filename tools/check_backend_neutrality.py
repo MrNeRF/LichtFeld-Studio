@@ -81,14 +81,6 @@ PRIVATE_SEAMS = {
         ("private-symbol", "internal::resize_image_prior_tensor"):
             "converted by lane F2b",
     },
-    "src/core/cuda/undistort/undistort.cu": {
-        ("private-symbol", "internal::undistort_image_tensor"):
-            "converted by lane F2b",
-    },
-    "src/visualizer/rendering/rendering_manager_vulkan.cpp": {
-        ("private-symbol", "lfs::core::internal::undistort_image_tensor"):
-            "converted by lane F2b",
-    },
 }
 INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
 CUDA_HEADER = re.compile(r'^(?:cuda(?:_runtime(?:_api)?|_fp16|_bf16)?\.h|driver_types\.h|vector_types\.h|cublas.*\.h|curand.*\.h|cub/.*)$')

@@ -29,6 +29,7 @@
 #include "visualizer/app_store.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <bit>
 #include <cassert>
 #include <cmath>
@@ -602,10 +603,7 @@ namespace lfs::vis {
     void RenderingManager::releaseSceneModelResources() {
         dropViewStates();
 
-        point_cloud_colors_cache_ = {};
-        point_cloud_colors_cache_key_ = nullptr;
-        point_cloud_colors_cache_size_ = 0;
-        ++point_cloud_data_revision_;
+        invalidatePointCloudData();
         ++point_cloud_preview_selection_revision_;
 
         if (scene_renderer_) {
@@ -634,10 +632,7 @@ namespace lfs::vis {
     void RenderingManager::releaseSceneRenderResources() {
         invalidateGTComparisonImageCache(state());
         dropViewStates();
-        point_cloud_colors_cache_ = {};
-        point_cloud_colors_cache_key_ = nullptr;
-        point_cloud_colors_cache_size_ = 0;
-        ++point_cloud_data_revision_;
+        invalidatePointCloudData();
         ++point_cloud_preview_selection_revision_;
         if (scene_renderer_)
             scene_renderer_->reset();
@@ -912,9 +907,28 @@ namespace lfs::vis {
         updateSettings(settings, DirtyFlag::CAMERA);
     }
 
-    float RenderingManager::getFovDegrees() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return lfs::rendering::focalLengthToVFov(activeSettingsLocked().focal_length_mm);
+    void RenderingManager::beginImportRenderCheck(const uint64_t generation) {
+        import_render_check_ = true;
+        import_render_generation_ = generation;
+        import_render_frames_ = 0;
+        import_render_result_.reset();
+        markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
+    }
+
+    double RenderingManager::secondsUntilTrainingRefresh() const {
+        std::lock_guard lock(views_mutex_);
+        double remaining = std::numeric_limits<double>::infinity();
+        for (const auto& [id, view] : view_states_)
+            remaining = std::min(remaining, view->frame_lifecycle_service_.secondsUntilTrainingRefresh(
+                                                trainingRefreshIntervalSec(*view)));
+        return remaining;
+    }
+
+    void RenderingManager::invalidatePointCloudData() {
+        point_cloud_colors_cache_ = {};
+        point_cloud_colors_cache_key_ = nullptr;
+        point_cloud_colors_cache_size_ = 0;
+        ++point_cloud_data_revision_;
     }
 
     float RenderingManager::getFocalLengthMm() const {
@@ -943,11 +957,6 @@ namespace lfs::vis {
     std::optional<SplitViewInfo> RenderingManager::getSplitViewInfoIfChanged(
         std::uint64_t& generation) const {
         return this->state().split_view_service_.getInfoIfChanged(generation);
-    }
-
-    bool RenderingManager::isSplitViewActive() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return this->state().split_view_service_.isActive(activeSettingsLocked());
     }
 
     bool RenderingManager::isGTComparisonActive() const {

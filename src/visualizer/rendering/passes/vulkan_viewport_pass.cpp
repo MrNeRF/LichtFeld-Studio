@@ -15,6 +15,7 @@
 #include "rendering/vulkan_wait.hpp"
 #include "shared_viewport_gpu_assets.hpp"
 #include "viewport_pass_graph.hpp"
+#include "rendering/viewport_geometry.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
 #include "vulkan_scene_image_uploader.hpp"
@@ -77,13 +78,6 @@ namespace lfs::vis {
         struct Vertex {
             glm::vec2 position;
             glm::vec2 uv;
-        };
-
-        struct FramebufferRect {
-            std::int32_t x = 0;
-            std::int32_t y = 0;
-            std::uint32_t width = 0;
-            std::uint32_t height = 0;
         };
 
         struct GridUniform {
@@ -157,22 +151,8 @@ namespace lfs::vis {
             const glm::vec2& viewport_pos,
             const glm::vec2& viewport_size,
             const VkExtent2D extent) {
-            const float sx = params.framebuffer_scale.x > 0.0f ? params.framebuffer_scale.x : 1.0f;
-            const float sy = params.framebuffer_scale.y > 0.0f ? params.framebuffer_scale.y : 1.0f;
-            const int x0 = std::clamp(static_cast<int>(std::lround(viewport_pos.x * sx)),
-                                      0, static_cast<int>(extent.width));
-            const int y0 = std::clamp(static_cast<int>(std::lround(viewport_pos.y * sy)),
-                                      0, static_cast<int>(extent.height));
-            const int x1 = std::clamp(static_cast<int>(std::lround((viewport_pos.x + viewport_size.x) * sx)),
-                                      0, static_cast<int>(extent.width));
-            const int y1 = std::clamp(static_cast<int>(std::lround((viewport_pos.y + viewport_size.y) * sy)),
-                                      0, static_cast<int>(extent.height));
-            return {
-                .x = x0,
-                .y = y0,
-                .width = static_cast<std::uint32_t>(std::max(x1 - x0, 0)),
-                .height = static_cast<std::uint32_t>(std::max(y1 - y0, 0)),
-            };
+            return scaledFramebufferRect(viewport_pos, viewport_size, params.framebuffer_scale,
+                                         glm::ivec2(static_cast<int>(extent.width), static_cast<int>(extent.height)));
         }
 
         [[nodiscard]] FramebufferRect toFramebufferRect(
@@ -1858,64 +1838,18 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] static GridUniform makeGridUniform(const VulkanViewportGridOverlay& grid) {
-            const glm::mat4 view_inv = glm::inverse(grid.view);
-            const glm::vec3 cam_pos = glm::vec3(view_inv[3]);
-            const glm::vec3 cam_right = glm::vec3(view_inv[0]);
-            const glm::vec3 cam_up = glm::vec3(view_inv[1]);
-            const glm::vec3 cam_forward = -glm::vec3(view_inv[2]);
-
-            glm::vec3 near_origin{0.0f};
-            glm::vec3 near_x{0.0f};
-            glm::vec3 near_y{0.0f};
-            glm::vec3 far_origin{0.0f};
-            glm::vec3 far_x{0.0f};
-            glm::vec3 far_y{0.0f};
-            if (grid.orthographic) {
-                const float half_width = 1.0f / grid.projection[0][0];
-                const float half_height = 1.0f / std::abs(grid.projection[1][1]);
-                const glm::vec3 right_offset = cam_right * half_width;
-                const glm::vec3 up_offset = cam_up * half_height;
-                constexpr float kRayNear = -1000.0f;
-                constexpr float kRayFar = 1000.0f;
-
-                const glm::vec3 near_center = cam_pos + cam_forward * kRayNear;
-                near_origin = near_center - right_offset - up_offset;
-                near_x = right_offset * 2.0f;
-                near_y = up_offset * 2.0f;
-
-                const glm::vec3 far_center = cam_pos + cam_forward * kRayFar;
-                far_origin = far_center - right_offset - up_offset;
-                far_x = right_offset * 2.0f;
-                far_y = up_offset * 2.0f;
-            } else {
-                const float fov_y = 2.0f * std::atan(1.0f / std::abs(grid.projection[1][1]));
-                const float aspect = std::abs(grid.projection[1][1] / grid.projection[0][0]);
-                const float half_height = std::tan(fov_y * 0.5f);
-                const float half_width = half_height * aspect;
-                const glm::vec3 far_center = cam_pos + cam_forward;
-                const glm::vec3 right_offset = cam_right * half_width;
-                const glm::vec3 up_offset = cam_up * half_height;
-                const glm::vec3 far_bl = far_center - right_offset - up_offset;
-                const glm::vec3 far_br = far_center + right_offset - up_offset;
-                const glm::vec3 far_tl = far_center - right_offset + up_offset;
-
-                near_origin = cam_pos;
-                far_origin = far_bl;
-                far_x = far_br - far_bl;
-                far_y = far_tl - far_bl;
-            }
-
+            const auto corners = gridFrustumCorners(grid.view, grid.projection, grid.orthographic);
             GridUniform uniform{};
             uniform.view_projection = grid.view_projection;
             uniform.view_position_plane = glm::vec4(grid.view_position,
                                                     static_cast<float>(std::clamp(grid.plane, 0, 2)));
             uniform.opacity_padding = glm::vec4(std::clamp(grid.opacity, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f);
-            uniform.near_origin = glm::vec4(near_origin, 0.0f);
-            uniform.near_x = glm::vec4(near_x, 0.0f);
-            uniform.near_y = glm::vec4(near_y, 0.0f);
-            uniform.far_origin = glm::vec4(far_origin, 0.0f);
-            uniform.far_x = glm::vec4(far_x, 0.0f);
-            uniform.far_y = glm::vec4(far_y, 0.0f);
+            uniform.near_origin = glm::vec4(corners.near_origin, 0.0f);
+            uniform.near_x = glm::vec4(corners.near_x, 0.0f);
+            uniform.near_y = glm::vec4(corners.near_y, 0.0f);
+            uniform.far_origin = glm::vec4(corners.far_origin, 0.0f);
+            uniform.far_x = glm::vec4(corners.far_x, 0.0f);
+            uniform.far_y = glm::vec4(corners.far_y, 0.0f);
             return uniform;
         }
 

@@ -26,12 +26,8 @@ namespace lfs::core {
 
     // Availability/candidate enumeration excludes backends not compiled into
     // this build. The Vulkan enum remains ABI-stable without being advertised.
-#if LFS_HAS_CUDA && defined(LFS_TENSOR_VULKAN) && defined(LFS_TENSOR_METAL)
-    inline constexpr auto kCompiledGpuBackends = kGpuBackends;
-#elif LFS_HAS_CUDA && defined(LFS_TENSOR_VULKAN)
+#if LFS_HAS_CUDA && defined(LFS_TENSOR_VULKAN)
     inline constexpr std::array kCompiledGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan};
-#elif LFS_HAS_CUDA && defined(LFS_TENSOR_METAL)
-    inline constexpr std::array kCompiledGpuBackends{GpuBackend::CUDA, GpuBackend::Metal};
 #elif LFS_HAS_CUDA
     inline constexpr std::array kCompiledGpuBackends{GpuBackend::CUDA};
 #elif defined(LFS_TENSOR_VULKAN) && defined(LFS_TENSOR_METAL)

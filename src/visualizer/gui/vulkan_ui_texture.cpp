@@ -42,6 +42,10 @@ namespace lfs::vis::gui {
 
     namespace {
         VulkanContext* g_texture_context = nullptr;
+        // Destroyed textures whose GPU resources may still be in flight.
+        std::vector<UiTexture::Impl*> g_orphaned_impls;
+        std::size_t serviceOrphanedImpls(bool wait);
+        void orphanImpl(UiTexture::Impl* impl);
         // Process-wide, not per-UiTexture: image/view handles are recycled
         // across instances, so a per-object generation is not a unique Rml cache key.
         std::atomic<std::uint64_t> g_external_src_incarnation{1};
@@ -93,23 +97,10 @@ namespace lfs::vis::gui {
                 const int src_y = flip_y ? (height - 1 - y) : y;
                 const std::uint8_t* src = pixels + static_cast<std::size_t>(src_y) * row_in;
                 std::uint8_t* dst = rgba.data() + static_cast<std::size_t>(y) * row_out;
-                if (channels == 4) {
+                if (channels == 4)
                     std::memcpy(dst, src, row_out);
-                    continue;
-                }
-                if (channels == 1) {
-                    for (int x = 0; x < width; ++x, ++src, dst += 4) {
-                        dst[0] = dst[1] = dst[2] = src[0];
-                        dst[3] = 255;
-                    }
-                } else {
-                    for (int x = 0; x < width; ++x, src += channels, dst += 4) {
-                        dst[0] = src[0];
-                        dst[1] = src[1];
-                        dst[2] = src[2];
-                        dst[3] = 255;
-                    }
-                }
+                else
+                    expandToRgba8(src, dst, static_cast<std::size_t>(width), channels);
             }
             return rgba;
         }
@@ -157,19 +148,19 @@ namespace lfs::vis::gui {
                         g_texture_context->lastError());
                 }
             }
-            if (const std::size_t remaining = UiTexture::serviceOrphanedImpls(true);
+            if (const std::size_t remaining = serviceOrphanedImpls(true);
                 remaining != 0) {
                 LOG_ERROR(
                     "Vulkan UI texture retaining {} quarantined impl(s) after context shutdown",
                     remaining);
                 // These objects deliberately retain GPU-live resources. Never
                 // revisit their context after it has been destroyed.
-                UiTexture::orphaned_impls_.clear();
+                g_orphaned_impls.clear();
             }
         }
         g_texture_context = context;
         if (context != nullptr)
-            UiTexture::serviceOrphanedImpls(false);
+            serviceOrphanedImpls(false);
     }
 
     VulkanContext* getUiTextureContext() {
@@ -1168,29 +1159,29 @@ namespace lfs::vis::gui {
         }
     };
 
-    std::vector<UiTexture::Impl*> UiTexture::orphaned_impls_;
-
-    std::size_t UiTexture::serviceOrphanedImpls(const bool wait) {
-        if (g_texture_context == nullptr)
-            return orphaned_impls_.size();
-        auto write = orphaned_impls_.begin();
-        for (auto read = orphaned_impls_.begin(); read != orphaned_impls_.end(); ++read) {
-            if (*read && (*read)->reset(wait)) {
-                delete *read;
-                continue;
+    namespace {
+        std::size_t serviceOrphanedImpls(const bool wait) {
+            if (g_texture_context == nullptr)
+                return g_orphaned_impls.size();
+            auto write = g_orphaned_impls.begin();
+            for (auto read = g_orphaned_impls.begin(); read != g_orphaned_impls.end(); ++read) {
+                if (*read && (*read)->reset(wait)) {
+                    delete *read;
+                    continue;
+                }
+                if (write != read)
+                    *write = *read;
+                ++write;
             }
-            if (write != read)
-                *write = *read;
-            ++write;
+            g_orphaned_impls.erase(write, g_orphaned_impls.end());
+            return g_orphaned_impls.size();
         }
-        orphaned_impls_.erase(write, orphaned_impls_.end());
-        return orphaned_impls_.size();
-    }
 
-    void UiTexture::orphanImpl(Impl* const impl) {
-        if (impl)
-            orphaned_impls_.push_back(impl);
-    }
+        void orphanImpl(UiTexture::Impl* const impl) {
+            if (impl)
+                g_orphaned_impls.push_back(impl);
+        }
+    } // namespace
 
     UiTexture::~UiTexture() {
         reset();

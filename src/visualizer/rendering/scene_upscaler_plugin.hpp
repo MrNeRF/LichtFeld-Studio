@@ -97,9 +97,7 @@ namespace lfs::vis {
         void configure(bool loading_enabled);
         [[nodiscard]] bool probe();
         [[nodiscard]] bool available();
-        [[nodiscard]] SceneUpscalerPluginState state() const;
         [[nodiscard]] std::string diagnostic() const;
-        [[nodiscard]] std::filesystem::path libraryPath() const;
         [[nodiscard]] bool hasCapability(LfsSceneUpscalerPluginCapability capability);
 
         [[nodiscard]] std::vector<std::string> requiredInstanceExtensions();
@@ -134,12 +132,6 @@ namespace lfs::vis {
         explicit SceneUpscalerPlugin(const SceneUpscalerPluginInfo& info) : info_(info) {}
         [[nodiscard]] const SceneUpscalerPluginInfo& info() const noexcept { return info_; }
         [[nodiscard]] constexpr bool available() const noexcept { return false; }
-        [[nodiscard]] constexpr SceneUpscalerPluginState state() const noexcept {
-            return SceneUpscalerPluginState::UnsupportedEnvironment;
-        }
-        [[nodiscard]] std::string diagnostic() const {
-            return "Vendor temporal upscalers require Vulkan and are unavailable on Metal";
-        }
 
     private:
         SceneUpscalerPluginInfo info_;

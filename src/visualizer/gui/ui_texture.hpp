@@ -22,6 +22,18 @@ namespace lfs::vis {
 namespace lfs::vis::gui {
     LFS_VIS_API void connectUiTextureGraphics(GraphicsContext* context);
 
+    // Expands `count` gray, gray+alpha, RGB or RGBA pixels to RGBA8.
+    inline void expandToRgba8(const std::uint8_t* source, std::uint8_t* target,
+                              const std::size_t count, const int channels) {
+        for (std::size_t i = 0; i < count; ++i, source += channels, target += 4) {
+            const bool gray = channels <= 2;
+            target[0] = source[0];
+            target[1] = gray ? source[0] : source[1];
+            target[2] = gray ? source[0] : source[2];
+            target[3] = channels == 2 ? source[1] : channels == 4 ? source[3] : 255;
+        }
+    }
+
     // Backend-neutral UI texture. The active graphics backend owns the image,
     // upload scheduling, RmlUi URL and retirement policy behind this facade.
     class LFS_VIS_API UiTexture {
@@ -67,12 +79,9 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::string rmlSrcUrl(int width, int height) const;
         void reset();
 
-        // Backend service hooks. They are public so the separately compiled
-        // backend can retire resources without exposing its native handles.
+        // Public so the separately compiled backend can retire resources
+        // without exposing its native handles.
         struct Impl;
-        static std::size_t serviceOrphanedImpls(bool wait);
-        static void orphanImpl(Impl* impl);
-        static std::vector<Impl*> orphaned_impls_;
 
     private:
         Impl* impl_ = nullptr;

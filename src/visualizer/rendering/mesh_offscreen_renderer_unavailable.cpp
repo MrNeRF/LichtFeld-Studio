@@ -19,7 +19,7 @@ namespace lfs::vis {
             .code = lfs::ErrorCode::Unsupported,
             .domain = lfs::ErrorDomain::Rendering,
             .user_message =
-                "Mesh viewport rendering is unavailable on the native Metal path in Phase 2",
+                "Offscreen mesh rendering for exported images is not available in Metal-only builds",
             .detection = LFS_SOURCE_SITE_CURRENT(),
         });
     }

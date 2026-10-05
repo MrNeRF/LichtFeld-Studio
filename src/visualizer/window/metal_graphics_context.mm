@@ -78,12 +78,10 @@ namespace lfs::vis {
         int height = 1;
         std::uint64_t generation = 0;
         std::uint64_t submitted = 0;
-        std::uint64_t successful = 0;
         std::uint32_t consecutive_acquire_failures = 0;
         bool active = false;
         bool frame_slot_held = false;
         bool headless = false;
-        bool resize_pending = false;
         bool shutdown = false;
 
         void setError(std::string message, const bool terminal = false) {
@@ -306,15 +304,14 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
         const int width, const int height, GraphicsResizeIntent) {
         impl_->width = std::max(width, 0);
         impl_->height = std::max(height, 0);
-        impl_->resize_pending = width > 0 && height > 0;
-        if (impl_->resize_pending) {
+        if (width > 0 && height > 0) {
             impl_->resizeLayer();
             impl_->ensureImage();
-            impl_->resize_pending = false;
         }
     }
 
-    bool MetalGraphicsContext::hasPendingResize() const { return impl_->resize_pending; }
+    // Resizes apply synchronously in notifyFramebufferResized.
+    bool MetalGraphicsContext::hasPendingResize() const { return false; }
     bool MetalGraphicsContext::pendingResizeReady() const { return true; }
     double MetalGraphicsContext::secondsUntilPendingResizeReady() const { return 0.0; }
 
@@ -354,7 +351,6 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
         impl_->active = false;
         if (impl_->headless) {
             ++impl_->submitted;
-            impl_->successful = impl_->submitted;
             publishCompleted(impl_->shared->completed, impl_->submitted);
             impl_->releaseFrameSlot();
             return {};
@@ -413,7 +409,6 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
             if (!command)
                 throw std::runtime_error("Metal tensor reader returned no presentation command buffer");
             impl_->frame_slot_held = false;
-            impl_->successful = serial;
             return {};
         } catch (const std::exception& error) {
             impl_->releaseFrameSlot();
@@ -508,8 +503,6 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
         }
     }
 
-    std::uint64_t MetalGraphicsContext::lastSubmitSerial() const { return impl_->submitted; }
-    std::uint64_t MetalGraphicsContext::lastSuccessfulSubmitSerial() const { return impl_->successful; }
     std::uint64_t MetalGraphicsContext::completedSubmitSerial() const {
         return impl_->shared->completed.load(std::memory_order_acquire);
     }
@@ -544,10 +537,6 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
         return snapshot;
     }
 
-    void MetalGraphicsContext::noteFailure(const std::exception& exception) {
-        impl_->setError(exception.what(), true);
-    }
-
     GraphicsCapabilities MetalGraphicsContext::capabilities() const noexcept {
         return {
             .native_metal = true,
@@ -555,8 +544,6 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
             // The tensor wireframe is drawn in the fragment shader at any width.
             .wireframe = true,
             .wide_lines = true,
-            .minimum_line_width = 1.0f,
-            .maximum_line_width = 16.0f,
             .external_memory_interop = false,
             .external_semaphore_interop = false,
             .environment_map = true,
@@ -584,9 +571,7 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
     void MetalGraphicsContext::connectTensorBackend() {}
     void MetalGraphicsContext::disconnectTensorBackend() {}
 
-#ifdef LFS_GRAPHICS_METAL
     std::unique_ptr<GraphicsContext> createGraphicsContext() {
         return std::make_unique<MetalGraphicsContext>();
     }
-#endif
 } // namespace lfs::vis

@@ -48,14 +48,7 @@ namespace lfs::vis {
 
         WindowManager(const std::string& title, int width, int height,
                       int monitor_x = 0, int monitor_y = 0,
-                      int monitor_width = 0, int monitor_height = 0,
-                      GraphicsBackend graphics_backend =
-#ifdef LFS_GRAPHICS_METAL
-                          GraphicsBackend::Metal
-#else
-                          GraphicsBackend::Vulkan
-#endif
-        );
+                      int monitor_width = 0, int monitor_height = 0);
         ~WindowManager();
 
         WindowManager(const WindowManager&) = delete;
@@ -94,9 +87,6 @@ namespace lfs::vis {
         [[nodiscard]] bool usesWayland() const { return is_wayland_; }
         [[nodiscard]] bool usesEventDrivenTitlebarDrag() const { return native_titlebar_move_available_; }
         void setFullscreen(bool fullscreen);
-        GraphicsBackend graphicsBackend() const { return graphics_backend_; }
-
-        void setCallbackHandler(void* handler) { callback_handler_ = handler; }
         void setInputController(InputController* ic);
         [[nodiscard]] InputController* inputController() { return input_controller_; }
         [[nodiscard]] const FrameInputBuffer& frameInput() const { return frame_input_; }
@@ -125,12 +115,6 @@ namespace lfs::vis {
 
         SDL_Window* window_ = nullptr;
         std::unique_ptr<GraphicsContext> graphics_context_;
-        GraphicsBackend graphics_backend_ =
-#ifdef LFS_GRAPHICS_METAL
-            GraphicsBackend::Metal;
-#else
-            GraphicsBackend::Vulkan;
-#endif
         std::string title_;
         glm::ivec2 window_size_;
         glm::ivec2 framebuffer_size_;
@@ -162,7 +146,6 @@ namespace lfs::vis {
         std::optional<PersistentWindowState> initial_window_state_;
         bool should_close_ = false;
 
-        static void* callback_handler_;
         InputController* input_controller_ = nullptr;
         input::InputRouter input_router_;
         FrameInputBuffer frame_input_;

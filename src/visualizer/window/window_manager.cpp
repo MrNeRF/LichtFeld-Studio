@@ -531,14 +531,10 @@ namespace lfs::vis {
 #endif
     } // namespace
 
-    void* WindowManager::callback_handler_ = nullptr;
-
     WindowManager::WindowManager(const std::string& title, const int width, const int height,
                                  const int monitor_x, const int monitor_y,
-                                 const int monitor_width, const int monitor_height,
-                                 const GraphicsBackend graphics_backend)
-        : graphics_backend_(graphics_backend),
-          title_(title),
+                                 const int monitor_width, const int monitor_height)
+        : title_(title),
           window_size_(width, height),
           framebuffer_size_(width, height),
           monitor_pos_(monitor_x, monitor_y),

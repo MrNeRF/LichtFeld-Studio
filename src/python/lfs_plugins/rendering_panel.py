@@ -32,8 +32,8 @@ def _theme():
     return lf.ui.theme()
 
 
-def _vulkan_capabilities():
-    query = getattr(lf, "get_vulkan_capabilities", None)
+def _graphics_capabilities():
+    query = getattr(lf, "get_graphics_capabilities", None)
     if query is None:
         return {}
     try:
@@ -43,11 +43,11 @@ def _vulkan_capabilities():
 
 
 def _mesh_wireframe_supported():
-    return bool(_vulkan_capabilities().get("mesh_wireframe", False))
+    return bool(_graphics_capabilities().get("mesh_wireframe", False))
 
 
 def _mesh_wide_lines_supported():
-    return bool(_vulkan_capabilities().get("wide_lines", False))
+    return bool(_graphics_capabilities().get("wide_lines", False))
 
 
 def _theme_vignette():
