@@ -242,7 +242,7 @@ namespace {
         static_cast<T& (T::*)(float, cudaStream_t)>(&T::fill_),
         static_cast<void (T::*)() const>(&T::print_formatted),
         static_cast<void (T::*)(const std::string&, size_t) const>(&T::print_formatted),
-        static_cast<float& (T::*)(std::initializer_list<size_t>)>(&T::at),
+        static_cast<TensorElementProxy (T::*)(std::initializer_list<size_t>)>(&T::at),
         static_cast<float (T::*)(std::initializer_list<size_t>) const>(&T::at)};
 
     [[maybe_unused]] constexpr auto kNnOverloads = std::tuple{

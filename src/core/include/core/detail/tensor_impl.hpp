@@ -102,6 +102,7 @@ namespace lfs::core {
     class TensorIndexer;
     class MaskedTensorProxy;
     class TensorRowProxy;
+    class TensorElementProxy;
 
     // ============================================================================
     // Type Promotion System
@@ -2022,7 +2023,7 @@ namespace lfs::core {
         TensorIndexer operator[](const std::vector<Tensor>& indices);
         MaskedTensorProxy operator[](const Tensor& mask) const;
 
-        float& at(std::initializer_list<size_t> indices);
+        TensorElementProxy at(std::initializer_list<size_t> indices);
         float at(std::initializer_list<size_t> indices) const;
 
         // ============= ADVANCED OPERATIONS =============
@@ -2118,8 +2119,6 @@ namespace lfs::core {
         Tensor& copy_(const Tensor& src) { return copy_from(src); }
         Tensor& uniform_(float low = 0.0f, float high = 1.0f);
         Tensor& normal_(float mean = 0.0f, float std = 1.0f);
-
-
 
         // Utility template methods
         template <typename Func>
@@ -2232,6 +2231,25 @@ namespace lfs::core {
         }
         return internal::tensor_lazy_expr_id(*this);
     }
+
+    // A mutable scalar view. Reads transfer one value; writes and arithmetic
+    // execute on the tensor backend and retain the storage's lifetime.
+    class LFS_CORE_API TensorElementProxy {
+    public:
+        TensorElementProxy(const TensorElementProxy&) = default;
+        operator float() const;
+        TensorElementProxy& operator=(float value);
+        TensorElementProxy& operator=(const TensorElementProxy& other);
+        TensorElementProxy& operator+=(float value);
+        TensorElementProxy& operator-=(float value);
+        TensorElementProxy& operator*=(float value);
+        TensorElementProxy& operator/=(float value);
+
+    private:
+        friend class Tensor;
+        explicit TensorElementProxy(Tensor element);
+        Tensor element_;
+    };
 
     // ============= TensorRowProxy for operator[] =============
     // Implementations in tensor_row_proxy.cpp (except template methods)
@@ -2517,7 +2535,6 @@ namespace lfs::core {
         size_t pool_reserved_high = 0;
 
         static MemoryInfo cuda();
-
     };
 
     // ========================================================================

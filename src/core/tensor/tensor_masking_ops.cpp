@@ -2070,30 +2070,52 @@ namespace lfs::core {
     }
 
     // Element Access
-    float& Tensor::at(std::initializer_list<size_t> indices) {
-        LFS_ASSERT_MSG(is_valid(),
-                       "mutable at() requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                       "mutable at() requires Float32");
-        LFS_ASSERT_MSG(indices.size() == shape_.rank(),
-                       "mutable at() index rank mismatch");
-        LFS_ASSERT_MSG(device_ == Device::CPU,
-                       "mutable at() cannot return a host reference to CUDA memory");
-
-        std::vector<size_t> idx_vec(indices);
-
-        size_t linear_idx = 0;
-        // Use actual strides_ member, not shape_.strides() which assumes contiguous layout
-        // This is critical for non-contiguous tensors (e.g., sliced views)
-
-        for (size_t i = 0; i < idx_vec.size(); ++i) {
-            LFS_ASSERT_MSG(idx_vec[i] < shape_[i],
-                           std::format("at() index {} is out of bounds for dimension {} of size {}",
-                                       idx_vec[i], i, shape_[i]));
-            linear_idx += idx_vec[i] * strides_[i];
+    TensorElementProxy Tensor::at(std::initializer_list<size_t> indices) {
+        LFS_ASSERT_MSG(is_valid() && dtype_ == DataType::Float32,
+                       "mutable at() requires a valid Float32 tensor");
+        LFS_ASSERT_MSG(indices.size() == ndim(), "mutable at() index rank mismatch");
+        Tensor element = *this;
+        size_t dim = 0;
+        for (const size_t index : indices) {
+            LFS_ASSERT_MSG(index < shape_[dim], "mutable at() index is out of bounds");
+            element = element.slice(static_cast<int>(dim), index, index + 1);
+            ++dim;
         }
+        return TensorElementProxy(element.squeeze());
+    }
 
-        return ptr<float>()[linear_idx];
+    TensorElementProxy::TensorElementProxy(Tensor element) : element_(std::move(element)) {}
+
+    TensorElementProxy::operator float() const { return element_.item<float>(); }
+
+    TensorElementProxy& TensorElementProxy::operator=(const float value) {
+        element_.fill_(value);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator=(const TensorElementProxy& other) {
+        element_.copy_(other.element_);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator+=(const float value) {
+        element_.add_(value);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator-=(const float value) {
+        element_.sub_(value);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator*=(const float value) {
+        element_.mul_(value);
+        return *this;
+    }
+
+    TensorElementProxy& TensorElementProxy::operator/=(const float value) {
+        element_.div_(value);
+        return *this;
     }
 
     float Tensor::at(std::initializer_list<size_t> indices) const {
