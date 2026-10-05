@@ -101,11 +101,6 @@ namespace lfs::core {
         return 0;
     }
 
-    std::optional<size_t> reserved_allocation_bytes(const Tensor& tensor) {
-        (void)tensor;
-        return std::nullopt;
-    }
-
     size_t gpu_allocation_bytes(const GpuBackend backend, const size_t bytes) {
         if (backend == GpuBackend::CUDA)
             return cuda_allocation_size(bytes);
