@@ -193,20 +193,4 @@ namespace lfs::vis {
         return "Unknown";
     }
 
-    std::string_view TrainingStateMachine::actionName(TrainingAction action) {
-        switch (action) {
-        case TrainingAction::LoadDataset: return "LoadDataset";
-        case TrainingAction::LoadCheckpoint: return "LoadCheckpoint";
-        case TrainingAction::Start: return "Start";
-        case TrainingAction::Pause: return "Pause";
-        case TrainingAction::Resume: return "Resume";
-        case TrainingAction::Stop: return "Stop";
-        case TrainingAction::Reset: return "Reset";
-        case TrainingAction::ClearScene: return "ClearScene";
-        case TrainingAction::DeleteTrainingNode: return "DeleteTrainingNode";
-        case TrainingAction::COUNT: return "Invalid";
-        }
-        return "Unknown";
-    }
-
 } // namespace lfs::vis
