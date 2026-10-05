@@ -91,7 +91,7 @@ namespace lfs::core {
         LFS_CORE_API bool lazy_executor_lookup_cached_materialization(uint64_t node_id, Tensor& materialized);
         LFS_CORE_API void lazy_executor_cache_materialization(uint64_t node_id, const Tensor& materialized);
 
-        // PR6 diagnostics helpers for planner/executor validation.
+        // Diagnostics helpers for planner/executor validation.
         LFS_CORE_API void lazy_executor_reset_diagnostics_for_testing();
         LFS_CORE_API LazyExecutorDiagnosticsSnapshot lazy_executor_diagnostics_snapshot_for_testing();
 
