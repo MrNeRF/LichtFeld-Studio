@@ -542,6 +542,27 @@ namespace {
         EXPECT_EQ(restored->mcmc_current.eval_mask, missing);
     }
 
+    // Catches a project saved by another version becoming unreadable because one stored value is
+    // outside what this version accepts, here an automatic learning rate stored as -1.
+    TEST(ProjectChapterTest, PresetFromAnotherVersionKeepsAcceptedValuesAndDefaultsTheRest) {
+        auto snapshot = parameter_snapshot();
+        snapshot.mrnf_session.iterations = 12345;
+        ParametersChapter chapter;
+        ASSERT_TRUE(chapter.set_snapshot(snapshot));
+        ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.session.shs_lr", -1.0));
+        ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.session.grow_fraction", -1.0));
+        ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.session.late_lr_anneal", 0.3));
+
+        auto reparsed = ParametersChapter::from_bytes(chapter.to_bytes());
+        ASSERT_TRUE(reparsed) << lfs::format_for_developer(reparsed.error());
+        const auto restored = reparsed->snapshot();
+        ASSERT_TRUE(restored) << lfs::format_for_developer(restored.error());
+        const auto defaults = lfs::core::param::OptimizationParameters::mrnf_defaults();
+        EXPECT_EQ(restored->mrnf_session.iterations, 12345u);
+        EXPECT_FLOAT_EQ(restored->mrnf_session.shs_lr, defaults.shs_lr);
+        EXPECT_FLOAT_EQ(restored->mrnf_session.grow_fraction, defaults.grow_fraction);
+    }
+
     TEST(ProjectChapterTest, PathReferenceMintAndResolveRoundTrip) {
         TemporaryDirectory temporary;
         const fs::path project_root = temporary.path / "project";

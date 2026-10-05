@@ -3041,14 +3041,44 @@ namespace lfs::io::project {
                 adapted.erase("ppisp_sidecar_path");
                 adapted.erase("config_file");
                 adapted["headless"] = false;
-                auto result =
-                    lfs::core::param::OptimizationParameters::from_json(
-                        nlohmann::json::parse(adapted.dump()));
-                result.headless = false;
-                result.config_file.clear();
-                result.bg_image_path.clear();
-                result.ppisp_sidecar_path.clear();
-                if (const std::string invalid = result.validate(); !invalid.empty()) {
+                const auto decode = [](const nlohmann::json& json) {
+                    auto parameters =
+                        lfs::core::param::OptimizationParameters::from_json(json);
+                    parameters.headless = false;
+                    parameters.config_file.clear();
+                    parameters.bg_image_path.clear();
+                    parameters.ppisp_sidecar_path.clear();
+                    return parameters;
+                };
+                auto stored = nlohmann::json::parse(adapted.dump());
+                auto result = decode(stored);
+                std::string invalid = result.validate();
+                // Another version can store values this one rejects, such as an automatic
+                // setting it does not have. Keep every accepted value and default the rest.
+                const auto defaults =
+                    lfs::core::param::OptimizationParameters::defaults_for_strategy(
+                        result.strategy)
+                        .to_json();
+                for (bool defaulted = true; defaulted && !invalid.empty();) {
+                    defaulted = false;
+                    for (auto fallback = defaults.begin();
+                         !invalid.empty() && fallback != defaults.end(); ++fallback) {
+                        const auto current = stored.find(fallback.key());
+                        if (current == stored.end() || *current == *fallback)
+                            continue;
+                        auto trial = stored;
+                        trial[fallback.key()] = *fallback;
+                        auto candidate = decode(trial);
+                        if (std::string candidate_invalid = candidate.validate();
+                            candidate_invalid != invalid) {
+                            stored = std::move(trial);
+                            result = std::move(candidate);
+                            invalid = std::move(candidate_invalid);
+                            defaulted = true;
+                        }
+                    }
+                }
+                if (!invalid.empty()) {
                     return fail<ParsedParameterPreset>(
                         lfs::ErrorCode::DataLoss,
                         "A pending parameter preset is invalid.",
