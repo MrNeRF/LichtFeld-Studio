@@ -938,9 +938,12 @@ namespace lfs::vis {
 
     void RenderingManager::setFocalLength(const float focal_mm) {
         auto settings = getSettings();
-        settings.focal_length_mm = std::clamp(focal_mm,
-                                              lfs::rendering::MIN_FOCAL_LENGTH_MM,
-                                              lfs::rendering::MAX_FOCAL_LENGTH_MM);
+        const float clamped = std::clamp(focal_mm,
+                                         lfs::rendering::MIN_FOCAL_LENGTH_MM,
+                                         lfs::rendering::MAX_FOCAL_LENGTH_MM);
+        if (settings.focal_length_mm == clamped)
+            return;
+        settings.focal_length_mm = clamped;
         updateSettings(settings, DirtyFlag::CAMERA);
     }
 

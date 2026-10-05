@@ -24,7 +24,6 @@
 #include <future>
 #include <limits>
 #include <thread>
-#include <vector>
 
 namespace lfs::vis {
     namespace {
@@ -158,23 +157,6 @@ namespace lfs::vis {
                 throw std::runtime_error(std::format("Metal frame clear was not submitted ({} pixels)", count));
         }
 
-        void fillBootstrap() {
-            const std::size_t pixels = static_cast<std::size_t>(std::max(width, 1)) *
-                                       static_cast<std::size_t>(std::max(height, 1));
-            std::vector<std::uint8_t> rgba(pixels * 4);
-            const std::array<std::uint8_t, 4> color{
-                unorm(clear_color[0]), unorm(clear_color[1]),
-                unorm(clear_color[2]), unorm(clear_color[3])};
-            for (std::size_t pixel = 0; pixel < pixels; ++pixel)
-                std::memcpy(rgba.data() + pixel * 4, color.data(), color.size());
-            auto cpu = lfs::core::Tensor::from_blob(
-                rgba.data(), {static_cast<std::size_t>(std::max(height, 1)),
-                              static_cast<std::size_t>(std::max(width, 1)), 4},
-                lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-            lfs::core::GpuBackendScope scope(lfs::core::GpuBackend::Metal);
-            final_image = cpu.to(lfs::core::Device::GPU);
-            final_image.set_name("render.presentation");
-        }
     };
 
     MetalGraphicsContext::MetalGraphicsContext() : impl_(std::make_unique<Impl>()) {}
@@ -452,14 +434,6 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
         auto frame = beginFrame({r, g, b, a});
         if (!frame || !*frame)
             return false;
-        try {
-            impl_->fillBootstrap();
-        } catch (const std::exception& error) {
-            impl_->active = false;
-            impl_->releaseFrameSlot();
-            impl_->setError(error.what(), true);
-            return false;
-        }
         return static_cast<bool>(endFrame());
     }
 
