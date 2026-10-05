@@ -208,7 +208,12 @@ namespace lfs::vis {
                     throw std::runtime_error("SDL_Metal_GetLayer returned no CAMetalLayer");
                 impl_->layer.device = impl_->reader->device();
                 impl_->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-                impl_->layer.framebufferOnly = YES;
+                // endFrame writes the drawable through a compute encoder.
+                // Framebuffer-only textures are restricted to render-pass attachments
+                // and cannot be bound to MTLComputeCommandEncoder (Apple contract):
+                // https://developer.apple.com/documentation/metal/mtltexture/isframebufferonly
+                // https://developer.apple.com/documentation/quartzcore/cametallayer/framebufferonly
+                impl_->layer.framebufferOnly = NO;
                 impl_->layer.maximumDrawableCount = kFramesInFlight;
                 impl_->layer.allowsNextDrawableTimeout = YES;
                 // Like the Vulkan swapchain's MAILBOX mode: present without
