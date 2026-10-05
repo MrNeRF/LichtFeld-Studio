@@ -87,9 +87,6 @@ namespace lfs::core {
                 return;
             }
 
-            const Tensor cpu_indices = indices.device() == Device::CPU
-                                           ? indices.contiguous()
-                                           : indices.cpu().contiguous();
             const auto assert_value = [&](const int64_t value, const size_t position) {
                 LFS_ASSERT_MSG(value >= std::numeric_limits<int>::min() &&
                                    value <= std::numeric_limits<int>::max(),
@@ -104,6 +101,23 @@ namespace lfs::core {
                                            operation, value, position, upper_bound));
             };
 
+            if (indices.device() == Device::GPU) {
+                const auto minimum = indices.min();
+                const auto maximum = indices.max();
+                const auto read_index = [&](const Tensor& scalar) -> int64_t {
+                    return indices.dtype() == DataType::Int64 ? scalar.item<int64_t>() : scalar.item<int>();
+                };
+                const int64_t lowest = read_index(minimum), highest = read_index(maximum);
+                LFS_ASSERT_MSG(lowest >= std::numeric_limits<int>::min() && highest <= std::numeric_limits<int>::max(),
+                               std::string(operation) + ": indices cannot be represented by the Int32 kernel");
+                if (check_bounds) {
+                    const int64_t lower_bound = allow_negative ? -static_cast<int64_t>(upper_bound) : 0;
+                    LFS_ASSERT_MSG(lowest >= lower_bound && highest < static_cast<int64_t>(upper_bound),
+                                   std::string(operation) + ": indices are out of bounds");
+                }
+                return;
+            }
+            const Tensor cpu_indices = indices.contiguous();
             if (cpu_indices.dtype() == DataType::Int64) {
                 const auto* values = cpu_indices.ptr<int64_t>();
                 for (size_t i = 0; i < cpu_indices.numel(); ++i) {

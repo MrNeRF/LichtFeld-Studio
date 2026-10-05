@@ -55,28 +55,13 @@ namespace lfs::core {
     // Helper struct for eval_impl dispatch based on operation return type
     namespace detail {
         inline void validate_permutation_indices(const Tensor& input, const Tensor& indices) {
-            if (indices.numel() == 0) {
+            if (indices.numel() == 0)
                 return;
-            }
-            if (input.numel() == 0) {
-                throw std::runtime_error("PermutationExpr: cannot index an empty tensor");
-            }
-            if (input.numel() > static_cast<size_t>(std::numeric_limits<int>::max())) {
-                throw std::runtime_error("PermutationExpr: input exceeds Int32 index range");
-            }
-
-            const auto cpu_indices = indices.device() == Device::CPU
-                                         ? indices.contiguous()
-                                         : indices.cpu().contiguous();
-            const auto* values = cpu_indices.ptr<int32_t>();
-            const auto lower = -static_cast<int64_t>(input.numel());
-            const auto upper = static_cast<int64_t>(input.numel());
-            for (size_t i = 0; i < cpu_indices.numel(); ++i) {
-                const auto value = static_cast<int64_t>(values[i]);
-                if (value < lower || value >= upper) {
-                    throw std::runtime_error("PermutationExpr: index is out of bounds");
-                }
-            }
+            LFS_ASSERT_MSG(input.numel() > 0 && input.numel() <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                           "PermutationExpr input must fit the nonempty Int32 index range");
+            const int size = static_cast<int>(input.numel());
+            LFS_ASSERT_MSG(indices.ge(-size).logical_and(indices.lt(size)).count_nonzero() == indices.numel(),
+                           "PermutationExpr index is out of bounds");
         }
 
         // Default implementation: float -> float or Int32 -> Int32 operations
@@ -996,14 +981,13 @@ namespace lfs::core {
     Tensor PermutationExpr<InputExpr, IndexExpr>::eval_impl() const {
         // Evaluate input and indices
         Tensor input_tensor = input_.eval();
-        Tensor indices_tensor = indices_.eval();
+        Tensor indices_tensor = indices_.eval().contiguous();
 
         // Ensure indices are Int32
-        if (indices_tensor.dtype() != DataType::Int32) {
-            throw std::runtime_error("PermutationExpr: indices must be Int32 dtype");
-        }
+        LFS_ASSERT_MSG(indices_tensor.dtype() == DataType::Int32, "PermutationExpr indices must be Int32");
 
-        Tensor result = input_tensor.flatten().take(indices_tensor).reshape(shape_);
+        detail::validate_permutation_indices(input_tensor, indices_tensor);
+        Tensor result = input_tensor.flatten().index_select(0, indices_tensor.reshape({-1}), BoundaryMode::Wrap).reshape(shape_);
         if (internal::lazy_ir_active()) {
             internal::lazy_ir_record_permutation(input_tensor, indices_tensor, result, "permutation");
         }
@@ -1018,56 +1002,81 @@ namespace lfs::core {
     Tensor UnaryExpr<PermutationExpr<InputExpr, IndexExpr>, UnaryOp>::eval_impl() const {
         // Evaluate the input data and indices from permutation
         Tensor input_tensor = perm_expr_.input_.eval();
-        Tensor indices_tensor = perm_expr_.indices_.eval();
+        Tensor indices_tensor = perm_expr_.indices_.eval().contiguous();
 
-        if (indices_tensor.dtype() != DataType::Int32) {
-            throw std::runtime_error("PermutationExpr: indices must be Int32 dtype");
-        }
+        LFS_ASSERT_MSG(indices_tensor.dtype() == DataType::Int32, "PermutationExpr indices must be Int32");
 
         detail::validate_permutation_indices(input_tensor, indices_tensor);
         internal::require_same_gpu_backend(
             input_tensor, indices_tensor, "permutation expression evaluation");
 
         // Flatten input for gather
-        Tensor flat_input = input_tensor.flatten();
-
-        std::optional<CUDAStreamGuard> execution_guard;
-        if (device_ == Device::GPU) {
-            execution_guard.emplace(prepare_inputs_for_stream({&flat_input, &indices_tensor}));
-        }
-
-        // Create result tensor
-        Tensor result = internal::allocate_like(flat_input, shape_, dtype_);
-
-        // OPTIMIZATION: Use fused gather+unary kernel!
-        if (device_ == Device::GPU) {
-            pin_operands({&flat_input, &indices_tensor});
-            internal::backend_ops_for(flat_input).gather_fused_unary(internal::storage_ref(flat_input), internal::storage_ref(indices_tensor), internal::storage_ref(result), internal::pointwise_op_of<std::remove_cvref_t<UnaryOp>>::value, internal::IndexProgram{
-                                                                                                                                                                                                                                                  .input_size = flat_input.numel(),
-                                                                                                                                                                                                                                                  .index_size = indices_tensor.numel(),
-                                                                                                                                                                                                                                              },
-                                                                     internal::ExecContext{result.stream()});
-        } else {
-            // CPU fallback: gather then apply operation
-            pin_operands({&flat_input, &indices_tensor});
-            const float* src = flat_input.template ptr<float>();
-            const int* idx = indices_tensor.template ptr<int>();
-            float* dst = result.template ptr<float>();
-            size_t total = flat_input.numel();
-
-            for (size_t i = 0; i < indices_tensor.numel(); ++i) {
-                int pos = idx[i];
-                if (pos < 0)
-                    pos += total;
-                dst[i] = (pos >= 0 && pos < static_cast<int>(total)) ? op_(src[pos]) : 0.0f;
+        Tensor flat_input = input_tensor.flatten().contiguous();
+        constexpr bool fused_operation = std::is_same_v<UnaryOp, ops::abs_op> ||
+                                         std::is_same_v<UnaryOp, ops::sqrt_op> ||
+                                         std::is_same_v<UnaryOp, ops::neg_op>;
+        const auto evaluate_unfused = [&] {
+            const auto gathered = flat_input.index_select(0, indices_tensor.reshape({-1}), BoundaryMode::Wrap).reshape(shape_);
+            if (gathered.dtype() == DataType::Float16) {
+                const auto promoted = gathered.to(DataType::Float32);
+                const auto result = UnaryExpr<TensorLeaf, UnaryOp>(TensorLeaf(promoted), op_, shape_, device_,
+                                                                   ops::returns_bool_v<UnaryOp> ? DataType::Bool : promoted.dtype())
+                                        .eval();
+                if constexpr (ops::returns_bool_v<UnaryOp>)
+                    return result;
+                else
+                    return result.to(DataType::Float16);
             }
-        }
+            return UnaryExpr<TensorLeaf, UnaryOp>(TensorLeaf(gathered), op_, shape_, device_,
+                                                  ops::returns_bool_v<UnaryOp> ? DataType::Bool : gathered.dtype())
+                .eval();
+        };
+        if constexpr (!fused_operation) {
+            return evaluate_unfused();
+        } else {
+            if (dtype_ != DataType::Float32)
+                return evaluate_unfused();
+            if (indices_tensor.numel() == 0)
+                return internal::allocate_like(input_tensor, shape_, dtype_);
 
-        Tensor reshaped = result.reshape(shape_);
-        if (internal::lazy_ir_active()) {
-            internal::lazy_ir_record_permutation(input_tensor, indices_tensor, reshaped, typeid(UnaryOp).name());
+            std::optional<CUDAStreamGuard> execution_guard;
+            if (device_ == Device::GPU) {
+                execution_guard.emplace(prepare_inputs_for_stream({&flat_input, &indices_tensor}));
+            }
+
+            // Create result tensor
+            Tensor result = internal::allocate_like(flat_input, shape_, dtype_);
+
+            // OPTIMIZATION: Use fused gather+unary kernel!
+            if (device_ == Device::GPU) {
+                pin_operands({&flat_input, &indices_tensor});
+                internal::backend_ops_for(flat_input).gather_fused_unary(internal::storage_ref(flat_input), internal::storage_ref(indices_tensor), internal::storage_ref(result), internal::pointwise_op_of<std::remove_cvref_t<UnaryOp>>::value, internal::IndexProgram{
+                                                                                                                                                                                                                                                      .input_size = flat_input.numel(),
+                                                                                                                                                                                                                                                      .index_size = indices_tensor.numel(),
+                                                                                                                                                                                                                                                  },
+                                                                         internal::ExecContext{result.stream()});
+            } else {
+                // CPU fallback: gather then apply operation
+                pin_operands({&flat_input, &indices_tensor});
+                const float* src = flat_input.template ptr<float>();
+                const int* idx = indices_tensor.template ptr<int>();
+                float* dst = result.template ptr<float>();
+                size_t total = flat_input.numel();
+
+                for (size_t i = 0; i < indices_tensor.numel(); ++i) {
+                    int pos = idx[i];
+                    if (pos < 0)
+                        pos += total;
+                    dst[i] = (pos >= 0 && pos < static_cast<int>(total)) ? op_(src[pos]) : 0.0f;
+                }
+            }
+
+            Tensor reshaped = result.reshape(shape_);
+            if (internal::lazy_ir_active()) {
+                internal::lazy_ir_record_permutation(input_tensor, indices_tensor, reshaped, typeid(UnaryOp).name());
+            }
+            return reshaped;
         }
-        return reshaped;
     }
 
 } // namespace lfs::core

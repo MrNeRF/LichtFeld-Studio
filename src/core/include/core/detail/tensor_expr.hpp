@@ -326,7 +326,7 @@ namespace lfs::core {
               op_(op),
               shape_(std::move(shape)),
               device_(device),
-              dtype_(dtype) {}
+              dtype_(ops::returns_bool_v<UnaryOp> ? DataType::Bool : dtype) {}
 
         // FUSED gather + unary! Implemented in tensor_expr_impl.hpp
         Tensor eval_impl() const;
