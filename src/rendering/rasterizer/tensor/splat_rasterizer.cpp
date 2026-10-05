@@ -14,6 +14,7 @@
 #include "splat_blend_gut32.hpp"
 #include "splat_blend_gut64.hpp"
 #include "splat_blend_points.hpp"
+#include "scratch_arena.hpp"
 #include "splat_present.hpp"
 #include "splat_tile_binner.hpp"
 
@@ -21,6 +22,7 @@
 #include <format>
 #include <map>
 #include <span>
+#include <tuple>
 
 namespace lfs::rendering {
     namespace {
@@ -62,7 +64,8 @@ namespace lfs::rendering {
         SplatTileBinner binner;
         std::map<std::pair<uint32_t, bool>, std::unique_ptr<M>> blends;
         std::unique_ptr<M> fast_blend, batch_blend, prefix_blend, present;
-        Tensor raster, present_parameters, color, depth, pick;
+        Tensor raster, present_parameters, color, depth, pick, rgba, linear_depth;
+        bool presented = false; // rgba and linear_depth hold an image of this extent
         // Depth-batch scratch, sized from the instances of a completed frame.
         Tensor depth_jobs, partial_color, partial_depth, partial_pick;
         uint32_t parallel_instances = 0;
@@ -90,10 +93,10 @@ namespace lfs::rendering {
             const auto needed = uint32_t(std::min<uint64_t>(frame.capacity, previous.required + previous.required / 8));
             if (needed > parallel_instances) {
                 const size_t slots = (size_t(needed) + kDepthChunkSize - 1) / kDepthChunkSize + frame.tiles;
+                // The job table is filled with -1 every frame; Int32 keeps fill_ available.
                 depth_jobs = Tensor::empty({slots * 2}, Device::GPU, DataType::Int32);
-                partial_color = Tensor::empty({slots * 256, 4}, Device::GPU, DataType::Float32);
-                partial_depth = Tensor::empty({slots * 256, 4}, Device::GPU, DataType::Float32);
-                partial_pick = Tensor::empty({slots * 256}, Device::GPU, DataType::UInt32);
+                std::tie(partial_color, partial_depth, partial_pick) =
+                    std::tuple_cat(carve_arena<3>({slots * 256 * 16, slots * 256 * 16, slots * 256 * 4}));
                 parallel_instances = needed;
             }
             return parallel_instances != 0;
@@ -160,11 +163,11 @@ namespace lfs::rendering {
         if (width != s.width || height != s.height) {
             const core::GpuBackendScope scope(s.backend);
             const size_t pixels = size_t(width) * height;
-            s.color = Tensor::empty({height, width, 4}, Device::GPU, DataType::Float16);
-            s.depth = Tensor::empty({height, width, 4}, Device::GPU, DataType::Float32);
-            s.pick = Tensor::empty({std::max<size_t>(pixels, 1)}, Device::GPU, DataType::UInt32);
+            std::tie(s.color, s.depth, s.pick, s.rgba, s.linear_depth) =
+                std::tuple_cat(carve_arena<5>({pixels * 8, pixels * 16, pixels * 4, pixels * 4, pixels * 4}));
             s.width = width;
             s.height = height;
+            s.presented = false;
         }
         return {};
     }
@@ -238,15 +241,10 @@ namespace lfs::rendering {
         return {};
     }
 
-    lfs::Result<void> SplatRasterizer::present(const SplatPresentParameters& parameters, Tensor& rgba, Tensor& linear_depth,
-                                          const Tensor* previous_rgba, const Tensor* previous_depth) {
+    lfs::Result<void> SplatRasterizer::present(const SplatPresentParameters& parameters) {
         auto& s = *impl_;
-        if (parameters.extent[0] != s.width || parameters.extent[1] != s.height ||
-            rgba.numel() != size_t(s.width) * s.height * 4 || linear_depth.numel() != size_t(s.width) * s.height ||
-            (parameters.has_previous && (!previous_rgba || !previous_depth)))
-            return failure(std::format("Splat present outputs disagree with the frame (extent={}x{} vs {}x{}, rgba={}, depth={}, previous={})",
-                                       parameters.extent[0], parameters.extent[1], s.width, s.height, rgba.numel(), linear_depth.numel(),
-                                       parameters.has_previous));
+        if (s.width == 0)
+            return failure("Splat present before any reservation");
         const core::GpuBackendScope scope(s.backend);
         if (!s.present) {
             auto loaded = M::load(splat_present_entries(), s.backend);
@@ -254,22 +252,33 @@ namespace lfs::rendering {
                 return lfs::Result<void>::failure(std::move(loaded).error());
             s.present = std::move(*loaded);
         }
-        s.upload(s.present_parameters, parameters);
+        // An overflowing frame keeps the last image: present then copies the
+        // outputs onto themselves.
+        auto frame = parameters;
+        frame.has_previous = s.presented ? 1u : 0u;
+        frame.extent = {s.width, s.height, s.width, s.height};
+        s.upload(s.present_parameters, frame);
         const PresentPointers pointers{};
         const std::array bindings{
             M::Binding{0, &s.color}, M::Binding{8, &s.depth}, M::Binding{16, &s.binner.status()},
-            M::Binding{24, &s.present_parameters}, M::Binding{32, parameters.has_previous ? previous_rgba : nullptr},
-            M::Binding{40, parameters.has_previous ? previous_depth : nullptr}, M::Binding{48, &rgba, RW},
-            M::Binding{56, &linear_depth, RW}};
-        return s.present->dispatch({.function = "present_viewer",
-                                    .arguments = {std::as_bytes(std::span(&pointers, 1)), bindings},
-                                    .groups = {(s.width + 15) / 16, (s.height + 15) / 16, 1},
-                                    .group = {16, 16, 1}});
+            M::Binding{24, &s.present_parameters}, M::Binding{32, s.presented ? &s.rgba : nullptr},
+            M::Binding{40, s.presented ? &s.linear_depth : nullptr}, M::Binding{48, &s.rgba, RW},
+            M::Binding{56, &s.linear_depth, RW}};
+        if (auto r = s.present->dispatch({.function = "present_viewer",
+                                          .arguments = {std::as_bytes(std::span(&pointers, 1)), bindings},
+                                          .groups = {(s.width + 15) / 16, (s.height + 15) / 16, 1},
+                                          .group = {16, 16, 1}});
+            !r)
+            return r;
+        s.presented = true;
+        return {};
     }
 
     const Tensor& SplatRasterizer::status() const { return impl_->binner.status(); }
     const Tensor& SplatRasterizer::color() const { return impl_->color; }
     const Tensor& SplatRasterizer::depth() const { return impl_->depth; }
     const Tensor& SplatRasterizer::pick() const { return impl_->pick; }
+    const Tensor& SplatRasterizer::rgba() const { return impl_->rgba; }
+    const Tensor& SplatRasterizer::linear_depth() const { return impl_->linear_depth; }
 } // namespace lfs::rendering
 

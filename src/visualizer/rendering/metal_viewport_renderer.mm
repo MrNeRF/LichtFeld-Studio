@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "metal_viewport_renderer.hpp"
+#include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
@@ -276,10 +277,8 @@ namespace lfs::vis {
             // the retry sizes from it instead of waiting for that frame's slot.
             std::shared_ptr<std::atomic<uint64_t>> overflow_required = std::make_shared<std::atomic<uint64_t>>(0);
             std::unique_ptr<MetalRadPager> pager;
-            // Tensor-program raster scratch and its display outputs. The outputs
-            // also serve as the previous image when a frame overflows.
+            // Tensor-program raster scratch and display outputs.
             std::unique_ptr<rendering::SplatRasterizer> tensor_raster;
-            core::Tensor tensor_rgba, tensor_depth;
         };
         std::unordered_map<RenderTargetId, TargetState, RenderTargetIdHash> targets;
         std::unordered_set<RenderTargetId, RenderTargetIdHash> released_targets;
@@ -662,15 +661,12 @@ namespace lfs::vis {
             if (tensor) {
                 auto& state = target(output);
                 const core::GpuBackendScope scope(core::GpuBackend::Metal);
-                if (!state.tensor_raster)
+                if (!state.tensor_raster) {
                     state.tensor_raster = std::make_unique<rendering::SplatRasterizer>(core::GpuBackend::Metal);
+                    LOG_INFO("Metal viewport target {} rasterizes splats with tensor programs", output.value);
+                }
                 if (auto reserved = state.tensor_raster->reserve(count, f.size.x, f.size.y, capacity); !reserved)
                     throw lfs::Exception(reserved.error());
-                const size_t width = size_t(f.size.x), height = size_t(f.size.y);
-                if (!state.tensor_rgba.is_valid() || state.tensor_rgba.size(0) != height || state.tensor_rgba.size(1) != width) {
-                    state.tensor_rgba = core::Tensor::empty({height, width, 4}, core::Device::GPU, core::DataType::UInt8);
-                    state.tensor_depth = core::Tensor::empty({height, width}, core::Device::GPU, core::DataType::Float32);
-                }
                 if (!tensor_projected.is_valid() || tensor_projected.bytes() < size_t(count) * sizeof(ProjectedSplat))
                     tensor_projected = core::Tensor::empty({std::max<size_t>(16, size_t(count) * sizeof(ProjectedSplat))}, core::Device::GPU, core::DataType::UInt8);
             } else if (!points) {
@@ -1442,18 +1438,20 @@ namespace lfs::vis {
                 raster.panorama = {projection.panorama.x, projection.panorama.y, projection.panorama.z, projection.panorama.w};
                 if (auto rasterized = state.tensor_raster->rasterize(i.tensor_projected, nullptr, draw_count, rendering::SplatRasterMode::Gaussian, raster); !rasterized)
                     throw lfs::Exception(rasterized.error());
-                // An overflowing frame keeps the last tensor image of this extent.
-                const bool has_previous = previous && previous->tensor;
-                const rendering::SplatPresentParameters presented{present.exposure, present.tone, present.transparent, has_previous ? 1u : 0u,
-                                                                  present.depth_min, present.depth_max, present.depth_view, present.depth_mode,
-                                                                  {present.background.x, present.background.y, present.background.z, present.background.w},
-                                                                  {present.capture.x, 0, 0, 0},
-                                                                  {raster.width, raster.height, raster.width, raster.height}};
-                if (auto shown = state.tensor_raster->present(presented, state.tensor_rgba, state.tensor_depth,
-                                                              has_previous ? &state.tensor_rgba : nullptr, has_previous ? &state.tensor_depth : nullptr);
-                    !shown)
+                rendering::SplatPresentParameters presented;
+                presented.exposure = present.exposure;
+                presented.tone = present.tone;
+                presented.transparent = present.transparent;
+                presented.depth_min = present.depth_min;
+                presented.depth_max = present.depth_max;
+                presented.depth_view = present.depth_view;
+                presented.depth_mode = present.depth_mode;
+                presented.background = {present.background.x, present.background.y, present.background.z, present.background.w};
+                presented.capture = {present.capture.x, 0, 0, 0};
+                if (auto shown = state.tensor_raster->present(presented); !shown)
                     throw lfs::Exception(shown.error());
-                const std::array<const core::Tensor*, 3> outputs{&state.tensor_rgba, &state.tensor_depth, &state.tensor_raster->status()};
+                const auto& raster_output = *state.tensor_raster;
+                const std::array<const core::Tensor*, 3> outputs{&raster_output.rgba(), &raster_output.linear_depth(), &raster_output.status()};
                 return i.reader.submit(outputs, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
                     if (i.next_readback)
                         [command encodeWaitForEvent:i.readback_event value:i.next_readback];

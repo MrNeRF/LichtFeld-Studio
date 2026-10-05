@@ -6,7 +6,9 @@
 #include "core/tensor_backend.hpp"
 #include "splat_rasterizer.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <gtest/gtest.h>
 #include <random>
@@ -99,17 +101,14 @@ namespace {
             auto rasterized = rasterizer.rasterize(projected, mode == SplatRasterMode::Gut ? &gut : nullptr, uint32_t(splats.size()), mode,
                                                    make_parameters(uint32_t(splats.size()), mode, flags));
             ASSERT_TRUE(rasterized) << rasterized.error().detail() << " mode=" << uint32_t(mode) << " flags=" << flags;
-            auto rgba = Tensor::empty({kHeight, kWidth, 4}, Device::GPU, DataType::UInt8);
-            auto depth = Tensor::empty({kHeight, kWidth}, Device::GPU, DataType::Float32);
             SplatPresentParameters present;
             present.transparent = (flags & 16384u) ? 1u : 0u;
             present.background = {.1f, .2f, .3f, 1};
-            present.extent = {kWidth, kHeight, kWidth, kHeight};
-            auto shown = rasterizer.present(present, rgba, depth);
+            auto shown = rasterizer.present(present);
             ASSERT_TRUE(shown) << shown.error().detail();
             EXPECT_EQ(download<uint32_t>(rasterizer.status(), 6)[2], 0u) << "mode=" << uint32_t(mode) << " flags=" << flags;
             if (mode == SplatRasterMode::Gaussian && !present.transparent) {
-                const auto pixels = download<uint8_t>(rgba, size_t(kWidth) * kHeight * 4);
+                const auto pixels = download<uint8_t>(rasterizer.rgba(), size_t(kWidth) * kHeight * 4);
                 size_t opaque = 0;
                 for (size_t i = 3; i < pixels.size(); i += 4)
                     opaque += pixels[i] == 255;
@@ -132,11 +131,67 @@ namespace {
         const auto parameters = make_parameters(count, SplatRasterMode::Gaussian, 128 | 4096);
         std::vector<std::vector<uint16_t>> frames;
         for (int frame = 0; frame < 3; ++frame) {
+            auto color = rasterizer.color();
+            color.zero_();
             auto rasterized = rasterizer.rasterize(projected, nullptr, count, SplatRasterMode::Gaussian, parameters);
             ASSERT_TRUE(rasterized) << rasterized.error().detail();
             frames.push_back(download<uint16_t>(rasterizer.color(), size_t(kWidth) * kHeight * 4));
         }
         EXPECT_EQ(frames[0], frames[2]);
+    }
+
+    // A tile deeper than the parallel threshold switches the next frames to
+    // depth batches: prefix, chunk blends and composition. Same image.
+    TEST_P(SplatRasterizing, DepthBatchesMatchSerialBlend) {
+        if (!lfs::core::gpu_backend_available(GetParam()) || GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        std::mt19937 rng(11);
+        std::uniform_real_distribution<float> offset(0, 16), depth(1, 50), tint(.1f, .9f);
+        std::vector<Splat> splats(40000);
+        for (auto& s : splats) {
+            const float cx = offset(rng), cy = offset(rng), d = depth(rng);
+            s.mean_depth = {cx, cy, d, 4};
+            s.conic_opacity = {.5f, 0, .5f, .05f}; // faint, so all chunks contribute
+            s.color = {tint(rng), tint(rng), tint(rng), d * d};
+            s.bounds = {0, 0, 16, 16};
+        }
+        const auto count = uint32_t(splats.size());
+        const auto projected = upload(splats.data(), splats.size() * sizeof(Splat));
+        SplatRasterizer rasterizer(GetParam());
+        ASSERT_TRUE(rasterizer.reserve(count, kWidth, kHeight, 1'000'000));
+        const auto parameters = make_parameters(count, SplatRasterMode::Gaussian, 128 | 4096);
+        std::vector<std::vector<uint16_t>> frames;
+        for (int frame = 0; frame < 3; ++frame) {
+            // Every frame must write every pixel itself.
+            auto color = rasterizer.color();
+            color.zero_();
+            auto rasterized = rasterizer.rasterize(projected, nullptr, count, SplatRasterMode::Gaussian, parameters);
+            ASSERT_TRUE(rasterized) << rasterized.error().detail();
+            frames.push_back(download<uint16_t>(rasterizer.color(), size_t(kWidth) * kHeight * 4));
+        }
+        const auto to_float = [](uint16_t bits) {
+            const uint32_t sign = uint32_t(bits >> 15) << 31, exponent = (bits >> 10) & 31, mantissa = bits & 1023;
+            uint32_t value = sign;
+            if (exponent == 31)
+                value |= 0x7f800000u | (mantissa << 13);
+            else if (exponent)
+                value |= ((exponent + 112) << 23) | (mantissa << 13);
+            else if (mantissa) { // subnormal
+                int e = -1;
+                uint32_t m = mantissa;
+                do { ++e; m <<= 1; } while (!(m & 1024));
+                value |= ((112 - e) << 23) | ((m & 1023) << 13);
+            }
+            float result;
+            std::memcpy(&result, &value, 4);
+            return result;
+        };
+        float worst = 0;
+        for (size_t i = 0; i < frames[0].size(); ++i)
+            worst = std::max(worst, std::fabs(to_float(frames[0][i]) - to_float(frames[2][i])));
+        EXPECT_LE(worst, 1.f / 255) << "serial and depth-batch blends differ";
+        EXPECT_NE(frames[0], std::vector<uint16_t>(frames[0].size(), 0));
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, SplatRasterizing, testing::ValuesIn(lfs::core::kCompiledGpuBackends),

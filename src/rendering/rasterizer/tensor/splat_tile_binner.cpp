@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "splat_tile_binner.hpp"
 
+#include "scratch_arena.hpp"
+
 #include "splat_scan.hpp"
 #include "splat_sort.hpp"
 #include "splat_sort32.hpp"
@@ -134,19 +136,29 @@ namespace lfs::rendering {
         auto& s = *impl_;
         const core::GpuBackendScope scope(s.backend);
         if (splats > s.max_splats) {
-            s.counts = Tensor::empty({splats}, Device::GPU, DataType::Int64);
-            s.offsets = Tensor::empty({splats}, Device::GPU, DataType::Int64);
-            s.group_offsets = Tensor::empty({ceil_div(splats, 256)}, Device::GPU, DataType::Int64);
-            s.scan_levels.clear();
+            // Per-splat counts and offsets, per-group scan sums and every scan level.
+            std::vector<uint32_t> levels;
             for (uint64_t n = splats; n > 1;) {
-                const uint32_t groups = ceil_div(n, 256);
-                s.scan_levels.push_back({Tensor::empty({groups}, Device::GPU, DataType::Int64),
-                                         Tensor::empty({groups}, Device::GPU, DataType::Int64)});
-                n = groups;
+                levels.push_back(ceil_div(n, 256));
+                n = levels.back();
             }
-            if (s.scan_levels.empty())
-                s.scan_levels.push_back({Tensor::empty({1}, Device::GPU, DataType::Int64),
-                                         Tensor::empty({1}, Device::GPU, DataType::Int64)});
+            if (levels.empty())
+                levels.push_back(1);
+            size_t level_bytes = 0;
+            for (const uint32_t groups : levels)
+                level_bytes += size_t(groups) * 16 + 512;
+            auto [counts, offsets, group_offsets, scan] = carve_arena<4>({size_t(splats) * 8, size_t(splats) * 8,
+                                                                         size_t(ceil_div(splats, 256)) * 8, level_bytes});
+            s.counts = counts;
+            s.offsets = offsets;
+            s.group_offsets = group_offsets;
+            s.scan_levels.clear();
+            size_t at = 0;
+            for (const uint32_t groups : levels) {
+                const size_t bytes = size_t(groups) * 8, step = (bytes + 255) / 256 * 256;
+                s.scan_levels.push_back({scan.slice(0, at, at + bytes), scan.slice(0, at + step, at + step + bytes)});
+                at += 2 * step;
+            }
             s.max_splats = splats;
         }
         if (tiles > s.max_tiles) {
@@ -154,13 +166,13 @@ namespace lfs::rendering {
             s.max_tiles = tiles;
         }
         if (capacity > s.capacity) {
-            for (int n = 0; n < 2; ++n) {
-                s.keys[n] = Tensor::empty({capacity}, Device::GPU, DataType::Int64);
-                s.indices[n] = Tensor::empty({capacity}, Device::GPU, DataType::UInt32);
-            }
-            const size_t histogram = size_t(std::max(1u, ceil_div(capacity, 2048))) * 256;
-            s.histogram = Tensor::empty({histogram}, Device::GPU, DataType::UInt32);
-            s.histogram_offsets = Tensor::empty({histogram}, Device::GPU, DataType::UInt32);
+            const size_t histogram = size_t(std::max(1u, ceil_div(capacity, 2048))) * 256 * 4;
+            auto [keys0, keys1, indices0, indices1, counts, offsets] =
+                carve_arena<6>({size_t(capacity) * 8, size_t(capacity) * 8, size_t(capacity) * 4, size_t(capacity) * 4, histogram, histogram});
+            s.keys = {keys0, keys1};
+            s.indices = {indices0, indices1};
+            s.histogram = counts;
+            s.histogram_offsets = offsets;
             s.capacity = capacity;
         }
         return {};

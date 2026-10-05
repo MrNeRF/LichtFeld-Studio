@@ -267,6 +267,24 @@ namespace {
             max_color = std::max(max_color, pixel);
             over_one += pixel > 1.0 / 255;
         }
+        // Binning alone, source-sorted as in the steady state.
+        lfs::rendering::SplatTileBinner binner(GpuBackend::Metal);
+        require(bool(binner.reserve(count, raster.tiles, capacity)), "binner reserve failed");
+        auto sorted_raster = raster;
+        sorted_raster.flags |= 256;
+        const auto raster_tensor = tensor(std::vector<lfs::rendering::SplatRasterParameters>{sorted_raster});
+        double bin_ms[2] = {};
+        for (int sorted = 0; sorted < 2; ++sorted) {
+            const auto raster_used = sorted ? raster_tensor : tensor(std::vector<lfs::rendering::SplatRasterParameters>{raster});
+            require(bool(binner.bin(projected, raster_used, count, raster.tiles, sorted != 0)), "bin failed");
+            (void)download<uint64_t>(binner.status(), 1);
+            const auto bin_start = std::chrono::steady_clock::now();
+            for (int i = 0; i < kFrames; ++i)
+                require(bool(binner.bin(projected, raster_used, count, raster.tiles, sorted != 0)), "bin failed");
+            (void)download<uint64_t>(binner.status(), 1);
+            bin_ms[sorted] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bin_start).count() / kFrames;
+        }
+        std::printf("replay slang bin: full-key=%.2f ms source-sorted=%.2f ms\n", bin_ms[0], bin_ms[1]);
         std::printf("replay %ux%u count=%u instances=%llu: native wall=%.2f ms gpu=%.2f ms | slang wall=%.2f ms | color max=%.2f/255 >1/255=%.4f%%\n",
                     width, height, count, (unsigned long long)native_status.required_instances, native_wall, gpu_ms / (kFrames - 6),
                     slang_wall, max_color * 255, 100.0 * over_one / (size_t(width) * height));

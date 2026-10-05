@@ -29,7 +29,7 @@ namespace lfs::rendering {
         uint32_t depth_view = 0, depth_mode = 0;
         std::array<float, 4> background{};
         std::array<uint32_t, 4> capture{};
-        std::array<uint32_t, 4> extent{}; // width, height, previous width, previous height
+        std::array<uint32_t, 4> extent{}; // set by present(): width, height, previous width, previous height
     };
     static_assert(sizeof(SplatPresentParameters) == 80);
 
@@ -57,15 +57,19 @@ namespace lfs::rendering {
         [[nodiscard]] lfs::Result<void> rasterize(const core::Tensor& projected, const core::Tensor* gut, uint32_t count,
                                              SplatRasterMode mode, const SplatRasterParameters& parameters);
 
-        // Writes the display image (UInt8 [H,W,4]) and linear view depth
-        // (Float32 [H,W]); on overflow, the previous outputs when given.
-        [[nodiscard]] lfs::Result<void> present(const SplatPresentParameters& parameters, core::Tensor& rgba, core::Tensor& linear_depth,
-                                           const core::Tensor* previous_rgba = nullptr, const core::Tensor* previous_depth = nullptr);
+        // Writes the display image (packed RGBA8) and linear view depth
+        // (Float32) of the last rasterize() into rgba() and linear_depth(). An
+        // overflowing frame keeps the previous image of the same extent; the
+        // rasterizer sets has_previous and extent.
+        [[nodiscard]] lfs::Result<void> present(const SplatPresentParameters& parameters);
 
-        [[nodiscard]] const core::Tensor& status() const; // RasterStatus bytes
-        [[nodiscard]] const core::Tensor& color() const;  // Float16 [H,W,4], premultiplied
-        [[nodiscard]] const core::Tensor& depth() const;  // Float32 [H,W,4]
-        [[nodiscard]] const core::Tensor& pick() const;   // UInt32 [H,W]
+        // Byte views carved from one per-extent allocation.
+        [[nodiscard]] const core::Tensor& status() const;       // RasterStatus bytes
+        [[nodiscard]] const core::Tensor& color() const;        // Float16 [H,W,4], premultiplied
+        [[nodiscard]] const core::Tensor& depth() const;        // Float32 [H,W,4]
+        [[nodiscard]] const core::Tensor& pick() const;         // UInt32 [H,W]
+        [[nodiscard]] const core::Tensor& rgba() const;         // RGBA8 [H,W]
+        [[nodiscard]] const core::Tensor& linear_depth() const; // Float32 [H,W]
 
     private:
         struct Impl;
