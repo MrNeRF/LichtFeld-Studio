@@ -564,6 +564,15 @@ function initLabelTool(global) {
             setActive(false);
         }
     });
+
+    // Hook consumed by the VR annotations module (vr-annotations.js) so it
+    // can rebuild in-world labels from the current tool state on XR start.
+    window.__lfsLabelTool = {
+        get: () => labels.map((label) => ({
+            text: label.text,
+            position: [label.position.x, label.position.y, label.position.z]
+        }))
+    };
 }
 
 export { initLabelTool };
