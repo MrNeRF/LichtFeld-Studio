@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "app/mcp_node_tools.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "mcp_node_utils.hpp"
 
 #include <SDL3/SDL_clipboard.h>
@@ -212,6 +213,90 @@ namespace lfs::app {
         auto* impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
         if (!impl)
             return;
+        const auto template_json = [](const vis::NodeGraphTemplate& value) {
+            return json{{"id", value.id}, {"name", value.name}, {"description", value.description}, {"category", value.category}, {"scene_kinds", value.scene_kinds}, {"adjust", value.adjust}, {"builtin", value.builtin}};
+        };
+        add(registry, impl, "nodes.template_list", "List built-in and user node graph templates with localized metadata", {}, {}, [template_json](auto& viewer, const json&) {
+                json values = json::array();
+                for (const auto& value : viewer.getSceneManager()->modifierManager().templates())
+                    values.push_back(template_json(value));
+                return json{{"success", true}, {"templates", std::move(values)}}; }, true);
+        add(registry, impl, "nodes.template_apply",
+            "Apply a node graph template as a fresh graph and modifier",
+            {{"target", stringSchema()}, {"template", stringSchema()}, {"name", stringSchema()}},
+            {"target", "template"}, [](auto& viewer, const json& args) {
+                auto& scene = *viewer.getSceneManager();
+                const auto host = target(scene, args);
+                if (!host)
+                    return failure("target must identify a splat, mesh or point cloud", "target");
+                const auto result = scene.modifierManager().applyTemplate(
+                    *host, args.at("template").get<std::string>(), args.value("name", ""));
+                if (!result)
+                    return failure(result.error().message, "template");
+                auto state = stack(scene, *host);
+                state["modifier"] = (*result)->uuid;
+                state["tree"] = (*result)->tree_uuid;
+                return state;
+            });
+        add(registry, impl, "nodes.template_save",
+            "Save an existing graph as a user template",
+            {{"tree", stringSchema()}, {"name", stringSchema()}, {"description", stringSchema()}, {"category", stringSchema()}},
+            {"tree", "name", "description", "category"},
+            [template_json](auto& viewer, const json& args) {
+                auto result = viewer.getSceneManager()->modifierManager().saveTemplate(
+                    args.at("tree").get<std::string>(), args.at("name").get<std::string>(),
+                    args.at("description").get<std::string>(), args.at("category").get<std::string>());
+                return result ? json{{"success", true}, {"template", template_json(*result)}}
+                              : failure(result.error().message, "tree");
+            });
+        add(registry, impl, "nodes.template_delete", "Delete a user node graph template", {{"template", stringSchema()}}, {"template"}, [](auto& viewer, const json& args) {
+                const auto result = viewer.getSceneManager()->modifierManager().deleteTemplate(
+                    args.at("template").get<std::string>());
+                return result ? json{{"success", true}}
+                              : failure(result.error().message, "template"); }, false, true);
+        add(registry, impl, "nodes.template_rename", "Rename a user node graph template",
+            {{"template", stringSchema()}, {"name", stringSchema()}}, {"template", "name"},
+            [](auto& viewer, const json& args) {
+                const auto result = viewer.getSceneManager()->modifierManager().renameTemplate(
+                    args.at("template").get<std::string>(), args.at("name").get<std::string>());
+                return result ? json{{"success", true}} : failure(result.error().message, "template");
+            });
+        add(registry, impl, "nodes.template_import", "Import a template JSON file as a new user template",
+            {{"path", stringSchema()}}, {"path"}, [template_json](auto& viewer, const json& args) {
+                const auto result = viewer.getSceneManager()->modifierManager().importTemplate(
+                    core::utf8_to_path(args.at("path").get<std::string>()));
+                return result ? json{{"success", true}, {"template", template_json(*result)}}
+                              : failure(result.error().message, "path");
+            });
+        add(registry, impl, "nodes.template_export", "Export a node graph template to a JSON file",
+            {{"template", stringSchema()}, {"path", stringSchema()}}, {"template", "path"},
+            [](auto& viewer, const json& args) {
+                const auto result = viewer.getSceneManager()->modifierManager().exportTemplate(
+                    args.at("template").get<std::string>(), core::utf8_to_path(args.at("path").get<std::string>()));
+                return result ? json{{"success", true}} : failure(result.error().message, "path");
+            });
+        add(registry, impl, "nodes.preview_set",
+            "Preview one geometry or field output from a node in the viewport",
+            {{"target", stringSchema()}, {"node", stringSchema()}, {"socket", stringSchema()}},
+            {"target", "node"}, [](auto& viewer, const json& args) {
+                auto& scene = *viewer.getSceneManager();
+                const auto host = target(scene, args);
+                if (!host)
+                    return failure("target must identify a splat, mesh or point cloud", "target");
+                const auto result = scene.modifierManager().previewSet(
+                    *host, args.at("node").get<std::string>(),
+                    args.contains("socket")
+                        ? std::optional{args.at("socket").get<std::string>()}
+                        : std::nullopt);
+                if (!result)
+                    return failure(result.error().message, "node");
+                return json{{"success", true}, {"node", args.at("node")}, {"socket", scene.modifierManager().previewState()->socket}};
+            });
+        add(registry, impl, "nodes.preview_clear", "End the active node output preview",
+            {}, {}, [](auto& viewer, const json&) {
+                viewer.getSceneManager()->modifierManager().previewClear();
+                return json{{"success", true}};
+            });
         for (const bool remove : {false, true}) {
             add(registry, impl, remove ? "nodes.keyframe_remove" : "nodes.keyframe_set",
                 remove ? "Remove an input keyframe at the sequencer playhead or supplied time" : "Keyframe an unlinked node input using the sequencer animation track",

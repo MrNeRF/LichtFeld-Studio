@@ -1466,7 +1466,31 @@ namespace lfs::vis {
                                                    : projection.error().message});
         SelectionFilterState filters;
         filters.restrict_to_selected_nodes = false;
-        const auto hovered = resolveCommandHoveredGaussianId(x, y, camera_index, filters, *projection);
+        std::optional<int> hovered;
+        // Paint and eyedropper must hit the visible surface, not whichever
+        // projected centre happens to be closest in 2D (possibly behind it).
+        // This is the same SceneRenderer query used by ring selection.
+        if (!testing_hovered_gaussian_id_) {
+            if (const auto frame_view = frameViewFromProjectionContext(*projection)) {
+                glm::vec2 point{x, y};
+                float padding = RING_PICK_PADDING_PX;
+                if (projection->viewer_layout) {
+                    const auto& layout = *projection->viewer_layout;
+                    point = screenToRender(point, layout);
+                    padding *= static_cast<float>(layout.render_width) / layout.width;
+                }
+                std::uint32_t picked = std::numeric_limits<std::uint32_t>::max();
+                if (const auto mask = tryBuildVksplatSelectionMask(
+                        scene_manager_, rendering_manager_, *frame_view, projection->equirectangular,
+                        RenderingManager::VksplatSelectionMaskShape::Ring, {{point.x, point.y, padding, 0.0f}}, &picked)) {
+                    if (picked == std::numeric_limits<std::uint32_t>::max())
+                        return std::unexpected(ViewportPickError{"No hovered gaussian"});
+                    hovered = static_cast<int>(picked);
+                }
+            }
+        }
+        if (!hovered)
+            hovered = resolveCommandHoveredGaussianId(x, y, camera_index, filters, *projection);
         if (!hovered || *hovered < 0)
             return std::unexpected(ViewportPickError{"No hovered gaussian"});
 

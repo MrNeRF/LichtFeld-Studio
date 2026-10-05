@@ -31,10 +31,6 @@ namespace lfs::vis {
     class SceneManager;
     class RenderingManager;
 
-    enum class GraphicsBackend {
-        Vulkan,
-    };
-
     enum class ProjectSwitchDisposition {
         RequireClean,
         DiscardChanges,
@@ -172,7 +168,6 @@ namespace lfs::vis {
         bool safe_mode = false;
         std::function<RuntimeServiceStatus()> mcp_status_provider;
         bool gut = false;
-        GraphicsBackend graphics_backend = GraphicsBackend::Vulkan;
         int monitor_x = 0; // Monitor hint for window placement
         int monitor_y = 0;
         int monitor_width = 0;

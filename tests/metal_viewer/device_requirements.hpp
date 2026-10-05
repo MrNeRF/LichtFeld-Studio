@@ -11,4 +11,4 @@ namespace lfs::metal_test {
                      LFS_METAL_TEST_REQUIRE_DEVICE ? "FAIL" : "SKIP");
         return LFS_METAL_TEST_REQUIRE_DEVICE ? 1 : 77;
     }
-}
+} // namespace lfs::metal_test

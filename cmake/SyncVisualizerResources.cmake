@@ -206,3 +206,11 @@ _lfs_copy_resource_file(
     "locale_index.json"
     OFF
 )
+_lfs_sync_resource_directory(
+    "${LFS_VISUALIZER_SOURCE_DIR}/gui/resources/node_templates"
+    "node_templates"
+    "*.json"
+    OFF
+    ON
+    OFF
+)

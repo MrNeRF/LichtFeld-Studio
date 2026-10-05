@@ -1,0 +1,36 @@
+// SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// sinh is (exp(x) - exp(-x)) / 2 in the shading language, which cancels near zero and overflows early. Below one,
+// Taylor terms through x^13; above, e^|x| / 2 from exp(|x| - ln 2) with ln 2 split, finite up to the float limit.
+float accurateSinh(float value)
+{
+    const float magnitude = abs(value);
+    if (magnitude < 1.0f)
+    {
+        // fma keeps the square opaque: the shader compiler otherwise rewrites (c * s)^2 as c^2 * s^2 after inlining.
+        const float square = fma(value, value, 0.0f);
+        // Reciprocal factorials 1/13! ... 1/3!, rounded to float.
+        float series = fma(1.6059044372074283e-10f, square, 2.5052107943679403e-08f);
+        series = fma(series, square, 2.7557318844628753e-06f);
+        series = fma(series, square, 1.9841270113829523e-04f);
+        series = fma(series, square, 8.3333337679505348e-03f);
+        series = fma(series, square, 0.1666666716337204f);
+        series = fma(series, square, 1.0f);
+        return value * series;
+    }
+    // e^|x| / 2 - e^-|x| / 2 with the constants pre-folded and an explicit fma, which leaves neither the shader
+    // compiler nor the driver anything to rewrite.
+    const float power = exp(magnitude - 0.693145751953125f);
+    const float large = fma(power, 0.9999985694885254f, -(0.25000035762786865f / power));
+    return asfloat((asuint(large) & 0x7fffffffu) | (asuint(value) & 0x80000000u));
+}
+
+// tanh = sinh / sqrt(1 + sinh^2), keeping the relative accuracy of sinh near zero; one beyond |x| = 10.
+float accurateTanh(float value)
+{
+    if (abs(value) > 10.0f)
+        return asfloat(0x3f800000u | (asuint(value) & 0x80000000u));
+    const float sine = accurateSinh(value);
+    return sine / sqrt(fma(sine, sine, 1.0f));
+}

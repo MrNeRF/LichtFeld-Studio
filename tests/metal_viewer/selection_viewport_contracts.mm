@@ -7,6 +7,7 @@
 #include "preferences.hpp"
 #include "scene_renderer_factory.hpp"
 #include "vksplat_viewport_renderer.hpp"
+#include "window/vulkan_graphics_context.hpp"
 #include "vulkan_scene_renderer_factory.hpp"
 #include <Python.h>
 #include <algorithm>
@@ -97,8 +98,9 @@ namespace {
     }
     void run(bool native_only, core::GpuBackend backend) {
         core::GpuBackendScope scope(backend);
-        vis::VulkanContext context;
-        require(context.initHeadless(), context.lastError().c_str());
+        vis::VulkanGraphicsContext graphics;
+        require(graphics.initializeHeadless(), graphics.lastError().c_str());
+        auto& context = graphics.vulkanContext();
         constexpr size_t count = 1029;
         std::mt19937 rng(74549);
         std::uniform_real_distribution<float> random(-1.f, 1.f);
@@ -133,7 +135,7 @@ namespace {
                               Tensor::from_vector(opacity, {count, 1}, Device::GPU), 1.f);
         model.deleted() = Tensor::from_vector(deleted, {count}, Device::GPU).to(core::DataType::Bool);
         model.notify_deleted_mask_changed();
-        auto native_adapter = vis::createSceneRenderer(context);
+        auto native_adapter = vis::createSceneRenderer(graphics);
         auto reference_adapter = vis::createVulkanSceneRenderer(context);
         vis::MetalViewportRenderer native;
         precise_small_splats(context, native);

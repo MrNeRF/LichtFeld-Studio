@@ -319,7 +319,7 @@ namespace lfs::vis {
 
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
-        gui::CachedVulkanContextRender direct_cache_;
+        gui::CachedUiContextRender direct_cache_;
         std::optional<RenderSignature> last_render_signature_;
         bool direct_cache_dirty_ = true;
         std::string base_rcss_;

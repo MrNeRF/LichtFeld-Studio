@@ -33,7 +33,7 @@ namespace lfs::vis {
                 auto& camera = source.view3D(id)->camera;
                 camera.frameBufferSize = {640, 480};
                 const auto settings = rendering.settingsForView(id);
-                rendering.renderVulkanFrame({.view = id, .viewport = camera, .settings = settings, .logical_screen_size = {640, 480}});
+                rendering.renderFrame({.view = id, .viewport = camera, .settings = settings, .logical_screen_size = {640, 480}});
             }
         };
 
@@ -229,6 +229,9 @@ namespace lfs::vis {
         }
 
         TEST_F(ViewRenderStateTest, ComparisonTargetsBelongOnlyToTheComparingView) {
+#ifndef LFS_GRAPHICS_VULKAN
+            GTEST_SKIP() << "Split-view render targets are an explicit Phase 3 capability on Metal";
+#endif
             source.editViewSettings(first, [](ViewSettings& settings) { settings.split_view_mode = SplitViewMode::PLYComparison; });
             renderEmpty(first);
             renderEmpty(second);

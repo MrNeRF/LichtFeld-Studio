@@ -2,12 +2,13 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "vulkan_external_tensor.hpp"
+#include "graphics_external_tensor.hpp"
 
 #include "core/exportable_storage.hpp"
 #include "core/services.hpp"
 #include "core/shareable_allocation_limit.hpp"
 #include "core/tensor_backend.hpp"
+#include "window/vulkan_graphics_context.hpp"
 #include "window/window_manager.hpp"
 
 #include <algorithm>
@@ -30,49 +31,66 @@ namespace lfs::vis {
 
     } // namespace
 
-    VulkanExternalTensorStorage::VulkanExternalTensorStorage(
-        VulkanContext& context, std::shared_ptr<lfs::core::ExportableBlock> block)
-        : context_(&context) {
+    struct GraphicsExternalTensorStorage::Impl {
+        VulkanContext* context = nullptr;
+        lfs::core::Tensor block_tensor;
+        lfs::core::TensorVulkanBuffer buffer{};
+    };
+
+    GraphicsExternalTensorStorage::GraphicsExternalTensorStorage(
+        GraphicsContext& graphics, std::shared_ptr<lfs::core::ExportableBlock> block)
+        : impl_(std::make_unique<Impl>()) {
+        auto* const context = vulkanContextOrNull(&graphics);
+        if (!context)
+            throw std::runtime_error("External tensor storage requires Vulkan graphics resources in Phase 1");
+        impl_->context = context;
         void* const pointer = block->device_ptr;
-        block_tensor_ = lfs::core::Tensor::from_external_owner(pointer, {1},
-                                                               lfs::core::Device::GPU, lfs::core::DataType::UInt8, std::move(block), 1,
-                                                               nullptr, "vulkan_external_buffer");
-        buffer_ = context.tensorInterop().buffer(block_tensor_).value();
+        impl_->block_tensor = lfs::core::Tensor::from_external_owner(
+            pointer, {1}, lfs::core::Device::GPU, lfs::core::DataType::UInt8,
+            std::move(block), 1, nullptr, "vulkan_external_buffer");
+        impl_->buffer = context->tensorInterop().buffer(impl_->block_tensor).value();
     }
 
-    VulkanExternalTensorStorage::~VulkanExternalTensorStorage() = default;
+    GraphicsExternalTensorStorage::~GraphicsExternalTensorStorage() = default;
 
-    bool VulkanExternalTensorStorage::bindNewExportableChunks(const lfs::core::ExportableBlock& block) {
-        if (!context_) {
+    bool GraphicsExternalTensorStorage::bindNewExportableChunks(const lfs::core::ExportableBlock& block) {
+        if (!impl_->context) {
             return false;
         }
         (void)block;
-        buffer_ = context_->tensorInterop().buffer(block_tensor_).value();
+        impl_->buffer = impl_->context->tensorInterop().buffer(impl_->block_tensor).value();
         return true;
     }
 
-    std::expected<lfs::core::Tensor, std::string> makeVulkanExternalTensor(
-        VulkanContext& context,
+    lfs::Result<lfs::core::Tensor> makeGraphicsExternalTensor(
+        GraphicsContext& graphics,
         lfs::core::TensorShape shape,
         const lfs::core::DataType dtype,
         const std::size_t capacity,
         const char* const debug_name) {
         try {
-            auto tensor = context.tensorInterop().empty(std::move(shape), dtype,
-                                                        lfs::core::GpuBackend::CUDA, capacity);
+            auto* const context = vulkanContextOrNull(&graphics);
+            if (!context)
+                return interop_error(
+                    lfs::ErrorCode::FailedPrecondition,
+                    "External tensor allocation requires Vulkan graphics resources in Phase 1");
+            auto tensor = context->tensorInterop().empty(std::move(shape), dtype,
+                                                         lfs::core::GpuBackend::CUDA, capacity);
             if (debug_name)
                 tensor.set_name(debug_name);
             return tensor;
         } catch (const std::exception& error) {
-            return std::unexpected(error.what());
+            // LFS-CENSUS-OK(empty-catch): translate the backend exception into the typed graphics boundary.
+            return interop_error(lfs::ErrorCode::Internal, error.what());
         }
     }
 
     lfs::Result<lfs::core::SplatTensorAllocator>
-    makeSplatExportableInteropAllocator(VulkanContext& context,
+    makeSplatExportableInteropAllocator(GraphicsContext& graphics,
                                         const lfs::core::SplatExportableStorage& storage,
-                                        std::shared_ptr<VulkanExternalTensorStorage>* parent_keep) {
-        if (!context.externalMemoryInteropEnabled()) {
+                                        std::shared_ptr<GraphicsExternalTensorStorage>* parent_keep) {
+        auto* const context = vulkanContextOrNull(&graphics);
+        if (!context || !context->externalMemoryInteropEnabled()) {
             return lfs::Result<lfs::core::SplatTensorAllocator>(interop_error(
                 lfs::ErrorCode::FailedPrecondition,
                 "Vulkan external-memory interop is not enabled; cannot import exportable block"));
@@ -109,17 +127,17 @@ namespace lfs::vis {
             }
         }
 
-        std::shared_ptr<VulkanExternalTensorStorage> parent;
+        std::shared_ptr<GraphicsExternalTensorStorage> parent;
         if (parent_keep && *parent_keep) {
             parent = *parent_keep;
             if (!parent->bindNewExportableChunks(*storage.block)) {
                 return lfs::Result<lfs::core::SplatTensorAllocator>(interop_error(
                     lfs::ErrorCode::Internal,
                     std::format("Vulkan bind of new exportable chunks failed: {}",
-                                context.lastError())));
+                                context->lastError())));
             }
         } else {
-            parent = std::make_shared<VulkanExternalTensorStorage>(context, storage.block);
+            parent = std::make_shared<GraphicsExternalTensorStorage>(graphics, storage.block);
             if (parent_keep) {
                 *parent_keep = parent;
             }
@@ -262,12 +280,5 @@ namespace lfs::vis {
     }
 
 #endif
-
-    lfs::core::SplatTensorAllocator makeViewerSplatTensorAllocator(const bool preserve_float_shN) {
-        auto* window = services().windowOrNull();
-        auto* context = window ? window->getVulkanContext() : nullptr;
-        return context ? context->tensorInterop().splat_allocator(preserve_float_shN)
-                       : lfs::core::SplatTensorAllocator{};
-    }
 
 } // namespace lfs::vis

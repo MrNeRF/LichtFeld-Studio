@@ -807,7 +807,7 @@ namespace lfs::vis {
             if (completion.semaphore == VK_NULL_HANDLE || completion.value == 0)
                 continue;
             const auto existing = std::find_if(frame_completions_.begin(), frame_completions_.end(),
-                [&](const auto& candidate) { return candidate.semaphore == completion.semaphore; });
+                                               [&](const auto& candidate) { return candidate.semaphore == completion.semaphore; });
             if (existing == frame_completions_.end())
                 frame_completions_.push_back(completion);
             else

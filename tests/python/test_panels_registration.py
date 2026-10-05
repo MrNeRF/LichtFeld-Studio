@@ -262,7 +262,7 @@ def _install_recording_lf(monkeypatch):
     )
     lf_stub.get_current_view = lambda: SimpleNamespace(width=1920, height=1080)
     lf_stub.get_selected_node_name = lambda: ""
-    lf_stub.get_vulkan_capabilities = lambda: {}
+    lf_stub.get_graphics_capabilities = lambda: {}
     def log_error(*args, **kwargs):
         # Support both printf-style and preformatted single-string calls.
         if len(args) == 1:

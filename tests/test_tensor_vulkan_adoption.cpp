@@ -7,7 +7,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor/backend/vulkan/vk_memory.hpp"
-#include "core/tensor_backend.hpp"
+#include "core/tensor_backend_vulkan.hpp"
 #include "core/tensor_splat.hpp"
 #include <chrono>
 #include <cstdio>

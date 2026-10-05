@@ -19,9 +19,9 @@
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/rml_menu_bar.hpp"
+#include "gui/ui_texture.hpp"
 #include "gui/utils/file_association.hpp"
 #include "gui/utils/native_file_dialog.hpp"
-#include "gui/vulkan_ui_texture.hpp"
 #include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
@@ -219,7 +219,7 @@ namespace lfs::python {
                                                : normalized;
 
                 if (!texture_) {
-                    texture_ = std::make_unique<lfs::vis::gui::VulkanUiTexture>();
+                    texture_ = std::make_unique<lfs::vis::gui::UiTexture>();
                 }
 
                 if (!texture_->upload(upload_tensor, w, h) || !texture_->valid())
@@ -242,7 +242,7 @@ namespace lfs::python {
                 width_ = height_ = 0;
             }
 
-            std::unique_ptr<lfs::vis::gui::VulkanUiTexture> release_texture() {
+            std::unique_ptr<lfs::vis::gui::UiTexture> release_texture() {
                 width_ = height_ = 0;
                 return std::move(texture_);
             }
@@ -274,7 +274,7 @@ namespace lfs::python {
         private:
             const uint64_t registry_id_ =
                 g_next_dynamic_texture_id.fetch_add(1, std::memory_order_relaxed);
-            std::unique_ptr<lfs::vis::gui::VulkanUiTexture> texture_;
+            std::unique_ptr<lfs::vis::gui::UiTexture> texture_;
             std::string plugin_name_;
             int width_ = 0;
             int height_ = 0;
@@ -597,7 +597,7 @@ namespace lfs::python {
 
         void free_plugin_textures(const std::string& plugin_name) {
             const bool graphics_thread = lfs::python::on_graphics_thread();
-            std::vector<lfs::vis::gui::VulkanUiTexture*> deferred;
+            std::vector<lfs::vis::gui::UiTexture*> deferred;
             {
                 std::lock_guard lock(g_dynamic_textures_mutex);
                 auto it = g_plugin_textures.find(plugin_name);
@@ -5468,6 +5468,11 @@ namespace lfs::python {
             result["force_no_atomic_float"] = state.options.force_no_atomic_float;
             result["cuda_available"] = static_cast<bool>(LFS_HAS_CUDA);
             result["metal_available"] = core::gpu_backend_available(core::GpuBackend::Metal);
+#ifdef LFS_TENSOR_VULKAN
+            result["vulkan_available"] = true;
+#else
+            result["vulkan_available"] = false;
+#endif
             return result; }, "Get saved tensor backend preferences; changes apply after restart");
 
         m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float) {
@@ -5479,6 +5484,10 @@ namespace lfs::python {
                   }
                   if (backend == "metal" && !core::gpu_backend_available(core::GpuBackend::Metal))
                       throw nb::value_error("Metal needs macOS 26 and a Metal 4 GPU");
+#ifndef LFS_TENSOR_VULKAN
+                  if (backend == "vulkan")
+                      throw nb::value_error("Vulkan is not compiled into this Metal-only build");
+#endif
                   if (validation < 0 || validation > 2)
                       throw nb::value_error("Validation must be 0, 1, or 2");
                   const vis::TensorPreferenceState state{

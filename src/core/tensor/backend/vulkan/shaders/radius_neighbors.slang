@@ -1,7 +1,7 @@
 #include "../../../../include/core/rounded_math.slangh"
 
 static const uint LFS_LOCAL_SIZE_X = 256;
-static const uint LFS_PUSH_CONSTANT_SIZE = 80;
+static const uint LFS_PUSH_CONSTANT_SIZE = 88;
 
 [SpecializationConstant] const uint kMode = 0;
 
@@ -13,6 +13,7 @@ struct Parameters {
     uint64_t output;
     uint64_t queries;
     uint64_t values;
+    uint64_t radii;
     uint count;
     uint bucketMask;
     float radius;
@@ -109,6 +110,9 @@ uint queryCount(Parameters p, uint i) {
 int queryMinInt(Parameters p, uint i) {
     Ptr<int, Access.Read> values = (Ptr<int, Access.Read>)p.values;
     int result = values[i];
+    Ptr<float, Access.Read> radii = (Ptr<float, Access.Read>)p.radii;
+    if (p.radii != 0 && !(radii[i] > p.radius * 0.5f))
+        return result;
     const float3 point = position(p, i);
     if (!all(isfinite(point)))
         return result;
@@ -119,7 +123,7 @@ int queryMinInt(Parameters p, uint i) {
         const int3 target = center + int3(x, y, z);
         for (int j = heads[hashCell(target, p.bucketMask)]; j >= 0; j = next[j]) {
             const float3 other = position(p, uint(j));
-            if (all(cell(other, p.radius) == target) && within(point, other, p.radius))
+            if (all(cell(other, p.radius) == target) && within(point, other, p.radii != 0 ? min(p.radius, min(radii[i], radii[j])) : p.radius))
                 result = min(result, values[j]);
         }
     }
@@ -129,6 +133,9 @@ int queryMinInt(Parameters p, uint i) {
 float queryMinFloat(Parameters p, uint i) {
     Ptr<float, Access.Read> values = (Ptr<float, Access.Read>)p.values;
     float result = values[i];
+    Ptr<float, Access.Read> radii = (Ptr<float, Access.Read>)p.radii;
+    if (p.radii != 0 && !(radii[i] > p.radius * 0.5f))
+        return result;
     const float3 point = position(p, i);
     if (!all(isfinite(point)))
         return result;
@@ -139,7 +146,7 @@ float queryMinFloat(Parameters p, uint i) {
         const int3 target = center + int3(x, y, z);
         for (int j = heads[hashCell(target, p.bucketMask)]; j >= 0; j = next[j]) {
             const float3 other = position(p, uint(j));
-            if (all(cell(other, p.radius) == target) && within(point, other, p.radius))
+            if (all(cell(other, p.radius) == target) && within(point, other, p.radii != 0 ? min(p.radius, min(radii[i], radii[j])) : p.radius))
                 result = min(result, values[j]);
         }
     }
@@ -168,7 +175,7 @@ float querySpacing(Parameters p, uint i) {
                         if (uint(j) == i || !all(cell(other, p.radius) == target))
                             continue;
                         const float3 delta = point - other;
-                        const float distance = dot(delta, delta);
+                        const float distance = dotRounded(delta, delta);
                         if (distance < best.z) {
                             best.z = max(best.y, distance);
                             best.y = max(best.x, min(best.y, distance));
@@ -187,6 +194,72 @@ float querySpacing(Parameters p, uint i) {
         sum += sqrt(best[k]);
     return found ? sum / found : p.radius * 4;
 }
+// Union-find over parents that never exceed their children, so every root is the smallest index in its tree.
+// Path halving only writes ancestors, so a stale read still leads to the same root.
+int componentRoot(Ptr<int, Access.ReadWrite> parent, int node) {
+    int current = parent[node];
+    if (current != node) {
+        int previous = node;
+        int ancestor = parent[current];
+        while (current > ancestor) {
+            parent[previous] = ancestor;
+            previous = current;
+            current = ancestor;
+            ancestor = parent[current];
+        }
+    }
+    return current;
+}
+
+// The root without path halving, for the final labels: halving there could overwrite a label another invocation
+// already finished with an older ancestor.
+int finalComponentRoot(Ptr<int, Access.ReadWrite> parent, int node) {
+    for (int ancestor = parent[node]; ancestor != node; ancestor = parent[node])
+        node = ancestor;
+    return node;
+}
+
+// Hooks the larger root under the smaller one for every neighbour pair. A failed exchange returns the root's
+// new, smaller parent, so each retry climbs and the loop ends.
+void unionComponents(Parameters p, uint i) {
+    if (loadByte(p.references, i) == 0u)
+        return;
+    const float3 point = position(p, i);
+    if (!all(isfinite(point)))
+        return;
+    Ptr<int, Access.ReadWrite> parent = (Ptr<int, Access.ReadWrite>)p.output;
+    Ptr<int, Access.Read> heads = (Ptr<int, Access.Read>)p.heads;
+    Ptr<int, Access.Read> next = (Ptr<int, Access.Read>)p.next;
+    int mine = componentRoot(parent, int(i));
+    const int3 center = cell(point, p.radius);
+    for (int z = -1; z <= 1; ++z) for (int y = -1; y <= 1; ++y) for (int x = -1; x <= 1; ++x) {
+        const int3 target = center + int3(x, y, z);
+        for (int j = heads[hashCell(target, p.bucketMask)]; j >= 0; j = next[j]) {
+            if (uint(j) <= i)
+                continue;
+            // A candidate from another cell sharing the bucket fails the distance test, and joining
+            // a pair twice changes nothing, so no cell check is needed here.
+            if (!within(point, position(p, uint(j)), p.radius))
+                continue;
+            int root = componentRoot(parent, j);
+            while (mine != root) {
+                int seen;
+                if (mine < root) {
+                    InterlockedCompareExchange(parent[root], root, mine, seen);
+                    if (seen == root)
+                        break;
+                    root = seen;
+                } else {
+                    InterlockedCompareExchange(parent[mine], mine, root, seen);
+                    if (seen == mine)
+                        break;
+                    mine = seen;
+                }
+            }
+        }
+    }
+}
+
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)] void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters p) {
     const uint3 numWorkgroups = spirv_asm {
 result:
@@ -207,6 +280,13 @@ result:
             InterlockedExchange(heads[bucket], int(i), previous);
             next[i] = previous;
         }
+    } else if (kMode == 6) {
+        for (uint i = p.queryBegin + dispatchThreadId.x; i < p.queryEnd; i += stride)
+            unionComponents(p, i);
+    } else if (kMode == 7) {
+        Ptr<int, Access.ReadWrite> parent = (Ptr<int, Access.ReadWrite>)p.output;
+        for (uint i = p.queryBegin + dispatchThreadId.x; i < p.queryEnd; i += stride)
+            parent[i] = finalComponentRoot(parent, int(i));
     } else if (kMode == 5) {
         Ptr<float, Access.ReadWrite> output = (Ptr<float, Access.ReadWrite>)p.output;
         for (uint i = p.queryBegin + dispatchThreadId.x; i < p.queryEnd; i += stride)

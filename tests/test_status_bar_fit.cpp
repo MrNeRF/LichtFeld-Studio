@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "core/tensor_backend.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/tensor_backend.hpp"
 #include "gui/gui_input.hpp"
 #include "gui/rml_status_bar.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -305,7 +305,8 @@ namespace {
             previous_language_ = localization.getCurrentLanguage();
             if (!had_localization_)
                 ASSERT_TRUE(localization.initialize((std::filesystem::path(PROJECT_ROOT_PATH) /
-                                                    "src/visualizer/gui/resources/locales").string()));
+                                                     "src/visualizer/gui/resources/locales")
+                                                        .string()));
             ASSERT_TRUE(localization.setLanguage("en"));
             Rml::SetSystemInterface(&system_interface_);
             ASSERT_TRUE(Rml::Initialise());
@@ -653,7 +654,7 @@ namespace {
         EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar_));
         lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_);
         context_->Update();
-#ifdef __APPLE__
+#ifdef LFS_TENSOR_METAL
         EXPECT_EQ(model_.renderer_value,
                   "Metal");
 #else

@@ -564,7 +564,7 @@ namespace lfs::vis::gui {
         subscriptions_.clear();
         model_handle_ = {};
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("status_bar");
         rml_context_ = nullptr;
@@ -592,7 +592,7 @@ namespace lfs::vis::gui {
             return;
 
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
 
         if (document_) {
             if (document_registered_)
@@ -1936,17 +1936,17 @@ namespace lfs::vis::gui {
                                         popup_rect);
     }
 
-    void RmlStatusBar::queueCachedVulkanContext(const float x, const float y,
-                                                const float w_px, const float h_px,
-                                                const int screen_w, const int screen_h,
-                                                const int render_w, const int render_h,
-                                                const bool refresh_cache) {
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+    void RmlStatusBar::queueCachedContext(const float x, const float y,
+                                          const float w_px, const float h_px,
+                                          const int screen_w, const int screen_h,
+                                          const int render_w, const int render_h,
+                                          const bool refresh_cache) {
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
 
         const auto blit_rect = toFramebufferBlitRect(rml_manager_->getWindow(),
                                                      x, y, w_px, h_px, screen_w, screen_h);
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = render_w,
@@ -2010,7 +2010,7 @@ namespace lfs::vis::gui {
         const bool needs_render = size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
                                   content_changed || tooltip_.revealDue() ||
                                   (animation_active_ && refresh_due);
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface()) {
+        if (!rml_manager_ || !rml_manager_->getUiRenderer()) {
             rml_animation_active_ = false;
             animation_active_ = model_animation_active_;
             return;
@@ -2043,9 +2043,9 @@ namespace lfs::vis::gui {
 
         trackRenderedContextFrame(x, y, overlay_height);
 
-        queueCachedVulkanContext(x, y - overlay_height, w_px, h_px + overlay_height,
-                                 screen_w, screen_h,
-                                 render_w, render_h, needs_render || direct_cache_.texture == 0);
+        queueCachedContext(x, y - overlay_height, w_px, h_px + overlay_height,
+                           screen_w, screen_h,
+                           render_w, render_h, needs_render || direct_cache_.texture == 0);
     }
 
 } // namespace lfs::vis::gui

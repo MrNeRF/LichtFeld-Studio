@@ -48,6 +48,8 @@ namespace lfs::nodes {
         }
         if (!geometry.mesh || !geometry.mesh->mesh)
             return geometry;
+        // Attributes belong to this component rather than the cached mesh upload.
+        attributes(geometry.mesh->attributes);
         const auto source = geometry.mesh->mesh;
         const auto resident = [&](const Tensor& tensor) {
             return !tensor.is_valid() || (tensor.device() == device && gpu_backend_of(tensor) == backend);
@@ -90,7 +92,9 @@ namespace lfs::nodes {
             entry = {source, source->generation(), device, backend, std::move(value)};
         }
         entry.source = source;
+        auto component_attributes = std::move(geometry.mesh->attributes);
         geometry.mesh = entry.value;
+        geometry.mesh->attributes = std::move(component_attributes);
         return geometry;
     }
 } // namespace lfs::nodes

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/splat_data.hpp"
 #include "lod_page_cache.hpp"
@@ -137,6 +138,13 @@ namespace lfs::vis {
         virtual void abandonReadbackTicket(uint64_t) const = 0;
         virtual ReadbackStats readbackStats() const = 0;
         virtual std::expected<core::Tensor, std::string> buildSelectionMask(const core::SplatData&, const SelectionMaskRequest&, bool) = 0;
+        // Device-resident output for the tensor compositor: UInt8 [H,W,4] color
+        // and Float32 [H,W] depth, ordered after the render on the GPU.
+        struct OutputTensors {
+            std::shared_ptr<core::Tensor> color;
+            std::shared_ptr<core::Tensor> depth;
+        };
+        virtual lfs::Result<OutputTensors> readOutputTensors(RenderTargetId) const;
         virtual bool hasRenderTarget(RenderTargetId) const = 0;
         virtual bool releaseRenderTarget(RenderTargetId) = 0;
         virtual void releaseSceneResources() = 0;
@@ -241,6 +249,7 @@ namespace lfs::vis {
         virtual bool takeRefinementRequest() { return false; }
         virtual std::expected<RenderResult, std::string> render(const RenderRequest&, RenderTargetId) = 0;
         virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImage(RenderTargetId) = 0;
+        virtual lfs::Result<SceneRenderer::OutputTensors> readOutputTensors(RenderTargetId) const;
         virtual bool hasRenderTarget(RenderTargetId) const = 0;
         virtual bool releaseRenderTarget(RenderTargetId) = 0;
         virtual void reset() = 0;

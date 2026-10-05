@@ -1293,15 +1293,7 @@ namespace lfs::vis {
         if (path.empty()) {
             return false;
         }
-        std::filesystem::path resolved = path;
-        if (!resolved.is_absolute() && !std::filesystem::exists(resolved)) {
-            try {
-                resolved = lfs::vis::getAssetPath(lfs::core::path_to_utf8(path));
-            } catch (const std::exception& error) {
-                LOG_DEBUG("Environment resource lookup failed; trying the assets directory: {}", error.what());
-                resolved = lfs::core::getAssetsDir() / path;
-            }
-        }
+        const auto resolved = resolveEnvironmentMapPath(path);
         const std::string utf8 = lfs::core::path_to_utf8(resolved);
         auto [source_data, w, h, nch] = lfs::core::load_image_float(resolved);
         if (!source_data) {

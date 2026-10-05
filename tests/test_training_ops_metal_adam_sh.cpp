@@ -772,8 +772,12 @@ namespace {
         // Q16 bounds and the final partial storage block. The CPU reference
         // reads the original layout, independently of the range kernel.
         constexpr std::array<std::pair<uint64_t, size_t>, 6> ranges{{
-            {0, 1}, {42, 91}, {32 * cells - 1, cells + 2},
-            {256 * cells - 2, 92}, {512 * cells - 1, cells + 1}, {n * cells - 1, 1},
+            {0, 1},
+            {42, 91},
+            {32 * cells - 1, cells + 2},
+            {256 * cells - 2, 92},
+            {512 * cells - 1, cells + 1},
+            {n * cells - 1, 1},
         }};
         for (const auto storage : {ops::ShStorage::Float32, ops::ShStorage::IeeeFloat16, ops::ShStorage::Q16}) {
             for (const auto [offset, count] : ranges) {
@@ -781,10 +785,15 @@ namespace {
                 std::vector<float> expected(count + 4, -7.25f);
                 auto output = gpu_f(expected);
                 const ops::ShRangeParams range{
-                    .canonical_float_offset = offset, .float_count = count, .primitives = n,
-                    .destination_rest = rest, .layout_rest = rest, .storage = storage,
+                    .canonical_float_offset = offset,
+                    .float_count = count,
+                    .primitives = n,
+                    .destination_rest = rest,
+                    .layout_rest = rest,
+                    .storage = storage,
                 };
-                const auto& values = storage == ops::ShStorage::Q16 ? codes : storage == ops::ShStorage::IeeeFloat16 ? f16 : f32;
+                const auto& values = storage == ops::ShStorage::Q16 ? codes : storage == ops::ShStorage::IeeeFloat16 ? f16
+                                                                                                                     : f32;
                 sh->decode_range(values, storage == ops::ShStorage::Q16 ? bounds : Tensor{}, output, range);
                 for (size_t i = 0; i < count; ++i) {
                     const uint32_t prim = (offset + i) / cells, cell = (offset + i) % cells;

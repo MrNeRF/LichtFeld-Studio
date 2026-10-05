@@ -167,8 +167,9 @@ namespace lfs::vis::gui {
         void applyGTMetricsOverlay();
         void applyLodStatsOverlay();
         void applyProjectDragOverlay();
+        void syncNodePreviewBanner();
         bool applyFrameTooltip();
-        void queueCachedVulkanContext(bool refresh_cache);
+        void queueCachedContext(bool refresh_cache);
         enum class RenderReason : std::uint32_t {
             Initial = 1u << 0,
             Reload = 1u << 1,
@@ -218,6 +219,7 @@ namespace lfs::vis::gui {
         bool toolbar_position_preference_dirty_ = true;
         std::string viewport_toolbar_position_ = "centered";
         std::string applied_viewport_toolbar_position_;
+        std::string applied_node_preview_banner_;
         float viewport_toolbar_free_y_ = 0.5f;
         float applied_toolbar_top_ = std::numeric_limits<float>::quiet_NaN();
         Rml::Element* toolbar_drag_handle_ = nullptr;
@@ -251,7 +253,7 @@ namespace lfs::vis::gui {
         int last_mouse_y_ = 0;
         int last_render_w_ = 0;
         int last_render_h_ = 0;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
         SplitDividerOverlayState split_divider_overlay_;
         GTMetricsOverlayState gt_metrics_overlay_;
         LodStatsOverlayState lod_stats_overlay_;

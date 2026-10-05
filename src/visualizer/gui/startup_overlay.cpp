@@ -138,7 +138,7 @@ namespace lfs::vis::gui {
 
     void StartupOverlay::shutdown() {
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("startup_overlay");
         rml_context_ = nullptr;
@@ -154,7 +154,7 @@ namespace lfs::vis::gui {
             return;
 
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
 
         if (document_) {
             rml_context_->UnloadDocument(document_);
@@ -219,7 +219,7 @@ namespace lfs::vis::gui {
         input_ = nullptr;
         last_mouse_valid_ = false;
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
     }
 
     void StartupOverlay::setPluginLoadState(const bool started,
@@ -752,7 +752,7 @@ namespace lfs::vis::gui {
             focus.want_capture_keyboard = true;
         }
 
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
 
         const int ctx_w = static_cast<int>(window_width);
@@ -783,7 +783,7 @@ namespace lfs::vis::gui {
         if (size_changed) {
             width_ = ctx_w;
             height_ = ctx_h;
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
             rml_context_->SetDimensions(Rml::Vector2i(ctx_w, ctx_h));
             document_->SetProperty("width", std::format("{}px", ctx_w));
             document_->SetProperty("height", std::format("{}px", ctx_h));
@@ -863,7 +863,7 @@ namespace lfs::vis::gui {
         rml_manager_->trackContextFrame(rml_context_,
                                         static_cast<int>(offset_x),
                                         static_cast<int>(offset_y));
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = ctx_w,

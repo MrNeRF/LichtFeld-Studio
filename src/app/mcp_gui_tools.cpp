@@ -55,7 +55,7 @@
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
 #include "visualizer/visualizer_impl.hpp"
-#include "visualizer/window/vulkan_context.hpp"
+#include "visualizer/window/graphics_context.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -346,13 +346,13 @@ namespace lfs::app {
                 return mcp::capture_error(lfs::ErrorCode::Unavailable, "No rendered viewport image is available yet");
 
             auto* const window_manager = viewer_impl->getWindowManager();
-            auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
-            if (!vulkan_context)
-                return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Viewport capture requires a Vulkan window");
+            auto* const graphics_context = window_manager ? window_manager->getGraphicsContext() : nullptr;
+            if (!graphics_context)
+                return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Viewport capture requires a graphics window");
 
-            auto capture = vulkan_context->captureAndEndActiveFrameRgba();
+            auto capture = graphics_context->captureFinalFrameRgba();
             if (!capture)
-                return mcp::capture_error(lfs::ErrorCode::Unavailable, capture.error());
+                return capture.error();
 
             const int left = std::clamp(rect.top_left.x, 0, capture->width);
             const int top = std::clamp(rect.top_left.y, 0, capture->height);
@@ -420,13 +420,13 @@ namespace lfs::app {
                 return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Full-window capture requires a GUI visualizer");
 
             auto* const window_manager = viewer_impl->getWindowManager();
-            auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
-            if (!vulkan_context)
-                return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Full-window capture requires a Vulkan window");
+            auto* const graphics_context = window_manager ? window_manager->getGraphicsContext() : nullptr;
+            if (!graphics_context)
+                return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Full-window capture requires a graphics window");
 
-            auto capture = vulkan_context->captureAndEndActiveFrameRgba();
+            auto capture = graphics_context->captureFinalFrameRgba();
             if (!capture)
-                return mcp::capture_error(lfs::ErrorCode::Unavailable, capture.error());
+                return capture.error();
 
             return mcp::encode_pixels_to_base64(capture->rgba.data(),
                                                 capture->width,
@@ -2765,7 +2765,7 @@ namespace lfs::app {
                         for (int col = 0; col < 3; ++col)
                             for (int row = 0; row < 3; ++row)
                                 orientation.push_back(rotation[col][row]);
-                        views.push_back({{"id", area.value}, {"active", area.value == rendering->activeViewId()}, {"rect", {target.pos.x, target.pos.y, target.size.x, target.size.y}}, {"position", {position.x, position.y, position.z}}, {"rotation", orientation}, {"orthographic", settings.orthographic}, {"point_cloud", settings.point_cloud_mode}, {"target", state.main_render_target_.value}, {"generation", state.vulkan_external_viewport_image_ != VK_NULL_HANDLE ? state.vulkan_external_viewport_image_generation_ : state.vulkan_viewport_image_generation_}, {"image_size", {state.vulkan_viewport_image_size_.x, state.vulkan_viewport_image_size_.y}}});
+                        views.push_back({{"id", area.value}, {"active", area.value == rendering->activeViewId()}, {"rect", {target.pos.x, target.pos.y, target.size.x, target.size.y}}, {"position", {position.x, position.y, position.z}}, {"rotation", orientation}, {"orthographic", settings.orthographic}, {"point_cloud", settings.point_cloud_mode}, {"target", state.main_render_target_.value}, {"generation", state.presentedImageGeneration()}, {"image_size", {state.vulkan_viewport_image_size_.x, state.vulkan_viewport_image_size_.y}}});
                     }
                     return json{{"views", views}};
                 });

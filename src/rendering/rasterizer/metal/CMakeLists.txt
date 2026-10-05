@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-if(NOT APPLE)
+if(NOT LFS_TENSOR_METAL)
     return()
 endif()
 enable_language(OBJCXX)

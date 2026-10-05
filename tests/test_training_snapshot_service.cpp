@@ -379,12 +379,6 @@ namespace {
 
 #if defined(__APPLE__)
     TEST_F(TrainingSnapshotServiceTest, MeasuresResidentCpuStateDuringCapture) {
-        // Isolate capture assertions from ambient runner memory; the admission
-        // tests exercise low-memory rejection separately; RSS is still measured.
-        const ScopedEnvironmentVariable available_memory(
-            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
-            std::to_string(64ull * 1024 * 1024 * 1024));
-
         constexpr std::size_t resident_bytes = 32 * MIB;
         constexpr std::size_t count = 512;
         auto params = make_snapshot_test_params(count);
@@ -406,6 +400,8 @@ namespace {
         });
         const lfs::training::TrainingSnapshotCaptureRequest request{
             .iteration = 500,
+            // Checks the resident-memory measurement, not the gate: independent of the runner's free memory.
+            .relaxed_host_memory_gate = true,
             .strategy = strategy,
             .params = params,
             .capture_additional_cpu_state = [&](const lfs::core::Uuid&)
@@ -826,21 +822,16 @@ namespace {
             for (std::size_t i = 0; i < retained.size(); ++i) {
                 ASSERT_EQ(retained[i].checkpoint_bytes->size(), references[i].size());
                 EXPECT_EQ(std::memcmp(retained[i].checkpoint_bytes->data(),
-                                      references[i].data(), references[i].size()), 0);
+                                      references[i].data(), references[i].size()),
+                          0);
                 if (i)
-                    EXPECT_NE(retained[i].snapshot_uuid, retained[i-1].snapshot_uuid);
+                    EXPECT_NE(retained[i].snapshot_uuid, retained[i - 1].snapshot_uuid);
             }
         }
     }
 
     TEST_F(TrainingSnapshotServiceTest,
            Q16Sh3ChunkedCaptureMatchesHostSerializeBitIdentical) {
-        // Isolate capture assertions from ambient runner memory; the admission
-        // tests exercise low-memory rejection separately; RSS is still measured.
-        const ScopedEnvironmentVariable available_memory(
-            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
-            std::to_string(64ull * 1024 * 1024 * 1024));
-
         lfs::training::sh_value::
             set_sh_value_quant_enabled_for_testing(true);
         struct QuantGuard {
@@ -911,6 +902,8 @@ namespace {
             request{
                 .iteration = SAVED_ITERATION,
                 .snapshot_uuid = assigned_snapshot_uuid,
+                // Checks the captured bytes, not the gate: independent of the runner's free memory.
+                .relaxed_host_memory_gate = true,
                 .strategy = strategy,
                 .params = params,
             };

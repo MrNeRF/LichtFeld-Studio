@@ -34,6 +34,28 @@ TEST(TensorOrderingTest, Float32SortReturnsValuesAndSourceIndices) {
               (std::vector<int64_t>{2, 0, 3, 1}));
 }
 
+TEST(TensorOrderingTest, SortKeepsTheOrderOfEqualKeysOnEveryDevice) {
+    // Short lines sort in one block, long ones across blocks.
+    for (const size_t count : {size_t(1000), size_t(200000)}) {
+        std::vector<float> keys(count);
+        for (size_t i = 0; i < count; ++i)
+            keys[i] = static_cast<float>((i * 7919) % 13);
+        for (const auto device : {Device::CPU, Device::GPU}) {
+            for (const bool descending : {false, true}) {
+                const auto order = Tensor::from_vector(keys, {count}, device).sort(0, descending).second.cpu().to_vector_int64();
+                ASSERT_EQ(order.size(), count);
+                for (size_t i = 1; i < count; ++i) {
+                    const float previous = keys[static_cast<size_t>(order[i - 1])];
+                    const float current = keys[static_cast<size_t>(order[i])];
+                    ASSERT_TRUE(descending ? previous >= current : previous <= current) << i;
+                    if (previous == current)
+                        ASSERT_LT(order[i - 1], order[i]) << "count " << count << " position " << i;
+                }
+            }
+        }
+    }
+}
+
 TEST(TensorOrderingTest, CpuSortPreservesInt64IndicesAcrossRanks) {
     const auto matrix = Tensor::from_vector(
         std::vector<float>{5.0f, 2.0f, 8.0f,
@@ -210,4 +232,52 @@ TEST(TensorOrderingTest, DISABLED_ArgExtremeTiming) {
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 20;
         std::cout << "arg_extreme " << TensorShape(shape).str() << " " << ms << " ms\n";
     }
+}
+
+TEST(TensorOrderingTest, DISABLED_SortTiming) {
+    for (const size_t count : {size_t(1) << 20, size_t(5) << 20}) {
+        const Tensor random = Tensor::rand({count}, Device::GPU);
+        // Small non-negative integers as biased floats, the shape of label keys.
+        const Tensor labels = (random * 1048576.0f).floor() + 8388608.0f;
+        auto& backend = internal::backend_ops_for(random);
+        for (const auto* keys : {&random, &labels}) {
+            for (int i = 0; i < 3; ++i)
+                (void)keys->sort(0);
+            backend.synchronize_device();
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 10; ++i)
+                (void)keys->sort(0);
+            backend.synchronize_device();
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 10;
+            std::cout << "sort " << count << (keys == &random ? " uniform " : " labels ") << ms << " ms\n";
+        }
+    }
+}
+
+TEST(TensorOrderingTest, DISABLED_GroupingPrimitiveTiming) {
+    const size_t count = size_t(5) << 20;
+    const Tensor random = Tensor::rand({count}, Device::GPU);
+    // Node evaluation holds freed buffers for reuse; measure the same way, once the backend is live.
+    Tensor::hold_freed_memory();
+    const Tensor ints = (random * 1000.0f).to(DataType::Int32);
+    const Tensor mask = random.gt(0.5f);
+    const Tensor order = random.sort(0).second.to(DataType::Int32);
+    auto& backend = internal::backend_ops_for(random);
+    const auto time = [&](const char* name, auto&& run) {
+        for (int i = 0; i < 3; ++i)
+            run();
+        backend.synchronize_device();
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < 10; ++i)
+            run();
+        backend.synchronize_device();
+        std::cout << name << " " << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 10 << " ms\n";
+    };
+    time("cumsum_int32", [&] { (void)ints.cumsum(0); });
+    time("nonzero", [&] { (void)mask.nonzero(); });
+    time("index_select_int32", [&] { (void)ints.index_select(0, order); });
+    time("index_copy_int32", [&] { auto out = Tensor::zeros({count}, Device::GPU, DataType::Int32); out.index_copy_(0, order, ints); });
+    time("item", [&] { (void)ints.slice(0, 0, 1).item<int>(); });
+    time("any_item", [&] { (void)mask.any().item<bool>(); });
+    Tensor::release_freed_memory();
 }

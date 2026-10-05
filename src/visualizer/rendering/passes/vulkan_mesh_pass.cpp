@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_mesh_pass.hpp"
+#include "rendering/viewport_geometry.hpp"
 #include "shared_viewport_gpu_assets.hpp"
 
 #include "core/logger.hpp"
@@ -1527,41 +1528,6 @@ namespace lfs::vis {
             vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
         }
 
-        glm::mat4 computeLightVp(const SharedMeshDrawAsset& gpu, const glm::mat4& model,
-                                 const glm::vec3& light_dir) const {
-            const std::array<glm::vec3, 8> corners{
-                glm::vec3{gpu.aabb_min.x, gpu.aabb_min.y, gpu.aabb_min.z},
-                glm::vec3{gpu.aabb_max.x, gpu.aabb_min.y, gpu.aabb_min.z},
-                glm::vec3{gpu.aabb_min.x, gpu.aabb_max.y, gpu.aabb_min.z},
-                glm::vec3{gpu.aabb_max.x, gpu.aabb_max.y, gpu.aabb_min.z},
-                glm::vec3{gpu.aabb_min.x, gpu.aabb_min.y, gpu.aabb_max.z},
-                glm::vec3{gpu.aabb_max.x, gpu.aabb_min.y, gpu.aabb_max.z},
-                glm::vec3{gpu.aabb_min.x, gpu.aabb_max.y, gpu.aabb_max.z},
-                glm::vec3{gpu.aabb_max.x, gpu.aabb_max.y, gpu.aabb_max.z},
-            };
-            glm::vec3 ws_min(std::numeric_limits<float>::max());
-            glm::vec3 ws_max(std::numeric_limits<float>::lowest());
-            for (const auto& c : corners) {
-                const glm::vec3 wp = glm::vec3(model * glm::vec4(c, 1.0f));
-                ws_min = glm::min(ws_min, wp);
-                ws_max = glm::max(ws_max, wp);
-            }
-
-            const glm::vec3 center = (ws_min + ws_max) * 0.5f;
-            const float radius = glm::length(ws_max - ws_min) * 0.5f;
-            const glm::vec3 dir = glm::length(light_dir) > 1e-6f ? glm::normalize(light_dir)
-                                                                 : glm::vec3(0.0f, 1.0f, 0.0f);
-            const glm::vec3 eye = center + dir * radius * 2.0f;
-            glm::vec3 up(0.0f, 1.0f, 0.0f);
-            if (std::abs(glm::dot(dir, up)) > 0.99f) {
-                up = glm::vec3(0.0f, 0.0f, 1.0f);
-            }
-            const glm::mat4 light_view = glm::lookAt(eye, center, up);
-            const glm::mat4 light_proj = glm::ortho(-radius, radius, -radius, radius,
-                                                    0.01f, radius * 4.0f);
-            return light_proj * light_view;
-        }
-
         bool ensureShadowTarget(MeshShadowState& gpu, int resolution) {
             if (gpu.shadow.image != VK_NULL_HANDLE && gpu.shadow.resolution == resolution) {
                 return true;
@@ -1732,7 +1698,7 @@ namespace lfs::vis {
                 if (!shadow_dirty) {
                     continue;
                 }
-                const glm::mat4 light_vp = computeLightVp(mesh, item.model, item.light_dir);
+                const glm::mat4 light_vp = meshShadowViewProjection(mesh.aabb_min, mesh.aabb_max, item.model, item.light_dir);
                 if (!recordShadowPass(gpu, mesh, light_vp * item.model)) {
                     gpu.cached_light_vp_valid = false;
                     continue;

@@ -1,0 +1,9 @@
+#template-backdrop { background-color: @{modal.backdrop}; }
+#window-frame.template-window { background-color: @{surface}; color: @{text}; }
+.template-window #close-btn { color: @{text_dim}; background-color: transparent; }
+.template-window #close-btn:hover { background-color: @{surface_bright}; }
+.template-window #close-btn img, .template-search-icon { image-color: @{text_dim}; }
+.template-card-description { color: @{text_dim}; }
+.template-card-adjust { color: @{text_dim}; }
+.template-chip { color: @{text_dim}; background-color: @{alpha(text,0.07)}; }
+#template-error { color: @{error}; }

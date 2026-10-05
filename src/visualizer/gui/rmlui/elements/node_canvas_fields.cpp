@@ -281,11 +281,14 @@ namespace lfs::vis::gui {
     void NodeCanvasElement::openModifierLibrary(const float x, const float y) {
         if (!context_menu_ || !manager_)
             return;
-        std::vector<ContextMenuItem> items{{.label = LOC("node_editor.new_graph"), .action = "new"}};
+        std::vector<ContextMenuItem> items{{.label = LOC("node_editor.from_template"), .action = "template"},
+                                           {.label = LOC("node_editor.new_graph"), .action = "new"}};
         for (const auto* tree : manager_->trees())
             items.push_back({.label = tree->name, .action = tree->uuid, .separator_before = items.size() == 1});
         context_menu_->request(std::move(items), panel_screen_offset_.x + x, panel_screen_offset_.y + y, [this](const std::string_view action) {
-            if (action == "new") {
+            if (action == "template") {
+                openTemplateBrowser();
+            } else if (action == "new") {
                 addModifier();
             } else if (const auto host = activeHost(); host && manager_->tree(action)) {
                 auto& modifier = manager_->addModifier(*host, std::string(action));
@@ -305,6 +308,7 @@ namespace lfs::vis::gui {
         std::vector<ContextMenuItem> items{
             {.label = LOC("node_editor.move_up"), .action = "up"},
             {.label = LOC("node_editor.move_down"), .action = "down"},
+            {.label = LOC("node_editor.save_as_template"), .action = "save_template", .separator_before = true},
             {.label = LOC("node_editor.apply"), .action = "apply", .separator_before = true},
             {.label = LOC("node_editor.remove"), .action = "remove"}};
         context_menu_->request(std::move(items), panel_screen_offset_.x + x, panel_screen_offset_.y + y, [this, host = *host, uuid = std::string(uuid)](const std::string_view action) {
@@ -315,6 +319,7 @@ namespace lfs::vis::gui {
             if (found == stack->modifiers.end())
                 return;
             const std::string name = found->name;
+            const std::string tree_uuid = found->tree_uuid;
             const size_t index = static_cast<size_t>(std::distance(stack->modifiers.begin(), found));
             if (action == "remove")
                 manager_->removeModifier(host, name);
@@ -324,6 +329,8 @@ namespace lfs::vis::gui {
                 manager_->moveModifier(host, name, index + 1);
             else if (action == "apply")
                 (void)manager_->applyModifier(host, name);
+            else if (action == "save_template")
+                openTemplateSaveDialog(tree_uuid);
             dom_dirty_ = true;
         });
     }

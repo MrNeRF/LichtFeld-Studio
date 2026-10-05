@@ -39,6 +39,7 @@ namespace lfs::vis {
         core::SplatTensorAllocator splat_allocator;
         std::chrono::steady_clock::time_point requested_at;
         bool bake = false;
+        std::optional<NodePreviewState> preview;
     };
 
     struct ModifierHostResult {
@@ -50,6 +51,9 @@ namespace lfs::vis {
         std::unordered_map<std::string, core::Tensor> previews;
         bool enabled = false;
         std::uint64_t output_key = 0;
+        std::optional<float> preview_min;
+        std::optional<float> preview_max;
+        std::string preview_key;
     };
 
     struct ModifierWorkerResult {
@@ -82,6 +86,8 @@ namespace lfs::vis {
         void wait(std::uint64_t generation);
         [[nodiscard]] ModifierWorkerProgress progress() const;
         [[nodiscard]] nlohmann::json performance(bool reset);
+        // Node times include their device work; each node then waits for the GPU.
+        void set_profiling(bool enabled) { profiling_.store(enabled, std::memory_order_relaxed); }
 
     private:
         void run(std::stop_token stop);
@@ -98,6 +104,7 @@ namespace lfs::vis {
         std::vector<ModifierWorkerResult> retired_;
         ModifierWorkerProgress progress_;
         std::atomic<std::uint64_t> generation_{0};
+        std::atomic<bool> profiling_{false};
         std::uint64_t finished_generation_ = 0;
         std::uint64_t requests_ = 0;
         std::uint64_t evaluations_ = 0;

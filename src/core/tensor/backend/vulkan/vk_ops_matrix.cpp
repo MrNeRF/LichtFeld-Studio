@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <span>
 
 namespace lfs::core::internal {
@@ -25,6 +26,7 @@ namespace lfs::core::internal {
         using vk::kLocalSize;
 
         constexpr uint32_t kGemmTile = 64;
+        constexpr size_t kSkinnyLimit = 16;
         constexpr size_t kDotElementsPerPartial = kLocalSize * 8;
         constexpr size_t kDotMaxPartials = 1024;
 
@@ -104,9 +106,9 @@ namespace lfs::core::internal {
             LFS_ASSERT_MSG(lhs.dtype == DataType::Float32 && rhs.dtype == DataType::Float32 &&
                                output.dtype == DataType::Float32,
                            "Vulkan GEMM requires Float32 operands");
-            LFS_ASSERT_MSG(program.batch <= context.caps().max_workgroup_count[2],
-                           "Vulkan GEMM batch count exceeds the device workgroup limit");
-            const std::array constants{transpose_b ? 1u : 0u, bias != nullptr ? 1u : 0u};
+            const bool skinny = program.k <= kSkinnyLimit && program.n <= kSkinnyLimit &&
+                                program.m * program.n <= std::numeric_limits<uint32_t>::max();
+            const std::array constants{transpose_b ? 1u : 0u, bias != nullptr ? 1u : 0u, skinny ? 1u : 0u};
             const VulkanPipeline& pipeline =
                 context.pipelines().specialized("gemm", sizeof(GemmPush), constants);
             const size_t rows_per_dispatch =
@@ -117,25 +119,51 @@ namespace lfs::core::internal {
             const uint32_t groups_x = static_cast<uint32_t>((program.n + kGemmTile - 1) / kGemmTile);
             LFS_ASSERT_MSG(groups_x <= context.caps().max_workgroup_count[0],
                            "Vulkan GEMM column count exceeds the device workgroup limit");
-            for (size_t row_offset = 0; row_offset < program.m; row_offset += rows_per_dispatch) {
-                const size_t rows = std::min(rows_per_dispatch, program.m - row_offset);
-                const GemmPush push{
-                    .a_address = address(lhs) + row_offset * program.k * sizeof(float),
-                    .b_address = address(rhs),
-                    .c_address = address(output) + row_offset * program.n * sizeof(float),
-                    .bias_address = bias != nullptr ? address(*bias) + row_offset * sizeof(float) : 0,
-                    .m = checked_u32(rows, "Vulkan GEMM rows exceed uint32"),
-                    .n = checked_u32(program.n, "Vulkan GEMM columns exceed uint32"),
-                    .k = checked_u32(program.k, "Vulkan GEMM depth exceeds uint32"),
-                    .batch = checked_u32(program.batch, "Vulkan GEMM batch exceeds uint32"),
-                    .stride_a = checked_u32(program.m * program.k, "Vulkan GEMM lhs batch stride exceeds uint32"),
-                    .stride_b = checked_u32(program.k * program.n, "Vulkan GEMM rhs batch stride exceeds uint32"),
-                    .stride_c = checked_u32(program.m * program.n, "Vulkan GEMM output batch stride exceeds uint32"),
-                };
-                record_dispatch(context, pipeline, push,
-                                std::span<const StorageRef>(reads.data(), read_count), writes,
-                                groups_x, static_cast<uint32_t>((rows + kGemmTile - 1) / kGemmTile),
-                                static_cast<uint32_t>(program.batch));
+            // The batch rides on the z workgroup count, which the device limits.
+            const size_t batch_per_dispatch = context.caps().max_workgroup_count[2];
+            for (size_t batch_offset = 0; batch_offset < program.batch; batch_offset += batch_per_dispatch) {
+                const size_t batches = std::min(batch_per_dispatch, program.batch - batch_offset);
+                if (skinny) {
+                    // Every row in one dispatch; the shader strides over the grid.
+                    const GemmPush push{
+                        .a_address = address(lhs) + batch_offset * program.m * program.k * sizeof(float),
+                        .b_address = address(rhs) + batch_offset * program.k * program.n * sizeof(float),
+                        .c_address = address(output) + batch_offset * program.m * program.n * sizeof(float),
+                        .bias_address = bias != nullptr ? address(*bias) : 0,
+                        .m = checked_u32(program.m, "Vulkan GEMM rows exceed uint32"),
+                        .n = checked_u32(program.n, "Vulkan GEMM columns exceed uint32"),
+                        .k = checked_u32(program.k, "Vulkan GEMM depth exceeds uint32"),
+                        .batch = checked_u32(batches, "Vulkan GEMM batch exceeds uint32"),
+                        .stride_a = checked_u32(program.m * program.k, "Vulkan GEMM lhs batch stride exceeds uint32"),
+                        .stride_b = checked_u32(program.k * program.n, "Vulkan GEMM rhs batch stride exceeds uint32"),
+                        .stride_c = checked_u32(program.m * program.n, "Vulkan GEMM output batch stride exceeds uint32"),
+                    };
+                    record_dispatch(context, pipeline, push,
+                                    std::span<const StorageRef>(reads.data(), read_count), writes,
+                                    dispatch_groups(context, program.m * program.n), 1,
+                                    static_cast<uint32_t>(batches));
+                    continue;
+                }
+                for (size_t row_offset = 0; row_offset < program.m; row_offset += rows_per_dispatch) {
+                    const size_t rows = std::min(rows_per_dispatch, program.m - row_offset);
+                    const GemmPush push{
+                        .a_address = address(lhs) + (batch_offset * program.m * program.k + row_offset * program.k) * sizeof(float),
+                        .b_address = address(rhs) + batch_offset * program.k * program.n * sizeof(float),
+                        .c_address = address(output) + (batch_offset * program.m * program.n + row_offset * program.n) * sizeof(float),
+                        .bias_address = bias != nullptr ? address(*bias) + row_offset * sizeof(float) : 0,
+                        .m = checked_u32(rows, "Vulkan GEMM rows exceed uint32"),
+                        .n = checked_u32(program.n, "Vulkan GEMM columns exceed uint32"),
+                        .k = checked_u32(program.k, "Vulkan GEMM depth exceeds uint32"),
+                        .batch = checked_u32(batches, "Vulkan GEMM batch exceeds uint32"),
+                        .stride_a = checked_u32(program.m * program.k, "Vulkan GEMM lhs batch stride exceeds uint32"),
+                        .stride_b = checked_u32(program.k * program.n, "Vulkan GEMM rhs batch stride exceeds uint32"),
+                        .stride_c = checked_u32(program.m * program.n, "Vulkan GEMM output batch stride exceeds uint32"),
+                    };
+                    record_dispatch(context, pipeline, push,
+                                    std::span<const StorageRef>(reads.data(), read_count), writes,
+                                    groups_x, static_cast<uint32_t>((rows + kGemmTile - 1) / kGemmTile),
+                                    static_cast<uint32_t>(batches));
+                }
             }
         }
 

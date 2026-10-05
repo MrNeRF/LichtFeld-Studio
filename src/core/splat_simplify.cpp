@@ -3,8 +3,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/splat_simplify.hpp"
+#include "core/error.hpp"
 #include "core/splat_simplify_history.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_fused.hpp"
 #include "core/tensor_sh.hpp"
+#include "core/tensor_simplify.hpp"
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
@@ -617,9 +621,7 @@ namespace lfs::core {
             }
         }
 
-        [[nodiscard]] float compute_voxel_size(const NativeRows& rows, int target_count) {
-            float min[3], max[3];
-            compute_bounds(rows, min, max);
+        [[nodiscard]] float voxel_size_for_bounds(const float min[3], const float max[3], int target_count) {
             float volume = 1.0f;
             int active_dims = 0;
             for (int axis = 0; axis < 3; ++axis) {
@@ -632,6 +634,12 @@ namespace lfs::core {
             if (active_dims == 0)
                 return 1.0f;
             return std::pow(volume / std::max(1, target_count), 1.0f / static_cast<float>(active_dims)) * 1.2f;
+        }
+
+        [[nodiscard]] float compute_voxel_size(const NativeRows& rows, int target_count) {
+            float min[3], max[3];
+            compute_bounds(rows, min, max);
+            return voxel_size_for_bounds(min, max, target_count);
         }
 
         [[nodiscard]] int pass_target_count_for(const int current_count,
@@ -1192,6 +1200,420 @@ namespace lfs::core {
             }
         }
 
+        // ----- Device passes: simplify_workset on one GPU backend, the same groups in the same order -----
+        //
+        // Every row carries a group label, any value shared by exactly its group. A stable sort by label
+        // lays each group out contiguously with its members ascending; relabelled by their first member,
+        // the groups also come out in the order simplify_workset gives them. Integer arithmetic runs in
+        // fused kernels, since tensor scalar operations compute in Float32.
+        namespace device {
+            namespace f = fused;
+
+            constexpr int32_t kSortBias = 0x00800000;
+
+            Tensor int_scalar(const int value) {
+                return Tensor::from_vector(std::vector<int>{value}, {1}, Device::CPU);
+            }
+
+            // Non-negative Int32 values as Float32 keys in the same order: biased into the normal floats.
+            Tensor sort_keys(const Tensor& values) {
+                static const f::Kernel kernel = [] {
+                    f::Builder builder(1);
+                    builder.output(builder.input(DataType::Int32, 1).load() + kSortBias, DataType::Int32);
+                    return f::Kernel(builder);
+                }();
+                return kernel({values.numel()}, {values})[0].view_as(DataType::Float32);
+            }
+
+            // Positions that sort keys ascending, ties in their current order.
+            Tensor stable_order(const Tensor& keys) {
+                return keys.sort(0).second.to(DataType::Int32);
+            }
+
+            // Int32 0..count-1 on the backend of like.
+            Tensor iota(const size_t count, const Tensor& like) {
+                static const f::Kernel kernel = [] {
+                    f::Builder builder(1);
+                    const auto anchor = builder.input(DataType::Int32, 1).at({0});
+                    builder.output(builder.iota(0) + anchor * 0, DataType::Int32);
+                    return f::Kernel(builder);
+                }();
+                return kernel({count}, {Tensor::zeros({1}, like.device(), DataType::Int32)})[0];
+            }
+
+            // Runs of equal values in a sorted Int32 sequence: for each position its run's start and size
+            // and its offset in the run.
+            struct Runs {
+                Tensor start;
+                Tensor size;
+                Tensor offset;
+                Tensor starts; // Int32 [runs]
+            };
+
+            Runs runs(const Tensor& sorted) {
+                static const f::Kernel heads = [] {
+                    f::Builder builder(1);
+                    const auto value = builder.input(DataType::Int32, 1);
+                    const auto position = builder.iota(0);
+                    builder.output(f::where(position == 0 || value.load() != value.gather({position - 1}, f::Bounds::Clamp), 1, 0),
+                                   DataType::Int32);
+                    return f::Kernel(builder);
+                }();
+                static const f::Kernel spans = [] {
+                    f::Builder builder(1);
+                    const auto run = builder.input(DataType::Int32, 1).load() - 1;
+                    const auto starts = builder.input(DataType::Int32, 1);
+                    const auto count = builder.input(DataType::Int32, 1).at({0});
+                    const auto total = builder.input(DataType::Int32, 1).at({0});
+                    const auto start = starts.gather({run});
+                    const auto end = f::where(run + 1 < total, starts.gather({run + 1}, f::Bounds::Clamp), count);
+                    builder.output(start, DataType::Int32);
+                    builder.output(end - start, DataType::Int32);
+                    builder.output(builder.iota(0) - start, DataType::Int32);
+                    return f::Kernel(builder);
+                }();
+                const size_t count = sorted.numel();
+                const auto head = heads({count}, {sorted})[0];
+                Runs result;
+                result.starts = head.ne(0).nonzero().reshape({-1}).to(DataType::Int32).contiguous();
+                auto spanned = spans({count}, {head.cumsum(0), result.starts, int_scalar(static_cast<int>(count)),
+                                               int_scalar(static_cast<int>(result.starts.numel()))});
+                result.start = std::move(spanned[0]);
+                result.size = std::move(spanned[1]);
+                result.offset = std::move(spanned[2]);
+                return result;
+            }
+
+            // Rows in label order, ascending within each label, with the runs of that order.
+            struct Grouping {
+                Tensor order; // Int32 [n] rows
+                Runs runs;
+            };
+
+            Grouping group_by(const Tensor& labels) {
+                Grouping result;
+                result.order = stable_order(sort_keys(labels));
+                result.runs = runs(labels.index_select(0, result.order).contiguous());
+                return result;
+            }
+
+            // Each row labelled with the first member of its group, which is the group's smallest row.
+            Tensor first_member_labels(const Tensor& labels) {
+                const auto grouping = group_by(labels);
+                auto result = Tensor::zeros({labels.numel()}, labels.device(), DataType::Int32);
+                result.index_copy_(0, grouping.order, grouping.order.index_select(0, grouping.runs.start));
+                return result;
+            }
+
+            // group_into_voxels: rows of one voxel share a label.
+            Tensor voxel_labels(const Tensor& means, const float voxel_size, const float bounds_min[3]) {
+                const size_t count = means.size(0);
+                const auto low = Tensor::from_vector(std::vector<float>{bounds_min[0], bounds_min[1], bounds_min[2]},
+                                                     {1, 3}, Device::CPU)
+                                     .to(means.device());
+                const auto cells = ((means - low) * (1.0f / voxel_size)).floor().contiguous();
+                auto order = iota(count, means);
+                for (const int axis : {2, 1, 0})
+                    order = order.index_select(
+                        0, stable_order(cells.slice(1, axis, axis + 1).squeeze(1).index_select(0, order)));
+                // Equal cells are neighbours in this order; number the runs.
+                static const f::Kernel heads = [] {
+                    f::Builder builder(1);
+                    const auto cells = builder.input(DataType::Float32, 2);
+                    const auto position = builder.iota(0);
+                    auto differs = position == 0;
+                    for (int32_t axis = 0; axis < 3; ++axis)
+                        differs = differs || cells.gather({position, builder.constant(axis)}) !=
+                                                 cells.gather({position - 1, builder.constant(axis)}, f::Bounds::Clamp);
+                    builder.output(f::where(differs, 1, 0), DataType::Int32);
+                    return f::Kernel(builder);
+                }();
+                const auto voxel = heads({count}, {cells.index_select(0, order).contiguous()})[0].cumsum(0);
+                auto labels = Tensor::zeros({count}, means.device(), DataType::Int32);
+                labels.index_copy_(0, order, voxel);
+                return labels;
+            }
+
+            // cap_voxel_group_sizes: a group above max_size splits at the median of its widest axis (ties by
+            // row) until no part is above it; a group without extent is cut into runs of max_size rows.
+            Tensor cap_groups(const Tensor& means, Tensor labels, const int max_size) {
+                const size_t count = means.size(0);
+                // Running min (channels 0-2) and max (3-5) over a group's positions, doubling the reach.
+                static const f::Kernel extent_step = [] {
+                    f::Builder builder(2);
+                    const auto values = builder.input(DataType::Float32, 2);
+                    const auto offset = builder.input(DataType::Int32, 1).load({0});
+                    const auto reach = builder.input(DataType::Int32, 1).at({0});
+                    const auto position = builder.iota(0);
+                    const auto channel = builder.iota(1);
+                    const auto own = values.load();
+                    const auto other = values.gather({position - reach, channel}, f::Bounds::Clamp);
+                    const auto combined = f::where(channel < 3, f::min(own, other), f::max(own, other));
+                    builder.output(f::where(offset >= reach, combined, own), DataType::Float32);
+                    return f::Kernel(builder);
+                }();
+                // Each position's coordinate on its group's widest axis (first of equal extents), and
+                // whether the group has no extent.
+                static const f::Kernel split_keys = [] {
+                    f::Builder builder(1);
+                    const auto extents = builder.input(DataType::Float32, 2);
+                    const auto points = builder.input(DataType::Float32, 2);
+                    const auto order = builder.input(DataType::Int32, 1).load();
+                    const auto start = builder.input(DataType::Int32, 1).load();
+                    const auto size = builder.input(DataType::Int32, 1).load();
+                    const auto last = start + size - 1;
+                    const auto extent = [&](const int32_t axis) {
+                        return extents.gather({last, builder.constant(axis + 3)}) -
+                               extents.gather({last, builder.constant(axis)});
+                    };
+                    const auto e0 = extent(0), e1 = extent(1), e2 = extent(2);
+                    const auto axis1 = e1 > e0;
+                    const auto best01 = f::where(axis1, e1, e0);
+                    const auto axis2 = e2 > best01;
+                    const auto axis = f::where(axis2, 2, f::where(axis1, 1, 0));
+                    const auto flat = f::where(axis2, e2, best01) <= 1e-6f;
+                    builder.output(f::where(flat, 0.0f, points.gather({order, axis})), DataType::Float32);
+                    builder.output(f::where(flat, 1, 0), DataType::Int32);
+                    return f::Kernel(builder);
+                }();
+                // A row's part of its split group, as an offset from the group start: the second half
+                // starts at size / 2; without extent, runs of max_size.
+                static const f::Kernel parts = [] {
+                    f::Builder builder(1);
+                    const auto offset = builder.input(DataType::Int32, 1).load();
+                    const auto size = builder.input(DataType::Int32, 1).load();
+                    const auto flat = builder.input(DataType::Int32, 1).load();
+                    const auto max_size = builder.input(DataType::Int32, 1).at({0});
+                    const auto half = size / 2;
+                    builder.output(f::where(flat != 0, (offset / max_size) * max_size, f::where(offset >= half, half, 0)),
+                                   DataType::Int32);
+                    return f::Kernel(builder);
+                }();
+                static const f::Kernel add = [] {
+                    f::Builder builder(1);
+                    builder.output(builder.input(DataType::Int32, 1).load() + builder.input(DataType::Int32, 1).load(),
+                                   DataType::Int32);
+                    return f::Kernel(builder);
+                }();
+                for (;;) {
+                    const auto grouping = group_by(labels);
+                    const auto& group = grouping.runs;
+                    const auto over = group.size.gt(static_cast<float>(max_size));
+                    if (!over.any().item<bool>())
+                        break;
+                    auto extents = Tensor::cat({means, means}, 1).index_select(0, grouping.order).contiguous();
+                    const int largest = group.size.max().item<int>();
+                    for (int reach = 1; reach < largest; reach *= 2)
+                        extents = extent_step({count, 6}, {extents, group.offset, int_scalar(reach)})[0];
+                    const auto keyed = split_keys({count}, {extents, means, grouping.order, group.start, group.size});
+                    // Positions of oversized groups in order of (group, key, row): positions already run by
+                    // row within a group.
+                    const auto positions = over.nonzero().reshape({-1}).to(DataType::Int32);
+                    auto split = positions.index_select(0, stable_order(keyed[0].index_select(0, positions)));
+                    split = split.index_select(0, stable_order(sort_keys(group.start.index_select(0, split))));
+                    const auto split_runs = runs(group.start.index_select(0, split).contiguous());
+                    const auto part = parts({split.numel()}, {split_runs.offset, group.size.index_select(0, split),
+                                                              keyed[1].index_select(0, split), int_scalar(max_size)})[0];
+                    // A group label is any position in it: its start, or its start plus the part offset.
+                    auto next = Tensor::zeros({count}, means.device(), DataType::Int32);
+                    next.index_copy_(0, grouping.order, group.start);
+                    next.index_copy_(0, grouping.order.index_select(0, split),
+                                     add({split.numel()}, {group.start.index_select(0, split), part})[0]);
+                    labels = std::move(next);
+                }
+                return labels;
+            }
+
+            // limit_groups_to_target: when merging every group would undershoot the target, merge the
+            // groups with the fewest savings first (ties by first member), part of the group that reaches
+            // the target, and leave the rest as single rows.
+            Tensor limit_groups(Tensor labels, const int current_count, const int target_count) {
+                const int remaining = current_count - target_count;
+                const auto grouping = group_by(labels);
+                const auto& group = grouping.runs;
+                const size_t groups = group.starts.numel();
+                const auto sizes = group.size.index_select(0, group.starts).contiguous();
+                static const f::Kernel minus_one = [] {
+                    f::Builder builder(1);
+                    builder.output(builder.input(DataType::Int32, 1).load() - 1, DataType::Int32);
+                    return f::Kernel(builder);
+                }();
+                const auto savings = minus_one({groups}, {sizes})[0];
+                if (remaining <= 0) {
+                    // Every row on its own: no merges, and the caller widens the voxels.
+                    return iota(labels.numel(), labels);
+                }
+                const auto possible = savings.cumsum(0).slice(0, groups - 1, groups).item<int>();
+                if (possible <= remaining)
+                    return labels;
+                const auto firsts = grouping.order.index_select(0, group.starts).contiguous();
+                auto order = stable_order(sort_keys(firsts));
+                order = order.index_select(0, stable_order(sort_keys(savings.index_select(0, order))));
+                const auto ordered_savings = savings.index_select(0, order).contiguous();
+                const auto prefix = ordered_savings.cumsum(0);
+                // Rows kept together in each group, in that order.
+                static const f::Kernel kept = [] {
+                    f::Builder builder(1);
+                    const auto saving = builder.input(DataType::Int32, 1).load();
+                    const auto prefix = builder.input(DataType::Int32, 1).load();
+                    const auto remaining = builder.input(DataType::Int32, 1).at({0});
+                    const auto before = prefix - saving;
+                    const auto whole = prefix <= remaining;
+                    const auto partial = before < remaining;
+                    builder.output(f::where(saving <= 0, 1, f::where(whole, saving + 1, f::where(partial, remaining - before + 1, 1))),
+                                   DataType::Int32);
+                    return f::Kernel(builder);
+                }();
+                const auto ordered_kept = kept({groups}, {ordered_savings, prefix, int_scalar(remaining)})[0];
+                auto group_kept = Tensor::zeros({groups}, labels.device(), DataType::Int32);
+                group_kept.index_copy_(0, order, ordered_kept);
+                // Positions past the kept rows become their own groups.
+                static const f::Kernel relabel = [] {
+                    f::Builder builder(1);
+                    const auto start = builder.input(DataType::Int32, 1).load();
+                    const auto offset = builder.input(DataType::Int32, 1).load();
+                    const auto run = builder.input(DataType::Int32, 1).load() - 1;
+                    const auto kept = builder.input(DataType::Int32, 1);
+                    builder.output(f::where(offset < kept.gather({run}), start, start + offset), DataType::Int32);
+                    return f::Kernel(builder);
+                }();
+                const auto runs_index = [&] {
+                    // Run number of each position: the number of starts at or before it.
+                    static const f::Kernel heads = [] {
+                        f::Builder builder(1);
+                        builder.output(f::where(builder.input(DataType::Int32, 1).load() == 0, 1, 0), DataType::Int32);
+                        return f::Kernel(builder);
+                    }();
+                    return heads({labels.numel()}, {group.offset})[0].cumsum(0);
+                }();
+                auto next = Tensor::zeros({labels.numel()}, labels.device(), DataType::Int32);
+                next.index_copy_(0, grouping.order,
+                                 relabel({labels.numel()}, {group.start, group.offset, runs_index, group_kept})[0]);
+                return next;
+            }
+
+            SimplifyRows activated_rows(const SplatSimplifyWorkset& workset) {
+                const auto raw_scales = workset.scaling.contiguous();
+                const auto scales = Tensor::where(raw_scales.eq(-std::numeric_limits<float>::infinity()),
+                                                  Tensor::zeros_like(raw_scales),
+                                                  raw_scales.clamp(-30.0f, 30.0f).exp().maximum(kMinScale));
+                const auto rotation = workset.rotation.contiguous();
+                const auto norm = (rotation * rotation).sum(1, true).sqrt().maximum(kMinQuatNorm);
+                return {workset.means.contiguous(), scales.contiguous(), (rotation / norm).contiguous(),
+                        workset.opacity.reshape({-1}).sigmoid().contiguous(), workset.appearance.contiguous()};
+            }
+
+            SplatSimplifyWorkset raw_workset(const SimplifyRows& rows, const SplatSimplifyWorkset& like) {
+                SplatSimplifyWorkset out = like;
+                out.means = rows.means;
+                out.scaling = Tensor::where(rows.scales.eq(0.0f),
+                                            Tensor::full_like(rows.scales, -std::numeric_limits<float>::infinity()),
+                                            rows.scales.maximum(kMinScale).log())
+                                  .contiguous();
+                out.rotation = rows.rotation;
+                const auto q = rows.opacity.clamp(kMinProb, 1.0f - kMinProb);
+                out.opacity = (q / (q.neg() + 1.0f)).log().reshape({-1, 1}).contiguous();
+                out.appearance = rows.appearance;
+                return out;
+            }
+
+            SimplifyRows select_rows(const SimplifyRows& rows, const Tensor& keep) {
+                return {rows.means.index_select(0, keep).contiguous(), rows.scales.index_select(0, keep).contiguous(),
+                        rows.rotation.index_select(0, keep).contiguous(), rows.opacity.index_select(0, keep).contiguous(),
+                        rows.appearance.index_select(0, keep).contiguous()};
+            }
+
+            struct Unsupported {};
+
+            // simplify_workset on the rows' GPU backend. Throws Unsupported, before any work, when the
+            // backend has no merge kernel.
+            lfs::Error failure(const lfs::ErrorCode code, std::string message,
+                               const SourceSite detection = LFS_SOURCE_SITE_CURRENT()) {
+                return lfs::make_error({.code = code,
+                                        .domain = lfs::ErrorDomain::Core,
+                                        .user_message = std::move(message),
+                                        .detection = detection});
+            }
+
+            lfs::Result<SplatSimplifyWorkset> simplify(const SplatSimplifyWorkset& input,
+                                                       const SplatSimplifyOptions& options,
+                                                       const SplatSimplifyProgressCallback& progress) {
+                GpuBackendScope scope(gpu_backend_of(input.means).value());
+                {
+                    // Probe the merge kernel with an empty grouping.
+                    const auto none = Tensor::zeros({1}, Device::GPU, DataType::Int32);
+                    const auto empty = SimplifyRows{Tensor::zeros({0, 3}, Device::GPU), Tensor::zeros({0, 3}, Device::GPU),
+                                                    Tensor::zeros({0, 4}, Device::GPU), Tensor::zeros({0}, Device::GPU),
+                                                    Tensor::zeros({0, size_t(input.appearance.size(1))}, Device::GPU)};
+                    if (!simplify_merge_groups(empty, none, Tensor::zeros({0}, Device::GPU, DataType::Int32)))
+                        throw Unsupported{};
+                }
+                auto current = activated_rows(input);
+                const int input_count = static_cast<int>(current.means.size(0));
+                if (input_count == 0)
+                    return failure(lfs::ErrorCode::InvalidArgument, "Splat simplify: input splat is empty");
+                const int target_count = target_count_for(input_count, options.ratio);
+
+                if (!report_progress(progress, 0.0f, "Pruning opacity"))
+                    return failure(lfs::ErrorCode::Cancelled, "Cancelled");
+                {
+                    // prune_by_opacity: the threshold never exceeds the median opacity.
+                    const auto sorted = current.opacity.sort(0).first;
+                    const size_t mid = static_cast<size_t>(input_count) / 2;
+                    const auto middle = sorted.slice(0, input_count % 2 ? mid : mid - 1, mid + 1).cpu().to_vector();
+                    const float median = middle.size() == 1 ? middle[0] : 0.5f * (middle[0] + middle[1]);
+                    const float threshold = std::min(options.opacity_prune_threshold, median);
+                    current = select_rows(current, current.opacity.ge(threshold).nonzero().reshape({-1}).to(DataType::Int32));
+                }
+                if (current.means.size(0) == 0)
+                    return failure(lfs::ErrorCode::InvalidArgument, "Splat simplify: input has no visible gaussians");
+
+                int pass = 0;
+                while (static_cast<int>(current.means.size(0)) > target_count) {
+                    const int count = static_cast<int>(current.means.size(0));
+                    const float pass_progress = progress_for_count(input_count, target_count, count);
+                    const std::string pass_prefix = "Pass " + std::to_string(pass + 1) + ": ";
+                    if (!report_progress(progress, pass_progress, pass_prefix + "building voxel grid"))
+                        return failure(lfs::ErrorCode::Cancelled, "Cancelled");
+                    const auto bounds = Tensor::cat({current.means.min(0), current.means.max(0)}, 0).cpu().to_vector();
+                    const float bounds_min[3] = {bounds[0], bounds[1], bounds[2]};
+                    const float bounds_max[3] = {bounds[3], bounds[4], bounds[5]};
+                    const int pass_target_count = pass_target_count_for(count, target_count, options.lod_base);
+                    float voxel_size = voxel_size_for_bounds(bounds_min, bounds_max, pass_target_count);
+                    bool reduced = false;
+                    for (int attempt = 0; attempt < 10 && !reduced; ++attempt) {
+                        const int max_group_size = std::max(
+                            2, static_cast<int>(std::ceil(static_cast<double>(count) / static_cast<double>(pass_target_count))) + 1);
+                        auto labels = voxel_labels(current.means, voxel_size, bounds_min);
+                        labels = cap_groups(current.means, std::move(labels), max_group_size);
+                        labels = limit_groups(std::move(labels), count, pass_target_count);
+                        const auto grouping = group_by(first_member_labels(labels));
+                        const auto sizes = grouping.runs.size.index_select(0, grouping.runs.starts);
+                        const int merge_count = static_cast<int>(sizes.gt(1.0f).to(DataType::Float32).sum().item<float>());
+                        if (merge_count == 0) {
+                            voxel_size *= 1.5f;
+                            continue;
+                        }
+                        if (!report_progress(progress, pass_progress + 0.02f,
+                                             pass_prefix + "merging " + std::to_string(merge_count) + " voxels"))
+                            return failure(lfs::ErrorCode::Cancelled, "Cancelled");
+                        const auto offsets = Tensor::cat({grouping.runs.starts, int_scalar(count).to(Device::GPU)}, 0).contiguous();
+                        auto merged = simplify_merge_groups(current, offsets, grouping.order);
+                        if (!merged)
+                            throw Unsupported{};
+                        current = std::move(*merged);
+                        reduced = true;
+                    }
+                    if (!reduced)
+                        return failure(lfs::ErrorCode::Internal, "Splat simplify stalled at " + std::to_string(count) +
+                                                                     " gaussians (target " + std::to_string(target_count) + ")");
+                    ++pass;
+                }
+                (void)report_progress(progress, 1.0f, "Complete");
+                return raw_workset(current, input);
+            }
+        } // namespace device
+
     } // namespace
 
     std::expected<std::unique_ptr<SplatData>, std::string> simplify_splats(
@@ -1202,11 +1624,21 @@ namespace lfs::core {
             if (!input.means_raw().is_valid() || input.size() == 0)
                 return std::unexpected("Splat simplify: input splat is empty");
 
+            if (input.means_raw().device() == Device::GPU) {
+                try {
+                    auto result = device::simplify(make_workset_from_input(input, Device::GPU), options, progress);
+                    if (!result)
+                        return std::unexpected(std::string(result.error().user_message()));
+                    return make_splat_from_workset(*result, Device::GPU);
+                } catch (const device::Unsupported&) {
+                    // No merge kernel on this backend: the CPU passes below.
+                }
+            }
             auto workset = make_workset_from_input(input, Device::CPU);
             auto result = simplify_workset(workset, options, std::move(progress));
             if (!result)
                 return std::unexpected(result.error());
-            return make_splat_from_workset(*result, Device::GPU);
+            return make_splat_from_workset(*result, input.means_raw().device());
         } catch (const std::exception& e) {
             LOG_ERROR("simplify_splats failed: {}", e.what());
             return std::unexpected(e.what());

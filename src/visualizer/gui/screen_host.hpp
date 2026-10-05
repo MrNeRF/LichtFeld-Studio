@@ -193,7 +193,7 @@ namespace lfs::vis::gui {
         Rml::DataModelHandle chrome_model_;
         RmlTooltipController chrome_tooltip_;
         std::vector<ChromeArea> chrome_areas_;
-        CachedVulkanContextRender chrome_cache_;
+        CachedUiContextRender chrome_cache_;
         bool chrome_dirty_ = true;
         bool chrome_pointer_inside_ = false;
         struct PendingAction {
@@ -209,7 +209,7 @@ namespace lfs::vis::gui {
         // Overlay (gesture previews and the active-view outline, drawn on top).
         Rml::Context* overlay_context_ = nullptr;
         Rml::ElementDocument* overlay_document_ = nullptr;
-        CachedVulkanContextRender overlay_cache_;
+        CachedUiContextRender overlay_cache_;
         bool overlay_dirty_ = true;
         bool overlay_visible_ = false;
 

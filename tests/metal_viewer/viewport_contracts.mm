@@ -14,6 +14,7 @@
 #include "viewport_interop_service.hpp"
 #include "vksplat_viewport_renderer.hpp"
 #include "vulkan_scene_output.hpp"
+#include "window/vulkan_graphics_context.hpp"
 #include "vulkan_scene_renderer_factory.hpp"
 #include <Python.h>
 #include <array>
@@ -185,7 +186,8 @@ static void failed_reservation_preserves_output_contract(vis::VulkanContext& con
         require(renderer.releaseAll().has_value(), "Reservation fixture release failed");
     }
 }
-static void partial_selection_mask_contract(vis::VulkanContext& context) {
+static void partial_selection_mask_contract(vis::VulkanContext& context,
+                                            vis::GraphicsContext& graphics) {
     using core::Device;
     using core::Tensor;
     // A short mask has an implicit unselected suffix. Exercise admission and
@@ -198,7 +200,7 @@ static void partial_selection_mask_contract(vis::VulkanContext& context) {
                               Tensor::full({3, 3}, -3.f, Device::GPU),
                               Tensor::from_vector(std::vector<float>{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}, {3, 4}, Device::GPU),
                               Tensor::full({3, 1}, 4.f, Device::GPU), 1.f);
-        auto adapter = vis::createSceneRenderer(context);
+        auto adapter = vis::createSceneRenderer(graphics);
         require(adapter->trainingInterop() == nullptr, "Native renderer joined the Vulkan trainer protocol");
         rendering::ViewportRenderRequest request;
         request.frame_view.size = {96, 64};
@@ -252,7 +254,9 @@ static void partial_selection_mask_contract(vis::VulkanContext& context) {
         require(!vis::MetalViewportRenderer::supports(model, request), "Strided selection mask accepted");
     }
 }
-static void multi_target_auto_contract(vis::VulkanContext& context, bool compare_vulkan) {
+static void multi_target_auto_contract(vis::VulkanContext& context,
+                                       vis::GraphicsContext& graphics,
+                                       bool compare_vulkan) {
     using core::Device;
     using core::Tensor;
     constexpr std::array<vis::RenderTargetId, 8> ids{{{5}, {37}, {1024}, {90001}, {17}, {700}, {0xFFFFFFFEu}, {23}}};
@@ -264,7 +268,7 @@ static void multi_target_auto_contract(vis::VulkanContext& context, bool compare
                               Tensor::full({1, 3}, -2.f, Device::GPU),
                               Tensor::from_vector(std::vector<float>{1, 0, 0, 0}, {1, 4}, Device::GPU),
                               Tensor::full({1, 1}, 4.f, Device::GPU), 1.f);
-        auto adapter = vis::createSceneRenderer(context);
+        auto adapter = vis::createSceneRenderer(graphics);
         require(adapter->trainingInterop() == nullptr, "Native renderer joined the Vulkan trainer protocol");
         std::array<Tensor, ids.size()> snapshots;
         const auto request_for = [](size_t index) {
@@ -397,8 +401,9 @@ static void bound_vulkan_contract(vis::VulkanContext& context) {
 }
 static void run(bool compare_vulkan) {
     core::GpuBackendScope scope(core::GpuBackend::Metal);
-    vis::VulkanContext context;
-    require(context.initHeadless(), context.lastError().c_str());
+    vis::VulkanGraphicsContext graphics;
+    require(graphics.initializeHeadless(), graphics.lastError().c_str());
+    auto& context = graphics.vulkanContext();
     if (compare_vulkan)
         bound_vulkan_contract(context);
     multi_view_scratch_memory_contract(context);
@@ -610,7 +615,7 @@ static void run(bool compare_vulkan) {
     request.frame_view.containment_intrinsics.reset();
     request.frame_view.intrinsics_override.reset();
     {
-        auto adapter = vis::createSceneRenderer(context);
+        auto adapter = vis::createSceneRenderer(graphics);
         require(adapter->trainingInterop() == nullptr, "Native renderer joined the Vulkan trainer protocol");
         uint64_t first_ticket = 0;
         for (const auto slot : {vis::RenderTargetId{1},
@@ -722,7 +727,7 @@ static void run(bool compare_vulkan) {
         }
         require(coverage_difference == 0, "Native point coverage differs from desktop Vulkan");
     }
-    auto point_auto = vis::createPointSceneRenderer(context);
+    auto point_auto = vis::createPointSceneRenderer(graphics);
     for (const auto target : {vis::RenderTargetId{19}, vis::RenderTargetId{45}, vis::RenderTargetId{903},
                               vis::RenderTargetId{701}, vis::RenderTargetId{300003}}) {
         const auto output = point_auto->render(points, target);
@@ -777,9 +782,9 @@ static void run(bool compare_vulkan) {
     require(point_auto->releaseRenderTarget(vis::RenderTargetId{19}), "Auto point target release failed");
     require(!point_auto->render(points, vis::RenderTargetId{19}).has_value(), "Closed point target ID was reused");
     require(point_auto->readOutputImage(vis::RenderTargetId{300003}).has_value(), "Closing one point view damaged another");
-    multi_target_auto_contract(context, compare_vulkan);
+    multi_target_auto_contract(context, graphics, compare_vulkan);
     transparent_threshold_contract(context);
-    partial_selection_mask_contract(context);
+    partial_selection_mask_contract(context, graphics);
     std::puts("Native viewport texture, resident storage, camera, depth, resize and slot reuse contracts passed.");
 }
 int main(int argc, char** argv) {

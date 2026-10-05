@@ -3119,8 +3119,8 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     // reference also offers accurate transparent geometry/partial coverage.
     const bool use_fp32 = (uniforms.lod_enabled & 4u) != 0u;
     auto* raster_pipeline = overlays_active
-                               ? (use_fp32 ? &pipeline_macro_raster_overlays_fp32 : &pipeline_macro_raster_overlays)
-                               : (use_fp32 ? &pipeline_macro_raster_fp32 : &pipeline_macro_raster);
+                                ? (use_fp32 ? &pipeline_macro_raster_overlays_fp32 : &pipeline_macro_raster_overlays)
+                                : (use_fp32 ? &pipeline_macro_raster_fp32 : &pipeline_macro_raster);
 #if defined(LFS_VULKAN_MACOS_REFERENCE)
     if ((uniforms.mip_filter & 8u) != 0u)
         raster_pipeline = overlays_active ? &pipeline_macro_raster_overlays_fp32_precise_alpha

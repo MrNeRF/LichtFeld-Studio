@@ -23,7 +23,9 @@
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_readback.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "graphics_external_tensor.hpp"
 #include "io/formats/rad.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rasterizer/vulkan/src/indirect_layout.h"
@@ -34,7 +36,6 @@
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
 #include "vksplat_shared_scratch_install.hpp"
-#include "vulkan_external_tensor.hpp"
 #include "window/vulkan_result.hpp"
 
 #include <algorithm>
@@ -8560,8 +8561,8 @@ namespace lfs::vis {
                                        !deterministic_export;
         const bool higs_active = higs_candidate && !higs_warmup_frame;
         const bool gut_aligned_band = request.gut &&
-            uniforms.render_origin_x % TILE_WIDTH == 0u &&
-            uniforms.render_origin_y % TILE_HEIGHT == 0u;
+                                      uniforms.render_origin_x % TILE_WIDTH == 0u &&
+                                      uniforms.render_origin_y % TILE_HEIGHT == 0u;
         if ((higs_active || gut_aligned_band) && deterministic_export &&
             request.frame_view.subregion_full_size.y > 0) {
             // GUT remaps full-image tiles into its local grid, which requires

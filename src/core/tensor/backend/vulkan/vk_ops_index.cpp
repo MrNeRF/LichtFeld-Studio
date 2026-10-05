@@ -36,6 +36,8 @@ namespace lfs::core::internal {
         constexpr uint32_t kIndexFillMode = 6;
         constexpr uint32_t kSortedRunMode = 7;
         constexpr uint32_t kIndexCastMode = 8;
+        constexpr uint32_t kLastPositionMode = 9;
+        constexpr uint32_t kLastPositionAssignMode = 10;
 
         constexpr uint32_t kUnaryNone = 0;
         constexpr uint32_t kUnaryAbs = 1;
@@ -288,6 +290,34 @@ namespace lfs::core::internal {
             }
         }
 
+        // Deterministic assignment without sorting: an atomic maximum records the last
+        // index position of every target, and only that position writes, so the last
+        // index wins as in the CPU reference.
+        void scatter_assign(VulkanContext& context, Launch launch, const StorageRef output,
+                            const StorageRef indices, const StorageRef source) {
+            if (launch.total == 0) {
+                return;
+            }
+            const size_t bytes = std::max<size_t>(launch.push.dim_size, 1) * sizeof(uint32_t);
+            const StorageRef last = context.memory().allocate(bytes, 16, {});
+            context.memory().memset(FillRequest{.dst = last, .bytes = bytes, .operation = "tensor.scatter_assign.last"});
+            Launch positions = launch;
+            positions.mode = kLastPositionMode;
+            positions.total = launch.push.index_size;
+            positions.push.keys_address = address(last);
+            {
+                const std::array reads{indices};
+                const std::array writes{last};
+                record_index(context, positions, reads, writes);
+            }
+            launch.mode = kLastPositionAssignMode;
+            launch.push.keys_address = address(last);
+            const std::array reads{indices, source, last};
+            const std::array writes{output};
+            record_index(context, launch, reads, writes);
+            context.memory().deallocate(last);
+        }
+
         void scatter_add(VulkanContext& context, Launch launch, const StorageRef output,
                          const StorageRef indices, const StorageRef source) {
             LFS_ASSERT_MSG(output.dtype == DataType::Float32 || output.dtype == DataType::Int32 ||
@@ -428,7 +458,7 @@ namespace lfs::core::internal {
         }
         // Assignment with duplicate targets is deterministic: the highest source
         // position wins, as in the CPU reference.
-        scatter_sorted(*context, launch, kRunAssign, output, indices, source);
+        scatter_assign(*context, launch, output, indices, source);
     }
 
     void VulkanBackendOps::index_copy(
@@ -438,7 +468,7 @@ namespace lfs::core::internal {
         const auto context = acquire_vulkan_context();
         const Launch launch = scatter_launch(kScatterAssignMode, output, indices, source,
                                              output_layout, program.dim, program.index_size);
-        scatter_sorted(*context, launch, kRunAssign, output, indices, source);
+        scatter_assign(*context, launch, output, indices, source);
     }
 
     void VulkanBackendOps::index_add(

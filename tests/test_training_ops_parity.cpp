@@ -479,6 +479,10 @@ namespace {
                     Tensor loss, grad, raw_gradient;
                     table->evaluate(saved, prediction, path.raw ? raw_image : absent, byte_target,
                                     path.mask ? soft : absent, {path.path, path.weight, true}, loss, grad, raw_gradient);
+                    if (path.raw && table->add_raw_gradient != nullptr) {
+                        raw_gradient = Tensor::zeros(prediction.shape(), Device::GPU);
+                        table->add_raw_gradient(saved, raw_gradient);
+                    }
                     const std::string prefix = std::format("photo.edge.{}.{}.{}.{}.{}", n, h, w, zero_mask, path.name);
                     keep(out.snapshot, backend, prefix + ".loss", loss, kReduce);
                     keep(out.snapshot, backend, prefix + ".gradient", grad, kReduce);
@@ -2399,9 +2403,9 @@ namespace {
     }
 
     TEST(TrainingOpsFastParity, NonzeroImageGradientAndFusedAdamVulkan) {
-        ASSERT_NE(lfs::training::training_ops(GpuBackend::Vulkan).fast, nullptr);
         if (!lfs::core::gpu_backend_available(GpuBackend::CUDA) || !lfs::core::gpu_backend_available(GpuBackend::Vulkan))
             GTEST_SKIP() << "CUDA and Vulkan devices required";
+        ASSERT_NE(lfs::training::training_ops(GpuBackend::Vulkan).fast, nullptr);
         for (int degree : {0, 1, 2, 3})
             for (bool mip : {false, true})
                 for (bool old_momentum : {false, true}) {

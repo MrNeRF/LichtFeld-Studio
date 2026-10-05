@@ -61,6 +61,7 @@ Pull narrower resources only when needed:
 - for reusable parts, add stable sockets with `nodes_interface_add`, select a connected subset with `nodes_group_make`, then use `nodes_group_set_graph` or `nodes_group_make_single_user` for instances; inspect resolved sockets before linking
 - use `nodes_editor_enter_group` / `nodes_editor_exit_group` to edit the referenced graph in context, and verify the breadcrumb in `lichtfeld://nodes/editor`
 - inspect `lichtfeld://nodes/stacks/<scene UUID>` before `nodes_modifier_apply`; changes use shared undo/redo
+- start discoverable workflows with `nodes.template_list` and `nodes.template_apply`; every apply creates a fresh graph
 
 ### Load Dataset And Train
 

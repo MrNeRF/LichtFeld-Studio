@@ -34,7 +34,6 @@
     "libdeflate",
     "libjpeg-turbo",
     "libpng",
-    "libplacebo",
     "libwebp",
     "nanobind",
     {
@@ -54,35 +53,11 @@
         "svg"
       ]
     },
-    {
-      "name": "sdl3",
-      "features": [
-        "vulkan"
-      ]
-    },
+    "sdl3",
     "spdlog",
     "tbb",
     "tiff",
     "openexr",
-    "vulkan",
-    {
-      "name": "vulkan-loader",
-      "features": [
-        "wayland",
-        "xcb",
-        "xlib"
-      ],
-      "platform": "linux"
-    },
-    "vulkan-memory-allocator",
-    "volk",
-    {
-      "name": "glslang",
-      "features": [
-        "tools",
-        "opt"
-      ]
-    },
     {
       "name": "shader-slang",
       "host": true
@@ -91,6 +66,28 @@
     "zstd"
   ],
   "features": {
+    "vulkan": {
+      "description": "Vulkan application and tensor backends",
+      "dependencies": [
+        "vulkan",
+        {
+          "name": "vulkan-loader",
+          "features": ["wayland", "xcb", "xlib"],
+          "platform": "linux"
+        },
+        "vulkan-memory-allocator",
+        "volk",
+        "libplacebo",
+        {
+          "name": "glslang",
+          "features": ["tools", "opt"]
+        },
+        {
+          "name": "sdl3",
+          "features": ["vulkan"]
+        }
+      ]
+    },
     "tests": {
       "description": "Dependencies used only by the C++ test targets",
       "dependencies": [

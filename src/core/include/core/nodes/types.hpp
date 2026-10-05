@@ -87,6 +87,18 @@ namespace lfs::nodes {
         [[nodiscard]] core::Device device() const;
     };
 
+    // The identity covers every tensor, attribute and scalar a field can read. Tensor handle ids are
+    // never reused, so equal identities mean equal contents for as long as a memo lives.
+    LFS_CORE_API FieldContext field_context(const SplatsComponent&);
+    LFS_CORE_API FieldContext field_context(const PointsComponent&);
+    LFS_CORE_API FieldContext field_context(const MeshComponent&);
+    // The first of splats, points and mesh.
+    LFS_CORE_API std::optional<FieldContext> field_context(const Geometry&);
+
+    // Positions by the transform, normals by its inverse transpose and tangents by its linear part, both
+    // renormalised; a mirroring transform flips the tangent handedness.
+    LFS_CORE_API std::shared_ptr<core::MeshData> transform_mesh(const core::MeshData&, const glm::mat4& matrix);
+
     class Field;
 
     struct LFS_CORE_API FieldMemo {

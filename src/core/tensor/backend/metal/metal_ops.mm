@@ -2213,9 +2213,10 @@ namespace lfs::core::internal {
                              const StorageRef next, const StorageRef output, const size_t count,
                              const size_t buckets, const float radius, const bool exclude_self,
                              const std::optional<StorageRef> queries, const int32_t max_count, const bool spacing = false,
-                             const std::optional<StorageRef> values = std::nullopt) {
+                             const std::optional<StorageRef> values = std::nullopt,
+                             const std::optional<StorageRef> radii = std::nullopt) {
         struct RadiusParams {
-            uint64_t points, references, heads, next, output, queries, values;
+            uint64_t points, references, heads, next, output, queries, values, radii;
             uint32_t count, bucket_mask;
             float radius;
             uint32_t exclude_self;
@@ -2230,6 +2231,7 @@ namespace lfs::core::internal {
             .output = address_of(*context, output),
             .queries = queries ? address_of(*context, *queries) : 0,
             .values = values ? address_of(*context, *values) : 0,
+            .radii = radii ? address_of(*context, *radii) : 0,
             .count = checked_u32(count, "Metal radius query count exceeds uint32"),
             .bucket_mask = checked_u32(buckets - 1, "Metal radius bucket count exceeds uint32"),
             .radius = radius,
@@ -2240,6 +2242,8 @@ namespace lfs::core::internal {
             uses.push_back(*queries);
         if (values)
             uses.push_back(*values);
+        if (radii)
+            uses.push_back(*radii);
         const size_t batch = exclude_self && !max_count ? 8192 : count;
         for (size_t begin = 0; begin < count; begin += batch) {
             params.query_begin = static_cast<uint32_t>(begin);
@@ -2318,10 +2322,10 @@ namespace lfs::core::internal {
                                               const StorageRef references, const StorageRef heads,
                                               const StorageRef next, const StorageRef output,
                                               const size_t count, const size_t buckets, const float radius,
-                                              ExecContext) {
+                                              const std::optional<StorageRef> radii, ExecContext) {
         LFS_FACADE_TRACE(radius_neighbor_min);
         radius_query(points, references, heads, next, output, count, buckets, radius, false,
-                     std::nullopt, 0, false, values);
+                     std::nullopt, 0, false, values, radii);
     }
 
     void MetalBackendOps::rasterize_points(const PointRasterProgram& program, ExecContext) {

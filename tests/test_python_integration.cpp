@@ -976,7 +976,7 @@ TEST_F(PythonIntegrationTest, CaptureSplitComparisonPreservesPresentedOrientatio
             }
             const auto image = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::from_vector(
                 pixels, {3, height, width}, lfs::core::Device::CPU));
-            lfs::vis::VulkanSplitViewParams params;
+            lfs::vis::SplitViewCpuDesc params;
             params.left.image = params.right.image = image;
             params.left.flip_y = params.right.flip_y = flip_y;
             params.content_rect = {0, 0, width, height};

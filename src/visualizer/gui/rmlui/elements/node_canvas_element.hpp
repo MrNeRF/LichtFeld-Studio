@@ -101,6 +101,8 @@ namespace lfs::vis::gui {
         void highlightAddType(std::string_view id);
         void moveAddHighlight(int direction);
         void closeAddMenu();
+        void openTemplateBrowser();
+        void openTemplateSaveDialog(std::string tree_uuid);
         bool processHelpEvent(Rml::Event& event);
         void updateSidebar();
         void updateSelectionPreview();
@@ -135,6 +137,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] lfs::nodes::NodeTree* activeTree();
         [[nodiscard]] const lfs::nodes::NodeTree* activeTree() const;
         [[nodiscard]] bool editableMode() const;
+        [[nodiscard]] bool effectiveSidebarVisible() const { return sidebar_visible_ && activeTree(); }
         [[nodiscard]] std::array<float, 4> socketColor(std::string_view type) const;
         [[nodiscard]] std::string categoryColor(std::string_view category) const;
         [[nodiscard]] std::optional<core::Uuid> activeHost() const;
@@ -178,6 +181,7 @@ namespace lfs::vis::gui {
             std::string node;
         };
         std::vector<GroupPathEntry> group_path_;
+        std::string previewPath(std::string_view node) const;
         std::string active_modifier_uuid_;
         std::string host_uuid_;
         std::uint64_t last_generation_ = 0;

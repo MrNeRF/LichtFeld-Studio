@@ -7,7 +7,14 @@
 #include <array>
 
 namespace lfs::vis {
+#ifdef LFS_GRAPHICS_VULKAN
+    // Outputs are Vulkan-owned images exported to Metal for the Vulkan compositor.
     class VulkanContext;
+    using MetalViewportPresentation = VulkanContext;
+#else
+    // Outputs are native Metal textures; copyOutputs moves them into tensors.
+    struct MetalViewportPresentation {};
+#endif
     // Explicit adapter at the pre-existing desktop string-error boundary.
     // Native callers retain the structured Result/Status instead.
     template <class T>
@@ -16,8 +23,8 @@ namespace lfs::vis {
             [](const lfs::Error& error) { return lfs::format_for_developer(error); });
     }
 
-    // Native rasterization into Vulkan-owned textures exported to Metal for the desktop compositor.
-    // This boundary contains no Objective-C types, keeping Apple headers out of the
+    // Native rasterization into textures the compositor consumes: exported to
+    // Vulkan, or copied into image tensors for the tensor compositor. This boundary contains no Objective-C types, keeping Apple headers out of the
     // cross-platform viewport and Python bindings.
     class LFS_VIS_API MetalViewportRenderer {
     public:
@@ -40,14 +47,19 @@ namespace lfs::vis {
         lfs::Result<FrameDiagnostics> frameDiagnostics(RenderTargetId) const;
         void setLodSettings(size_t pool_splats, float vram_fraction, uint32_t fade_frames);
         static bool supportsSelection(const core::SplatData&, const SceneRenderer::SelectionMaskRequest&);
-        lfs::Result<core::Tensor> buildSelectionMask(VulkanContext&, const core::SplatData&, const SceneRenderer::SelectionMaskRequest&);
+        lfs::Result<core::Tensor> buildSelectionMask(MetalViewportPresentation&, const core::SplatData&, const SceneRenderer::SelectionMaskRequest&);
         static bool supportsPoints(const PointSceneRenderer::RenderRequest&);
         lfs::Result<PointSceneRenderer::RenderResult> renderPoints(
-            VulkanContext&, const PointSceneRenderer::RenderRequest&, RenderTargetId);
+            MetalViewportPresentation&, const PointSceneRenderer::RenderRequest&, RenderTargetId);
         lfs::Result<SceneRenderer::RenderResult> render(
-            VulkanContext&, const core::SplatData&, const rendering::ViewportRenderRequest&,
+            MetalViewportPresentation&, const core::SplatData&, const rendering::ViewportRenderRequest&,
             RenderTargetId, bool expected_depth = false, bool wait_for_pages = false);
         glm::ivec2 size(RenderTargetId) const;
+#ifndef LFS_GRAPHICS_VULKAN
+        // Copies the latest output into contiguous [H,W,4] UInt8 color and
+        // [H,W] Float32 depth tensors, ordered after its render on the GPU.
+        lfs::Status copyOutputs(RenderTargetId, core::Tensor& color, core::Tensor* depth) const;
+#endif
         // Explicit validation/readback boundary: waits for the native command and
         // distinguishes a complete image from capacity-overflow fallback output.
         lfs::Result<bool> outputComplete(RenderTargetId) const;

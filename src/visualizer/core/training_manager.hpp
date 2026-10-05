@@ -7,6 +7,7 @@
 #include "core/camera.hpp"
 #include "core/camera_metrics.hpp"
 #include "core/error_latch.hpp"
+#include "core/event_bridge/event_bridge.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_exportable_storage.hpp"
@@ -32,6 +33,8 @@ namespace lfs::training {
 #include <optional>
 #include <stop_token>
 #include <thread>
+#include <typeindex>
+#include <utility>
 #include <vector>
 
 namespace lfs::core {
@@ -46,7 +49,7 @@ namespace lfs::vis {
     // Forward declarations
     class VisualizerImpl;
     class ParameterManager;
-    class VulkanExternalTensorStorage;
+    class GraphicsExternalTensorStorage;
     class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
     class VisualizerImplResetTest_NewProjectWhileCompletionPendingStillErrors_Test;
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
@@ -136,6 +139,9 @@ namespace lfs::vis {
         [[nodiscard]] bool isPaused() const { return state_machine_.isInState(TrainingState::Paused); }
         [[nodiscard]] bool isFinished() const { return state_machine_.isInState(TrainingState::Finished); }
         [[nodiscard]] bool isTrainingActive() const { return state_machine_.isActive(); }
+        // Whether the training loop may still change the model: running, or paused or stopping before the
+        // loop has reached the iteration boundary where it honours the request.
+        [[nodiscard]] bool isModelChanging() const;
         [[nodiscard]] bool canStart() const { return canPerform(TrainingAction::Start); }
         [[nodiscard]] bool canPause() const { return canPerform(TrainingAction::Pause); }
         [[nodiscard]] bool canResume() const { return canPerform(TrainingAction::Resume); }
@@ -327,11 +333,13 @@ namespace lfs::vis {
         bool initialization_main_step_failed_ = false;
         std::atomic<bool> initialization_pause_requested_{false};
         std::jthread completion_reaper_;
+        // Handlers capture this, so the destructor removes them from the process-wide bridge.
+        std::vector<std::pair<std::type_index, lfs::event::HandlerId>> event_handlers_;
         VisualizerImpl* viewer_ = nullptr;
         core::Scene* scene_ = nullptr;
         std::function<bool(std::function<void()>, std::function<void()>)> test_scene_owner_poster_;
         std::optional<lfs::core::SplatExportableStorage> splat_storage_;
-        std::shared_ptr<VulkanExternalTensorStorage> splat_interop_parent_;
+        std::shared_ptr<GraphicsExternalTensorStorage> splat_interop_parent_;
         lfs::core::SplatTensorAllocator splat_interop_allocator_;
         // Nesting depth for densify-window Vulkan exclusion.
         int exportable_densify_barrier_depth_ = 0;

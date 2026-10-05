@@ -4,17 +4,8 @@
 
 #pragma once
 
-#include "core/export.hpp"
-
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <string>
-#include <vector>
-
-namespace lfs::core {
-    class Tensor;
-}
+#include "gui/ui_texture.hpp"
+#include <vulkan/vulkan.h>
 
 namespace lfs::vis {
     class VulkanContext;
@@ -22,63 +13,8 @@ namespace lfs::vis {
 
 namespace lfs::vis::gui {
 
-    LFS_VIS_API void setVulkanUiTextureContext(VulkanContext* context);
-    [[nodiscard]] LFS_VIS_API VulkanContext* getVulkanUiTextureContext();
-
-    class LFS_VIS_API VulkanUiTexture {
-    public:
-        VulkanUiTexture() = default;
-        ~VulkanUiTexture();
-
-        VulkanUiTexture(const VulkanUiTexture&) = delete;
-        VulkanUiTexture& operator=(const VulkanUiTexture&) = delete;
-
-        VulkanUiTexture(VulkanUiTexture&& other) noexcept;
-        VulkanUiTexture& operator=(VulkanUiTexture&& other) noexcept;
-
-        [[nodiscard]] bool upload(const std::uint8_t* pixels, int width, int height, int channels);
-        [[nodiscard]] bool uploadRegion(const std::uint8_t* pixels,
-                                        int texture_width,
-                                        int texture_height,
-                                        int x,
-                                        int y,
-                                        int width,
-                                        int height,
-                                        int channels);
-        struct Region {
-            const std::uint8_t* pixels = nullptr;
-            int texture_width = 0;
-            int texture_height = 0;
-            int x = 0;
-            int y = 0;
-            int width = 0;
-            int height = 0;
-            int channels = 0;
-        };
-        [[nodiscard]] bool uploadRegions(std::span<const Region> regions);
-        // flip_y: vertically mirror the image during upload. Set when the source tensor uses the
-        // rasterizer's OpenGL (bottom-left origin) convention but the Vulkan view samples
-        // top-left, e.g., the sequencer's RmlUi-bound preview textures.
-        [[nodiscard]] bool upload(const lfs::core::Tensor& image,
-                                  int expected_width,
-                                  int expected_height,
-                                  bool flip_y = false);
-        [[nodiscard]] std::uintptr_t textureId() const;
-        [[nodiscard]] bool valid() const;
-        // Build a Rml::Image src URL referencing this texture's image view and sampler.
-        // Same-size re-upload keeps the view and incarnation. Resize allocates a new
-        // image/view and a process-wide incarnation (URL `g=`), so RmlUi cannot reuse a
-        // cached descriptor when the driver recycles the view handle.
-        [[nodiscard]] std::string rmlSrcUrl(int width, int height) const;
-        void reset();
-
-    private:
-        friend LFS_VIS_API void setVulkanUiTextureContext(VulkanContext* context);
-        struct Impl;
-        static std::size_t serviceOrphanedImpls(bool wait);
-        static void orphanImpl(Impl* impl);
-        static std::vector<Impl*> orphaned_impls_;
-        Impl* impl_ = nullptr;
-    };
+    LFS_VIS_API void setUiTextureContext(VulkanContext* context);
+    [[nodiscard]] LFS_VIS_API VulkanContext* getUiTextureContext();
+    [[nodiscard]] LFS_VIS_API VkDescriptorSet referenceUiTextureDescriptor(const lfs::core::Tensor&);
 
 } // namespace lfs::vis::gui

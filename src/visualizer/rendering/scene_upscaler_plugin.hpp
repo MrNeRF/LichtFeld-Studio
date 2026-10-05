@@ -5,8 +5,11 @@
 #pragma once
 
 #include "core/export.hpp"
-#include "rendering/scene_upscaler_plugin_api.h"
 #include "rendering/scene_upscaler_registry.hpp"
+
+#ifdef LFS_GRAPHICS_VULKAN
+#include "rendering/scene_upscaler_plugin_api.h"
+#endif
 
 #include <cstdint>
 #include <filesystem>
@@ -33,6 +36,18 @@ namespace lfs::vis {
         RuntimeFailed,
     };
 
+    // Backend-neutral identity for one optional vendor plugin. The runtime ABI
+    // itself remains excluded from Metal-only builds below.
+    struct SceneUpscalerPluginInfo {
+        SceneUpscalerBackend backend;
+        std::string_view id;
+        std::string_view name;
+        std::string_view directory;
+        std::string_view library;
+        std::string_view cache_dir;
+    };
+
+#ifdef LFS_GRAPHICS_VULKAN
     /*
      * Allocates identities for one host process. Dynamic-capability plugins
      * use IDs above the legacy three-view range; older plugins are limited to
@@ -70,17 +85,6 @@ namespace lfs::vis {
         std::set<std::uint32_t> allocated_;
     };
 
-    // Identity of one optional vendor plugin. The host knows only where the
-    // module lives; everything else is negotiated through the plugin C ABI.
-    struct SceneUpscalerPluginInfo {
-        SceneUpscalerBackend backend;
-        std::string_view id;        // Required LfsSceneUpscalerPluginApiV1::plugin_id.
-        std::string_view name;      // Label for diagnostics before the module is loaded.
-        std::string_view directory; // Under <app>/scene_upscalers/.
-        std::string_view library;   // Module stem without platform prefix/suffix.
-        std::string_view cache_dir; // Under the user cache directory.
-    };
-
     class LFS_VIS_API SceneUpscalerPlugin final {
     public:
         explicit SceneUpscalerPlugin(const SceneUpscalerPluginInfo& info);
@@ -93,9 +97,7 @@ namespace lfs::vis {
         void configure(bool loading_enabled);
         [[nodiscard]] bool probe();
         [[nodiscard]] bool available();
-        [[nodiscard]] SceneUpscalerPluginState state() const;
         [[nodiscard]] std::string diagnostic() const;
-        [[nodiscard]] std::filesystem::path libraryPath() const;
         [[nodiscard]] bool hasCapability(LfsSceneUpscalerPluginCapability capability);
 
         [[nodiscard]] std::vector<std::string> requiredInstanceExtensions();
@@ -121,6 +123,20 @@ namespace lfs::vis {
         SceneUpscalerPluginInfo info_;
         Impl* impl_;
     };
+#else
+    // Vendor reconstruction plugins expose Vulkan objects in their ABI.  Keep
+    // that ABI entirely out of a Metal-only process while preserving the
+    // backend-neutral availability queries used by preferences and scripting.
+    class LFS_VIS_API SceneUpscalerPlugin final {
+    public:
+        explicit SceneUpscalerPlugin(const SceneUpscalerPluginInfo& info) : info_(info) {}
+        [[nodiscard]] const SceneUpscalerPluginInfo& info() const noexcept { return info_; }
+        [[nodiscard]] constexpr bool available() const noexcept { return false; }
+
+    private:
+        SceneUpscalerPluginInfo info_;
+    };
+#endif
 
     // Every optional plugin backend the host knows how to discover.
     [[nodiscard]] LFS_VIS_API std::span<SceneUpscalerPlugin* const> sceneUpscalerPlugins();

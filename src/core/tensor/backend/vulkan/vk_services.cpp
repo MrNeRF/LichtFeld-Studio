@@ -122,6 +122,10 @@ namespace lfs::core::internal {
         }
     }
 
+    void VulkanBackendOps::hold_freed_memory(const bool hold) {
+        acquire_vulkan_context()->memory().hold_freed(hold);
+    }
+
     MemoryInfo VulkanBackendOps::stats() {
         return acquire_vulkan_context()->memory().stats();
     }

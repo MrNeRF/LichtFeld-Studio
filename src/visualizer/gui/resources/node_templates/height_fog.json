@@ -1,0 +1,317 @@
+{
+  "schema_version": 1,
+  "id": "height_fog",
+  "name": "Height fog",
+  "description": "Blend low geometry towards a pale fog colour using a directional height field.",
+  "category": "Colour",
+  "scene_kinds": [
+    "splat",
+    "mesh",
+    "points"
+  ],
+  "adjust": "Set Origin near ground level, Up to the scene up axis, and Fog Top above the desired layer.",
+  "tree": {
+    "schema_version": 1,
+    "uuid": "builtin.height_fog",
+    "name": "Height fog",
+    "tree_type": "lfs.geometry",
+    "nodes": [
+      {
+        "name": "Group Input",
+        "type_id": "lfs.group_input",
+        "location": [
+          -760,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Group Output",
+        "type_id": "lfs.group_output",
+        "location": [
+          520,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "none"
+          }
+        },
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Position",
+        "type_id": "lfs.position",
+        "location": [
+          -620,
+          -260
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Relative",
+        "type_id": "lfs.vector_math",
+        "location": [
+          -420,
+          -260
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "operation": "subtract"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Height",
+        "type_id": "lfs.vector_math",
+        "location": [
+          -200,
+          -260
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "operation": "dot"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Density",
+        "type_id": "lfs.map_range",
+        "location": [
+          20,
+          -220
+        ],
+        "muted": false,
+        "input_values": {
+          "From Min": {
+            "type": "float",
+            "value": 0
+          },
+          "From Max": {
+            "type": "float",
+            "value": 1.5
+          },
+          "To Min": {
+            "type": "float",
+            "value": 0.5
+          },
+          "To Max": {
+            "type": "float",
+            "value": 0
+          }
+        },
+        "properties": {
+          "clamp": true
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Fog",
+        "type_id": "lfs.set_colour",
+        "location": [
+          260,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "geometry"
+          },
+          "Colour": {
+            "type": "vec4",
+            "value": [
+              0.78,
+              0.82,
+              0.88,
+              1
+            ]
+          }
+        },
+        "properties": {
+          "clear_view_dependent": true
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Adjust these settings",
+        "type_id": "lfs.frame",
+        "location": [
+          -620,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "colour": "neutral",
+          "label": "Adjust these settings",
+          "note": "Set Origin near ground level, Up to the scene up axis, and Fog Top above the desired layer."
+        },
+        "ui": {},
+        "version": 1
+      }
+    ],
+    "links": [
+      {
+        "from_node": "Group Input",
+        "from_socket": "Geometry",
+        "to_node": "Fog",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Position",
+        "from_socket": "Position",
+        "to_node": "Relative",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Relative",
+        "from_socket": "Vector",
+        "to_node": "Height",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Height",
+        "from_socket": "Value",
+        "to_node": "Density",
+        "to_socket": "Value"
+      },
+      {
+        "from_node": "Density",
+        "from_socket": "Result",
+        "to_node": "Fog",
+        "to_socket": "Selection"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Origin",
+        "to_node": "Relative",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Up",
+        "to_node": "Height",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Fog Top",
+        "to_node": "Density",
+        "to_socket": "From Max"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Fog Colour",
+        "to_node": "Fog",
+        "to_socket": "Colour"
+      },
+      {
+        "from_node": "Fog",
+        "from_socket": "Geometry",
+        "to_node": "Group Output",
+        "to_socket": "Geometry"
+      }
+    ],
+    "interface": {
+      "inputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        },
+        {
+      "identifier": "Origin",
+      "label": "Origin",
+      "type": "lfs.vector",
+          "default": {
+            "type": "vec3",
+            "value": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        {
+      "identifier": "Up",
+      "label": "Up",
+      "type": "lfs.vector",
+          "default": {
+            "type": "vec3",
+            "value": [
+              0,
+              0,
+              1
+            ]
+          }
+        },
+        {
+          "identifier": "Fog Top",
+          "label": "Fog Top",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 1.5
+          },
+          "min": -100,
+          "max": 100,
+          "step": 0.1
+        },
+        {
+      "identifier": "Fog Colour",
+      "label": "Fog Colour",
+      "type": "lfs.colour",
+          "default": {
+            "type": "vec4",
+            "value": [
+              0.78,
+              0.82,
+              0.88,
+              1
+            ]
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        }
+      ]
+    }
+  }
+}

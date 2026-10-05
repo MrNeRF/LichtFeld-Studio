@@ -287,7 +287,7 @@ target_link_libraries(lfs_py PRIVATE
     $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::curand>
     $<$<NOT:$<PLATFORM_ID:Darwin>>:SDL3::SDL3>
     ${CMAKE_DL_LIBS}
-    GPUOpen::VulkanMemoryAllocator
+    $<$<BOOL:${LFS_USE_VULKAN}>:GPUOpen::VulkanMemoryAllocator>
     $<IF:$<PLATFORM_ID:Windows>,RmlUi::RmlUi,lfs_rmlui>
 )
 if(APPLE)

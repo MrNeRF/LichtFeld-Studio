@@ -773,6 +773,22 @@ ALLOWLIST: tuple[AllowlistEntry, ...] = (
         reason="the sanctioned legacy string bridge's own declaration",
         expiry="post-campaign (expected-string workoff)",
     ),
+    AllowlistEntry(
+        rule="expected-string",
+        file="src/rendering/mesh2splat_unavailable.cpp",
+        line_pattern=r"std::expected",
+        owner="metal-phase-2",
+        reason="the unavailable implementation must preserve the legacy mesh2splat public signature",
+        expiry="when mesh2splat migrates to structured errors",
+    ),
+    AllowlistEntry(
+        rule="expected-string",
+        file="src/visualizer/rendering/rendering_manager_tensor.cpp",
+        line_pattern=r"std::expected",
+        owner="metal-phase-2",
+        reason="Metal overrides preserve the legacy rendering-manager virtual signatures",
+        expiry="when rendering-manager results migrate to structured errors",
+    ),
 )
 
 

@@ -21,6 +21,7 @@
 #include "gui/rml_progress_overlay.hpp"
 #include "gui/rml_shell_frame.hpp"
 #include "gui/rml_status_bar.hpp"
+#include "gui/rml_template_browser.hpp"
 #include "gui/rml_toast_overlay.hpp"
 #include "gui/rml_viewport_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -32,8 +33,8 @@
 #include "gui/startup_overlay.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/drag_drop_native.hpp"
-#include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/render_target_id.hpp"
+#include "rendering/viewport_reference_renderer.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 
@@ -51,7 +52,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <vulkan/vulkan.h>
 
 struct SDL_Cursor;
 
@@ -59,7 +59,7 @@ namespace lfs::vis {
     class WindowInputDispatchTest;
     class VisualizerImpl;
     class WindowManager;
-    class VulkanImportErrorScope;
+    class GraphicsImportErrorScope;
     class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
     class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
     class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -113,7 +113,7 @@ namespace lfs::vis {
             void shutdown();
             // Drop viewport-pass GPU objects (descriptor sets that sample external
             // scene image views) while the Vulkan context is still alive.
-            void shutdownVulkanViewportPass();
+            void shutdownViewportCompositors();
             [[nodiscard]] bool render();
             void updateInteractiveTransitions();
             [[nodiscard]] bool isInteractiveTransitionSettling() const;
@@ -143,6 +143,7 @@ namespace lfs::vis {
             [[nodiscard]] AsyncTaskManager& asyncTasks() { return async_tasks_; }
             [[nodiscard]] const AsyncTaskManager& asyncTasks() const { return async_tasks_; }
             void enqueueModal(lfs::core::ModalRequest request);
+            void openTemplateBrowser(core::Uuid target, std::string save_tree = {});
             [[nodiscard]] RmlModalOverlay* modalOverlay() { return rml_modal_overlay_.get(); }
             [[nodiscard]] const RmlModalOverlay* modalOverlay() const {
                 return rml_modal_overlay_.get();
@@ -265,7 +266,7 @@ namespace lfs::vis {
 
         private:
             std::string import_render_error_;
-            std::unique_ptr<VulkanImportErrorScope> import_error_capture_;
+            std::unique_ptr<GraphicsImportErrorScope> import_error_capture_;
             friend class lfs::vis::WindowInputDispatchTest;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
             friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
@@ -290,8 +291,8 @@ namespace lfs::vis {
             [[nodiscard]] ViewportLayout activeViewportLayout(const ScreenState& screen) const;
             void syncEditorFlags();
             void applyScreenCursor(screen::GestureCursor cursor);
-            [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(ViewId id, VkExtent2D extent,
-                                                                             std::size_t frame_slot) const;
+            [[nodiscard]] ViewportFrameDesc buildViewportFrameDesc(
+                ViewId id, glm::uvec2 extent, std::size_t frame_slot) const;
 
             void setupEventHandlers();
             void applyDefaultStyle();
@@ -355,7 +356,7 @@ namespace lfs::vis {
 
             [[nodiscard]] bool isVramHudOverlayVisible() const;
             [[nodiscard]] PanelAnimationVisibility panelAnimationVisibility() const;
-            [[nodiscard]] bool drainVulkanFramesForInteractiveTransition(
+            [[nodiscard]] bool drainGraphicsFramesForInteractiveTransition(
                 lfs::vis::WindowManager& window_manager,
                 const char* transition_name);
             void applyInteractiveTransitionCooldown(
@@ -398,6 +399,7 @@ namespace lfs::vis {
 
             // Owned components
             std::unique_ptr<RmlModalOverlay> rml_modal_overlay_;
+            std::unique_ptr<RmlTemplateBrowser> rml_template_browser_;
             std::unique_ptr<RmlProgressOverlay> rml_progress_overlay_;
             std::unique_ptr<RmlToastOverlay> rml_toast_overlay_;
             std::unique_ptr<lfs::gui::IVideoExtractorWidget> video_widget_;
@@ -487,8 +489,8 @@ namespace lfs::vis {
 
             // RmlUI integration
             RmlUIManager rmlui_manager_;
-            std::shared_ptr<lfs::vis::SharedViewportGpuAssets> viewport_gpu_assets_;
-            std::unordered_map<ViewId, std::unique_ptr<lfs::vis::VulkanViewportPass>> vulkan_viewport_passes_;
+            std::shared_ptr<lfs::vis::ViewportReferenceResources> viewport_compositor_resources_;
+            std::unordered_map<ViewId, std::unique_ptr<lfs::vis::ViewportReferenceRenderer>> viewport_compositors_;
             std::unordered_map<ViewId, RenderTargetId> viewport_pass_targets_;
             std::unordered_map<ViewId, std::vector<LineRendererCommand>> view_overlay_commands_;
             bool vulkan_gui_ = false;

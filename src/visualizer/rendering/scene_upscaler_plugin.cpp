@@ -132,7 +132,6 @@ namespace lfs::vis {
         const LfsSceneUpscalerPluginApiV1* api = nullptr;
         void* plugin = nullptr;
         SceneUpscalerPluginState state = SceneUpscalerPluginState::Unprobed;
-        std::filesystem::path library_path;
         std::wstring application_data_path;
         std::wstring plugin_directory;
         std::string diagnostic;
@@ -190,7 +189,6 @@ namespace lfs::vis {
             optimal_settings_cache.reset();
             unloadLibrary(library);
             library = nullptr;
-            library_path.clear();
             application_data_path.clear();
             plugin_directory.clear();
         }
@@ -239,7 +237,6 @@ namespace lfs::vis {
                 LOG_WARN("Optional {} plugin is invalid: {}", info.name, diagnostic);
                 return false;
             }
-            library_path = candidate;
 
             const auto get_api = reinterpret_cast<LfsSceneUpscalerGetPluginApiV1Fn>(
                 loadSymbol(library, LFS_SCENE_UPSCALER_PLUGIN_ENTRY_V1));
@@ -365,19 +362,9 @@ namespace lfs::vis {
 
     bool SceneUpscalerPlugin::available() { return probe(); }
 
-    SceneUpscalerPluginState SceneUpscalerPlugin::state() const {
-        std::scoped_lock lock(impl_->mutex);
-        return impl_->state;
-    }
-
     std::string SceneUpscalerPlugin::diagnostic() const {
         std::scoped_lock lock(impl_->mutex);
         return impl_->diagnostic;
-    }
-
-    std::filesystem::path SceneUpscalerPlugin::libraryPath() const {
-        std::scoped_lock lock(impl_->mutex);
-        return impl_->library_path;
     }
 
     std::vector<std::string> SceneUpscalerPlugin::requiredInstanceExtensions() {

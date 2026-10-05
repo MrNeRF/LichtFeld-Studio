@@ -9,6 +9,7 @@
 #include "core/tensor_procedural.hpp"
 #include "core/tensor_random.hpp"
 #include "core/tensor_spatial.hpp"
+#include "io/formats/ply.hpp"
 #include "visualizer/nodes/camera_nodes.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -17,13 +18,16 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <limits>
 #include <numbers>
+#include <numeric>
 #include <optional>
 #include <random>
+#include <set>
 #include <string_view>
 
 namespace {
@@ -154,7 +158,7 @@ namespace {
 
         Tensor field_result(std::string_view id, std::string_view socket, std::string_view socket_type,
                             Geometry geometry, std::function<void(Node&)> configure = {}, EvalHost* eval_host = nullptr,
-                            std::optional<Device> execution_device = {}) {
+                            std::optional<Device> execution_device = {}, const bool round_trip = false) {
             Tensor value;
             NodeTypeInfo capture;
             capture.id = "test.capture";
@@ -177,6 +181,8 @@ namespace {
             EXPECT_TRUE(tree.add_link({"Field", std::string(socket), "Capture", "Value"}));
             EXPECT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Capture", "Geometry"}));
             EXPECT_TRUE(tree.add_link({"Capture", "Geometry", tree.output_node().name, "Geometry"}));
+            if (round_trip)
+                tree = NodeTree::from_json(tree.to_json(), registry_);
             const auto result = lfs::nodes::evaluate(tree, {geometry, {}, 1, execution_device.value_or(device())}, eval_host);
             if (!result.ok)
                 for (const auto& [name, message] : result.errors)
@@ -737,6 +743,105 @@ namespace {
         EXPECT_EQ(result.geometry.mesh->mesh->submeshes[1].start_index, 3u);
     }
 
+    TEST_P(NodesCore, MeshAttributesSurviveDeviceTransferAndJoin) {
+        auto mesh_a = std::make_shared<lfs::core::MeshData>(tensor({0, 0, 0, 1, 0, 0, 0, 1, 0}, {3, 3}).cpu(),
+                                                            ints({0, 1, 2}, {1, 3}).cpu());
+        auto mesh_b = std::make_shared<lfs::core::MeshData>(tensor({0, 0, 1, 1, 0, 1, 0, 1, 1}, {3, 3}).cpu(),
+                                                            ints({0, 1, 2}, {1, 3}).cpu());
+        Geometry a, b;
+        a.mesh = MeshComponent{mesh_a};
+        a.mesh->attributes["a"] = Tensor::full({3}, 7.0f, Device::CPU);
+        b.mesh = MeshComponent{mesh_b};
+        NodeTypeInfo info;
+        info.id = "test.mesh_b";
+        info.outputs.push_back({"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)});
+        info.evaluate = [b](NodeContext& context) { context.set_output("Geometry", b); };
+        registry_.unregister_type(info.id);
+        ASSERT_TRUE(registry_.register_type(std::move(info)));
+        NodeTree tree(registry_);
+        tree.add_node("test.mesh_b", "B");
+        tree.add_node("lfs.join_geometry", "Join");
+        Node& read = tree.add_node("lfs.named_attribute", "Read");
+        read.input_values["Name"] = std::string("a");
+        Node& copy = tree.add_node("lfs.store_named_attribute", "Copy");
+        copy.input_values["Name"] = std::string("copy");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Join", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"B", "Geometry", "Join", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Join", "Geometry", "Copy", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Read", "Attribute", "Copy", "Value"}));
+        ASSERT_TRUE(tree.add_link({"Copy", "Geometry", tree.output_node().name, "Geometry"}));
+        const auto result = evaluate(tree, {a, {}, 1, device()});
+        registry_.unregister_type("test.mesh_b");
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
+        ASSERT_TRUE(result.geometry.mesh);
+        const auto& attributes = result.geometry.mesh->attributes;
+        ASSERT_TRUE(attributes.contains("a"));
+        EXPECT_EQ(attributes.at("a").device(), device());
+        EXPECT_EQ(host<float>(attributes.at("a")), (std::vector<float>{7, 7, 7, 0, 0, 0}));
+        EXPECT_EQ(host<float>(attributes.at("copy")), (std::vector<float>{7, 7, 7, 0, 0, 0}));
+    }
+
+    TEST_P(NodesCore, MeshTransformsCarryNormalsAndTangents) {
+        auto source = std::make_shared<lfs::core::MeshData>(tensor({0, 0, 0, 1, 0, 0, 0, 1, 0}, {3, 3}),
+                                                            ints({0, 1, 2}, {1, 3}));
+        const float diagonal = std::sqrt(0.5f);
+        source->normals = tensor({0, 0, 1, 0, 0, 1, diagonal, diagonal, 0}, {3, 3});
+        source->tangents = tensor({1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, -1}, {3, 4});
+        const auto close = [](const std::vector<float>& actual, const std::vector<float>& expected) {
+            ASSERT_EQ(actual.size(), expected.size());
+            for (size_t i = 0; i < actual.size(); ++i)
+                EXPECT_NEAR(actual[i], expected[i], 1e-5f) << "element " << i;
+        };
+
+        // A quarter turn about Y takes +Z to +X and +X to -Z.
+        const auto turned = transform_mesh(*source, rotation_matrix(glm::vec3(0, 90, 0)));
+        close(host<float>(turned->normals), {1, 0, 0, 1, 0, 0, 0, diagonal, -diagonal});
+        close(host<float>(turned->tangents), {0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, -1});
+
+        // A stretching mirror: normals by the inverse transpose, tangent handedness flipped.
+        const auto mirrored = transform_mesh(*source, glm::scale(glm::mat4(1), glm::vec3(-2, 1, 1)));
+        const float x = -0.5f / std::sqrt(1.25f), y = 1.0f / std::sqrt(1.25f);
+        close(host<float>(mirrored->vertices), {0, 0, 0, -2, 0, 0, 0, 1, 0});
+        close(host<float>(mirrored->normals), {0, 0, 1, 0, 0, 1, x, y, 0});
+        close(host<float>(mirrored->tangents), {-1, 0, 0, -1, -1, 0, 0, -1, -1, 0, 0, 1});
+
+        // Flattening keeps normals finite.
+        const auto flat = transform_mesh(*source, glm::scale(glm::mat4(1), glm::vec3(1, 1, 0)));
+        for (const float value : host<float>(flat->normals))
+            EXPECT_TRUE(std::isfinite(value));
+    }
+
+    TEST_P(NodesCore, TriangleRayIndexFindsPointsInsideAClosedMesh) {
+        const auto mesh = torus(48, 24);
+        const lfs::core::TriangleRayIndex index(mesh->vertices, mesh->indices);
+        std::mt19937 random(5);
+        std::uniform_real_distribution<float> across(-2.2f, 2.2f), along(-0.7f, 0.7f);
+        std::vector<float> points;
+        std::vector<bool> expected;
+        // Away from the faceted surface, the smooth torus decides inside.
+        while (expected.size() < 20000) {
+            const float x = across(random), y = across(random), z = along(random);
+            const float ring = std::sqrt(x * x + y * y) - 1.5f;
+            const float distance = std::sqrt(ring * ring + z * z);
+            if (std::abs(distance - 0.5f) < 0.03f)
+                continue;
+            points.insert(points.end(), {x, y, z});
+            expected.push_back(distance < 0.5f);
+        }
+        points.insert(points.end(), {std::numeric_limits<float>::quiet_NaN(), 0, 0, 1e30f, 0, 0});
+        expected.insert(expected.end(), {false, false});
+        const auto queries = tensor(points, {expected.size(), 3});
+        const auto inside = index.odd_crossings(queries);
+        EXPECT_EQ(inside.device(), device());
+        EXPECT_EQ(inside.cpu().to_vector_bool(), expected);
+        // Batches answer like one query.
+        const auto first = index.odd_crossings(queries.slice(0, 0, 777));
+        EXPECT_EQ(first.cpu().to_vector_bool(), std::vector<bool>(expected.begin(), expected.begin() + 777));
+
+        const lfs::core::TriangleRayIndex empty(mesh->vertices, ints({}, {0, 3}));
+        EXPECT_EQ(empty.odd_crossings(queries).cpu().to_vector_bool(), std::vector<bool>(expected.size(), false));
+    }
+
     TEST_P(NodesCore, DeleteSeparateAndStoredSelectionCarryAttributes) {
         NodeTree tree(registry_);
         Node &stored = tree.add_node("lfs.stored_selection"),
@@ -992,46 +1097,73 @@ namespace {
         }
     }
 
-    TEST_P(NodesCore, EveryGeometryBuiltinPassesEmptySplatsCleanly) {
-        Geometry empty;
-        empty.splats = SplatsComponent{Tensor::empty({0, 3}, device()),
-                                       Tensor::empty({0, 3}, device()),
-                                       Tensor::empty({0, 3, 3}, device()),
-                                       Tensor::empty({0, 3}, device()),
-                                       Tensor::empty({0, 4}, device()),
-                                       Tensor::empty({0}, device()),
-                                       1,
-                                       1,
-                                       {{"weight", Tensor::empty({0}, device())}}};
+    TEST_P(NodesCore, EveryGeometryBuiltinPassesEmptyGeometryCleanly) {
+        const auto empty_splats = [&](const int degree) {
+            const size_t rest = static_cast<size_t>((degree + 1) * (degree + 1) - 1);
+            return SplatsComponent{Tensor::empty({0, 3}, device()),
+                                   Tensor::empty({0, 3}, device()),
+                                   Tensor::empty({0, rest, 3}, device()),
+                                   Tensor::empty({0, 3}, device()),
+                                   Tensor::empty({0, 4}, device()),
+                                   Tensor::empty({0}, device()),
+                                   degree,
+                                   1,
+                                   {{"weight", Tensor::empty({0}, device())}}};
+        };
+        const PointsComponent empty_points{Tensor::empty({0, 3}, device()), Tensor::empty({0, 3}, device()), {{"weight", Tensor::empty({0}, device())}}};
+        MeshComponent empty_mesh{std::make_shared<lfs::core::MeshData>(Tensor::empty({0, 3}, device()),
+                                                                       Tensor::empty({0, 3}, device(), lfs::core::DataType::Int32))};
+        empty_mesh.attributes["weight"] = Tensor::empty({0}, device());
+        std::vector<std::pair<std::string, Geometry>> cases;
+        for (int degree = 0; degree <= 3; ++degree)
+            cases.emplace_back("splats degree " + std::to_string(degree), Geometry{empty_splats(degree), std::nullopt, std::nullopt});
+        cases.emplace_back("points", Geometry{std::nullopt, empty_points, std::nullopt});
+        cases.emplace_back("mesh", Geometry{std::nullopt, std::nullopt, empty_mesh});
+        cases.emplace_back("mixed", Geometry{empty_splats(2), empty_points, empty_mesh});
+        // Instance on Points takes splats as its instance whatever its points are.
+        NodeTypeInfo instance_type;
+        instance_type.id = "test.empty_splats";
+        instance_type.outputs.push_back({"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)});
+        instance_type.evaluate = [instance = Geometry{empty_splats(1), std::nullopt, std::nullopt}](NodeContext& context) {
+            context.set_output("Geometry", instance);
+        };
+        registry_.unregister_type(instance_type.id);
+        ASSERT_TRUE(registry_.register_type(std::move(instance_type)));
 
-        for (const auto& builtin : registry_.list()) {
-            if (!builtin->id.starts_with("lfs.") || builtin->id == "lfs.group_input" ||
-                builtin->id == "lfs.group_output")
-                continue;
-            const auto input = std::ranges::find(builtin->inputs, GEOMETRY_SOCKET, &SocketDecl::type);
-            const auto output = std::ranges::find(builtin->outputs, GEOMETRY_SOCKET, &SocketDecl::type);
-            if (input == builtin->inputs.end() || output == builtin->outputs.end())
-                continue;
-            SCOPED_TRACE(builtin->id);
-            NodeTree tree(registry_);
-            tree.add_node(builtin->id, "Builtin");
-            ASSERT_TRUE(tree.add_link(
-                {tree.input_node().name, "Geometry", "Builtin", input->identifier}));
-            if (builtin->id == "lfs.instance_on_points")
-                ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Builtin", "Instance"}));
-            ASSERT_TRUE(tree.add_link(
-                {"Builtin", output->identifier, tree.output_node().name, "Geometry"}));
-            const auto result = evaluate(tree, {empty, {}, 1});
-            ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
-                                                             : result.errors.begin()->second);
-            expect_finite(result.geometry);
-            if (result.geometry.splats)
-                EXPECT_EQ(result.geometry.splats->means.shape()[0], 0u);
-            if (result.geometry.points)
-                EXPECT_EQ(result.geometry.points->positions.shape()[0], 0u);
-            if (result.geometry.mesh && result.geometry.mesh->mesh)
-                EXPECT_EQ(result.geometry.mesh->mesh->vertex_count(), 0);
+        for (const auto& [label, empty] : cases) {
+            SCOPED_TRACE(label);
+            for (const auto& builtin : registry_.list()) {
+                if (!builtin->id.starts_with("lfs.") || builtin->id == "lfs.group_input" ||
+                    builtin->id == "lfs.group_output")
+                    continue;
+                const auto input = std::ranges::find(builtin->inputs, GEOMETRY_SOCKET, &SocketDecl::type);
+                const auto output = std::ranges::find(builtin->outputs, GEOMETRY_SOCKET, &SocketDecl::type);
+                if (input == builtin->inputs.end() || output == builtin->outputs.end())
+                    continue;
+                SCOPED_TRACE(builtin->id);
+                NodeTree tree(registry_);
+                tree.add_node(builtin->id, "Builtin");
+                ASSERT_TRUE(tree.add_link(
+                    {tree.input_node().name, "Geometry", "Builtin", input->identifier}));
+                if (builtin->id == "lfs.instance_on_points") {
+                    tree.add_node("test.empty_splats", "Instance");
+                    ASSERT_TRUE(tree.add_link({"Instance", "Geometry", "Builtin", "Instance"}));
+                }
+                ASSERT_TRUE(tree.add_link(
+                    {"Builtin", output->identifier, tree.output_node().name, "Geometry"}));
+                const auto result = evaluate(tree, {empty, {}, 1});
+                ASSERT_TRUE(result.ok) << (result.errors.empty() ? "no error text"
+                                                                 : result.errors.begin()->second);
+                expect_finite(result.geometry);
+                if (result.geometry.splats)
+                    EXPECT_EQ(result.geometry.splats->means.shape()[0], 0u);
+                if (result.geometry.points)
+                    EXPECT_EQ(result.geometry.points->positions.shape()[0], 0u);
+                if (result.geometry.mesh && result.geometry.mesh->mesh)
+                    EXPECT_EQ(result.geometry.mesh->mesh->vertex_count(), 0);
+            }
         }
+        registry_.unregister_type("test.empty_splats");
     }
 
     TEST(NodesCoreMetadata, OnlyAttributeNodesKeepElements) {
@@ -1342,6 +1474,70 @@ namespace {
         const auto& consumer = cache.nodes.at(opacity.name);
         ASSERT_TRUE(consumer.selection);
         EXPECT_EQ(consumer.selection->mask.cpu().to_vector_bool(), (std::vector<bool>{false, true, false}));
+    }
+
+    TEST_P(NodesCore, ConsumersRecordOnlySelectionsEvaluatedOnTheirInput) {
+        NodeTypeInfo info;
+        info.id = "test.select_moved";
+        info.inputs = {{"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)},
+                       {"Selection", "Selection", std::string(FLOAT_SOCKET), 1.0f, {}, {}, {}, true}};
+        info.outputs = {{"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)}};
+        info.evaluate = [](NodeContext& context) {
+            auto geometry = *context.input("Geometry").get_if<Geometry>();
+            geometry.splats->means = geometry.splats->means + 1.0f;
+            const auto domain = field_context(*geometry.splats);
+            context.record_selection(domain, context.evaluate_field("Selection", domain).ge(0.5f));
+            context.set_output("Geometry", geometry);
+        };
+        registry_.unregister_type(info.id);
+        ASSERT_TRUE(registry_.register_type(std::move(info)));
+        NodeTree tree(registry_);
+        Node& box = tree.add_node("lfs.box_selection");
+        box.input_values["Centre"] = glm::vec3(1, 0, 0);
+        box.input_values["Size"] = glm::vec3(0.5f);
+        const Node& node = tree.add_node("test.select_moved");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", node.name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({box.name, "Selection", node.name, "Selection"}));
+        ASSERT_TRUE(tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"}));
+        EvalCache cache;
+        ASSERT_TRUE(evaluate(tree, {splats(), {}, 7}, nullptr, &cache).ok);
+        // The mask covers moved positions, so it cannot stand in for a preview on the input.
+        EXPECT_FALSE(cache.nodes.at(node.name).selection);
+        registry_.unregister_type("test.select_moved");
+    }
+
+    TEST_P(NodesCore, SharedFieldsReadAttributesAsTheyAreAfterAnOverwrite) {
+        NodeTree tree(registry_);
+        // Node references do not survive later add_node calls; keep names.
+        const auto store = [&](const std::string& node_name, const std::string& name, const std::optional<float> value) {
+            Node& node = tree.add_node("lfs.store_named_attribute", node_name);
+            node.input_values["Name"] = name;
+            if (value)
+                node.input_values["Value"] = *value;
+            return node_name;
+        };
+        const auto first = store("First", "a", 1.0f);
+        const auto before = store("Before", "b", std::nullopt);
+        const auto overwrite = store("Overwrite", "a", 2.0f);
+        const auto after = store("After", "c", std::nullopt);
+        tree.add_node("lfs.named_attribute", "Read").input_values["Name"] = std::string("a");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", first, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({first, "Geometry", before, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({before, "Geometry", overwrite, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({overwrite, "Geometry", after, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({after, "Geometry", tree.output_node().name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Read", "Attribute", before, "Value"}));
+        ASSERT_TRUE(tree.add_link({"Read", "Attribute", after, "Value"}));
+        // Every copy of a mesh component shares its mesh, so a memo keyed on the mesh alone serves the
+        // first read of "a" to the second.
+        const auto mesh = torus(4, 3);
+        const auto result = evaluate(tree, {Geometry{std::nullopt, std::nullopt, MeshComponent{mesh}}, {}, 7, device()});
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
+        ASSERT_TRUE(result.geometry.mesh);
+        const auto& attributes = result.geometry.mesh->attributes;
+        const auto vertices = static_cast<size_t>(mesh->vertex_count());
+        EXPECT_EQ(host<float>(attributes.at("b")), std::vector<float>(vertices, 1.0f));
+        EXPECT_EQ(host<float>(attributes.at("c")), std::vector<float>(vertices, 2.0f));
     }
 
     TEST_P(NodesCore, PaintSelectionSoftnessEndpointsAndInvert) {
@@ -1681,6 +1877,53 @@ namespace {
         EXPECT_EQ(two_required.geometry.splats->means.shape()[0], 0u);
     }
 
+    // Fails if one collapsed splat (zero size) sets the radius range for all others: relative mode then counted
+    // no neighbours anywhere and Remove Floaters deleted every splat.
+    TEST_P(NodesCore, RemoveFloatersIgnoresACollapsedSplatInRelativeMode) {
+        auto geometry = splats();
+        geometry.splats->means = tensor({0, 0, 0, 0.01f, 0, 0, 10, 0, 0}, {3, 3});
+        const float small = std::log(0.1f), collapsed = -std::numeric_limits<float>::infinity();
+        geometry.splats->scaling = tensor({small, small, small, small, small, small, collapsed, collapsed, collapsed}, {3, 3});
+        const auto result = single("lfs.remove_floaters", geometry, [](Node& node) {
+            node.input_values["Min Opacity"] = 0.0f;
+        });
+        ASSERT_TRUE(result.ok);
+        EXPECT_EQ(host<float>(result.geometry.splats->attributes.at("weight")), (std::vector<float>{10, 20}));
+    }
+
+    // Fails if relative mode measures point clouds by their (absent) size instead of in scene units.
+    TEST_P(NodesCore, RelativeNeighbourCountUsesSceneUnitsOnPoints) {
+        Tensor value;
+        NodeTypeInfo capture;
+        capture.id = "test.capture_points";
+        capture.inputs = {{"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)},
+                          {"Value", "Value", std::string(INT_SOCKET), {}, {}, {}, {}, true}};
+        capture.outputs = {{"Geometry", "Geometry", std::string(GEOMETRY_SOCKET)}};
+        capture.evaluate = [&](NodeContext& context) {
+            const auto source = *context.input("Geometry").get_if<Geometry>();
+            const FieldContext domain{Domain::Point, nullptr, &*source.points, nullptr, 101};
+            value = context.evaluate_field("Value", domain, INT_SOCKET);
+            context.set_output("Geometry", source);
+        };
+        registry_.unregister_type(capture.id);
+        registry_.register_type(std::move(capture));
+        PointsComponent points;
+        points.positions = tensor({0, 0, 0, 0.5f, 0, 0}, {2, 3});
+        points.colors = tensor({1, 1, 1, 1, 1, 1}, {2, 3});
+        NodeTree tree(registry_);
+        auto& count = tree.add_node("lfs.neighbour_count", "Count");
+        count.input_values["Radius"] = 1.0f;
+        count.properties["relative_to_size"] = true;
+        tree.add_node("test.capture_points", "Capture");
+        ASSERT_TRUE(tree.add_link({"Count", "Count", "Capture", "Value"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Capture", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Capture", "Geometry", tree.output_node().name, "Geometry"}));
+        const auto result = lfs::nodes::evaluate(tree, {Geometry{std::nullopt, std::move(points), std::nullopt}, {}, 1, device()});
+        registry_.unregister_type("test.capture_points");
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
+        EXPECT_EQ(host<int>(value), (std::vector<int>{1, 1}));
+    }
+
     TEST_P(NodesCore, RadiusNeighborCountsMatchBruteForceWithCollisionsAndMasks) {
         constexpr size_t count = 257;
         std::mt19937 random(91);
@@ -1728,6 +1971,233 @@ namespace {
         EXPECT_EQ(empty.numel(), 0u);
     }
 
+    // Fails if components are cut short (the old label propagation stopped after 64 rounds, splitting long chains),
+    // if a point outside the selection still bridges two components, or if a backend labels differently.
+    // Fails if the indexed spacing query differs from the full one at the same points, or skips duplicates.
+    TEST_P(NodesCore, PerPointRadiusCountsMatchBruteForce) {
+        // A dense cluster, a sparse cloud and a far field with radii from a thousandth to tens of units, so
+        // tree boxes are skipped, counted whole and opened, around queries inside and outside the references.
+        std::mt19937 random(9133);
+        std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+        std::normal_distribution<float> normal(0.0f, 1.0f);
+        constexpr size_t count = 4000;
+        std::vector<float> xyz(count * 3), radii(count), references(count), queries(count);
+        for (size_t i = 0; i < count; ++i) {
+            const float pick = unit(random);
+            const float spread = pick < 0.5f ? 0.05f : pick < 0.8f ? 2.0f
+                                                                   : 10.0f;
+            const float offset = pick < 0.8f ? 0.0f : 40.0f;
+            xyz[i * 3] = offset + spread * normal(random);
+            xyz[i * 3 + 1] = spread * normal(random);
+            xyz[i * 3 + 2] = spread * normal(random);
+            radii[i] = std::exp(std::log(1e-3f) + unit(random) * (std::log(50.0f) - std::log(1e-3f)));
+            references[i] = unit(random) < 0.8f ? 1.0f : 0.0f;
+            queries[i] = unit(random) < 0.7f ? 1.0f : 0.0f;
+        }
+        std::copy_n(xyz.begin() + 3, 3, xyz.begin() + 6);
+        xyz[30] = std::numeric_limits<float>::quiet_NaN();
+        radii[5] = 0.0f;
+        radii[6] = -1.0f;
+        radii[7] = std::numeric_limits<float>::quiet_NaN();
+        radii[8] = std::numeric_limits<float>::infinity();
+        radii[9] = 1e-30f;
+        const auto finite = [&](size_t i) {
+            return std::isfinite(xyz[i * 3]) && std::isfinite(xyz[i * 3 + 1]) && std::isfinite(xyz[i * 3 + 2]);
+        };
+        // The library's inclusive test, each operation rounded on its own.
+        const auto within = [](const float* a, const float* b, const float radius) {
+            volatile float x = a[0] - b[0], y = a[1] - b[1], z = a[2] - b[2];
+            volatile float limit = radius * radius;
+            if (limit < std::numeric_limits<float>::min() || !std::isfinite(limit)) {
+                x = x / radius;
+                y = y / radius;
+                z = z / radius;
+                limit = 1.0f;
+            }
+            volatile float xx = x * x, yy = y * y, zz = z * z;
+            volatile float partial = xx + yy;
+            volatile float total = partial + zz;
+            return total <= limit;
+        };
+        const auto brute = [&](const bool masked_references) {
+            std::vector<int> counts(count, 0);
+            for (size_t i = 0; i < count; ++i) {
+                if (!finite(i) || !(radii[i] > 0.0f) || !std::isfinite(radii[i]))
+                    continue;
+                for (size_t j = 0; j < count; ++j)
+                    if (j != i && (!masked_references || references[j] != 0.0f) && finite(j) &&
+                        within(&xyz[i * 3], &xyz[j * 3], radii[i]))
+                        ++counts[i];
+            }
+            return counts;
+        };
+        const auto points = tensor(xyz, {count, 3});
+        const auto radius_tensor = tensor(radii, {count});
+        const auto query_mask = tensor(queries, {count}).to(lfs::core::DataType::Bool);
+        for (const bool masked_references : {false, true}) {
+            const auto counts = brute(masked_references);
+            const auto reference_mask = masked_references ? tensor(references, {count}).to(lfs::core::DataType::Bool)
+                                                          : Tensor::full_bool({count}, true, device());
+            for (const int32_t max_count : {1, 3, 7, 1 << 20}) {
+                SCOPED_TRACE(std::format("masked references {} max_count {}", masked_references, max_count));
+                std::vector<int> expected(count), expected_queried(count);
+                for (size_t i = 0; i < count; ++i) {
+                    expected[i] = std::min(counts[i], max_count);
+                    expected_queried[i] = queries[i] != 0.0f ? expected[i] : 0;
+                }
+                const auto all = lfs::core::radius_neighbor_counts(points, reference_mask, radius_tensor, max_count);
+                EXPECT_EQ(all.device(), device());
+                EXPECT_EQ(all.dtype(), lfs::core::DataType::Int32);
+                EXPECT_EQ(host<int>(all), expected);
+                EXPECT_EQ(host<int>(lfs::core::radius_neighbor_counts(points, reference_mask, radius_tensor, max_count,
+                                                                      &query_mask)),
+                          expected_queried);
+            }
+        }
+        // No usable reference at all.
+        const auto none = Tensor::zeros({count}, device(), lfs::core::DataType::Bool);
+        EXPECT_EQ(host<int>(lfs::core::radius_neighbor_counts(points, none, radius_tensor, 4)), std::vector<int>(count, 0));
+    }
+
+    TEST_P(NodesCore, MutualRadiusComponentsMatchBruteForce) {
+        // Clusters of different density with radii from a fraction of their spacing to far beyond it, so tree
+        // boxes are skipped for their largest radius as well as for the query's.
+        std::mt19937 random(4417);
+        std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+        std::normal_distribution<float> normal(0.0f, 1.0f);
+        constexpr size_t count = 3000;
+        std::vector<float> xyz(count * 3), radii(count);
+        for (size_t i = 0; i < count; ++i) {
+            const float pick = unit(random);
+            const float spread = pick < 0.6f ? 0.05f : pick < 0.9f ? 1.0f
+                                                                   : 8.0f;
+            for (int axis = 0; axis < 3; ++axis)
+                xyz[i * 3 + axis] = (axis == 0 && pick >= 0.9f ? 20.0f : 0.0f) + spread * normal(random);
+            radii[i] = std::exp(std::log(2e-3f) + unit(random) * (std::log(6.0f) - std::log(2e-3f)));
+        }
+        std::copy_n(xyz.begin() + 3, 3, xyz.begin() + 9);
+        xyz[30] = std::numeric_limits<float>::infinity();
+        radii[4] = 0.0f;
+        radii[5] = -1.0f;
+        radii[6] = std::numeric_limits<float>::quiet_NaN();
+        const auto within = [](const float* a, const float* b, const float radius) {
+            volatile float x = a[0] - b[0], y = a[1] - b[1], z = a[2] - b[2];
+            volatile float limit = radius * radius;
+            if (limit < std::numeric_limits<float>::min() || !std::isfinite(limit)) {
+                x = x / radius;
+                y = y / radius;
+                z = z / radius;
+                limit = 1.0f;
+            }
+            volatile float xx = x * x, yy = y * y, zz = z * z;
+            volatile float partial = xx + yy;
+            volatile float total = partial + zz;
+            return total <= limit;
+        };
+        const auto usable = [&](size_t i) {
+            return std::isfinite(xyz[i * 3]) && std::isfinite(xyz[i * 3 + 1]) && std::isfinite(xyz[i * 3 + 2]) &&
+                   radii[i] > 0.0f && std::isfinite(radii[i]);
+        };
+        std::vector<int> parent(count);
+        std::iota(parent.begin(), parent.end(), 0);
+        const auto root = [&](int x) {
+            while (parent[x] != x)
+                x = parent[x] = parent[parent[x]];
+            return x;
+        };
+        std::vector<int> degree(count);
+        for (size_t i = 0; i < count; ++i)
+            for (size_t j = i + 1; j < count; ++j)
+                if (usable(i) && usable(j) && within(&xyz[i * 3], &xyz[j * 3], radii[i]) &&
+                    within(&xyz[i * 3], &xyz[j * 3], radii[j])) {
+                    const int a = root(int(i)), b = root(int(j));
+                    parent[std::max(a, b)] = std::min(a, b);
+                    ++degree[i];
+                    ++degree[j];
+                }
+        // Walks hand out neighbours in batches of at most 64, so dense points take several.
+        EXPECT_GT(*std::max_element(degree.begin(), degree.end()), 256);
+        std::vector<int> expected(count);
+        for (size_t i = 0; i < count; ++i)
+            expected[i] = root(int(i));
+        const auto labels = lfs::core::mutual_radius_components(tensor(xyz, {count, 3}), tensor(radii, {count}));
+        EXPECT_EQ(labels.device(), device());
+        EXPECT_EQ(labels.dtype(), lfs::core::DataType::Int32);
+        EXPECT_EQ(host<int>(labels), expected);
+        EXPECT_GT(std::set<int>(expected.begin(), expected.end()).size(), 10u);
+        EXPECT_LT(std::set<int>(expected.begin(), expected.end()).size(), count / 2);
+    }
+
+    TEST_P(NodesCore, RadiusConnectedComponentsMatchBruteForce) {
+        const auto reference = [](const std::vector<float>& xyz, const std::vector<bool>& selected, const float radius) {
+            const size_t count = xyz.size() / 3;
+            std::vector<int> parent(count);
+            std::iota(parent.begin(), parent.end(), 0);
+            const auto root = [&](int x) {
+                while (parent[x] != x)
+                    x = parent[x] = parent[parent[x]];
+                return x;
+            };
+            for (size_t i = 0; i < count; ++i) {
+                if (!selected[i] || !std::isfinite(xyz[i * 3]) || !std::isfinite(xyz[i * 3 + 1]) || !std::isfinite(xyz[i * 3 + 2]))
+                    continue;
+                for (size_t j = i + 1; j < count; ++j) {
+                    if (!selected[j])
+                        continue;
+                    float squared = 0;
+                    for (int axis = 0; axis < 3; ++axis) {
+                        const float delta = xyz[i * 3 + axis] - xyz[j * 3 + axis];
+                        squared += delta * delta;
+                    }
+                    if (squared <= radius * radius) {
+                        const int a = root(int(i)), b = root(int(j));
+                        parent[std::max(a, b)] = std::min(a, b);
+                    }
+                }
+            }
+            std::vector<int> labels(count);
+            for (size_t i = 0; i < count; ++i)
+                labels[i] = root(int(i));
+            return labels;
+        };
+        const auto check = [&](const std::vector<float>& xyz, const std::vector<bool>& selected, const float radius) {
+            const size_t count = xyz.size() / 3;
+            const auto points = tensor(xyz, {count, 3});
+            const bool all = std::ranges::all_of(selected, [](bool value) { return value; });
+            std::vector<float> mask(selected.begin(), selected.end());
+            const auto actual = all ? lfs::core::radius_connected_components(points, radius)
+                                    : lfs::core::radius_connected_components(points, radius, tensor(mask, {count}).to(lfs::core::DataType::Bool));
+            EXPECT_EQ(actual.device(), device());
+            EXPECT_EQ(actual.dtype(), lfs::core::DataType::Int32);
+            EXPECT_EQ(host<int>(actual), reference(xyz, selected, radius));
+        };
+        std::mt19937 random(5171);
+        std::uniform_real_distribution<float> coordinate(-2.0f, 2.0f);
+        constexpr size_t count = 1500;
+        std::vector<float> xyz(count * 3);
+        for (auto& value : xyz)
+            value = coordinate(random);
+        std::copy_n(xyz.begin(), 3, xyz.begin() + 3);
+        xyz[30] = std::numeric_limits<float>::quiet_NaN();
+        std::vector<bool> every(count, true), some(count);
+        for (size_t i = 0; i < count; ++i)
+            some[i] = i % 7 != 0;
+        for (const float radius : {0.05f, 0.3f, 0.6f}) {
+            check(xyz, every, radius);
+            check(xyz, some, radius);
+        }
+        // A chain far longer than any fixed number of propagation rounds, cut once by the selection.
+        constexpr size_t chain = 5000;
+        std::vector<float> line(chain * 3, 0.0f);
+        for (size_t i = 0; i < chain; ++i)
+            line[i * 3] = 0.009f * static_cast<float>(chain - 1 - i);
+        std::vector<bool> cut(chain, true);
+        cut[2500] = false;
+        check(line, std::vector<bool>(chain, true), 0.01f);
+        check(line, cut, 0.01f);
+        EXPECT_EQ(lfs::core::radius_connected_components(Tensor::empty({0, 3}, device()), 1.0f).numel(), 0u);
+    }
+
     TEST_P(NodesCore, RadiusNeighborMinMatchesBruteForceForFloatAndInt) {
         constexpr size_t count = 193;
         std::mt19937 random(417);
@@ -1771,6 +2241,28 @@ namespace {
                                                  Tensor::empty({0}, device(), lfs::core::DataType::Int32), 1.0f)
                       .numel(),
                   0u);
+
+        std::vector<float> local_radii(count);
+        for (size_t i = 0; i < count; ++i)
+            local_radii[i] = std::ldexp(0.75f, int(i % 6) - 3);
+        auto expected = integers;
+        for (size_t i = 0; i < count; ++i)
+            for (size_t j = 0; j < count; ++j) {
+                float squared = 0;
+                for (int axis = 0; axis < 3; ++axis) {
+                    const float d = xyz[3 * i + axis] - xyz[3 * j + axis];
+                    squared += d * d;
+                }
+                const float radius = std::min(local_radii[i], local_radii[j]);
+                if (squared <= radius * radius)
+                    expected[i] = std::min(expected[i], integers[j]);
+            }
+        const auto radii = tensor(local_radii, {count});
+        const auto values = ints(integers, {count});
+        auto actual = values;
+        for (int octave = -3; octave <= 2; ++octave)
+            actual = actual.minimum(lfs::core::radius_neighbor_min(points, values, std::ldexp(1.0f, octave), &radii));
+        EXPECT_EQ(host<int>(actual), expected) << "Octaves must include every symmetric local-radius edge";
     }
 
     TEST_P(NodesCore, CurvesRampDistanceGradientAndNoiseEvaluateOnBackend) {
@@ -1848,6 +2340,57 @@ namespace {
         EXPECT_EQ(cleaned.geometry.splats->means.shape()[0], 3u);
         EXPECT_EQ(host<float>(cleaned.geometry.splats->attributes.at("weight")),
                   (std::vector<float>{1, 2, 3}));
+    }
+
+    TEST_P(NodesCore, RemoveClumpsPreservesTenfoldSurfaceDensityAndRejectsIsolatedClusters) {
+        std::vector<float> positions;
+        for (int patch = 0; patch < 2; ++patch) {
+            const float step = patch ? 0.0316227766f : 0.01f;
+            for (int y = 0; y < 20; ++y)
+                for (int x = 0; x < 20; ++x)
+                    positions.insert(positions.end(), {patch * 0.22f + x * step, y * step, 0.0f});
+        }
+        const auto surface = positions;
+        for (int cluster = 0; cluster < 4; ++cluster)
+            for (int point = 0; point < 8; ++point)
+                positions.insert(positions.end(), {cluster * 0.5f + (point & 1) * 0.002f,
+                                                   ((point >> 1) & 1) * 0.002f,
+                                                   2.0f + ((point >> 2) & 1) * 0.002f});
+        Geometry geometry;
+        geometry.points = PointsComponent{tensor(positions, {positions.size() / 3, 3}),
+                                          tensor(std::vector<float>(positions.size()), {positions.size() / 3, 3}),
+                                          {}};
+        const auto result = single("lfs.remove_clumps", geometry);
+        ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
+        ASSERT_TRUE(result.geometry.points);
+        EXPECT_EQ(host<float>(result.geometry.points->positions), surface);
+    }
+
+    TEST_P(NodesCore, RemoveClumpsFullSceneAcceptance) {
+        const auto* directory = std::getenv("LFS_NODE_SCENES_DIR");
+        if (!directory)
+            GTEST_SKIP() << "Set LFS_NODE_SCENES_DIR to the full garden/bicycle PLY fixture directory";
+        for (const auto& [name, limit, expected] : {
+                 std::tuple{"garden", 0.01, 992505u}, std::tuple{"bicycle", 0.02, 983348u}}) {
+            const auto loaded = lfs::io::load_ply(std::filesystem::path(directory) / (std::string(name) + ".ply"));
+            ASSERT_TRUE(loaded) << name;
+            auto geometry = geometry_from_splat_data(loaded->value);
+            geometry.splats->means = geometry.splats->means.to(device());
+            const auto count = geometry.splats->means.shape()[0];
+            ASSERT_EQ(count, 1'000'000u) << "The acceptance fixtures are the full 1M-splat captures";
+            for (int run = 0; run < 2; ++run) {
+                const auto begin = std::chrono::steady_clock::now();
+                const auto result = single("lfs.remove_clumps", geometry);
+                ASSERT_TRUE(result.ok);
+                const auto kept = host<float>(result.geometry.splats->means).size() / 3;
+                const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+                std::cout << "CLUMPS " << GetParam().name << ' ' << name << " run=" << run
+                          << " kept=" << kept << " removed=" << (count - kept)
+                          << " percent=" << (100.0 * (count - kept) / count) << " seconds=" << seconds << '\n';
+                EXPECT_EQ(kept, expected) << "CPU/Metal/Vulkan must retain identical element counts";
+                EXPECT_LE(double(count - kept) / count, limit);
+            }
+        }
     }
 
     TEST_P(NodesCore, MergeByDistanceAveragesPointsRemapsMeshAndKeepsOpaqueSplat) {
@@ -1944,9 +2487,12 @@ namespace {
         node.input_values["Rotation"] = glm::vec3(23, -31, 47);
         node.input_values["Scale"] = glm::vec3(0.7f, 1.2f, 1.8f);
         tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"});
-        const auto result = evaluate(tree, {{}, {}, 1});
+        const auto result = evaluate(tree, {{}, {}, 1, device()});
         ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
         ASSERT_TRUE(result.geometry.splats);
+        // CPU evaluation stays on the CPU; GPU evaluation stays on its backend.
+        EXPECT_EQ(result.geometry.splats->means.device(), device());
+        EXPECT_EQ(result.geometry.splats->shN.device(), device());
         EXPECT_EQ(result.geometry.splats->means.size(0), 6u);
         const glm::vec3 positions[] = {glm::vec3(2, 3, 4), glm::vec3(-1, 4, 2)};
         const auto rotation = glm::rotate(glm::mat4(1), glm::radians(47.0f), glm::vec3(0, 0, 1)) * glm::rotate(glm::mat4(1), glm::radians(-31.0f), glm::vec3(0, 1, 0)) * glm::rotate(glm::mat4(1), glm::radians(23.0f), glm::vec3(1, 0, 0));
@@ -1975,6 +2521,62 @@ namespace {
         const auto capped = evaluate(tree, {{}, {}, 4});
         EXPECT_FALSE(capped.ok);
         EXPECT_TRUE(std::ranges::any_of(capped.errors, [](const auto& entry) { return entry.second.find("50 million") != std::string::npos; }));
+    }
+
+    TEST_P(NodesCore, InstanceOnPointsKeepsShBeyondTheDegreeAndMatchesTheCpu) {
+        // Degree 1 with eight stored coefficients: the five beyond band 1 pass through unchanged, and a
+        // collapsed scale axis leaves every coefficient alone, on every device as on the CPU.
+        for (const glm::vec3 size : {glm::vec3(0.6f, 1.3f, 0.9f), glm::vec3(0.0f, 1.0f, 1.0f)}) {
+            SCOPED_TRACE(size.x);
+            const auto make = [&](const Device target) {
+                auto source = splats(1);
+                std::vector<float> sh(3 * 8 * 3);
+                for (size_t i = 0; i < sh.size(); ++i)
+                    sh[i] = 0.01f * float(i % 29) - 0.1f;
+                source.splats->shN = Tensor::from_vector(sh, {3, 8, 3}, Device::CPU).to(target);
+                source.splats->sh_degree = 1;
+                for (auto* value : {&source.splats->means, &source.splats->sh0, &source.splats->scaling,
+                                    &source.splats->rotation, &source.splats->opacity})
+                    *value = value->to(target);
+                for (auto& [_, value] : source.splats->attributes)
+                    value = value.to(target);
+                Geometry anchors;
+                anchors.points = PointsComponent{Tensor::from_vector(std::vector<float>{2, 3, 4, -1, 4, 2, 0, 0, 1}, {3, 3}, Device::CPU).to(target),
+                                                 Tensor::ones({3, 3}, target),
+                                                 {}};
+                NodeTree tree(registry_);
+                auto& node = tree.add_node("lfs.instance_on_points", "Scatter");
+                node.input_values["Points"] = anchors;
+                node.input_values["Instance"] = source;
+                node.input_values["Rotation"] = glm::vec3(23, -31, 47);
+                node.input_values["Scale"] = size;
+                tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"});
+                const auto result = evaluate(tree, {{}, {}, 1, target});
+                EXPECT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.begin()->second);
+                return std::pair{result.geometry.splats, sh};
+            };
+            const auto [actual, sh] = make(device());
+            const auto [expected, unused] = make(Device::CPU);
+            (void)unused;
+            ASSERT_TRUE(actual && expected);
+            const auto shn = host<float>(actual->shN);
+            ASSERT_EQ(shn.size(), 3u * sh.size());
+            for (size_t copy = 0; copy < 3; ++copy)
+                for (size_t row = 0; row < 3; ++row)
+                    for (size_t k = 3; k < 8; ++k)
+                        for (size_t c = 0; c < 3; ++c)
+                            EXPECT_EQ(shn[((copy * 3 + row) * 8 + k) * 3 + c], sh[(row * 8 + k) * 3 + c]);
+            if (size.x == 0)
+                EXPECT_EQ(shn, host<float>(expected->shN));
+            for (const auto& pair : {std::pair{actual->means, expected->means}, std::pair{actual->shN, expected->shN},
+                                     std::pair{actual->scaling, expected->scaling}, std::pair{actual->rotation, expected->rotation}}) {
+                const auto got = host<float>(pair.first), want = host<float>(pair.second);
+                ASSERT_EQ(got.size(), want.size());
+                for (size_t i = 0; i < want.size(); ++i)
+                    if (std::isfinite(want[i]) || std::isfinite(got[i]))
+                        EXPECT_NEAR(got[i], want[i], 2e-5f) << i;
+            }
+        }
     }
 
     TEST_P(NodesCore, InstanceOnPointsSupportsReflectionsAndCollapsedAxes) {
@@ -2448,6 +3050,17 @@ namespace {
             EXPECT_EQ(std::bit_cast<uint32_t>(golden[i]), bits[i]) << i;
     }
 
+    // Fails if serializing a graph drops an unconnected input's runtime default: Noise then samples an empty
+    // vector instead of the position, and the worker serializes graphs for every evaluation.
+    TEST_P(NodesCore, NoiseKeepsItsPositionDefaultThroughSerialization) {
+        auto geometry = splats();
+        geometry.splats->means = tensor({0, 0, 0, .123f, .27f, .38f, 1.5f, -2.25f, .75f}, {3, 3});
+        const auto direct = host<float>(field_result("lfs.noise_texture", "Fac", FLOAT_SOCKET, geometry));
+        const auto loaded = host<float>(field_result("lfs.noise_texture", "Fac", FLOAT_SOCKET, geometry, {}, nullptr, {}, true));
+        EXPECT_EQ(loaded, direct);
+        EXPECT_NE(direct[0], direct[1]);
+    }
+
     TEST_P(NodesCore, FusedPreciseDivisionMatchesCpu) {
         if (device() == Device::CPU)
             GTEST_SKIP() << "Fused kernel requires GPU";
@@ -2467,6 +3080,61 @@ namespace {
         const fused::Kernel kernel(builder);
         const auto actual = host<float>(kernel({expected.size()}, {tensor(numerator, {expected.size()}), tensor(denominator, {expected.size()})})[0]);
         EXPECT_EQ(actual, expected);
+    }
+
+    // Fails if precise division is not correctly rounded across the float range: subnormal inputs and results, the
+    // overflow boundary, signed zeros, infinities and NaN must match the CPU bit for bit.
+    TEST_P(NodesCore, FusedPreciseDivisionIsCorrectlyRoundedAcrossTheFloatRange) {
+        if (device() == Device::CPU)
+            GTEST_SKIP() << "Fused kernel requires GPU";
+        namespace fused = lfs::core::fused;
+        using lfs::core::DataType;
+        const auto bits = [](std::uint32_t value) { return std::bit_cast<float>(value); };
+        constexpr float inf = std::numeric_limits<float>::infinity();
+        const std::vector<float> special{0.0f, -0.0f, 1.0f, -1.0f, 3.0f, 0.1f, 7.0f, 1e-38f, 3e38f, inf, -inf,
+                                         std::numeric_limits<float>::quiet_NaN(), bits(1), bits(0x00400001u),
+                                         bits(0x007fffffu), bits(0x00800000u), bits(0x7f7fffffu)};
+        std::vector<float> numerator, denominator;
+        for (const float a : special) {
+            for (const float b : special) {
+                numerator.push_back(a);
+                denominator.push_back(b);
+            }
+        }
+        std::mt19937 random(2766);
+        std::uniform_int_distribution<std::uint32_t> any;
+        for (int i = 0; i < 1 << 16; ++i) {
+            numerator.push_back(bits(any(random)));
+            denominator.push_back(bits(any(random)));
+        }
+        // Quotient exponents around the subnormal range and the overflow boundary, where rounding shifts and carries.
+        std::uniform_int_distribution<std::uint32_t> fraction(0, 0x7fffffu), sign(0, 1);
+        for (const int exponent : {-160, -150, -149, -140, -127, -126, -125, 126, 127, 128}) {
+            for (int i = 0; i < 4096; ++i) {
+                const int ey = 1 + int(any(random) % 200);
+                const int ex = std::clamp(ey + exponent, 0, 254);
+                numerator.push_back(bits(sign(random) << 31 | std::uint32_t(ex) << 23 | fraction(random)));
+                denominator.push_back(bits(sign(random) << 31 | std::uint32_t(ey) << 23 | fraction(random)));
+            }
+        }
+        fused::Builder builder(1);
+        const auto a = builder.input(DataType::Float32, 1), b = builder.input(DataType::Float32, 1);
+        builder.output(fused::precise_divide(a.load(), b.load()), DataType::Float32);
+        const fused::Kernel kernel(builder);
+        const size_t n = numerator.size();
+        const auto actual = host<float>(kernel({n}, {tensor(numerator, {n}), tensor(denominator, {n})})[0]);
+        size_t mismatches = 0;
+        for (size_t i = 0; i < n; ++i) {
+            const float expected = numerator[i] / denominator[i];
+            const bool same = std::isnan(expected) ? std::isnan(actual[i])
+                                                   : std::bit_cast<std::uint32_t>(actual[i]) == std::bit_cast<std::uint32_t>(expected);
+            if (!same && ++mismatches <= 8) {
+                ADD_FAILURE() << std::hex << std::bit_cast<std::uint32_t>(numerator[i]) << " / "
+                              << std::bit_cast<std::uint32_t>(denominator[i]) << ": "
+                              << std::bit_cast<std::uint32_t>(actual[i]) << " vs " << std::bit_cast<std::uint32_t>(expected);
+            }
+        }
+        EXPECT_EQ(mismatches, 0u) << "of " << n;
     }
 
     TEST_P(NodesCore, FusedNoiseVaryingFieldsStridesAndFractionalOctavesMatchCpuExactly) {
@@ -2571,6 +3239,61 @@ namespace {
         }
     }
 
+    TEST_P(NodesCore, PointNeighbourSpacingMatchesBruteForceWithinItsCells) {
+        std::mt19937 random(17);
+        std::normal_distribution<float> spread(0.0f, 0.02f);
+        std::uniform_real_distribution<float> anywhere(-1.0f, 1.0f);
+        std::vector<float> xyz;
+        // Dense clusters, sparse points between them, duplicates and a non-finite point.
+        for (int cluster = 0; cluster < 20; ++cluster) {
+            const float cx = anywhere(random), cy = anywhere(random), cz = anywhere(random);
+            for (int i = 0; i < 120; ++i)
+                xyz.insert(xyz.end(), {cx + spread(random), cy + spread(random), cz + spread(random)});
+        }
+        for (int i = 0; i < 400; ++i)
+            xyz.insert(xyz.end(), {anywhere(random), anywhere(random), anywhere(random)});
+        xyz.insert(xyz.end(), {xyz[0], xyz[1], xyz[2], std::numeric_limits<float>::quiet_NaN(), 0, 0});
+        const size_t count = xyz.size() / 3;
+        const float width = 0.05f;
+        const auto cell = [&](const float value) {
+            return static_cast<int>(std::clamp(std::floor(value / width), -268435456.0f, 268435456.0f));
+        };
+        std::vector<float> expected(count, 0.0f);
+        for (size_t i = 0; i < count; ++i) {
+            const float* p = &xyz[i * 3];
+            if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]))
+                continue;
+            std::vector<float> near, ring;
+            for (size_t j = 0; j < count; ++j) {
+                const float* q = &xyz[j * 3];
+                if (j == i || !std::isfinite(q[0]) || !std::isfinite(q[1]) || !std::isfinite(q[2]))
+                    continue;
+                int reach = 0;
+                for (int axis = 0; axis < 3; ++axis)
+                    reach = std::max(reach, std::abs(cell(q[axis]) - cell(p[axis])));
+                const float dx = p[0] - q[0], dy = p[1] - q[1], dz = p[2] - q[2];
+                const float distance = dx * dx + dy * dy + dz * dz;
+                if (reach <= 1)
+                    near.push_back(distance);
+                else if (reach == 2)
+                    ring.push_back(distance);
+            }
+            auto& candidates = near;
+            if (near.size() < 3)
+                candidates.insert(candidates.end(), ring.begin(), ring.end());
+            std::ranges::sort(candidates);
+            const size_t found = std::min<size_t>(3, candidates.size());
+            float sum = 0;
+            for (size_t k = 0; k < found; ++k)
+                sum += std::sqrt(candidates[k]);
+            expected[i] = found ? sum / static_cast<float>(found) : width * 4;
+        }
+        const auto actual = host<float>(lfs::core::point_neighbor_spacing(tensor(xyz, {count, 3}), width));
+        ASSERT_EQ(actual.size(), count);
+        for (size_t i = 0; i < count; ++i)
+            ASSERT_NEAR(actual[i], expected[i], 1e-6f + 1e-5f * expected[i]) << "point " << i;
+    }
+
     TEST_P(NodesCore, PointNeighbourSpacingExpandsAndHandlesEmptyInputs) {
         const auto points = tensor({0, 0, 0, 1.8f, 0, 0, 1.9f, 0, 0, 2, 0, 0}, {4, 3});
         const auto spacing = lfs::core::point_neighbor_spacing(points, 1.0f);
@@ -2653,6 +3376,29 @@ namespace {
         const auto limited = single("lfs.mesh_to_splats", geometry, [](Node& node) { node.input_values["Max Count"] = std::int64_t(31); });
         ASSERT_TRUE(limited.ok);
         EXPECT_EQ(limited.geometry.splats->means.shape()[0], 31u);
+    }
+
+    TEST_P(NodesCore, MeshToSplatsPlacesTheSameSamplesOnEveryBackend) {
+        const auto mesh = torus(24, 12);
+        NodeTree tree(registry_);
+        Node& node = tree.add_node("lfs.mesh_to_splats");
+        node.input_values["Density"] = 200.0f;
+        node.properties["seed"] = 1234567;
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", node.name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"}));
+        const auto here = evaluate(tree, {geometry_from_mesh(mesh), {}, 1});
+        const auto cpu = lfs::nodes::evaluate(tree, {geometry_from_mesh(mesh), {}, 1, Device::CPU});
+        ASSERT_TRUE(here.ok && cpu.ok);
+        ASSERT_TRUE(here.geometry.splats && cpu.geometry.splats);
+        EXPECT_EQ(here.geometry.splats->means.device(), device());
+        const auto actual = host<float>(here.geometry.splats->means);
+        const auto expected = host<float>(cpu.geometry.splats->means);
+        ASSERT_EQ(actual.size(), expected.size());
+        ASSERT_GT(actual.size(), 3 * 4000u);
+        size_t mismatches = 0;
+        for (size_t i = 0; i < actual.size(); ++i)
+            mismatches += std::abs(actual[i] - expected[i]) > 1e-5f;
+        EXPECT_EQ(mismatches, 0u);
     }
 
     TEST_P(NodesCore, MeshToSplatsUsesVertexMaterialAndTextureColours) {
@@ -2838,6 +3584,36 @@ namespace {
         const auto missing = evaluate(tree, {{}, {}, 1}, nullptr, &cache);
         EXPECT_FALSE(missing.ok);
         EXPECT_TRUE(missing.errors.contains("Host"));
+    }
+
+    TEST_P(NodesCore, InvalidPowerReportsNodeErrorInsteadOfPublishingNonFiniteOpacity) {
+        NodeTree tree(registry_);
+        auto& math = tree.add_node("lfs.math", "Power");
+        math.properties["operation"] = "power";
+        tree.add_node("lfs.set_opacity", "Opacity");
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", "Opacity", "Geometry"}));
+        ASSERT_TRUE(tree.add_link({"Power", "Value", "Opacity", "Opacity"}));
+        ASSERT_TRUE(tree.add_link({"Opacity", "Geometry", tree.output_node().name, "Geometry"}));
+        for (const auto [base, exponent] : {std::pair{-1.0689604f, -0.848964f}, {0.0f, -1.0f}, {1e30f, 2.0f}}) {
+            SCOPED_TRACE(std::format("base={} exponent={}", base, exponent));
+            tree.find_node("Power")->input_values["A"] = base;
+            tree.find_node("Power")->input_values["B"] = exponent;
+            const auto result = evaluate(tree, {.geometry = splats()});
+            EXPECT_FALSE(result.ok);
+            ASSERT_TRUE(result.errors.contains("Opacity"));
+            EXPECT_NE(result.errors.at("Opacity").find("Set Opacity received 3 non-finite values"), std::string::npos);
+            tree.find_node("Opacity")->input_values["Selection"] = 0.0f;
+            const auto unselected = evaluate(tree, {.geometry = splats()});
+            ASSERT_TRUE(unselected.ok);
+            EXPECT_EQ(host<float>(unselected.geometry.splats->opacity), (std::vector<float>{0, 1, -1}));
+            tree.find_node("Opacity")->input_values["Selection"] = 1.0f;
+        }
+        const auto valid = field_result("lfs.math", "Value", FLOAT_SOCKET, splats(), [](Node& node) {
+            node.properties["operation"] = "power";
+            node.input_values["A"] = -2.0f;
+            node.input_values["B"] = 3.0f;
+        });
+        EXPECT_EQ(host<float>(valid), (std::vector<float>{-8, -8, -8}));
     }
 
     TEST_P(NodesCore, ArithmeticOperationsMatchExpectedValues) {
@@ -3394,6 +4170,138 @@ namespace {
         ASSERT_EQ(actual.size(), expected.size());
         EXPECT_EQ(std::memcmp(actual.data(), expected.data(), actual.size() * sizeof(float)), 0);
         EXPECT_TRUE(result.nodes.contains("Instance/Instance/" + inner.output_node().name));
+    }
+
+    // Fails if a group's cached contents survive an edit upstream of the group or inside a group it contains:
+    // interface geometry hashed only by type, and a group key covered only its own graph.
+    TEST_P(NodesCore, GroupCachesFollowUpstreamAndNestedEdits) {
+        NodeTree inner(registry_, "Inner");
+        NodeTree middle(registry_, "Middle");
+        NodeTree outer(registry_, "Outer");
+        const TreeResolver resolver = [&](std::string_view uuid) -> const NodeTree* {
+            for (const auto* tree : {&inner, &middle, &outer})
+                if (tree->uuid == uuid)
+                    return tree;
+            return nullptr;
+        };
+        inner.add_node("lfs.transform_geometry", "Move").input_values["Translation"] = glm::vec3(0, 0, 0);
+        ASSERT_TRUE(inner.add_link({inner.input_node().name, "Geometry", "Move", "Geometry"}));
+        ASSERT_TRUE(inner.add_link({"Move", "Geometry", inner.output_node().name, "Geometry"}));
+        middle.add_node("lfs.group", "Inner").properties["tree"] = inner.uuid;
+        ASSERT_TRUE(middle.add_link({middle.input_node().name, "Geometry", "Inner", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(middle.add_link({"Inner", "Geometry", middle.output_node().name, "Geometry"}, nullptr, resolver));
+        outer.add_node("lfs.transform_geometry", "Shift").input_values["Translation"] = glm::vec3(1, 0, 0);
+        outer.add_node("lfs.group", "Middle").properties["tree"] = middle.uuid;
+        ASSERT_TRUE(outer.add_link({outer.input_node().name, "Geometry", "Shift", "Geometry"}));
+        ASSERT_TRUE(outer.add_link({"Shift", "Geometry", "Middle", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(outer.add_link({"Middle", "Geometry", outer.output_node().name, "Geometry"}, nullptr, resolver));
+        EvalCache cache;
+        const auto x = [&] {
+            const auto result = evaluate(outer, {.geometry = splats(), .device = device(), .tree_resolver = resolver}, nullptr, &cache);
+            EXPECT_TRUE(result.ok);
+            return host<float>(result.geometry.splats->means)[0];
+        };
+        EXPECT_FLOAT_EQ(x(), 1.0f);
+        outer.find_node("Shift")->input_values["Translation"] = glm::vec3(2, 0, 0);
+        EXPECT_FLOAT_EQ(x(), 2.0f);
+        inner.find_node("Move")->input_values["Translation"] = glm::vec3(3, 0, 0);
+        EXPECT_FLOAT_EQ(x(), 5.0f);
+    }
+
+    // Fails if a muted group still runs its contents, or if nested graphs ignore cancellation.
+    TEST_P(NodesCore, GroupsBypassWhenMutedAndStopWhenCancelled) {
+        NodeTree inner(registry_, "Inner");
+        NodeTree outer(registry_, "Outer");
+        const TreeResolver resolver = [&](std::string_view uuid) -> const NodeTree* {
+            return uuid == inner.uuid ? &inner : uuid == outer.uuid ? &outer
+                                                                    : nullptr;
+        };
+        std::string previous = inner.input_node().name;
+        for (int step = 0; step < 5; ++step) {
+            const std::string name = "Move " + std::to_string(step);
+            inner.add_node("lfs.transform_geometry", name).input_values["Translation"] = glm::vec3(1, 0, 0);
+            ASSERT_TRUE(inner.add_link({previous, "Geometry", name, "Geometry"}));
+            previous = name;
+        }
+        ASSERT_TRUE(inner.add_link({previous, "Geometry", inner.output_node().name, "Geometry"}));
+        outer.add_node("lfs.group", "Group").properties["tree"] = inner.uuid;
+        ASSERT_TRUE(outer.add_link({outer.input_node().name, "Geometry", "Group", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(outer.add_link({"Group", "Geometry", outer.output_node().name, "Geometry"}, nullptr, resolver));
+        const auto run = [&](const EvalControl& control) {
+            return evaluate(outer, {.geometry = splats(), .device = device(), .tree_resolver = resolver}, nullptr, nullptr, control);
+        };
+        const auto moved = run({});
+        ASSERT_TRUE(moved.ok);
+        EXPECT_FLOAT_EQ(host<float>(moved.geometry.splats->means)[0], 5.0f);
+        outer.find_node("Group")->muted = true;
+        const auto muted = run({});
+        ASSERT_TRUE(muted.ok);
+        EXPECT_FLOAT_EQ(host<float>(muted.geometry.splats->means)[0], 0.0f);
+        outer.find_node("Group")->muted = false;
+        int checks = 0;
+        const auto cancelled = run({.cancelled = [&] { return ++checks > 4; }});
+        EXPECT_TRUE(cancelled.cancelled);
+        EXPECT_FALSE(cancelled.nodes.contains("Group/Move 4"));
+    }
+
+    // Fails if one cache serves stale geometry after a mute toggle, after a cancelled run, or once the graphs
+    // are reloaded from JSON.
+    TEST_P(NodesCore, GroupCachesStayCorrectAcrossMutingCancellationAndReload) {
+        auto inner = std::make_unique<NodeTree>(registry_, "Inner");
+        auto middle = std::make_unique<NodeTree>(registry_, "Middle");
+        auto outer = std::make_unique<NodeTree>(registry_, "Outer");
+        const TreeResolver resolver = [&](std::string_view uuid) -> const NodeTree* {
+            for (const auto* tree : {inner.get(), middle.get(), outer.get()})
+                if (tree->uuid == uuid)
+                    return tree;
+            return nullptr;
+        };
+        std::string previous = inner->input_node().name;
+        for (int step = 0; step < 3; ++step) {
+            const std::string name = "Move " + std::to_string(step);
+            inner->add_node("lfs.transform_geometry", name).input_values["Translation"] = glm::vec3(1, 0, 0);
+            ASSERT_TRUE(inner->add_link({previous, "Geometry", name, "Geometry"}));
+            previous = name;
+        }
+        ASSERT_TRUE(inner->add_link({previous, "Geometry", inner->output_node().name, "Geometry"}));
+        middle->add_node("lfs.group", "Inner").properties["tree"] = inner->uuid;
+        ASSERT_TRUE(middle->add_link({middle->input_node().name, "Geometry", "Inner", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(middle->add_link({"Inner", "Geometry", middle->output_node().name, "Geometry"}, nullptr, resolver));
+        outer->add_node("lfs.group", "Middle").properties["tree"] = middle->uuid;
+        ASSERT_TRUE(outer->add_link({outer->input_node().name, "Geometry", "Middle", "Geometry"}, nullptr, resolver));
+        ASSERT_TRUE(outer->add_link({"Middle", "Geometry", outer->output_node().name, "Geometry"}, nullptr, resolver));
+        EvalCache cache;
+        const auto run = [&](const EvalControl& control = {}) {
+            return evaluate(*outer, {.geometry = splats(), .device = device(), .tree_resolver = resolver}, nullptr, &cache,
+                            control);
+        };
+        const auto x = [&] {
+            const auto result = run();
+            EXPECT_TRUE(result.ok);
+            return result.ok ? host<float>(result.geometry.splats->means)[0] : -1.0f;
+        };
+        EXPECT_FLOAT_EQ(x(), 3.0f);
+        middle->find_node("Inner")->muted = true;
+        EXPECT_FLOAT_EQ(x(), 0.0f);
+        middle->find_node("Inner")->muted = false;
+        EXPECT_FLOAT_EQ(x(), 3.0f);
+
+        // A run cancelled inside the innermost graph leaves nothing that a later run reuses as complete.
+        inner->find_node("Move 2")->input_values["Translation"] = glm::vec3(5, 0, 0);
+        int checks = 0;
+        EXPECT_TRUE(run({.cancelled = [&] { return ++checks > 2; }}).cancelled);
+        EXPECT_FLOAT_EQ(x(), 7.0f);
+        const auto unchanged = run();
+        ASSERT_TRUE(unchanged.ok);
+        EXPECT_TRUE(unchanged.nodes.at("Middle").cached);
+
+        // The reloaded graphs evaluate like the originals, and edits to them reach the result.
+        inner = std::make_unique<NodeTree>(NodeTree::from_json(inner->to_json(), registry_));
+        middle = std::make_unique<NodeTree>(NodeTree::from_json(middle->to_json(), registry_));
+        outer = std::make_unique<NodeTree>(NodeTree::from_json(outer->to_json(), registry_));
+        EXPECT_FLOAT_EQ(x(), 7.0f);
+        inner->find_node("Move 0")->input_values["Translation"] = glm::vec3(-1, 0, 0);
+        EXPECT_FLOAT_EQ(x(), 5.0f);
     }
 
     TEST(NodesGraphEditing, ForcedJsonGroupCycleReportsNamedNodeError) {

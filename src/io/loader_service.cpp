@@ -149,7 +149,7 @@ namespace lfs::io {
             const bool encode_q16 = lfs::core::sh_value_quant::enabled() && !shN_q16;
             lfs::core::Tensor deleted = model.has_deleted_mask() ? model.deleted() : lfs::core::Tensor{};
 
-            #if defined(__APPLE__)
+#if defined(__APPLE__)
             // A decoder can use Metal while the selected tensor allocator uses
             // Vulkan (or vice versa). Keep SH conversion on the destination GPU.
             auto migrated_means = copy_to_allocator(model.means_raw(), "SplatData.means");
@@ -178,7 +178,7 @@ namespace lfs::io {
                     model.shN_value_bounds(), "SplatData.shN_value_bounds", q16_pair_ready);
             }
             lfs::core::SplatData migrated(max_sh,
-                                          #if defined(__APPLE__)
+#if defined(__APPLE__)
                                           std::move(migrated_means),
 #else
                                           copy_to_allocator(model.means_raw(), "SplatData.means"),

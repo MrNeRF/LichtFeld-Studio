@@ -44,4 +44,6 @@ namespace lfs::core::internal {
     };
 
     std::unique_ptr<MetalVulkanQueue> make_metal_vulkan_queue(void* device, void* consumer_timeline);
+    // Metal-only builds: the consumer is an id<MTLSharedEvent>, timeline() is null.
+    std::unique_ptr<MetalVulkanQueue> make_metal_work_queue(void* consumer_event);
 } // namespace lfs::core::internal

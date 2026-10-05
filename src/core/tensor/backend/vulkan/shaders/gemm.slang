@@ -7,6 +7,11 @@ static const uint LFS_PUSH_CONSTANT_SIZE = 64;
 const uint kTransposeB = 0;
 [SpecializationConstant]
 const uint kBiasRelu = 0;
+// k and n of at most kSkinnyLimit: one thread per output element with B in
+// shared memory, instead of mostly empty 64x64 tiles.
+[SpecializationConstant]
+const uint kSkinny = 0;
+static const uint kSkinnyLimit = 16;
 
 static const uint kTileM = 64;
 static const uint kTileN = 64;
@@ -32,12 +37,55 @@ struct Parameters
 
 groupshared float tileA[kTileM][kTileK];
 groupshared float tileB[kTileK][kTileN];
+groupshared float skinnyB[kSkinnyLimit * kSkinnyLimit];
+
+void skinnyGemm(uint3 groupId, uint thread, uniform Parameters parameters)
+{
+    const uint n = parameters.n;
+    const uint k = parameters.k;
+    const uint64_t batchA = uint64_t(groupId.z) * parameters.strideA;
+    const uint64_t batchB = uint64_t(groupId.z) * parameters.strideB;
+    const uint64_t batchC = uint64_t(groupId.z) * parameters.strideC;
+    Ptr<float, Access.Read> a = (Ptr<float, Access.Read>)parameters.aAddress;
+    Ptr<float, Access.Read> b = (Ptr<float, Access.Read>)parameters.bAddress;
+    Ptr<float, Access.ReadWrite> c = (Ptr<float, Access.ReadWrite>)parameters.cAddress;
+    for (uint i = thread; i < k * n; i += LFS_LOCAL_SIZE_X)
+    {
+        const uint gk = i / n;
+        const uint gn = i - gk * n;
+        skinnyB[i] = kTransposeB != 0 ? b[batchB + uint64_t(gn) * k + gk] : b[batchB + uint64_t(i)];
+    }
+    GroupMemoryBarrierWithGroupSync();
+    const uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+    const uint count = parameters.m * n;
+    for (uint index = groupId.x * LFS_LOCAL_SIZE_X + thread; index < count;
+         index += groups.x * LFS_LOCAL_SIZE_X)
+    {
+        const uint row = index / n;
+        const uint col = index - row * n;
+        // Same accumulation order as the tiled path.
+        float value = 0.0f;
+        for (uint kk = 0; kk < k; ++kk)
+            value += a[batchA + uint64_t(row) * k + kk] * skinnyB[kk * n + col];
+        if (kBiasRelu != 0)
+        {
+            value += ((Ptr<float, Access.Read>)parameters.biasAddress)[row];
+            value = value > 0.0f ? value : 0.0f;
+        }
+        c[batchC + uint64_t(index)] = value;
+    }
+}
 
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
 void main(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID,
           uniform Parameters parameters)
 {
     const uint thread = groupThreadId.x;
+    if (kSkinny != 0)
+    {
+        skinnyGemm(groupId, thread, parameters);
+        return;
+    }
     const uint threadCol = thread % kThreadsPerRow;
     const uint threadRow = thread / kThreadsPerRow;
     const uint rowBase = groupId.y * kTileM;

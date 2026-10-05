@@ -5,7 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
-#include "gui/vulkan_ui_texture.hpp"
+#include "gui/ui_texture.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -28,10 +28,10 @@ namespace lfs::vis::gui {
         IconCache(const IconCache&) = delete;
         IconCache& operator=(const IconCache&) = delete;
 
-        std::unique_ptr<VulkanUiTexture> loadTexture(const std::string& icon_name);
+        std::unique_ptr<UiTexture> loadTexture(const std::string& icon_name);
 
         mutable std::mutex mutex_;
-        std::unordered_map<std::string, std::unique_ptr<VulkanUiTexture>> cache_;
+        std::unordered_map<std::string, std::unique_ptr<UiTexture>> cache_;
     };
 
 } // namespace lfs::vis::gui

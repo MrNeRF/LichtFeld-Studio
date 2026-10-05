@@ -3,11 +3,13 @@
 #include "app/mcp_node_tools.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "mcp/mcp_tools.hpp"
+#include "visualizer/gui/bounds_gizmo.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/rmlui/elements/node_canvas_element.hpp"
 #include "visualizer/gui/screen_host.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
 #include "visualizer/nodes/node_animation.hpp"
+#include "visualizer/nodes/viewport_coordinates.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/selection/selection_service.hpp"
@@ -125,7 +127,23 @@ namespace lfs::vis {
             EXPECT_TRUE(descriptor["annotations"].contains("destructiveHint"));
             EXPECT_TRUE(descriptor["annotations"].contains("idempotentHint"));
         }
-        EXPECT_EQ(count, 51u);
+        EXPECT_EQ(count, 60u);
+    }
+
+    TEST_F(McpNodeToolsTest, TemplatesAndPreviewRoundTrip) {
+        const auto listed = call("template_list");
+        ASSERT_GE(listed["templates"].size(), 15u);
+        const auto applied = call("template_apply", {{"target", target_}, {"template", "colour_grade"}, {"name", "Template MCP"}});
+        ASSERT_TRUE(applied["success"]);
+        const auto preview = call("preview_set", {{"target", target_}, {"node", "Colour Correct"}, {"socket", "Geometry"}});
+        EXPECT_EQ(preview["socket"], "Geometry");
+        EXPECT_EQ(resource("editor")["preview"]["node"], "Colour Correct");
+        ASSERT_TRUE(call("preview_clear")["success"]);
+        EXPECT_TRUE(resource("editor")["preview"].is_null());
+        const auto saved = call("template_save", {{"tree", applied["tree"]}, {"name", "MCP template"}, {"description", "Saved by the MCP test"}, {"category", "Test"}});
+        ASSERT_TRUE(saved["success"]);
+        ASSERT_TRUE(call("template_rename", {{"template", saved["template"]["id"]}, {"name", "Renamed MCP"}})["success"]);
+        ASSERT_TRUE(call("template_delete", {{"template", saved["template"]["id"]}})["success"]);
     }
 
     TEST_F(McpNodeToolsTest, KeyframesDefaultsRenameJsonCopyAndRemove) {
@@ -356,6 +374,8 @@ namespace lfs::vis {
         EXPECT_EQ(gizmo["kind"], "box");
         EXPECT_TRUE(gizmo["editable"].get<bool>());
         EXPECT_EQ(gizmo["local"]["translation"], json::array({0.0f, 0.0f, 0.0f}));
+        EXPECT_EQ(gizmo["extent"]["input"], "Size");
+        EXPECT_EQ(gizmo["extent"]["handles"].size(), 7u);
 
         call("editor_select", {{"nodes", {"Paint"}}});
         const auto painting = call("paint_mode", {{"node", "Paint"}, {"enabled", true}, {"radius", 40.0f}});
@@ -401,5 +421,105 @@ namespace lfs::vis {
         ASSERT_NE(colour, nullptr);
         EXPECT_EQ(*colour, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
         EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+    }
+
+    TEST_F(McpNodeToolsTest, ViewportBoundsDragKeepsOppositeFaceFixedAndIsOneUndoStep) {
+        const auto id = graph();
+        call("node_add", {{"tree", id}, {"type_id", "lfs.box_selection"}, {"name", "Box"}});
+        call("node_add", {{"tree", id}, {"type_id", "lfs.ellipsoid_selection"}, {"name", "Ellipsoid"}});
+        const auto modifier = call("modifier_add", {{"target", target_}, {"tree", id}})["modifier"];
+        call("editor_open");
+        call("editor_show", {{"target", target_}, {"modifier", modifier}});
+
+        auto& scene = *viewer_->getSceneManager();
+        auto& manager = scene.modifierManager();
+        const auto host = scene.getScene().getNodeByUuid(core::Uuid::from_string(target_).value());
+        ASSERT_NE(host, nullptr);
+        const nodes::ViewportCoordinates coordinates(scene.getScene(), host->id);
+        ASSERT_TRUE(coordinates.valid());
+        const auto value = [&](const char* node_name, const char* input) {
+            const auto* tree = manager.tree(id);
+            const auto* node = tree ? tree->find_node(node_name) : nullptr;
+            EXPECT_NE(node, nullptr);
+            const auto* result = node ? node->input_values.at(input).get_if<glm::vec3>() : nullptr;
+            EXPECT_NE(result, nullptr);
+            return result ? *result : glm::vec3(0.0f);
+        };
+
+        const auto check_drag = [&](const char* node_name, const char* extent_input, const int gizmo_id) {
+            call("editor_select", {{"nodes", {node_name}}});
+            const auto before = manager.viewportNodeGizmo();
+            ASSERT_TRUE(before.has_value());
+            const glm::vec3 old_center = before->local_translation;
+            const glm::vec3 old_extent = before->local_scale;
+            const float extent_factor = before->kind == NodeViewportGizmoKind::Box ? 0.5f : 1.0f;
+            const float old_opposite_face = old_center.x - old_extent.x * extent_factor;
+
+            // Script the positive-X face handle through the same bounds primitive used by
+            // crop boxes, ellipsoids and node volume gizmos. Identity view plus a 0.5x
+            // projection keeps either default extent comfortably inside this viewport.
+            gui::NativeOverlayDrawList draw_list;
+            gui::BoundsGizmoConfig bounds;
+            bounds.id = gizmo_id;
+            bounds.viewport_size = {200.0f, 200.0f};
+            bounds.projection = glm::scale(glm::mat4(1.0f), glm::vec3(0.5f, 0.5f, 1.0f));
+            bounds.center_world = glm::vec3(before->world_transform[3]);
+            for (int axis = 0; axis < 3; ++axis)
+                bounds.orientation_world[axis] = glm::normalize(glm::vec3(before->world_transform[axis]));
+            bounds.half_extents_world = glm::vec3(
+                                            glm::length(glm::vec3(before->world_transform[0])),
+                                            glm::length(glm::vec3(before->world_transform[1])),
+                                            glm::length(glm::vec3(before->world_transform[2]))) *
+                                        extent_factor;
+            bounds.draw_list = &draw_list;
+            const glm::vec2 face_screen{
+                100.0f + bounds.half_extents_world.x * 50.0f,
+                100.0f,
+            };
+            bounds.input = {.mouse_pos = face_screen, .mouse_left_down = true, .mouse_left_clicked = true};
+            gui::beginBoundsGizmoFrame();
+            const auto pressed = gui::drawBoundsGizmo(bounds);
+            ASSERT_TRUE(pressed.active);
+            EXPECT_EQ(pressed.active_handle, gui::BoundsGizmoHandle::FaceXPositive);
+
+            bounds.input = {.mouse_pos = face_screen + glm::vec2(20.0f, 0.0f), .mouse_left_down = true};
+            gui::beginBoundsGizmoFrame();
+            const auto dragged_bounds = gui::drawBoundsGizmo(bounds);
+            ASSERT_TRUE(dragged_bounds.changed);
+            EXPECT_EQ(dragged_bounds.active_handle, gui::BoundsGizmoHandle::FaceXPositive);
+
+            glm::mat4 dragged_world = before->world_transform;
+            dragged_world[3] = glm::vec4(dragged_bounds.center_world, 1.0f);
+            const glm::vec3 dragged_scale = dragged_bounds.half_extents_world / extent_factor;
+            for (int axis = 0; axis < 3; ++axis)
+                dragged_world[axis] = glm::vec4(bounds.orientation_world[axis] * dragged_scale[axis], 0.0f);
+            const auto expected_local = coordinates.transformToLocal(dragged_world);
+
+            bounds.input = {.mouse_pos = face_screen + glm::vec2(20.0f, 0.0f)};
+            gui::beginBoundsGizmoFrame();
+            EXPECT_FALSE(gui::drawBoundsGizmo(bounds).active);
+            // End the scripted frame: a gizmo left hovered would swallow later tests' camera drags.
+            gui::beginBoundsGizmoFrame();
+
+            op::undoHistory().clear();
+            ASSERT_TRUE(manager.beginViewportNodeGizmoDrag());
+            ASSERT_TRUE(manager.updateViewportNodeGizmo(dragged_world));
+            manager.endViewportNodeGizmoDrag(false);
+
+            const auto centre = value(node_name, "Centre");
+            const auto extent = value(node_name, extent_input);
+            const float new_opposite_face = centre.x - extent.x * extent_factor;
+            EXPECT_NEAR(new_opposite_face, old_opposite_face, 1e-5f);
+            EXPECT_EQ(centre, expected_local.translation);
+            EXPECT_EQ(extent, expected_local.scale);
+            EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+            ASSERT_TRUE(op::undoHistory().undo().success);
+            EXPECT_EQ(value(node_name, "Centre"), old_center);
+            EXPECT_EQ(value(node_name, extent_input), old_extent);
+        };
+
+        // Positive X face moves out while the negative face remains anchored.
+        check_drag("Box", "Size", 901);
+        check_drag("Ellipsoid", "Radii", 902);
     }
 } // namespace lfs::vis

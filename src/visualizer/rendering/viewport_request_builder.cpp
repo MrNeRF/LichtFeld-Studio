@@ -3,9 +3,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "viewport_request_builder.hpp"
+#include "core/camera.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/model_renderability.hpp"
 #include "scene/scene_manager.hpp"
 #include "temporal_frame_tracker.hpp"
+#include <algorithm>
 #include <type_traits>
 #include <vector>
 
@@ -639,6 +642,113 @@ namespace lfs::vis {
         state.selected_node_mask = {selected};
         state.has_selection = scene.hasSelection() && state.selection_mask &&
                               state.selection_mask->is_valid();
+    }
+
+    PointSceneRenderer::RenderRequest buildPointSceneRequest(const lfs::rendering::PointCloudRenderRequest& frame,
+                                                             const RenderSettings& settings) {
+        const auto& view = frame.frame_view;
+        const glm::mat4 view_matrix = view.getViewMatrix();
+        const glm::mat4 projection = lfs::rendering::createProjectionMatrix(
+            view.size, lfs::rendering::focalLengthToVFov(view.focal_length_mm), view.orthographic,
+            view.ortho_scale, view.near_plane, view.far_plane);
+        // The projection is OpenGL NDC (Y up); images have a top-left origin.
+        glm::mat4 clip_y_flip(1.0f);
+        clip_y_flip[1][1] = -1.0f;
+        PointSceneRenderer::RenderRequest request{};
+        request.model_transforms = frame.scene.model_transforms;
+        request.transform_indices = frame.scene.transform_indices.get();
+        request.node_visibility_mask = &frame.scene.node_visibility_mask;
+        request.selection_mask = frame.overlay.selection_mask.get();
+        request.preview_selection_mask = frame.overlay.transient_mask.mask;
+        request.selection_colors = &frame.overlay.selection_colors;
+        request.preview_selection_additive = frame.overlay.transient_mask.additive;
+        if (frame.filters.crop_box) {
+            request.crop = PointSceneRenderer::CropBox{.to_local = frame.filters.crop_box->transform,
+                                                       .min = frame.filters.crop_box->min,
+                                                       .max = frame.filters.crop_box->max,
+                                                       .inverse = frame.filters.crop_inverse,
+                                                       .desaturate = frame.filters.crop_desaturate};
+        } else if (frame.filters.crop_ellipsoid) {
+            request.crop_ellipsoid = PointSceneRenderer::CropEllipsoid{.to_local = frame.filters.crop_ellipsoid->transform,
+                                                                       .radii = frame.filters.crop_ellipsoid->radii,
+                                                                       .inverse = frame.filters.crop_inverse,
+                                                                       .desaturate = frame.filters.crop_desaturate};
+        }
+        request.view = view_matrix;
+        request.view_projection = clip_y_flip * projection * view_matrix;
+        request.size = view.size;
+        request.background_color = view.background_color;
+        request.transparent_background = frame.transparent_background;
+        request.orthographic = view.orthographic;
+        request.ortho_scale = view.ortho_scale;
+        request.focal_y = lfs::core::fov2focal(lfs::rendering::focalLengthToVFovRad(view.focal_length_mm), view.size.y);
+        request.voxel_size = frame.render.voxel_size;
+        request.scaling_modifier = frame.render.scaling_modifier;
+        request.depth_view = settings.depth_view;
+        request.depth_view_min = settings.depth_view_min;
+        request.depth_view_max = settings.depth_view_max;
+        request.depth_visualization_mode = settings.depth_visualization_mode;
+        return request;
+    }
+
+    ViewportMeshPassDesc buildViewportMeshes(const FrameContext& ctx, const RenderSettings& settings) {
+        ViewportMeshPassDesc frame;
+        const auto vp_data = ctx.makeViewportData();
+        frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
+        frame.camera_position = vp_data.translation;
+        const auto& meshes = ctx.scene_state.meshes;
+        const auto& selected_nodes = ctx.scene_state.selected_node_mask;
+        const bool any_selected = std::ranges::any_of(meshes, [](const auto& mesh) { return mesh.is_selected; }) ||
+                                  std::ranges::any_of(selected_nodes, [](const bool selected) { return selected; });
+        const bool dim_non_emphasized = settings.desaturate_unselected && any_selected;
+        const glm::vec3 headlight_dir = glm::length(vp_data.translation) > 1e-6f
+                                            ? glm::normalize(vp_data.translation)
+                                            : settings.mesh_light_dir;
+        frame.items.reserve(meshes.size());
+        for (const auto& mesh : meshes) {
+            if (!mesh.mesh)
+                continue;
+            frame.items.push_back({
+                .mesh = mesh.mesh,
+                .model = mesh.transform,
+                .light_dir = headlight_dir,
+                .light_intensity = settings.mesh_light_intensity,
+                .ambient = settings.mesh_ambient,
+                .backface_culling = settings.mesh_backface_culling,
+                .is_emphasized = mesh.is_selected,
+                .dim_non_emphasized = dim_non_emphasized,
+                .flash_intensity = ctx.selection_flash_intensity,
+                .wireframe_overlay = settings.mesh_wireframe,
+                .wireframe_color = settings.mesh_wireframe_color,
+                .wireframe_width = settings.mesh_wireframe_width,
+                .shadow_enabled = settings.mesh_shadow_enabled,
+                .shadow_map_resolution = settings.mesh_shadow_resolution,
+            });
+        }
+        return frame;
+    }
+
+    ViewportEnvironment buildViewportEnvironment(const FrameContext& ctx, const RenderSettings& settings,
+                                                 const bool enabled) {
+        const auto vp_data = ctx.makeViewportData();
+        const auto frame_view = ctx.makeFrameView();
+        ViewportEnvironment environment{
+            .enabled = enabled,
+            .map_path = settings.environment_map_path,
+            .camera_to_world = vp_data.rotation,
+            .viewport_size = glm::vec2(static_cast<float>(frame_view.size.x), static_cast<float>(frame_view.size.y)),
+            .exposure = settings.environment_exposure,
+            .rotation_radians = glm::radians(settings.environment_rotation_degrees),
+            .equirectangular_view = settings.equirectangular,
+        };
+        if (frame_view.intrinsics_override.has_value() && !frame_view.orthographic) {
+            const auto& intr = *frame_view.intrinsics_override;
+            environment.intrinsics = glm::vec4(intr.focal_x, intr.focal_y, intr.center_x, intr.center_y);
+        } else {
+            const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(frame_view.size, frame_view.focal_length_mm);
+            environment.intrinsics = glm::vec4(fx, fy, frame_view.size.x * 0.5f, frame_view.size.y * 0.5f);
+        }
+        return environment;
     }
 
 } // namespace lfs::vis

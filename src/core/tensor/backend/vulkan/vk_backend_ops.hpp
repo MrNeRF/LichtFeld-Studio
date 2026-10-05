@@ -77,7 +77,19 @@ namespace lfs::core::internal {
         void radius_neighbor_counts(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                     size_t, size_t, float, int32_t, std::optional<StorageRef>, ExecContext) override;
         void radius_neighbor_min(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
-                                 size_t, size_t, float, ExecContext) override;
+                                 size_t, size_t, float, std::optional<StorageRef>, ExecContext) override;
+        bool radius_connected_components(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, size_t, size_t,
+                                         float, ExecContext) override;
+        bool point_tree_counts(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, std::optional<StorageRef>,
+                               StorageRef, const PointTreeProgram&, ExecContext) override;
+        bool point_tree_components(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
+                                   StorageRef, const PointTreeProgram&, ExecContext) override;
+        bool triangle_tree_parity(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, const PointTreeProgram&,
+                                  ExecContext) override;
+        bool point_tree_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, const PointTreeProgram&,
+                                ExecContext) override;
+        bool simplify_merge(const std::array<StorageRef, 5>&, StorageRef, StorageRef, const std::array<StorageRef, 5>&,
+                            const SimplifyMergeProgram&, ExecContext) override;
         void point_neighbor_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                     size_t, size_t, float, ExecContext) override;
         void mark_points_2d(StorageRef, StorageRef, size_t, const PointRegion2D&,
@@ -175,6 +187,7 @@ namespace lfs::core::internal {
         void rehome_stream(StorageRef, ExecContext) override;
         void trim() override;
         void trim_if_reserved_unused_exceeds(size_t) override;
+        void hold_freed_memory(bool) override;
         MemoryInfo stats() override;
         void shutdown() override;
         void set_allocation_iteration(int) override;

@@ -1,5 +1,7 @@
+
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 96;
+#include "hyperbolic_math.slangh"
 
 // kOp follows ReduceOp: 0 Sum, 1 Mean, 2 Max, 3 Min, 4 Prod, 5 Any, 6 All.
 [SpecializationConstant]
@@ -159,7 +161,7 @@ float applyChainOp(float value, ChainOp op, uint index)
     if (op.kind == 15) return 1.0f / (1.0f + exp(-value));
     if (op.kind == 16) return isnan(value) ? value : ieeeMaximum(value, 0.0f);
     if (op.kind == 17) return value * value;
-    if (op.kind == 18) return tanh(value);
+    if (op.kind == 18) return accurateTanh(value);
     if (op.kind == 19) return rsqrt(value);
     if (op.kind == 20) return float((value > 0.0f) - (value < 0.0f));
     if (op.kind == 21) return 1.0f / value;

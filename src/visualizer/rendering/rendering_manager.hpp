@@ -20,10 +20,6 @@
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
 #include "io/loader.hpp"
-#include "passes/vulkan_depth_blit_pass.hpp"
-#include "passes/vulkan_environment_pass.hpp"
-#include "passes/vulkan_mesh_pass.hpp"
-#include "passes/vulkan_split_view_pass.hpp"
 #include "render_animation_state.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/scene_temporal_resolve.hpp"
@@ -32,13 +28,14 @@
 #include "rendering/temporal_frame_tracker.hpp"
 #include "rendering_types.hpp"
 #include "spark_lod_controller.hpp"
+#include "split_view_cpu_desc.hpp"
 #include "split_view_service.hpp"
 #include "stale_frame_guard.hpp"
 #include "viewport_appearance_correction.hpp"
 #include "viewport_artifact_service.hpp"
 #include "viewport_frame_lifecycle_service.hpp"
+#include "viewport_frame_result.hpp"
 #include "viewport_interaction_context.hpp"
-#include "viewport_interop_service.hpp"
 #include "viewport_overlay_service.hpp"
 #include <algorithm>
 #include <atomic>
@@ -58,9 +55,6 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include <vulkan/vulkan.h>
-
-class PythonIntegrationTest_ParkedGtPanelWindowRequestsAreAtomicallyRefused_Test;
 
 namespace lfs::core {
     class Camera;
@@ -69,27 +63,20 @@ namespace lfs::core {
     class Tensor;
 } // namespace lfs::core
 
-namespace lfs::io {
-    class PipelinedImageLoader;
-}
-
 namespace lfs::core::events::ui {
     struct GridSettingsChanged;
     struct PointCloudModeChanged;
     struct RenderSettingsChanged;
 } // namespace lfs::core::events::ui
 
-namespace lfs::core::events::cmd {} // namespace lfs::core::events::cmd
-
 namespace lfs::vis::op {
     struct DepthWindowModeSnapshot;
 }
 
 namespace lfs::vis {
-    class VulkanContext;
+    class GraphicsContext;
     class SceneRenderer;
     class PointSceneRenderer;
-    struct VulkanViewportPassParams;
 
     class SceneManager;
     struct SceneRenderState;
@@ -109,42 +96,9 @@ namespace lfs::vis {
             glm::ivec2 logical_screen_size{0, 0};
             const ViewportRegion* viewport_region = nullptr;
             SceneManager* scene_manager = nullptr;
-            VulkanContext* vulkan_context = nullptr;
+            GraphicsContext* graphics_context = nullptr;
             bool preparing_import = false;
             core::Uuid provisional_import_node;
-        };
-
-        struct VulkanFrameResult {
-            std::shared_ptr<const lfs::core::Tensor> image = {};
-            VkImage external_image = VK_NULL_HANDLE;
-            VkImageView external_image_view = VK_NULL_HANDLE;
-            VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-            std::uint64_t external_image_generation = 0;
-            VkSemaphore completion_semaphore = VK_NULL_HANDLE;
-            std::uint64_t completion_value = 0;
-            // Mixed panels may come from independent native command queues.
-            std::vector<ViewportInteropService::FrameCompletion> additional_completions;
-            // Bumps only when the underlying image content changes (fresh render).
-            // Cache-HIT frames keep the previous value so downstream consumers
-            // (e.g. CUDA→Vulkan interop upload) can skip work by generation.
-            std::uint64_t image_generation = 0;
-            std::uint64_t split_left_image_generation = 0;
-            glm::ivec2 size{0, 0};       // valid/logical viewport extent
-            glm::ivec2 alloc_size{0, 0}; // bucketed image extent (0 = treat as size)
-            bool flip_y = false;
-            // True only when this output was rendered for the logical viewport
-            // extent in the current request. Internal reconstruction resolution
-            // may differ from that extent.
-            bool matches_viewport_extent = false;
-            bool rendered = false; // Fresh output; cached and deferred results stay false.
-
-            // Split-view right panel. The left panel reuses the `image` slot above
-            // (rideshares the existing scene-image interop). When this is set, the
-            // gui-side split interop slot uploads it in parallel to the left panel.
-            std::shared_ptr<const lfs::core::Tensor> split_right_image{};
-            std::uint64_t split_right_image_generation = 0;
-            glm::ivec2 split_right_size{0, 0};
-            bool split_right_flip_y = false;
         };
 
         explicit RenderingManager(ViewSource& views);
@@ -163,9 +117,10 @@ namespace lfs::vis {
         void cancelImportRenderCheck();
 
         // Main render function
-        VulkanFrameResult renderVulkanFrame(const RenderContext& context);
+        ViewportFrameResult renderFrame(const RenderContext& context);
+        void publishFrameToInterop(ViewId view, const ViewportFrameResult& frame);
         [[nodiscard]] std::expected<void, std::string> ensureVksplatTrainingSharedScratchReady(
-            VulkanContext& context,
+            GraphicsContext& context,
             const lfs::core::SplatData& model,
             glm::ivec2 viewport_size);
         // Called by the viewer loop at idle cadence. Releases private viewer
@@ -355,14 +310,12 @@ namespace lfs::vis {
         // lens. Leaving ortho keeps the focal length the user set.
         void setOrthographic(bool enabled, float viewport_height, float distance_to_pivot);
 
-        float getFovDegrees() const;
         float getFocalLengthMm() const;
         void setFocalLength(float focal_mm);
 
         void advanceSplitOffset();
         SplitViewInfo getSplitViewInfo() const;
         [[nodiscard]] std::optional<SplitViewInfo> getSplitViewInfoIfChanged(std::uint64_t& generation) const;
-        [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
         [[nodiscard]] bool isPLYComparisonActive() const;
         [[nodiscard]] bool depthWindowDragPreview(ViewId view = kNoView) const;
@@ -450,7 +403,6 @@ namespace lfs::vis {
 
         struct ContentBounds {
             float x, y, width, height;
-            bool letterboxed = false;
         };
         ContentBounds getContentBounds(ViewId view, const glm::ivec2& viewport_size) const;
 
@@ -547,7 +499,7 @@ namespace lfs::vis {
         std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
         std::shared_ptr<lfs::core::Tensor> captureViewportImage();
         [[nodiscard]] static std::shared_ptr<lfs::core::Tensor> composeSplitViewCpu(
-            const VulkanSplitViewParams& params, const glm::ivec2& output_size);
+            const SplitViewCpuDesc& params, const glm::ivec2& output_size);
 
         // Where the 3D viewport sat inside the window framebuffer on the last frame,
         // top-left origin. Lets callers crop a full-window readback down to the viewport
@@ -630,18 +582,6 @@ namespace lfs::vis {
             return this->state().viewport_overlay_service_.lassoTracksCursor();
         }
 
-        // Vulkan mesh frame — populated by `renderVulkanFrame` when there are meshes in
-        // the scene, consumed by gui_manager to feed `vulkan_viewport_pass.mesh_items`.
-
-        void setVulkanMeshFrame(ViewRenderState& view, VulkanMeshFrame frame) {
-            std::lock_guard lock(view.vulkan_mesh_frame_mutex_);
-            view.vulkan_mesh_frame_ = std::move(frame);
-        }
-        void clearVulkanMeshFrame(ViewRenderState& view) {
-            std::lock_guard lock(view.vulkan_mesh_frame_mutex_);
-            view.vulkan_mesh_frame_ = {};
-        }
-
         // Preview selection
         void setPreviewSelection(lfs::core::Tensor* preview, bool add_mode = true) {
             this->state().viewport_overlay_service_.setPreviewSelection(preview, add_mode);
@@ -719,9 +659,8 @@ namespace lfs::vis {
             return false;
         }
 
-        [[nodiscard]] ViewportInteropService& viewportInterop();
-        [[nodiscard]] const ViewportInteropService& viewportInterop() const;
-        void shutdownViewportInterop(VulkanContext* context = nullptr);
+        void clearViewportSceneImage();
+        void shutdownViewportInterop(GraphicsContext* context = nullptr);
         [[nodiscard]] bool hasPendingViewportResizeSettle() const {
             std::lock_guard lock(views_mutex_);
             for (const auto& [id, view] : view_states_)
@@ -782,9 +721,9 @@ namespace lfs::vis {
         [[nodiscard]] static PreviewImageReadbackConfig previewImageReadbackConfig(
             PreviewImageReadback readback,
             bool has_background_color_override);
-        void clearVulkanViewportImageState(ViewRenderState& view, glm::ivec2 size = {0, 0},
-                                           bool flip_y = false,
-                                           glm::ivec2 alloc_size = {0, 0});
+        void clearViewportImageState(ViewRenderState& view, glm::ivec2 size = {0, 0},
+                                     bool flip_y = false,
+                                     glm::ivec2 alloc_size = {0, 0});
         [[nodiscard]] float exportRasterizationScale(int target_height, int reference_height) const;
         [[nodiscard]] std::optional<float> exportOrthoScale(std::optional<float> scale, int target_height, int reference_height) const;
 
@@ -903,6 +842,11 @@ namespace lfs::vis {
         void requestViewFollowUp(ViewRenderState& view, DirtyMask flags);
         void queueSharedScratchRetry(ViewRenderState& view, DirtyMask retry_dirty);
         void notifyAsyncLodResultsReady();
+        // Fills the request's level-of-detail cut for `model` (rendering_manager_lod.cpp).
+        void prepareLodRequest(const RenderSettings& settings, const lfs::core::SplatData* model,
+                               lfs::rendering::ViewportRenderRequest& request,
+                               std::vector<std::uint32_t>& lod_touched_chunks);
+        void noteLodPageGeneration(std::uint64_t generation);
         void cameraMetricsWorkerLoop(std::stop_token stop_token);
         [[nodiscard]] GTComparisonImageLookup getOrQueueGTComparisonImage(
             GTComparisonImageJobRequest request);
@@ -962,18 +906,16 @@ namespace lfs::vis {
         const lfs::core::SplatData* lod_controller_model_ = nullptr;
         bool lod_controller_needs_sync_traversal_ = false;
         std::uint64_t lod_controller_page_map_generation_ = 0;
-        // Cached SH0→RGB derivation for the point-cloud Vulkan path. Refreshed
-        // only when the source sh0_raw() pointer/size changes so the Vulkan
-        // renderer's per-tensor upload cache stays warm across frames.
+        // Cached SH0→RGB derivation for the point-cloud path. Refreshed only when
+        // the source sh0_raw() pointer/size changes so the renderer's per-tensor
+        // upload cache stays warm across frames.
+        void invalidatePointCloudData();
         lfs::core::Tensor point_cloud_colors_cache_;
         const void* point_cloud_colors_cache_key_ = nullptr;
         std::size_t point_cloud_colors_cache_size_ = 0;
-        // Submit serial of the last frame that drew the point cloud; its buffers
-        // are released only after that frame has retired on the GPU.
-        std::uint64_t point_cloud_last_frame_serial_ = 0;
         std::uint64_t point_cloud_data_revision_ = 0;
         std::uint64_t point_cloud_preview_selection_revision_ = 0;
-        VulkanContext* last_vulkan_context_ = nullptr;
+        GraphicsContext* last_graphics_context_ = nullptr;
         std::atomic<bool> vksplat_terminal_release_pending_{false};
         ViewportFrameLifecycleService::ModelSource renderer_model_source_ = ViewportFrameLifecycleService::ModelSource::Scene;
 
@@ -995,10 +937,6 @@ namespace lfs::vis {
         glm::ivec2 gt_comparison_failed_placeholder_size_{0, 0};
         std::mutex wake_callback_mutex_;
         std::function<void()> wake_callback_;
-
-        // GT compare-panel camera for the frame currently presented, for the
-        // selection lane. Written and cleared at exactly the same sites as
-        // this->state().vulkan_gt_comparison_content_size_.
 
         FrameDemandLedger frame_demand_ledger_;
         std::vector<ViewId> ledger_views_;
@@ -1033,10 +971,6 @@ namespace lfs::vis {
         uint64_t gt_comparison_image_request_generation_ = 0;
         std::condition_variable_any gt_comparison_image_cv_;
         std::jthread gt_comparison_image_worker_;
-        // #1574 GT depth/normal async hold-then-swap: at most one outstanding ticket.
-
-        // Granular dirty tracking
-
         CameraInteractionService camera_interaction_service_;
 
         RenderSettings activeSettingsLocked() const;
@@ -1071,7 +1005,6 @@ namespace lfs::vis {
 
         lfs::event::ScopedHandler event_handlers_;
 
-        friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
         friend class SceneManager;
     };
 

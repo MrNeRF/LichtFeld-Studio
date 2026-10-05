@@ -204,10 +204,11 @@ jobs:
           CUDA_VISIBLE_DEVICES: ''
           NVIDIA_VISIBLE_DEVICES: void
           DISPLAY: ''
-          LFS_TEST_BUILD_DIR: ${{ github.workspace }}/build
         # The runner has no NVIDIA driver; the toolkit's stub libcuda lets the extension load without a GPU.
         run: |
           grep -m1 'model name' /proc/cpuinfo || true
+          # github.workspace is the host path; Python runs in the job container.
+          export LFS_TEST_BUILD_DIR="$PWD/build"
           mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
           ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
           LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \

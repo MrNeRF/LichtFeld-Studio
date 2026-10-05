@@ -61,6 +61,11 @@ namespace lfs::nodes {
         // EvalInputs without a second evaluator API. Ordinary callers leave it empty.
         std::vector<std::pair<std::string, std::string>> group_stack;
         std::string cache_namespace;
+        // Evaluate only this output and its dependencies. For a field, geometry
+        // is the first reachable consumer's input (or the modifier input).
+        std::string requested_node;
+        std::string requested_socket;
+        bool resolve_preview_context = true;
         float seconds = 0.0f;
         float frames_per_second = 24.0f;
     };
@@ -80,6 +85,8 @@ namespace lfs::nodes {
 
     // Long node work calls this between chunks; it does nothing outside an evaluation.
     LFS_CORE_API void throw_if_evaluation_cancelled();
+    // Whether the running evaluation was cancelled, for work that reports through its own channel.
+    LFS_CORE_API bool evaluation_cancelled();
 
     struct EvalControl {
         std::function<bool()> cancelled;
@@ -88,6 +95,8 @@ namespace lfs::nodes {
         // Rethrow device out-of-memory instead of reporting it as a node error,
         // for hosts that can release memory and retry.
         bool propagate_out_of_memory = false;
+        // Wait for each node's queued device work before stopping its timer, so node times include the GPU.
+        bool synchronize_nodes = false;
     };
 
     struct EvalResult {
@@ -97,12 +106,12 @@ namespace lfs::nodes {
         std::unordered_map<std::string, double> time_ms;
         std::unordered_map<std::string, NodeEvaluation> nodes;
         std::unordered_map<std::string, Value> output_values;
+        std::size_t output_key = 0;
         bool cancelled = false;
     };
 
     struct ConsumedSelection {
-        std::uint64_t context = 0; // FieldContext::identity
-        core::Tensor mask;         // Bool
+        core::Tensor mask; // Bool, over the first component of the node's geometry input
     };
 
     struct CachedNodeOutput {
@@ -139,7 +148,7 @@ namespace lfs::nodes {
         [[nodiscard]] float seconds() const noexcept { return seconds_; }
         [[nodiscard]] float frame() const noexcept { return seconds_ * frames_per_second_; }
         void set_output(std::string identifier, Value value);
-        // Keeps the first Selection mask a node evaluates, for viewport previews.
+        // Keeps the first Selection mask a node evaluates on its geometry input, for viewport previews.
         void record_selection(const FieldContext& context, const core::Tensor& mask) const;
 
     private:
@@ -148,6 +157,7 @@ namespace lfs::nodes {
         std::unordered_map<std::string, std::vector<Value>> inputs_;
         std::unordered_map<std::string, Value> outputs_;
         mutable std::optional<ConsumedSelection> selection_;
+        const Geometry* geometry_input_ = nullptr;
         FieldMemo* memo_ = nullptr;
         EvalHost* host_ = nullptr;
         float seconds_ = 0.0f;

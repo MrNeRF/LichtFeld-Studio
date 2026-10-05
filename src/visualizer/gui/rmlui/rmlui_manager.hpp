@@ -9,6 +9,7 @@
 
 #include "gui/gui_input.hpp"
 #include "gui/rmlui/element_observer.hpp"
+#include "gui/ui_renderer.hpp"
 #include <RmlUi/Core/EventListener.h>
 #include <RmlUi/Core/Types.h>
 #include <functional>
@@ -25,10 +26,7 @@
 #include <utility>
 #include <vector>
 
-#include <vulkan/vulkan.h>
-
 struct SDL_Window;
-class RenderInterface_VK;
 
 namespace Rml {
     class Context;
@@ -38,7 +36,8 @@ namespace Rml {
 namespace lfs::vis {
     class WindowInputDispatchTest;
     class McpNodeToolsTest;
-    class VulkanContext;
+    class GraphicsContext;
+    struct GraphicsFrame;
 } // namespace lfs::vis
 
 namespace lfs::vis::gui {
@@ -48,7 +47,7 @@ namespace lfs::vis::gui {
     class SceneGraphElement;
     enum class RmlCursorRequest : uint8_t;
 
-    struct CachedVulkanContextRender {
+    struct CachedUiContextRender {
         Rml::TextureHandle texture = {};
         int width = 0;
         int height = 0;
@@ -71,9 +70,9 @@ namespace lfs::vis::gui {
         float y2 = 0.0f;
     };
 
-    struct CachedVulkanContextDraw {
+    struct CachedUiContextDraw {
         Rml::Context* context = nullptr;
-        CachedVulkanContextRender* cache = nullptr;
+        CachedUiContextRender* cache = nullptr;
         int cache_width = 0;
         int cache_height = 0;
         float offset_x = 0.0f;
@@ -102,7 +101,8 @@ namespace lfs::vis::gui {
         LFS_VIS_API explicit RmlUIManager(SDL_Window* window = nullptr);
         LFS_VIS_API ~RmlUIManager();
 
-        bool initVulkan(SDL_Window* window, lfs::vis::VulkanContext& vulkan_context, float dp_ratio = 1.0f);
+        bool initGraphics(SDL_Window* window, lfs::vis::GraphicsContext& graphics,
+                          float dp_ratio = 1.0f);
         LFS_VIS_API void shutdown();
         [[nodiscard]] bool isInitialized() const { return initialized_; }
 
@@ -123,7 +123,7 @@ namespace lfs::vis::gui {
 
         void activateTheme(const std::string& theme_id);
 
-        RenderInterface_VK* getVulkanRenderInterface() const { return vulkan_render_interface_; }
+        UiRenderer* getUiRenderer() const { return ui_renderer_; }
         RmlTextInputHandler* getTextInputHandler() const { return text_input_handler_.get(); }
         SDL_Window* getWindow() const { return window_; }
 
@@ -147,26 +147,21 @@ namespace lfs::vis::gui {
         LFS_VIS_API void syncTextInput();
         LFS_VIS_API void ProcessEvent(Rml::Event& event) override;
 
-        void queueVulkanContext(Rml::Context* context,
-                                float offset_x = 0.0f,
-                                float offset_y = 0.0f,
-                                bool foreground = false,
-                                bool clip_enabled = false,
-                                float clip_x1 = 0.0f,
-                                float clip_y1 = 0.0f,
-                                float clip_x2 = 0.0f,
-                                float clip_y2 = 0.0f);
-        void queueCachedVulkanContext(const CachedVulkanContextDraw& draw);
-        void releaseCachedVulkanContext(CachedVulkanContextRender& cache);
-        void clearVulkanQueue();
-        [[nodiscard]] bool beginVulkanFrame(VkCommandBuffer command_buffer,
-                                            VkExtent2D extent,
-                                            VkImage swapchain_image,
-                                            VkImageView swapchain_image_view,
-                                            VkImageView depth_stencil_image_view,
-                                            std::size_t frame_slot);
-        void renderQueuedVulkanContexts(bool foreground);
-        void endVulkanFrame();
+        void queueContext(Rml::Context* context,
+                          float offset_x = 0.0f,
+                          float offset_y = 0.0f,
+                          bool foreground = false,
+                          bool clip_enabled = false,
+                          float clip_x1 = 0.0f,
+                          float clip_y1 = 0.0f,
+                          float clip_x2 = 0.0f,
+                          float clip_y2 = 0.0f);
+        void queueCachedContext(const CachedUiContextDraw& draw);
+        void releaseCachedContext(CachedUiContextRender& cache);
+        void clearQueue();
+        [[nodiscard]] bool beginFrame(const lfs::vis::GraphicsFrame& frame);
+        void renderQueuedContexts(bool foreground);
+        void endFrame();
 
         LFS_VIS_API void beginFrameCursorTracking();
         LFS_VIS_API void trackContextFrame(const Rml::Context* context, int window_x, int window_y,
@@ -210,7 +205,7 @@ namespace lfs::vis::gui {
     private:
         friend class lfs::vis::WindowInputDispatchTest;
         friend class lfs::vis::McpNodeToolsTest;
-        struct VulkanContextCommand {
+        struct UiContextCommand {
             Rml::Context* context = nullptr;
             std::string context_name;
             float offset_x = 0.0f;
@@ -220,7 +215,7 @@ namespace lfs::vis::gui {
             float clip_y1 = 0.0f;
             float clip_x2 = 0.0f;
             float clip_y2 = 0.0f;
-            CachedVulkanContextRender* cache = nullptr;
+            CachedUiContextRender* cache = nullptr;
             int cache_width = 0;
             int cache_height = 0;
             float draw_width = 0.0f;
@@ -243,7 +238,7 @@ namespace lfs::vis::gui {
         LFS_VIS_API bool initWithRenderInterface(SDL_Window* window,
                                                  float dp_ratio,
                                                  std::unique_ptr<Rml::RenderInterface> render_interface,
-                                                 RenderInterface_VK* vulkan_render_interface);
+                                                 UiRenderer* ui_renderer);
 
         LFS_VIS_API bool registerInput(Rml::Context* context, const PanelInputState& input,
                                        std::function<void(const PanelInputState&)> handler, bool exclusive,
@@ -299,7 +294,7 @@ namespace lfs::vis::gui {
 
         std::unique_ptr<RmlSystemInterface> system_interface_;
         std::unique_ptr<Rml::RenderInterface> owned_render_interface_;
-        RenderInterface_VK* vulkan_render_interface_ = nullptr;
+        UiRenderer* ui_renderer_ = nullptr;
         std::unique_ptr<RmlTextInputHandler> text_input_handler_;
         std::vector<std::vector<std::byte>> font_blobs_;
         bool cjk_fonts_loaded_ = false;
@@ -313,16 +308,17 @@ namespace lfs::vis::gui {
         std::unordered_map<const Rml::Context*, TrackedContextFrame> previous_context_frames_;
         std::unordered_map<const Rml::Context*, std::chrono::steady_clock::time_point>
             tooltip_reveal_deadlines_;
-        std::vector<VulkanContextCommand> vulkan_queue_;
-        std::vector<VulkanContextCommand> vulkan_foreground_queue_;
+        std::vector<UiContextCommand> queue_;
+        std::vector<UiContextCommand> foreground_queue_;
         SDL_Window* window_ = nullptr;
         float dp_ratio_ = 1.0f;
         std::string active_theme_id_;
         bool resize_deferring_ = false;
         bool debugger_enabled_ = false;
         bool debugger_initialized_ = false;
-        bool vulkan_frame_active_ = false;
-        VkExtent2D vulkan_frame_extent_{};
+        bool frame_active_ = false;
+        std::uint32_t frame_width_ = 0;
+        std::uint32_t frame_height_ = 0;
         bool initialized_ = false;
         std::uint64_t tracked_context_order_ = 0;
         mutable std::mutex drag_payload_mutex_;

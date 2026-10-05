@@ -304,7 +304,7 @@ TEST_F(TrainingSceneInitConcurrencyTest, ColdViewportDefersWhileTrainerHoldsMode
         timed_out = work.wait_for(std::chrono::seconds(2)) == std::future_status::timeout;
     });
     locked.get_future().wait();
-    const auto deferred = rendering.renderVulkanFrame(context);
+    const auto deferred = rendering.renderFrame(context);
     viewer_work.set_value();
     worker.join();
     EXPECT_FALSE(timed_out);
@@ -313,7 +313,7 @@ TEST_F(TrainingSceneInitConcurrencyTest, ColdViewportDefersWhileTrainerHoldsMode
     EXPECT_NE(rendering.pendingDirtyMask(), 0u);
 
     // Once growth releases the lock, a hidden/empty scene can publish its extent.
-    const auto ready = rendering.renderVulkanFrame(context);
+    const auto ready = rendering.renderFrame(context);
     EXPECT_TRUE(ready.matches_viewport_extent);
 }
 

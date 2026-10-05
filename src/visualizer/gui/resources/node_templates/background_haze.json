@@ -1,0 +1,301 @@
+{
+  "schema_version": 1,
+  "id": "background_haze",
+  "name": "Remove background haze",
+  "description": "Remove faint oversized splats that create a milky background.",
+  "category": "Clean-up",
+  "scene_kinds": [
+    "splat"
+  ],
+  "adjust": "Raise Max Opacity or lower Min Size to remove more; inspect the result before applying.",
+  "tree": {
+    "schema_version": 1,
+    "uuid": "builtin.background_haze",
+    "name": "Remove background haze",
+    "tree_type": "lfs.geometry",
+    "nodes": [
+      {
+        "name": "Group Input",
+        "type_id": "lfs.group_input",
+        "location": [
+          -760,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Group Output",
+        "type_id": "lfs.group_output",
+        "location": [
+          520,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "none"
+          }
+        },
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Opacity",
+        "type_id": "lfs.opacity",
+        "location": [
+          -560,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Faint",
+        "type_id": "lfs.compare",
+        "location": [
+          -340,
+          -180
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0.15
+          }
+        },
+        "properties": {
+          "operation": "less_than"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Scale",
+        "type_id": "lfs.scale",
+        "location": [
+          -560,
+          -340
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Size",
+        "type_id": "lfs.vector_math",
+        "location": [
+          -340,
+          -340
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "operation": "length"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Large",
+        "type_id": "lfs.compare",
+        "location": [
+          -120,
+          -340
+        ],
+        "muted": false,
+        "input_values": {
+          "B": {
+            "type": "float",
+            "value": 0.25
+          }
+        },
+        "properties": {
+          "operation": "greater_than"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Haze",
+        "type_id": "lfs.boolean_math",
+        "location": [
+          80,
+          -220
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "operation": "and"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Delete Haze",
+        "type_id": "lfs.delete_geometry",
+        "location": [
+          280,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "geometry"
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Adjust these settings",
+        "type_id": "lfs.frame",
+        "location": [
+          -620,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "colour": "neutral",
+          "label": "Adjust these settings",
+          "note": "Raise Max Opacity or lower Min Size to remove more; inspect the result before applying."
+        },
+        "ui": {},
+        "version": 1
+      }
+    ],
+    "links": [
+      {
+        "from_node": "Group Input",
+        "from_socket": "Geometry",
+        "to_node": "Delete Haze",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Opacity",
+        "from_socket": "Opacity",
+        "to_node": "Faint",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Scale",
+        "from_socket": "Scale",
+        "to_node": "Size",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Size",
+        "from_socket": "Value",
+        "to_node": "Large",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Faint",
+        "from_socket": "Result",
+        "to_node": "Haze",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Large",
+        "from_socket": "Result",
+        "to_node": "Haze",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Haze",
+        "from_socket": "Result",
+        "to_node": "Delete Haze",
+        "to_socket": "Selection"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Max Opacity",
+        "to_node": "Faint",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Min Size",
+        "to_node": "Large",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Delete Haze",
+        "from_socket": "Geometry",
+        "to_node": "Group Output",
+        "to_socket": "Geometry"
+      }
+    ],
+    "interface": {
+      "inputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        },
+        {
+          "identifier": "Max Opacity",
+          "label": "Max Opacity",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 0.15
+          },
+          "min": 0,
+          "max": 1,
+          "step": 0.01
+        },
+        {
+          "identifier": "Min Size",
+          "label": "Min Size",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 0.25
+          },
+          "min": 0,
+          "max": 10,
+          "step": 0.01
+        }
+      ],
+      "outputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        }
+      ]
+    }
+  }
+}

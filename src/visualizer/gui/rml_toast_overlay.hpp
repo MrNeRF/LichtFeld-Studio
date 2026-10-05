@@ -99,7 +99,7 @@ namespace lfs::vis::gui {
         float last_right_px_ = -1.0f;
         float last_bottom_px_ = -1.0f;
         std::vector<std::uint8_t> last_alpha_;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
         bool render_needed_ = true;
     };
 

@@ -160,8 +160,8 @@ namespace lfs::vis::gui {
         node_editor_.reset();
         chrome_tooltip_.setHover({}, nullptr);
         if (services_.rml) {
-            services_.rml->releaseCachedVulkanContext(chrome_cache_);
-            services_.rml->releaseCachedVulkanContext(overlay_cache_);
+            services_.rml->releaseCachedContext(chrome_cache_);
+            services_.rml->releaseCachedContext(overlay_cache_);
             if (chrome_context_)
                 services_.rml->destroyContext("screen_chrome");
             if (overlay_context_)
@@ -180,8 +180,8 @@ namespace lfs::vis::gui {
         if (!chrome_context_ || !overlay_context_)
             return;
         if (services_.rml) {
-            services_.rml->releaseCachedVulkanContext(chrome_cache_);
-            services_.rml->releaseCachedVulkanContext(overlay_cache_);
+            services_.rml->releaseCachedContext(chrome_cache_);
+            services_.rml->releaseCachedContext(overlay_cache_);
         }
         if (chrome_document_) {
             chrome_context_->UnloadDocument(chrome_document_);
@@ -727,7 +727,7 @@ namespace lfs::vis::gui {
             services_.rml->setContextNeedsPassiveMouseMoveFrames(chrome_context_, chrome_tooltip_.hasActiveState());
             services_.rml->setContextTooltipRevealDeadline(chrome_context_, chrome_tooltip_.revealDeadline());
             services_.rml->trackContextFrame(chrome_context_, static_cast<int>(work_.x), static_cast<int>(work_.y));
-            services_.rml->queueCachedVulkanContext({
+            services_.rml->queueCachedContext({
                 .context = chrome_context_,
                 .cache = &chrome_cache_,
                 .cache_width = w,
@@ -875,7 +875,7 @@ namespace lfs::vis::gui {
             overlay_context_->Update();
             overlay_dirty_ = false;
         }
-        services_.rml->queueCachedVulkanContext({
+        services_.rml->queueCachedContext({
             .context = overlay_context_,
             .cache = &overlay_cache_,
             .cache_width = w,

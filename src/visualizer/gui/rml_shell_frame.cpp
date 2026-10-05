@@ -54,7 +54,7 @@ namespace lfs::vis::gui {
 
     void RmlShellFrame::shutdown() {
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("shell_frame");
         rml_context_ = nullptr;
@@ -70,7 +70,7 @@ namespace lfs::vis::gui {
             return;
 
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
 
         if (document_) {
             rml_context_->UnloadDocument(document_);
@@ -123,7 +123,7 @@ namespace lfs::vis::gui {
     void RmlShellFrame::render(const ShellRegions& regions) {
         if (!rml_context_ || !document_)
             return;
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
 
         const float full_w = regions.screen.w;
@@ -160,7 +160,7 @@ namespace lfs::vis::gui {
             rml_context_->Update();
         }
 
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = layout.width,

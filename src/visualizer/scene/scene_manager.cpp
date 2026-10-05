@@ -28,8 +28,8 @@
 #include "python/python_runtime.hpp"
 #include "rendering/appearance_tensor_model.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/graphics_external_tensor.hpp"
 #include "rendering/rendering_manager.hpp"
-#include "rendering/vulkan_external_tensor.hpp"
 #include "scene/point_cloud_merge.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
@@ -53,7 +53,7 @@
 #include "visualizer/rendering/model_renderability.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer_impl.hpp"
-#include "window/vulkan_context.hpp"
+#include "window/graphics_context.hpp"
 #include "window/window_manager.hpp"
 #include <algorithm>
 #include <cctype>
@@ -1383,14 +1383,14 @@ namespace lfs::vis {
 
     void SceneManager::drainGpuForTensorRelease() {
         if (auto* const rendering = services().renderingOrNull()) {
-            rendering->viewportInterop().setSceneImage(nullptr, glm::ivec2(0, 0), false, 0);
+            rendering->clearViewportSceneImage();
             // Stop asynchronous page decoding and uploads before device idle
             // and before the scene releases the model and its mapped metadata.
             rendering->releaseSceneModelResources();
         }
         if (auto* const window_mgr = services().windowOrNull()) {
-            if (auto* const vulkan_ctx = window_mgr->getVulkanContext()) {
-                (void)vulkan_ctx->deviceWaitIdle();
+            if (auto* const graphics = window_mgr->getGraphicsContext()) {
+                (void)graphics->waitIdle();
             }
         }
     }
@@ -1892,6 +1892,10 @@ namespace lfs::vis {
         if (selection_.selectedNodeCount() == 1 && selection_.isNodeSelected(id))
             return;
 
+        if (const auto& preview = modifier_manager_->previewState();
+            preview && preview->target != scene_.getNodeUuid(id))
+            modifier_manager_->previewClear();
+
         selection_.selectNode(id);
         if (import_selection_generation)
             *import_selection_generation = selection_.generation();
@@ -1934,6 +1938,9 @@ namespace lfs::vis {
                 return;
         }
 
+        if (const auto& preview = modifier_manager_->previewState();
+            preview && (ids.size() != 1 || preview->target != scene_.getNodeUuid(ids.front())))
+            modifier_manager_->previewClear();
         selection_.selectNodes(ids);
         python::invalidate_poll_caches(1);
         if (services().renderingOrNull())
@@ -3526,8 +3533,15 @@ namespace lfs::vis {
             modifier_preview_selection_ = std::move(selection);
             ++modifier_preview_generation_;
         }
-        std::lock_guard state_lock(state_mutex_);
-        cached_render_state_.reset();
+        {
+            std::lock_guard state_lock(state_mutex_);
+            cached_render_state_.reset();
+        }
+        // The derived mask can change without a new payload (for example an
+        // attribute-only graph or a Paint Selection stroke). Invalidating the
+        // snapshot alone does not schedule a new scene render.
+        if (auto* rendering = services().renderingOrNull())
+            rendering->markDirty(DirtyFlag::SELECTION, FrameReason::Selection, "node_selection_preview");
     }
 
     SceneRenderState SceneManager::buildRenderState(const SceneRenderStateOptions options) const {

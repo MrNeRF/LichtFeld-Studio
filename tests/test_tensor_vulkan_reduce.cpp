@@ -468,6 +468,11 @@ namespace {
             Case{{2000, 3}, 0},
             Case{{70001}, 0},
             Case{{4000, 1500}, 1},
+            // Lines of one tile, one past it, two exactly, and a strided line over several tiles.
+            Case{{4096}, 0},
+            Case{{4097}, 0},
+            Case{{2, 8192}, 1},
+            Case{{9001, 3}, 0},
         };
         for (const Case& test : cases) {
             size_t count = 1;
@@ -502,17 +507,19 @@ namespace {
                 }
             }
         }
-        std::vector<int> integers(5 * 3000);
+        // Rows over several tiles, so the int path also adds the totals of earlier tiles.
+        constexpr size_t kRow = 9000;
+        std::vector<int> integers(5 * kRow);
         for (size_t i = 0; i < integers.size(); ++i) {
             integers[i] = static_cast<int>(i % 13) - 6;
         }
-        const Tensor vulkan = upload_vulkan(Tensor::from_vector(integers, {5, 3000}, Device::CPU));
-        const std::vector<float> scanned = vulkan.cumsum(1).cpu().to(DataType::Float32).to_vector();
+        const Tensor vulkan = upload_vulkan(Tensor::from_vector(integers, {5, kRow}, Device::CPU));
+        const std::vector<int> scanned = vulkan.cumsum(1).cpu().to_vector_int();
         for (size_t row = 0; row < 5; ++row) {
             int running = 0;
-            for (size_t k = 0; k < 3000; ++k) {
-                running += integers[row * 3000 + k];
-                ASSERT_EQ(scanned[row * 3000 + k], static_cast<float>(running)) << row << "," << k;
+            for (size_t k = 0; k < kRow; ++k) {
+                running += integers[row * kRow + k];
+                ASSERT_EQ(scanned[row * kRow + k], running) << row << "," << k;
             }
         }
     }

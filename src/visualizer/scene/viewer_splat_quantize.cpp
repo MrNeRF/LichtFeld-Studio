@@ -10,6 +10,7 @@
 #include "core/shareable_allocation_limit.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -63,7 +64,7 @@ namespace lfs::vis {
         [[noreturn]] void throwUnrenderable(const std::filesystem::path& path,
                                             const lfs::core::SplatData& model) {
             std::string message = std::format(
-                "Viewer cannot bind splat tensors for '{}' in Vulkan-external storage",
+                "Viewer cannot bind splat tensors for '{}' in renderer-visible storage",
                 lfs::core::path_to_utf8(path));
             if (!lfs::core::sh_value_quant::enabled()) {
                 message += "; SH value quantization is disabled";
@@ -103,14 +104,14 @@ namespace lfs::vis {
             destination.set_name("SplatData.shN");
             destination.copy_from(source);
             model.shN_raw() = std::move(destination);
-            LOG_INFO("Viewer SH q16 disabled for '{}'; decoded SH rest into FP32 Vulkan-external storage",
+            LOG_INFO("Viewer SH q16 disabled for '{}'; decoded SH rest into FP32 renderer-visible storage",
                      lfs::core::path_to_utf8(path));
         }
 
         void encodeViewerSplatShNIfNeeded(const std::filesystem::path& path,
                                           lfs::core::SplatData& model) {
             if (!model.has_tensor_allocator()) {
-                LOG_WARN("Viewer SH q16 skipped for '{}': Vulkan-external storage is unavailable or degraded",
+                LOG_WARN("Viewer SH q16 skipped for '{}': a renderer-visible splat allocator is unavailable",
                          lfs::core::path_to_utf8(path));
                 return;
             }

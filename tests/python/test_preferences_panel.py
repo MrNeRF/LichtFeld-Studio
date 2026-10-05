@@ -97,7 +97,8 @@ def preferences_panel_module(monkeypatch):
 
     tensor_defaults = dict(backend="cuda", vulkan_device="", vulkan_validation=0,
                            force_fp32_half=False, force_no_atomic_float=False)
-    state.tensor_preferences = dict(tensor_defaults, cuda_available=True, metal_available=False)
+    state.tensor_preferences = dict(tensor_defaults, cuda_available=True, metal_available=False,
+                                   vulkan_available=True)
     state.backend_dialogs = []
     state.viewer_backend = "auto"
 

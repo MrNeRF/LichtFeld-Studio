@@ -113,10 +113,10 @@ namespace lfs::vis::gui {
         bool layoutFits(float reserve_px) const;
         LFS_VIS_API void fitToAvailableWidth(bool allow_expand);
         LFS_VIS_API void applyFitLevel(int level);
-        void queueCachedVulkanContext(float x, float y, float w_px, float h_px,
-                                      int screen_w, int screen_h,
-                                      int render_w, int render_h,
-                                      bool refresh_cache);
+        void queueCachedContext(float x, float y, float w_px, float h_px,
+                                int screen_w, int screen_h,
+                                int render_w, int render_h,
+                                bool refresh_cache);
         LFS_VIS_API void trackContextFrame(float window_x, float window_y);
         void trackRenderedContextFrame(float bar_x, float bar_y, float overlay_height) {
             trackContextFrame(bar_x, bar_y - overlay_height);
@@ -326,7 +326,7 @@ namespace lfs::vis::gui {
         int last_render_w_ = 0;
         int last_render_h_ = 0;
         int last_document_h_ = 0;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
         static constexpr int kMaxFitLevel = 9;
         static constexpr auto kIdleRefreshInterval = std::chrono::milliseconds(200);
         static constexpr auto kBusyRefreshInterval = std::chrono::milliseconds(100);

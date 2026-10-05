@@ -30,8 +30,12 @@
 #include "scene/scene_manager.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
 
+#ifdef LFS_GRAPHICS_METAL
+#include "gui/rmlui/rmlui_tensor_backend.hpp"
+#else
 #include "gui/rmlui/rmlui_vk_backend.hpp"
-#include "window/vulkan_context.hpp"
+#endif
+#include "window/graphics_context.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Context.h>
@@ -177,33 +181,26 @@ namespace lfs::vis::gui {
         return result;
     }
 
-    bool RmlUIManager::initVulkan(SDL_Window* window, lfs::vis::VulkanContext& vulkan_context, float dp_ratio) {
+    bool RmlUIManager::initGraphics(SDL_Window* window, lfs::vis::GraphicsContext& graphics,
+                                    float dp_ratio) {
+#ifdef LFS_GRAPHICS_METAL
+        auto render_interface = std::make_unique<TensorRmlUiRenderer>();
+#else
         auto render_interface = std::make_unique<RenderInterface_VK>();
-        RenderInterface_VK::ExternalContext context{};
-        context.instance = vulkan_context.instance();
-        context.physical_device = vulkan_context.physicalDevice();
-        context.device = vulkan_context.device();
-        context.pipeline_cache = vulkan_context.pipelineCache();
-        context.graphics_queue = vulkan_context.graphicsQueue();
-        context.graphics_queue_family = vulkan_context.graphicsQueueFamily();
-        context.color_format = vulkan_context.swapchainFormat();
-        context.depth_stencil_format = vulkan_context.depthStencilFormat();
-        context.extent = vulkan_context.framebufferExtent();
-        context.host_image_copy = vulkan_context.hasHostImageCopy();
-
-        auto* vulkan_render_interface = render_interface.get();
-        if (!vulkan_render_interface->InitializeExternal(context)) {
-            LOG_ERROR("Failed to initialize RmlUI Vulkan render interface");
+#endif
+        auto* const ui_renderer = render_interface.get();
+        if (!ui_renderer->initialize(graphics)) {
+            LOG_ERROR("Failed to initialize RmlUI graphics renderer");
             return false;
         }
 
-        return initWithRenderInterface(window, dp_ratio, std::move(render_interface), vulkan_render_interface);
+        return initWithRenderInterface(window, dp_ratio, std::move(render_interface), ui_renderer);
     }
 
     bool RmlUIManager::initWithRenderInterface(SDL_Window* window,
                                                float dp_ratio,
                                                std::unique_ptr<Rml::RenderInterface> render_interface,
-                                               RenderInterface_VK* vulkan_render_interface) {
+                                               UiRenderer* ui_renderer) {
         assert(!initialized_);
         assert(window);
         assert(dp_ratio >= 1.0f);
@@ -215,7 +212,7 @@ namespace lfs::vis::gui {
 
         system_interface_ = std::make_unique<RmlSystemInterface>(window);
         owned_render_interface_ = std::move(render_interface);
-        vulkan_render_interface_ = vulkan_render_interface;
+        ui_renderer_ = ui_renderer;
         text_input_handler_ = std::make_unique<RmlTextInputHandler>([this] { return accepts_text_activation_; });
 
         Rml::SetSystemInterface(system_interface_.get());
@@ -224,10 +221,10 @@ namespace lfs::vis::gui {
 
         if (!Rml::Initialise()) {
             LOG_ERROR("Failed to initialize RmlUI");
-            if (vulkan_render_interface_)
-                vulkan_render_interface_->ShutdownExternal();
+            if (ui_renderer_)
+                ui_renderer_->shutdown();
             owned_render_interface_.reset();
-            vulkan_render_interface_ = nullptr;
+            ui_renderer_ = nullptr;
             text_input_handler_.reset();
             system_interface_.reset();
             return false;
@@ -497,12 +494,12 @@ namespace lfs::vis::gui {
         if (Rml::GetTextInputHandler() == text_input_handler_.get())
             Rml::SetTextInputHandler(nullptr);
         Rml::Shutdown();
-        if (vulkan_render_interface_)
-            vulkan_render_interface_->ShutdownExternal();
+        if (ui_renderer_)
+            ui_renderer_->shutdown();
         owned_render_interface_.reset();
-        vulkan_render_interface_ = nullptr;
-        vulkan_queue_.clear();
-        vulkan_foreground_queue_.clear();
+        ui_renderer_ = nullptr;
+        queue_.clear();
+        foreground_queue_.clear();
         context_names_.clear();
         font_blobs_.clear();
         cjk_fonts_loaded_ = false;
@@ -510,7 +507,7 @@ namespace lfs::vis::gui {
         text_input_handler_.reset();
         system_interface_.reset();
         resize_deferring_ = false;
-        vulkan_frame_active_ = false;
+        frame_active_ = false;
         initialized_ = false;
 
         LOG_INFO("RmlUI shut down");
@@ -609,13 +606,13 @@ namespace lfs::vis::gui {
         if (current_drag_context_id_ == id)
             current_drag_context_id_ = 0;
         contexts_.erase(name);
-        auto erase_context_commands = [context](std::vector<VulkanContextCommand>& queue) {
-            std::erase_if(queue, [context](const VulkanContextCommand& command) {
+        auto erase_context_commands = [context](std::vector<UiContextCommand>& queue) {
+            std::erase_if(queue, [context](const UiContextCommand& command) {
                 return command.context == context;
             });
         };
-        erase_context_commands(vulkan_queue_);
-        erase_context_commands(vulkan_foreground_queue_);
+        erase_context_commands(queue_);
+        erase_context_commands(foreground_queue_);
         if (system_interface_)
             system_interface_->releaseContext(context);
         for (const auto* type : INPUT_LIFECYCLE_EVENTS)
@@ -1364,18 +1361,18 @@ namespace lfs::vis::gui {
         return changed;
     }
 
-    void RmlUIManager::queueVulkanContext(Rml::Context* const context,
-                                          const float offset_x,
-                                          const float offset_y,
-                                          const bool foreground,
-                                          const bool clip_enabled,
-                                          const float clip_x1,
-                                          const float clip_y1,
-                                          const float clip_x2,
-                                          const float clip_y2) {
-        if (!context || !vulkan_render_interface_)
+    void RmlUIManager::queueContext(Rml::Context* const context,
+                                    const float offset_x,
+                                    const float offset_y,
+                                    const bool foreground,
+                                    const bool clip_enabled,
+                                    const float clip_x1,
+                                    const float clip_y1,
+                                    const float clip_x2,
+                                    const float clip_y2) {
+        if (!context || !ui_renderer_)
             return;
-        auto& queue = foreground ? vulkan_foreground_queue_ : vulkan_queue_;
+        auto& queue = foreground ? foreground_queue_ : queue_;
         std::string context_name = "unknown";
         if (const auto it = context_names_.find(context); it != context_names_.end())
             context_name = it->second;
@@ -1392,13 +1389,13 @@ namespace lfs::vis::gui {
         });
     }
 
-    void RmlUIManager::queueCachedVulkanContext(const CachedVulkanContextDraw& draw) {
-        if (!draw.context || !draw.cache || !vulkan_render_interface_ ||
+    void RmlUIManager::queueCachedContext(const CachedUiContextDraw& draw) {
+        if (!draw.context || !draw.cache || !ui_renderer_ ||
             draw.cache_width <= 0 || draw.cache_height <= 0 ||
             draw.draw_width <= 0.0f || draw.draw_height <= 0.0f)
             return;
 
-        auto& queue = draw.foreground ? vulkan_foreground_queue_ : vulkan_queue_;
+        auto& queue = draw.foreground ? foreground_queue_ : queue_;
         std::string context_name = "unknown";
         if (const auto it = context_names_.find(draw.context); it != context_names_.end())
             context_name = it->second;
@@ -1422,9 +1419,9 @@ namespace lfs::vis::gui {
         });
     }
 
-    void RmlUIManager::releaseCachedVulkanContext(CachedVulkanContextRender& cache) {
-        if (vulkan_render_interface_ && cache.texture != 0)
-            vulkan_render_interface_->ReleaseTexture(cache.texture);
+    void RmlUIManager::releaseCachedContext(CachedUiContextRender& cache) {
+        if (ui_renderer_ && cache.texture != 0)
+            ui_renderer_->ReleaseTexture(cache.texture);
         cache.texture = {};
         cache.width = 0;
         cache.height = 0;
@@ -1432,49 +1429,38 @@ namespace lfs::vis::gui {
         cache.preview_texture_generation = 0;
     }
 
-    void RmlUIManager::clearVulkanQueue() {
-        vulkan_queue_.clear();
-        vulkan_foreground_queue_.clear();
+    void RmlUIManager::clearQueue() {
+        queue_.clear();
+        foreground_queue_.clear();
     }
 
-    bool RmlUIManager::beginVulkanFrame(const VkCommandBuffer command_buffer,
-                                        const VkExtent2D extent,
-                                        const VkImage swapchain_image,
-                                        const VkImageView swapchain_image_view,
-                                        const VkImageView depth_stencil_image_view,
-                                        const std::size_t frame_slot) {
-        if (!vulkan_render_interface_ || command_buffer == VK_NULL_HANDLE || swapchain_image_view == VK_NULL_HANDLE ||
-            depth_stencil_image_view == VK_NULL_HANDLE)
+    bool RmlUIManager::beginFrame(const lfs::vis::GraphicsFrame& frame) {
+        if (!ui_renderer_ || !ui_renderer_->beginFrame(frame))
             return false;
-        vulkan_render_interface_->BeginExternalFrame(command_buffer,
-                                                     extent,
-                                                     swapchain_image,
-                                                     swapchain_image_view,
-                                                     depth_stencil_image_view,
-                                                     frame_slot);
-        vulkan_frame_active_ = true;
-        vulkan_frame_extent_ = extent;
+        frame_active_ = true;
+        frame_width_ = frame.width;
+        frame_height_ = frame.height;
         return true;
     }
 
-    void RmlUIManager::renderQueuedVulkanContexts(const bool foreground) {
-        auto& queue = foreground ? vulkan_foreground_queue_ : vulkan_queue_;
-        if (!vulkan_render_interface_ || !vulkan_frame_active_) {
+    void RmlUIManager::renderQueuedContexts(const bool foreground) {
+        auto& queue = foreground ? foreground_queue_ : queue_;
+        if (!ui_renderer_ || !frame_active_) {
             queue.clear();
             return;
         }
 
-        const auto previewDependencyChanged = [this](const CachedVulkanContextRender& cache) {
+        const auto previewDependencyChanged = [this](const CachedUiContextRender& cache) {
             return cache.depends_on_preview_textures &&
                    cache.preview_texture_generation !=
-                       vulkan_render_interface_->previewTextureGeneration();
+                       ui_renderer_->previewTextureGeneration();
         };
-        const auto recordPreviewDependency = [this](CachedVulkanContextRender& cache,
+        const auto recordPreviewDependency = [this](CachedUiContextRender& cache,
                                                     const bool saved) {
             cache.depends_on_preview_textures =
-                saved && vulkan_render_interface_->currentContextUsedPreviewTexture();
+                saved && ui_renderer_->currentContextUsedPreviewTexture();
             cache.preview_texture_generation = cache.depends_on_preview_textures
-                                                   ? vulkan_render_interface_->previewTextureGeneration()
+                                                   ? ui_renderer_->previewTextureGeneration()
                                                    : 0;
         };
 
@@ -1497,8 +1483,8 @@ namespace lfs::vis::gui {
             // so we cache only the on-screen clipped window, which always fits the
             // framebuffer and blits 1:1.
             if (command.cache && command.cache_visible_region) {
-                const int fb_w = static_cast<int>(vulkan_frame_extent_.width);
-                const int fb_h = static_cast<int>(vulkan_frame_extent_.height);
+                const int fb_w = static_cast<int>(frame_width_);
+                const int fb_h = static_cast<int>(frame_height_);
                 const int left = std::clamp(static_cast<int>(std::floor(command.clip_x1)), 0, fb_w);
                 const int top = std::clamp(static_cast<int>(std::floor(command.clip_y1)), 0, fb_h);
                 const int right = std::clamp(static_cast<int>(std::ceil(command.clip_x2)), 0, fb_w);
@@ -1512,11 +1498,13 @@ namespace lfs::vis::gui {
 
                 if (vis_w <= 0 || vis_h <= 0) {
                     if (command.cache->texture != 0)
-                        releaseCachedVulkanContext(*command.cache);
+                        releaseCachedContext(*command.cache);
                 } else {
-                    const VkRect2D capture_region{
-                        {left, top},
-                        {static_cast<uint32_t>(vis_w), static_cast<uint32_t>(vis_h)}};
+                    const UiPixelRect capture_region{
+                        .x = left,
+                        .y = top,
+                        .width = static_cast<uint32_t>(vis_w),
+                        .height = static_cast<uint32_t>(vis_h)};
                     const bool region_changed =
                         command.cache->width != vis_w || command.cache->height != vis_h ||
                         std::abs(command.cache->offset_x - command.offset_x) > 0.5f ||
@@ -1539,25 +1527,25 @@ namespace lfs::vis::gui {
                                 ? command.cache->texture
                                 : Rml::TextureHandle{};
                         if (command.cache->texture != 0 && reuse_texture == 0)
-                            releaseCachedVulkanContext(*command.cache);
+                            releaseCachedContext(*command.cache);
 
-                        vulkan_render_interface_->ResetContextRenderState();
-                        vulkan_render_interface_->BeginCacheCapture(left, top, vis_w, vis_h);
-                        vulkan_render_interface_->SetContextOffset(command.offset_x, command.offset_y);
-                        vulkan_render_interface_->SetContextClipRect(fleft, ftop, fright, fbottom);
-                        const Rml::LayerHandle layer = vulkan_render_interface_->PushLayer();
+                        ui_renderer_->resetContextRenderState();
+                        ui_renderer_->beginCacheCapture(left, top, vis_w, vis_h);
+                        ui_renderer_->setContextOffset(command.offset_x, command.offset_y);
+                        ui_renderer_->setContextClipRect(fleft, ftop, fright, fbottom);
+                        const Rml::LayerHandle layer = ui_renderer_->PushLayer();
                         if (layer != 0) {
                             command.context->Render();
                             const Rml::TextureHandle saved_texture =
-                                vulkan_render_interface_->SaveLayerRegionAsTexture(capture_region, reuse_texture);
+                                ui_renderer_->saveLayerRegionAsTexture(capture_region, reuse_texture);
                             if (reuse_texture != 0 && saved_texture != 0 && saved_texture != reuse_texture)
-                                vulkan_render_interface_->ReleaseTexture(reuse_texture);
+                                ui_renderer_->ReleaseTexture(reuse_texture);
                             // On save failure keep a still-valid reuse handle (avoid leaking it).
                             command.cache->texture =
                                 saved_texture != 0 ? saved_texture : reuse_texture;
-                            vulkan_render_interface_->SetTextureDebugName(command.cache->texture,
-                                                                          command.context_name);
-                            vulkan_render_interface_->PopLayer();
+                            ui_renderer_->setTextureDebugName(command.cache->texture,
+                                                              command.context_name);
+                            ui_renderer_->PopLayer();
                             const bool saved = command.cache->texture != 0;
                             command.cache->width = saved ? vis_w : 0;
                             command.cache->height = saved ? vis_h : 0;
@@ -1569,7 +1557,7 @@ namespace lfs::vis::gui {
                             command.cache->clip_y2 = fbottom;
                             recordPreviewDependency(*command.cache, saved);
                         }
-                        vulkan_render_interface_->EndCacheCapture();
+                        ui_renderer_->endCacheCapture();
                     }
 
                     if (command.cache->texture != 0) {
@@ -1580,31 +1568,30 @@ namespace lfs::vis::gui {
                         lfs::core::ScopedTimer timer(
                             blit_timer_name, 0.25, lfs::core::LogLevel::Performance,
                             LFS_SOURCE_SITE_CURRENT());
-                        vulkan_render_interface_->ResetContextRenderState();
-                        vulkan_render_interface_->SetContextClipRect(fleft, ftop, fright, fbottom);
-                        vulkan_render_interface_->RenderTextureQuad(command.cache->texture,
-                                                                    fleft,
-                                                                    ftop,
-                                                                    static_cast<float>(vis_w),
-                                                                    static_cast<float>(vis_h));
+                        ui_renderer_->resetContextRenderState();
+                        ui_renderer_->setContextClipRect(fleft, ftop, fright, fbottom);
+                        ui_renderer_->renderTextureQuad(command.cache->texture,
+                                                        fleft,
+                                                        ftop,
+                                                        static_cast<float>(vis_w),
+                                                        static_cast<float>(vis_h));
                     } else {
                         lfs::core::ScopedTimer timer(
                             timer_name, lfs::core::LogLevel::Performance,
                             LFS_SOURCE_SITE_CURRENT());
-                        vulkan_render_interface_->ResetContextRenderState();
-                        vulkan_render_interface_->SetContextClipRect(command.clip_x1,
-                                                                     command.clip_y1,
-                                                                     command.clip_x2,
-                                                                     command.clip_y2);
-                        vulkan_render_interface_->SetContextOffset(command.offset_x, command.offset_y);
+                        ui_renderer_->resetContextRenderState();
+                        ui_renderer_->setContextClipRect(command.clip_x1,
+                                                         command.clip_y1,
+                                                         command.clip_x2,
+                                                         command.clip_y2);
+                        ui_renderer_->setContextOffset(command.offset_x, command.offset_y);
                         command.context->Render();
                     }
                 }
             } else if (command.cache) {
-                const VkRect2D capture_region{
-                    {0, 0},
-                    {static_cast<uint32_t>(command.cache_width),
-                     static_cast<uint32_t>(command.cache_height)}};
+                const UiPixelRect capture_region{
+                    .width = static_cast<uint32_t>(command.cache_width),
+                    .height = static_cast<uint32_t>(command.cache_height)};
                 const bool refresh_cache =
                     command.refresh_cache ||
                     command.cache->texture == 0 ||
@@ -1621,34 +1608,34 @@ namespace lfs::vis::gui {
                             ? command.cache->texture
                             : Rml::TextureHandle{};
                     if (command.cache->texture != 0 && reuse_texture == 0)
-                        releaseCachedVulkanContext(*command.cache);
+                        releaseCachedContext(*command.cache);
 
-                    vulkan_render_interface_->ResetContextRenderState();
-                    vulkan_render_interface_->BeginCacheCapture(0, 0, command.cache_width, command.cache_height);
-                    vulkan_render_interface_->SetContextOffset(0.0f, 0.0f);
-                    vulkan_render_interface_->SetContextClipRect(0.0f,
-                                                                 0.0f,
-                                                                 static_cast<float>(command.cache_width),
-                                                                 static_cast<float>(command.cache_height));
-                    const Rml::LayerHandle layer = vulkan_render_interface_->PushLayer();
+                    ui_renderer_->resetContextRenderState();
+                    ui_renderer_->beginCacheCapture(0, 0, command.cache_width, command.cache_height);
+                    ui_renderer_->setContextOffset(0.0f, 0.0f);
+                    ui_renderer_->setContextClipRect(0.0f,
+                                                     0.0f,
+                                                     static_cast<float>(command.cache_width),
+                                                     static_cast<float>(command.cache_height));
+                    const Rml::LayerHandle layer = ui_renderer_->PushLayer();
                     if (layer != 0) {
                         command.context->Render();
                         const Rml::TextureHandle saved_texture =
-                            vulkan_render_interface_->SaveLayerRegionAsTexture(capture_region, reuse_texture);
+                            ui_renderer_->saveLayerRegionAsTexture(capture_region, reuse_texture);
                         if (reuse_texture != 0 && saved_texture != 0 && saved_texture != reuse_texture)
-                            vulkan_render_interface_->ReleaseTexture(reuse_texture);
+                            ui_renderer_->ReleaseTexture(reuse_texture);
                         // On save failure keep a still-valid reuse handle (avoid leaking it).
                         command.cache->texture =
                             saved_texture != 0 ? saved_texture : reuse_texture;
-                        vulkan_render_interface_->SetTextureDebugName(command.cache->texture,
-                                                                      command.context_name);
-                        vulkan_render_interface_->PopLayer();
+                        ui_renderer_->setTextureDebugName(command.cache->texture,
+                                                          command.context_name);
+                        ui_renderer_->PopLayer();
                         const bool saved = command.cache->texture != 0;
                         command.cache->width = saved ? command.cache_width : 0;
                         command.cache->height = saved ? command.cache_height : 0;
                         recordPreviewDependency(*command.cache, saved);
                     }
-                    vulkan_render_interface_->EndCacheCapture();
+                    ui_renderer_->endCacheCapture();
                 }
 
                 if (command.cache->texture != 0) {
@@ -1659,47 +1646,47 @@ namespace lfs::vis::gui {
                     lfs::core::ScopedTimer timer(
                         blit_timer_name, 0.25, lfs::core::LogLevel::Performance,
                         LFS_SOURCE_SITE_CURRENT());
-                    vulkan_render_interface_->ResetContextRenderState();
+                    ui_renderer_->resetContextRenderState();
                     if (command.clip_enabled) {
-                        vulkan_render_interface_->SetContextClipRect(command.clip_x1,
-                                                                     command.clip_y1,
-                                                                     command.clip_x2,
-                                                                     command.clip_y2);
+                        ui_renderer_->setContextClipRect(command.clip_x1,
+                                                         command.clip_y1,
+                                                         command.clip_x2,
+                                                         command.clip_y2);
                     }
-                    vulkan_render_interface_->RenderTextureQuad(command.cache->texture,
-                                                                command.offset_x,
-                                                                command.offset_y,
-                                                                command.draw_width,
-                                                                command.draw_height);
+                    ui_renderer_->renderTextureQuad(command.cache->texture,
+                                                    command.offset_x,
+                                                    command.offset_y,
+                                                    command.draw_width,
+                                                    command.draw_height);
                 } else {
                     lfs::core::ScopedTimer timer(
                         timer_name, lfs::core::LogLevel::Performance,
                         LFS_SOURCE_SITE_CURRENT());
-                    vulkan_render_interface_->ResetContextRenderState();
+                    ui_renderer_->resetContextRenderState();
                     if (command.clip_enabled) {
-                        vulkan_render_interface_->SetContextClipRect(command.clip_x1,
-                                                                     command.clip_y1,
-                                                                     command.clip_x2,
-                                                                     command.clip_y2);
+                        ui_renderer_->setContextClipRect(command.clip_x1,
+                                                         command.clip_y1,
+                                                         command.clip_x2,
+                                                         command.clip_y2);
                     }
-                    vulkan_render_interface_->SetContextOffset(command.offset_x, command.offset_y);
+                    ui_renderer_->setContextOffset(command.offset_x, command.offset_y);
                     command.context->Render();
                 }
             } else {
                 lfs::core::ScopedTimer timer(
                     timer_name, lfs::core::LogLevel::Performance,
                     LFS_SOURCE_SITE_CURRENT());
-                vulkan_render_interface_->ResetContextRenderState();
+                ui_renderer_->resetContextRenderState();
                 if (command.clip_enabled) {
-                    vulkan_render_interface_->SetContextClipRect(command.clip_x1,
-                                                                 command.clip_y1,
-                                                                 command.clip_x2,
-                                                                 command.clip_y2);
+                    ui_renderer_->setContextClipRect(command.clip_x1,
+                                                     command.clip_y1,
+                                                     command.clip_x2,
+                                                     command.clip_y2);
                 }
-                vulkan_render_interface_->SetContextOffset(command.offset_x, command.offset_y);
+                ui_renderer_->setContextOffset(command.offset_x, command.offset_y);
                 command.context->Render();
             }
-            vulkan_render_interface_->ResetContextRenderState();
+            ui_renderer_->resetContextRenderState();
             if (canvas_start)
                 if (auto* scene = services().sceneOrNull())
                     scene->modifierManager().recordCanvasFrame(
@@ -1709,11 +1696,11 @@ namespace lfs::vis::gui {
         queue.clear();
     }
 
-    void RmlUIManager::endVulkanFrame() {
-        if (!vulkan_render_interface_ || !vulkan_frame_active_)
+    void RmlUIManager::endFrame() {
+        if (!ui_renderer_ || !frame_active_)
             return;
-        vulkan_render_interface_->EndExternalFrame();
-        vulkan_frame_active_ = false;
+        ui_renderer_->endFrame();
+        frame_active_ = false;
     }
 
 } // namespace lfs::vis::gui

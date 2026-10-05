@@ -134,6 +134,11 @@ namespace lfs::core::internal {
         // Each key starts a byte range; state survives cache reuse of the VkBuffer.
         std::map<VkDeviceSize, Access> accesses{{0, {}}};
         bool cacheable = false;
+        // A direct-range buffer that a freed-memory hold may keep.
+        bool holdable = false;
+        // Its block was handed to another API (a CUDA view or a Metal reader), whose work the tensor queue
+        // does not order; until then only the tensor queue uses the buffer.
+        bool shared_outside_queue = false;
         bool host_visible = false;
         std::byte* mapped = nullptr;
         StorageMeta descriptor_owner;
@@ -422,6 +427,7 @@ namespace lfs::core::internal {
         // Freed buffers of kDirectLimit and above go back to the driver: a cached
         // one pins its whole pool block while it waits for a same-size request.
         const bool cacheable = host_visible || (!direct_class && !direct);
+        const bool holdable = direct && !direct_class;
         std::unique_ptr<AllocationRecord> record;
         if (cacheable) {
             std::lock_guard lock(allocations_mutex_);
@@ -432,11 +438,26 @@ namespace lfs::core::internal {
                 record = std::move(free_iterator->second.back());
                 free_iterator->second.pop_back();
             }
+        } else if (holdable) {
+            std::lock_guard lock(allocations_mutex_);
+            collect_retired_locked(context_.completed_timeline());
+            // Take the smallest held buffer within an eighth of the request, of
+            // the same export class, so reuse wastes little and keeps interop.
+            // A held buffer may still be in flight: it keeps last_use and its
+            // access state, so record() submits its earlier users first and
+            // prepare_accesses orders the new writes after them on the queue.
+            const auto held = held_.lower_bound(bucket_size);
+            if (held != held_.end() && held->first <= bucket_size + bucket_size / 8 &&
+                (held->first <= kMaxExportSize) == (bucket_size <= kMaxExportSize)) {
+                record = std::move(held->second);
+                held_.erase(held);
+            }
         }
         if (!record) {
             record = std::make_unique<AllocationRecord>();
             record->allocated_size = bucket_size;
             record->cacheable = cacheable;
+            record->holdable = holdable;
             record->host_visible = host_visible;
 
 #if LFS_HAS_CUDA
@@ -565,7 +586,8 @@ namespace lfs::core::internal {
                            "vkGetBufferDeviceAddress returned zero for tensor storage");
         }
         record->requested_size = bytes;
-        record->last_use = 0;
+        if (!record->holdable)
+            record->last_use = 0;
         record->descriptor_owner.backend = GpuBackend::Vulkan;
         record->descriptor_owner.pending_recorder.store(0, std::memory_order_relaxed);
         record->descriptor_owner.pending_value.store(0, std::memory_order_relaxed);
@@ -622,12 +644,13 @@ namespace lfs::core::internal {
         if (storage.meta == nullptr || storage.backend != GpuBackend::Vulkan) {
             return std::nullopt;
         }
-        const AllocationRecord& record = allocation_for(storage);
+        AllocationRecord& record = allocation_for(storage);
         VmaAllocationInfo2 info{};
         vmaGetAllocationInfo2(context_.allocator(), record.allocation, &info);
         if (info.allocationInfo.deviceMemory == VK_NULL_HANDLE || info.blockSize == 0) {
             return std::nullopt;
         }
+        record.shared_outside_queue = true;
         return CudaBlockInfo{
             .memory = info.allocationInfo.deviceMemory,
             .allocation_offset = info.allocationInfo.offset,
@@ -910,7 +933,12 @@ namespace lfs::core::internal {
     void VulkanMemory::collect_retired_locked(const uint64_t completed) {
         std::vector<std::unique_ptr<AllocationRecord>> released;
         std::erase_if(retired_, [&](auto& record) {
-            if (record->last_use > completed) {
+            const bool done = record->last_use <= completed;
+            if (record->holdable && freed_memory_holds_ != 0 && (done || !record->shared_outside_queue)) {
+                held_.emplace(record->allocated_size, std::move(record));
+                return true;
+            }
+            if (!done) {
                 return false;
             }
             if (!record->cacheable) {
@@ -954,6 +982,18 @@ namespace lfs::core::internal {
     }
 
     void VulkanMemory::destroy_free_locked() {
+        const uint64_t completed = context_.completed_timeline();
+        for (auto& [size, record] : held_) {
+            (void)size;
+            if (shutting_down_ || record->last_use <= completed) {
+                vmaDestroyBuffer(context_.allocator(), record->buffer, record->allocation);
+            } else {
+                // Still in flight: destroy it once its last use completes.
+                record->holdable = false;
+                retired_.push_back(std::move(record));
+            }
+        }
+        held_.clear();
         for (auto* lists : {&free_lists_, &readback_free_lists_}) {
             for (auto& [size, records] : *lists) {
                 (void)size;
@@ -1006,9 +1046,30 @@ namespace lfs::core::internal {
         collect_retired_locked(context_.completed_timeline());
         // A trim also discards buffers whose last GPU use is still pending.
         // Reclaim them after completion instead of repopulating the cache.
-        for (auto& record : retired_)
+        for (auto& record : retired_) {
             record->cacheable = false;
+            record->holdable = false;
+        }
         destroy_free_when_idle_locked();
+    }
+
+    void VulkanMemory::hold_freed(const bool hold) {
+        std::lock_guard lock(allocations_mutex_);
+        if (hold) {
+            ++freed_memory_holds_;
+            return;
+        }
+        if (freed_memory_holds_ == 0 || --freed_memory_holds_ != 0)
+            return;
+        // Held buffers retire like any other freed direct buffer: destroyed once
+        // their last use completes (and, on Apple, while the queue is idle).
+        for (auto& [size, record] : held_) {
+            (void)size;
+            record->holdable = false;
+            retired_.push_back(std::move(record));
+        }
+        held_.clear();
+        collect_retired_locked(context_.completed_timeline());
     }
 
     MemoryInfo VulkanMemory::stats() const {
@@ -1034,6 +1095,10 @@ namespace lfs::core::internal {
     size_t VulkanMemory::cached_bytes() const noexcept {
         std::lock_guard lock(allocations_mutex_);
         size_t result = 0;
+        for (const auto& [size, record] : held_) {
+            (void)record;
+            result += static_cast<size_t>(size);
+        }
         for (const auto* lists : {&free_lists_, &readback_free_lists_}) {
             for (const auto& [size, records] : *lists) {
                 result += static_cast<size_t>(size) * records.size();
@@ -1051,7 +1116,7 @@ namespace lfs::core::internal {
                 free_count += records.size();
             }
         }
-        return allocations_.size() + retired_.size() + free_count +
+        return allocations_.size() + retired_.size() + held_.size() + free_count +
                (staging_buffer_ != VK_NULL_HANDLE ? 1 : 0);
     }
 

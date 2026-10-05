@@ -1,10 +1,101 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "builtin_common.hpp"
+#include "core/tensor_fused.hpp"
 #include "core/tensor_spatial.hpp"
+
+#include <algorithm>
+#include <bit>
 #include <numbers>
+#include <vector>
+
 namespace lfs::nodes::builtin {
     namespace {
+        // Surface samples drawn from a counter hash of (seed, sample, stream) rather than a backend's
+        // generator, so a seed places the same samples on every backend. The top 24 hash bits make an
+        // exact float in [0, 1) everywhere.
+        template <typename Word>
+        Word hash32(Word x) {
+            x = (x ^ (x >> 17u)) * 0xed5ad4bbu;
+            x = (x ^ (x >> 11u)) * 0xac4c1b51u;
+            x = (x ^ (x >> 15u)) * 0x31848babu;
+            return x ^ (x >> 14u);
+        }
+
+        template <typename Word>
+        auto unit_draw(const Word& sample, const Word& key, const uint32_t stream) {
+            const Word bits = hash32<Word>(hash32<Word>(sample * 3u + stream) ^ key) >> 8u;
+            if constexpr (std::is_same_v<Word, uint32_t>)
+                return static_cast<float>(bits) * 0x1p-24f;
+            else
+                return bits.cast(DataType::Float32) * 0x1p-24f;
+        }
+
+        uint32_t sampling_key(const uint64_t seed) {
+            return hash32(static_cast<uint32_t>(seed) ^ hash32(static_cast<uint32_t>(seed >> 32U) + 0x9e3779b9u));
+        }
+
+        // Face by inverse CDF over the cumulative areas, as a binary search unrolled over the bits of the
+        // face count, plus the two barycentric draws.
+        core::fused::Kernel make_surface_sampler(const int steps) {
+            namespace f = core::fused;
+            f::Builder builder(1);
+            const auto cdf = builder.input(DataType::Float32, 1);
+            const auto parameters = builder.input(DataType::Int32, 1);
+            const auto key = parameters.at({0}).cast(DataType::UInt32);
+            const auto faces = parameters.at({1});
+            const auto sample = builder.iota(0).cast(DataType::UInt32);
+            const auto target = unit_draw(sample, key, 0) * cdf.gather({faces - 1});
+            auto below = builder.constant(0);
+            for (int bit = steps - 1; bit >= 0; --bit) {
+                const auto candidate = below + (1 << bit);
+                below = f::where(candidate <= faces && cdf.gather({candidate - 1}, f::Bounds::Clamp) <= target,
+                                 candidate, below);
+            }
+            builder.output(f::min(below, faces - 1), DataType::Int32);
+            builder.output(f::sqrt(unit_draw(sample, key, 1)), DataType::Float32);
+            builder.output(unit_draw(sample, key, 2), DataType::Float32);
+            return f::Kernel(builder);
+        }
+
+        struct SurfaceSamples {
+            Tensor faces; // Int32
+            Tensor root;  // square root of the first barycentric draw
+            Tensor second;
+        };
+
+        SurfaceSamples sample_surface(const Tensor& areas, const size_t count, const uint64_t seed) {
+            const size_t face_count = areas.numel();
+            const auto key = sampling_key(seed);
+            const auto cdf = areas.cumsum(0);
+            if (areas.device() == Device::GPU) {
+                static const auto kernels = [] {
+                    std::vector<core::fused::Kernel> result;
+                    for (int steps = 1; steps <= 31; ++steps)
+                        result.push_back(make_surface_sampler(steps));
+                    return result;
+                }();
+                const auto parameters = Tensor::from_vector(
+                    std::vector<int>{std::bit_cast<int>(key), static_cast<int>(face_count)}, {2}, Device::CPU);
+                auto outputs = kernels[std::bit_width(face_count) - 1]({count}, {cdf, parameters});
+                return {std::move(outputs[0]), std::move(outputs[1]), std::move(outputs[2])};
+            }
+            const auto sums = cdf.to_vector();
+            std::vector<int> faces(count);
+            std::vector<float> root(count), second(count);
+            for (size_t i = 0; i < count; ++i) {
+                const auto sample = static_cast<uint32_t>(i);
+                const float target = unit_draw(sample, key, 0) * sums.back();
+                const auto face = std::upper_bound(sums.begin(), sums.end(), target) - sums.begin();
+                faces[i] = static_cast<int>(std::min<size_t>(face, face_count - 1));
+                root[i] = std::sqrt(unit_draw(sample, key, 1));
+                second[i] = unit_draw(sample, key, 2);
+            }
+            return {Tensor::from_vector(faces, {count}, Device::CPU),
+                    Tensor::from_vector(root, {count}, Device::CPU),
+                    Tensor::from_vector(second, {count}, Device::CPU)};
+        }
+
         Tensor auto_point_radius(const Tensor& positions) {
             const size_t count = positions.shape()[0];
             if (count < 2)
@@ -180,10 +271,7 @@ namespace lfs::nodes::builtin {
             return;
         }
         const auto seed = static_cast<uint64_t>(property_int(context, "seed"));
-        const auto faces = Tensor::multinomial(areas, static_cast<int>(count), true, seed).to(DataType::Int32);
-        const auto samples = Tensor::uniform({count, 2}, 0, 1, device, DataType::Float32, seed + 1);
-        const auto root = channel(samples, 0).sqrt();
-        const auto second = channel(samples, 1);
+        const auto [faces, root, second] = sample_surface(areas, count, seed);
         const auto weights = Tensor::stack({root.neg() + 1, root * (second.neg() + 1), root * second}, 1);
         const auto vertices = mesh.indices.index_select(0, faces);
         const auto positions = (mesh.vertices.index_select(0, vertices.flatten()).reshape(core::TensorShape{count, 3, 3}) * weights.unsqueeze(2)).sum(1);

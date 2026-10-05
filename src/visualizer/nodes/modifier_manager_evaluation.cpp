@@ -13,8 +13,10 @@
 #include "visualizer/nodes/node_animation.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <format>
 #include <ranges>
+#include <thread>
 
 namespace lfs::vis {
 
@@ -27,6 +29,7 @@ namespace lfs::vis {
         const auto* controller = sequencer();
         request.frames_per_second = export_time_ ? export_fps_ : controller ? controller->framesPerSecond()
                                                                             : 24.0f;
+        request.preview = preview_;
         request.inputs_ready = std::make_shared<core::TensorCompletion>();
         request.splat_allocator = scene_manager_->makeExternalSplatAllocator();
         const auto include = [&](const core::Tensor& tensor) {
@@ -123,6 +126,10 @@ namespace lfs::vis {
             state.evaluation = std::move(result.evaluation);
             state.shown = result.enabled;
             state.previews = std::move(result.previews);
+            if (preview_ && preview_->target == uuid) {
+                preview_->range_min = result.preview_min;
+                preview_->range_max = result.preview_max;
+            }
             if (!result.enabled && state.evaluation.ok)
                 scene.clearNodeEvaluatedPayload(node->id);
             else if (state.evaluation.ok &&
@@ -158,8 +165,10 @@ namespace lfs::vis {
             return;
         }
         const auto* trainer_manager = scene_manager_->getTrainerManager();
+        // A requested pause reaches the training loop only at its next iteration boundary; until then the
+        // model may still change, so evaluation stays suspended.
         const bool training_running = content == SceneManager::ContentType::Dataset &&
-                                      trainer_manager && trainer_manager->isRunning();
+                                      trainer_manager && trainer_manager->isModelChanging();
         if (training_running) {
             if (!training_suspended_) {
                 training_suspended_ = true;
@@ -203,10 +212,22 @@ namespace lfs::vis {
         lfs::nodes::EvaluationEvent{.phase = "started", .generation = requested_generation_}.emit();
     }
 
+    void ModifierManager::waitForTrainingBoundary() const {
+        const auto* trainer_manager = scene_manager_->getTrainerManager();
+        if (!trainer_manager || trainer_manager->isRunning())
+            return;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (trainer_manager->isModelChanging() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
     ModifierEvaluation ModifierManager::evaluate(const core::Uuid& node_uuid) {
+        waitForTrainingBoundary();
         tick();
-        if (requested_generation_ == output_generation_ && worker_->progress().busy) {
-            // Explicit synchronous Python/API request only; canvas code never calls this.
+        // Explicit synchronous Python/API request only; canvas code never calls this. Wait even when the worker
+        // looks idle: a small graph can finish between tick() and a busy check, and its result still needs
+        // installing.
+        if (requested_generation_ == output_generation_) {
             worker_->wait(requested_generation_);
             installReady();
         }
@@ -221,6 +242,7 @@ namespace lfs::vis {
         auto request = captureRequest();
         request.targets = {node_uuid};
         request.bake = true;
+        request.preview.reset(); // Applying a modifier must never bake an editor preview.
         const auto object = std::ranges::find(request.objects, node_uuid, &ModifierObjectSnapshot::uuid);
         if (object == request.objects.end())
             return {};
@@ -267,6 +289,8 @@ namespace lfs::vis {
         if (measure_canvas_)
             canvas_work_ms_ = canvas_work_ms_.value_or(0.0) + milliseconds;
     }
+
+    void ModifierManager::setProfiling(const bool enabled) { worker_->set_profiling(enabled); }
 
     nlohmann::json ModifierManager::performance(const bool reset) {
         auto result = worker_->performance(reset);

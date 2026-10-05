@@ -17,7 +17,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/shareable_allocation_limit.hpp"
-#include "core/tensor_backend.hpp"
+#include "core/tensor_backend_vulkan.hpp"
 #include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/vulkan_wait.hpp"
@@ -2586,8 +2586,8 @@ namespace lfs::vis {
             transfer_queue_family_ = 0;
             has_dedicated_transfer_queue_ = false;
         }
-        // The tensor backend gets its own queue: the second queue of the compute
-        // family when it has one, else the second queue of the graphics family.
+        // Tensor programs need graphics and compute on the same timeline. Keep
+        // a separate queue, preferring a graphics-capable family for raster.
         std::optional<uint32_t> tensor_queue_family;
         uint32_t tensor_queue_index = 1;
         {
@@ -2595,7 +2595,7 @@ namespace lfs::vis {
             vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &family_count, nullptr);
             std::vector<VkQueueFamilyProperties> family_props(family_count);
             vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &family_count, family_props.data());
-            for (const uint32_t candidate : {compute_queue_family_, graphics_queue_family_}) {
+            for (const uint32_t candidate : {graphics_queue_family_, compute_queue_family_}) {
                 if (candidate < family_count && family_props[candidate].queueCount >= 2 &&
                     (family_props[candidate].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
                     tensor_queue_family = candidate;

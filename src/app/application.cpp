@@ -63,7 +63,7 @@
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include "visualizer/input/input_bindings.hpp"
 #include "visualizer/preferences.hpp"
-#include "window/vulkan_context.hpp"
+#include "window/graphics_context.hpp"
 #include <cmath>
 #include <condition_variable>
 #if LFS_HAS_CUDA
@@ -1087,19 +1087,14 @@ namespace lfs::app {
         int runHeadlessRender(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
             const auto& cfg = *params->render_path;
 
-            vis::VulkanContext context;
-            if (!context.initHeadless()) {
+            auto graphics_context = vis::createGraphicsContext();
+            auto& context = *graphics_context;
+            if (!context.initializeHeadless()) {
                 LOG_ERROR("Off-screen renderer initialization failed: {}", context.lastError());
                 return 1;
             }
-            struct BackendLifetime {
-                ~BackendLifetime() {
-                    if (auto result = core::shutdown_gpu_backend(core::GpuBackend::Vulkan); !result)
-                        LOG_WARN("Failed to shut down tensor backend: {}", result.error().detail());
-                }
-            } backend_lifetime;
             auto renderer = vis::createSceneRenderer(context);
-            const auto splat_allocator = context.tensorInterop().splat_allocator(true);
+            const auto splat_allocator = context.splatTensorAllocator(true);
 
             // Pipeline creation does not read the scene. Overlap it with the load.
             auto loading = std::async(std::launch::async, [&]() -> std::expected<std::shared_ptr<core::SplatData>, std::string> {
@@ -1267,6 +1262,7 @@ namespace lfs::app {
             // Training reaches Trainer::initialize, which names any missing families.
             if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Metal))
                 return true;
+#ifndef LFS_GRAPHICS_METAL
             if (viewer_only) {
                 if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan) &&
                     lfs::core::set_default_gpu_backend(lfs::core::GpuBackend::Vulkan).has_value()) {
@@ -1275,9 +1271,14 @@ namespace lfs::app {
                     return true;
                 }
             }
+#endif
             reportFatalStartupError(
                 "LichtFeld Studio - No usable GPU",
+#ifdef LFS_GRAPHICS_METAL
+                "This Metal-only build requires macOS 26 and a Metal 4 GPU. Vulkan fallback is not compiled into this application.",
+#else
                 "The selected Metal tensor backend requires macOS 26 and a Metal 4 GPU; only the viewer can fall back to Vulkan.",
+#endif
                 show_dialog);
             return false;
         }
@@ -1510,7 +1511,6 @@ namespace lfs::app {
                 return std::make_unique<lfs::io::video::VideoEncoder>();
             });
 
-            constexpr auto graphics_backend = lfs::vis::GraphicsBackend::Vulkan;
             mcp::McpHttpServer mcp_http({.enable_resources = true});
             const auto mcp_preferences = vis::loadMcpPreferences();
             const auto mcp_port_override = params->mcp_port;
@@ -1571,7 +1571,6 @@ namespace lfs::app {
                     };
                 },
                 .gut = params->optimization.gut,
-                .graphics_backend = graphics_backend,
                 .startup_project = startup_project,
             });
 

@@ -88,7 +88,7 @@ namespace lfs::vis::gui {
         std::uint64_t last_language_generation_ = 0;
         bool has_language_generation_ = false;
         const PanelInputState* input_ = nullptr;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
         int width_ = 0;
         int height_ = 0;
         float fitted_dp_ratio_ = 0.0f;

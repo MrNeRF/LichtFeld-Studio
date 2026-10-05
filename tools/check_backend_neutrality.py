@@ -61,6 +61,7 @@ SEAMS = {
     "src/visualizer/project/project_lifecycle.cpp": "Project loading binds the CUDA trainer thread to its device.",
     "src/visualizer/gui/gui_manager.cpp": "The GUI reports failure of the selected CUDA runtime.",
     "src/visualizer/preferences.cpp": "Preferences select a backend before tensor initialization.",
+    "src/visualizer/window/metal_graphics_context.mm": "The platform presenter owns the final Metal image tensor and selects Metal allocation explicitly.",
 }
 # Exact private-interface exceptions pending ownership changes in other lanes.
 PRIVATE_SEAMS = {
@@ -78,14 +79,6 @@ PRIVATE_SEAMS = {
         ("private-header", "core/tensor/backend/cuda/runtime/cuda_memory_guard.hpp"):
             "converted by lane F2b",
         ("private-symbol", "internal::resize_image_prior_tensor"):
-            "converted by lane F2b",
-    },
-    "src/core/cuda/undistort/undistort.cu": {
-        ("private-symbol", "internal::undistort_image_tensor"):
-            "converted by lane F2b",
-    },
-    "src/visualizer/rendering/rendering_manager_vulkan.cpp": {
-        ("private-symbol", "lfs::core::internal::undistort_image_tensor"):
             "converted by lane F2b",
     },
 }

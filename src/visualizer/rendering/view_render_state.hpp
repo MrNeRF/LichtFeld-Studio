@@ -8,13 +8,10 @@
 #include "dirty_flags.hpp"
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
-#include "passes/vulkan_depth_blit_pass.hpp"
-#include "passes/vulkan_environment_pass.hpp"
-#include "passes/vulkan_mesh_pass.hpp"
-#include "passes/vulkan_split_view_pass.hpp"
 #include "render_animation_state.hpp"
 #include "render_target_id.hpp"
 #include "rendering/rendering.hpp"
+#include "viewport_draw_types.hpp"
 #include "rendering/scene_temporal_resolve.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
@@ -26,8 +23,8 @@
 #include "viewport_artifact_service.hpp"
 #include "viewport_frame_lifecycle_service.hpp"
 #include "viewport_interaction_context.hpp"
-#include "viewport_interop_service.hpp"
 #include "viewport_overlay_service.hpp"
+#include "viewport_reference_state.hpp"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -36,7 +33,6 @@
 #include <optional>
 #include <string>
 #include <vector>
-#include <vulkan/vulkan.h>
 
 namespace lfs::vis {
     struct FramebufferViewportRect {
@@ -45,27 +41,16 @@ namespace lfs::vis {
 
         [[nodiscard]] bool valid() const { return size.x > 0 && size.y > 0; }
     };
-    struct VulkanMeshFrame {
-        struct TemporalFrame {
-            TemporalFrameInput input;
-            SceneTemporalResolveSettings resolve_settings;
-            SceneTemporalQuality quality = SceneTemporalQuality::Balanced;
-        };
-
-        glm::mat4 view_projection{1.0f};
-        glm::vec3 camera_position{0.0f};
-        std::vector<lfs::vis::VulkanMeshDrawItem> items;
-        std::vector<lfs::vis::VulkanMeshViewportPanel> panels;
-        lfs::vis::VulkanEnvironmentParams environment;
-        lfs::vis::VulkanDepthBlitParams depth_blit;
-        lfs::vis::VulkanSplitViewParams split_view;
-        std::optional<TemporalFrame> temporal;
-    };
     struct GTPresentedView {
         GTRenderCamera camera;
         glm::ivec2 size{0, 0};
     };
     struct ViewRenderState {
+        [[nodiscard]] std::uint64_t presentedImageGeneration() const {
+            if (const auto generation = referenceSceneOutputGeneration(*this))
+                return *generation;
+            return vulkan_viewport_image_generation_;
+        }
         ViewportOverlayService viewport_overlay_service_;
         ViewId id = kNoView;
         glm::ivec2 last_nonzero_viewport_size_{0, 0};
@@ -75,6 +60,11 @@ namespace lfs::vis {
         lfs::rendering::ScreenOverlayRenderer screen_overlay_renderer_;
         mutable FramerateController framerate_controller_;
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
+        // Linear view depth and environment background matching
+        // vulkan_viewport_image_ (tensor compositor).
+        std::shared_ptr<const lfs::core::Tensor> viewport_depth_image_;
+        ViewportEnvironment viewport_environment_;
+        ViewportMeshPassDesc viewport_meshes_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
         StaleFrameGuard vksplat_stale_frame_guard_;
@@ -101,11 +91,7 @@ namespace lfs::vis {
         RenderTargetId main_render_target_{};
         RenderTargetId split_left_render_target_{};
         RenderTargetId split_right_render_target_{};
-        VkImage vulkan_external_viewport_image_ = VK_NULL_HANDLE;
-        VkImageView vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
-        VkImageLayout vulkan_external_viewport_image_layout_ =
-            VK_IMAGE_LAYOUT_UNDEFINED;
-        std::uint64_t vulkan_external_viewport_image_generation_ = 0;
+        std::shared_ptr<ViewportReferenceState> reference_state_;
         std::uint64_t split_view_image_generation_ = 0;
         std::uint64_t split_left_image_generation_ = 0;
         std::uint64_t split_right_image_generation_ = 0;
@@ -136,7 +122,6 @@ namespace lfs::vis {
         RenderAnimationState animation_state_;
         FramebufferViewportRect framebuffer_viewport_rect_;
         ViewportArtifactService viewport_artifact_service_;
-        ViewportInteropService viewport_interop_;
         SplitViewService split_view_service_;
         ViewportFrameLifecycleService frame_lifecycle_service_;
         int depth_window_preview_count_ = 0;
@@ -149,8 +134,6 @@ namespace lfs::vis {
         // The requested reconstruction cannot serve the current view mode.
         bool scene_upscaler_mode_unsupported_ = false;
         mutable std::mutex depth_window_transition_mutex_;
-        mutable std::mutex vulkan_mesh_frame_mutex_;
-        VulkanMeshFrame vulkan_mesh_frame_;
         ViewportInteractionContext viewport_interaction_context_;
     };
 } // namespace lfs::vis

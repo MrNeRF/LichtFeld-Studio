@@ -5,6 +5,8 @@
 
 #include "core/logger.hpp"
 #include "core/nodes/nodes.hpp"
+#include "core/path_utils.hpp"
+#include "core/tensor_backend.hpp"
 #include "py_tensor.hpp"
 #include "py_ui.hpp"
 #include "py_viewer_dispatch.hpp"
@@ -20,6 +22,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <algorithm>
+#include <format>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -231,7 +234,10 @@ namespace lfs::python {
                 result->materials = source.materials;
                 result->submeshes = source.submeshes;
                 result->texture_images = source.texture_images;
-                return PyMesh{MeshComponent{std::move(result)}};
+                // Like the splat and point replacements, keep the component's textures and attributes.
+                PyMesh replaced = *this;
+                replaced.value.mesh = std::move(result);
+                return replaced;
             }
         };
 
@@ -767,45 +773,46 @@ namespace lfs::python {
         }
 
         struct PyNodeContext {
-            NodeContext* context = nullptr;
+            // Cleared when execute() returns, so a context kept by Python raises instead of reading freed memory.
+            std::shared_ptr<NodeContext*> guard;
+            std::shared_ptr<const std::unordered_map<std::string, std::string>> input_types;
+
+            NodeContext& live() const {
+                if (!guard || !*guard)
+                    throw nb::value_error("This node context is only valid while execute() runs");
+                return **guard;
+            }
 
             nb::object input(const std::string& name) const {
-                return value_to_python(context->input(name));
+                return value_to_python(live().input(name));
             }
 
             PyTensor field(const std::string& name, const PyGeometry& geometry) const {
-                FieldContext field_context;
-                if (geometry.value.splats) {
-                    field_context.domain = Domain::Splat;
-                    field_context.splats = &*geometry.value.splats;
-                } else if (geometry.value.points) {
-                    field_context.domain = Domain::Point;
-                    field_context.points = &*geometry.value.points;
-                } else if (geometry.value.mesh) {
-                    field_context.domain = Domain::Vertex;
-                    field_context.mesh = &*geometry.value.mesh;
-                } else {
+                const auto context = lfs::nodes::field_context(geometry.value);
+                if (!context)
                     throw nb::value_error("Geometry has no component for field evaluation");
-                }
-                // Python components are temporary copies, with no stable
-                // FieldContext identity. Sharing the evaluator's memo under
-                // identity 0 reuses fields from earlier, different geometry.
-                // Keep memoization within this field evaluation instead.
+                // Python components are temporary copies, so a memo shared with the evaluator would
+                // rarely hit; keep memoization within this field evaluation.
                 FieldMemo memo;
-                return PyTensor(context->field(name, FLOAT_SOCKET).evaluate(field_context, memo));
+                std::string type(FLOAT_SOCKET);
+                if (input_types)
+                    if (const auto declared = input_types->find(name); declared != input_types->end())
+                        type = declared->second;
+                return PyTensor(live().field(name, type).evaluate(*context, memo));
             }
 
             nb::object prop(const std::string& name) const {
-                const auto found = context->properties().find(name);
-                return found == context->properties().end() ? nb::none()
-                                                            : json_to_python(*found);
+                const auto& properties = live().properties();
+                const auto found = properties.find(name);
+                return found == properties.end() ? nb::none()
+                                                 : json_to_python(*found);
             }
 
             void output(const std::string& name, const nb::handle value) const {
                 if (nb::isinstance<PyGeometry>(value))
-                    context->set_output(name, nb::cast<PyGeometry>(value).value);
+                    live().set_output(name, nb::cast<PyGeometry>(value).value);
                 else
-                    context->set_output(name, python_to_value(value));
+                    live().set_output(name, python_to_value(value));
             }
         };
 
@@ -888,7 +895,10 @@ namespace lfs::python {
             const std::string type_id = info.id;
             if (nb::cast<std::string>(cls.attr("__module__")) == "lfs_plugins.node_posterize" && info.id == "lfs.posterize")
                 set_builtin_node_text(info);
-            info.evaluate = [type_id](NodeContext& context) {
+            auto input_types = std::make_shared<std::unordered_map<std::string, std::string>>();
+            for (const auto& input : info.inputs)
+                input_types->emplace(input.identifier, input.type);
+            info.evaluate = [type_id, input_types = std::shared_ptr<const std::unordered_map<std::string, std::string>>(std::move(input_types))](NodeContext& context) {
                 SafeClass type;
                 {
                     std::lock_guard lock(python_types_mutex());
@@ -898,16 +908,27 @@ namespace lfs::python {
                     type = found->second;
                 }
                 nb::gil_scoped_acquire gil;
+                const auto guard = std::make_shared<NodeContext*>(&context);
+                struct Expire {
+                    const std::shared_ptr<NodeContext*>& guard;
+                    bool outer;
+                    ~Expire() {
+                        *guard = nullptr;
+                        g_in_node_execute = outer;
+                    }
+                } expire{guard, g_in_node_execute};
+                g_in_node_execute = true;
                 try {
                     auto instance = (**type)();
                     const auto callback = instance.attr("execute");
-                    auto result = callback(PyNodeContext{&context});
+                    const PyNodeContext python_context{guard, input_types};
+                    auto result = callback(python_context);
                     if (!result.is_none()) {
                         if (nb::isinstance<PyGeometry>(result))
                             context.set_output("Geometry", nb::cast<PyGeometry>(result).value);
                         else if (nb::isinstance<nb::dict>(result))
                             for (const auto [key, value] : nb::cast<nb::dict>(result))
-                                PyNodeContext{&context}.output(nb::cast<std::string>(key), value);
+                                python_context.output(nb::cast<std::string>(key), value);
                     }
                 } catch (const nb::python_error& error) {
                     LOG_WARN("Python node {} failed:\n{}", type_id, error.what());
@@ -966,10 +987,14 @@ namespace lfs::python {
             double total = 0.0;
             for (const auto& [_, time] : result.time_ms)
                 total += time;
+            nb::dict nodes;
+            for (const auto& [node, time] : result.time_ms)
+                nodes[nb::str(node.c_str())] = time;
             nb::dict value;
             value["ok"] = result.ok;
             value["errors"] = std::move(errors);
             value["time_ms"] = total;
+            value["node_time_ms"] = std::move(nodes);
             return value;
         }
 
@@ -1578,8 +1603,19 @@ namespace lfs::python {
                                     false);
         });
         module.def("evaluate_tree", [](const PyTree& tree, const PyGeometry& geometry, std::optional<float> time, std::optional<std::string> device) {
-            if (device && *device != "cpu" && *device != "gpu")
-                throw std::invalid_argument("Evaluation device must be cpu or gpu");
+            // "gpu" evaluates on the default backend; "cuda", "vulkan" and "metal" name one.
+            std::optional<core::GpuBackendScope> backend_scope;
+            if (device && *device != "cpu" && *device != "gpu") {
+                const auto backend = *device == "cuda"     ? std::optional{core::GpuBackend::CUDA}
+                                     : *device == "vulkan" ? std::optional{core::GpuBackend::Vulkan}
+                                     : *device == "metal"  ? std::optional{core::GpuBackend::Metal}
+                                                           : std::nullopt;
+                if (!backend)
+                    throw std::invalid_argument("Evaluation device must be cpu, gpu, cuda, vulkan or metal");
+                if (!core::gpu_backend_available(*backend))
+                    throw std::runtime_error(std::format("The {} backend is not available", *device));
+                backend_scope.emplace(*backend);
+            }
             auto graph = require_tree(tree);
             auto* manager = live_manager();
             const auto* controller = manager ? manager->sequencer() : &standalone().sequencer;
@@ -1641,6 +1677,99 @@ namespace lfs::python {
             if (!result)
                 throw std::runtime_error("Scene node or scene manager is unavailable");
             return *result; }, nb::arg("node_name"), nb::arg("tree"), nb::arg("name") = "");
+        module.def("templates", [] {
+            const auto result = invoke_on_viewer([] {
+                nlohmann::json values = nlohmann::json::array();
+                if (auto* manager = live_manager())
+                    for (const auto& value : manager->templates())
+                        values.push_back({{"id", value.id}, {"name", value.name}, {"description", value.description}, {"category", value.category}, {"scene_kinds", value.scene_kinds}, {"adjust", value.adjust}, {"builtin", value.builtin}});
+                return values;
+            },
+                                                 nlohmann::json::array());
+            return json_to_python(result);
+        });
+        module.def("apply_template", [](const std::string& node_name, const std::string& template_id, std::string name) {
+            const auto result = invoke_on_viewer(
+                [node_name, template_id, name = std::move(name)]() mutable
+                    -> std::optional<PyModifier> {
+                    const auto uuid = scene_node_uuid(node_name);
+                    if (!uuid || !live_manager())
+                        return std::nullopt;
+                    const auto applied = live_manager()->applyTemplate(*uuid, template_id,
+                                                                        std::move(name));
+                    if (!applied)
+                        throw std::invalid_argument(applied.error().message);
+                    return PyModifier{*uuid, (*applied)->uuid};
+                }, std::optional<PyModifier>{});
+            if (!result)
+                throw std::runtime_error("Scene node or scene manager is unavailable");
+            return *result; }, nb::arg("target"), nb::arg("id"), nb::arg("name") = "");
+        module.def("save_template", [](const PyTree& tree, std::string name, std::string description, std::string category) {
+            const auto result = invoke_on_viewer(
+                [tree, name = std::move(name), description = std::move(description),
+                 category = std::move(category)]() mutable {
+                    if (!live_manager())
+                        throw std::runtime_error("User templates require a running viewer");
+                    auto saved = live_manager()->saveTemplate(tree.uuid, std::move(name),
+                                                               std::move(description),
+                                                               std::move(category));
+                    if (!saved)
+                        throw std::invalid_argument(saved.error().message);
+                    return saved->id;
+                }, std::string{});
+            return result; }, nb::arg("tree"), nb::arg("name"), nb::arg("description"), nb::arg("category"));
+        module.def("delete_template", [](const std::string& id) { return invoke_on_viewer([id] {
+                                                                      if (!live_manager())
+                                                                          return false;
+                                                                      const auto result = live_manager()->deleteTemplate(id);
+                                                                      if (!result)
+                                                                          throw std::invalid_argument(result.error().message);
+                                                                      return true;
+                                                                  },
+                                                                                          false); }, nb::arg("id"));
+        module.def("rename_template", [](const std::string& id, const std::string& name) { return invoke_on_viewer([id, name] {
+                                                                                               if (!live_manager())
+                                                                                                   throw std::runtime_error("User templates require a running viewer");
+                                                                                               const auto result = live_manager()->renameTemplate(id, name);
+                                                                                               if (!result)
+                                                                                                   throw std::invalid_argument(result.error().message);
+                                                                                               return true;
+                                                                                           },
+                                                                                                                   false); }, nb::arg("id"), nb::arg("name"));
+        module.def("import_template", [](const std::string& path) { return invoke_on_viewer([path] {
+                                                                        if (!live_manager())
+                                                                            throw std::runtime_error("User templates require a running viewer");
+                                                                        const auto result = live_manager()->importTemplate(core::utf8_to_path(path));
+                                                                        if (!result)
+                                                                            throw std::invalid_argument(result.error().message);
+                                                                        return result->id;
+                                                                    },
+                                                                                            std::string{}); }, nb::arg("path"));
+        module.def("export_template", [](const std::string& id, const std::string& path) { return invoke_on_viewer([id, path] {
+                                                                                               if (!live_manager())
+                                                                                                   throw std::runtime_error("User templates require a running viewer");
+                                                                                               const auto result = live_manager()->exportTemplate(id, core::utf8_to_path(path));
+                                                                                               if (!result)
+                                                                                                   throw std::invalid_argument(result.error().message);
+                                                                                               return true;
+                                                                                           },
+                                                                                                                   false); }, nb::arg("id"), nb::arg("path"));
+        module.def("preview", [](const std::string& target, const std::string& node, std::optional<std::string> socket) {
+            const auto error = invoke_on_viewer([target, node, socket = std::move(socket)] {
+                const auto uuid = scene_node_uuid(target);
+                if (!uuid || !live_manager())
+                    return std::string{"Scene node or scene manager is unavailable"};
+                const auto result = live_manager()->previewSet(*uuid, node, socket);
+                return result ? std::string{} : result.error().message;
+            }, std::string{"Viewer is unavailable"});
+            if (!error.empty())
+                throw std::invalid_argument(error); }, nb::arg("target"), nb::arg("node"), nb::arg("socket") = nb::none());
+        module.def("clear_preview", [] {
+            invoke_on_viewer([] {
+                if (live_manager())
+                    live_manager()->previewClear();
+            });
+        });
         module.def("modifiers", [](const std::string& node_name) {
             std::vector<PyModifier> result;
             const auto uuid = scene_node_uuid(node_name);
@@ -1670,6 +1799,14 @@ namespace lfs::python {
                 return live_manager() ? live_manager()->performance(reset) : nlohmann::json::object();
             }, nlohmann::json::object());
             return json_to_python(result); }, nb::arg("reset") = false);
+        module.def(
+            "profile", [](const bool enabled) {
+                invoke_on_viewer([enabled] {
+                    if (auto* manager = live_manager())
+                        manager->setProfiling(enabled);
+                    return 0; }, 0);
+            },
+            nb::arg("enabled"), "Include each node's device work in its time; each node then waits for the GPU.");
         module.def("evaluate", [](const std::string& node_name) {
             const auto result = invoke_on_viewer([node_name] {
                 std::optional<nb::gil_scoped_release> release;

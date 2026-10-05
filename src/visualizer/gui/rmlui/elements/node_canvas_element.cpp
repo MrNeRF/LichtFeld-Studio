@@ -625,6 +625,9 @@ namespace lfs::vis::gui {
         last_selection_generation_ = selection_generation;
         last_generation_ = generation;
         last_result_generation_ = manager_ ? manager_->resultGeneration() : 0;
+        if (manager_ && manager_->previewState() && next_host != host_uuid_ &&
+            manager_->previewState()->target.to_string() != next_host)
+            manager_->previewClear();
         host_uuid_ = next_host;
 
         const auto previous_tree = active_tree_uuid_;
@@ -946,7 +949,19 @@ namespace lfs::vis::gui {
             notice_element_->SetInnerRML("<span>" + escape(LOC("node_editor.select_node_notice")) + "</span>");
             notice_element_->SetProperty("display", "flex");
         } else if (!activeTree()) {
-            notice_element_->SetInnerRML("<span>" + escape(LOC("node_editor.add_modifier_notice")) + "</span>");
+            std::string suggestions = "<div class=\"node-empty-templates\"><strong>" +
+                                      escape(LOC("node_editor.suggested_templates")) + "</strong><span>" +
+                                      escape(LOC("node_editor.add_modifier_notice")) + "</span><div>";
+            for (const auto& value : manager_->templates()) {
+                if (!value.builtin || (value.id != "colour_grade" && value.id != "box_crop" && value.id != "noise_variation"))
+                    continue;
+                suggestions += "<button data-action=\"template-apply\" data-template=\"" +
+                               escape(value.id) + "\"><strong>" + escape(value.name) +
+                               "</strong><small>" + escape(value.description) + "</small></button>";
+            }
+            suggestions += "</div><button class=\"btn btn--secondary browse-templates\" data-action=\"browse-templates\">" +
+                           escape(LOC("node_editor.browse_templates")) + "</button></div>";
+            notice_element_->SetInnerRML(suggestions);
             notice_element_->SetProperty("display", "flex");
         } else if (manager_->trainingSuspended()) {
             notice_element_->SetClass("training-suspended", true);
@@ -998,6 +1013,10 @@ namespace lfs::vis::gui {
                     {"theme", theme_signature_},
                     {"language", language_generation_},
                     {"optional", LOC("node_editor.optional_selection")}};
+                const auto& preview = manager_->previewState();
+                content_state["preview"] = preview && preview->target.to_string() == host_uuid_ &&
+                                           preview->modifier_uuid == active_modifier_uuid_ &&
+                                           preview->node == previewPath(node->name);
                 if (const auto* controller = manager_->sequencer()) {
                     content_state["animation_time"] = manager_->animationTime();
                     content_state["animation_revision"] = controller->timelineRevision();
@@ -1030,6 +1049,20 @@ namespace lfs::vis::gui {
                         if (node->type_id == "lfs.group")
                             title += "<button class=\"node-title-tool\" data-action=\"group-enter\" data-node=\"" +
                                      escape(node->name) + "\" title=\"Enter graph\">&#x2192;</button>";
+                        const bool previewable = std::ranges::any_of(outputs, [](const auto& output) {
+                            return output.type == lfs::nodes::GEOMETRY_SOCKET ||
+                                   output.type == lfs::nodes::FLOAT_SOCKET ||
+                                   output.type == lfs::nodes::INT_SOCKET ||
+                                   output.type == lfs::nodes::BOOL_SOCKET ||
+                                   output.type == lfs::nodes::VECTOR_SOCKET ||
+                                   output.type == lfs::nodes::COLOUR_SOCKET;
+                        });
+                        if (previewable)
+                            title += "<button class=\"node-title-tool" +
+                                     std::string(content_state["preview"].get<bool>() ? " active" : "") +
+                                     "\" data-action=\"node-preview\" data-node=\"" + escape(node->name) +
+                                     "\" title=\"" + escape(LOC("node_editor.preview_node")) +
+                                     "\">&#x25C9;</button>";
                         title += "</div><div class=\"socket-rows\">";
                         for (const auto& output : outputs)
                             title += "<div class=\"socket-row output\" title=\"" + escape(output.description) + "\"><span class=\"socket-label\">" +
@@ -1147,7 +1180,9 @@ namespace lfs::vis::gui {
 
     void NodeCanvasElement::updateNodePositions() {
         const auto size = GetBox().GetSize(Rml::BoxArea::Content);
-        const float width = std::max(0.0f, size.x - (sidebar_visible_ ? kSidebarWidth * dp_ratio_ : 0.0f));
+        notice_element_->SetProperty("right", effectiveSidebarVisible() ? "280dp" : "0dp");
+        notice_element_->SetClass("compact-empty", size.y / dp_ratio_ < 180 || size.x / dp_ratio_ < 520);
+        const float width = std::max(0.0f, size.x - (effectiveSidebarVisible() ? kSidebarWidth * dp_ratio_ : 0.0f));
         if (canvas_width_ != width) {
             viewport_element_->SetProperty("width", px(width));
             canvas_width_ = width;
@@ -1182,11 +1217,18 @@ namespace lfs::vis::gui {
         layout_zoom_ = zoom;
     }
 
+    std::string NodeCanvasElement::previewPath(std::string_view node) const {
+        std::string path;
+        for (const auto& group : group_path_)
+            path += group.node + "/";
+        return path + std::string(node);
+    }
+
     void NodeCanvasElement::updateSidebar() {
         if (!sidebar_element_ || !scene_manager_ || !manager_)
             return;
-        sidebar_element_->SetProperty("display", sidebar_visible_ ? "block" : "none");
-        if (!sidebar_visible_) {
+        sidebar_element_->SetProperty("display", effectiveSidebarVisible() ? "block" : "none");
+        if (!effectiveSidebarVisible()) {
             updateEvaluationDom();
             return;
         }
@@ -1236,6 +1278,33 @@ namespace lfs::vis::gui {
         }
         html += "<button class=\"btn btn--secondary sidebar-button\" data-action=\"add-modifier\">+ " +
                 escape(LOC("node_editor.add_modifier")) + "</button></div>";
+        if (const auto* stack = host_uuid ? manager_->stack(*host_uuid) : nullptr) {
+            const auto modifier = std::ranges::find(stack->modifiers, active_modifier_uuid_, &Modifier::uuid);
+            const auto* graph = modifier != stack->modifiers.end() ? manager_->tree(modifier->tree_uuid) : nullptr;
+            if (graph && graph->group_interface.inputs.size() > 1) {
+                html += "<div class=\"sidebar-section\"><div class=\"sidebar-heading\">" +
+                        escape(LOC("node_editor.template_adjust")) + "</div>";
+                for (const auto& socket : graph->group_interface.inputs) {
+                    if (socket.type == lfs::nodes::GEOMETRY_SOCKET)
+                        continue;
+                    const auto override = modifier->input_overrides.find(socket.identifier);
+                    const auto& value = override == modifier->input_overrides.end() ? socket.default_value : override->second;
+                    const nlohmann::json encoded = value;
+                    const auto payload = encoded.value("value", nlohmann::json{});
+                    const auto attributes = " data-action=\"modifier-input\" data-input=\"" + escape(socket.identifier) + "\"";
+                    html += "<label class=\"setting-row node-setting\"><span class=\"prop-label\">" + escape(socket.label) + "</span>";
+                    if (socket.type == lfs::nodes::BOOL_SOCKET) {
+                        html += "<input type=\"checkbox\"" + attributes + (payload == true ? " checked" : "") + "/>";
+                    } else {
+                        const auto text = payload.is_string() ? payload.get<std::string>() : payload.dump();
+                        html += "<input class=\"modifier-input-value\" type=\"text\"" + attributes +
+                                " value=\"" + escape(text) + "\"/>";
+                    }
+                    html += "</label>";
+                }
+                html += "</div>";
+            }
+        }
         if (const auto* tree = activeTree(); tree && selected_nodes_.size() == 1) {
             if (const auto* node = tree->find_node(*selected_nodes_.begin())) {
                 const auto type = manager_->registry().find_localized(node->type_id);
@@ -1412,7 +1481,7 @@ namespace lfs::vis::gui {
         if (!renderer)
             return;
         const auto size = GetBox().GetSize(Rml::BoxArea::Content);
-        const float canvas_width = std::max(0.0f, size.x - (sidebar_visible_ ? kSidebarWidth * dp_ratio_ : 0.0f));
+        const float canvas_width = std::max(0.0f, size.x - (effectiveSidebarVisible() ? kSidebarWidth * dp_ratio_ : 0.0f));
         interaction_.setViewport({0.0f, 0.0f, canvas_width, size.y});
         const auto& palette = theme().palette;
         Rml::Mesh frames;
@@ -1754,6 +1823,10 @@ namespace lfs::vis::gui {
         for (const auto& node : selected_nodes_)
             changed |= tree->remove_node(node);
         if (changed) {
+            if (const auto& preview = manager_->previewState();
+                preview && preview->tree_uuid == tree->uuid &&
+                selected_nodes_.contains(preview->node))
+                manager_->previewClear();
             manager_->recordTreeEdit(tree->uuid, before);
             selected_nodes_.clear();
             dom_dirty_ = true;
@@ -1903,7 +1976,7 @@ namespace lfs::vis::gui {
             max_y = std::max(max_y, visual.interaction.bounds.y + visual.interaction.bounds.height);
         }
         const auto size = GetBox().GetSize(Rml::BoxArea::Content);
-        const float width = std::max(1.0f, size.x - (sidebar_visible_ ? kSidebarWidth * dp_ratio_ : 0.0f));
+        const float width = std::max(1.0f, size.x - (effectiveSidebarVisible() ? kSidebarWidth * dp_ratio_ : 0.0f));
         const float zoom = std::clamp(std::min((width - 80.0f * dp_ratio_) / (max_x - min_x),
                                                (size.y - 80.0f * dp_ratio_) / (max_y - min_y)),
                                       0.3f, 2.5f);
@@ -1995,6 +2068,11 @@ namespace lfs::vis::gui {
         }
         switch (scancode) {
         case SDL_SCANCODE_ESCAPE:
+            if (manager_ && manager_->previewState()) {
+                manager_->previewClear();
+                dom_dirty_ = true;
+                return true;
+            }
             if (manager_ && (manager_->paintModeActive() || manager_->colourPickActive())) {
                 manager_->cancelViewportMode();
                 dom_dirty_ = true;
@@ -2069,6 +2147,18 @@ namespace lfs::vis::gui {
         case SDL_SCANCODE_N:
             setSidebarVisible(!sidebar_visible_);
             return true;
+        case SDL_SCANCODE_P:
+            if (manager_ && selected_nodes_.size() == 1) {
+                const auto& state = manager_->previewState();
+                if (state && state->target.to_string() == host_uuid_ &&
+                    state->modifier_uuid == active_modifier_uuid_ && state->node == previewPath(*selected_nodes_.begin()))
+                    manager_->previewClear();
+                else if (const auto host = activeHost())
+                    (void)manager_->previewSet(*host, active_modifier_uuid_ + "/" + previewPath(*selected_nodes_.begin()));
+                dom_dirty_ = true;
+                return true;
+            }
+            break;
         default: break;
         }
         (void)control;
@@ -2086,6 +2176,23 @@ namespace lfs::vis::gui {
             if ((shortcut || button) && keyframeInput(target)) {
                 event.StopImmediatePropagation();
                 return;
+            }
+            if (shortcut && event.GetParameter<int>("shift_key", 0) != 0 && manager_) {
+                for (auto* element = target; element && element != this; element = element->GetParentNode()) {
+                    const std::string node = element->GetAttribute<Rml::String>("data-node", "");
+                    if (node.empty())
+                        continue;
+                    const auto host = activeHost();
+                    const auto& state = manager_->previewState();
+                    if (state && host && state->target == *host && state->modifier_uuid == active_modifier_uuid_ &&
+                        state->node == previewPath(node))
+                        manager_->previewClear();
+                    else if (host)
+                        (void)manager_->previewSet(*host, active_modifier_uuid_ + "/" + previewPath(node));
+                    dom_dirty_ = true;
+                    event.StopImmediatePropagation();
+                    return;
+                }
             }
         }
         if (event_type == "curvebegin" || event_type == "curvechange" || event_type == "curveend" || event_type == "curvecancel" || event_type == "curvefocus") {
@@ -2150,7 +2257,7 @@ namespace lfs::vis::gui {
         if (event.GetType() != "mousescroll" && event.GetType() != "pinch")
             return;
         const auto pointer = localPointer(event);
-        if (sidebar_visible_ && pointer.x >= GetBox().GetSize(Rml::BoxArea::Content).x - kSidebarWidth * dp_ratio_)
+        if (effectiveSidebarVisible() && pointer.x >= GetBox().GetSize(Rml::BoxArea::Content).x - kSidebarWidth * dp_ratio_)
             return;
         auto* window = services().windowOrNull();
         auto* controller = window ? window->inputController() : nullptr;
@@ -2184,6 +2291,56 @@ namespace lfs::vis::gui {
                     if (!result)
                         file_error_ = result.error().message;
                     dom_dirty_ = true;
+                }
+                event.StopPropagation();
+                return;
+            }
+            if (action == "modifier-input" && (type == "change" || type == "blur")) {
+                if (type == "change" && target->GetAttribute<Rml::String>("type", "") == "text" &&
+                    !event.GetParameter("linebreak", false))
+                    return;
+                const auto host = activeHost();
+                auto* stack = host ? manager_->stack(*host) : nullptr;
+                auto* input = dynamic_cast<Rml::ElementFormControlInput*>(target);
+                if (stack && input) {
+                    const auto modifier = std::ranges::find(stack->modifiers, active_modifier_uuid_, &Modifier::uuid);
+                    const auto* graph = modifier != stack->modifiers.end() ? manager_->tree(modifier->tree_uuid) : nullptr;
+                    if (graph) {
+                        const auto identifier = target->GetAttribute<Rml::String>("data-input", "");
+                        const auto socket = std::ranges::find(graph->group_interface.inputs, identifier, &lfs::nodes::InterfaceSocket::identifier);
+                        if (socket != graph->group_interface.inputs.end()) {
+                            auto encoded = nlohmann::json(socket->default_value);
+                            auto payload = socket->type == lfs::nodes::STRING_SOCKET ? nlohmann::json(input->GetValue())
+                                           : socket->type == lfs::nodes::BOOL_SOCKET ? nlohmann::json(target->HasAttribute("checked"))
+                                                                                     : nlohmann::json::parse(input->GetValue(), nullptr, false);
+                            const auto original = encoded.value("value", nlohmann::json{});
+                            const bool valid = !payload.is_discarded() &&
+                                               ((original.is_number() && payload.is_number()) ||
+                                                (original.is_boolean() && payload.is_boolean()) ||
+                                                (original.is_string() && payload.is_string()) ||
+                                                (original.is_array() && payload.is_array() && payload.size() == original.size() &&
+                                                 std::ranges::all_of(payload, [](const auto& component) { return component.is_number(); })));
+                            if (valid) {
+                                if (payload.is_number()) {
+                                    double number = payload.get<double>();
+                                    if (socket->min)
+                                        number = std::max(number, *socket->min);
+                                    if (socket->max)
+                                        number = std::min(number, *socket->max);
+                                    payload = number;
+                                }
+                                encoded["value"] = payload;
+                                const auto value = encoded.get<lfs::nodes::Value>();
+                                const auto current = modifier->input_overrides.find(identifier);
+                                if (current == modifier->input_overrides.end() || nlohmann::json(current->second) != encoded) {
+                                    const nlohmann::json before = stack->modifiers;
+                                    modifier->input_overrides[identifier] = value;
+                                    manager_->recordStackEdit(*host, before, modifier->uuid + ":input:" + identifier);
+                                }
+                                dom_dirty_ = true;
+                            }
+                        }
+                    }
                 }
                 event.StopPropagation();
                 return;
@@ -2390,6 +2547,39 @@ namespace lfs::vis::gui {
                 event.StopPropagation();
                 return;
             }
+            if (action == "browse-templates") {
+                openTemplateBrowser();
+                event.StopPropagation();
+                return;
+            }
+            if (action == "template-apply") {
+                if (const auto host = activeHost()) {
+                    const auto result = manager_->applyTemplate(
+                        *host, target->GetAttribute<Rml::String>("data-template", ""));
+                    if (result) {
+                        active_modifier_uuid_ = (*result)->uuid;
+                        active_tree_uuid_ = (*result)->tree_uuid;
+                    } else {
+                        file_error_ = result.error().message;
+                    }
+                }
+                dom_dirty_ = true;
+                event.StopPropagation();
+                return;
+            }
+            if (action == "node-preview") {
+                const auto host = activeHost();
+                const std::string node = target->GetAttribute<Rml::String>("data-node", "");
+                const auto& state = manager_->previewState();
+                if (state && host && state->target == *host && state->modifier_uuid == active_modifier_uuid_ &&
+                    state->node == previewPath(node))
+                    manager_->previewClear();
+                else if (host)
+                    (void)manager_->previewSet(*host, active_modifier_uuid_ + "/" + previewPath(node));
+                dom_dirty_ = true;
+                event.StopPropagation();
+                return;
+            }
             if (action == "capture-view") {
                 if (auto* graph = activeTree()) {
                     const auto result = manager_->captureViewportCamera(graph->uuid, target->GetAttribute<Rml::String>("data-node", ""));
@@ -2580,7 +2770,7 @@ namespace lfs::vis::gui {
             const int button = event.GetParameter("button", 0);
             const auto pointer = localPointer(event);
             const auto size = GetBox().GetSize(Rml::BoxArea::Content);
-            if (sidebar_visible_ && pointer.x >= size.x - kSidebarWidth * dp_ratio_)
+            if (effectiveSidebarVisible() && pointer.x >= size.x - kSidebarWidth * dp_ratio_)
                 return;
             CanvasPointerButton canvas_button = CanvasPointerButton::Left;
             if (button == 1)
@@ -2642,6 +2832,8 @@ namespace lfs::vis::gui {
                 scancode = SDL_SCANCODE_L;
             else if (key == Rml::Input::KI_I)
                 scancode = SDL_SCANCODE_I;
+            else if (key == Rml::Input::KI_P)
+                scancode = SDL_SCANCODE_P;
             else if (key == Rml::Input::KI_TAB)
                 scancode = SDL_SCANCODE_TAB;
             if (handleKey(scancode, event.GetParameter<int>("shift_key", 0) != 0,

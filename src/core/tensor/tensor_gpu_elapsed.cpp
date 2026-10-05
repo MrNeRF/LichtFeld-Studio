@@ -4,13 +4,15 @@
 #include "core/gpu_elapsed.hpp"
 
 #include "backend/metal/metal_queue.hpp"
+#ifdef LFS_TENSOR_VULKAN
 #include "backend/vulkan/vk_context.hpp"
 #include "backend/vulkan/vk_recorder.hpp"
+#include <vulkan/vulkan.h>
+#endif
 #include "core/cuda_types.hpp"
 
 #include <stdexcept>
 #include <vector>
-#include <vulkan/vulkan.h>
 
 #if LFS_HAS_CUDA
 #include <cuda_runtime.h>
@@ -29,14 +31,18 @@ namespace lfs::core {
 #if LFS_HAS_CUDA
         std::vector<cudaEvent_t> events;
 #endif
-        std::shared_ptr<internal::VulkanContext> vulkan;
         std::unique_ptr<internal::metal_queue::Timestamps> metal;
+#ifdef LFS_TENSOR_VULKAN
+        std::shared_ptr<internal::VulkanContext> vulkan;
         VkQueryPool queries = VK_NULL_HANDLE;
+#endif
         std::vector<Mark> marks;
         float timestamp_period = 0.f;
         ~Impl() {
+#ifdef LFS_TENSOR_VULKAN
             if (queries != VK_NULL_HANDLE && vulkan)
                 vkDestroyQueryPool(vulkan->device(), queries, nullptr);
+#endif
         }
     };
 
@@ -51,6 +57,7 @@ namespace lfs::core {
             impl_->ready = impl_->metal != nullptr;
             return;
         }
+#ifdef LFS_TENSOR_VULKAN
         if (backend == GpuBackend::Vulkan) {
             auto context = internal::acquire_vulkan_context();
             uint32_t families = 0;
@@ -73,6 +80,7 @@ namespace lfs::core {
             impl_->ready = true;
             return;
         }
+#endif
 #if LFS_HAS_CUDA
         if (backend != GpuBackend::CUDA)
             return;
@@ -132,6 +140,7 @@ namespace lfs::core {
             impl_->marks[index] = {id, impl_->metal->write(index), true};
             return true;
         }
+#ifdef LFS_TENSOR_VULKAN
         if (impl_->backend == GpuBackend::Vulkan) {
             if (!ready() || index >= impl_->marks.size())
                 return false;
@@ -142,6 +151,7 @@ namespace lfs::core {
             impl_->marks[index] = {id, timeline, true};
             return true;
         }
+#endif
 #if LFS_HAS_CUDA
         if (!ready() || index >= impl_->events.size() ||
             (impl_->backend != GpuBackend::CUDA && execution_target != nullptr))
@@ -166,6 +176,7 @@ namespace lfs::core {
             internal::metal_queue::wait(internal::metal_queue::submit());
             return true;
         }
+#ifdef LFS_TENSOR_VULKAN
         if (impl_->backend == GpuBackend::Vulkan) {
             if (!ready())
                 return false;
@@ -186,6 +197,7 @@ namespace lfs::core {
             }
             return true;
         }
+#endif
 #if LFS_HAS_CUDA
         if (!ready() ||
             (impl_->backend != GpuBackend::CUDA && execution_target != nullptr))
@@ -206,6 +218,7 @@ namespace lfs::core {
             internal::metal_queue::wait(impl_->marks[index].timeline);
             return true;
         }
+#ifdef LFS_TENSOR_VULKAN
         if (impl_->backend == GpuBackend::Vulkan) {
             if (!ready() || index >= impl_->marks.size() || !impl_->marks[index].written)
                 return false;
@@ -219,6 +232,7 @@ namespace lfs::core {
                 VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
             return result == VK_SUCCESS;
         }
+#endif
 #if LFS_HAS_CUDA
         if (!ready() || index >= impl_->events.size())
             return false;
@@ -235,6 +249,7 @@ namespace lfs::core {
                                                   const std::size_t end) const {
         if (impl_->backend == GpuBackend::Metal)
             return ready() ? impl_->metal->milliseconds(begin, end) : std::nullopt;
+#ifdef LFS_TENSOR_VULKAN
         if (impl_->backend == GpuBackend::Vulkan) {
             if (!ready() || begin >= impl_->marks.size() || end >= impl_->marks.size() ||
                 !impl_->marks[begin].written || !impl_->marks[end].written)
@@ -252,6 +267,7 @@ namespace lfs::core {
             const double nanoseconds = static_cast<double>(second - first) * impl_->timestamp_period;
             return static_cast<float>(nanoseconds / 1.0e6);
         }
+#endif
 #if LFS_HAS_CUDA
         if (!ready() || begin >= impl_->events.size() || end >= impl_->events.size())
             return std::nullopt;

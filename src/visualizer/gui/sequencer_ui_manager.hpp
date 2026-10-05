@@ -11,7 +11,7 @@
 #include "gui/sequencer_ui_state.hpp"
 #include "gui/sequencer_viewport_edit_mode.hpp"
 #include "gui/ui_context.hpp"
-#include "gui/vulkan_ui_texture.hpp"
+#include "gui/ui_texture.hpp"
 #include "io/loader.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
 #include "sequencer/sequencer_controller.hpp"
@@ -151,7 +151,7 @@ namespace lfs::vis {
             bool playback_ticked_before_scene_ = false;
 
             static constexpr float PREVIEW_TARGET_FPS = 30.0f;
-            VulkanUiTexture pip_texture_;
+            UiTexture pip_texture_;
             bool pip_initialized_ = false;
             std::optional<PipPreviewKey> pip_last_key_;
             // Rml reload / GPU reset are not encoded in model state.

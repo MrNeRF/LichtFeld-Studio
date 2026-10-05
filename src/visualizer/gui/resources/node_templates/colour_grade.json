@@ -1,0 +1,209 @@
+{
+  "schema_version": 1,
+  "id": "colour_grade",
+  "name": "Colour grade",
+  "description": "Add contrast, saturation and warmth to the whole capture.",
+  "category": "Colour",
+  "scene_kinds": [
+    "splat"
+  ],
+  "adjust": "Start with Exposure, Contrast and Saturation; use Temperature for a warmer or cooler result.",
+  "tree": {
+    "schema_version": 1,
+    "uuid": "builtin.colour_grade",
+    "name": "Colour grade",
+    "tree_type": "lfs.geometry",
+    "nodes": [
+      {
+        "name": "Group Input",
+        "type_id": "lfs.group_input",
+        "location": [
+          -760,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Group Output",
+        "type_id": "lfs.group_output",
+        "location": [
+          520,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "none"
+          }
+        },
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Colour Correct",
+        "type_id": "lfs.colour_correct",
+        "location": [
+          0,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "geometry"
+          },
+          "Exposure": {
+            "type": "float",
+            "value": 0.1
+          },
+          "Contrast": {
+            "type": "float",
+            "value": 1.15
+          },
+          "Saturation": {
+            "type": "float",
+            "value": 1.2
+          },
+          "Temperature": {
+            "type": "float",
+            "value": 0.07
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Adjust these settings",
+        "type_id": "lfs.frame",
+        "location": [
+          -620,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "colour": "neutral",
+          "label": "Adjust these settings",
+          "note": "Start with Exposure, Contrast and Saturation; use Temperature for a warmer or cooler result."
+        },
+        "ui": {},
+        "version": 1
+      }
+    ],
+    "links": [
+      {
+        "from_node": "Group Input",
+        "from_socket": "Geometry",
+        "to_node": "Colour Correct",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Exposure",
+        "to_node": "Colour Correct",
+        "to_socket": "Exposure"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Contrast",
+        "to_node": "Colour Correct",
+        "to_socket": "Contrast"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Saturation",
+        "to_node": "Colour Correct",
+        "to_socket": "Saturation"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Temperature",
+        "to_node": "Colour Correct",
+        "to_socket": "Temperature"
+      },
+      {
+        "from_node": "Colour Correct",
+        "from_socket": "Geometry",
+        "to_node": "Group Output",
+        "to_socket": "Geometry"
+      }
+    ],
+    "interface": {
+      "inputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        },
+        {
+          "identifier": "Exposure",
+          "label": "Exposure",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 0.1
+          },
+          "min": -5,
+          "max": 5,
+          "step": 0.05
+        },
+        {
+          "identifier": "Contrast",
+          "label": "Contrast",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 1.15
+          },
+          "min": 0,
+          "max": 4,
+          "step": 0.05
+        },
+        {
+          "identifier": "Saturation",
+          "label": "Saturation",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 1.2
+          },
+          "min": 0,
+          "max": 4,
+          "step": 0.05
+        },
+        {
+          "identifier": "Temperature",
+          "label": "Temperature",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 0.07
+          },
+          "min": -1,
+          "max": 1,
+          "step": 0.01
+        }
+      ],
+      "outputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        }
+      ]
+    }
+  }
+}

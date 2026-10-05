@@ -84,4 +84,17 @@ namespace lfs::vis {
         return path;
     }
 
+    // Environment maps are absolute, relative to the working directory, bundled
+    // assets ("environments/x.hdr") or relative to the assets directory.
+    inline std::filesystem::path resolveEnvironmentMapPath(const std::filesystem::path& path) {
+        if (path.is_absolute() || std::filesystem::exists(path))
+            return path;
+        try {
+            return getAssetPath(lfs::core::path_to_utf8(path));
+        } catch (const std::exception&) {
+            // LFS-CENSUS-OK(empty-catch): not a bundled asset; try the assets directory.
+            return lfs::core::getAssetsDir() / path;
+        }
+    }
+
 } // namespace lfs::vis

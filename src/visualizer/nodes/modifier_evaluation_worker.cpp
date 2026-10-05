@@ -8,6 +8,7 @@
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_fused.hpp"
 #include "core/tensor_sh.hpp"
 #include "core/tensor_vulkan_interop.hpp"
 #include "io/loader.hpp"
@@ -71,21 +72,8 @@ namespace lfs::vis {
             };
             if (geometry.points)
                 geometry.points->positions = transform_positions(geometry.points->positions);
-            if (geometry.mesh && geometry.mesh->mesh) {
-                const auto& source = *geometry.mesh->mesh;
-                auto result = std::make_shared<core::MeshData>();
-                result->vertices = transform_positions(source.vertices);
-                result->indices = source.indices;
-                result->normals = source.normals;
-                result->tangents = source.tangents;
-                result->texcoords = source.texcoords;
-                result->colors = source.colors;
-                result->materials = source.materials;
-                result->submeshes = source.submeshes;
-                result->texture_images = source.texture_images;
-                geometry.mesh = lfs::nodes::MeshComponent{std::move(result), geometry.mesh->textures,
-                                                          geometry.mesh->attributes};
-            }
+            if (geometry.mesh && geometry.mesh->mesh)
+                geometry.mesh->mesh = lfs::nodes::transform_mesh(*geometry.mesh->mesh, matrix);
             return geometry;
         }
 
@@ -243,11 +231,14 @@ namespace lfs::vis {
                             lfs::nodes::splat_data_from_geometry(output).release());
                     }
                 }
-            } else if (node.type == core::NodeType::POINTCLOUD && result.evaluation.geometry.points) {
+            } else if (node.type == core::NodeType::POINTCLOUD &&
+                       result.evaluation.geometry.points) {
                 points = std::make_shared<core::PointCloud>(
                     lfs::nodes::point_cloud_from_geometry(result.evaluation.geometry));
-            } else if (node.type == core::NodeType::MESH && result.evaluation.geometry.mesh) {
-                mesh = std::const_pointer_cast<core::MeshData>(result.evaluation.geometry.mesh->mesh);
+            } else if (node.type == core::NodeType::MESH &&
+                       result.evaluation.geometry.mesh) {
+                mesh = std::const_pointer_cast<core::MeshData>(
+                    result.evaluation.geometry.mesh->mesh);
             }
             result.splats = std::move(splats);
             result.points = std::move(points);
@@ -327,32 +318,6 @@ namespace lfs::vis {
             return core::gpu_backend_available(backend) ? std::optional{backend} : std::nullopt;
         }
 
-        std::optional<FieldContext> fieldContext(const Geometry& geometry) {
-            FieldContext context;
-            if (geometry.splats) {
-                context.domain = Domain::Splat;
-                context.splats = &*geometry.splats;
-                const auto& splats = *geometry.splats;
-                context.identity = static_cast<std::uint64_t>(splats.means.debug_id()) ^
-                                   (static_cast<std::uint64_t>(splats.sh0.debug_id()) << 8U) ^
-                                   (static_cast<std::uint64_t>(splats.scaling.debug_id()) << 16U) ^
-                                   (static_cast<std::uint64_t>(splats.opacity.debug_id()) << 24U) ^
-                                   (static_cast<std::uint64_t>(splats.shN.debug_id()) << 32U);
-            } else if (geometry.points) {
-                context.domain = Domain::Point;
-                context.points = &*geometry.points;
-                context.identity = static_cast<std::uint64_t>(geometry.points->positions.debug_id()) ^
-                                   (static_cast<std::uint64_t>(geometry.points->colors.debug_id()) << 32U);
-            } else if (geometry.mesh) {
-                context.domain = Domain::Vertex;
-                context.mesh = &*geometry.mesh;
-                context.identity = geometry.mesh->mesh ? geometry.mesh->mesh->id() : 0;
-            } else {
-                return std::nullopt;
-            }
-            return context;
-        }
-
         // Attribute nodes replace tensors but keep element order, so tensor identity would hide every
         // preview behind them. Equal counts alone prove nothing: a reordering join keeps the count.
         bool sameElements(const ModifierHostResult& result, const FieldContext& left, const FieldContext& right) {
@@ -406,16 +371,151 @@ namespace lfs::vis {
             });
         }
 
+        Geometry colourGeometry(Geometry geometry, core::Tensor values,
+                                const std::string_view type, float& minimum, float& maximum) {
+            using namespace core;
+            values = values.to(DataType::Float32);
+            const size_t count = values.shape()[0];
+            const size_t channels = values.ndim() == 2 ? values.shape()[1] : 1;
+            if ((type == VECTOR_SOCKET || type == COLOUR_SOCKET) && channels < 3)
+                throw NodeError(std::format("Preview expects at least 3 channels, observed {}", channels));
+            minimum = values.numel() ? values.min().item<float>() : 0.0f;
+            maximum = values.numel() ? values.max().item<float>() : 0.0f;
+            const float mode = type == BOOL_SOCKET ? 1.f : type == VECTOR_SOCKET ? 2.f
+                                                       : type == COLOUR_SOCKET   ? 3.f
+                                                                                 : 0.f;
+            // A single public fused kernel maps all field kinds and writes RGB + SH DC.
+            // Only the two scalar range reductions cross to the host for the banner.
+            static const fused::Kernel kernel = [] {
+                using namespace fused;
+                Builder b(2);
+                const auto source = b.input(DataType::Float32, 1);
+                const auto parameters = b.input(DataType::Float32, 1);
+                const auto row = b.iota(0), channel = b.iota(1);
+                const auto stride = parameters.at({3}).cast(DataType::Int32);
+                const auto x = source.gather({row * stride});
+                const auto t = clamp((x - parameters.at({0})) / parameters.at({1}), 0.f, 1.f);
+                const auto rgb = [&](float r, float g, float blue) {
+                    return where(channel == 0, r, where(channel == 1, g, blue));
+                };
+                const auto a = rgb(.267f, .005f, .329f), c = rgb(.230f, .322f, .546f);
+                const auto d = rgb(.128f, .567f, .551f), e = rgb(.369f, .789f, .383f);
+                const auto f = rgb(.993f, .906f, .144f);
+                const auto viridis = where(t < .25f, a + t * 4.f * (c - a),
+                                           where(t < .5f, c + (t - .25f) * 4.f * (d - c),
+                                                 where(t < .75f, d + (t - .5f) * 4.f * (e - d), e + (t - .75f) * 4.f * (f - e))));
+                const auto y = source.gather({row * stride + 1});
+                const auto z = source.gather({row * stride + 2});
+                const auto component = source.gather({row * stride + channel});
+                const auto vector = abs(component) / max(sqrt(x * x + y * y + z * z), 1e-12f);
+                const auto mode = parameters.at({2});
+                const auto mapped = clamp(where(mode == 0.f, viridis,
+                                                where(mode == 1.f, where(x != 0.f, rgb(.95f, .70f, .20f), .12f),
+                                                      where(mode == 2.f, vector, component))),
+                                          0.f, 1.f);
+                b.output(mapped, DataType::Float32);
+                b.output((mapped - .5f) / .28209479177387814f, DataType::Float32);
+                return Kernel(b);
+            }();
+            const auto parameters = Tensor::from_vector(
+                {minimum, std::max(maximum - minimum, 1e-12f), mode, static_cast<float>(channels)}, {4}, Device::CPU);
+            auto mapped = kernel({count, 3}, {values.reshape({-1}), parameters});
+            const auto& rgb = mapped[0];
+            if (geometry.splats) {
+                geometry.splats->sh0 = std::move(mapped[1]);
+                geometry.splats->shN = core::Tensor::zeros_like(geometry.splats->shN);
+            }
+            if (geometry.points)
+                geometry.points->colors = rgb;
+            if (geometry.mesh && geometry.mesh->mesh) {
+                const auto& source = *geometry.mesh->mesh;
+                auto mesh = copyMesh(source);
+                mesh->colors = core::Tensor::cat(
+                    {rgb, core::Tensor::ones({rgb.shape()[0], 1}, rgb.device())}, 1);
+                geometry.mesh->mesh = std::move(mesh);
+            }
+            return geometry;
+        }
+
+        struct PreviewProduct {
+            Geometry geometry;
+            float minimum = 0.0f;
+            float maximum = 0.0f;
+        };
+
+        std::optional<PreviewProduct> previewOutput(
+            const NodePreviewState& preview, const EvalResult& evaluated) {
+            const auto value = evaluated.output_values.find(preview.socket);
+            if (value == evaluated.output_values.end())
+                return std::nullopt;
+            if (preview.socket_type == GEOMETRY_SOCKET) {
+                const auto* geometry = value->second.get_if<Geometry>();
+                return geometry ? std::optional{PreviewProduct{.geometry = *geometry}} : std::nullopt;
+            }
+            Geometry context_geometry = evaluated.geometry;
+            const auto context = field_context(context_geometry);
+            if (!context)
+                return std::nullopt;
+            FieldMemo memo;
+            const auto* field = value->second.get_if<Field>();
+            auto values = (field ? convert_field(*field, preview.socket_type)
+                                 : constant_field(value->second, preview.socket_type))
+                              .evaluate(*context, memo);
+            PreviewProduct result;
+            result.geometry = colourGeometry(std::move(context_geometry), std::move(values),
+                                             preview.socket_type, result.minimum, result.maximum);
+            return result;
+        }
+
+        // Selected counts stay on the device until every preview is known, then come back in one read.
+        struct PendingShares {
+            std::vector<std::string> nodes;
+            std::vector<core::Tensor> counts;
+            std::vector<size_t> totals;
+
+            void add(std::string node, const core::Tensor& count, const size_t total) {
+                nodes.push_back(std::move(node));
+                counts.push_back(count);
+                totals.push_back(total);
+            }
+
+            void read(ModifierHostResult& result) {
+                if (nodes.empty())
+                    return;
+                std::vector<int> values;
+                const bool one_device = std::ranges::all_of(counts, [&](const core::Tensor& count) {
+                    return count.device() == counts.front().device();
+                });
+                if (one_device) {
+                    values = core::Tensor::cat(counts, 0).cpu().to_vector_int();
+                } else {
+                    for (const auto& count : counts)
+                        values.push_back(count.cpu().to_vector_int().front());
+                }
+                for (size_t i = 0; i < nodes.size(); ++i)
+                    if (auto status = result.evaluation.nodes.find(nodes[i]); status != result.evaluation.nodes.end())
+                        status->second.selected_share = totals[i] ? static_cast<double>(values[i]) / static_cast<double>(totals[i]) : 0.0;
+            }
+        };
+
+        // Int32 [1] number of selected elements.
+        core::Tensor selectedCount(const core::Tensor& mask) {
+            if (!mask.numel())
+                return core::Tensor::zeros({1}, mask.device(), core::DataType::Int32);
+            return mask.to(core::DataType::Int32).sum().to(core::DataType::Int32).reshape({1});
+        }
+
         void selectionPreviews(const NodeTree& tree, const EvalCache& cache,
                                const std::string& modifier, ModifierHostResult& result,
+                               PendingShares& shares,
                                const std::function<bool()>& cancelled,
                                const TreeResolver& resolver,
                                const std::string& name_space = {}) {
-            const auto displayed = fieldContext(result.evaluation.geometry);
+            const auto displayed = field_context(result.evaluation.geometry);
             if (!displayed)
                 return;
             FieldMemo memo;
-            std::unordered_map<std::string, std::pair<core::Tensor, double>> masks;
+            std::unordered_map<std::string, std::pair<core::Tensor, core::Tensor>> masks;
             for (const auto& node : tree.nodes) {
                 if (cancelled())
                     return;
@@ -456,7 +556,7 @@ namespace lfs::vis {
                 }
                 if (!consumer || !consumer->geometry_input)
                     continue;
-                const auto context = fieldContext(*consumer->geometry_input);
+                const auto context = field_context(*consumer->geometry_input);
                 if (!context)
                     continue;
                 const auto cached = cache.nodes.find(source);
@@ -470,12 +570,10 @@ namespace lfs::vis {
                                         std::to_string(context->identity) + "/" +
                                         std::to_string(context->size());
                 auto found = masks.find(key);
-                if (found == masks.end() && consumed_as_selection && consumer->selection &&
-                    consumer->selection->context == context->identity) {
+                // The consumer recorded its mask only when it evaluated it on this geometry input.
+                if (found == masks.end() && consumed_as_selection && consumer->selection) {
                     const auto& mask = consumer->selection->mask;
-                    const auto count = mask.numel();
-                    const double share = count ? static_cast<double>(mask.count_nonzero()) / count : 0.0;
-                    found = masks.emplace(key, std::pair{mask, share}).first;
+                    found = masks.emplace(key, std::pair{mask, selectedCount(mask)}).first;
                 }
                 if (found == masks.end()) {
                     try {
@@ -484,9 +582,8 @@ namespace lfs::vis {
                                            : constant_field(value->second, FLOAT_SOCKET))
                                         .evaluate(*context, memo)
                                         .ge(0.5f);
-                        const auto count = mask.numel();
-                        const double share = count ? static_cast<double>(mask.count_nonzero()) / count : 0.0;
-                        found = masks.emplace(key, std::pair{std::move(mask), share}).first;
+                        auto count = selectedCount(mask);
+                        found = masks.emplace(key, std::pair{std::move(mask), std::move(count)}).first;
                     } catch (const std::exception&) {
                         // LFS-CENSUS-OK(empty-catch): optional selection diagnostics cannot fail evaluation.
                         // Selection statistics and viewport previews are ancillary. A field that
@@ -494,15 +591,13 @@ namespace lfs::vis {
                         continue;
                     }
                 }
-                if (auto status = result.evaluation.nodes.find(modifier + "/" + name_space + node.name);
-                    status != result.evaluation.nodes.end())
-                    status->second.selected_share = found->second.second;
+                shares.add(modifier + "/" + name_space + node.name, found->second.second, found->second.first.numel());
                 if (sameElements(result, *context, *displayed))
                     result.previews[modifier + "/" + name_space + node.name] = found->second.first;
             }
             for (const auto& node : tree.nodes) {
                 if (const auto* nested = node.type_id == "lfs.group" ? groupTree(node, resolver) : nullptr)
-                    selectionPreviews(*nested, cache, modifier, result, cancelled, resolver,
+                    selectionPreviews(*nested, cache, modifier, result, shares, cancelled, resolver,
                                       name_space + node.name + "/");
             }
         }
@@ -568,16 +663,20 @@ namespace lfs::vis {
                 result.uuid = object.uuid;
                 const auto start = std::chrono::steady_clock::now();
                 // An object without visible modifiers displays its stored payload; it
-                // needs no evaluation copy unless it is baked or read by Object Info.
-                const bool active = std::ranges::any_of(object.stack.modifiers, [](const Modifier& modifier) {
-                    return modifier.enabled && modifier.show_viewport;
+                // needs no evaluation copy unless previewed, baked or read by Object Info.
+                const bool active = std::ranges::any_of(object.stack.modifiers, [&](const Modifier& modifier) {
+                    return (modifier.enabled && modifier.show_viewport) ||
+                           (request_.preview && request_.preview->target == object.uuid &&
+                            request_.preview->modifier_uuid == modifier.uuid);
                 });
                 Geometry geometry = active || request_.bake ? source_(object) : Geometry{};
                 std::uint64_t input_generation = request_.source_generation;
                 for (const auto& modifier : object.stack.modifiers) {
                     if (control_.cancelled())
                         break;
-                    if (!modifier.enabled || !modifier.show_viewport)
+                    const bool previewing = request_.preview && request_.preview->target == object.uuid &&
+                                            request_.preview->modifier_uuid == modifier.uuid;
+                    if ((!modifier.enabled || !modifier.show_viewport) && !previewing)
                         continue;
                     result.enabled = true;
                     const auto source = request_.trees.find(modifier.tree_uuid);
@@ -599,6 +698,7 @@ namespace lfs::vis {
                         const auto slash = entry.first.find('/');
                         return !node_names.contains(std::string_view(entry.first).substr(0, slash));
                     });
+                    const std::string requested_node = previewing ? request_.preview->node : std::string{};
                     auto evaluated = lfs::nodes::evaluate(tree,
                                                           {.geometry = geometry,
                                                            .interface_overrides = modifier.input_overrides,
@@ -606,6 +706,8 @@ namespace lfs::vis {
                                                            .tree_resolver = [this](const std::string_view uuid) {
                                                                return resolveTree(uuid);
                                                            },
+                                                           .requested_node = requested_node,
+                                                           .requested_socket = requested_node.empty() ? std::string{} : request_.preview->socket,
                                                            .seconds = request_.seconds,
                                                            .frames_per_second = request_.frames_per_second},
                                                           this, &cache, control_);
@@ -627,15 +729,28 @@ namespace lfs::vis {
                         }
                         break;
                     }
+                    input_generation = evaluated.output_key;
+                    if (request_.preview && request_.preview->target == object.uuid &&
+                        request_.preview->modifier_uuid == modifier.uuid) {
+                        geometry = evaluated.geometry;
+                        if (auto product = previewOutput(*request_.preview, evaluated)) {
+                            geometry = std::move(product->geometry);
+                            result.preview_min = product->minimum;
+                            result.preview_max = product->maximum;
+                        }
+                        break;
+                    }
                     geometry = std::move(evaluated.geometry);
-                    if (const auto output = cache.nodes.find(tree.output_node().name); output != cache.nodes.end())
-                        input_generation = output->second.key;
                 }
                 result.evaluation.geometry = std::move(geometry);
                 result.output_key = input_generation;
+                if (request_.preview && request_.preview->target == object.uuid)
+                    result.preview_key = request_.preview->modifier_uuid + "/" +
+                                         request_.preview->node + "/" + request_.preview->socket;
                 const auto previous = previous_.find(object.uuid);
                 const bool cached = previous != previous_.end() && previous->second.enabled == result.enabled &&
                                     previous->second.output_key == result.output_key &&
+                                    previous->second.preview_key == result.preview_key &&
                                     (!request_.bake || previous->second.splats || previous->second.points || previous->second.mesh) &&
                                     std::ranges::all_of(result.evaluation.nodes, [](const auto& entry) { return entry.second.cached; });
                 if (!control_.cancelled() && result.evaluation.ok) {
@@ -649,15 +764,20 @@ namespace lfs::vis {
                             if (const auto old = previous->second.evaluation.nodes.find(name); old != previous->second.evaluation.nodes.end())
                                 status.selected_share = old->second.selected_share;
                     } else {
+                        PendingShares shares;
                         for (const auto& modifier : object.stack.modifiers) {
+                            if (!result.preview_key.empty())
+                                break;
                             if (!modifier.enabled || !modifier.show_viewport)
                                 continue;
                             const auto source = request_.trees.find(modifier.tree_uuid);
                             if (source != request_.trees.end())
                                 selectionPreviews(NodeTree::from_json(source->second, registry_), caches_[modifier.uuid],
-                                                  modifier.uuid, result, control_.cancelled,
+                                                  modifier.uuid, result, shares, control_.cancelled,
                                                   [this](const std::string_view uuid) { return resolveTree(uuid); });
                         }
+                        if (!control_.cancelled())
+                            shares.read(result);
                         if ((result.enabled || request_.bake) && !control_.cancelled()) {
                             // A bake hands its payload to the scene, so it shares nothing with the viewport's.
                             const lfs::nodes::SplatsComponent* source = nullptr;
@@ -787,6 +907,10 @@ namespace lfs::vis {
                     lock.unlock();
                     core::Tensor::release_freed_memory();
                     holding_freed_memory_ = false;
+                    // Once no graph is left to evaluate or publish, return the storage the graphs
+                    // pooled, including payload buffers the renderer imported.
+                    if (caches_.empty() && sources_.empty() && published_.empty())
+                        core::Tensor::trim_memory_pool();
                     continue;
                 }
                 retired.swap(retired_);
@@ -846,7 +970,9 @@ namespace lfs::vis {
             std::unordered_set<std::string_view> modifier_ids;
             for (const auto& object : request.objects)
                 for (const auto& modifier : object.stack.modifiers)
-                    if (modifier.enabled && modifier.show_viewport)
+                    if ((modifier.enabled && modifier.show_viewport) ||
+                        (request.preview && request.preview->target == object.uuid &&
+                         request.preview->modifier_uuid == modifier.uuid))
                         modifier_ids.insert(modifier.uuid);
             std::erase_if(caches_, [&](const auto& entry) { return !modifier_ids.contains(entry.first); });
             // Keep the previous immutable captures alive until their replacement
@@ -896,7 +1022,8 @@ namespace lfs::vis {
                     progress_.pending_nodes.erase(name);
                     progress_.completed = progress_.finished_nodes.size();
                     progress_.node.clear(); },
-                .propagate_out_of_memory = true};
+                .propagate_out_of_memory = true,
+                .synchronize_nodes = profiling_.load(std::memory_order_relaxed)};
             SnapshotHost host(request, registry_, caches_, source, previous_hosts_, published_, control,
                               [&](const core::Uuid& uuid, const std::string& modifier, const lfs::nodes::NodeTree& tree) {
                                   std::unordered_map<std::string, std::vector<std::string>> parents;

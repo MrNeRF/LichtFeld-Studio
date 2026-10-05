@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "id": "edge_fade",
+  "name": "Soft edge fade",
+  "description": "Fade geometry opacity towards the edge of an adjustable subject region.",
+  "category": "Geometry",
+  "scene_kinds": [
+    "splat"
+  ],
+  "adjust": "Set Centre and Radii around the useful capture; Falloff controls the soft edge width.",
+  "tree": {
+    "schema_version": 1,
+    "uuid": "builtin.edge_fade",
+    "name": "Soft edge fade",
+    "tree_type": "lfs.geometry",
+    "nodes": [
+      {
+        "name": "Group Input",
+        "type_id": "lfs.group_input",
+        "location": [
+          -760,
+          0
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Group Output",
+        "type_id": "lfs.group_output",
+        "location": [
+          520,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "none"
+          }
+        },
+        "properties": {},
+        "ui": {},
+        "version": 1
+      },
+      {
+        "name": "Useful Region",
+        "type_id": "lfs.ellipsoid_selection",
+        "location": [
+          -400,
+          -180
+        ],
+        "muted": false,
+        "input_values": {
+          "Centre": {
+            "type": "vec3",
+            "value": [
+              0,
+              0,
+              0
+            ]
+          },
+          "Radii": {
+            "type": "vec3",
+            "value": [
+              5,
+              5,
+              5
+            ]
+          },
+          "Falloff": {
+            "type": "float",
+            "value": 2
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Opacity",
+        "type_id": "lfs.opacity",
+        "location": [
+          -400,
+          -340
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Fade",
+        "type_id": "lfs.math",
+        "location": [
+          -100,
+          -220
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "operation": "multiply"
+        },
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Set Opacity",
+        "type_id": "lfs.set_opacity",
+        "location": [
+          180,
+          0
+        ],
+        "muted": false,
+        "input_values": {
+          "Geometry": {
+            "type": "geometry"
+          }
+        },
+        "properties": {},
+        "ui": {
+          "frame": "Adjust these settings"
+        },
+        "version": 1
+      },
+      {
+        "name": "Adjust these settings",
+        "type_id": "lfs.frame",
+        "location": [
+          -620,
+          -180
+        ],
+        "muted": false,
+        "input_values": {},
+        "properties": {
+          "colour": "neutral",
+          "label": "Adjust these settings",
+          "note": "Set Centre and Radii around the useful capture; Falloff controls the soft edge width."
+        },
+        "ui": {},
+        "version": 1
+      }
+    ],
+    "links": [
+      {
+        "from_node": "Group Input",
+        "from_socket": "Geometry",
+        "to_node": "Set Opacity",
+        "to_socket": "Geometry"
+      },
+      {
+        "from_node": "Useful Region",
+        "from_socket": "Selection",
+        "to_node": "Fade",
+        "to_socket": "A"
+      },
+      {
+        "from_node": "Opacity",
+        "from_socket": "Opacity",
+        "to_node": "Fade",
+        "to_socket": "B"
+      },
+      {
+        "from_node": "Fade",
+        "from_socket": "Value",
+        "to_node": "Set Opacity",
+        "to_socket": "Opacity"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Centre",
+        "to_node": "Useful Region",
+        "to_socket": "Centre"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Radii",
+        "to_node": "Useful Region",
+        "to_socket": "Radii"
+      },
+      {
+        "from_node": "Group Input",
+        "from_socket": "Falloff",
+        "to_node": "Useful Region",
+        "to_socket": "Falloff"
+      },
+      {
+        "from_node": "Set Opacity",
+        "from_socket": "Geometry",
+        "to_node": "Group Output",
+        "to_socket": "Geometry"
+      }
+    ],
+    "interface": {
+      "inputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        },
+        {
+          "identifier": "Centre",
+          "label": "Centre",
+          "type": "lfs.vector",
+          "default": {
+            "type": "vec3",
+            "value": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "identifier": "Radii",
+          "label": "Radii",
+          "type": "lfs.vector",
+          "default": {
+            "type": "vec3",
+            "value": [
+              5,
+              5,
+              5
+            ]
+          }
+        },
+        {
+          "identifier": "Falloff",
+          "label": "Falloff",
+          "type": "lfs.float",
+          "default": {
+            "type": "float",
+            "value": 2
+          },
+          "min": 0,
+          "max": 20,
+          "step": 0.1
+        }
+      ],
+      "outputs": [
+        {
+          "identifier": "Geometry",
+          "label": "Geometry",
+          "type": "lfs.geometry",
+          "default": {
+            "type": "geometry"
+          }
+        }
+      ]
+    }
+  }
+}

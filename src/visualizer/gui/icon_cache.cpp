@@ -55,7 +55,7 @@ namespace lfs::vis::gui {
         cache_.clear();
     }
 
-    std::unique_ptr<VulkanUiTexture> IconCache::loadTexture(const std::string& icon_name) {
+    std::unique_ptr<UiTexture> IconCache::loadTexture(const std::string& icon_name) {
         std::string path_str = icon_name;
         if (icon_name.find('/') == std::string::npos && icon_name.find('.') == std::string::npos) {
             path_str = std::string(ICON_PREFIX) + icon_name + ICON_SUFFIX;
@@ -67,7 +67,7 @@ namespace lfs::vis::gui {
             return nullptr;
         }
 
-        auto texture = std::make_unique<VulkanUiTexture>();
+        auto texture = std::make_unique<UiTexture>();
         const bool uploaded = texture->upload(
             static_cast<const std::uint8_t*>(data),
             width,

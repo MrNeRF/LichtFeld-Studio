@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rml_viewport_overlay.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_input.hpp"
@@ -13,17 +14,20 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
-#include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
+#include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
+#include "visualizer/core/services.hpp"
+#include "visualizer/nodes/modifier_manager.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/ElementUtilities.h>
 #include <RmlUi/Core/Input.h>
 #include <RmlUi/Core/StringUtilities.h>
 #include <algorithm>
@@ -155,6 +159,35 @@ namespace lfs::vis::gui {
         return sources.empty() ? "unknown" : sources;
     }
 
+    void RmlViewportOverlay::syncNodePreviewBanner() {
+        if (!document_)
+            return;
+        auto* element = document_->GetElementById("node-preview-banner");
+        if (!element)
+            return;
+        std::string message;
+        if (const auto* scene = services().sceneOrNull())
+            if (const auto& preview = scene->modifierManager().previewState()) {
+                std::string range;
+                if (preview->socket_type != lfs::nodes::GEOMETRY_SOCKET &&
+                    preview->range_min && preview->range_max)
+                    range = std::format(" · {:.3g}–{:.3g}", *preview->range_min,
+                                        *preview->range_max);
+                message = std::vformat(LOC("node_editor.previewing"),
+                                       std::make_format_args(preview->label, preview->socket, range));
+            }
+        if (message == applied_node_preview_banner_ && element->IsClassSet("hidden") == message.empty())
+            return;
+        applied_node_preview_banner_ = message;
+        element->SetClass("hidden", message.empty());
+        element->SetInnerRML(Rml::StringUtilities::EncodeRml(message));
+        const float dp = std::max(0.01f, element->GetContext()->GetDensityIndependentPixelRatio());
+        const float width = Rml::ElementUtilities::GetStringWidth(element, message) / dp + 22.0f;
+        element->SetProperty("width", std::format("{}dp", width));
+        element->SetProperty("flex", std::format("0 1 {}dp", width));
+        markRenderNeeded(RenderReason::DocumentSync);
+    }
+
     void RmlViewportOverlay::init(RmlUIManager* mgr) {
         assert(mgr);
         rml_manager_ = mgr;
@@ -203,7 +236,7 @@ namespace lfs::vis::gui {
         if (vram_hud_)
             vram_hud_->onDocumentDestroyed();
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("viewport_overlay");
         rml_context_ = nullptr;
@@ -228,7 +261,7 @@ namespace lfs::vis::gui {
         doc_registered_ = false;
 
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
 
         if (document_) {
             resetToolbarDragListeners();
@@ -1265,14 +1298,14 @@ namespace lfs::vis::gui {
                               static_cast<int>(vp_size_.y));
     }
 
-    void RmlViewportOverlay::queueCachedVulkanContext(const bool refresh_cache) {
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+    void RmlViewportOverlay::queueCachedContext(const bool refresh_cache) {
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
         const float x = vp_pos_.x - screen_origin_.x;
         const float y = vp_pos_.y - screen_origin_.y;
         const int w = static_cast<int>(vp_size_.x);
         const int h = static_cast<int>(vp_size_.y);
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = w,
@@ -1296,11 +1329,11 @@ namespace lfs::vis::gui {
     void RmlViewportOverlay::renderFrostedGlass() {
         if (viewport_chrome_style_ != "frosted" || !document_ || !rml_manager_)
             return;
-        auto* const renderer = rml_manager_->getVulkanRenderInterface();
+        auto* const renderer = rml_manager_->getUiRenderer();
         if (!renderer)
             return;
 
-        std::vector<RenderInterface_VK::FrostedGlassRegion> regions;
+        std::vector<UiFrostedGlassRegion> regions;
         const auto is_visible = [](Rml::Element* element) {
             for (auto* node = element; node; node = node->GetParentNode()) {
                 if (node->GetDisplay() == Rml::Style::Display::None)
@@ -1354,7 +1387,8 @@ namespace lfs::vis::gui {
         if (regions.empty())
             return;
 
-        const bool rendered = renderer->RenderFrostedGlass({regions.data(), regions.size()});
+        const bool rendered = renderer->renderFrostedGlass(
+            {regions.data(), regions.size()});
         if (!rml_theme::setFrostedGlassAvailable(rendered))
             return;
 
@@ -1371,6 +1405,7 @@ namespace lfs::vis::gui {
             return;
         if (vp_size_.x <= 0 || vp_size_.y <= 0)
             return;
+        syncNodePreviewBanner();
 
         const int w = static_cast<int>(vp_size_.x);
         const int h = static_cast<int>(vp_size_.y);
@@ -1399,7 +1434,7 @@ namespace lfs::vis::gui {
                                             static_cast<int>(vp_pos_.y - screen_origin_.y));
             rml_context_->SetDimensions(Rml::Vector2i(w, h));
             rml_context_->Update();
-            queueCachedVulkanContext(true);
+            queueCachedContext(true);
             const double next_delay = rml_context_->GetNextUpdateDelay();
             next_update_delay_ = next_delay;
             animation_active_ = (next_delay == 0.0);
@@ -1418,9 +1453,9 @@ namespace lfs::vis::gui {
             return;
         }
 
-        queueCachedVulkanContext(direct_cache_.texture == 0 ||
-                                 direct_cache_.width != w ||
-                                 direct_cache_.height != h);
+        queueCachedContext(direct_cache_.texture == 0 ||
+                           direct_cache_.width != w ||
+                           direct_cache_.height != h);
     }
 
     void RmlViewportOverlay::render() {
@@ -1428,13 +1463,14 @@ namespace lfs::vis::gui {
             return;
         if (vp_size_.x <= 0 || vp_size_.y <= 0)
             return;
+        syncNodePreviewBanner();
 
         if (!doc_registered_) {
             lfs::python::register_rml_document("viewport_overlay", document_);
             doc_registered_ = true;
         }
 
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
 
         const bool theme_changed = updateTheme();
@@ -1492,9 +1528,9 @@ namespace lfs::vis::gui {
                                   theme_changed || size_changed || dpi_changed || toolbar_changed ||
                                   tooltip_changed || had_data_model_binding_dirty;
         if (!needs_render) {
-            queueCachedVulkanContext(direct_cache_.texture == 0 ||
-                                     direct_cache_.width != w ||
-                                     direct_cache_.height != h);
+            queueCachedContext(direct_cache_.texture == 0 ||
+                               direct_cache_.width != w ||
+                               direct_cache_.height != h);
             return;
         }
 
@@ -1533,7 +1569,7 @@ namespace lfs::vis::gui {
             }
         }
 
-        queueCachedVulkanContext(true);
+        queueCachedContext(true);
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.next_delay", 0.25);
             const double next_delay = rml_context_->GetNextUpdateDelay();

@@ -61,7 +61,7 @@ namespace lfs::vis::gui {
 
     RmlToastOverlay::~RmlToastOverlay() {
         if (rml_manager_ && rml_manager_->isInitialized())
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         if (rml_context_ && rml_manager_ && rml_manager_->isInitialized())
             rml_manager_->destroyContext("toast_overlay");
     }
@@ -125,7 +125,7 @@ namespace lfs::vis::gui {
         last_bottom_px_ = -1.0f;
         last_alpha_.clear();
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         render_needed_ = true;
 
         try {
@@ -241,7 +241,7 @@ namespace lfs::vis::gui {
         if (!document_ || !el_stack_)
             return;
 
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
 
         rml_manager_->trackContextFrame(rml_context_, 0, 0);
@@ -282,7 +282,7 @@ namespace lfs::vis::gui {
 
         const bool refresh_cache = needs_update || direct_cache_.texture == 0;
         render_needed_ = false;
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = w,
@@ -299,7 +299,7 @@ namespace lfs::vis::gui {
 
     void RmlToastOverlay::releaseRendererResources() {
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
     }
 
 } // namespace lfs::vis::gui

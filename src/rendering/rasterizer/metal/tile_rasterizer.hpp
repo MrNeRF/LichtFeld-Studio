@@ -26,6 +26,7 @@ namespace lfs::rendering::metal {
         explicit RasterScratch(id<MTLDevice>);
         ~RasterScratch();
         [[nodiscard]] bool fits(uint32_t width, uint32_t height, uint32_t splats, uint32_t instances) const;
+
     private:
         friend class RasterFrame;
         friend class TileRasterizer;

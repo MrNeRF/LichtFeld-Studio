@@ -490,7 +490,7 @@ namespace lfs::vis::gui {
         snap_buttons_.clear();
         open_menu_idname_.clear();
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("menu_bar");
         rml_context_ = nullptr;
@@ -570,7 +570,7 @@ namespace lfs::vis::gui {
         last_ctx_h_ = 0;
         last_document_h_ = 0;
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/menubar.rml");
@@ -1447,7 +1447,7 @@ namespace lfs::vis::gui {
     void RmlMenuBar::draw(int screen_w, int screen_h) {
         if (!rml_context_ || !document_)
             return;
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
         const bool theme_changed = updateTheme();
         rebuildToolbarButtons();
@@ -1565,7 +1565,7 @@ namespace lfs::vis::gui {
         }
         updateTitlebarDragRegion(bar_h);
 
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = ctx_w,

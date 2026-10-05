@@ -161,6 +161,94 @@ namespace lfs::core::internal {
                         return raw(ext(GLSLstd450Fma, {exponent, f(0.6931471824645996f), reduced_log}));
                     }); }));
             }
+            Value copysign(Value magnitude, Value sign) {
+                return as_float(u(spv::OpBitwiseOr, u(spv::OpBitwiseAnd, raw(magnitude), literal(0x7fffffffu)),
+                                  u(spv::OpBitwiseAnd, raw(sign), literal(0x80000000u))));
+            }
+            // GLSL sinh is (exp(x) - exp(-x)) / 2, which cancels to a few correct bits near zero and overflows early.
+            // Below one, Taylor terms through x^13; above, e^|x| / 2 from exp(|x| - ln 2) with ln 2 split, finite up
+            // to the float limit.
+            Value sinh(Value x) {
+                const auto square = mul(x, x);
+                // Reciprocal factorials 1/13! ... 1/3!, rounded to float.
+                auto series = f(1.6059044372074283e-10f);
+                for (const float coefficient : {2.5052107943679403e-08f, 2.7557318844628753e-06f, 1.9841270113829523e-04f,
+                                                8.3333337679505348e-03f, 0.1666666716337204f, 1.0f})
+                    series = ext(GLSLstd450Fma, {series, square, f(coefficient)});
+                const auto magnitude = ext(GLSLstd450FAbs, {x});
+                // e^|x| / 2 - e^-|x| / 2 with the constants pre-folded and an explicit fma, which leaves neither the
+                // shader compiler nor the driver anything to rewrite.
+                const auto power = ext(GLSLstd450Exp, {sub(magnitude, f(0.693145751953125f))});
+                const auto large = ext(GLSLstd450Fma, {power, f(0.9999985694885254f), neg(div(f(0.25000035762786865f), power))});
+                return choose(cmp(spv::OpFOrdLessThan, magnitude, f(1)), mul(x, series), copysign(large, x), float_);
+            }
+            // tanh = sinh / sqrt(1 + sinh^2), keeping the relative accuracy of sinh near zero; one beyond |x| = 10.
+            Value tanh(Value x) {
+                const auto sine = sinh(x);
+                const auto ratio = div(sine, ext(GLSLstd450Sqrt, {ext(GLSLstd450Fma, {sine, sine, f(1)})}));
+                return choose(cmp(spv::OpFOrdGreaterThan, ext(GLSLstd450FAbs, {x}), f(10)), copysign(f(1), x), ratio, float_);
+            }
+            Value msb(Value v) {
+                const auto result = id();
+                body_.push_back((uint32_t(6) << 16) | spv::OpExtInst);
+                body_.insert(body_.end(), {uint_, result, glsl_, GLSLstd450FindUMsb, v});
+                return result;
+            }
+            // Correctly rounded x / y in integer arithmetic. OpFDiv only guarantees 2.5 ULP and is a
+            // reciprocal multiply on some drivers.
+            Value precise_div(Value x, Value y) {
+                const auto both = [&](Value a, Value b) { return instruction(spv::OpLogicalAnd, bool_, {a, b}); };
+                const auto either = [&](Value a, Value b) { return instruction(spv::OpLogicalOr, bool_, {a, b}); };
+                const auto inf = literal(0x7f800000u);
+                const auto bx = raw(x), by = raw(y);
+                const auto sign = u(spv::OpBitwiseAnd, u(spv::OpBitwiseXor, bx, by), literal(0x80000000u));
+                const auto ax = u(spv::OpBitwiseAnd, bx, literal(0x7fffffffu));
+                const auto ay = u(spv::OpBitwiseAnd, by, literal(0x7fffffffu));
+                // Significand in [2^23, 2^24) and its biased exponent, which is below one for subnormals.
+                const auto normalize = [&](Value a, Value& exponent) {
+                    const auto field = u(spv::OpShiftRightLogical, a, literal(23));
+                    const auto fraction = u(spv::OpBitwiseAnd, a, literal(0x7fffffu));
+                    const auto subnormal = cmp(spv::OpIEqual, field, literal(0));
+                    auto significand = choose(subnormal, fraction, u(spv::OpBitwiseOr, fraction, literal(0x800000u)), uint_);
+                    significand = choose(cmp(spv::OpIEqual, significand, literal(0)), literal(0x800000u), significand, uint_);
+                    const auto shift = u(spv::OpISub, literal(23), msb(significand));
+                    exponent = u(spv::OpISub, choose(subnormal, literal(1), field, uint_), shift);
+                    return u(spv::OpShiftLeftLogical, significand, shift);
+                };
+                Value ex, ey;
+                const auto mx = normalize(ax, ex), my = normalize(ay, ey);
+                // mx / my lies in (1/2, 2), so the quotient has 26 or 27 bits: the significand, a guard bit and
+                // two more, with the remainder as the sticky bit.
+                const auto numerator = instruction(spv::OpShiftLeftLogical, ulong_, {instruction(spv::OpUConvert, ulong_, {mx}), constant(ulong_, 26)});
+                const auto divisor = instruction(spv::OpUConvert, ulong_, {my});
+                auto quotient = instruction(spv::OpUConvert, uint_, {instruction(spv::OpUDiv, ulong_, {numerator, divisor})});
+                auto sticky = instruction(spv::OpINotEqual, bool_, {instruction(spv::OpUMod, ulong_, {numerator, divisor}), constant(ulong_, 0)});
+                const auto below_one = cmp(spv::OpULessThan, quotient, literal(1u << 26));
+                quotient = choose(below_one, u(spv::OpShiftLeftLogical, quotient, literal(1)), quotient, uint_);
+                auto exponent = u(spv::OpISub, u(spv::OpIAdd, u(spv::OpISub, ex, ey), literal(127)), boolean(below_one));
+                // Subnormal results shift right by 1 - exponent; every bit shifted out joins the sticky bit.
+                const auto subnormal = cmp(spv::OpSLessThan, as_int(exponent), as_int(literal(1)));
+                auto shift = u(spv::OpISub, literal(1), exponent);
+                shift = choose(subnormal, choose(cmp(spv::OpULessThan, shift, literal(31)), shift, literal(31), uint_), literal(0), uint_);
+                const auto lost = u(spv::OpBitwiseAnd, quotient, u(spv::OpISub, u(spv::OpShiftLeftLogical, literal(1), shift), literal(1)));
+                sticky = either(sticky, cmp(spv::OpINotEqual, lost, literal(0)));
+                quotient = u(spv::OpShiftRightLogical, quotient, shift);
+                exponent = choose(subnormal, literal(1), exponent, uint_);
+                // Round to nearest, ties to even. A carry out of the significand bumps the exponent.
+                const auto guard = cmp(spv::OpINotEqual, u(spv::OpBitwiseAnd, quotient, literal(4)), literal(0));
+                const auto rest = either(sticky, cmp(spv::OpINotEqual, u(spv::OpBitwiseAnd, quotient, literal(3)), literal(0)));
+                const auto odd = cmp(spv::OpINotEqual, u(spv::OpBitwiseAnd, quotient, literal(8)), literal(0));
+                const auto significand = u(spv::OpIAdd, u(spv::OpShiftRightLogical, quotient, literal(3)), boolean(both(guard, either(rest, odd))));
+                auto magnitude = u(spv::OpIAdd, u(spv::OpShiftLeftLogical, u(spv::OpISub, exponent, literal(1)), literal(23)), significand);
+                magnitude = choose(cmp(spv::OpUGreaterThanEqual, magnitude, inf), inf, magnitude, uint_);
+                const auto x_zero = cmp(spv::OpIEqual, ax, literal(0)), y_zero = cmp(spv::OpIEqual, ay, literal(0));
+                const auto x_inf = cmp(spv::OpIEqual, ax, inf), y_inf = cmp(spv::OpIEqual, ay, inf);
+                magnitude = choose(either(x_zero, y_inf), literal(0), magnitude, uint_);
+                magnitude = choose(either(x_inf, y_zero), inf, magnitude, uint_);
+                const auto invalid = either(both(x_zero, y_zero), both(x_inf, y_inf));
+                const auto nan = either(invalid, either(cmp(spv::OpUGreaterThan, ax, inf), cmp(spv::OpUGreaterThan, ay, inf)));
+                return choose(nan, f(std::numeric_limits<float>::quiet_NaN()), as_float(u(spv::OpBitwiseOr, sign, magnitude)), float_);
+            }
             Value pointer(Value address) { return instruction(spv::OpConvertUToPtr, physical_uint_, {address}); }
             Value load_word(Value address) { return instruction(spv::OpLoad, uint_, {pointer(address), spv::MemoryAccessAlignedMask, 4}); }
             Value word_at(Value word) {
@@ -286,8 +374,8 @@ namespace lfs::core::internal {
                 case ExprOp::Add: result = add(x, y); break;
                 case ExprOp::Sub: result = sub(x, y); break;
                 case ExprOp::Mul: result = mul(x, y); break;
-                case ExprOp::Div:
-                case ExprOp::PreciseDiv: result = div(x, y); break;
+                case ExprOp::Div: result = div(x, y); break;
+                case ExprOp::PreciseDiv: result = precise_div(x, y); break;
                 case ExprOp::Mod: result = fp(spv::OpFRem, x, y); break;
                 case ExprOp::Pow: result = choose(cmp(spv::OpFOrdEqual, y, f(2)), mul(x, x), c_pow(x, y), float_); break;
                 case ExprOp::Min: result = ieee_minmax(x, y, false); break;
@@ -312,7 +400,7 @@ namespace lfs::core::internal {
                 case ExprOp::Sigmoid: result = div(f(1), add(f(1), ext(GLSLstd450Exp, {neg(x)}))); break;
                 case ExprOp::Relu: result = ieee_minmax(x, f(0), true); break;
                 case ExprOp::Square: result = mul(x, x); break;
-                case ExprOp::Tanh: result = ext(GLSLstd450Tanh, {x}); break;
+                case ExprOp::Tanh: result = tanh(x); break;
                 case ExprOp::Rsqrt: result = ext(GLSLstd450InverseSqrt, {x}); break;
                 case ExprOp::Sign: result = instruction(spv::OpConvertSToF, float_, {as_int(u(spv::OpISub, boolean(cmp(spv::OpFOrdGreaterThan, x, f(0))), boolean(cmp(spv::OpFOrdLessThan, x, f(0)))))}); break;
                 case ExprOp::Reciprocal: result = div(f(1), x); break;
@@ -335,11 +423,11 @@ namespace lfs::core::internal {
                     break;
                 }
                 case ExprOp::Atan: result = ext(GLSLstd450Atan, {x}); break;
-                case ExprOp::Sinh: result = ext(GLSLstd450Sinh, {x}); break;
+                case ExprOp::Sinh: result = sinh(x); break;
                 case ExprOp::Cosh: result = ext(GLSLstd450Cosh, {x}); break;
                 case ExprOp::Gelu: {
                     auto inner = mul(f(std::sqrt(2.0f / 3.14159265358979323846f)), add(x, mul(mul(mul(f(.044715f), x), x), x)));
-                    result = mul(mul(f(.5f), x), add(f(1), ext(GLSLstd450Tanh, {inner})));
+                    result = mul(mul(f(.5f), x), add(f(1), tanh(inner)));
                     break;
                 }
                 case ExprOp::Swish: result = div(x, add(f(1), ext(GLSLstd450Exp, {neg(x)}))); break;

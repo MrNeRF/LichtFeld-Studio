@@ -29,4 +29,8 @@ namespace lfs::vis {
     LFS_VIS_API std::shared_ptr<lfs::core::Tensor> makeNormalDisplayTensor(
         const lfs::core::Tensor& normal);
 
+    // CHW or HWC image to a CPU Float32 [3, H, W] image resampled to `target_size`.
+    LFS_VIS_API std::shared_ptr<lfs::core::Tensor> resizeChwDisplayTensor(
+        const std::shared_ptr<lfs::core::Tensor>& image, glm::ivec2 target_size);
+
 } // namespace lfs::vis

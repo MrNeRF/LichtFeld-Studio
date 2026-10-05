@@ -12,7 +12,10 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <format>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <string>
@@ -28,6 +31,29 @@ namespace {
 
     constexpr float kInf = std::numeric_limits<float>::infinity();
     constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+
+    TEST(TensorProcessConfigurationDeathTest, BackendAndExecutionOptionsSurviveReexec) {
+        const auto configuration = [] {
+            const auto options = lfs::core::tensor_backend_options();
+            return std::format("tensor-config: {} {} {} {}\n",
+                               lfs::core::gpu_backend_name(lfs::core::configured_gpu_backend()),
+                               options.vulkan_validation, options.force_fp32_half,
+                               options.force_no_atomic_float);
+        };
+        // The matcher is evaluated by the parent. Recompute the configuration
+        // inside the re-executed child so a lost selector cannot pass silently
+        // on machines where the harness's default CUDA backend is also built.
+        const auto expected = configuration();
+        const auto style = GTEST_FLAG_GET(death_test_style);
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(
+            {
+                std::cerr << configuration() << std::flush;
+                std::_Exit(0);
+            },
+            testing::ExitedWithCode(0), expected);
+        GTEST_FLAG_SET(death_test_style, style);
+    }
 
     struct Target {
         const char* name;
@@ -90,6 +116,26 @@ namespace {
         const Tensor batched = make<float>(DataType::Float32, {1, 2, 0}, {}).bmm(make<float>(DataType::Float32, {1, 0, 3}, {}));
         EXPECT_EQ(batched.shape(), TensorShape({1, 2, 3}));
         EXPECT_EQ(host<float>(batched), std::vector<float>(6, 0.f));
+    }
+
+    // Fails if a batch beyond one launch's z dimension (65535 on CUDA and typical Vulkan devices) is rejected or
+    // its tail batches are computed with the wrong operands.
+    TEST_P(TensorBackendSemantics, BatchedMatmulHandlesBatchesBeyondOneLaunch) {
+        constexpr size_t batch = 70001, m = 3, k = 3, n = 2;
+        std::vector<float> a(batch * m * k), b(batch * k * n);
+        for (size_t i = 0; i < a.size(); ++i)
+            a[i] = static_cast<float>(i % 13) - 6.0f;
+        for (size_t i = 0; i < b.size(); ++i)
+            b[i] = static_cast<float>(i % 7) * 0.5f;
+        std::vector<float> want(batch * m * n, 0.0f);
+        for (size_t p = 0; p < batch; ++p)
+            for (size_t r = 0; r < m; ++r)
+                for (size_t c = 0; c < n; ++c)
+                    for (size_t j = 0; j < k; ++j)
+                        want[(p * m + r) * n + c] += a[(p * m + r) * k + j] * b[(p * k + j) * n + c];
+        const Tensor product = make<float>(DataType::Float32, {batch, m, k}, a).bmm(make<float>(DataType::Float32, {batch, k, n}, b));
+        EXPECT_EQ(product.shape(), TensorShape({batch, m, n}));
+        expect_floats(host<float>(product), want);
     }
 
     TEST_P(TensorBackendSemantics, FloatPowFollowsC) {

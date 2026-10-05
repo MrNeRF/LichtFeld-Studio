@@ -1100,8 +1100,10 @@ namespace lfs::core {
 
 #if LFS_HAS_CUDA
         constexpr GpuBackend storage_less_backend = GpuBackend::CUDA;
-#else
+#elif defined(LFS_TENSOR_VULKAN)
         constexpr GpuBackend storage_less_backend = GpuBackend::Vulkan;
+#else
+        constexpr GpuBackend storage_less_backend = GpuBackend::Metal;
 #endif
         const GpuBackend backend = device_ == Device::GPU && storage_meta_
                                        ? storage_meta_->backend
@@ -3424,6 +3426,8 @@ namespace lfs::core {
             const size_t copy_bytes =
                 checked_product(numel(), element_size, "reserve copy byte count");
             if (device_ == Device::GPU) {
+                // On the tensor's own stream: a legacy-stream copy does not wait for writes still queued on a
+                // non-blocking stream, and would copy what the storage held before them.
                 internal::backend_ops_for(*this).copy_device_to_device(
                     internal::CopyRequest{
                         .src = internal::storage_ref(
@@ -3431,7 +3435,7 @@ namespace lfs::core {
                         .dst = new_gpu_storage,
                         .bytes = copy_bytes,
                         .synchronous = true,
-                        .context = internal::ExecContext{nullptr},
+                        .context = internal::ExecContext{stream()},
                     });
             } else {
                 std::memcpy(new_data, old_data, copy_bytes);

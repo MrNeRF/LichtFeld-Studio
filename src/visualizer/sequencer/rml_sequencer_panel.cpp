@@ -305,7 +305,7 @@ namespace lfs::vis {
     void RmlSequencerPanel::destroyGraphicsResources() {
         clearPendingComposite();
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         direct_cache_dirty_ = true;
         last_render_signature_.reset();
         unregisterFilmStripSources();
@@ -413,7 +413,7 @@ namespace lfs::vis {
 
         clearPendingComposite();
         if (rml_manager_)
-            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+            rml_manager_->releaseCachedContext(direct_cache_);
         direct_cache_dirty_ = true;
         last_render_signature_.reset();
         unregisterFilmStripSources();
@@ -539,7 +539,7 @@ namespace lfs::vis {
                                               const bool refresh) {
         if (!rml_manager_ || !rml_context_)
             return;
-        rml_manager_->queueCachedVulkanContext({
+        rml_manager_->queueCachedContext({
             .context = rml_context_,
             .cache = &direct_cache_,
             .cache_width = width,
@@ -1238,7 +1238,7 @@ namespace lfs::vis {
             updateTimelineGuides(timeline_pos.x, tl_width, film_strip);
         }
 
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+        if (!rml_manager_ || !rml_manager_->getUiRenderer())
             return;
 
         if (document_) {

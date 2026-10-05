@@ -653,13 +653,13 @@ TEST(PlyToRadLod, VulkanViewportRadUsesInputBackend) {
         request.lod_gpu_traversal = {};
         rendered = renderer.render(context, *model, request, true, primary);
         ASSERT_TRUE(rendered) << rendered.error();
-        EXPECT_NE(rendered->image, VK_NULL_HANDLE);
+        EXPECT_TRUE(rendered->image);
         EXPECT_GT(rendered->completion_value, 0u);
         const auto before = renderer.readOutputImage(context, primary);
         ASSERT_TRUE(before) << before.error();
         const auto* pixels = (*before)->ptr<float>();
         ASSERT_TRUE(std::any_of(pixels, pixels + (*before)->numel(), [](float value) { return value > 1e-6f; }));
-        std::vector<VkImage> images{rendered->image};
+        std::vector<decltype(rendered->image)> images{rendered->image};
         for (int i = 0; i < 9; ++i) {
             (void)targets.allocate();
             const auto target = targets.allocate();

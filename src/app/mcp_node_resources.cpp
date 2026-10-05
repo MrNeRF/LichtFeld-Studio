@@ -100,6 +100,17 @@ namespace lfs::app::node_mcp {
                 result.update(canvas->viewState());
             }
         result["progress"] = progress(viewer.getSceneManager()->modifierManager().progress());
+        if (const auto& preview = viewer.getSceneManager()->modifierManager().previewState())
+            result["preview"] = {{"target", preview->target.to_string()},
+                                 {"tree", preview->tree_uuid},
+                                 {"node", preview->node},
+                                 {"socket", preview->socket},
+                                 {"socket_type", preview->socket_type},
+                                 {"label", preview->label},
+                                 {"min", preview->range_min ? json(*preview->range_min) : json(nullptr)},
+                                 {"max", preview->range_max ? json(*preview->range_max) : json(nullptr)}};
+        else
+            result["preview"] = nullptr;
         auto& scene = *viewer.getSceneManager();
         if (const auto host = target(scene, result))
             result["target_name"] = scene.getScene().getNodeByUuid(*host)->name;

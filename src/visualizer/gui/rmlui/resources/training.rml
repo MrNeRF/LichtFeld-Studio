@@ -85,8 +85,8 @@
     </div>
     <div id="training-controls-header" class="training-state-line">
       <span class="training-status-badge is-ready" data-if="show_ctrl_ready"><span class="training-status-badge-label">@tr:status.ready</span></span>
-      <span class="training-status-badge is-active is-preparing" data-if="show_ctrl_preparing"><span class="training-preparation-indicator"></span><span class="training-status-badge-label">@tr:training_panel.preparing_training</span></span>
-      <span class="training-status-badge is-active is-preparing" data-if="show_ctrl_starting"><span class="training-preparation-indicator"></span><span class="training-status-badge-label">@tr:training_panel.preparing_training</span></span>
+      <span class="training-status-badge is-active" data-if="show_ctrl_preparing" data-class-is-preparing="show_ctrl_preparing"><span class="training-preparation-indicator"></span><span class="training-status-badge-label">@tr:training_panel.preparing_training</span></span>
+      <span class="training-status-badge is-active" data-if="show_ctrl_starting" data-class-is-preparing="show_ctrl_starting"><span class="training-preparation-indicator"></span><span class="training-status-badge-label">@tr:training_panel.preparing_training</span></span>
       <span class="training-status-badge is-active" data-if="show_ctrl_running"><span class="training-status-badge-label">@tr:training_panel.running</span></span>
       <span class="training-status-badge is-paused" data-if="show_ctrl_paused"><span class="training-status-badge-label">@tr:status.paused</span></span>
       <span class="training-status-badge is-complete" data-if="show_ctrl_completed"><span class="training-status-badge-label">@tr:status.complete</span></span>

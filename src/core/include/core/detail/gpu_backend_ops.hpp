@@ -165,7 +165,57 @@ namespace lfs::core {
             virtual void radius_neighbor_min(StorageRef points, StorageRef values, StorageRef references,
                                              StorageRef heads, StorageRef next, StorageRef output,
                                              size_t count, size_t buckets, float radius,
-                                             ExecContext context) = 0;
+                                             std::optional<StorageRef> radii, ExecContext context) = 0;
+            // Writes the radius-graph component of every referenced point into labels, which holds each point's
+            // own index on entry: the smallest index of its component. Returns false, writing nothing, when the
+            // backend has no kernel for it.
+            virtual bool radius_connected_components(StorageRef /*points*/, StorageRef /*references*/,
+                                                     StorageRef /*heads*/, StorageRef /*next*/, StorageRef /*labels*/,
+                                                     size_t /*count*/, size_t /*buckets*/, float /*radius*/,
+                                                     ExecContext /*context*/) {
+                return false;
+            }
+            // Int32 [N] neighbour counts over a point tree (see PointTreeProgram), with one Float32 radius per
+            // point. Returns false, writing nothing, when the backend has no kernel for it.
+            virtual bool point_tree_counts(StorageRef /*points*/, StorageRef /*sorted*/, StorageRef /*boxes*/,
+                                           StorageRef /*visit*/, StorageRef /*radii*/,
+                                           std::optional<StorageRef> /*queries*/, StorageRef /*output*/,
+                                           const PointTreeProgram& /*program*/, ExecContext /*context*/) {
+                return false;
+            }
+            // mutual_radius_components over a point tree: labels holds each point's own index on entry.
+            // box_radii is the largest radius under each box, sorted_radii the radii in tree order. Returns
+            // false, writing nothing, when the backend has no kernel for it.
+            virtual bool point_tree_components(StorageRef /*points*/, StorageRef /*sorted*/, StorageRef /*boxes*/,
+                                               StorageRef /*box_radii*/, StorageRef /*visit*/, StorageRef /*sorted_radii*/,
+                                               StorageRef /*radii*/, StorageRef /*labels*/,
+                                               const PointTreeProgram& /*program*/, ExecContext /*context*/) {
+                return false;
+            }
+            // Float32 [N] point_neighbor_spacing over a point tree of every finite point (program.radius is the
+            // cell width). Returns false, writing nothing, when the backend has no kernel for it.
+            virtual bool point_tree_spacing(StorageRef /*points*/, StorageRef /*sorted*/, StorageRef /*boxes*/,
+                                            StorageRef /*visit*/, StorageRef /*output*/,
+                                            const PointTreeProgram& /*program*/, ExecContext /*context*/) {
+                return false;
+            }
+            // Int32 [N] 0/1 ray-crossing parity over a triangle tree (see TriangleRayIndex): triangles are
+            // [F,9] (a, b - a, c - a) and boxes their bounds in the ray frame, both in tree order. visit
+            // orders the queries. Returns false, writing nothing, when the backend has no kernel for it.
+            virtual bool triangle_tree_parity(StorageRef /*points*/, StorageRef /*visit*/, StorageRef /*triangles*/,
+                                              StorageRef /*boxes*/, StorageRef /*output*/,
+                                              const PointTreeProgram& /*program*/, ExecContext /*context*/) {
+                return false;
+            }
+            // One merged row per group, as splat_simplify.cpp merges a voxel group: rows and outputs are
+            // (means, scales, rotation, opacity, appearance); members are Int32, ascending within each
+            // group, and Int32 [G+1] offsets delimit the groups. Returns false, writing nothing, when the
+            // backend has no kernel for it.
+            virtual bool simplify_merge(const std::array<StorageRef, 5>& /*rows*/, StorageRef /*offsets*/,
+                                        StorageRef /*members*/, const std::array<StorageRef, 5>& /*outputs*/,
+                                        const SimplifyMergeProgram& /*program*/, ExecContext /*context*/) {
+                return false;
+            }
             virtual void point_neighbor_spacing(StorageRef points, StorageRef references,
                                                 StorageRef heads, StorageRef next, StorageRef output,
                                                 size_t count, size_t buckets, float cell_width, ExecContext context) = 0;
@@ -493,7 +543,23 @@ namespace lfs::core {
             void radius_neighbor_min(StorageRef points, StorageRef values, StorageRef references,
                                      StorageRef heads, StorageRef next, StorageRef output,
                                      size_t count, size_t buckets, float radius,
-                                     ExecContext context) override;
+                                     std::optional<StorageRef> radii, ExecContext context) override;
+            bool radius_connected_components(StorageRef points, StorageRef references, StorageRef heads,
+                                             StorageRef next, StorageRef labels, size_t count, size_t buckets,
+                                             float radius, ExecContext context) override;
+            bool point_tree_counts(StorageRef points, StorageRef sorted, StorageRef boxes, StorageRef visit,
+                                   StorageRef radii, std::optional<StorageRef> queries, StorageRef output,
+                                   const PointTreeProgram& program, ExecContext context) override;
+            bool point_tree_components(StorageRef points, StorageRef sorted, StorageRef boxes, StorageRef box_radii,
+                                       StorageRef visit, StorageRef sorted_radii, StorageRef radii, StorageRef labels,
+                                       const PointTreeProgram& program, ExecContext context) override;
+            bool triangle_tree_parity(StorageRef points, StorageRef visit, StorageRef triangles, StorageRef boxes,
+                                      StorageRef output, const PointTreeProgram& program, ExecContext context) override;
+            bool point_tree_spacing(StorageRef points, StorageRef sorted, StorageRef boxes, StorageRef visit,
+                                    StorageRef output, const PointTreeProgram& program, ExecContext context) override;
+            bool simplify_merge(const std::array<StorageRef, 5>& rows, StorageRef offsets, StorageRef members,
+                                const std::array<StorageRef, 5>& outputs, const SimplifyMergeProgram& program,
+                                ExecContext context) override;
             void point_neighbor_spacing(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                                         size_t, size_t, float, ExecContext) override;
             void project_points(StorageRef points, StorageRef output, size_t count,

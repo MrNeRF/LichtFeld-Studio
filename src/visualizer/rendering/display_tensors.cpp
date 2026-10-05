@@ -175,4 +175,104 @@ namespace lfs::vis {
         return std::make_shared<Tensor>(color.cpu().contiguous());
     }
 
+    std::shared_ptr<lfs::core::Tensor> resizeChwDisplayTensor(
+        const std::shared_ptr<lfs::core::Tensor>& image,
+        const glm::ivec2 target_size) {
+        if (!image || !image->is_valid() || image->ndim() != 3 ||
+            target_size.x <= 0 || target_size.y <= 0) {
+            return {};
+        }
+        const auto layout = lfs::rendering::detectImageLayout(*image);
+        if (layout == lfs::rendering::ImageLayout::Unknown) {
+            return {};
+        }
+
+        lfs::core::Tensor src = *image;
+        if (src.dtype() == lfs::core::DataType::UInt8) {
+            src = src.to(lfs::core::DataType::Float32) / 255.0f;
+        } else if (src.dtype() != lfs::core::DataType::Float32) {
+            src = src.to(lfs::core::DataType::Float32);
+        }
+        if (layout == lfs::rendering::ImageLayout::HWC) {
+            src = src.permute({2, 0, 1}).contiguous();
+        }
+        src = src.cpu().contiguous();
+
+        const int src_channels = static_cast<int>(src.size(0));
+        const int src_height = static_cast<int>(src.size(1));
+        const int src_width = static_cast<int>(src.size(2));
+        if (src_channels <= 0 || src_width <= 0 || src_height <= 0) {
+            return {};
+        }
+        if (src_width == target_size.x && src_height == target_size.y &&
+            src_channels >= 3) {
+            return std::make_shared<lfs::core::Tensor>(std::move(src));
+        }
+
+        const int dst_width = target_size.x;
+        const int dst_height = target_size.y;
+        const std::size_t dst_pixel_count =
+            static_cast<std::size_t>(dst_width) * static_cast<std::size_t>(dst_height);
+        std::vector<float> output(3 * dst_pixel_count, 0.0f);
+        const float* const src_data = src.ptr<float>();
+        if (!src_data) {
+            return {};
+        }
+
+        const auto sample = [&](const int channel, const int x, const int y) {
+            const int c = std::clamp(channel, 0, src_channels - 1);
+            return src_data[(static_cast<std::size_t>(c) * src_height + y) * src_width + x];
+        };
+
+        const float scale_x = static_cast<float>(src_width) / static_cast<float>(dst_width);
+        const float scale_y = static_cast<float>(src_height) / static_cast<float>(dst_height);
+        for (int y = 0; y < dst_height; ++y) {
+            float src_y = (static_cast<float>(y) + 0.5f) * scale_y - 0.5f;
+            int y0 = static_cast<int>(std::floor(src_y));
+            float wy = src_y - static_cast<float>(y0);
+            if (y0 < 0) {
+                y0 = 0;
+                wy = 0.0f;
+            }
+            int y1 = y0 + 1;
+            if (y1 >= src_height) {
+                y1 = y0 = src_height - 1;
+                wy = 0.0f;
+            }
+
+            for (int x = 0; x < dst_width; ++x) {
+                float src_x = (static_cast<float>(x) + 0.5f) * scale_x - 0.5f;
+                int x0 = static_cast<int>(std::floor(src_x));
+                float wx = src_x - static_cast<float>(x0);
+                if (x0 < 0) {
+                    x0 = 0;
+                    wx = 0.0f;
+                }
+                int x1 = x0 + 1;
+                if (x1 >= src_width) {
+                    x1 = x0 = src_width - 1;
+                    wx = 0.0f;
+                }
+
+                const std::size_t dst_idx = static_cast<std::size_t>(y) * dst_width + x;
+                for (int c = 0; c < 3; ++c) {
+                    const float top =
+                        glm::mix(sample(c, x0, y0), sample(c, x1, y0), wx);
+                    const float bottom =
+                        glm::mix(sample(c, x0, y1), sample(c, x1, y1), wx);
+                    output[static_cast<std::size_t>(c) * dst_pixel_count + dst_idx] =
+                        glm::mix(top, bottom, wy);
+                }
+            }
+        }
+
+        auto tensor = lfs::core::Tensor::from_vector(
+            output,
+            {std::size_t{3},
+             static_cast<std::size_t>(dst_height),
+             static_cast<std::size_t>(dst_width)},
+            lfs::core::Device::CPU);
+        return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+    }
+
 } // namespace lfs::vis

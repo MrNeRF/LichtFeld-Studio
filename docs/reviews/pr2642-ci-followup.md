@@ -1,5 +1,7 @@
 # CI after PR #2642
 
+The original findings and results below describe the 4 October revision. The integration with newer dev is recorded in the final section.
+
 Base: merge `718ea0c7f31777d23dbe5849ffafe90dc8575d0f`. Tested code: `f60dafc932aaa5750ff8503b96a049f06c63912d`. Subsequent changes to this record do not alter the tested runtime.
 
 ## Observed failures
@@ -50,3 +52,11 @@ Skipped and disabled cases are not counted as passes. GTest XML, command/source/
 The failed hosted Mac run uses macOS 26.6.2 and Xcode 26.6, and explicitly reports `Metal device: Apple Paravirtual device`, `metal4=false`. Fixing execution order can restore CPU/Vulkan coverage and its capability summary; it cannot provide native Metal 4 GPU coverage on that device. Physical Metal 4 Mac validation remains required. Local M4 results do not establish hosted VM or M5 behavior.
 
 The merge's macOS push run was cancelled after newer upstream pushes. The candidate workflow has not been run on GitHub. Windows and Ubuntu Release jobs were still active at the inspection snapshot; no successful conclusion is inferred for unfinished jobs. The branch stays based on the merge under examination rather than incorporating later production changes.
+
+## Integration with dev on 5 October
+
+Merged `dev` at `76b85f18b0532d385ac13cbeea1b103de19e3428` without rebasing. Upstream already corrects both snapshot fixtures using explicit relaxed-save admission and replaces the node device parametrizations with GPU-marked default/CUDA/Vulkan cases and additional backend assertions. Both test files are adopted exactly from this dev revision; the earlier local memory-input and marker implementations are removed from the resulting diff.
+
+The remaining code change relative to dev is the macOS workflow: independent checks still execute after another test fails, the Metal capability report remains explicit, and the CPU application/visualizer coverage is retained. Upstream's new hybrid CI flags (`LFS_GRAPHICS_BACKEND=Vulkan`, `LFS_TENSOR_METAL=ON`, `LFS_TENSOR_VULKAN=ON`) are preserved alongside its Metal-only default app configuration and all newer runtime/test changes. No production source differs from the integrated dev revision.
+
+The merged revision is validated separately below; the earlier counts are historical.

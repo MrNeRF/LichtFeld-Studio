@@ -294,6 +294,7 @@ namespace {
         EXPECT_NE(exported->slice(2, 0, 3).to_vector(), export_input.slice(2, 0, 3).to_vector());
     }
 
-    INSTANTIATE_TEST_SUITE_P(Backends, ViewerAppearance, ::testing::ValuesIn(kGpuBackends),
-                             [](const ::testing::TestParamInfo<GpuBackend>& info) { return info.param == GpuBackend::CUDA ? "CUDA" : "Vulkan"; });
+    INSTANTIATE_TEST_SUITE_P(Backends, ViewerAppearance, ::testing::ValuesIn(kCompiledGpuBackends),
+                             [](const ::testing::TestParamInfo<GpuBackend>& info) { return info.param == GpuBackend::CUDA ? "CUDA" : info.param == GpuBackend::Vulkan ? "Vulkan"
+                                                                                                                                                                      : "Metal"; });
 } // namespace

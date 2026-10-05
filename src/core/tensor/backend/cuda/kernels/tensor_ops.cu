@@ -2243,21 +2243,22 @@ namespace lfs::core::tensor_ops {
             thrust::sequence(policy, indices_ptr, indices_ptr + n);
         });
 
+        // Stable, as on the other backends: equal keys keep their order.
         if (stream) {
             if (descending) {
-                thrust::sort_by_key(thrust::cuda::par_nosync.on(stream), values_ptr, values_ptr + n,
-                                    indices_ptr, ops::sort_greater_op{});
+                thrust::stable_sort_by_key(thrust::cuda::par_nosync.on(stream), values_ptr, values_ptr + n,
+                                           indices_ptr, ops::sort_greater_op{});
             } else {
-                thrust::sort_by_key(thrust::cuda::par_nosync.on(stream), values_ptr, values_ptr + n,
-                                    indices_ptr, ops::sort_less_op{});
+                thrust::stable_sort_by_key(thrust::cuda::par_nosync.on(stream), values_ptr, values_ptr + n,
+                                           indices_ptr, ops::sort_less_op{});
             }
         } else {
             if (descending) {
-                thrust::sort_by_key(thrust::cuda::par_nosync, values_ptr, values_ptr + n,
-                                    indices_ptr, ops::sort_greater_op{});
+                thrust::stable_sort_by_key(thrust::cuda::par_nosync, values_ptr, values_ptr + n,
+                                           indices_ptr, ops::sort_greater_op{});
             } else {
-                thrust::sort_by_key(thrust::cuda::par_nosync, values_ptr, values_ptr + n,
-                                    indices_ptr, ops::sort_less_op{});
+                thrust::stable_sort_by_key(thrust::cuda::par_nosync, values_ptr, values_ptr + n,
+                                           indices_ptr, ops::sort_less_op{});
             }
         }
     }

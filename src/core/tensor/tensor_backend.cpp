@@ -1,9 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/tensor_backend.hpp"
 #include "backend/tensor_completion.hpp"
 #include "backend/tensor_vulkan_interop.hpp"
+#include "core/tensor_backend_vulkan.hpp"
 #include "core/tensor_completion.hpp"
 
 #if LFS_HAS_CUDA
@@ -30,17 +30,17 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #endif
+#include "backend/gpu_backend_ops.hpp"
 #include <exception>
 #include <format>
 #include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
-#ifdef LFS_TENSOR_VULKAN
-#include "backend/gpu_backend_ops.hpp"
 #ifdef LFS_TENSOR_METAL
 #include "backend/metal/metal_context.hpp"
 #endif
+#ifdef LFS_TENSOR_VULKAN
 #include "backend/vulkan/vk_context.hpp"
 #if LFS_HAS_CUDA
 #include "backend/vulkan/vk_cuda_bridge.hpp"
@@ -351,7 +351,13 @@ namespace lfs::core {
             if (internal::metal_backend_available())
                 return GpuBackend::Metal;
 #endif
+#ifdef LFS_TENSOR_VULKAN
             return GpuBackend::Vulkan;
+#elif defined(LFS_TENSOR_METAL)
+            return GpuBackend::Metal;
+#else
+            return GpuBackend::CUDA;
+#endif
         }
 
         GpuBackend backend_of_state(const int state) {
@@ -426,7 +432,8 @@ namespace lfs::core {
     }
 
     lfs::Status set_default_gpu_backend(const GpuBackend backend) {
-        if (std::ranges::find(kGpuBackends, backend) == kGpuBackends.end()) {
+        if (std::ranges::find(kCompiledGpuBackends, backend) ==
+            kCompiledGpuBackends.end()) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::InvalidArgument,
                 .domain = lfs::ErrorDomain::Core,

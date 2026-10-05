@@ -7,7 +7,6 @@
 #include "core/tensor_backend.hpp"
 #include "frame_budget.hpp"
 #include "lod_upload_engine.hpp"
-#include "window/vulkan_context.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -44,7 +43,7 @@ namespace lfs::vis {
     };
     MetalRadPager::MetalRadPager(id<MTLDevice> device) : impl_(std::make_unique<Impl>(device)) {}
     MetalRadPager::~MetalRadPager() = default;
-    void MetalRadPager::configure(const core::SplatData& model, VulkanContext& context,
+    void MetalRadPager::configure(const core::SplatData& model, void* device,
                                   void* consumer, Settings settings) {
         auto& i = *impl_;
         if (!std::isfinite(settings.vram_fraction) || settings.vram_fraction <= 0 || settings.vram_fraction > 1)
@@ -107,7 +106,7 @@ namespace lfs::vis {
         for (size_t j = 0; j < sizes.size(); ++j)
             if (sizes[j])
                 pool.regions[j] = core::Tensor::zeros({sizes[j]}, core::Device::GPU, core::DataType::UInt8);
-        (void)i.engine.configure({pool}, context.device(), consumer);
+        (void)i.engine.configure({pool}, device, consumer);
         // The captured mapped-file owner outlives every decode job, including
         // model replacement. The engine remains alive until cache.reset joins.
         i.cache.configure(chunks, pages, 1, size_t(page_bytes), true);

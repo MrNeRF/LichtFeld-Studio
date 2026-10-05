@@ -2129,6 +2129,7 @@ struct RadiusParams {
     device uchar* output;
     device const uchar* queries;
     device const uchar* values;
+    device const float* radii;
     uint count;
     uint bucket_mask;
     float radius;
@@ -2205,7 +2206,7 @@ static float radius_spacing(constant RadiusParams& p, uint i) {
                         if (uint(j) == i || !all(radius_cell(other, p.radius) == target))
                             continue;
                         const float3 delta = point - other;
-                        const float distance = dot(delta, delta);
+                        const float distance = dot_rounded(delta, delta);
                         if (distance < best.z) {
                             best.z = max(best.y, distance);
                             best.y = max(best.x, min(best.y, distance));
@@ -2227,6 +2228,8 @@ static float radius_spacing(constant RadiusParams& p, uint i) {
 template <typename T>
 static T radius_minimum(constant RadiusParams& p, uint i, device const T* values) {
     T result = values[i];
+    if (p.radii && !(p.radii[i] > p.radius * 0.5f))
+        return result;
     const float3 point = radius_point(p, i);
     if (!all(isfinite(point)))
         return result;
@@ -2237,7 +2240,8 @@ static T radius_minimum(constant RadiusParams& p, uint i, device const T* values
                 const int3 target = center + int3(x, y, z);
                 for (int j = p.heads[radius_bucket(target, p.bucket_mask)]; j >= 0; j = p.next[j]) {
                     const float3 other = radius_point(p, uint(j));
-                    if (all(radius_cell(other, p.radius) == target) && within_radius(point, other, p.radius))
+                    if (all(radius_cell(other, p.radius) == target) &&
+                        within_radius(point, other, p.radii ? min(p.radius, min(p.radii[i], p.radii[j])) : p.radius))
                         result = min(result, values[j]);
                 }
             }

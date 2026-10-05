@@ -162,7 +162,7 @@ namespace lfs::vis::gui {
         bool content_height_settling_ = false;
         std::uint64_t localized_language_generation_ = std::numeric_limits<std::uint64_t>::max();
         bool direct_cache_dirty_ = true;
-        CachedVulkanContextRender direct_cache_;
+        CachedUiContextRender direct_cache_;
         int last_fbo_w_ = 0;
         int last_fbo_h_ = 0;
         int last_fbo_padding_ = 0;

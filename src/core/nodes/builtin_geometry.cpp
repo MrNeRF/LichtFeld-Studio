@@ -78,6 +78,10 @@ namespace lfs::nodes::builtin {
         context.set_output("Geometry", std::move(geometry));
     }
 
+    static Tensor normalized(const Tensor& vector) {
+        return safe_divide(vector, (vector * vector).sum(1, true).sqrt());
+    }
+
     void evaluate_transform(NodeContext& context) {
         auto geometry = geometry_input(context);
         const auto translation = input_vector(context, "Translation");
@@ -102,16 +106,8 @@ namespace lfs::nodes::builtin {
         };
         if (geometry.points)
             geometry.points->positions = positions(geometry.points->positions);
-        if (geometry.mesh && geometry.mesh->mesh) {
-            const auto& source = *geometry.mesh->mesh;
-            auto mesh = copy_mesh(source, positions(source.vertices), source.indices);
-            if (source.has_normals()) {
-                const auto transformed = source.normals.matmul(
-                    matrix_tensor(glm::transpose(glm::inverse(glm::mat3(matrix))), source.normals.device()));
-                mesh->normals = safe_divide(transformed, (transformed * transformed).sum(1, true).sqrt());
-            }
-            geometry.mesh = MeshComponent{std::move(mesh), geometry.mesh->textures, geometry.mesh->attributes};
-        }
+        if (geometry.mesh && geometry.mesh->mesh)
+            geometry.mesh->mesh = transform_mesh(*geometry.mesh->mesh, matrix);
         context.set_output("Geometry", std::move(geometry));
     }
     Geometry separate_geometry(const NodeContext& context, const Geometry& source, bool selected) {
@@ -174,6 +170,8 @@ namespace lfs::nodes::builtin {
                     size_t n;
                     if constexpr (std::is_same_v<Component, SplatsComponent>)
                         n = c->means.shape()[0];
+                    else if constexpr (std::is_same_v<Component, MeshComponent>)
+                        n = static_cast<size_t>(c->mesh->vertex_count());
                     else
                         n = c->positions.shape()[0];
                     auto dimensions = shape.dims();
@@ -210,13 +208,16 @@ namespace lfs::nodes::builtin {
         std::vector<const SplatsComponent*> splats;
         std::vector<const PointsComponent*> points;
         std::vector<std::shared_ptr<const core::MeshData>> meshes;
+        std::vector<const MeshComponent*> mesh_components;
         for (auto& g : values) {
             if (g.splats)
                 splats.push_back(&*g.splats);
             if (g.points)
                 points.push_back(&*g.points);
-            if (g.mesh && g.mesh->mesh)
+            if (g.mesh && g.mesh->mesh) {
                 meshes.push_back(g.mesh->mesh);
+                mesh_components.push_back(&*g.mesh);
+            }
         }
         if (!splats.empty()) {
             int degree = 0;
@@ -297,7 +298,7 @@ namespace lfs::nodes::builtin {
             }
             mesh->vertices = core::Tensor::cat(verts, 0);
             mesh->indices = core::Tensor::cat(idx, 0);
-            const auto join_vertex_data = [&](Tensor core::MeshData::*member, size_t channels,
+            const auto join_vertex_data = [&](Tensor core::MeshData::* member, size_t channels,
                                               float fallback) {
                 if (!std::ranges::any_of(meshes, [&](const auto& source) {
                         return (source.get()->*member).is_valid();
@@ -318,10 +319,11 @@ namespace lfs::nodes::builtin {
             mesh->tangents = join_vertex_data(&core::MeshData::tangents, 4, 0);
             mesh->texcoords = join_vertex_data(&core::MeshData::texcoords, 2, 0);
             mesh->colors = join_vertex_data(&core::MeshData::colors, 4, 1);
+            const auto device = mesh->vertices.device();
             MeshComponent component{std::move(mesh)};
-            for (const auto& value : values)
-                if (value.mesh && value.mesh->mesh)
-                    component.textures.insert(component.textures.end(), value.mesh->textures.begin(), value.mesh->textures.end());
+            for (const auto* value : mesh_components)
+                component.textures.insert(component.textures.end(), value->textures.begin(), value->textures.end());
+            component.attributes = join_attributes(mesh_components, device);
             result.mesh = std::move(component);
         }
         return result;
@@ -335,32 +337,12 @@ namespace lfs::nodes::builtin {
         context.set_output("Geometry", join_geometries(values));
     }
 
-    static Tensor normalized(const Tensor& vector) {
-        return safe_divide(vector, (vector * vector).sum(1, true).sqrt());
-    }
-
     Tensor integer_range(size_t count, Device device) {
         return (Tensor::ones({count}, device, DataType::Int32).cumsum(0) - 1).to(DataType::Int32);
     }
 
     Tensor selected_component_labels(const Tensor& positions, const Tensor& selected, float radius) {
-        const size_t count = positions.shape()[0];
-        const auto indices = integer_range(count, positions.device());
-        // Keep the sentinel exactly representable as Float32 because Tensor::full takes a float scalar.
-        const auto sentinel = Tensor::full({count}, 1'000'000'000.0f,
-                                           positions.device(), DataType::Int32);
-        auto labels = Tensor::where(selected, indices, sentinel);
-        for (int iteration = 0; iteration < 64; ++iteration) {
-            auto next = core::radius_neighbor_min(positions, labels, radius);
-            const auto safe = Tensor::where(selected, next, indices);
-            next = next.minimum(labels.index_select(0, safe));
-            next = Tensor::where(selected, next, sentinel);
-            const bool stable = next.ne(labels).count_nonzero() == 0;
-            labels = std::move(next);
-            if (stable)
-                break;
-        }
-        return Tensor::where(selected, labels, indices).to(DataType::Int32);
+        return core::radius_connected_components(positions, radius, selected.to(DataType::Bool));
     }
 
     Tensor cluster_average(const Tensor& values, const Tensor& labels, const Tensor& leaders) {
@@ -439,19 +421,11 @@ namespace lfs::nodes::builtin {
             const auto opacity_order = splats.opacity.sort(0, true).second.to(DataType::Int32);
             auto ranks = Tensor::zeros({count}, splats.means.device(), DataType::Int32);
             ranks.scatter_(0, opacity_order, integer_range(count, splats.means.device()));
-            const auto indices = integer_range(count, splats.means.device());
-            const auto sentinel = Tensor::full({count}, 1'000'000'000.0f,
-                                               splats.means.device(), DataType::Int32);
-            auto best = Tensor::where(selected, ranks, sentinel);
-            for (int iteration = 0; iteration < 64; ++iteration) {
-                auto next = core::radius_neighbor_min(splats.means, best, radius);
-                next = Tensor::where(selected, next, sentinel);
-                const bool stable = next.ne(best).count_nonzero() == 0;
-                best = std::move(next);
-                if (stable)
-                    break;
-            }
-            const auto keep = selected.logical_not().logical_or(ranks.eq(best));
+            // In opacity order, each component's smallest index is its most opaque splat.
+            const auto labels = core::radius_connected_components(splats.means.index_select(0, opacity_order), radius,
+                                                                  selected.to(DataType::Bool).index_select(0, opacity_order));
+            const auto leaders = labels.eq(integer_range(count, splats.means.device())).index_select(0, ranks);
+            const auto keep = selected.logical_not().logical_or(leaders);
             splats = filter_splats(splats, keep);
         }
         context.set_output("Geometry", std::move(geometry));
@@ -492,3 +466,33 @@ namespace lfs::nodes::builtin {
     }
 
 } // namespace lfs::nodes::builtin
+
+namespace lfs::nodes {
+    std::shared_ptr<core::MeshData> transform_mesh(const core::MeshData& source, const glm::mat4& matrix) {
+        using namespace builtin;
+        const glm::mat3 linear(matrix);
+        const auto device = source.vertices.device();
+        auto mesh = copy_mesh(source,
+                              source.vertices.matmul(matrix_tensor(linear, device)) +
+                                  vector_tensor(glm::vec3(matrix[3]), device),
+                              source.indices);
+        const bool mirrors = glm::determinant(linear) < 0.0f;
+        if (source.has_normals()) {
+            // The cofactor matrix is the inverse transpose scaled by the determinant, and stays defined
+            // when the transform flattens the mesh.
+            glm::mat3 cofactor(glm::cross(linear[1], linear[2]), glm::cross(linear[2], linear[0]),
+                               glm::cross(linear[0], linear[1]));
+            if (mirrors)
+                cofactor = -cofactor;
+            mesh->normals = normalized(source.normals.matmul(matrix_tensor(cofactor, device)));
+        }
+        if (source.has_tangents()) {
+            const auto directions = normalized(source.tangents.slice(1, 0, 3).matmul(matrix_tensor(linear, device)));
+            auto handedness = source.tangents.slice(1, 3, 4);
+            if (mirrors)
+                handedness = handedness.neg();
+            mesh->tangents = Tensor::cat({directions, handedness}, 1);
+        }
+        return mesh;
+    }
+} // namespace lfs::nodes

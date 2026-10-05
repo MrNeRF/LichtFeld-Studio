@@ -28,6 +28,9 @@ namespace lfs::core {
     // Per-splat row-major Float32 [N,4,4] TRS transforms. Shares the affine
     // covariance factorization and SH basis/least-squares convention above.
     LFS_CORE_API SplatData& transform(SplatData& splat_data, const Tensor& transform_matrices);
+    // Row i uses transform_matrices[matrix_index[i]]: Float32 [M,4,4] and Int32 [N]. SH rotations are fitted
+    // once per matrix, so many rows sharing a matrix cost little more than the copy.
+    LFS_CORE_API SplatData& transform(SplatData& splat_data, const Tensor& transform_matrices, const Tensor& matrix_index);
 
     /**
      * @brief transform() for attributes held with canonical SH (sh0 [N,3] or [N,1,3], shN [N,K,3])
@@ -37,6 +40,11 @@ namespace lfs::core {
      */
     LFS_CORE_API float transform_canonical(Tensor& means, Tensor& rotation, Tensor& scaling, Tensor& sh0,
                                            Tensor& shN, int sh_degree, const glm::mat4& transform_matrix);
+    // Row i uses matrices[matrix_index[i]] (Float32 [M,4,4], Int32 [N]) on canonical tensors, on their own
+    // device: means [N,3], rotation [N,4], scaling [N,3] and shN [N,K,3] when sh_degree > 0. SH rotations are
+    // fitted once per matrix. Replaces the tensors instead of writing into them.
+    LFS_CORE_API void transform_canonical(Tensor& means, Tensor& rotation, Tensor& scaling, Tensor& shN, int sh_degree,
+                                          const Tensor& matrices, const Tensor& matrix_index);
 
     /**
      * @brief The scene scale transform() leaves after moving the means: their median distance from their

@@ -8,7 +8,7 @@
 #include "gui/string_keys.hpp"
 #include "io/loader.hpp"
 #include "rendering/coordinate_conventions.hpp"
-#include "rendering/vulkan_external_tensor.hpp"
+#include "rendering/graphics_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
 #include <optional>
 #include <shared_mutex>
