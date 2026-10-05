@@ -3036,6 +3036,7 @@
   "projects.gallery.eligibility.hdr": "Deze Galerie ondersteunt HDR niet",
   "projects.gallery.eligibility.no_splats": "Geen zichtbare splats",
   "projects.gallery.eligibility.external_payloads": "Externe splatgegevens zijn niet ingesloten in de weergavekopie",
+  "projects.gallery.eligibility.hdr_missing": "HDR-achtergrondbestand niet gevonden. Kies het opnieuw en sla het project op.",
   "projects.gallery.eligibility.space": "Onvoldoende vrije ruimte in de Galerie",
   "projects.gallery.eligibility.not_checked": "Geschiktheid wordt gecontroleerd bij het voorbereiden van de weergavekopie",
   "projects.gallery.eligibility.copy": "Dit bestand is een kopie van een ander project. Gebruik Project opslaan als om het apart te publiceren.",

@@ -3036,6 +3036,7 @@
   "projects.gallery.eligibility.hdr": "此图库不支持 HDR",
   "projects.gallery.eligibility.no_splats": "没有可见的高斯点",
   "projects.gallery.eligibility.external_payloads": "查看副本中未嵌入外部高斯点数据",
+  "projects.gallery.eligibility.hdr_missing": "未找到 HDR 背景文件。请重新选择并保存项目。",
   "projects.gallery.eligibility.space": "图库剩余空间不足",
   "projects.gallery.eligibility.not_checked": "准备查看副本时会检查发布条件",
   "projects.gallery.eligibility.copy": "此文件是另一个项目的副本。请使用“项目另存为”单独发布。",

@@ -1157,6 +1157,7 @@ set(TEST_FILES
     test_rml_im_mode_layout.cpp
     test_rml_python_listener_lifetime.cpp
     test_status_bar_fit.cpp
+    test_gallery_file_panel_layout.cpp
     test_training_progress_publisher.cpp
     test_startup_overlay_geometry.cpp
     test_vram_hud_geometry.cpp

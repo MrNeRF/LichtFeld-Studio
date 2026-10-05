@@ -3036,6 +3036,7 @@
   "projects.gallery.eligibility.hdr": "이 갤러리는 HDR을 지원하지 않습니다",
   "projects.gallery.eligibility.no_splats": "표시되는 스플랫이 없습니다",
   "projects.gallery.eligibility.external_payloads": "외부 스플랫 데이터가 보기용 사본에 포함되지 않았습니다",
+  "projects.gallery.eligibility.hdr_missing": "HDR 배경 파일을 찾을 수 없습니다. 다시 선택하고 프로젝트를 저장하세요.",
   "projects.gallery.eligibility.space": "갤러리의 남은 공간이 부족합니다",
   "projects.gallery.eligibility.not_checked": "보기용 사본을 준비할 때 게시 가능 여부를 확인합니다",
   "projects.gallery.eligibility.copy": "이 파일은 다른 프로젝트의 사본입니다. 따로 게시하려면 '다른 이름으로 프로젝트 저장'을 사용하세요.",
