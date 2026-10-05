@@ -20,6 +20,9 @@
 
 namespace lfs::training {
     namespace {
+        [[nodiscard]] bool camera_needs_normal_map(const lfs::core::Camera& cam) {
+            return cam.has_image() && !cam.has_normal();
+        }
 
         constexpr std::string_view kOriginalImagesFolder = "images";
 

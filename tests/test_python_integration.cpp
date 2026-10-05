@@ -717,204 +717,205 @@ TEST_F(PythonIntegrationTest, PythonSyntaxDocumentExtractsSymbolsAndScope) {
     EXPECT_FALSE(document.foldRanges().empty());
     EXPECT_FALSE(document.highlights().empty());
     EXPECT_EQ(document.scopeAt(code.find("pass")), "Tool.run");
+}
 
-    TEST_F(PythonIntegrationTest, PythonSyntaxDocumentAppliesIncrementalEdits) {
-        constexpr std::string_view original =
-            "def run():\n"
-            "    pass\n";
-        std::string updated(original);
-        const size_t replace_start = updated.find("pass");
-        ASSERT_NE(replace_start, std::string::npos);
-        constexpr std::string_view replacement = "if True pass";
-        updated.replace(replace_start, std::string_view("pass").size(), replacement);
+TEST_F(PythonIntegrationTest, PythonSyntaxDocumentAppliesIncrementalEdits) {
+    constexpr std::string_view original =
+        "def run():\n"
+        "    pass\n";
+    std::string updated(original);
+    const size_t replace_start = updated.find("pass");
+    ASSERT_NE(replace_start, std::string::npos);
+    constexpr std::string_view replacement = "if True pass";
+    updated.replace(replace_start, std::string_view("pass").size(), replacement);
 
-        lfs::python::PythonSyntaxDocument document;
-        ASSERT_TRUE(document.reset(original));
+    lfs::python::PythonSyntaxDocument document;
+    ASSERT_TRUE(document.reset(original));
 
-        const lfs::python::PythonBufferEdit edit{
-            .start_byte = replace_start,
-            .old_end_byte = replace_start + std::string_view("pass").size(),
-            .new_end_byte = replace_start + replacement.size(),
-            .start_point = lfs::python::python_buffer_point_at_byte(original, replace_start),
-            .old_end_point =
-                lfs::python::python_buffer_point_at_byte(original, replace_start + std::string_view("pass").size()),
-            .new_end_point = lfs::python::python_buffer_point_at_byte(updated, replace_start + replacement.size()),
-        };
-        const std::array edits{edit};
+    const lfs::python::PythonBufferEdit edit{
+        .start_byte = replace_start,
+        .old_end_byte = replace_start + std::string_view("pass").size(),
+        .new_end_byte = replace_start + replacement.size(),
+        .start_point = lfs::python::python_buffer_point_at_byte(original, replace_start),
+        .old_end_point =
+            lfs::python::python_buffer_point_at_byte(original, replace_start + std::string_view("pass").size()),
+        .new_end_point = lfs::python::python_buffer_point_at_byte(updated, replace_start + replacement.size()),
+    };
+    const std::array edits{edit};
 
-        ASSERT_TRUE(document.applyEditsAndReparse(updated, edits));
-        EXPECT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::SyntaxError);
-        ASSERT_FALSE(document.analysis().issues.empty());
+    ASSERT_TRUE(document.applyEditsAndReparse(updated, edits));
+    EXPECT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::SyntaxError);
+    ASSERT_FALSE(document.analysis().issues.empty());
+}
+
+TEST_F(PythonIntegrationTest, PythonSyntaxDocumentExtractsFallbackHighlightCaptures) {
+    constexpr std::string_view code =
+        "@decorator\n"
+        "def run():\n"
+        "    return 42\n";
+
+    lfs::python::PythonSyntaxDocument document;
+    ASSERT_TRUE(document.reset(code));
+    ASSERT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::Clean);
+
+    bool has_keyword = false;
+    bool has_decorator = false;
+    bool has_function = false;
+    bool has_number = false;
+    for (const auto& highlight : document.highlights()) {
+        has_keyword |= highlight.kind == lfs::python::PythonHighlightKind::Keyword;
+        has_decorator |= highlight.kind == lfs::python::PythonHighlightKind::Decorator;
+        has_function |= highlight.kind == lfs::python::PythonHighlightKind::Function;
+        has_number |= highlight.kind == lfs::python::PythonHighlightKind::Number;
+        EXPECT_LT(highlight.start_byte, highlight.end_byte);
+        EXPECT_LE(highlight.end_byte, code.size());
     }
 
-    TEST_F(PythonIntegrationTest, PythonSyntaxDocumentExtractsFallbackHighlightCaptures) {
-        constexpr std::string_view code =
-            "@decorator\n"
-            "def run():\n"
-            "    return 42\n";
+    EXPECT_TRUE(has_keyword);
+    EXPECT_TRUE(has_decorator);
+    EXPECT_TRUE(has_function);
+    EXPECT_TRUE(has_number);
+}
 
-        lfs::python::PythonSyntaxDocument document;
-        ASSERT_TRUE(document.reset(code));
-        ASSERT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::Clean);
+TEST_F(PythonIntegrationTest, PythonSyntaxDocumentKeepsStructureDuringSyntaxError) {
+    constexpr std::string_view valid =
+        "class Tool:\n"
+        "    def run(self):\n"
+        "        pass\n";
+    constexpr std::string_view invalid = "if True print('x')\n";
 
-        bool has_keyword = false;
-        bool has_decorator = false;
-        bool has_function = false;
-        bool has_number = false;
-        for (const auto& highlight : document.highlights()) {
-            has_keyword |= highlight.kind == lfs::python::PythonHighlightKind::Keyword;
-            has_decorator |= highlight.kind == lfs::python::PythonHighlightKind::Decorator;
-            has_function |= highlight.kind == lfs::python::PythonHighlightKind::Function;
-            has_number |= highlight.kind == lfs::python::PythonHighlightKind::Number;
-            EXPECT_LT(highlight.start_byte, highlight.end_byte);
-            EXPECT_LE(highlight.end_byte, code.size());
-        }
+    lfs::python::PythonSyntaxDocument document;
+    ASSERT_TRUE(document.reset(valid));
+    ASSERT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::Clean);
+    ASSERT_FALSE(document.symbols().empty());
+    ASSERT_FALSE(document.foldRanges().empty());
 
-        EXPECT_TRUE(has_keyword);
-        EXPECT_TRUE(has_decorator);
-        EXPECT_TRUE(has_function);
-        EXPECT_TRUE(has_number);
+    ASSERT_TRUE(document.reset(invalid));
+    EXPECT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::SyntaxError);
+    ASSERT_FALSE(document.symbols().empty());
+    ASSERT_FALSE(document.foldRanges().empty());
+
+    bool retained_class = false;
+    bool retained_function = false;
+    for (const auto& symbol : document.symbols()) {
+        retained_class |= symbol.kind == lfs::python::PythonSymbolKind::Class && symbol.name == "Tool";
+        retained_function |= symbol.kind == lfs::python::PythonSymbolKind::Function && symbol.name == "run";
     }
+    EXPECT_TRUE(retained_class);
+    EXPECT_TRUE(retained_function);
+}
 
-    TEST_F(PythonIntegrationTest, PythonSyntaxDocumentKeepsStructureDuringSyntaxError) {
-        constexpr std::string_view valid =
-            "class Tool:\n"
-            "    def run(self):\n"
-            "        pass\n";
-        constexpr std::string_view invalid = "if True print('x')\n";
+TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsIndentedSnippetBeforeBlack) {
+    const auto result = lfs::python::format_python_code("    if True:\n        print('x')\n");
 
-        lfs::python::PythonSyntaxDocument document;
-        ASSERT_TRUE(document.reset(valid));
-        ASSERT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::Clean);
-        ASSERT_FALSE(document.symbols().empty());
-        ASSERT_FALSE(document.foldRanges().empty());
+    ASSERT_FALSE(result.success);
+    EXPECT_NE(result.error.find("Python syntax error"), std::string::npos);
+}
 
-        ASSERT_TRUE(document.reset(invalid));
-        EXPECT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::SyntaxError);
-        ASSERT_FALSE(document.symbols().empty());
-        ASSERT_FALSE(document.foldRanges().empty());
+TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsUnexpectedTopLevelIndentBeforeBlack) {
+    const auto result = lfs::python::format_python_code(
+        "import lichtfeld as lf\n    scene = lf.get_scene()\nprint('hello world')\n");
 
-        bool retained_class = false;
-        bool retained_function = false;
-        for (const auto& symbol : document.symbols()) {
-            retained_class |= symbol.kind == lfs::python::PythonSymbolKind::Class && symbol.name == "Tool";
-            retained_function |= symbol.kind == lfs::python::PythonSymbolKind::Function && symbol.name == "run";
-        }
-        EXPECT_TRUE(retained_class);
-        EXPECT_TRUE(retained_function);
+    ASSERT_FALSE(result.success);
+    EXPECT_NE(result.error.find("Python syntax error"), std::string::npos);
+}
+
+TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsLeadingPreambleBulletsBeforeBlack) {
+    const auto result = lfs::python::format_python_code(
+        "1. SOURCE_NAME if set\n"
+        "2. currently selected node\n"
+        "3. first splat node in the scene\n"
+        "\n"
+        "from pathlib import Path\n"
+        "import lichtfeld as lf\n");
+
+    ASSERT_FALSE(result.success);
+    EXPECT_NE(result.error.find("Python syntax error"), std::string::npos);
+}
+
+TEST_F(PythonIntegrationTest, CleanPythonCodeRepairsUnindentedFunctionBlock) {
+    const auto result = lfs::python::clean_python_code(
+        "def _safe_path_component(text):\n"
+        "stripped = str(text or \"\").strip()\n"
+        "if not stripped:\n"
+        "    return \"splat\"\n"
+        "safe = \"\".join(ch if ch.isalnum() or ch in (\"-\", \"_\", \".\") else \"_\" for ch in stripped)\n"
+        "safe = safe.strip(\"_\")\n"
+        "return safe or \"splat\"\n");
+
+    if (formatterUnavailable(result)) {
+        GTEST_SKIP() << result.error;
     }
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_NE(result.code.find("def _safe_path_component(text):"), std::string::npos);
+    EXPECT_NE(result.code.find("    stripped = str(text or \"\").strip()"), std::string::npos);
+    EXPECT_NE(result.code.find("    if not stripped:"), std::string::npos);
+    EXPECT_NE(result.code.find("        return \"splat\""), std::string::npos);
+    EXPECT_NE(result.code.find("    return safe or \"splat\""), std::string::npos);
+}
 
-    TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsIndentedSnippetBeforeBlack) {
-        const auto result = lfs::python::format_python_code("    if True:\n        print('x')\n");
+TEST_F(PythonIntegrationTest, FormatPythonCodeReportsSyntaxErrorWithoutUnexpectedResultFallback) {
+    const auto result = lfs::python::format_python_code("import os\nif True print('x')\n");
 
-        ASSERT_FALSE(result.success);
-        EXPECT_NE(result.error.find("Python syntax error"), std::string::npos);
+    if (formatterUnavailable(result)) {
+        GTEST_SKIP() << result.error;
     }
+    ASSERT_FALSE(result.success);
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_EQ(result.error.find("unexpected result"), std::string::npos);
+}
 
-    TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsUnexpectedTopLevelIndentBeforeBlack) {
-        const auto result = lfs::python::format_python_code(
-            "import lichtfeld as lf\n    scene = lf.get_scene()\nprint('hello world')\n");
-
-        ASSERT_FALSE(result.success);
-        EXPECT_NE(result.error.find("Python syntax error"), std::string::npos);
-    }
-
-    TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsLeadingPreambleBulletsBeforeBlack) {
-        const auto result = lfs::python::format_python_code(
-            "1. SOURCE_NAME if set\n"
-            "2. currently selected node\n"
-            "3. first splat node in the scene\n"
-            "\n"
-            "from pathlib import Path\n"
-            "import lichtfeld as lf\n");
-
-        ASSERT_FALSE(result.success);
-        EXPECT_NE(result.error.find("Python syntax error"), std::string::npos);
-    }
-
-    TEST_F(PythonIntegrationTest, CleanPythonCodeRepairsUnindentedFunctionBlock) {
-        const auto result = lfs::python::clean_python_code(
-            "def _safe_path_component(text):\n"
-            "stripped = str(text or \"\").strip()\n"
-            "if not stripped:\n"
-            "    return \"splat\"\n"
-            "safe = \"\".join(ch if ch.isalnum() or ch in (\"-\", \"_\", \".\") else \"_\" for ch in stripped)\n"
-            "safe = safe.strip(\"_\")\n"
-            "return safe or \"splat\"\n");
-
-        if (formatterUnavailable(result)) {
-            GTEST_SKIP() << result.error;
-        }
-        ASSERT_TRUE(result.success) << result.error;
-        EXPECT_NE(result.code.find("def _safe_path_component(text):"), std::string::npos);
-        EXPECT_NE(result.code.find("    stripped = str(text or \"\").strip()"), std::string::npos);
-        EXPECT_NE(result.code.find("    if not stripped:"), std::string::npos);
-        EXPECT_NE(result.code.find("        return \"splat\""), std::string::npos);
-        EXPECT_NE(result.code.find("    return safe or \"splat\""), std::string::npos);
-    }
-
-    TEST_F(PythonIntegrationTest, FormatPythonCodeReportsSyntaxErrorWithoutUnexpectedResultFallback) {
-        const auto result = lfs::python::format_python_code("import os\nif True print('x')\n");
-
-        if (formatterUnavailable(result)) {
-            GTEST_SKIP() << result.error;
-        }
-        ASSERT_FALSE(result.success);
-        EXPECT_FALSE(result.error.empty());
-        EXPECT_EQ(result.error.find("unexpected result"), std::string::npos);
-    }
-
-    TEST_F(PythonIntegrationTest, LookAtReturnsVisualizerPoseTranslation) {
-        const auto result = runPythonTensorSnippet(R"PY(
+TEST_F(PythonIntegrationTest, LookAtReturnsVisualizerPoseTranslation) {
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 _rotation, translation = lf.look_at((1.0, 2.0, 3.0), (1.0, 2.0, 2.0))
 result_shape = tuple(translation.shape)
 result_values = translation.flatten().tolist()
 )PY");
 
-        ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
-        EXPECT_EQ(result.shape[0], 3);
-        ASSERT_EQ(result.values.size(), static_cast<size_t>(3));
-        EXPECT_FLOAT_EQ(result.values[0], 1.0f);
-        EXPECT_FLOAT_EQ(result.values[1], 2.0f);
-        EXPECT_FLOAT_EQ(result.values[2], 3.0f);
-    }
+    ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
+    EXPECT_EQ(result.shape[0], 3);
+    ASSERT_EQ(result.values.size(), static_cast<size_t>(3));
+    EXPECT_FLOAT_EQ(result.values[0], 1.0f);
+    EXPECT_FLOAT_EQ(result.values[1], 2.0f);
+    EXPECT_FLOAT_EQ(result.values[2], 3.0f);
+}
 
-    TEST_F(PythonIntegrationTest, GetCurrentViewComputesHorizontalFovFromViewportAspect) {
-        const ScopedViewCallback callback([]() -> std::optional<lfs::vis::ViewInfo> {
-            lfs::vis::ViewInfo info{};
-            info.rotation = {1.0f, 0.0f, 0.0f,
-                             0.0f, 1.0f, 0.0f,
-                             0.0f, 0.0f, 1.0f};
-            info.translation = {0.0f, 0.0f, 0.0f};
-            info.width = 200;
-            info.height = 100;
-            info.fov = 60.0f;
-            return info;
-        });
+TEST_F(PythonIntegrationTest, GetCurrentViewComputesHorizontalFovFromViewportAspect) {
+    const ScopedViewCallback callback([]() -> std::optional<lfs::vis::ViewInfo> {
+        lfs::vis::ViewInfo info{};
+        info.rotation = {1.0f, 0.0f, 0.0f,
+                         0.0f, 1.0f, 0.0f,
+                         0.0f, 0.0f, 1.0f};
+        info.translation = {0.0f, 0.0f, 0.0f};
+        info.width = 200;
+        info.height = 100;
+        info.fov = 60.0f;
+        return info;
+    });
 
-        const auto result = runPythonTensorSnippet(R"PY(
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 view = lf.get_current_view()
 result_shape = (2,)
 result_values = [float(view.fov_x), float(view.fov_y)]
 )PY");
 
-        const float expected_fov_x =
-            std::atan(std::tan(60.0f * std::numbers::pi_v<float> / 360.0f) * 2.0f) * 360.0f / std::numbers::pi_v<float>;
-        ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
-        EXPECT_EQ(result.shape[0], 2);
-        ASSERT_EQ(result.values.size(), static_cast<size_t>(2));
-        EXPECT_NEAR(result.values[0], expected_fov_x, 1e-4f);
-        EXPECT_FLOAT_EQ(result.values[1], 60.0f);
-    }
+    const float expected_fov_x =
+        std::atan(std::tan(60.0f * std::numbers::pi_v<float> / 360.0f) * 2.0f) * 360.0f / std::numbers::pi_v<float>;
+    ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
+    EXPECT_EQ(result.shape[0], 2);
+    ASSERT_EQ(result.values.size(), static_cast<size_t>(2));
+    EXPECT_NEAR(result.values[0], expected_fov_x, 1e-4f);
+    EXPECT_FLOAT_EQ(result.values[1], 60.0f);
+}
 
-    TEST_F(PythonIntegrationTest, RenderViewRequiresActiveVisualizerRenderer) {
-        lfs::core::Scene scene;
-        scene.addSplat("single", makeSingleWhiteSplat(0.0f, 0.0f, 2.0f));
-        const lfs::python::SceneContextGuard scene_guard(&scene);
+TEST_F(PythonIntegrationTest, RenderViewRequiresActiveVisualizerRenderer) {
+    lfs::core::Scene scene;
+    scene.addSplat("single", makeSingleWhiteSplat(0.0f, 0.0f, 2.0f));
+    const lfs::python::SceneContextGuard scene_guard(&scene);
 
-        const auto result = runPythonTensorSnippet(R"PY(
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 rotation, translation = lf.look_at((0.0, 0.0, 0.0), (0.0, 0.0, -1.0))
 img = lf.render_view(rotation, translation, 64, 64, fov=60.0)
@@ -922,18 +923,18 @@ result_shape = (1,)
 result_values = [1.0 if img is None else 0.0]
 )PY");
 
-        ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
-        EXPECT_EQ(result.shape[0], 1);
-        ASSERT_EQ(result.values.size(), static_cast<size_t>(1));
-        EXPECT_FLOAT_EQ(result.values[0], 1.0f);
-    }
+    ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
+    EXPECT_EQ(result.shape[0], 1);
+    ASSERT_EQ(result.values.size(), static_cast<size_t>(1));
+    EXPECT_FLOAT_EQ(result.values[0], 1.0f);
+}
 
-    TEST_F(PythonIntegrationTest, CaptureViewportMatchesViewportVerticalOrientation) {
-        const ScopedCaptureViewportRenderCallback callback([]() -> std::optional<lfs::vis::ViewportRender> {
-            return lfs::vis::ViewportRender{makeViewportReadbackLikeImage(), nullptr};
-        });
+TEST_F(PythonIntegrationTest, CaptureViewportMatchesViewportVerticalOrientation) {
+    const ScopedCaptureViewportRenderCallback callback([]() -> std::optional<lfs::vis::ViewportRender> {
+        return lfs::vis::ViewportRender{makeViewportReadbackLikeImage(), nullptr};
+    });
 
-        const auto result = runPythonTensorSnippet(R"PY(
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 viewport = lf.capture_viewport()
 img = viewport.image.cpu().tolist()
@@ -943,70 +944,70 @@ result_shape = (2,)
 result_values = [float(top), float(bottom)]
 )PY");
 
-        ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
-        EXPECT_EQ(result.shape[0], 2);
-        ASSERT_EQ(result.values.size(), static_cast<size_t>(2));
-        EXPECT_GT(result.values[0], result.values[1]);
-    }
+    ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
+    EXPECT_EQ(result.shape[0], 2);
+    ASSERT_EQ(result.values.size(), static_cast<size_t>(2));
+    EXPECT_GT(result.values[0], result.values[1]);
+}
 
-    TEST_F(PythonIntegrationTest, CaptureSplitComparisonPreservesPresentedOrientation) {
-        for (const bool flip_y : {false, true}) {
-            const ScopedCaptureViewportRenderCallback callback([flip_y]() -> std::optional<lfs::vis::ViewportRender> {
-                constexpr size_t width = 64;
-                constexpr size_t height = 8;
-                std::vector<float> pixels(3 * width * height, 0.0f);
-                for (size_t x = 0; x < width; ++x) {
-                    pixels[(flip_y ? height - 1 : 0) * width + x] = 1.0f;
-                }
-                const auto image = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::from_vector(
-                    pixels, {3, height, width}, lfs::core::Device::CPU));
-                lfs::vis::SplitViewCpuDesc params;
-                params.left.image = params.right.image = image;
-                params.left.flip_y = params.right.flip_y = flip_y;
-                params.content_rect = {0, 0, width, height};
-                return lfs::vis::ViewportRender{
-                    lfs::vis::RenderingManager::composeSplitViewCpu(params, {width, height}), nullptr};
-            });
-            const auto result = runPythonTensorSnippet(R"PY(
+TEST_F(PythonIntegrationTest, CaptureSplitComparisonPreservesPresentedOrientation) {
+    for (const bool flip_y : {false, true}) {
+        const ScopedCaptureViewportRenderCallback callback([flip_y]() -> std::optional<lfs::vis::ViewportRender> {
+            constexpr size_t width = 64;
+            constexpr size_t height = 8;
+            std::vector<float> pixels(3 * width * height, 0.0f);
+            for (size_t x = 0; x < width; ++x) {
+                pixels[(flip_y ? height - 1 : 0) * width + x] = 1.0f;
+            }
+            const auto image = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::from_vector(
+                pixels, {3, height, width}, lfs::core::Device::CPU));
+            lfs::vis::SplitViewCpuDesc params;
+            params.left.image = params.right.image = image;
+            params.left.flip_y = params.right.flip_y = flip_y;
+            params.content_rect = {0, 0, width, height};
+            return lfs::vis::ViewportRender{
+                lfs::vis::RenderingManager::composeSplitViewCpu(params, {width, height}), nullptr};
+        });
+        const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 image = lf.capture_viewport().image.cpu().tolist()
 result_shape = (4,)
 result_values = [image[0][0][0], image[-1][0][0], image[0][-1][0], image[-1][-1][0]]
 )PY");
-            ASSERT_EQ(result.values.size(), 4u);
-            EXPECT_FLOAT_EQ(result.values[0], 1.0f);
-            EXPECT_FLOAT_EQ(result.values[1], 0.0f);
-            EXPECT_FLOAT_EQ(result.values[2], 1.0f);
-            EXPECT_FLOAT_EQ(result.values[3], 0.0f);
-        }
+        ASSERT_EQ(result.values.size(), 4u);
+        EXPECT_FLOAT_EQ(result.values[0], 1.0f);
+        EXPECT_FLOAT_EQ(result.values[1], 0.0f);
+        EXPECT_FLOAT_EQ(result.values[2], 1.0f);
+        EXPECT_FLOAT_EQ(result.values[3], 0.0f);
     }
+}
 
-    TEST_F(PythonIntegrationTest, CaptureViewportPostsToViewerThreadWhenOffThread) {
-        TestVisualizer viewer;
-        const ScopedVisualizer scoped_viewer(&viewer);
-        const ScopedCaptureViewportRenderCallback callback([]() -> std::optional<lfs::vis::ViewportRender> {
-            return lfs::vis::ViewportRender{makeViewportReadbackLikeImage(), nullptr};
-        });
+TEST_F(PythonIntegrationTest, CaptureViewportPostsToViewerThreadWhenOffThread) {
+    TestVisualizer viewer;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    const ScopedCaptureViewportRenderCallback callback([]() -> std::optional<lfs::vis::ViewportRender> {
+        return lfs::vis::ViewportRender{makeViewportReadbackLikeImage(), nullptr};
+    });
 
-        const auto result = runPythonTensorSnippet(R"PY(
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 viewport = lf.capture_viewport()
 result_shape = (1,)
 result_values = [float(viewport.image.cpu().sum().item())]
 )PY");
 
-        ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
-        EXPECT_EQ(result.shape[0], 1);
-        ASSERT_EQ(result.values.size(), static_cast<size_t>(1));
-        EXPECT_GT(result.values[0], 0.0f);
-        EXPECT_EQ(viewer.post_work_calls, 1);
-    }
+    ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
+    EXPECT_EQ(result.shape[0], 1);
+    ASSERT_EQ(result.values.size(), static_cast<size_t>(1));
+    EXPECT_GT(result.values[0], 0.0f);
+    EXPECT_EQ(viewer.post_work_calls, 1);
+}
 
-    TEST_F(PythonIntegrationTest, ScreenMutationsPostToViewerThreadWhenOffThread) {
-        TestVisualizer viewer;
-        const ScopedVisualizer scoped_viewer(&viewer);
+TEST_F(PythonIntegrationTest, ScreenMutationsPostToViewerThreadWhenOffThread) {
+    TestVisualizer viewer;
+    const ScopedVisualizer scoped_viewer(&viewer);
 
-        const auto result = runPythonTensorSnippet(R"PY(
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 lf.ui.screen.reset()
 lf.toggle_split_viewport()
@@ -1014,137 +1015,137 @@ result_shape = (1,)
 result_values = [1.0]
 )PY");
 
-        ASSERT_EQ(result.values.size(), 1u);
-        EXPECT_FLOAT_EQ(result.values[0], 1.0F);
-        EXPECT_EQ(viewer.post_work_calls, 2);
-    }
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    EXPECT_EQ(viewer.post_work_calls, 2);
+}
 
-    TEST_F(PythonIntegrationTest,
-           ProjectOpenSurfacesRecoveryPromptPendingOutcome) {
-        TestVisualizer viewer;
-        viewer.project_open_outcome =
-            lfs::vis::ProjectOpenOutcome::
-                RecoveryPromptPending;
-        const ScopedVisualizer scoped_viewer(&viewer);
+TEST_F(PythonIntegrationTest,
+       ProjectOpenSurfacesRecoveryPromptPendingOutcome) {
+    TestVisualizer viewer;
+    viewer.project_open_outcome =
+        lfs::vis::ProjectOpenOutcome::
+            RecoveryPromptPending;
+    const ScopedVisualizer scoped_viewer(&viewer);
 
-        const auto result = runPythonTensorSnippet(R"PY(
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 outcome = lf.project_open("pending.licht", discard_changes=True)
 result_shape = (1,)
 result_values = [1.0 if outcome is lf.ProjectOpenOutcome.RECOVERY_PROMPT_PENDING else 0.0]
 )PY");
 
-        ASSERT_EQ(result.values.size(), 1u);
-        EXPECT_FLOAT_EQ(result.values[0], 1.0F);
-        EXPECT_EQ(viewer.post_work_calls, 1);
-    }
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    EXPECT_EQ(viewer.post_work_calls, 1);
+}
 
-    TEST_F(PythonIntegrationTest, ProjectWritePollRunsOnViewerThread) {
-        using namespace std::chrono_literals;
-        TestVisualizer viewer;
-        viewer.queue_posted_work = true;
-        const ScopedVisualizer scoped_viewer(&viewer);
-        std::jthread viewer_worker([&]() {
-            if (viewer.waitForQueuedWork(1s)) {
-                // Acquiring the GIL here also checks that the caller releases it
-                // while waiting for the viewer to settle the write.
-                const lfs::python::GilAcquire gil;
-                viewer.runNextQueuedWork();
-            }
-        });
-        const auto viewer_thread = viewer_worker.get_id();
-        const auto result = runPythonTensorSnippet(R"PY(
+TEST_F(PythonIntegrationTest, ProjectWritePollRunsOnViewerThread) {
+    using namespace std::chrono_literals;
+    TestVisualizer viewer;
+    viewer.queue_posted_work = true;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    std::jthread viewer_worker([&]() {
+        if (viewer.waitForQueuedWork(1s)) {
+            // Acquiring the GIL here also checks that the caller releases it
+            // while waiting for the viewer to settle the write.
+            const lfs::python::GilAcquire gil;
+            viewer.runNextQueuedWork();
+        }
+    });
+    const auto viewer_thread = viewer_worker.get_id();
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 state = lf.project_poll_write()
 result_shape = (1,)
 result_values = [float(state['generation'])]
 )PY");
-        viewer_worker.join();
-        ASSERT_EQ(result.values.size(), 1u);
-        EXPECT_FLOAT_EQ(result.values[0], 42.0F);
-        EXPECT_EQ(viewer.poll_calls, 1);
-        EXPECT_EQ(viewer.poll_thread, viewer_thread);
-        EXPECT_EQ(viewer.wait_thread, std::thread::id{});
-    }
+    viewer_worker.join();
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 42.0F);
+    EXPECT_EQ(viewer.poll_calls, 1);
+    EXPECT_EQ(viewer.poll_thread, viewer_thread);
+    EXPECT_EQ(viewer.wait_thread, std::thread::id{});
+}
 
-    TEST_F(PythonIntegrationTest, ProjectPreviewWaitPollsOnViewerThread) {
-        using namespace std::chrono_literals;
-        TestVisualizer viewer;
-        viewer.queue_posted_work = true;
-        const ScopedVisualizer scoped_viewer(&viewer);
-        std::jthread viewer_worker([&](std::stop_token stop) {
-            while (!stop.stop_requested()) {
-                if (viewer.waitForQueuedWork(100ms)) {
-                    const lfs::python::GilAcquire gil;
-                    viewer.runNextQueuedWork();
-                }
+TEST_F(PythonIntegrationTest, ProjectPreviewWaitPollsOnViewerThread) {
+    using namespace std::chrono_literals;
+    TestVisualizer viewer;
+    viewer.queue_posted_work = true;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    std::jthread viewer_worker([&](std::stop_token stop) {
+        while (!stop.stop_requested()) {
+            if (viewer.waitForQueuedWork(100ms)) {
+                const lfs::python::GilAcquire gil;
+                viewer.runNextQueuedWork();
             }
-        });
-        const auto viewer_thread = viewer_worker.get_id();
-        const auto result = runPythonTensorSnippet(R"PY(
+        }
+    });
+    const auto viewer_thread = viewer_worker.get_id();
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 result_shape = (1,)
 result_values = [float(lf.project_set_preview(b'preview', wait=True))]
 )PY");
-        viewer_worker.request_stop();
-        viewer_worker.join();
-        ASSERT_EQ(result.values.size(), 1u);
-        EXPECT_FLOAT_EQ(result.values[0], 1.0F);
-        EXPECT_EQ(viewer.poll_calls, 1);
-        EXPECT_EQ(viewer.poll_thread, viewer_thread);
-        EXPECT_EQ(viewer.wait_thread, viewer_thread);
-    }
+    viewer_worker.request_stop();
+    viewer_worker.join();
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    EXPECT_EQ(viewer.poll_calls, 1);
+    EXPECT_EQ(viewer.poll_thread, viewer_thread);
+    EXPECT_EQ(viewer.wait_thread, viewer_thread);
+}
 
-    TEST_F(PythonIntegrationTest, ProjectSaveWaitPollsOnViewerThread) {
-        using namespace std::chrono_literals;
-        TestVisualizer viewer;
-        viewer.queue_posted_work = true;
-        viewer.project_save_started = true;
-        const ScopedVisualizer scoped_viewer(&viewer);
-        std::jthread viewer_worker([&](std::stop_token stop) {
-            while (!stop.stop_requested()) {
-                if (viewer.waitForQueuedWork(100ms)) {
-                    const lfs::python::GilAcquire gil;
-                    viewer.runNextQueuedWork();
-                }
+TEST_F(PythonIntegrationTest, ProjectSaveWaitPollsOnViewerThread) {
+    using namespace std::chrono_literals;
+    TestVisualizer viewer;
+    viewer.queue_posted_work = true;
+    viewer.project_save_started = true;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    std::jthread viewer_worker([&](std::stop_token stop) {
+        while (!stop.stop_requested()) {
+            if (viewer.waitForQueuedWork(100ms)) {
+                const lfs::python::GilAcquire gil;
+                viewer.runNextQueuedWork();
             }
-        });
-        const auto viewer_thread = viewer_worker.get_id();
-        const auto result = runPythonTensorSnippet(R"PY(
+        }
+    });
+    const auto viewer_thread = viewer_worker.get_id();
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 result_shape = (1,)
 result_values = [float(lf.project_save(wait=True))]
 )PY");
-        viewer_worker.request_stop();
-        viewer_worker.join();
-        ASSERT_EQ(result.values.size(), 1u);
-        EXPECT_FLOAT_EQ(result.values[0], 1.0F);
-        EXPECT_EQ(viewer.poll_calls, 1);
-        EXPECT_EQ(viewer.poll_thread, viewer_thread);
-        EXPECT_EQ(viewer.wait_thread, viewer_thread);
-    }
+    viewer_worker.request_stop();
+    viewer_worker.join();
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    EXPECT_EQ(viewer.poll_calls, 1);
+    EXPECT_EQ(viewer.poll_thread, viewer_thread);
+    EXPECT_EQ(viewer.wait_thread, viewer_thread);
+}
 
-    TEST_F(PythonIntegrationTest, ProjectWritePollRunsInlineOnViewerThread) {
-        TestVisualizer viewer;
-        viewer.on_viewer_thread = true;
-        const ScopedVisualizer scoped_viewer(&viewer);
-        const auto result = runPythonTensorSnippet(R"PY(
+TEST_F(PythonIntegrationTest, ProjectWritePollRunsInlineOnViewerThread) {
+    TestVisualizer viewer;
+    viewer.on_viewer_thread = true;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 result_shape = (1,)
 result_values = [float(lf.project_poll_write()['generation'])]
 )PY");
-        ASSERT_EQ(result.values.size(), 1u);
-        EXPECT_FLOAT_EQ(result.values[0], 42.0F);
-        EXPECT_EQ(viewer.poll_thread, std::this_thread::get_id());
-        EXPECT_EQ(viewer.post_work_calls, 0);
-        EXPECT_EQ(viewer.wait_thread, std::thread::id{});
-    }
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 42.0F);
+    EXPECT_EQ(viewer.poll_thread, std::this_thread::get_id());
+    EXPECT_EQ(viewer.post_work_calls, 0);
+    EXPECT_EQ(viewer.wait_thread, std::thread::id{});
+}
 
-    TEST_F(PythonIntegrationTest, ProjectWritePollRejectsViewerShutdown) {
-        TestVisualizer viewer;
-        viewer.accepts_posted_work = false;
-        const ScopedVisualizer scoped_viewer(&viewer);
-        const auto result = runPythonTensorSnippet(R"PY(
+TEST_F(PythonIntegrationTest, ProjectWritePollRejectsViewerShutdown) {
+    TestVisualizer viewer;
+    viewer.accepts_posted_work = false;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 result_shape = (1,)
 try:
@@ -1153,19 +1154,19 @@ try:
 except RuntimeError:
     result_values = [1.0]
 )PY");
-        ASSERT_EQ(result.values.size(), 1u);
-        EXPECT_FLOAT_EQ(result.values[0], 1.0F);
-        EXPECT_EQ(viewer.poll_calls, 0);
-    }
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    EXPECT_EQ(viewer.poll_calls, 0);
+}
 
-    TEST_F(PythonIntegrationTest, SceneClearPreservesTypedShutdownError) {
-        for (const bool inline_call : {false, true}) {
-            TestVisualizer viewer;
-            viewer.on_viewer_thread = inline_call;
-            viewer.accepts_posted_work = false;
-            const ScopedVisualizer scoped_viewer(&viewer);
-            const lfs::python::SceneContextGuard scene_guard(&viewer.getScene());
-            const auto result = runPythonTensorSnippet(R"PY(
+TEST_F(PythonIntegrationTest, SceneClearPreservesTypedShutdownError) {
+    for (const bool inline_call : {false, true}) {
+        TestVisualizer viewer;
+        viewer.on_viewer_thread = inline_call;
+        viewer.accepts_posted_work = false;
+        const ScopedVisualizer scoped_viewer(&viewer);
+        const lfs::python::SceneContextGuard scene_guard(&viewer.getScene());
+        const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 result_shape = (2,)
 result_values = []
@@ -1178,19 +1179,19 @@ for clear in (lf.clear_scene, lf.get_scene().clear):
         assert error.domain == 'Python'
         result_values.append(1.0)
 )PY");
-            EXPECT_EQ(result.values, (std::vector<float>{1.0F, 1.0F}));
-            EXPECT_EQ(viewer.clear_calls, 0);
-        }
+        EXPECT_EQ(result.values, (std::vector<float>{1.0F, 1.0F}));
+        EXPECT_EQ(viewer.clear_calls, 0);
     }
+}
 
-    TEST_F(PythonIntegrationTest, SceneClearPreservesLegacyFailureContext) {
-        for (const bool inline_call : {false, true}) {
-            TestVisualizer viewer;
-            viewer.on_viewer_thread = inline_call;
-            viewer.clear_error = "Scene is busy";
-            const ScopedVisualizer scoped_viewer(&viewer);
-            const lfs::python::SceneContextGuard scene_guard(&viewer.getScene());
-            const auto result = runPythonTensorSnippet(R"PY(
+TEST_F(PythonIntegrationTest, SceneClearPreservesLegacyFailureContext) {
+    for (const bool inline_call : {false, true}) {
+        TestVisualizer viewer;
+        viewer.on_viewer_thread = inline_call;
+        viewer.clear_error = "Scene is busy";
+        const ScopedVisualizer scoped_viewer(&viewer);
+        const lfs::python::SceneContextGuard scene_guard(&viewer.getScene());
+        const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 result_shape = (2,)
 result_values = []
@@ -1205,16 +1206,16 @@ for clear in (lf.clear_scene, lf.get_scene().clear):
         assert error.context
         result_values.append(1.0)
 )PY");
-            EXPECT_EQ(result.values, (std::vector<float>{1.0F, 1.0F}));
-            EXPECT_EQ(viewer.clear_calls, 2);
-        }
+        EXPECT_EQ(result.values, (std::vector<float>{1.0F, 1.0F}));
+        EXPECT_EQ(viewer.clear_calls, 2);
     }
+}
 
-    TEST_F(PythonIntegrationTest, ProjectLicenseRoundTripsThroughBinding) {
-        TestVisualizer viewer;
-        const ScopedVisualizer scoped_viewer(&viewer);
+TEST_F(PythonIntegrationTest, ProjectLicenseRoundTripsThroughBinding) {
+    TestVisualizer viewer;
+    const ScopedVisualizer scoped_viewer(&viewer);
 
-        const auto result = runPythonTensorSnippet(R"PY(
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 assert lf.project_get_license() is None
 lf.project_set_license("CC BY-NC", "Use with attribution")
@@ -1226,110 +1227,110 @@ result_shape = (2,)
 result_values = [1.0 if set_ok else 0.0, 1.0 if clear_ok else 0.0]
 )PY");
 
-        ASSERT_EQ(result.values.size(), 2u);
-        EXPECT_FLOAT_EQ(result.values[0], 1.0F);
-        EXPECT_FLOAT_EQ(result.values[1], 1.0F);
-    }
+    ASSERT_EQ(result.values.size(), 2u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    EXPECT_FLOAT_EQ(result.values[1], 1.0F);
+}
 
-    TEST_F(PythonIntegrationTest, CaptureViewportReleasesGilWhileWaitingForViewerThread) {
-        using namespace std::chrono_literals;
+TEST_F(PythonIntegrationTest, CaptureViewportReleasesGilWhileWaitingForViewerThread) {
+    using namespace std::chrono_literals;
 
-        TestVisualizer viewer;
-        viewer.queue_posted_work = true;
-        const ScopedVisualizer scoped_viewer(&viewer);
-        const ScopedCaptureViewportRenderCallback callback([]() -> std::optional<lfs::vis::ViewportRender> {
-            return lfs::vis::ViewportRender{makeViewportReadbackLikeImage(), nullptr};
-        });
+    TestVisualizer viewer;
+    viewer.queue_posted_work = true;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    const ScopedCaptureViewportRenderCallback callback([]() -> std::optional<lfs::vis::ViewportRender> {
+        return lfs::vis::ViewportRender{makeViewportReadbackLikeImage(), nullptr};
+    });
 
-        std::atomic_bool python_call_completed = false;
-        std::atomic_bool gil_acquired_during_call = false;
-        std::atomic_bool probe_started = false;
-        std::atomic_bool queued_work_seen = false;
-        std::atomic_bool viewer_work_ran = false;
+    std::atomic_bool python_call_completed = false;
+    std::atomic_bool gil_acquired_during_call = false;
+    std::atomic_bool probe_started = false;
+    std::atomic_bool queued_work_seen = false;
+    std::atomic_bool viewer_work_ran = false;
 
-        std::thread gil_probe([&]() {
-            queued_work_seen.store(viewer.waitForQueuedWork(1s), std::memory_order_release);
-            if (!queued_work_seen.load(std::memory_order_acquire)) {
-                return;
-            }
-            probe_started.store(true, std::memory_order_release);
-            const lfs::python::GilAcquire gil;
-            gil_acquired_during_call.store(!python_call_completed.load(std::memory_order_acquire),
-                                           std::memory_order_release);
-        });
+    std::thread gil_probe([&]() {
+        queued_work_seen.store(viewer.waitForQueuedWork(1s), std::memory_order_release);
+        if (!queued_work_seen.load(std::memory_order_acquire)) {
+            return;
+        }
+        probe_started.store(true, std::memory_order_release);
+        const lfs::python::GilAcquire gil;
+        gil_acquired_during_call.store(!python_call_completed.load(std::memory_order_acquire),
+                                       std::memory_order_release);
+    });
 
-        std::thread viewer_worker([&]() {
-            if (!viewer.waitForQueuedWork(1s)) {
-                return;
-            }
-            const auto deadline = std::chrono::steady_clock::now() + 500ms;
-            while (std::chrono::steady_clock::now() < deadline &&
-                   (!probe_started.load(std::memory_order_acquire) ||
-                    !gil_acquired_during_call.load(std::memory_order_acquire))) {
-                std::this_thread::sleep_for(10ms);
-            }
-            viewer_work_ran.store(viewer.runNextQueuedWork(), std::memory_order_release);
-        });
+    std::thread viewer_worker([&]() {
+        if (!viewer.waitForQueuedWork(1s)) {
+            return;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + 500ms;
+        while (std::chrono::steady_clock::now() < deadline &&
+               (!probe_started.load(std::memory_order_acquire) ||
+                !gil_acquired_during_call.load(std::memory_order_acquire))) {
+            std::this_thread::sleep_for(10ms);
+        }
+        viewer_work_ran.store(viewer.runNextQueuedWork(), std::memory_order_release);
+    });
 
-        const auto result = runPythonTensorSnippet(R"PY(
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 viewport = lf.capture_viewport()
 result_shape = (1,)
 result_values = [float(viewport.image.cpu().sum().item())]
 )PY");
-        python_call_completed.store(true, std::memory_order_release);
+    python_call_completed.store(true, std::memory_order_release);
 
-        viewer_worker.join();
-        gil_probe.join();
+    viewer_worker.join();
+    gil_probe.join();
 
-        ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
-        EXPECT_EQ(result.shape[0], 1);
-        ASSERT_EQ(result.values.size(), static_cast<size_t>(1));
-        EXPECT_GT(result.values[0], 0.0f);
-        EXPECT_TRUE(queued_work_seen.load(std::memory_order_acquire));
-        EXPECT_TRUE(viewer_work_ran.load(std::memory_order_acquire));
-        EXPECT_TRUE(gil_acquired_during_call.load(std::memory_order_acquire));
+    ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
+    EXPECT_EQ(result.shape[0], 1);
+    ASSERT_EQ(result.values.size(), static_cast<size_t>(1));
+    EXPECT_GT(result.values[0], 0.0f);
+    EXPECT_TRUE(queued_work_seen.load(std::memory_order_acquire));
+    EXPECT_TRUE(viewer_work_ran.load(std::memory_order_acquire));
+    EXPECT_TRUE(gil_acquired_during_call.load(std::memory_order_acquire));
+}
+
+TEST_F(PythonIntegrationTest, SceneCameraExposesVisualizerRenderContract) {
+    const auto dataset_dir = std::filesystem::path(PROJECT_ROOT_PATH) / "data" / "bicycle";
+    if (!std::filesystem::exists(dataset_dir / "sparse")) {
+        GTEST_SKIP() << "bicycle sparse data not available";
     }
 
-    TEST_F(PythonIntegrationTest, SceneCameraExposesVisualizerRenderContract) {
-        const auto dataset_dir = std::filesystem::path(PROJECT_ROOT_PATH) / "data" / "bicycle";
-        if (!std::filesystem::exists(dataset_dir / "sparse")) {
-            GTEST_SKIP() << "bicycle sparse data not available";
-        }
+    auto loader = lfs::io::Loader::create();
+    lfs::io::LoadOptions options;
+    // The committed masks are quarter-resolution and intentionally pair with images_4.
+    options.resize_factor = 4;
+    options.images_folder = "images_4";
 
-        auto loader = lfs::io::Loader::create();
-        lfs::io::LoadOptions options;
-        // The committed masks are quarter-resolution and intentionally pair with images_4.
-        options.resize_factor = 4;
-        options.images_folder = "images_4";
+    auto load_result = loader->load(dataset_dir, options);
+    ASSERT_TRUE(load_result.has_value()) << "Failed to load dataset: " << load_result.error().format();
+    ASSERT_TRUE(std::holds_alternative<lfs::io::LoadedScene>(load_result->data));
+    const auto& loaded_scene = std::get<lfs::io::LoadedScene>(load_result->data);
+    ASSERT_FALSE(loaded_scene.cameras.empty());
+    const auto& raw_camera = *loaded_scene.cameras.front();
 
-        auto load_result = loader->load(dataset_dir, options);
-        ASSERT_TRUE(load_result.has_value()) << "Failed to load dataset: " << load_result.error().format();
-        ASSERT_TRUE(std::holds_alternative<lfs::io::LoadedScene>(load_result->data));
-        const auto& loaded_scene = std::get<lfs::io::LoadedScene>(load_result->data);
-        ASSERT_FALSE(loaded_scene.cameras.empty());
-        const auto& raw_camera = *loaded_scene.cameras.front();
+    const auto expected_pose = lfs::rendering::visualizerCameraPoseFromDataWorldToCamera(
+        lfs::rendering::mat3FromRowMajor3x3(static_cast<const float*>(raw_camera.R().cpu().contiguous().data_ptr())),
+        [&]() {
+            const auto translation = raw_camera.T().cpu().contiguous();
+            const auto* ptr = static_cast<const float*>(translation.data_ptr());
+            return glm::vec3(ptr[0], ptr[1], ptr[2]);
+        }());
+    const auto expected_view = lfs::rendering::makeViewMatrix(expected_pose.rotation, expected_pose.translation);
+    const float expected_fov_x = raw_camera.FoVx() * 180.0f / std::numbers::pi_v<float>;
+    const float expected_fov_y = raw_camera.FoVy() * 180.0f / std::numbers::pi_v<float>;
+    const auto expected_raw_rotation = raw_camera.R().cpu().contiguous();
+    const auto expected_raw_translation = raw_camera.T().cpu().contiguous();
+    const auto expected_raw_view = raw_camera.world_view_transform().cpu().contiguous();
+    const auto expected_raw_position = raw_camera.cam_position().cpu().contiguous();
 
-        const auto expected_pose = lfs::rendering::visualizerCameraPoseFromDataWorldToCamera(
-            lfs::rendering::mat3FromRowMajor3x3(static_cast<const float*>(raw_camera.R().cpu().contiguous().data_ptr())),
-            [&]() {
-                const auto translation = raw_camera.T().cpu().contiguous();
-                const auto* ptr = static_cast<const float*>(translation.data_ptr());
-                return glm::vec3(ptr[0], ptr[1], ptr[2]);
-            }());
-        const auto expected_view = lfs::rendering::makeViewMatrix(expected_pose.rotation, expected_pose.translation);
-        const float expected_fov_x = raw_camera.FoVx() * 180.0f / std::numbers::pi_v<float>;
-        const float expected_fov_y = raw_camera.FoVy() * 180.0f / std::numbers::pi_v<float>;
-        const auto expected_raw_rotation = raw_camera.R().cpu().contiguous();
-        const auto expected_raw_translation = raw_camera.T().cpu().contiguous();
-        const auto expected_raw_view = raw_camera.world_view_transform().cpu().contiguous();
-        const auto expected_raw_position = raw_camera.cam_position().cpu().contiguous();
-
-        const auto script = std::string(R"PY(
+    const auto script = std::string(R"PY(
 import lichtfeld as lf
 import warnings
 result = lf.io.load(r")PY") +
-                            dataset_dir.string() + R"PY(", resize_factor=4, images_folder="images_4")
+                        dataset_dir.string() + R"PY(", resize_factor=4, images_folder="images_4")
 camera = result.cameras[0]
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter("always", DeprecationWarning)
@@ -1354,81 +1355,81 @@ result_values = (
     ]
 )
 )PY";
-        const auto result = runPythonTensorSnippet(script);
+    const auto result = runPythonTensorSnippet(script);
 
-        ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
-        EXPECT_EQ(result.shape[0], 64);
-        ASSERT_EQ(result.values.size(), static_cast<size_t>(64));
+    ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
+    EXPECT_EQ(result.shape[0], 64);
+    ASSERT_EQ(result.values.size(), static_cast<size_t>(64));
 
-        size_t index = 0;
-        for (int row = 0; row < 3; ++row) {
-            for (int col = 0; col < 3; ++col) {
-                EXPECT_NEAR(result.values[index++], expected_pose.rotation[col][row], 1e-5f);
-            }
+    size_t index = 0;
+    for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 3; ++col) {
+            EXPECT_NEAR(result.values[index++], expected_pose.rotation[col][row], 1e-5f);
         }
-        EXPECT_NEAR(result.values[index++], expected_pose.translation.x, 1e-5f);
-        EXPECT_NEAR(result.values[index++], expected_pose.translation.y, 1e-5f);
-        EXPECT_NEAR(result.values[index++], expected_pose.translation.z, 1e-5f);
-        for (int row = 0; row < 4; ++row) {
-            for (int col = 0; col < 4; ++col) {
-                EXPECT_NEAR(result.values[index++], expected_view[col][row], 1e-5f);
-            }
-        }
-        EXPECT_NEAR(result.values[index++], expected_fov_x, 1e-4f);
-        EXPECT_NEAR(result.values[index++], expected_fov_y, 1e-4f);
-        for (int i = 0; i < expected_raw_rotation.numel(); ++i) {
-            EXPECT_NEAR(result.values[index++], expected_raw_rotation.ptr<float>()[i], 1e-5f);
-        }
-        for (int i = 0; i < expected_raw_translation.numel(); ++i) {
-            EXPECT_NEAR(result.values[index++], expected_raw_translation.ptr<float>()[i], 1e-5f);
-        }
-        for (int i = 0; i < expected_raw_view.numel(); ++i) {
-            EXPECT_NEAR(result.values[index++], expected_raw_view.ptr<float>()[i], 1e-5f);
-        }
-        for (int i = 0; i < expected_raw_position.numel(); ++i) {
-            EXPECT_NEAR(result.values[index++], expected_raw_position.ptr<float>()[i], 1e-5f);
-        }
-        EXPECT_FLOAT_EQ(result.values[index++], 4.0f);
-        EXPECT_FLOAT_EQ(result.values[index++], 1.0f);
-        EXPECT_FLOAT_EQ(result.values[index++], 1.0f);
     }
+    EXPECT_NEAR(result.values[index++], expected_pose.translation.x, 1e-5f);
+    EXPECT_NEAR(result.values[index++], expected_pose.translation.y, 1e-5f);
+    EXPECT_NEAR(result.values[index++], expected_pose.translation.z, 1e-5f);
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            EXPECT_NEAR(result.values[index++], expected_view[col][row], 1e-5f);
+        }
+    }
+    EXPECT_NEAR(result.values[index++], expected_fov_x, 1e-4f);
+    EXPECT_NEAR(result.values[index++], expected_fov_y, 1e-4f);
+    for (int i = 0; i < expected_raw_rotation.numel(); ++i) {
+        EXPECT_NEAR(result.values[index++], expected_raw_rotation.ptr<float>()[i], 1e-5f);
+    }
+    for (int i = 0; i < expected_raw_translation.numel(); ++i) {
+        EXPECT_NEAR(result.values[index++], expected_raw_translation.ptr<float>()[i], 1e-5f);
+    }
+    for (int i = 0; i < expected_raw_view.numel(); ++i) {
+        EXPECT_NEAR(result.values[index++], expected_raw_view.ptr<float>()[i], 1e-5f);
+    }
+    for (int i = 0; i < expected_raw_position.numel(); ++i) {
+        EXPECT_NEAR(result.values[index++], expected_raw_position.ptr<float>()[i], 1e-5f);
+    }
+    EXPECT_FLOAT_EQ(result.values[index++], 4.0f);
+    EXPECT_FLOAT_EQ(result.values[index++], 1.0f);
+    EXPECT_FLOAT_EQ(result.values[index++], 1.0f);
+}
 
-    TEST_F(PythonIntegrationTest, PyTensorSyncWaitsForItsVulkanBackendWithCudaDefault) {
-        using namespace lfs::core;
-        if (!gpu_backend_available(GpuBackend::Vulkan))
-            GTEST_SKIP();
-        GpuBackendScope vulkan(GpuBackend::Vulkan);
-        const lfs::python::GilAcquire gil;
-        const auto decref = [](PyObject* object) { Py_XDECREF(object); };
-        std::unique_ptr<PyObject, decltype(decref)> globals(PyDict_New(), decref);
-        ASSERT_NE(globals.get(), nullptr);
-        PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
-        execPythonInGlobals(globals.get(), R"PY(
+TEST_F(PythonIntegrationTest, PyTensorSyncWaitsForItsVulkanBackendWithCudaDefault) {
+    using namespace lfs::core;
+    if (!gpu_backend_available(GpuBackend::Vulkan))
+        GTEST_SKIP();
+    GpuBackendScope vulkan(GpuBackend::Vulkan);
+    const lfs::python::GilAcquire gil;
+    const auto decref = [](PyObject* object) { Py_XDECREF(object); };
+    std::unique_ptr<PyObject, decltype(decref)> globals(PyDict_New(), decref);
+    ASSERT_NE(globals.get(), nullptr);
+    PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
+    execPythonInGlobals(globals.get(), R"PY(
 import lichtfeld as lf
 t = lf.Tensor.ones([257], device="gpu")
 assert t.backend == "vulkan", t.backend
 )PY");
-        auto sentinel = Tensor::zeros({257}, Device::GPU);
-        sentinel.fill_(7.f, nullptr);
-        const auto pending = lfs::test::vulkan_pending_value(sentinel);
-        ASSERT_GT(pending, lfs::test::vulkan_completed_value());
-        {
-            GpuBackendScope opposite(GpuBackend::CUDA);
-            execPythonInGlobals(globals.get(), "t.sync()\n");
-        }
-        EXPECT_GE(lfs::test::vulkan_completed_value(), pending);
-        // Drain even on a failed expectation, so the test leaves no queued work.
-        TensorCompletion completion;
-        completion.include(GpuBackend::Vulkan);
-        completion.wait();
-        EXPECT_EQ(sentinel.cpu().to_vector(), std::vector<float>(257, 7.f));
-        for (const auto& message : lfs::test::vulkan_validation_messages()) {
-            ADD_FAILURE() << message;
-        }
+    auto sentinel = Tensor::zeros({257}, Device::GPU);
+    sentinel.fill_(7.f, nullptr);
+    const auto pending = lfs::test::vulkan_pending_value(sentinel);
+    ASSERT_GT(pending, lfs::test::vulkan_completed_value());
+    {
+        GpuBackendScope opposite(GpuBackend::CUDA);
+        execPythonInGlobals(globals.get(), "t.sync()\n");
     }
+    EXPECT_GE(lfs::test::vulkan_completed_value(), pending);
+    // Drain even on a failed expectation, so the test leaves no queued work.
+    TensorCompletion completion;
+    completion.include(GpuBackend::Vulkan);
+    completion.wait();
+    EXPECT_EQ(sentinel.cpu().to_vector(), std::vector<float>(257, 7.f));
+    for (const auto& message : lfs::test::vulkan_validation_messages()) {
+        ADD_FAILURE() << message;
+    }
+}
 
-    TEST_F(PythonIntegrationTest, PyTensorBooleanRowMaskIndexingMatchesTorch) {
-        const auto result = runPythonTensorSnippet(R"PY(
+TEST_F(PythonIntegrationTest, PyTensorBooleanRowMaskIndexingMatchesTorch) {
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 t = lf.Tensor.arange(1, 13, 1, device="cpu", dtype="float32").reshape([4, 3])
 mask = lf.Tensor.arange(0, 4, 1, device="cpu", dtype="float32") != 1
@@ -1437,15 +1438,15 @@ result_shape = tuple(selected.shape)
 result_values = selected.flatten().tolist()
 )PY");
 
-        const auto torch_tensor = torch::arange(1, 13, torch::kFloat32).reshape({4, 3});
-        const auto torch_mask = torch::tensor(std::vector<int>{1, 0, 1, 1}, torch::kInt32).to(torch::kBool);
-        const auto torch_result = torch_tensor.index({torch_mask});
+    const auto torch_tensor = torch::arange(1, 13, torch::kFloat32).reshape({4, 3});
+    const auto torch_mask = torch::tensor(std::vector<int>{1, 0, 1, 1}, torch::kInt32).to(torch::kBool);
+    const auto torch_result = torch_tensor.index({torch_mask});
 
-        comparePythonResultToTorch(result, torch_result, "PyTensor row mask");
-    }
+    comparePythonResultToTorch(result, torch_result, "PyTensor row mask");
+}
 
-    TEST_F(PythonIntegrationTest, PyTensorElementwiseBooleanMaskIndexingMatchesTorch) {
-        const auto result = runPythonTensorSnippet(R"PY(
+TEST_F(PythonIntegrationTest, PyTensorElementwiseBooleanMaskIndexingMatchesTorch) {
+    const auto result = runPythonTensorSnippet(R"PY(
 import lichtfeld as lf
 t = lf.Tensor.arange(1, 13, 1, device="cpu", dtype="float32").reshape([4, 3])
 mask = (t == 1) | (t == 4) | (t == 6) | (t == 9) | (t == 10)
@@ -1454,36 +1455,36 @@ result_shape = tuple(selected.shape)
 result_values = selected.tolist()
 )PY");
 
-        const auto torch_tensor = torch::arange(1, 13, torch::kFloat32).reshape({4, 3});
-        const auto torch_mask =
-            (torch_tensor == 1) |
-            (torch_tensor == 4) |
-            (torch_tensor == 6) |
-            (torch_tensor == 9) |
-            (torch_tensor == 10);
-        const auto torch_result = torch_tensor.masked_select(torch_mask);
+    const auto torch_tensor = torch::arange(1, 13, torch::kFloat32).reshape({4, 3});
+    const auto torch_mask =
+        (torch_tensor == 1) |
+        (torch_tensor == 4) |
+        (torch_tensor == 6) |
+        (torch_tensor == 9) |
+        (torch_tensor == 10);
+    const auto torch_result = torch_tensor.masked_select(torch_mask);
 
-        comparePythonResultToTorch(result, torch_result, "PyTensor elementwise mask");
-    }
+    comparePythonResultToTorch(result, torch_result, "PyTensor elementwise mask");
+}
 
-    TEST_F(PythonIntegrationTest, DecoratorHookContextUsesLiveHookSnapshot) {
-        const lfs::training::HookContext stale_snapshot{
-            .iteration = 0,
-            .loss = 0.0f,
-            .num_gaussians = 0,
-            .is_refining = false,
-            .trainer = nullptr,
-        };
-        const lfs::training::HookContext live_callback{
-            .iteration = 1047,
-            .loss = 0.125f,
-            .num_gaussians = 98765,
-            .is_refining = true,
-            .trainer = nullptr,
-        };
+TEST_F(PythonIntegrationTest, DecoratorHookContextUsesLiveHookSnapshot) {
+    const lfs::training::HookContext stale_snapshot{
+        .iteration = 0,
+        .loss = 0.0f,
+        .num_gaussians = 0,
+        .is_refining = false,
+        .trainer = nullptr,
+    };
+    const lfs::training::HookContext live_callback{
+        .iteration = 1047,
+        .loss = 0.125f,
+        .num_gaussians = 98765,
+        .is_refining = true,
+        .trainer = nullptr,
+    };
 
-        const auto result = runPythonHookContextSnippet(
-            R"PY(
+    const auto result = runPythonHookContextSnippet(
+        R"PY(
 import lichtfeld as lf
 records = []
 
@@ -1499,36 +1500,36 @@ def _hook(hook):
         ctx.num_gaussians,
     ))
 )PY",
-            stale_snapshot,
-            live_callback);
+        stale_snapshot,
+        live_callback);
 
-        ASSERT_EQ(result.size(), 6u);
-        EXPECT_EQ(result[0], live_callback.iteration);
-        EXPECT_EQ(result[1], live_callback.iteration);
-        EXPECT_EQ(result[2], static_cast<long long>(live_callback.num_gaussians));
-        EXPECT_EQ(result[3], static_cast<long long>(live_callback.num_gaussians));
-        EXPECT_EQ(result[4], live_callback.iteration);
-        EXPECT_EQ(result[5], static_cast<long long>(live_callback.num_gaussians));
-    }
+    ASSERT_EQ(result.size(), 6u);
+    EXPECT_EQ(result[0], live_callback.iteration);
+    EXPECT_EQ(result[1], live_callback.iteration);
+    EXPECT_EQ(result[2], static_cast<long long>(live_callback.num_gaussians));
+    EXPECT_EQ(result[3], static_cast<long long>(live_callback.num_gaussians));
+    EXPECT_EQ(result[4], live_callback.iteration);
+    EXPECT_EQ(result[5], static_cast<long long>(live_callback.num_gaussians));
+}
 
-    TEST_F(PythonIntegrationTest, ScopedHandlerHookContextUsesLiveHookSnapshot) {
-        const lfs::training::HookContext stale_snapshot{
-            .iteration = 0,
-            .loss = 0.0f,
-            .num_gaussians = 0,
-            .is_refining = false,
-            .trainer = nullptr,
-        };
-        const lfs::training::HookContext live_callback{
-            .iteration = 1008,
-            .loss = 0.25f,
-            .num_gaussians = 54321,
-            .is_refining = false,
-            .trainer = nullptr,
-        };
+TEST_F(PythonIntegrationTest, ScopedHandlerHookContextUsesLiveHookSnapshot) {
+    const lfs::training::HookContext stale_snapshot{
+        .iteration = 0,
+        .loss = 0.0f,
+        .num_gaussians = 0,
+        .is_refining = false,
+        .trainer = nullptr,
+    };
+    const lfs::training::HookContext live_callback{
+        .iteration = 1008,
+        .loss = 0.25f,
+        .num_gaussians = 54321,
+        .is_refining = false,
+        .trainer = nullptr,
+    };
 
-        const auto result = runPythonHookContextSnippet(
-            R"PY(
+    const auto result = runPythonHookContextSnippet(
+        R"PY(
 import lichtfeld as lf
 records = []
 handler = lf.ScopedHandler()
@@ -1546,99 +1547,99 @@ def _hook(hook):
 
 handler.on_post_step(_hook)
 )PY",
-            stale_snapshot,
-            live_callback);
+        stale_snapshot,
+        live_callback);
 
-        ASSERT_EQ(result.size(), 6u);
-        EXPECT_EQ(result[0], live_callback.iteration);
-        EXPECT_EQ(result[1], live_callback.iteration);
-        EXPECT_EQ(result[2], static_cast<long long>(live_callback.num_gaussians));
-        EXPECT_EQ(result[3], static_cast<long long>(live_callback.num_gaussians));
-        EXPECT_EQ(result[4], live_callback.iteration);
-        EXPECT_EQ(result[5], static_cast<long long>(live_callback.num_gaussians));
+    ASSERT_EQ(result.size(), 6u);
+    EXPECT_EQ(result[0], live_callback.iteration);
+    EXPECT_EQ(result[1], live_callback.iteration);
+    EXPECT_EQ(result[2], static_cast<long long>(live_callback.num_gaussians));
+    EXPECT_EQ(result[3], static_cast<long long>(live_callback.num_gaussians));
+    EXPECT_EQ(result[4], live_callback.iteration);
+    EXPECT_EQ(result[5], static_cast<long long>(live_callback.num_gaussians));
+}
+
+namespace {
+    class CountingPythonInitConsumer final : public lfs::NativeErrorConsumer {
+    public:
+        void on_error(const lfs::ErrorNotification& notification,
+                      const lfs::ErrorDeliveryInfo&) noexcept override {
+            if (notification.error.domain() == lfs::ErrorDomain::Python &&
+                notification.error.code() == lfs::ErrorCode::Unavailable)
+                count.fetch_add(1, std::memory_order_relaxed);
+        }
+        std::atomic<int> count{0};
+    };
+} // namespace
+
+TEST_F(PythonIntegrationTest, ConcurrentEnsureInitializedLatchesOnceUnderRace) {
+    struct InitLatchResetGuard {
+        ~InitLatchResetGuard() {
+            lfs::python::force_python_init_failure_for_testing(false);
+            lfs::python::reset_python_init_state_for_testing();
+        }
+    } reset_guard;
+
+    lfs::python::reset_python_init_state_for_testing();
+
+    CountingPythonInitConsumer consumer;
+    auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+
+    lfs::python::force_python_init_failure_for_testing(true);
+
+    constexpr int kThreads = 8;
+    std::vector<lfs::Status> results(kThreads);
+    std::barrier start(kThreads);
+    {
+        std::vector<std::jthread> threads;
+        threads.reserve(kThreads);
+        for (int i = 0; i < kThreads; ++i) {
+            threads.emplace_back([&, i] {
+                start.arrive_and_wait();
+                results[i] = lfs::python::ensure_initialized();
+            });
+        }
     }
 
-    namespace {
-        class CountingPythonInitConsumer final : public lfs::NativeErrorConsumer {
-        public:
-            void on_error(const lfs::ErrorNotification& notification,
-                          const lfs::ErrorDeliveryInfo&) noexcept override {
-                if (notification.error.domain() == lfs::ErrorDomain::Python &&
-                    notification.error.code() == lfs::ErrorCode::Unavailable)
-                    count.fetch_add(1, std::memory_order_relaxed);
-            }
-            std::atomic<int> count{0};
-        };
-    } // namespace
-
-    TEST_F(PythonIntegrationTest, ConcurrentEnsureInitializedLatchesOnceUnderRace) {
-        struct InitLatchResetGuard {
-            ~InitLatchResetGuard() {
-                lfs::python::force_python_init_failure_for_testing(false);
-                lfs::python::reset_python_init_state_for_testing();
-            }
-        } reset_guard;
-
-        lfs::python::reset_python_init_state_for_testing();
-
-        CountingPythonInitConsumer consumer;
-        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
-
-        lfs::python::force_python_init_failure_for_testing(true);
-
-        constexpr int kThreads = 8;
-        std::vector<lfs::Status> results(kThreads);
-        std::barrier start(kThreads);
-        {
-            std::vector<std::jthread> threads;
-            threads.reserve(kThreads);
-            for (int i = 0; i < kThreads; ++i) {
-                threads.emplace_back([&, i] {
-                    start.arrive_and_wait();
-                    results[i] = lfs::python::ensure_initialized();
-                });
-            }
-        }
-
-        for (const lfs::Status& result : results) {
-            ASSERT_FALSE(result.has_value());
-            EXPECT_EQ(result.error().code(), lfs::ErrorCode::Unavailable);
-            EXPECT_EQ(result.error().domain(), lfs::ErrorDomain::Python);
-        }
-        EXPECT_EQ(lfs::python::init_state().state, lfs::python::PyInitState::Failed);
-        // The race-safety invariant: 8 concurrent callers never double-publish the
-        // failure (the duplicate-toast hazard). Exact-once liveness depends on a
-        // fresh process-global publish latch, which the test-only reset seam cannot
-        // guarantee against sibling tests in a shared process; it is covered by the
-        // single-threaded forced-failure path instead.
-        EXPECT_LE(consumer.count.load(), 1);
+    for (const lfs::Status& result : results) {
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(result.error().code(), lfs::ErrorCode::Unavailable);
+        EXPECT_EQ(result.error().domain(), lfs::ErrorDomain::Python);
     }
+    EXPECT_EQ(lfs::python::init_state().state, lfs::python::PyInitState::Failed);
+    // The race-safety invariant: 8 concurrent callers never double-publish the
+    // failure (the duplicate-toast hazard). Exact-once liveness depends on a
+    // fresh process-global publish latch, which the test-only reset seam cannot
+    // guarantee against sibling tests in a shared process; it is covered by the
+    // single-threaded forced-failure path instead.
+    EXPECT_LE(consumer.count.load(), 1);
+}
 
-    // A retained Python settings proxy must re-read live settings before applying its named
-    // property after a focus change. Otherwise DirtyFlag::ALL back-routes the proxy's stale
-    // depth window into the newly focused panel.
-    namespace {
-        // The real viewer registers the manager used by the compiled binding.
-        // No window loop or SelectionTool is initialized: this is its no-tool lane.
-    } // namespace
-    // NOTE: Tests that actually execute Python scripts require the lichtfeld module
-    // to be importable, which depends on the CommandCenter and training infrastructure.
-    // These are better tested via integration tests (running training with --python-script).
+// A retained Python settings proxy must re-read live settings before applying its named
+// property after a focus change. Otherwise DirtyFlag::ALL back-routes the proxy's stale
+// depth window into the newly focused panel.
+namespace {
+    // The real viewer registers the manager used by the compiled binding.
+    // No window loop or SelectionTool is initialized: this is its no-tool lane.
+} // namespace
+// NOTE: Tests that actually execute Python scripts require the lichtfeld module
+// to be importable, which depends on the CommandCenter and training infrastructure.
+// These are better tested via integration tests (running training with --python-script).
 
-    TEST_F(PythonIntegrationTest, LoadConfirmationLegacyCallbackOpensDialog) {
-        const lfs::python::GilAcquire gil;
-        std::unique_ptr<PyObject, decltype(&Py_DecRef)> globals(PyDict_New(), Py_DecRef);
-        ASSERT_NE(globals, nullptr);
-        PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
-        const auto run = [&](const char* code) {
-            auto* result = PyRun_String(code, Py_file_input, globals.get(), globals.get());
-            if (!result)
-                ADD_FAILURE() << consumePythonError();
-            const bool success = result != nullptr;
-            Py_XDECREF(result);
-            return success;
-        };
-        ASSERT_TRUE(run(R"PY(
+TEST_F(PythonIntegrationTest, LoadConfirmationLegacyCallbackOpensDialog) {
+    const lfs::python::GilAcquire gil;
+    std::unique_ptr<PyObject, decltype(&Py_DecRef)> globals(PyDict_New(), Py_DecRef);
+    ASSERT_NE(globals, nullptr);
+    PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
+    const auto run = [&](const char* code) {
+        auto* result = PyRun_String(code, Py_file_input, globals.get(), globals.get());
+        if (!result)
+            ADD_FAILURE() << consumePythonError();
+        const bool success = result != nullptr;
+        Py_XDECREF(result);
+        return success;
+    };
+    ASSERT_TRUE(run(R"PY(
 import lichtfeld as lf
 calls = []
 dialogs = []
@@ -1649,13 +1650,13 @@ def callback(paths, is_dataset, replace):
     lf.ui.confirm_dialog('Load files', 'Confirm replacement', ['Load', 'Cancel'])
 lf.ui.on_show_load_file_confirmation(callback)
 )PY"));
-        lfs::core::events::cmd::ShowLoadFileConfirmation{
-            .paths = {"first.ply", "second.ply"},
-            .is_dataset = false,
-            .replace = true,
-            .user_batch = true}
-            .emit();
-        EXPECT_TRUE(run(R"PY(
+    lfs::core::events::cmd::ShowLoadFileConfirmation{
+        .paths = {"first.ply", "second.ply"},
+        .is_dataset = false,
+        .replace = true,
+        .user_batch = true}
+        .emit();
+    EXPECT_TRUE(run(R"PY(
 try:
     assert calls == [(['first.ply', 'second.ply'], False, True)], calls
     assert dialogs == [('Load files', 'Confirm replacement', ['Load', 'Cancel'])], dialogs
@@ -1663,22 +1664,22 @@ finally:
     lf.ui.on_show_load_file_confirmation(lambda paths, is_dataset, replace: None)
     lf.ui.confirm_dialog = original_dialog
 )PY"));
-    }
+}
 
-    TEST_F(PythonIntegrationTest, LoadConfirmationBatchCallbackRetainsProvenance) {
-        const lfs::python::GilAcquire gil;
-        std::unique_ptr<PyObject, decltype(&Py_DecRef)> globals(PyDict_New(), Py_DecRef);
-        ASSERT_NE(globals, nullptr);
-        PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
-        const auto run = [&](const char* code) {
-            auto* result = PyRun_String(code, Py_file_input, globals.get(), globals.get());
-            if (!result)
-                ADD_FAILURE() << consumePythonError();
-            const bool success = result != nullptr;
-            Py_XDECREF(result);
-            return success;
-        };
-        ASSERT_TRUE(run(R"PY(
+TEST_F(PythonIntegrationTest, LoadConfirmationBatchCallbackRetainsProvenance) {
+    const lfs::python::GilAcquire gil;
+    std::unique_ptr<PyObject, decltype(&Py_DecRef)> globals(PyDict_New(), Py_DecRef);
+    ASSERT_NE(globals, nullptr);
+    PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
+    const auto run = [&](const char* code) {
+        auto* result = PyRun_String(code, Py_file_input, globals.get(), globals.get());
+        if (!result)
+            ADD_FAILURE() << consumePythonError();
+        const bool success = result != nullptr;
+        Py_XDECREF(result);
+        return success;
+    };
+    ASSERT_TRUE(run(R"PY(
 import lichtfeld as lf
 calls = []
 lf.ui.on_show_load_file_confirmation(lambda *args: calls.append(('old', args)))
@@ -1687,16 +1688,16 @@ def callback(paths, is_dataset, replace, user_batch):
 lf.ui.on_show_load_file_confirmation_with_batch(callback)
 lf.ui.on_show_load_file_confirmation_with_batch(callback)
 )PY"));
-        lfs::core::events::cmd::ShowLoadFileConfirmation{
-            .paths = {"first.ply", "second.ply"},
-            .is_dataset = false,
-            .replace = true,
-            .user_batch = true}
-            .emit();
-        EXPECT_TRUE(run(R"PY(
+    lfs::core::events::cmd::ShowLoadFileConfirmation{
+        .paths = {"first.ply", "second.ply"},
+        .is_dataset = false,
+        .replace = true,
+        .user_batch = true}
+        .emit();
+    EXPECT_TRUE(run(R"PY(
 try:
     assert calls == [(['first.ply', 'second.ply'], False, True, True)], calls
 finally:
     lf.ui.on_show_load_file_confirmation_with_batch(lambda paths, is_dataset, replace, user_batch: None)
 )PY"));
-    }
+}
