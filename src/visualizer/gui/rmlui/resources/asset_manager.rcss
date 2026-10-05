@@ -921,8 +921,8 @@
 .asset-list-row .asset-col { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .asset-col-name { flex: 1 1 0dp; min-width: 120dp; display: flex; flex-direction: column; justify-content: center; }
 .asset-col-folder { flex: 0 0 auto; }
-.asset-col-size { flex: 0 0 auto; text-align: right; font-family: "JetBrains Mono"; }
-.asset-col-modified { flex: 0 0 auto; font-family: "JetBrains Mono"; }
+.asset-col-size { flex: 0 0 auto; text-align: right; }
+.asset-col-modified { flex: 0 0 auto; }
 .asset-col-gallery { flex: 0 0 auto; min-width: 0; display: flex; align-items: center; gap: 4dp; }
 .asset-list-header .asset-col-gallery { display: flex; }
 .asset-list-header .asset-col, .asset-list-row .asset-col { flex: 0 0 auto; min-width: 0; max-width: none; box-sizing: border-box; height: 24dp; line-height: 24dp; }
@@ -984,7 +984,7 @@
 .parameter-label { flex: 0 0 168dp; width: 168dp; min-width: 168dp; font-size: 12dp; }
 .inspector-problem-status { display: block; flex: 0 0 auto; line-height: 18dp; white-space: normal; }
 .inspector-problem > .btn { max-width: 100%; height: auto; min-height: 24dp; white-space: normal; }
-.parameter-value { flex: 1 1 0dp; width: 0; min-width: 0; font-family: "JetBrains Mono"; font-size: 11dp; }
+.parameter-value { flex: 1 1 0dp; width: 0; min-width: 0; font-size: 11dp; }
 .inspector-gallery-summary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .inspector-gallery-reason { display: block; padding: 4dp 0; }
 .inspector-gallery-detail-row { flex: 0 0 auto; height: auto; align-items: flex-start; }
@@ -1085,7 +1085,7 @@
 /* Runtime font measurements include cell padding. Rows keep their own inset. */
 #asset-text-measure { position: absolute; visibility: hidden; pointer-events: none; width: 0; height: 0; }
 #asset-measure-prose { font-family: Inter; font-size: 12dp; font-weight: 400; }
-#asset-measure-mono { font-family: "JetBrains Mono"; font-size: 10dp; font-weight: 400; }
+#asset-measure-value { font-size: 10dp; font-weight: 400; }
 .asset-list-thumb { margin-right: 8dp; }
 .asset-list-row .asset-col, .asset-list-header .asset-col { padding: 0 8dp; }
 .asset-list-row .asset-col-size, .asset-list-row .asset-col-modified { font-size: 10dp; }

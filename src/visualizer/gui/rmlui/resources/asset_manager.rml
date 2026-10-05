@@ -5,7 +5,7 @@
 </head>
 
 <body template="docked-panel" data-model="asset_manager">
-  <div id="asset-text-measure"><span id="asset-measure-prose">M</span><span id="asset-measure-mono">M</span></div>
+  <div id="asset-text-measure"><span id="asset-measure-prose">M</span><span id="asset-measure-value">M</span></div>
   <div id="asset-floating-header" class="hidden" data-class-hidden="!is_floating">
     <span id="asset-floating-title">{{panel_label}}</span>
     <div class="asset-panel-actions">

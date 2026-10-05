@@ -1185,7 +1185,7 @@ def test_training_rml_mounts_every_run_with_writable_records():
     assert re.search(r'(?<!data-attr-)data-tooltip="row\.tooltip_key"', rml) is None
 
     assert 'data-if="row.id == \'iterations\'"' in rml
-    assert 'data-class-steps-scale-lock-row="row.id == \'iterations\'"' in rml
+    assert 'class="prop-label prop-label--with-action" data-if="row.id == \'iterations\'"' in rml
     assert "steps_scaler" not in rml
     assert 'data-value="pv_search_query"' in rml
     assert 'data-event-click="pv_search_clear"' in rml

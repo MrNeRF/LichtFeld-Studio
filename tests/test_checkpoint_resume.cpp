@@ -15,6 +15,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -28,6 +29,8 @@
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/event_bridge/control_boundary.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
@@ -41,6 +44,7 @@
 #include "io/loader.hpp"
 #include "io/loaders/checkpoint_loader.hpp"
 #include "io/project_document.hpp"
+#include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "licht_test_support.hpp"
@@ -1860,6 +1864,120 @@ namespace {
             strategy, sh_degree);
     }
 
+    class CheckpointBenchmarkTest : public CheckpointResumeTest {
+    protected:
+        void SetUp() override {
+            CheckpointResumeTest::SetUp();
+            profiler_enabled_ = lfs::diagnostics::VramProfiler::instance().enabled();
+            evaluation_handler_ = lfs::core::events::state::EvaluationCompleted::when(
+                [this](const auto& event) { evaluated_psnr_ = event.psnr; });
+        }
+
+        void TearDown() override {
+            lfs::event::EventBridge::instance().unsubscribe(
+                typeid(lfs::core::events::state::EvaluationCompleted), evaluation_handler_);
+            lfs::training::PerfBenchCollector::configure(false);
+            lfs::diagnostics::VramProfiler::instance().setEnabled(profiler_enabled_);
+            CheckpointResumeTest::TearDown();
+        }
+
+        lfs::core::param::TrainingParameters benchmarkParams() {
+            auto params = createParams(2);
+            params.dataset.max_width = 64;
+            params.optimization.perf_bench = true;
+            params.optimization.perf_bench_warmup = 0;
+            params.optimization.enable_eval = true;
+            params.optimization.enable_save_eval_images = false;
+            params.optimization.eval_steps = {1, 2};
+            params.optimization.save_steps.clear();
+            return params;
+        }
+
+        void trainFresh(const lfs::core::param::TrainingParameters& params, const bool save_project = false) {
+            evaluated_psnr_.reset();
+            lfs::core::Scene scene;
+            const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+            ASSERT_TRUE(loaded.has_value()) << loaded.error();
+            const auto model = lfs::training::initializeTrainingModel(params, scene);
+            ASSERT_TRUE(model.has_value()) << model.error();
+            lfs::training::Trainer trainer(scene);
+            const auto initialized = trainer.initialize(params);
+            ASSERT_TRUE(initialized.has_value()) << initialized.error();
+            if (save_project) {
+                lfs::training::grant_headless_project_saves(trainer, params);
+            }
+            const auto trained = trainer.train();
+            ASSERT_TRUE(trained.has_value()) << lfs::format_for_developer(trained.error());
+            EXPECT_EQ(trainer.get_current_iteration(), 2);
+            trainer.shutdown();
+        }
+
+        void expectReportPsnr(const double expected) {
+            std::ifstream report(output_path_ / "perf_bench.json");
+            ASSERT_TRUE(report.is_open());
+            const auto json = nlohmann::json::parse(report);
+            EXPECT_NEAR(json.at("last_psnr").get<double>(), expected, 1e-6);
+        }
+
+        std::optional<float> evaluated_psnr_;
+        lfs::event::HandlerId evaluation_handler_ = 0;
+        bool profiler_enabled_ = false;
+    };
+
+    TEST_P(CheckpointBenchmarkTest, ScheduledEvaluationAndSessionReset) {
+        auto params = benchmarkParams();
+        ASSERT_NO_FATAL_FAILURE(trainFresh(params));
+        ASSERT_TRUE(evaluated_psnr_.has_value());
+        EXPECT_TRUE(std::isfinite(*evaluated_psnr_));
+        expectReportPsnr(*evaluated_psnr_);
+
+        // A new run without evaluation must not inherit the previous PSNR.
+        std::filesystem::remove(output_path_ / "perf_bench.json");
+        params.optimization.enable_eval = false;
+        ASSERT_NO_FATAL_FAILURE(trainFresh(params));
+        EXPECT_FALSE(evaluated_psnr_.has_value());
+        expectReportPsnr(-1.0);
+    }
+
+    TEST_P(CheckpointBenchmarkTest, TerminalResumeEvaluation) {
+        auto params = benchmarkParams();
+        ASSERT_NO_FATAL_FAILURE(trainFresh(params, true));
+
+        const auto project_path = output_path_ / "project.licht";
+        auto document = lfs::io::project::ProjectDocument::open(project_path);
+        ASSERT_TRUE(document) << lfs::format_for_developer(document.error());
+        const auto bound = document->bound_checkpoint_uuid();
+        ASSERT_TRUE(bound);
+        ASSERT_TRUE(*bound);
+
+        lfs::core::Scene scene;
+        const auto hydration = document->hydrate(scene);
+        ASSERT_TRUE(hydration) << lfs::format_for_developer(hydration.error());
+        ASSERT_TRUE(hydration->checkpoint_header.has_value());
+        params.resume_project = project_path;
+        auto installed = lfs::training::installTrainerFromProjectCheckpoint(
+            scene, *document, **bound, params, lfs::core::path_to_utf8(project_path),
+            hydration->checkpoint_header->iteration);
+        ASSERT_TRUE(installed.has_value()) << installed.error();
+        auto& trainer = *installed->trainer;
+        ASSERT_EQ(trainer.get_current_iteration(), 2);
+        ASSERT_EQ(trainer.get_total_iterations(), 2);
+
+        evaluated_psnr_.reset();
+        std::filesystem::remove(output_path_ / "perf_bench.json");
+        const auto trained = trainer.train();
+        ASSERT_TRUE(trained.has_value()) << lfs::format_for_developer(trained.error());
+        ASSERT_TRUE(evaluated_psnr_.has_value());
+        EXPECT_TRUE(std::isfinite(*evaluated_psnr_));
+        expectReportPsnr(*evaluated_psnr_);
+        trainer.shutdown();
+    }
+
+    INSTANTIATE_TEST_SUITE_P(
+        Benchmark,
+        CheckpointBenchmarkTest,
+        ::testing::Values(std::make_tuple("mcmc", 0, 2, 2)));
+
     std::string TestName(const ::testing::TestParamInfo<CheckpointResumeTest::ParamType>& info) {
         const bool nightly = std::get<3>(info.param) > 10;
         auto name = std::format("{}_{}_{}", nightly ? "nightly" : "tiny",
@@ -2377,6 +2495,81 @@ namespace {
         }
         std::cout << " count=" << reopened->checkpoint_uuids().size()
                   << '\n';
+
+        std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           SaveProjectAtIterationSurvivesEarlierStepSave) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_save_at_iteration_after_step_save";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        auto params = make_tiny_headless_params(output_path, 4);
+        params.optimization.save_steps = {1};
+        params.save_project_at_iteration = 3;
+        params.save_project_path = output_path / "at_iteration.licht";
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+        ASSERT_TRUE(trainer->initialize(params));
+        lfs::training::grant_headless_project_saves(*trainer, params);
+
+        // The hook prepares at the step before its target. Waiting for the step
+        // save's writer there keeps the hook on the prepare path instead of
+        // coalescing it behind an active writer.
+        const auto step_save_path = output_path / "project.licht";
+        const auto step_save_written = [&](const lfs::training::Trainer& t) {
+            const auto metrics = t.get_project_snapshot_metrics();
+            return metrics.last_path == step_save_path && !metrics.writer_in_flight;
+        };
+        bool step_save_writer_finished = false;
+        auto& boundary = lfs::training::ControlBoundary::instance();
+        const auto handle = boundary.register_callback(
+            lfs::training::ControlHook::PostStep,
+            [&](const lfs::training::HookContext& ctx) {
+                if (ctx.iteration != 2 || !ctx.trainer)
+                    return;
+                const auto deadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(60);
+                while (!step_save_written(*ctx.trainer) &&
+                       std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                step_save_writer_finished = step_save_written(*ctx.trainer);
+            });
+        auto train = trainer->train();
+        boundary.unregister_callback(lfs::training::ControlHook::PostStep, handle);
+        ASSERT_TRUE(train)
+            << lfs::format_for_developer(train.error());
+        trainer->shutdown();
+        ASSERT_TRUE(step_save_writer_finished);
+
+        auto document = lfs::io::project::ProjectDocument::open(
+            params.save_project_path);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(document.error());
+        std::vector<int> iterations;
+        for (const auto& uuid : document->checkpoint_uuids()) {
+            std::optional<lfs::core::CheckpointHeader> header;
+            ASSERT_TRUE(document->find_checkpoint(uuid)->visit_stream(
+                [&](std::istream& stream, const std::uint64_t bytes)
+                    -> lfs::Result<void> {
+                    if (auto parsed =
+                            lfs::core::load_checkpoint_header(stream, bytes);
+                        parsed) {
+                        header = *parsed;
+                    }
+                    return {};
+                }));
+            ASSERT_TRUE(header);
+            iterations.push_back(header->iteration);
+        }
+        EXPECT_NE(std::ranges::find(iterations, 3), iterations.end());
 
         std::filesystem::remove_all(output_path, ec);
     }

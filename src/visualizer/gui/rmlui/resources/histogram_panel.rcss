@@ -721,7 +721,6 @@
 }
 
 .axis-label {
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     color: #bac2de;
 }
@@ -755,7 +754,6 @@
 }
 
 .footer-value {
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     color: #cdd6f4;
 }

@@ -3542,6 +3542,27 @@ namespace lfs::training {
         return request_id;
     }
 
+    // Step-boundary saves and explicit requests consume the shared prestaged
+    // slot, so the at-iteration hook reserves again when its chapters are gone.
+    void Trainer::reserve_project_hook_chapters() {
+        {
+            std::lock_guard lock(project_snapshot_mutex_);
+            if (prestaged_project_chapters_)
+                return;
+        }
+        auto chapters = reserve_project_snapshot_chapters();
+        std::lock_guard lock(project_snapshot_mutex_);
+        if (prestaged_project_chapters_)
+            return;
+        if (!chapters) {
+            LOG_ERROR("Cannot reserve .licht snapshot UUID for save-project-at-iter: {}",
+                      lfs::format_for_developer(chapters.error()));
+            return;
+        }
+        prestaged_project_chapters_ = std::move(*chapters);
+        prestaged_project_request_id_ = 0;
+    }
+
     void Trainer::cancel_project_snapshot_request(
         const std::uint64_t request_id,
         const lfs::Error& reason) {
@@ -3862,6 +3883,8 @@ namespace lfs::training {
             return;
         }
 
+        if (request_id == 0)
+            reserve_project_hook_chapters();
         lfs::core::Uuid snapshot_uuid;
         {
             std::lock_guard lock(
@@ -7739,6 +7762,9 @@ namespace lfs::training {
                                                             val_dataset_,
                                                             background_,
                                                             evaluation_image_loader.get());
+                        if (PerfBenchCollector::enabled() && metrics.valid) {
+                            PerfBenchCollector::instance().set_psnr(metrics.psnr);
+                        }
                         if (evaluator_->has_appearance()) {
                             const int n = eval_ppisp_applied_.load();
                             const int k = eval_ppisp_exif_.load();
@@ -8504,6 +8530,9 @@ namespace lfs::training {
                                                     val_dataset_,
                                                     background_,
                                                     evaluation_image_loader.get());
+                if (PerfBenchCollector::enabled() && metrics.valid) {
+                    PerfBenchCollector::instance().set_psnr(metrics.psnr);
+                }
                 LOG_INFO("{}", metrics.to_string());
                 if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
                     training_ops_->photometric->shrink_to_required(photo_saved_);

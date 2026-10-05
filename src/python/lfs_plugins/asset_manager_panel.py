@@ -4658,8 +4658,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if not self._doc:
             return
         prose = self._doc.get_element_by_id("asset-measure-prose")
-        mono = self._doc.get_element_by_id("asset-measure-mono")
-        if not prose or not mono or not hasattr(prose, "measure_text"):
+        value = self._doc.get_element_by_id("asset-measure-value")
+        if not prose or not value or not hasattr(prose, "measure_text"):
             return
         scale = self._ui_scale()
         folder_records = self._asset_index_folders()
@@ -4680,8 +4680,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._inspector_label_width = math.ceil(widest(prose, labels))
         self._text_column_metrics = dict(
             gallery=math.ceil(widest(prose, gallery)) + 16.0 + 24.0,
-            size=math.ceil(widest(mono, ["1023.9 " + unit for unit in ("B", "KB", "MB", "GB", "TB")])) + 16.0,
-            modified=math.ceil(widest(mono, ["2000-12-30 23:59"])) + 16.0,
+            size=math.ceil(widest(value, ["1023.9 " + unit for unit in ("B", "KB", "MB", "GB", "TB")])) + 16.0,
+            modified=math.ceil(widest(value, ["2000-12-30 23:59"])) + 16.0,
             folder=min(240.0, math.ceil(widest(prose, folders)) + 16.0))
         for column in self._text_column_metrics:
             self._text_column_metrics[column] = max(self._text_column_metrics[column],

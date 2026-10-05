@@ -616,6 +616,7 @@ namespace lfs::training {
 
         // Handle control requests
         void handle_control_requests(int iter, std::stop_token stop_token = {});
+        void reserve_project_hook_chapters();
         void prepare_project_snapshot_at_safe_point(
             int capture_iteration,
             const std::filesystem::path& path,
