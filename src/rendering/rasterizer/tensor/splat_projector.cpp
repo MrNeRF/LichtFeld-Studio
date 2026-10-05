@@ -60,7 +60,7 @@ namespace lfs::rendering {
         const auto draw_count = lod ? lod->size : in.count;
         const auto cut_array = [&](const Tensor* tensor) { return !tensor || tensor->bytes() >= size_t(draw_count) * 4; };
         if (degree > 3 || (degree && !in.sh_rest) || !in.means || !in.opacity || !in.sh0 ||
-            (lod && (!lod->indices || !cut_array(lod->indices) || !cut_array(lod->logical_indices) || !cut_array(lod->levels) ||
+            (lod && ((lod->size && !lod->indices) || !cut_array(lod->indices) || !cut_array(lod->logical_indices) || !cut_array(lod->levels) ||
                      !cut_array(lod->weights) || (lod->count && lod->count->bytes() < 4))) ||
             (primitive != SplatPrimitive::Points && (!in.scales || !in.rotations)) ||
             projected.bytes() < size_t(draw_count) * 64 || (primitive == SplatPrimitive::Gut && (!gut || gut->bytes() < size_t(draw_count) * 64)) ||

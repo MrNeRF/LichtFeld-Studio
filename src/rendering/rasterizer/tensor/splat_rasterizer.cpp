@@ -210,7 +210,7 @@ namespace lfs::rendering {
                          (!overlay->preview && parameters.mask_limits[1]))))
             return failure(std::format("Splat overlay inputs disagree with raster flags {:#x} (overlay={}, selection_count={}, preview_count={})",
                                        parameters.flags, overlay != nullptr, parameters.mask_limits[0], parameters.mask_limits[1]));
-        if (((parameters.flags & kLogicalIds) != 0) != (logical != nullptr) || (logical && (!logical->ids || !logical->count)))
+        if (((parameters.flags & kLogicalIds) != 0) != (logical != nullptr) || (logical && ((count && !logical->ids) || !logical->count)))
             return failure(std::format("Splat logical IDs disagree with raster flags {:#x} (logical={}, count={})", parameters.flags,
                                        logical != nullptr, logical ? logical->count : 0));
         if (parameters.flags & (kSourceSorted | kDepthBatches | kDepthPrefix))

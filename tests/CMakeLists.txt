@@ -111,6 +111,9 @@ if(BUILD_TESTS)
         target_link_libraries(tensor_rasterizer_contracts PRIVATE lfs_tensor_rasterizer GTest::gtest_main)
         target_compile_features(tensor_rasterizer_contracts PRIVATE cxx_std_23)
         add_test(NAME TensorRasterizerContracts COMMAND tensor_rasterizer_contracts)
+        # The contracts check precise-math oracles; MoltenVK compiles its MSL
+        # with fast math unless told otherwise.
+        set_tests_properties(TensorRasterizerContracts PROPERTIES ENVIRONMENT "MVK_CONFIG_FAST_MATH_ENABLED=0")
         set_tests_properties(TensorRasterizerContracts PROPERTIES LABELS "tensor;gpu" TIMEOUT 180)
     endif()
 endif()

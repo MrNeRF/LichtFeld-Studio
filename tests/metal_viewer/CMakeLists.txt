@@ -145,7 +145,7 @@ if(TARGET lfs_visualizer AND TARGET lfs_vulkan_rasterizer_macos_reference)
         option(LFS_BUILD_MAC_VIEWER_BENCHMARK "Build the native Metal versus Vulkan viewer benchmark" ON)
         if(LFS_BUILD_MAC_VIEWER_BENCHMARK)
             add_executable(mac_viewer_backend_benchmark backend_benchmark.mm)
-            target_link_libraries(mac_viewer_backend_benchmark PRIVATE lfs_viewer_vulkan_reference lfs_visualizer lfs_core lfs_io Python::Python)
+            target_link_libraries(mac_viewer_backend_benchmark PRIVATE lfs_viewer_vulkan_reference lfs_visualizer lfs_core lfs_io Python::Python "-framework Metal" "-framework Foundation")
             target_compile_options(mac_viewer_backend_benchmark PRIVATE -fobjc-arc)
             target_compile_definitions(mac_viewer_backend_benchmark PRIVATE
                 LFS_METAL_TEST_REQUIRE_DEVICE=$<BOOL:${LFS_METAL_TEST_REQUIRE_DEVICE}>)
