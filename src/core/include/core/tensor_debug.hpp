@@ -30,12 +30,11 @@ namespace lfs::core::debug {
     LFS_CORE_API TensorValidation validate_tensor_cpu(const Tensor& tensor);
     LFS_CORE_API TensorValidation validate_tensor_gpu(const Tensor& tensor);
 
-    // Auto-select validation based on device and size
+    // Inspection runs on the tensor backend and reads back only scalar results.
     inline TensorValidation validate_tensor(const Tensor& tensor) {
-        constexpr size_t GPU_THRESHOLD = 10000;
         if (tensor.is_empty())
             return {};
-        if (tensor.device() == Device::GPU && tensor.numel() > GPU_THRESHOLD) {
+        if (tensor.device() == Device::GPU) {
             return validate_tensor_gpu(tensor);
         }
         return validate_tensor_cpu(tensor);
@@ -59,11 +58,13 @@ namespace lfs::core::debug {
         size_t num_different = 0;
         size_t total_elements = 0;
 
-        [[nodiscard]] bool is_close(const float atol = 1e-5f, const float rtol = 1e-4f) const {
-            return shapes_match && dtypes_match && max_abs_diff <= atol + rtol * max_abs_diff;
-        }
-
+        [[nodiscard]] LFS_CORE_API bool is_close(float atol = 1e-5f, float rtol = 1e-4f) const;
         [[nodiscard]] LFS_CORE_API std::string to_string() const;
+
+    private:
+        Tensor difference_;
+        Tensor scale_;
+        friend TensorDiff diff_tensors(const Tensor&, const Tensor&, float);
     };
 
     LFS_CORE_API TensorDiff diff_tensors(const Tensor& expected, const Tensor& actual, float tolerance = 1e-5f);
@@ -86,6 +87,7 @@ namespace lfs::core::debug {
         TensorShape shape;
         DataType dtype = DataType::Float32;
         bool is_cuda = false;
+        std::optional<GpuBackend> backend;
 
         [[nodiscard]] LFS_CORE_API std::string to_string() const;
     };

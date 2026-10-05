@@ -2620,14 +2620,18 @@ namespace lfs::core {
             return;
         }
 
-        if (shape_.rank() == 1) {
+        if (numel() == 0) {
+            std::println("  []");
+        } else if (shape_.rank() <= 1) {
             print_1d(max_per_dim);
         } else if (shape_.rank() == 2) {
             print_2d(max_per_dim);
         } else {
             std::println("  [Higher dimensional tensor - showing first slice]");
-            auto first_slice = slice(0, 0, 1);
-            first_slice.squeeze().print_2d(max_per_dim);
+            Tensor first_slice = *this;
+            while (first_slice.ndim() > 2)
+                first_slice = first_slice.slice(0, 0, 1).squeeze(0);
+            first_slice.print_2d(max_per_dim);
         }
     }
 
@@ -2657,14 +2661,14 @@ namespace lfs::core {
         size_t rows = std::min(max_per_dim, shape_[0]);
         size_t cols = std::min(max_per_dim, shape_[1]);
 
-        auto values = debug_values(shape_[0] * shape_[1]);
+        auto values = slice(0, 0, rows).slice(1, 0, cols).debug_values(rows * cols);
 
         for (size_t i = 0; i < rows; ++i) {
             std::print("  [");
             for (size_t j = 0; j < cols; ++j) {
                 if (j > 0)
                     std::print(", ");
-                size_t idx = i * shape_[1] + j;
+                size_t idx = i * cols + j;
                 std::print("{:8.4f}", values[idx]);
             }
             if (shape_[1] > cols) {
