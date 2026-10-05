@@ -853,6 +853,7 @@
 .asset-view-button { width: 24dp; height: 24dp; min-width: 24dp; min-height: 24dp; padding: 0; }
 .asset-view-button img { width: 16dp; height: 16dp; }
 .asset-toolbar-view img { width: 16dp; height: 16dp; }
+.asset-clean-missing img { width: 16dp; height: 16dp; }
 
 #asset-main-row {
     position: relative;

@@ -2969,6 +2969,7 @@
   "projects.dialog.scan_depth_message": "サブフォルダー内のプロジェクトも Projects に含めますか？",
   "projects.action.add_existing": "既存を追加...",
   "projects.tooltip.add_existing": "既存の .licht プロジェクトをカタログに追加",
+  "projects.tooltip.clean_missing": "ここに表示されている見つからないプロジェクトをカタログから削除します。ファイルは削除されません。",
   "projects.dialog.choose_existing": "既存の .licht を選択",
   "projects.action.clear_search": "クリア",
   "projects.status.no_search_results": "一致するプロジェクトはありません",

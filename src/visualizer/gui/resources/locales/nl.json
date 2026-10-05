@@ -2969,6 +2969,7 @@
   "projects.dialog.scan_depth_message": "Moet Projects ook projecten in submappen opnemen?",
   "projects.action.add_existing": "Bestaande toevoegen...",
   "projects.tooltip.add_existing": "Een bestaand .licht-project aan de catalogus toevoegen",
+  "projects.tooltip.clean_missing": "De hier getoonde ontbrekende projecten uit de catalogus verwijderen. Er worden geen bestanden verwijderd.",
   "projects.dialog.choose_existing": "Bestaande .licht kiezen",
   "projects.action.clear_search": "Wissen",
   "projects.status.no_search_results": "Geen overeenkomende projecten",

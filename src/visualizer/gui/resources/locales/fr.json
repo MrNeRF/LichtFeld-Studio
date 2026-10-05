@@ -2969,6 +2969,7 @@
   "projects.dialog.scan_depth_message": "Projects doit-il inclure les projets des sous-dossiers ?",
   "projects.action.add_existing": "Ajouter un existant...",
   "projects.tooltip.add_existing": "Ajouter un projet .licht existant au catalogue",
+  "projects.tooltip.clean_missing": "Retirer du catalogue les projets manquants affichés ici. Aucun fichier n’est supprimé.",
   "projects.dialog.choose_existing": "Choisir un .licht existant",
   "projects.action.clear_search": "Effacer",
   "projects.status.no_search_results": "Aucun projet correspondant",
