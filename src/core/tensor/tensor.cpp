@@ -3132,6 +3132,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(std::isfinite(rtol) && std::isfinite(atol) &&
                            rtol >= 0.0f && atol >= 0.0f,
                        "all_close tolerances must be finite and non-negative");
+        LFS_ASSERT_MSG(device_ == other.device_, "all_close operands must share a device");
         internal::require_same_gpu_backend(*this, other, "all_close");
 
         if (shape_ != other.shape_ || dtype_ != other.dtype_) {

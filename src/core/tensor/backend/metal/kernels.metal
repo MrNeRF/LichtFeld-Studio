@@ -3864,9 +3864,9 @@ kernel void cdist(device const uchar* lhs_buffer [[buffer(0)]],
         else if (p == 1.0f)
             distance += abs(difference);
         else if (p == 0.0f)
-            distance += difference != 0.0f ? 1.0f : 0.0f;
+            distance += a[d] != b[d] ? 1.0f : 0.0f;
         else if (isinf(p))
-            distance = max(distance, abs(difference));
+            distance = isnan(distance) || isnan(difference) ? distance + difference : max(distance, abs(difference));
         else
             distance += pow(abs(difference), p);
     }

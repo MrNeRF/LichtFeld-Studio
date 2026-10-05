@@ -2146,7 +2146,7 @@ namespace lfs::core::tensor_ops {
         for (size_t d = 0; d < D; ++d) {
             float diff = fabsf(a[i * D + d] - b[j * D + d]);
             if (p == 0.0f) {
-                dist += diff != 0.0f ? 1.0f : 0.0f;
+                dist += a[i * D + d] != b[j * D + d] ? 1.0f : 0.0f;
             } else if (isinf(p)) {
                 dist = ops::maximum_op{}(dist, diff);
             } else {
