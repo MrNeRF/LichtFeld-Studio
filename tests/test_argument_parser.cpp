@@ -135,6 +135,21 @@ TEST(ArgumentParserTest,
         (*resume_parsed)->resume_checkpoint);
 }
 
+// Catches rejecting --eval-space on a resume, where --undistort comes from the project.
+TEST(ArgumentParserTest, EvalSpaceOnResumeTrustsTheProjectsUndistort) {
+    const auto project = std::filesystem::path(make_test_path("lfs_arg_parser_resume_eval_space")) / "session.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    const char* resume[] = {"LichtFeld-Studio", "--headless", "--resume", project_text.c_str(),
+                            "--eval", "--eval-space", "undistorted"};
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(resume)), resume);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ((*parsed)->optimization.eval_space, lfs::core::param::EvalSpace::Undistorted);
+
+    const char* fresh[] = {"LichtFeld-Studio", "--eval", "--eval-space", "undistorted"};
+    EXPECT_FALSE(lfs::core::args::parse_args_and_params(static_cast<int>(std::size(fresh)), fresh));
+}
+
 TEST(ArgumentParserTest, HeadlessResumeSelectsEmbeddedCheckpointFlow) {
     const auto directory =
         make_test_path(

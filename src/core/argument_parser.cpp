@@ -2044,7 +2044,8 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
             params->optimization.max_screen_share));
     if (flag_given("--eval-steps") && !params->optimization.enable_eval)
         return std::unexpected("--eval-steps needs --eval or --eval-all; without them no evaluation runs");
-    if (flag_given("--eval-space") && !params->optimization.undistort) {
+    const bool resuming = params->resume_project || params->resume_checkpoint;
+    if (flag_given("--eval-space") && !params->optimization.undistort && !resuming) {
         return std::unexpected(
             "--eval-space needs --undistort; without it both spaces are identical");
     }
