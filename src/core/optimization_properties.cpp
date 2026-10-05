@@ -689,7 +689,7 @@ namespace lfs::core::param {
             .all_strategies()
             .string_prop(&OptimizationParameters::eval_mask,
                          "eval_mask", "Evaluation Mask", d.eval_mask,
-                         "Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range or points); training is not affected")
+                         "Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected")
             .locale("training_params.eval_mask")
             .tooltip("training.tooltip.eval_mask")
             .flags(PROP_NEEDS_RESTART)

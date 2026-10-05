@@ -358,6 +358,8 @@ namespace lfs::core {
         [[nodiscard]] LFS_CORE_API std::optional<std::array<int, 2>> parse_eval_mask_points(std::string_view spec);
         // The PLY of a points:<file> spec, whose positions replace the initial point cloud.
         [[nodiscard]] LFS_CORE_API std::optional<std::string_view> eval_mask_points_file(std::string_view spec);
+        // The PLY of a splat:<file> spec, whose rendered coverage selects the evaluated pixels.
+        [[nodiscard]] LFS_CORE_API std::optional<std::string_view> eval_mask_splat_file(std::string_view spec);
         [[nodiscard]] LFS_CORE_API std::optional<std::array<float, 6>> parse_eval_mask_box(std::string_view spec);
         [[nodiscard]] LFS_CORE_API std::string normalize_eval_mask(std::string_view spec);
 

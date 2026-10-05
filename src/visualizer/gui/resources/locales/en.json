@@ -544,7 +544,7 @@
       "bg_image_path": "A custom background image for training. Use when the scene should be optimized against a known background plate.",
       "bg_image_browse": "Browse for a background image",
       "bg_image_clear": "Clear the selected background image",
-      "eval_mask": "Selects the pixels to evaluate: a mesh, a box, the crop box, a mask folder, a depth range or points. Training is not affected.",
+      "eval_mask": "Selects the pixels to evaluate: a mesh, a box, the crop box, a mask folder, a depth range, points or a splat. Training is not affected.",
       "eval_mask_invert": "Scores the pixels outside the evaluation mask instead.",
       "eval_mask_browse": "Browse for an evaluation mesh",
       "eval_mask_clear": "Clear the evaluation mask",

@@ -190,14 +190,25 @@ namespace lfs::training {
         bool invert = false;
     };
 
+    // A splat whose rendered coverage selects the evaluated pixels.
+    struct EvaluationSplat {
+        lfs::core::SplatData model; // CUDA, SH degree 0, in the training world frame
+        bool invert = false;
+    };
+
     struct EvaluationMaskSources {
         const EvaluationMesh* mesh = nullptr;
         const EvaluationPoints* points = nullptr;
         const lfs::io::MaskDirCache* folder = nullptr;
+        const EvaluationSplat* splat = nullptr;
     };
 
     [[nodiscard]] lfs::Result<EvaluationMesh> load_evaluation_mesh(
         const std::filesystem::path& path, const std::array<float, 3>& training_origin, bool invert);
+
+    // A splat PLY moved into the training frame, kept with its geometry and opacity only.
+    [[nodiscard]] lfs::Result<lfs::core::SplatData> load_evaluation_splat(
+        const std::filesystem::path& path, const std::array<float, 3>& training_origin);
 
     // Positions [N,3] of a splat or point cloud PLY, moved into the training frame.
     [[nodiscard]] lfs::Result<lfs::core::Tensor> load_evaluation_points(
@@ -300,10 +311,12 @@ namespace lfs::training {
             _eval_mask_folder = std::move(folder);
         }
         void set_eval_points(EvaluationPoints points) { _eval_points = std::move(points); }
+        void set_eval_splat(EvaluationSplat splat) { _eval_splat = std::move(splat); }
         [[nodiscard]] EvaluationMaskSources mask_sources() const {
             return {.mesh = eval_mesh(),
                     .points = _eval_points ? &*_eval_points : nullptr,
-                    .folder = _eval_mask_folder.get()};
+                    .folder = _eval_mask_folder.get(),
+                    .splat = _eval_splat ? &*_eval_splat : nullptr};
         }
 
         void set_normal_prior_decode(const lfs::core::Camera::NormalPriorDecode& decode) {
@@ -358,5 +371,6 @@ namespace lfs::training {
         std::optional<EvaluationMesh> _eval_mesh;
         std::shared_ptr<const lfs::io::MaskDirCache> _eval_mask_folder;
         std::optional<EvaluationPoints> _eval_points;
+        std::optional<EvaluationSplat> _eval_splat;
     };
 } // namespace lfs::training

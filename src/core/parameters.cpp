@@ -434,6 +434,12 @@ namespace lfs::core {
             return spec == "points" || spec.starts_with("points:");
         }
 
+        std::optional<std::string_view> eval_mask_splat_file(const std::string_view spec) {
+            if (!spec.starts_with("splat:") || spec.size() == 6)
+                return std::nullopt;
+            return spec.substr(6);
+        }
+
         std::optional<std::string_view> eval_mask_points_file(const std::string_view spec) {
             if (!spec.starts_with("points:") || parse_float_list<2>(spec.substr(7)))
                 return std::nullopt;
@@ -483,6 +489,8 @@ namespace lfs::core {
                 auto canonical = std::filesystem::weakly_canonical(absolute, error);
                 return path_to_utf8((error ? absolute : canonical).lexically_normal());
             };
+            if (const auto file = eval_mask_splat_file(spec))
+                return "splat:" + normalize_path(*file);
             if (const auto file = eval_mask_points_file(spec))
                 return "points:" + normalize_path(*file);
             if (const auto points = parse_eval_mask_points(spec))
@@ -542,6 +550,9 @@ namespace lfs::core {
             if (is_eval_mask_box(eval_mask)) {
                 if (!parse_eval_mask_box(eval_mask))
                     return std::format("eval_mask box must be bbox:x0,y0,z0,x1,y1,z1 with each minimum below its maximum (got '{}')", eval_mask);
+            } else if (const auto file = eval_mask_splat_file(eval_mask)) {
+                if (!utf8_to_path(std::string(*file)).is_absolute())
+                    return std::format("eval_mask splat file must be an absolute path (got '{}')", eval_mask);
             } else if (const auto file = eval_mask_points_file(eval_mask)) {
                 if (!utf8_to_path(std::string(*file)).is_absolute())
                     return std::format("eval_mask points file must be an absolute path (got '{}')", eval_mask);

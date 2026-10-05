@@ -548,7 +548,7 @@
       "bg_image_path": "Niestandardowy obraz tla dla treningu. Używaj, gdy scena ma byc optymalizowana wzgledem znanej background plate.",
       "bg_image_browse": "Przeglądaj obraz tła",
       "bg_image_clear": "Wyczyść wybrany obraz tła",
-      "eval_mask": "Wybiera piksele do ewaluacji: siatkę, prostopadłościan, crop box, folder masek, zakres głębi lub punkty. Trening się nie zmienia.",
+      "eval_mask": "Wybiera piksele do ewaluacji: siatkę, prostopadłościan, crop box, folder masek, zakres głębi, punkty lub splat. Trening się nie zmienia.",
       "eval_mask_invert": "Ocenia zamiast tego piksele poza maską ewaluacji.",
       "eval_mask_browse": "Wybierz siatkę do oceny",
       "eval_mask_clear": "Wyczyść maskę ewaluacji",

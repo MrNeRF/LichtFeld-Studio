@@ -929,7 +929,7 @@ namespace lfs::python {
                     modify_params([value = lfs::core::param::normalize_eval_mask(v)](
                                       auto& p) { p.eval_mask = value; });
                 },
-                "Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range or points); training is not affected")
+                "Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected")
             .def_prop_rw(
                 "eval_mask_invert",
                 [](PyOptimizationParams& self) { return self.params().eval_mask_invert; },

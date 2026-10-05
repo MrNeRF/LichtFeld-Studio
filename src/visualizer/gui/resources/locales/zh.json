@@ -548,7 +548,7 @@
       "bg_image_path": "训练用自定义背景图。当场景应针对已知 background plate 优化时使用。",
       "bg_image_browse": "浏览背景图像",
       "bg_image_clear": "清除已选背景图像",
-      "eval_mask": "选择要评估的像素：网格、长方体、crop box、遮罩文件夹、深度范围或点。不影响训练。",
+      "eval_mask": "选择要评估的像素：网格、长方体、crop box、遮罩文件夹、深度范围、点或 splat。不影响训练。",
       "eval_mask_invert": "改为评估评估遮罩之外的像素。",
       "eval_mask_browse": "浏览评估网格",
       "eval_mask_clear": "清除评估遮罩",

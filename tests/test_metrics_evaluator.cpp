@@ -958,6 +958,62 @@ TEST(MetricsEvaluatorUndistort, ThinMaskFallsBackToPartialSsimWindows) {
 
 // Catches geometric masks projected through a pinhole when GUT renders a distorted camera natively,
 // without --undistort: they must select the same pixels as the source-lens path of --undistort.
+// Catches the splat mask scoring anything but what the splat covers when rendered with all its information:
+// the mask must equal the pixels whose rendered opacity is at least one half, and its inverse the rest.
+TEST(MetricsEvaluator, SplatMaskSelectsTheRenderedCoverage) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_splat_mask";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 64;
+    constexpr int kH = 48;
+    const auto image_path = tmp / "gt.png";
+    write_rgb_png(image_path, 130, 130, 130, kH, kW);
+    auto camera = make_eval_camera(image_path, {}, kW, kH);
+    // An elongated splat smaller than the view, so the mask has both covered and uncovered pixels.
+    const float opaque = std::log(0.99f / 0.01f);
+    lfs::training::EvaluationSplat splat{
+        .model = SplatData(0, Tensor::from_vector({0.3f, -0.2f, 1.0f}, {1, 3}, Device::CUDA),
+                           Tensor::zeros({1, 1, 3}, Device::CUDA), Tensor::zeros({1, 0, 3}, Device::CUDA),
+                           Tensor::from_vector({-0.4f, -1.2f, -3.0f}, {1, 3}, Device::CUDA),
+                           Tensor::from_vector({0.92f, 0.0f, 0.0f, 0.39f}, {1, 4}, Device::CUDA),
+                           Tensor::full({1}, opaque, Device::CUDA), 1.0f)};
+    const auto render = [](Camera& render_camera, float) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        lfs::training::RenderOutput output;
+        output.image = Tensor::zeros({size_t{3}, static_cast<size_t>(render_camera.image_height()),
+                                      static_cast<size_t>(render_camera.image_width())},
+                                     Device::CUDA);
+        return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+    };
+    const auto params = make_eval_params(tmp / "out");
+    const auto mask_of = [&] {
+        const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, {.splat = &splat});
+        EXPECT_TRUE(prepared.has_value()) << prepared.error().detail();
+        return prepared->metric_mask.cpu().to_vector_uint8();
+    };
+
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    const auto alpha = lfs::training::fast_rasterize(*camera, splat.model, background, params.optimization.mip_filter)
+                           .alpha.cpu()
+                           .to_vector();
+    ASSERT_EQ(alpha.size(), static_cast<size_t>(kW * kH));
+    std::vector<uint8_t> expected(alpha.size());
+    std::ranges::transform(alpha, expected.begin(), [](const float value) { return value >= 0.5f ? 1 : 0; });
+    const auto covered = std::ranges::count(expected, uint8_t{1});
+    ASSERT_GT(covered, 0);
+    ASSERT_LT(covered, static_cast<std::ptrdiff_t>(expected.size()));
+
+    EXPECT_EQ(mask_of(), expected);
+    splat.invert = true;
+    const auto inverted = mask_of();
+    for (size_t i = 0; i < expected.size(); ++i)
+        ASSERT_EQ(inverted[i], 1 - expected[i]) << i;
+    std::filesystem::remove_all(tmp);
+}
+
 TEST(MetricsEvaluatorUndistort, PointMaskFollowsTheNativeGutLens) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";

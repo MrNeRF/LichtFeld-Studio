@@ -548,7 +548,7 @@
       "bg_image_path": "Una imagen de fondo personalizada para entrenamiento. Úsala cuando la escena deba optimizarse contra una placa de fondo conocida.",
       "bg_image_browse": "Buscar una imagen de fondo",
       "bg_image_clear": "Borrar la imagen de fondo seleccionada",
-      "eval_mask": "Selecciona los píxeles que se evalúan: una malla, una caja, la caja de recorte, una carpeta de máscaras, un rango de profundidad o puntos. El entrenamiento no cambia.",
+      "eval_mask": "Selecciona los píxeles que se evalúan: una malla, una caja, la caja de recorte, una carpeta de máscaras, un rango de profundidad, puntos o un splat. El entrenamiento no cambia.",
       "eval_mask_invert": "Evalúa en su lugar los píxeles fuera de la máscara de evaluación.",
       "eval_mask_browse": "Buscar una malla de evaluación",
       "eval_mask_clear": "Quitar la máscara de evaluación",

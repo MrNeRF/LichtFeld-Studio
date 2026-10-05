@@ -548,7 +548,7 @@
       "bg_image_path": "Une image de fond personnalisée pour l'entraînement. Utilisez-la quand la scène doit être optimisée par rapport à une plaque de fond connue.",
       "bg_image_browse": "Rechercher une image de fond",
       "bg_image_clear": "Effacer l'image de fond sélectionnée",
-      "eval_mask": "Sélectionne les pixels évalués : un maillage, une boîte, la boîte de recadrage, un dossier de masques, une plage de profondeur ou des points. L'entraînement n'est pas modifié.",
+      "eval_mask": "Sélectionne les pixels évalués : un maillage, une boîte, la boîte de recadrage, un dossier de masques, une plage de profondeur, des points ou un splat. L'entraînement n'est pas modifié.",
       "eval_mask_invert": "Évalue plutôt les pixels en dehors du masque d'évaluation.",
       "eval_mask_browse": "Parcourir pour choisir un maillage d'évaluation",
       "eval_mask_clear": "Effacer le masque d'évaluation",

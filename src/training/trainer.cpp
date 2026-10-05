@@ -3011,7 +3011,15 @@ namespace lfs::training {
             if (!params_.optimization.eval_mask.empty()) {
                 const glm::vec3 origin = scene_ ? scene_->getTrainingDataOrigin() : glm::vec3{0.0f};
                 const bool invert = params_.optimization.eval_mask_invert;
-                if (const auto file = lfs::core::param::eval_mask_points_file(params_.optimization.eval_mask)) {
+                if (const auto file = lfs::core::param::eval_mask_splat_file(params_.optimization.eval_mask)) {
+                    auto splat = lfs::training::load_evaluation_splat(lfs::core::utf8_to_path(std::string(*file)),
+                                                                      {origin.x, origin.y, origin.z});
+                    if (!splat)
+                        return std::unexpected(std::format("Failed to load evaluation splat '{}': {}", *file,
+                                                           splat.error().detail()));
+                    LOG_INFO("Evaluation mask: {} splats from {}{}", splat->size(), *file, invert ? " (inverted)" : "");
+                    evaluator_->set_eval_splat(lfs::training::EvaluationSplat{.model = std::move(*splat), .invert = invert});
+                } else if (const auto file = lfs::core::param::eval_mask_points_file(params_.optimization.eval_mask)) {
                     auto means = lfs::training::load_evaluation_points(lfs::core::utf8_to_path(std::string(*file)),
                                                                        {origin.x, origin.y, origin.z});
                     if (!means)

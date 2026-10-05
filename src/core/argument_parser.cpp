@@ -95,7 +95,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--eval-all", "eval_all", Bool},
             OptimizationCliBinding{"--eval-space", "eval_space", Enum},
             OptimizationCliBinding{"--eval-mask", "eval_mask", String, false,
-                                   ". Sources: mesh:<file> pixels covered by the mesh; bbox:x0,y0,z0,x1,y1,z1 pixels covered by the axis-aligned box with that minimum and maximum corner; cropbox pixels covered by the training model's crop box; masks:<folder> one mask image per input image, matched by file name, white pixels scored; depth:near,far solid rendered pixels whose depth lies between near and far; points or points:radius,close pixels around the initial point cloud, each point drawn as a disk of radius pixels (default 2) with gaps up to twice close pixels filled (default 3); points:<file> the same around the points of a splat or point cloud PLY; none clears a mask stored in a resumed project. Meshes, boxes and point files use the dataset's coordinates"},
+                                   ". Sources: mesh:<file> pixels covered by the mesh; bbox:x0,y0,z0,x1,y1,z1 pixels covered by the axis-aligned box with that minimum and maximum corner; cropbox pixels covered by the training model's crop box; masks:<folder> one mask image per input image, matched by file name, white pixels scored; depth:near,far solid rendered pixels whose depth lies between near and far; points or points:radius,close pixels around the initial point cloud, each point drawn as a disk of radius pixels (default 2) with gaps up to twice close pixels filled (default 3); points:<file> the same around the points of a splat or point cloud PLY; splat:<file> pixels a splat PLY covers when rendered with its positions, sizes, rotations and opacities (opacity of at least one half); none clears a mask stored in a resumed project. Meshes, boxes, point files and splats use the dataset's coordinates"},
             OptimizationCliBinding{"--eval-mask-invert", "eval_mask_invert", Bool},
             OptimizationCliBinding{"--headless", "headless", Bool},
             OptimizationCliBinding{"--undistort", "undistort", Bool},
@@ -219,7 +219,7 @@ namespace {
     lfs::Result<std::string> parse_eval_mask(const std::string_view spec) {
         constexpr std::string_view expected =
             "Expected mesh:<file>, bbox:x0,y0,z0,x1,y1,z1, cropbox, masks:<folder>, depth:near,far, points:radius,close, "
-            "points:<file> or none";
+            "points:<file>, splat:<file> or none";
         const auto invalid = [&](std::string message) {
             return lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::InvalidArgument,
@@ -232,6 +232,14 @@ namespace {
             return std::string{};
         if (lfs::core::param::is_eval_mask_cropbox(spec))
             return std::string(spec);
+        if (const auto file = lfs::core::param::eval_mask_splat_file(spec)) {
+            const auto normalized = lfs::core::param::normalize_eval_mask(spec);
+            std::error_code error;
+            if (!std::filesystem::is_regular_file(
+                    lfs::core::utf8_to_path(std::string(*lfs::core::param::eval_mask_splat_file(normalized))), error))
+                return invalid(std::format("Evaluation splat file does not exist: {}", *file));
+            return normalized;
+        }
         if (const auto file = lfs::core::param::eval_mask_points_file(spec)) {
             const auto normalized = lfs::core::param::normalize_eval_mask(spec);
             std::error_code error;

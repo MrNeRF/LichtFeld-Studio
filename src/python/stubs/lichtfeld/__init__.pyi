@@ -2158,7 +2158,7 @@ class OptimizationParams:
     @property
     def eval_mask(self) -> str:
         """
-        Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range or points); training is not affected
+        Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected
         """
 
     @eval_mask.setter

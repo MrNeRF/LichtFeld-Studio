@@ -548,7 +548,7 @@
       "bg_image_path": "training 用の custom background image です。既知の background plate に合わせて scene を最適化したい場合に使います。",
       "bg_image_browse": "背景画像を参照",
       "bg_image_clear": "選択した背景画像をクリア",
-      "eval_mask": "評価するピクセルを選択します: メッシュ、ボックス、crop box、マスクフォルダー、深度範囲、またはポイント。学習には影響しません。",
+      "eval_mask": "評価するピクセルを選択します: メッシュ、ボックス、crop box、マスクフォルダー、深度範囲、ポイント、またはスプラット。学習には影響しません。",
       "eval_mask_invert": "代わりに評価マスクの外側のピクセルを評価します。",
       "eval_mask_browse": "評価メッシュを選択",
       "eval_mask_clear": "評価マスクをクリア",

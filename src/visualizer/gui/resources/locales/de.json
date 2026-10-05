@@ -548,7 +548,7 @@
       "bg_image_path": "Ein benutzerdefiniertes Hintergrundbild für das Training. Nutze es, wenn die Szene gegen eine bekannte Hintergrundplatte optimiert werden soll.",
       "bg_image_browse": "Nach Hintergrundbild suchen",
       "bg_image_clear": "Ausgewähltes Hintergrundbild entfernen",
-      "eval_mask": "Wählt die auszuwertenden Pixel: ein Mesh, eine Box, die Crop Box, einen Maskenordner, einen Tiefenbereich oder Punkte. Das Training bleibt unverändert.",
+      "eval_mask": "Wählt die auszuwertenden Pixel: ein Mesh, eine Box, die Crop Box, einen Maskenordner, einen Tiefenbereich, Punkte oder einen Splat. Das Training bleibt unverändert.",
       "eval_mask_invert": "Wertet stattdessen die Pixel außerhalb der Auswertungsmaske aus.",
       "eval_mask_browse": "Nach einem Auswertungs-Mesh suchen",
       "eval_mask_clear": "Auswertungsmaske entfernen",

@@ -2044,6 +2044,24 @@ TEST(ArgumentParserTest, EvalPointsFileMaskParsesValidatesAndSurvivesResume) {
     EXPECT_TRUE((*parsed)->optimization.validate().empty());
 
     EXPECT_FALSE(lfs::core::param::eval_mask_points_file("points:3,4"));
+    EXPECT_FALSE(lfs::core::param::eval_mask_splat_file(spec));
+
+    const auto splat_spec = "splat:" + (directory / "." / "subject.ply").string();
+    const char* splat_argv[] = {"LichtFeld-Studio", "--eval", "--eval-mask", splat_spec.c_str()};
+    const auto parsed_splat = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(splat_argv)), splat_argv);
+    ASSERT_TRUE(parsed_splat) << parsed_splat.error();
+    const auto splat_expected =
+        "splat:" + lfs::core::path_to_utf8(std::filesystem::weakly_canonical(directory / "subject.ply"));
+    EXPECT_EQ((*parsed_splat)->optimization.eval_mask, splat_expected);
+    EXPECT_EQ(lfs::core::param::eval_mask_splat_file(splat_expected), splat_expected.substr(6));
+    EXPECT_FALSE(lfs::core::param::eval_mask_points_file(splat_expected));
+    const auto absent_splat = "splat:" + (directory / "absent.ply").string();
+    const char* missing_splat[] = {"LichtFeld-Studio", "--eval", "--eval-mask", absent_splat.c_str()};
+    EXPECT_FALSE(lfs::core::args::parse_args_and_params(static_cast<int>(std::size(missing_splat)), missing_splat));
+    lfs::core::param::OptimizationParameters relative_splat;
+    relative_splat.enable_eval = true;
+    relative_splat.eval_mask = "splat:subject.ply";
+    EXPECT_FALSE(relative_splat.validate().empty());
     EXPECT_FALSE(lfs::core::param::eval_mask_points_file("points"));
 
     const auto absent = "points:" + (directory / "absent.ply").string();

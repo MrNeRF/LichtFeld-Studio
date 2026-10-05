@@ -548,7 +548,7 @@
       "bg_image_path": "Un'immagine di sfondo personalizzata per il training. Usala quando la scena deve essere ottimizzata rispetto a una background plate nota.",
       "bg_image_browse": "Sfoglia per un'immagine di sfondo",
       "bg_image_clear": "Rimuovi l'immagine di sfondo selezionata",
-      "eval_mask": "Seleziona i pixel da valutare: una mesh, un box, il crop box, una cartella di maschere, un intervallo di profondità o punti. L'addestramento non cambia.",
+      "eval_mask": "Seleziona i pixel da valutare: una mesh, un box, il crop box, una cartella di maschere, un intervallo di profondità, punti o uno splat. L'addestramento non cambia.",
       "eval_mask_invert": "Valuta invece i pixel fuori dalla maschera di valutazione.",
       "eval_mask_browse": "Scegli una mesh di valutazione",
       "eval_mask_clear": "Cancella la maschera di valutazione",

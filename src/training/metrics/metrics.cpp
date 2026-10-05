@@ -425,6 +425,26 @@ namespace lfs::training {
             .invert = invert};
     }
 
+    lfs::Result<lfs::core::SplatData> load_evaluation_splat(
+        const std::filesystem::path& path, const std::array<float, 3>& training_origin) {
+        if (!lfs::io::is_gaussian_splat_ply(path))
+            return evaluation_error("the file is not a splat PLY", LFS_SOURCE_SITE_CURRENT());
+        auto loaded = lfs::io::Loader::create()->load(path);
+        if (!loaded)
+            return evaluation_error(loaded.error().format(), LFS_SOURCE_SITE_CURRENT());
+        auto* const splat = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&loaded->data);
+        if (!splat || !*splat || (*splat)->size() == 0)
+            return evaluation_error("the file does not contain splats", LFS_SOURCE_SITE_CURRENT());
+        auto model = std::move(**splat);
+        model.set_sh_degree(0);
+        assert(model.means().ndim() == 2 && model.means().shape()[1] == 3);
+        const auto origin = lfs::core::Tensor::from_vector(
+            {training_origin[0], training_origin[1], training_origin[2]},
+            lfs::core::TensorShape({1, 3}), model.means().device());
+        model.means() = (model.means() - origin).contiguous();
+        return model;
+    }
+
     lfs::Result<lfs::core::Tensor> load_evaluation_points(
         const std::filesystem::path& path, const std::array<float, 3>& training_origin) {
         lfs::core::Tensor means;
@@ -492,6 +512,7 @@ namespace lfs::training {
         const auto* mesh = mask_sources.mesh;
         const auto* points = mask_sources.points;
         const auto* mask_folder = mask_sources.folder;
+        const auto* mask_splat = mask_sources.splat;
         RestoreCameraImageDimensions restore_dimensions{
             camera, camera.image_width(), camera.image_height(), camera.image_size_loaded()};
 
@@ -797,6 +818,44 @@ namespace lfs::training {
                     return evaluation_error("depth mask covers no evaluated pixel", LFS_SOURCE_SITE_CURRENT());
             }
 
+            if (mask_splat) {
+                // Rendered with the same camera and rasterizer as the scored image, so it follows the same lens.
+                auto& model = const_cast<lfs::core::SplatData&>(mask_splat->model);
+                auto mask_background =
+                    background.is_valid() ? background : lfs::core::Tensor::zeros({3}, lfs::core::Device::CUDA);
+                lfs::core::Tensor alpha;
+                try {
+                    alpha = params.optimization.gut
+                                ? gsplat_rasterize(*render_camera, model, mask_background, 1.0f, false,
+                                                   GsplatRenderMode::RGB, true)
+                                      .alpha
+                                : fast_rasterize(*render_camera, model, mask_background, params.optimization.mip_filter,
+                                                 {}, false, dilation_scale)
+                                      .alpha;
+                } catch (const std::exception& e) {
+                    // LFS-CENSUS-OK(empty-catch): converted into a typed evaluation error
+                    return evaluation_error(std::string("splat mask render failed: ") + e.what(),
+                                            LFS_SOURCE_SITE_CURRENT());
+                }
+                if (!alpha.is_valid())
+                    return evaluation_error("splat mask render has no alpha", LFS_SOURCE_SITE_CURRENT());
+                alpha.sync_to_stream(consumer);
+                if (warp_to_distorted)
+                    alpha = lfs::core::distort_mask_to_source_area(alpha, *inverse_warp, consumer);
+                auto coverage = squeeze_to_hw(alpha).ge(0.5f).to(lfs::core::DataType::UInt8);
+                if (mask_splat->invert)
+                    coverage = coverage.eq(0).to(lfs::core::DataType::UInt8);
+                metric_mask = validity_mask.is_valid()
+                                  ? (coverage.to(lfs::core::DataType::Float32) *
+                                     validity_mask.to(lfs::core::DataType::Float32))
+                                        .gt(0.5f)
+                                        .to(lfs::core::DataType::UInt8)
+                                        .contiguous()
+                                  : coverage.contiguous();
+                if (metric_mask.to(lfs::core::DataType::Float32).sum().item<float>() <= 0.0f)
+                    return evaluation_error("splat mask covers no evaluated pixel", LFS_SOURCE_SITE_CURRENT());
+            }
+
             if (points) {
                 const auto stream = rendered->output.image.stream();
                 const auto R = camera.R().cpu().contiguous().to_vector();
@@ -903,6 +962,7 @@ namespace lfs::training {
                 .render_geometry = geometry,
                 .validity_mask_applied = warp_to_distorted,
                 .erode_ssim_mask = warp_to_distorted || mesh != nullptr || points != nullptr || mask_folder != nullptr ||
+                                   mask_splat != nullptr ||
                                    lfs::core::param::is_eval_mask_depth(params.optimization.eval_mask)};
         } catch (const std::exception& e) {
             // LFS-CENSUS-OK(empty-catch): converted into a typed evaluation error

@@ -548,7 +548,7 @@
       "bg_image_path": "Een aangepaste achtergrondafbeelding voor training. Gebruik wanneer de scene moet worden geoptimaliseerd tegen een bekende background plate.",
       "bg_image_browse": "Bladeren naar een achtergrondafbeelding",
       "bg_image_clear": "Geselecteerde achtergrondafbeelding wissen",
-      "eval_mask": "Kiest de pixels die worden geëvalueerd: een mesh, een box, de crop box, een maskermap, een dieptebereik of punten. De training verandert niet.",
+      "eval_mask": "Kiest de pixels die worden geëvalueerd: een mesh, een box, de crop box, een maskermap, een dieptebereik, punten of een splat. De training verandert niet.",
       "eval_mask_invert": "Evalueert in plaats daarvan de pixels buiten het evaluatiemasker.",
       "eval_mask_browse": "Bladeren naar een evaluatiemesh",
       "eval_mask_clear": "Evaluatiemasker wissen",

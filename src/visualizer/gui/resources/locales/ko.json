@@ -548,7 +548,7 @@
       "bg_image_path": "training 을 위한 custom background image 입니다. scene 을 known background plate 에 맞춰 optimize 해야 할 때 사용합니다.",
       "bg_image_browse": "배경 이미지 찾아보기",
       "bg_image_clear": "선택된 배경 이미지 지우기",
-      "eval_mask": "평가할 픽셀을 선택합니다: 메시, 박스, crop box, 마스크 폴더, 깊이 범위 또는 포인트. 학습에는 영향을 주지 않습니다.",
+      "eval_mask": "평가할 픽셀을 선택합니다: 메시, 박스, crop box, 마스크 폴더, 깊이 범위, 포인트 또는 스플랫. 학습에는 영향을 주지 않습니다.",
       "eval_mask_invert": "대신 평가 마스크 밖의 픽셀을 평가합니다.",
       "eval_mask_browse": "평가 메시 찾아보기",
       "eval_mask_clear": "평가 마스크 지우기",
