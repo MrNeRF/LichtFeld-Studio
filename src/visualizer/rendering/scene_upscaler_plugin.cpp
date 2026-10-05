@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "scene_upscaler_plugin.hpp"
+#include "scene_upscaler_plugin_metadata.hpp"
 
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
@@ -135,6 +136,7 @@ namespace lfs::vis {
         std::wstring application_data_path;
         std::wstring plugin_directory;
         std::string diagnostic;
+        std::string display_name;
         std::optional<OptimalSettingsCache> optimal_settings_cache;
         bool loading_enabled = true;
         bool runtime_initialized = false;
@@ -262,6 +264,17 @@ namespace lfs::vis {
                 destroyLocked();
                 return false;
             }
+            // Copy the provider's name before it can be unloaded. Metadata and
+            // ABI identity agree, so settings stay keyed by the real provider ID.
+            std::size_t name_length = 0;
+            while (name_length <= 256 && api->display_name[name_length] != '\0')
+                ++name_length;
+            if (name_length == 0 || name_length > 256) {
+                failLocked(SceneUpscalerPluginState::InvalidPlugin, "plugin display name is invalid");
+                destroyLocked();
+                return false;
+            }
+            display_name.assign(api->display_name, name_length);
 
             const auto paths = lfs::core::UserPaths::resolve();
             if (!paths) {
@@ -361,6 +374,11 @@ namespace lfs::vis {
     }
 
     bool SceneUpscalerPlugin::available() { return probe(); }
+
+    std::string SceneUpscalerPlugin::displayName() const {
+        std::scoped_lock lock(impl_->mutex);
+        return impl_->display_name.empty() ? info_.name : impl_->display_name;
+    }
 
     std::string SceneUpscalerPlugin::diagnostic() const {
         std::scoped_lock lock(impl_->mutex);
@@ -543,24 +561,35 @@ namespace lfs::vis {
     }
 
     std::span<SceneUpscalerPlugin* const> sceneUpscalerPlugins() {
-        static SceneUpscalerPlugin nvidia_dlss({
-            .backend = SceneUpscalerBackend::NvidiaDlss,
-            .id = "nvidia-dlss",
-            .name = "NVIDIA DLSS",
-            .directory = "nvidia",
-            .library = "lfs_scene_upscaler_nvidia_dlss",
-            .cache_dir = "ngx",
-        });
-        static SceneUpscalerPlugin amd_fsr3({
-            .backend = SceneUpscalerBackend::AmdFsr3,
-            .id = "amd-fsr3",
-            .name = "AMD FSR 3.1",
-            .directory = "amd",
-            .library = "lfs_scene_upscaler_amd_fsr3",
-            .cache_dir = "fidelityfx",
-        });
-        static const std::array<SceneUpscalerPlugin*, 2> PLUGINS{&nvidia_dlss, &amd_fsr3};
-        return PLUGINS;
+        static const auto providers = [] {
+            std::vector<std::unique_ptr<SceneUpscalerPlugin>> result;
+            const std::array roots{lfs::core::getExecutableDir(), lfs::core::getLibDir()};
+            const auto folders = discoverSceneUpscalerProviderFolders(roots);
+            auto identity = static_cast<std::uint32_t>(SceneUpscalerBackend::FirstExternal);
+            for (const auto& folder : folders) {
+                result.push_back(std::make_unique<SceneUpscalerPlugin>(SceneUpscalerPluginInfo{
+                    .backend = static_cast<SceneUpscalerBackend>(identity++),
+                    .id = folder.id,
+                    .name = folder.id,
+                    .directory = folder.directory,
+                    .library = folder.library,
+                    .cache_dir = "providers/" + folder.id,
+                    .presets = {{
+                        {"quality", "preferences.scene_reconstruction_quality", folder.input_scales[0]},
+                        {"balanced", "preferences.scene_reconstruction_balanced", folder.input_scales[1]},
+                        {"performance", "preferences.scene_reconstruction_performance", folder.input_scales[2]},
+                    }},
+                }));
+            }
+            return result;
+        }();
+        static const auto plugins = [&] {
+            std::vector<SceneUpscalerPlugin*> result;
+            for (const auto& provider : providers)
+                result.push_back(provider.get());
+            return result;
+        }();
+        return plugins;
     }
 
     SceneUpscalerPlugin* sceneUpscalerPlugin(const SceneUpscalerBackend backend) {

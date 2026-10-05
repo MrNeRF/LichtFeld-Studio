@@ -52,40 +52,6 @@ namespace lfs::vis {
                 .input_scale = 0.50f,
             },
         };
-        constexpr std::array NVIDIA_DLSS_PRESETS{
-            SceneUpscalerPreset{
-                .id = "quality",
-                .label_key = "preferences.scene_reconstruction_quality",
-                .input_scale = 2.0f / 3.0f,
-            },
-            SceneUpscalerPreset{
-                .id = "balanced",
-                .label_key = "preferences.scene_reconstruction_balanced",
-                .input_scale = 0.58f,
-            },
-            SceneUpscalerPreset{
-                .id = "performance",
-                .label_key = "preferences.scene_reconstruction_performance",
-                .input_scale = 0.50f,
-            },
-        };
-        constexpr std::array AMD_FSR3_PRESETS{
-            SceneUpscalerPreset{
-                .id = "quality",
-                .label_key = "preferences.scene_reconstruction_quality",
-                .input_scale = 2.0f / 3.0f,
-            },
-            SceneUpscalerPreset{
-                .id = "balanced",
-                .label_key = "preferences.scene_reconstruction_balanced",
-                .input_scale = 1.0f / 1.7f,
-            },
-            SceneUpscalerPreset{
-                .id = "performance",
-                .label_key = "preferences.scene_reconstruction_performance",
-                .input_scale = 0.50f,
-            },
-        };
         constexpr std::array DESCRIPTORS{
             SceneUpscalerDescriptor{
                 .backend = SceneUpscalerBackend::Native,
@@ -105,18 +71,6 @@ namespace lfs::vis {
                 .label_key = "preferences.scene_reconstruction_temporal",
                 .presets = TEMPORAL_PRESETS,
             },
-            SceneUpscalerDescriptor{
-                .backend = SceneUpscalerBackend::NvidiaDlss,
-                .id = "nvidia-dlss",
-                .label_key = "preferences.scene_reconstruction_nvidia_dlss",
-                .presets = NVIDIA_DLSS_PRESETS,
-            },
-            SceneUpscalerDescriptor{
-                .backend = SceneUpscalerBackend::AmdFsr3,
-                .id = "amd-fsr3",
-                .label_key = "preferences.scene_reconstruction_amd_fsr3",
-                .presets = AMD_FSR3_PRESETS,
-            },
         };
 
     } // namespace
@@ -128,20 +82,39 @@ namespace lfs::vis {
             if (plugin == nullptr || plugin->available())
                 available.push_back(descriptor);
         }
+        for (auto* const plugin : sceneUpscalerPlugins()) {
+            if (plugin->available())
+                available.push_back(sceneUpscalerDescriptor(plugin->info().backend));
+        }
         return available;
     }
 
-    const SceneUpscalerDescriptor& sceneUpscalerDescriptor(const SceneUpscalerBackend backend) {
+    SceneUpscalerDescriptor sceneUpscalerDescriptor(const SceneUpscalerBackend backend) {
         const auto found =
             std::ranges::find(DESCRIPTORS, backend, &SceneUpscalerDescriptor::backend);
-        return found != DESCRIPTORS.end() ? *found : DESCRIPTORS.front();
+        if (found != DESCRIPTORS.end())
+            return *found;
+        if (auto* const plugin = sceneUpscalerPlugin(backend)) {
+            return {
+                .backend = backend,
+                .id = plugin->info().id,
+                .label_key = "",
+                .presets = plugin->info().presets,
+                .display_name = plugin->displayName(),
+            };
+        }
+        return DESCRIPTORS.front();
     }
 
     std::optional<SceneUpscalerBackend> sceneUpscalerBackendFromId(const std::string_view id) {
         const auto found = std::ranges::find(DESCRIPTORS, id, &SceneUpscalerDescriptor::id);
-        if (found == DESCRIPTORS.end())
-            return std::nullopt;
-        return found->backend;
+        if (found != DESCRIPTORS.end())
+            return found->backend;
+        for (const auto* const plugin : sceneUpscalerPlugins()) {
+            if (plugin->info().id == id)
+                return plugin->info().backend;
+        }
+        return std::nullopt;
     }
 
     bool sceneUpscalerBackendAvailable(const SceneUpscalerBackend backend) {

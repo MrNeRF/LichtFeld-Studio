@@ -45,9 +45,18 @@ set_target_properties(lfs_scene_upscaler_amd_fsr3 PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:LichtFeld-Studio>/scene_upscalers/amd"
     LIBRARY_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:LichtFeld-Studio>/scene_upscalers/amd")
 
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/provider-id.txt" "amd-fsr3\n")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/provider-module.txt" "lfs_scene_upscaler_amd_fsr3\n")
+# Exact FP32 values of the existing bootstrap preset ratios.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/provider-presets.txt" "0.6666666865348816 0.5882352590560913 0.5\n")
+set(_lfs_fsr3_metadata "${CMAKE_CURRENT_BINARY_DIR}/provider-id.txt"
+    "${CMAKE_CURRENT_BINARY_DIR}/provider-module.txt"
+    "${CMAKE_CURRENT_BINARY_DIR}/provider-presets.txt")
+
 add_custom_command(TARGET lfs_scene_upscaler_amd_fsr3 POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "${LFS_AMD_FSR3_LICENSE}"
+        ${_lfs_fsr3_metadata}
         "$<TARGET_FILE_DIR:lfs_scene_upscaler_amd_fsr3>"
     COMMENT "Staging the AMD FidelityFX SDK license beside the optional FSR plugin")
 
@@ -62,3 +71,4 @@ install(TARGETS lfs_scene_upscaler_amd_fsr3
     LIBRARY DESTINATION "${_lfs_fsr3_install_dir}")
 install(FILES "${LFS_AMD_FSR3_LICENSE}"
     DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/AMD-FidelityFX-SDK")
+install(FILES ${_lfs_fsr3_metadata} DESTINATION "${_lfs_fsr3_install_dir}")

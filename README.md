@@ -191,7 +191,7 @@ Getting started:
 
 ## License
 
-This project is licensed under GPLv3. It includes an additional permission for NVIDIA DLSS; see [LICENSE-EXCEPTION.txt](LICENSE-EXCEPTION.txt) for details.
+This project is licensed under GPLv3. Optional external plugins have separate licenses and distribution terms.
 
 #### _Agents_
 

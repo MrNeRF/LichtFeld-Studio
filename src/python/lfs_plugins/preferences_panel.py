@@ -93,6 +93,7 @@ class PreferencesPanel(Panel):
         self._handle = None
         self._scene_upscaler_catalog = []
         self._scene_upscaler_presets = {}
+        self._scene_upscaler_display_names = {}
         self._keymap = KeymapBindingsSection()
         self._theme_catalog = []
         self._theme_families = []
@@ -533,7 +534,7 @@ class PreferencesPanel(Panel):
         self._handle.update_record_list(
             "scene_upscalers",
             [
-                {"index": str(index), "label": lf.ui.tr(label_key)}
+                {"index": str(index), "label": self._scene_upscaler_display_names.get(_backend) or lf.ui.tr(label_key)}
                 for index, (_backend, label_key) in enumerate(self._scene_upscaler_catalog)
             ],
         )
@@ -711,18 +712,22 @@ class PreferencesPanel(Panel):
         records = lf.ui.get_scene_reconstruction_options()
         backends = []
         presets = {}
+        display_names = {}
         for record in records:
             backend_id = str(record["id"])
             label_key = str(record["label_key"])
+            display_name = str(record.get("display_name", ""))
             backend_presets = tuple(
                 (str(preset["id"]), str(preset["label_key"]))
                 for preset in record.get("presets", ())
             )
-            if backend_id and label_key and backend_presets:
+            if backend_id and (label_key or display_name) and backend_presets:
                 backends.append((backend_id, label_key))
                 presets[backend_id] = backend_presets
+                display_names[backend_id] = display_name
         self._scene_upscaler_catalog = backends
         self._scene_upscaler_presets = presets
+        self._scene_upscaler_display_names = display_names
 
     def _sync_scene_upscaler_preset_records(self):
         if not self._handle:

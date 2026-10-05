@@ -11,6 +11,7 @@
 #include "rendering/scene_upscaler_plugin_api.h"
 #endif
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
@@ -40,11 +41,12 @@ namespace lfs::vis {
     // itself remains excluded from Metal-only builds below.
     struct SceneUpscalerPluginInfo {
         SceneUpscalerBackend backend;
-        std::string_view id;
-        std::string_view name;
-        std::string_view directory;
-        std::string_view library;
-        std::string_view cache_dir;
+        std::string id;
+        std::string name;
+        std::filesystem::path directory;
+        std::string library;
+        std::string cache_dir;
+        std::array<SceneUpscalerPreset, 3> presets;
     };
 
 #ifdef LFS_GRAPHICS_VULKAN
@@ -97,6 +99,7 @@ namespace lfs::vis {
         void configure(bool loading_enabled);
         [[nodiscard]] bool probe();
         [[nodiscard]] bool available();
+        [[nodiscard]] std::string displayName() const;
         [[nodiscard]] std::string diagnostic() const;
         [[nodiscard]] bool hasCapability(LfsSceneUpscalerPluginCapability capability);
 
@@ -132,6 +135,7 @@ namespace lfs::vis {
         explicit SceneUpscalerPlugin(const SceneUpscalerPluginInfo& info) : info_(info) {}
         [[nodiscard]] const SceneUpscalerPluginInfo& info() const noexcept { return info_; }
         [[nodiscard]] constexpr bool available() const noexcept { return false; }
+        [[nodiscard]] std::string displayName() const { return info_.name; }
 
     private:
         SceneUpscalerPluginInfo info_;

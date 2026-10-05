@@ -143,13 +143,15 @@ The [test prerequisites](#tests) still apply.
 
 Creates a self-contained package that works on any machine with an NVIDIA driver.
 
-The optional NVIDIA DLSS and AMD FSR 3.1 scene-reconstruction plugins are off
-by default. To include them, pass `-DLFS_ENABLE_NVIDIA_DLSS=ON` and/or
-`-DLFS_ENABLE_AMD_FSR3=ON` and provide the SDK checkouts, typically at
-`external/nvidia-dlss-sdk` (including Git LFS objects) and
-`external/fidelityfx-sdk` (FidelityFX SDK v1.1.4), or explicit
-`-DLFS_NVIDIA_DLSS_ROOT=` and `-DLFS_AMD_FSR3_ROOT=` paths. CMake never
-downloads either SDK or accepts its license.
+The optional AMD FSR 3.1 plugin is off by default. Enable it with
+`-DLFS_ENABLE_AMD_FSR3=ON` and supply FidelityFX SDK v1.1.4 using
+`-DLFS_AMD_FSR3_ROOT=`. CMake does not download or accept its license.
+External reconstruction plugins are built and installed separately; see
+[scene reconstruction](docs/development/scene-reconstruction.md).
+Use a fresh portable install prefix. Portable installation rejects a prefix
+containing a separately installed external reconstruction plugin or runtime;
+it does not delete the user's files. Keep that local installation separate
+from the primary distribution staging directory.
 
 ```bash
 cmake -B build -DBUILD_PORTABLE=ON
@@ -161,10 +163,9 @@ cmake --install build --prefix ./dist
 # Example training run (writes /path/to/output/project.licht)
 ./dist/bin/run_lichtfeld.sh -d /path/to/data -o /path/to/output
 
-# Portable package with the NVIDIA DLSS and AMD FSR 3.1 plugins:
-# git clone https://github.com/NVIDIA/DLSS external/nvidia-dlss-sdk
+# Portable package with the AMD FSR 3.1 plugin:
 # git clone --branch v1.1.4 https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK external/fidelityfx-sdk
-# cmake -B build -DBUILD_PORTABLE=ON -DLFS_ENABLE_NVIDIA_DLSS=ON -DLFS_ENABLE_AMD_FSR3=ON
+# cmake -B build -DBUILD_PORTABLE=ON -DLFS_ENABLE_AMD_FSR3=ON
 ```
 
 ### macOS portable app (Apple Silicon)
@@ -304,22 +305,10 @@ dist/
 | `BUILD_LOCALIZATION_TESTS` | OFF | Register headless localization contract tests |
 | `LFS_ENFORCE_LINUX_GUI_BACKENDS` | ON | Linux only. Fail configure if SDL3 would be built without both X11 and Wayland |
 | `LFS_CUDA_COMPILER_CACHE` | *(empty)* | Compiler cache for CUDA only. Empty follows the auto-detected launcher; `OFF` disables CUDA caching; or name/path of a launcher such as `ccache`. Needed where nvcc cannot be wrapped by sccache |
-| `LFS_ENABLE_NVIDIA_DLSS` | OFF | Build the optional external NVIDIA DLSS viewport plugin |
-| `LFS_NVIDIA_DLSS_ROOT` | *(empty)* | Path to an NVIDIA DLSS SDK checkout supplied separately; required when the plugin is enabled |
 | `LFS_ENABLE_AMD_FSR3` | OFF | Build the optional external AMD FSR 3.1 viewport plugin |
 | `LFS_AMD_FSR3_ROOT` | *(empty)* | Path to an AMD FidelityFX SDK v1.1.4 checkout supplied separately; required when the plugin is enabled |
 | `LFS_AMD_FSR3_LIBRARY_DIR` | *(empty)* | Optional directory containing prebuilt FidelityFX FSR 3.1 upscaler and Vulkan backend libraries |
 | `LFS_AMD_FSR3_BUILD_SDK` | ON | Build the required FidelityFX static libraries from an isolated copy of the supplied SDK when prebuilt libraries are absent; Linux and macOS use vcpkg glslang |
-
-The DLSS option builds a separate plugin under `scene_upscalers/nvidia`; the
-main executable and `lfs_visualizer` do not link to NGX. The plugin is opened
-from that application-owned path during Vulkan bootstrap only to query required
-extensions. NGX runtime initialization and GPU feature resources remain lazy
-until DLSS is selected. A portable build with the plugin enabled packages the
-corresponding vendor runtime subject to NVIDIA's redistribution terms. The
-official SDK repository is [NVIDIA/DLSS](https://github.com/NVIDIA/DLSS).
-When the plugin is enabled, a missing or incomplete SDK is a configuration
-error rather than silently producing a build without the requested backend.
 
 The FSR option follows the same boundary under `scene_upscalers/amd`. FidelityFX
 FSR 3.1 and its Vulkan backend are linked only into that optional MIT-licensed

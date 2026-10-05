@@ -113,8 +113,7 @@
       "binaryDir": "${sourceDir}/build-macos-portable",
       "cacheVariables": {
         "BUILD_PORTABLE": "ON",
-        "LFS_MACOS_PORTABLE_APP": "ON",
-        "LFS_ENABLE_NVIDIA_DLSS": "OFF"
+        "LFS_MACOS_PORTABLE_APP": "ON"
       }
     },
     {

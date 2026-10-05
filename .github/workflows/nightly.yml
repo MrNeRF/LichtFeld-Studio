@@ -196,14 +196,6 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Checkout NVIDIA DLSS SDK for the portable plugin
-        uses: actions/checkout@v4
-        with:
-          repository: NVIDIA/DLSS
-          ref: a291cc7b314e2b985cd10290b943b070acc8e97f
-          path: external/nvidia-dlss-sdk
-          lfs: true
-
       - name: Checkout AMD FidelityFX SDK for the portable plugin
         uses: actions/checkout@v4
         with:
@@ -255,7 +247,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $buildDir = $env:BUILD_DIR
-          $cmakeArgs = "-B $buildDir -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF -DLFS_ENABLE_NVIDIA_DLSS=ON -DLFS_NVIDIA_DLSS_ROOT=external/nvidia-dlss-sdk -DLFS_ENABLE_AMD_FSR3=ON -DLFS_AMD_FSR3_ROOT=external/fidelityfx-sdk"
+          $cmakeArgs = "-B $buildDir -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF -DLFS_ENABLE_AMD_FSR3=ON -DLFS_AMD_FSR3_ROOT=external/fidelityfx-sdk"
           $retryablePatterns = @(
             'status code 5\d\d',
             'timed out',
@@ -403,6 +395,9 @@ jobs:
 
           $packageName = "LichtFeld-Studio-windows-v$packageVersion.zip"
           cmake --install $env:BUILD_DIR --prefix dist
+          if ($LASTEXITCODE -ne 0) {
+            throw "Portable install failed; package creation is blocked."
+          }
           Compress-Archive -Path dist\* -DestinationPath $packageName
           "build_channel=$buildChannel" >> $env:GITHUB_OUTPUT
           "package_name=$packageName" >> $env:GITHUB_OUTPUT

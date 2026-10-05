@@ -1253,3 +1253,31 @@ def test_unchanged_unavailable_tensor_backend_does_not_save_or_show_dialog(prefe
 def test_platform_viewer_has_no_backend_setting(preferences_panel_module):
     module, _state = preferences_panel_module
     assert not hasattr(module.PreferencesPanel(), "_set_viewer_backend_preference")
+
+
+def test_optional_provider_names_come_from_catalog_and_do_not_require_translation_keys(
+    preferences_panel_module, monkeypatch
+):
+    module, state = preferences_panel_module
+    original = module.lf.ui.get_scene_reconstruction_options()
+    provider = {
+        "id": "amd-fsr3", "label_key": "", "display_name": "AMD FSR 3.1",
+        "presets": [{"id": "quality", "label_key": "preferences.scene_reconstruction_quality"}],
+    }
+    monkeypatch.setattr(module.lf.ui, "get_scene_reconstruction_options", lambda: original + [provider])
+    panel = module.PreferencesPanel()
+    captured = {}
+    panel._handle = SimpleNamespace(update_record_list=lambda name, records: captured.update({name: records}))
+    monkeypatch.setattr(panel, "_sync_theme_variant_records", lambda: None)
+    monkeypatch.setattr(panel, "_reload_file_associations", lambda: None)
+    monkeypatch.setattr(module.lf.ui, "themes", lambda: [], raising=False)
+    monkeypatch.setattr(module.lf.ui, "get_languages", lambda: [("en", "English")], raising=False)
+    panel._sync_scene_reconstruction_catalog()
+    panel._rebuild_records()
+    assert panel._scene_upscaler_catalog[-1] == ("amd-fsr3", "")
+    assert captured["scene_upscalers"][-1]["label"] == "AMD FSR 3.1"
+    assert captured["scene_upscalers"][0]["label"] == original[0]["label_key"]
+    monkeypatch.setattr(module.lf.ui, "get_scene_reconstruction_options", lambda: original)
+    panel._sync_scene_reconstruction_catalog()
+    panel._rebuild_records()
+    assert all(item[0] != "amd-fsr3" for item in panel._scene_upscaler_catalog)

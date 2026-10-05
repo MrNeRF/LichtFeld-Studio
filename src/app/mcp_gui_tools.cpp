@@ -3189,6 +3189,7 @@ namespace lfs::app {
                     }
                     backends.push_back(json{
                         {"id", std::string(descriptor.id)},
+                        {"display_name", descriptor.display_name},
                         {"presets", std::move(presets)},
                     });
                 }

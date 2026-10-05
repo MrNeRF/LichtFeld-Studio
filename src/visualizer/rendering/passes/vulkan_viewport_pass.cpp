@@ -12,10 +12,10 @@
 #include "gui/vulkan_ui_texture.hpp"
 #include "rendering/output_image_pool.hpp"
 #include "rendering/scene_upscaler_plugin.hpp"
+#include "rendering/viewport_geometry.hpp"
 #include "rendering/vulkan_wait.hpp"
 #include "shared_viewport_gpu_assets.hpp"
 #include "viewport_pass_graph.hpp"
-#include "rendering/viewport_geometry.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
 #include "vulkan_scene_image_uploader.hpp"
@@ -2439,9 +2439,11 @@ namespace lfs::vis {
                                ? split_view_pass.available()
                                : scene_spatial_pipeline != VK_NULL_HANDLE;
                 case SceneUpscalerBackend::Temporal:
-                case SceneUpscalerBackend::NvidiaDlss:
-                case SceneUpscalerBackend::AmdFsr3:
                     return std::nullopt;
+                default:
+                    if (sceneUpscalerPlugin(params.scene_upscaler) != nullptr)
+                        return std::nullopt;
+                    return false;
                 }
                 return false;
             }();

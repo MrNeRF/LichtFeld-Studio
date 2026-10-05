@@ -47,7 +47,7 @@ native export does not produce this warning. Structured issue IDs and
 provider-specific unavailability reason IDs remain stable for logs and for
 future resolution through owner-scoped plugin catalogs.
 
-The initial catalog intentionally exposes only `native`. DLSS, FSR, and other
+The initial catalog intentionally exposes only `native`. FSR and other external
 implementations are not named or loaded by this contract. Later viewer-only
 plugin work can populate the same read-only interface after static discovery
 and device availability checks.
@@ -55,7 +55,7 @@ and device availability checks.
 That future **viewer-side adapter** must reuse the existing
 `SceneUpscalerDescriptor`, `SceneUpscalerPreset`, and `SceneUpscalerSelection`
 registry in `src/visualizer/rendering/scene_upscaler_registry.hpp`, including its
-stable IDs (`native`, `spatial`, `temporal`, `nvidia-dlss`). Do not introduce a
+stable IDs (`native`, `spatial`, `temporal`, `external`). Do not introduce a
 parallel backend or preset registry. The adapter must copy metadata and add
 offline/resource/projection capabilities; viewport availability alone does not
 prove offline support. The serializable contract stays in `io`, with no reverse
