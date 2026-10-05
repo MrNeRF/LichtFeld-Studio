@@ -65,6 +65,7 @@ namespace lfs::training {
         std::optional<float> psnr;
         std::optional<float> ssim;
         std::optional<float> lpips;
+        std::optional<float> flip;
         bool masked = false;
         int bit_depth = 8;
         float evaluated_pixel_fraction = 0.0f;
@@ -76,6 +77,7 @@ namespace lfs::training {
         float psnr = 0.0f;
         float ssim = 0.0f;
         std::optional<float> lpips;
+        std::optional<float> flip;
         float elapsed_time = 0.0f;
         int num_gaussians = 0;
         int iteration = 0;
@@ -101,6 +103,9 @@ namespace lfs::training {
             if (lpips && std::isfinite(*lpips)) {
                 ss << ", LPIPS: " << *lpips;
             }
+            if (flip && std::isfinite(*flip)) {
+                ss << ", FLIP: " << *flip;
+            }
             ss << ", Time: " << elapsed_time << "s/image"
                << ", #GS: " << num_gaussians
                << ", bias=(" << bias_r << "," << bias_g << "," << bias_b << ")"
@@ -115,7 +120,7 @@ namespace lfs::training {
         }
 
         static std::string to_csv_header() {
-            return "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b";
+            return "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b,flip";
         }
 
         [[nodiscard]] std::string to_csv_row() const {
@@ -138,7 +143,10 @@ namespace lfs::training {
                 ss << *depth_absrel;
             }
             ss << "," << bias_r << "," << bias_g << "," << bias_b
-               << "," << bias_corr_r << "," << bias_corr_g << "," << bias_corr_b;
+               << "," << bias_corr_r << "," << bias_corr_g << "," << bias_corr_b << ",";
+            if (flip && std::isfinite(*flip)) {
+                ss << *flip;
+            }
             return ss.str();
         }
     };

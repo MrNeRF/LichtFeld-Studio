@@ -259,6 +259,7 @@ namespace lfs::core {
             bool bg_modulation = false;                        // Enable sinusoidal background modulation
             bool enable_eval = false;                          // Only evaluate when explicitly enabled
             bool eval_all = false;                             // Train on every image and evaluate all of them
+            bool eval_flip = false;                            // Also compute FLIP and save its error maps
             EvalSpace eval_space = EvalSpace::Distorted;       // Reference image space used for evaluation
             EvalBitDepth eval_bit_depth = EvalBitDepth::Auto;  // Grid the render is quantized to for evaluation
             std::string eval_mask = "";                        // Mesh path, bbox:..., cropbox, masks:<folder>, depth:near,far, points:radius,close or points:<file>; empty disables

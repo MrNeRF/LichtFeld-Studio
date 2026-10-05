@@ -757,6 +757,12 @@ namespace lfs::core::param {
             .locale("training_params.eval_all")
             .tooltip("training.tooltip.eval_all")
             .all_strategies()
+            .bool_prop(&OptimizationParameters::eval_flip,
+                       "eval_flip", "Eval FLIP", d.eval_flip,
+                       "Also compute FLIP per evaluated image and save its error map next to the evaluation images")
+            .locale("training_params.eval_flip")
+            .tooltip("training.tooltip.eval_flip")
+            .all_strategies()
             .enum_prop(&OptimizationParameters::eval_space,
                        "eval_space", "Eval Space", d.eval_space,
                        {{"Distorted", EvalSpace::Distorted, "training.options.eval_space.distorted", "distorted"},

@@ -2165,6 +2165,15 @@ class OptimizationParams:
     def eval_all(self, arg: bool, /) -> None: ...
 
     @property
+    def eval_flip(self) -> bool:
+        """
+        Also compute FLIP per evaluated image and save its error map next to the evaluation images
+        """
+
+    @eval_flip.setter
+    def eval_flip(self, arg: bool, /) -> None: ...
+
+    @property
     def eval_mask(self) -> str:
         """
         Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected

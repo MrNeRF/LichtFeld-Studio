@@ -16,6 +16,7 @@
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "eval_mask.hpp"
+#include "flip.cuh"
 #include "io/filesystem_utils.hpp"
 #include "io/loader.hpp"
 #include "io/pipelined_image_loader.hpp"
@@ -1182,6 +1183,8 @@ namespace lfs::training {
             {"evaluated_pixel_fraction", view.evaluated_pixel_fraction},
             {"validity_mask_applied", view.validity_mask_applied},
         };
+        if (view.flip)
+            entry["flip"] = json_metric(view.flip);
         if (!view.skipped_reason.empty())
             entry["skipped_reason"] = view.skipped_reason;
 
@@ -1287,6 +1290,8 @@ namespace lfs::training {
             report_file << "SSIM:  " << final.ssim << "\n";
             if (final.lpips && std::isfinite(*final.lpips))
                 report_file << "LPIPS: " << *final.lpips << "\n";
+            if (final.flip && std::isfinite(*final.flip))
+                report_file << "FLIP:  " << *final.flip << "\n";
             report_file << "Time per image: " << final.elapsed_time << " seconds\n";
             report_file << "Number of Gaussians: " << final.num_gaussians << "\n";
             report_file << "Bias (raw):  (" << final.bias_r << ", " << final.bias_g << ", " << final.bias_b << ")\n";
@@ -1381,7 +1386,7 @@ namespace lfs::training {
         result.num_gaussians = static_cast<int>(splatData.size());
         result.iteration = iteration;
 
-        std::vector<float> psnr_values, ssim_values, lpips_values, normal_values, depth_values;
+        std::vector<float> psnr_values, ssim_values, lpips_values, flip_values, normal_values, depth_values;
         std::vector<float> bias_r_values, bias_g_values, bias_b_values;
         std::vector<float> bias_corr_r_values, bias_corr_g_values, bias_corr_b_values;
         const auto start_time = std::chrono::steady_clock::now();
@@ -1611,6 +1616,23 @@ namespace lfs::training {
                 }
             }
             view.lpips = lpips;
+            lfs::core::Tensor flip_map;
+            if (_params.optimization.eval_flip) {
+                try {
+                    flip_map = flip_error_map(gt_float, r_output.image);
+                    if (mask.is_valid())
+                        flip_map = flip_map * mask_as_float01(mask);
+                    const float flip = mask.is_valid()
+                                           ? flip_map.sum().item<float>() / mask_as_float01(mask).sum().item<float>()
+                                           : flip_map.mean().item<float>();
+                    if (std::isfinite(flip)) {
+                        view.flip = flip;
+                        flip_values.push_back(flip);
+                    }
+                } catch (const std::exception& e) {
+                    LOG_WARN("Eval: FLIP failed for camera '{}' ({})", cam->image_name(), e.what());
+                }
+            }
             auto accumulate_bias = [&](const lfs::core::Tensor& image,
                                        std::vector<float>& br,
                                        std::vector<float>& bg,
@@ -1775,6 +1797,11 @@ namespace lfs::training {
                     true, // horizontal
                     4,    // separator width
                     lfs::core::provenance_to_json(stamp));
+                if (flip_map.is_valid()) {
+                    lfs::core::image_io::save_image_async(
+                        eval_dir / (std::to_string(image_idx) + "_flip.png"),
+                        flip_error_image(flip_map).to(lfs::core::DataType::Float32).div(255.0f));
+                }
                 if (view.validity_mask_applied) {
                     lfs::core::image_io::save_image_async(
                         eval_dir / (std::to_string(image_idx) + "_metric_mask.png"),
@@ -1814,6 +1841,7 @@ namespace lfs::training {
             result.ssim = std::accumulate(ssim_values.begin(), ssim_values.end(), 0.0f) / ssim_values.size();
         }
         result.lpips = mean_of_finite(lpips_values);
+        result.flip = mean_of_finite(flip_values);
         if (!bias_r_values.empty()) {
             const auto n = static_cast<float>(bias_r_values.size());
             result.bias_r = std::accumulate(bias_r_values.begin(), bias_r_values.end(), 0.0f) / n;

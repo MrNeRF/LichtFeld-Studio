@@ -218,7 +218,7 @@ namespace {
 
 TEST(EvalMetricsCsv, HeaderAppendsGeometryColumnsWithoutRenamingExisting) {
     EXPECT_EQ(EvalMetrics::to_csv_header(),
-              "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b");
+              "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b,flip");
 
     EvalMetrics missing;
     missing.iteration = 200;
@@ -226,7 +226,7 @@ TEST(EvalMetricsCsv, HeaderAppendsGeometryColumnsWithoutRenamingExisting) {
     missing.ssim = 0.5f;
     missing.elapsed_time = 0.01f;
     missing.num_gaussians = 10;
-    EXPECT_EQ(missing.to_csv_row(), "200,1.000000,0.500000,,0.010000,10,,,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000");
+    EXPECT_EQ(missing.to_csv_row(), "200,1.000000,0.500000,,0.010000,10,,,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,");
 
     EvalMetrics present = missing;
     present.normal_angle_deg = 12.5f;
@@ -234,7 +234,8 @@ TEST(EvalMetricsCsv, HeaderAppendsGeometryColumnsWithoutRenamingExisting) {
     present.bias_r = 0.001f;
     present.bias_g = -0.002f;
     present.bias_b = 0.003f;
-    EXPECT_EQ(present.to_csv_row(), "200,1.000000,0.500000,,0.010000,10,12.500000,0.250000,0.001000,-0.002000,0.003000,0.000000,0.000000,0.000000");
+    present.flip = 0.125f;
+    EXPECT_EQ(present.to_csv_row(), "200,1.000000,0.500000,,0.010000,10,12.500000,0.250000,0.001000,-0.002000,0.003000,0.000000,0.000000,0.000000,0.125000");
 }
 
 TEST(EvalMetricsEvent, ZeroLpipsRemainsPresent) {
@@ -443,8 +444,53 @@ TEST(MetricsEvaluatorGeom, MatchingRenderedAndPriorNormalIsNearZero) {
     ASSERT_TRUE(metrics.normal_angle_deg.has_value());
     EXPECT_NEAR(*metrics.normal_angle_deg, 0.0f, 2.0f);
     EXPECT_EQ(EvalMetrics::to_csv_header(),
-              "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b");
+              "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b,flip");
 
+    std::filesystem::remove_all(tmp);
+}
+
+// Catches FLIP missing from the per-view record, the CSV row or the saved error map when enabled, and
+// FLIP computed when it is not.
+TEST(MetricsEvaluator, FlipIsReportedAndSavedOnlyWhenEnabled) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_flip";
+    std::filesystem::remove_all(tmp);
+    const auto image_path = std::filesystem::path(TEST_DATA_DIR) / "bicycle" / "images_8" / "_DSC8679.JPG";
+    const auto [width, height, channels] = lfs::core::get_image_info(image_path);
+    ASSERT_GT(width, 0);
+    auto dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{make_eval_camera(image_path, {}, width, height)}, DatasetConfig{},
+        CameraDataset::Split::ALL);
+    auto splat = make_front_facing_splat();
+    auto background = Tensor::zeros({3}, Device::CUDA);
+
+    for (const bool enabled : {true, false}) {
+        auto params = make_eval_params(tmp / (enabled ? "on" : "off"));
+        params.optimization.eval_flip = enabled;
+        params.optimization.enable_save_eval_images = true;
+        std::filesystem::create_directories(params.dataset.output_path);
+        MetricsEvaluator evaluator(params);
+        const auto metrics = evaluator.evaluate(1, splat, dataset, background);
+        ASSERT_TRUE(metrics.valid);
+        ASSERT_EQ(metrics.views.size(), 1u);
+        const auto flip_png = params.dataset.output_path / "eval_step_1" / "0_flip.png";
+        EXPECT_EQ(metrics.views[0].flip.has_value(), enabled);
+        EXPECT_EQ(metrics.flip.has_value(), enabled);
+        EXPECT_EQ(std::filesystem::exists(flip_png), enabled);
+        EXPECT_EQ(metrics.to_csv_row().ends_with(","), !enabled);
+        if (!enabled)
+            continue;
+        EXPECT_GT(*metrics.views[0].flip, 0.0f);
+        EXPECT_LE(*metrics.views[0].flip, 1.0f);
+        EXPECT_FLOAT_EQ(*metrics.flip, *metrics.views[0].flip);
+        const auto [flip_width, flip_height, flip_channels] = lfs::core::get_image_info(flip_png);
+        EXPECT_EQ(flip_width, width);
+        EXPECT_EQ(flip_height, height);
+    }
     std::filesystem::remove_all(tmp);
 }
 

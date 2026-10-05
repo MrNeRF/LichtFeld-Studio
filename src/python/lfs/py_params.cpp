@@ -954,6 +954,11 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_all = v; }); },
                 "Train on every image and evaluate all of them; no image is held out")
             .def_prop_rw(
+                "eval_flip",
+                [](PyOptimizationParams& self) { return self.params().eval_flip; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_flip = v; }); },
+                "Also compute FLIP per evaluated image and save its error map next to the evaluation images")
+            .def_prop_rw(
                 "eval_mask",
                 [](PyOptimizationParams& self) { return self.params().eval_mask; },
                 [](PyOptimizationParams&, const std::string& v) {

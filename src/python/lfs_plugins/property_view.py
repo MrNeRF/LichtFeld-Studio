@@ -91,6 +91,7 @@ BOOL_PROPS = (
     "random",
     "enable_eval",
     "eval_all",
+    "eval_flip",
     "eval_mask_invert",
 )
 
@@ -218,6 +219,7 @@ BASIC_RUNS = (
 DATASET_RUNS = (
     _run("dataset_eval", "enable_eval", visibility_condition_id="has_dataset"),
     _run("dataset_eval_train", "eval_all", visibility_condition_id="dep_eval"),
+    _run("dataset_eval_flip", "eval_flip", visibility_condition_id="dep_eval"),
     _run("dataset_eval_space", "eval_space", visibility_condition_id="dep_undistort"),
     _run("dataset_eval_bit_depth", "eval_bit_depth", visibility_condition_id="dep_eval"),
     _run(

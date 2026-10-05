@@ -100,6 +100,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--gut", "gut", Bool},
             OptimizationCliBinding{"--eval", "enable_eval", Bool},
             OptimizationCliBinding{"--eval-all", "eval_all", Bool},
+            OptimizationCliBinding{"--eval-flip", "eval_flip", Bool},
             OptimizationCliBinding{"--eval-space", "eval_space", Enum},
             OptimizationCliBinding{"--eval-bit-depth", "eval_bit_depth", Enum},
             OptimizationCliBinding{"--eval-mask", "eval_mask", String, false,
@@ -870,6 +871,7 @@ namespace {
             ::args::Group output_group(parser, "OUTPUT OPTIONS:");
             ::args::Flag enable_eval(output_group, "eval", lfs::core::args::optimization_cli_help("--eval"), {"eval"});
             ::args::Flag eval_all(output_group, "eval_all", lfs::core::args::optimization_cli_help("--eval-all"), {"eval-all"});
+            ::args::Flag eval_flip(output_group, "eval_flip", lfs::core::args::optimization_cli_help("--eval-flip"), {"eval-flip"});
             ::args::MapFlag<std::string, lfs::core::param::EvalSpace> eval_space(
                 output_group, "eval_space", lfs::core::args::optimization_cli_help("--eval-space"),
                 {"eval-space"},
@@ -1539,6 +1541,7 @@ namespace {
                                         ppisp_sidecar_path_val = cli_option_present({"--ppisp-sidecar"}) ? std::optional<std::string>(::args::get(ppisp_sidecar_path)) : std::optional<std::string>(),
                                         enable_eval_flag = bool(enable_eval),
                                         eval_all_flag = bool(eval_all),
+                                        eval_flip_flag = bool(eval_flip),
                                         eval_space_val = cli_option_present({"--eval-space"}) ? std::optional<lfs::core::param::EvalSpace>(::args::get(eval_space)) : std::optional<lfs::core::param::EvalSpace>(),
                                         eval_bit_depth_val = cli_option_present({"--eval-bit-depth"}) ? std::optional<lfs::core::param::EvalBitDepth>(::args::get(eval_bit_depth)) : std::optional<lfs::core::param::EvalBitDepth>(),
                                         eval_mask_val = std::move(eval_mask_val),
@@ -1711,6 +1714,7 @@ namespace {
                 setFlag(enable_eval_flag, opt.enable_eval);
                 setFlag(eval_all_flag, opt.eval_all);
                 setFlag(eval_all_flag, opt.enable_eval);
+                setFlag(eval_flip_flag, opt.eval_flip);
                 setVal(eval_space_val, opt.eval_space);
                 setVal(eval_bit_depth_val, opt.eval_bit_depth);
                 setVal(eval_mask_val, opt.eval_mask);
@@ -1834,6 +1838,7 @@ namespace {
                 note_opt("ppisp_sidecar_path", ppisp_sidecar_path_val.has_value());
                 note_opt("enable_eval", enable_eval_flag || eval_all_flag);
                 note_opt("eval_all", eval_all_flag);
+                note_opt("eval_flip", eval_flip_flag);
                 note_opt("eval_space", eval_space_val.has_value());
                 note_opt("eval_bit_depth", eval_bit_depth_val.has_value());
                 note_opt("eval_mask", eval_mask_val.has_value());
@@ -2046,6 +2051,9 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
     if ((flag_given("--eval-mask") || flag_given("--eval-mask-invert")) &&
         !params->optimization.enable_eval)
         return std::unexpected("--eval-mask and --eval-mask-invert need --eval or --eval-all; without them no evaluation runs");
+    if (flag_given("--eval-flip") && !params->optimization.enable_eval && !params->resume_project &&
+        !params->resume_checkpoint)
+        return std::unexpected("--eval-flip needs --eval or --eval-all; without them no evaluation runs");
     if (flag_given("--eval-mask-invert") && !flag_given("--eval-mask"))
         return std::unexpected("--eval-mask-invert needs --eval-mask");
     if (params->optimization.eval_all && flag_given("--test-every"))
