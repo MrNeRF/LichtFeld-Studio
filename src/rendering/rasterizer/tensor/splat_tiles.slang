@@ -17,9 +17,12 @@ struct Parameters {
     Ptr<uint64_t, Access.ReadWrite> keys; // uint32 tile keys when source-sorted
     Ptr<uint, Access.ReadWrite> indices;
     Ptr<uint, Access.ReadWrite> ranges;   // [tiles][begin, end)
-    Ptr<uint, Access.Read> source_order;      // optional: source-sorted frames
-    Ptr<uint64_t, Access.Read> source_counts; // optional: source-sorted frames
+    Ptr<uint, Access.ReadWrite> source_order;      // source-sorted frames: source per rank
+    Ptr<uint64_t, Access.ReadWrite> source_counts; // source-sorted frames: tiles per source
     Ptr<RasterParameters, Access.Read> raster;
+    Ptr<uint, Access.ReadWrite> source_keys;       // source-sorted frames: uncompacted depth keys
+    Ptr<uint, Access.ReadWrite> source_ids;
+    Ptr<uint64_t, Access.ReadWrite> group_offsets; // exclusive scan of the visible counts in `offsets`
 };
 [[vk::push_constant]] ConstantBuffer<Parameters> p;
 
@@ -87,6 +90,78 @@ void tile_status(uint3 tid : SV_DispatchThreadID) {
                               : 1u;
     p.dispatch_args[19] = 1u;
     p.dispatch_args[20] = 1u;
+}
+
+groupshared uint visible_totals[8];
+
+// Source-sorted frames sort each visible source's exact depth key before it
+// is duplicated into tiles; a stable tile-only sort then keeps that order.
+// Per 256 sources: visible keys and ids packed to the front, their number in
+// offsets[group], and every source's tile count.
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void source_key_groups(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
+    const uint lane = thread.x, sg = lane / 32u, group = group_id.x, i = group * 256u + lane;
+    const RasterParameters r = p.raster[0];
+    uint key = 0;
+    uint64_t count = 0;
+    if (i < r.count) {
+        const ProjectedSplat s = p.splats[i];
+        key = asuint(s.color.w);
+        const uint4 b = clipped_bounds(s, r);
+        count = b.z > b.x && b.w > b.y ? uint64_t((b.z + 15u) / 16u - b.x / 16u) * uint64_t((b.w + 15u) / 16u - b.y / 16u) : 0ul;
+        p.source_counts[i] = count;
+    }
+    const uint visible = count != 0ul ? 1u : 0u;
+    uint rank = WavePrefixSum(visible);
+    const uint total = WaveActiveSum(visible);
+    if ((lane & 31u) == 0u)
+        visible_totals[sg] = total;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint j = 0; j < sg; ++j)
+        rank += visible_totals[j];
+    if (visible != 0u) {
+        p.source_keys[group * 256u + rank] = key;
+        p.source_ids[group * 256u + rank] = i;
+    }
+    if (lane == 255u)
+        p.offsets[group] = rank + visible;
+}
+
+// Packs the visible keys of every group contiguously; the count becomes the
+// sort length.
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void source_compact(uint3 tid : SV_DispatchThreadID) {
+    const uint i = tid.x, group = i / 256u, lane = i % 256u;
+    const RasterParameters r = p.raster[0];
+    if (i >= r.count)
+        return;
+    if (uint64_t(lane) < p.offsets[group]) {
+        const uint to = uint(p.group_offsets[group]) + lane;
+        ((Ptr<uint, Access.ReadWrite>)p.keys)[to] = p.source_keys[i];
+        p.indices[to] = p.source_ids[i];
+    }
+    if (i == 0u) {
+        const uint last = (r.count - 1u) / 256u;
+        RasterStatus status;
+        status.required = p.group_offsets[last] + p.offsets[last];
+        status.error = 0u;
+        status.blend_threads = 0u;
+        status.maximum_tile_instances = 0u;
+        status.padding = 0u;
+        p.status[0] = status;
+        write_sort_dispatch(status);
+    }
+}
+
+// Rank -> source of the depth-sorted visible sources; hidden ranks get ~0.
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void source_permutation(uint3 tid : SV_DispatchThreadID) {
+    const uint i = tid.x;
+    if (i < p.raster[0].count)
+        p.source_order[i] = uint64_t(i) < p.status[0].required ? p.indices[i] : 0xffffffffu;
 }
 
 [shader("compute")]

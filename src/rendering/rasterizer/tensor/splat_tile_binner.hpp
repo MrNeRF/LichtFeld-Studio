@@ -34,12 +34,15 @@ namespace lfs::rendering {
         // `splats` holds `count` ProjectedSplat records; `raster` one
         // RasterParameters whose count, tiles, columns and capacity match.
         // Overflowing the capacity sets status.error and bins nothing.
+        // `source_sorted` (raster flag 256) sorts the visible sources by depth
+        // first and then only the tile bits of each instance: cheaper when
+        // instances outnumber sources. Requires count <= capacity.
         [[nodiscard]] Result<void> bin(const core::Tensor& splats, const core::Tensor& raster,
-                                       uint32_t count, uint32_t tiles);
+                                       uint32_t count, uint32_t tiles, bool source_sorted = false);
 
         // Results of the last bin(), valid on the tensor timeline.
         [[nodiscard]] const core::Tensor& status() const;  // RasterStatus bytes
-        [[nodiscard]] const core::Tensor& keys() const;    // Int64, sorted (tile << 32 | depth bits)
+        [[nodiscard]] const core::Tensor& keys() const;    // Int64 (tile << 32 | depth bits); uint32 tiles when source-sorted
         [[nodiscard]] const core::Tensor& indices() const; // UInt32 source per sorted key
         [[nodiscard]] const core::Tensor& ranges() const;  // UInt32 [tiles][begin, end)
 

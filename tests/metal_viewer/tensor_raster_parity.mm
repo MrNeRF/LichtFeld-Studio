@@ -7,17 +7,21 @@
 #include "core/tensor_backend.hpp"
 #include "splat_preprocessor.hpp"
 #include "splat_project.hpp"
+#include "gpu_profile.hpp"
 #include "splat_rasterizer.hpp"
+#include "splat_tile_binner.hpp"
 #include "tile_rasterizer.hpp"
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <memory>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -202,7 +206,7 @@ namespace {
         TileRasterizer native(device);
         lfs::rendering::SplatRasterizer slang(GpuBackend::Metal);
         auto queue = [device newCommandQueue];
-        const uint32_t count = 60000, width = 1280, height = 720, capacity = 8'000'000;
+        const uint32_t count = 60000, width = 1280, height = 720, capacity = 16'000'000;
         const auto scene = make_scene(count, 21);
         int failures = 0;
         for (const auto& config : {Config{"frame-perspective-sh3", CameraModel::Perspective, PrimitiveMode::Gaussian, ShStorage::CanonicalFloat32, 3, false, false},
@@ -272,31 +276,102 @@ namespace {
             require(bool(rasterized), std::format("Slang rasterize failed: {}", rasterized ? "" : rasterized.error().detail()));
             const auto slang_color = download<uint16_t>(slang.color(), size_t(width) * height * 4);
             const auto slang_depth = download<float>(slang.depth(), size_t(width) * height * 4);
-            const auto status = download<uint64_t>(slang.status(), 3);
-            // Compare.
-            const auto* nc = reinterpret_cast<const _Float16*>(native_color.data());
-            const auto* sc = reinterpret_cast<const _Float16*>(slang_color.data());
-            const auto* nd = reinterpret_cast<const float*>(native_depth.data());
-            double max_color = 0, sum_color = 0;
-            size_t over_one = 0, median_diff = 0;
-            for (size_t i = 0; i < size_t(width) * height; ++i) {
-                double pixel_max = 0;
-                for (int c = 0; c < 4; ++c) {
-                    const double d = std::fabs(double(nc[i * 4 + c]) - double(sc[i * 4 + c]));
-                    pixel_max = std::max(pixel_max, d);
-                    sum_color += d;
-                }
-                max_color = std::max(max_color, pixel_max);
-                over_one += pixel_max > 1.0 / 255;
-                const float a = nd[i * 4 + 3], b = slang_depth[i * 4 + 3];
-                median_diff += std::fabs(a - b) > 1e-3f * std::max(1.f, std::fabs(a));
+            // Timing: frames back to back, host waits once at the end.
+            constexpr int kFrames = 30;
+            const auto clock = [] { return std::chrono::steady_clock::now(); };
+            const auto native_start = clock();
+            std::vector<std::unique_ptr<RasterFrame>> ring;
+            for (int i = 0; i < 3; ++i)
+                ring.push_back(std::make_unique<RasterFrame>(device, width, height, count, capacity));
+            id<MTLCommandBuffer> last;
+            std::array<id<MTLCommandBuffer>, 3> inflight{};
+            for (int i = 0; i < kFrames; ++i) {
+                if (inflight[i % 3])
+                    [inflight[i % 3] waitUntilCompleted];
+                last = [queue commandBuffer];
+                preprocessor.encode(last, in, projection, config.degree, config.mode, {projected_native});
+                native.encode(last, {projected_native}, count, RasterMode::Gaussian, background, *ring[i % 3], {}, {}, projection);
+                [last commit];
+                inflight[i % 3] = last;
             }
-            const size_t pixels = size_t(width) * height;
-            const bool ok = status[0] == native_status.required_instances && max_color * 255 <= 2 && over_one * 1000 <= pixels &&
-                            median_diff * 1000 <= pixels;
-            std::printf("%-28s instances native=%llu slang=%llu color max=%.2f/255 mean=%.4f/255 >1/255=%.4f%% median_depth_diff=%.4f%% %s\n",
-                        config.name, (unsigned long long)native_status.required_instances, (unsigned long long)status[0], max_color * 255,
-                        sum_color / (pixels * 4) * 255, 100.0 * over_one / pixels, 100.0 * median_diff / pixels, ok ? "ok" : "FAIL");
+            [last waitUntilCompleted];
+            const double native_ms = std::chrono::duration<double, std::milli>(clock() - native_start).count() / kFrames;
+            const auto slang_start = clock();
+            for (int i = 0; i < kFrames; ++i) {
+                require(bool((*module)->dispatch({.function = "project_splats", .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
+                                                  .groups = {M::groups_for(count, 256), 1, 1}, .group = {256, 1, 1}})),
+                        "Slang projection failed");
+                require(bool(slang.rasterize(projected, nullptr, count, lfs::rendering::SplatRasterMode::Gaussian, raster)), "Slang rasterize failed");
+            }
+            (void)download<uint64_t>(slang.status(), 1);
+            const double slang_ms = std::chrono::duration<double, std::milli>(clock() - slang_start).count() / kFrames;
+            std::printf("%-28s frame native=%.2f ms slang=%.2f ms\n", config.name, native_ms, slang_ms);
+            // Stage split. Native: GPU timestamps of one frame. Slang: wall
+            // clock of the cumulative prefixes, each run back to back.
+            if (std::getenv("LFS_RASTER_STAGES")) {
+                GpuProfile profile(device);
+                auto command = [queue commandBuffer];
+                preprocessor.encode(command, in, projection, config.degree, config.mode, {projected_native}, {}, {}, {}, {}, &profile);
+                native.encode(command, {projected_native}, count, RasterMode::Gaussian, background, *ring[0], {}, {}, projection, {}, false, false, &profile);
+                [command commit];
+                [command waitUntilCompleted];
+                const auto stages = profile.resolve();
+                std::printf("  native GPU: projection=%.2f instances=%.2f sort=%.2f blend=%.2f ms\n", stages[0], stages[1], stages[2], stages[3]);
+                lfs::rendering::SplatTileBinner binner(GpuBackend::Metal);
+                require(bool(binner.reserve(count, raster.tiles, capacity)), "binner reserve failed");
+                const auto raster_tensor = tensor(std::vector<lfs::rendering::SplatRasterParameters>{raster});
+                const auto time = [&](int depth) {
+                    const auto start = clock();
+                    for (int i = 0; i < kFrames; ++i) {
+                        require(bool((*module)->dispatch({.function = "project_splats", .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
+                                                          .groups = {M::groups_for(count, 256), 1, 1}, .group = {256, 1, 1}})),
+                                "projection failed");
+                        if (depth >= 1)
+                            require(bool(binner.bin(projected, raster_tensor, count, raster.tiles)), "bin failed");
+                        if (depth >= 2)
+                            require(bool(slang.rasterize(projected, nullptr, count, lfs::rendering::SplatRasterMode::Gaussian, raster)), "rasterize failed");
+                    }
+                    (void)download<uint64_t>(depth >= 1 ? binner.status() : projected, 1);
+                    return std::chrono::duration<double, std::milli>(clock() - start).count() / kFrames;
+                };
+                time(0);
+                const double project = time(0), binned = time(1), full = time(2);
+                std::printf("  slang wall: projection=%.2f bin=%.2f rasterize(bin+blend)=%.2f ms\n", project, binned - project, full - binned);
+            }
+            // Compare the first frame and a steady-state (source-sorted) one.
+            const auto compare = [&](const char* label, const std::vector<uint16_t>& slang_color, const std::vector<float>& slang_depth) {
+                const auto status = download<uint64_t>(slang.status(), 3);
+                const auto* nc = reinterpret_cast<const _Float16*>(native_color.data());
+                const auto* sc = reinterpret_cast<const _Float16*>(slang_color.data());
+                const auto* nd = reinterpret_cast<const float*>(native_depth.data());
+                double max_color = 0, sum_color = 0;
+                size_t over_one = 0, median_diff = 0, covered = 0;
+                for (size_t i = 0; i < size_t(width) * height; ++i) {
+                    double pixel_max = 0;
+                    for (int c = 0; c < 4; ++c) {
+                        const double d = std::fabs(double(nc[i * 4 + c]) - double(sc[i * 4 + c]));
+                        pixel_max = std::max(pixel_max, d);
+                        sum_color += d;
+                    }
+                    max_color = std::max(max_color, pixel_max);
+                    covered += double(nc[i * 4 + 3]) > .5;
+                    over_one += pixel_max > 1.0 / 255;
+                    const float a = nd[i * 4 + 3], b = slang_depth[i * 4 + 3];
+                    median_diff += std::fabs(a - b) > 1e-3f * std::max(1.f, std::fabs(a));
+                }
+                const size_t pixels = size_t(width) * height;
+                const auto status_words = download<uint32_t>(slang.status(), 6);
+                const bool ok = status_words[2] == 0 && covered * 10 > pixels && status[0] == native_status.required_instances &&
+                                max_color * 255 <= 2 && over_one * 1000 <= pixels && median_diff * 1000 <= pixels;
+                std::printf("%-28s %-6s instances native=%llu slang=%llu color max=%.2f/255 mean=%.4f/255 >1/255=%.4f%% median_depth_diff=%.4f%% covered=%.1f%% %s\n",
+                            config.name, label, (unsigned long long)native_status.required_instances, (unsigned long long)status[0], max_color * 255,
+                            sum_color / (pixels * 4) * 255, 100.0 * over_one / pixels, 100.0 * median_diff / pixels, 100.0 * covered / pixels, ok ? "ok" : "FAIL");
+                return ok;
+            };
+            const bool first_ok = compare("first", slang_color, slang_depth);
+            const bool steady_ok = compare("steady", download<uint16_t>(slang.color(), size_t(width) * height * 4),
+                                           download<float>(slang.depth(), size_t(width) * height * 4));
+            const bool ok = first_ok && steady_ok;
             failures += ok ? 0 : 1;
         }
         return failures;

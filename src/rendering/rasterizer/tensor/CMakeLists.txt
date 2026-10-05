@@ -12,8 +12,10 @@ target_link_libraries(lfs_tensor_rasterizer PUBLIC lfs_core)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_scan SOURCE splat_scan.slang COMPUTE scan_blocks scan_add)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_sort SOURCE splat_sort.slang
     COMPUTE sort_histogram sort_digit_scan sort_digit_offsets sort_scatter)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_sort32 SOURCE splat_sort.slang
+    COMPUTE sort_histogram sort_digit_scan sort_digit_offsets sort_scatter DEFINES LFS_SORT_KEY32=1)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_tiles SOURCE splat_tiles.slang
-    COMPUTE tile_counts tile_status tile_instances tile_ranges)
+    COMPUTE tile_counts tile_status source_key_groups source_compact source_permutation tile_instances tile_ranges)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_project SOURCE splat_project.slang COMPUTE project_splats)
 # Blend variants: one fully specialized plain-viewer blend, and per raster mode
 # and group width generic blends that read their feature flags per dispatch.

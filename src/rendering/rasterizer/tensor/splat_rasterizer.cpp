@@ -3,6 +3,7 @@
 #include "splat_rasterizer.hpp"
 
 #include "core/gpu_kernel_module.hpp"
+#include "core/tensor_readback.hpp"
 #include "core/tensor_upload.hpp"
 #include "splat_blend_discs.hpp"
 #include "splat_blend_gs32.hpp"
@@ -26,7 +27,9 @@ namespace lfs::rendering {
         using core::Tensor;
         using M = core::GpuKernelModule;
         constexpr auto RW = M::Access::ReadWrite;
-        constexpr uint32_t kSingleSimd = 128;
+        constexpr uint32_t kSingleSimd = 128, kSourceSorted = 256;
+        // Below this many sources the extra source sort is not worth its passes.
+        constexpr uint32_t kSourceSortMinimum = 4096;
 
         struct BlendParameters {
             uint64_t pointers[19] = {};
@@ -53,6 +56,28 @@ namespace lfs::rendering {
         Tensor raster, present_parameters, color, depth, pick;
         uint32_t width = 0, height = 0;
         std::deque<core::TensorUpload> uploads;
+        // The last completed RasterStatus, read without waiting. It picks
+        // source sorting for frames of the same source count.
+        core::TensorReadback status_readback;
+        uint32_t readback_count = 0, previous_count = 0;
+        struct {
+            uint64_t required = 0;
+            uint32_t error = 1, rest[3] = {};
+        } previous;
+        static_assert(sizeof(previous) == SplatTileBinner::kRasterStatusBytes);
+
+        bool source_sort(const uint32_t count, const uint32_t capacity) {
+            if (status_readback.pending() && status_readback.poll(std::as_writable_bytes(std::span(&previous, 1))))
+                previous_count = readback_count;
+            return count >= kSourceSortMinimum && count <= capacity && previous_count == count && previous.error == 0 &&
+                   previous.required > count / 4;
+        }
+        void read_status(const uint32_t count) {
+            if (status_readback.pending())
+                return;
+            status_readback.enqueue(binner.status());
+            readback_count = count;
+        }
 
         explicit Impl(const core::GpuBackend b) : backend(b), binner(b) {}
 
@@ -75,7 +100,7 @@ namespace lfs::rendering {
                 }
                 return slot.get();
             };
-            if (mode == SplatRasterMode::Gaussian && flags == kSingleSimd)
+            if (mode == SplatRasterMode::Gaussian && (flags & ~kSourceSorted) == kSingleSimd)
                 return load(splat_blend_gs_fast_entries(), fast_blend);
             const bool single = (flags & kSingleSimd) != 0;
             auto& slot = blends[{uint32_t(mode), single}];
@@ -119,14 +144,18 @@ namespace lfs::rendering {
             return failure(std::format("Splat raster parameters disagree with the frame (extent={}x{} vs {}x{}, count={} vs {}, mode={} vs {}, gut={})",
                                        parameters.width, parameters.height, s.width, s.height, parameters.count, count,
                                        parameters.mode, uint32_t(mode), gut != nullptr));
-        // Depth batches and source sorting are later optimizations of the native path.
-        if (parameters.flags & (256u | 512u | 1024u))
+        // The rasterizer owns source sorting; depth batches are not ported yet.
+        if (parameters.flags & (kSourceSorted | 512u | 1024u))
             return failure(std::format("Unsupported splat blend flags {:#x}", parameters.flags));
         const core::GpuBackendScope scope(s.backend);
-        s.upload(s.raster, parameters);
-        if (auto r = s.binner.bin(projected, s.raster, count, parameters.tiles); !r)
+        auto frame = parameters;
+        const bool source_sorted = s.source_sort(count, frame.capacity);
+        if (source_sorted)
+            frame.flags |= kSourceSorted;
+        s.upload(s.raster, frame);
+        if (auto r = s.binner.bin(projected, s.raster, count, frame.tiles, source_sorted); !r)
             return r;
-        auto program = s.blend(mode, parameters.flags);
+        auto program = s.blend(mode, frame.flags);
         if (!program)
             return Result<void>::failure(std::move(program).error());
         const BlendParameters blend{.logical_count = count};
@@ -137,11 +166,15 @@ namespace lfs::rendering {
             M::Binding{56, nullptr}, M::Binding{64, nullptr}, M::Binding{72, nullptr}, M::Binding{80, gut},
             M::Binding{88, nullptr}, M::Binding{96, nullptr}, M::Binding{104, nullptr}, M::Binding{112, nullptr},
             M::Binding{120, nullptr}, M::Binding{128, &s.color, RW}, M::Binding{136, &s.depth, RW}, M::Binding{144, &s.pick, RW}};
-        const bool single = (parameters.flags & kSingleSimd) != 0;
-        return (*program)->dispatch({.function = "tile_blend",
-                                     .arguments = {std::as_bytes(std::span(&blend, 1)), bindings},
-                                     .groups = {parameters.tiles * (single ? 8u : 4u), 1, 1},
-                                     .group = {single ? 32u : 64u, 1, 1}});
+        const bool single = (frame.flags & kSingleSimd) != 0;
+        if (auto r = (*program)->dispatch({.function = "tile_blend",
+                                           .arguments = {std::as_bytes(std::span(&blend, 1)), bindings},
+                                           .groups = {frame.tiles * (single ? 8u : 4u), 1, 1},
+                                           .group = {single ? 32u : 64u, 1, 1}});
+            !r)
+            return r;
+        s.read_status(count);
+        return {};
     }
 
     Result<void> SplatRasterizer::present(const SplatPresentParameters& parameters, Tensor& rgba, Tensor& linear_depth,

@@ -142,6 +142,32 @@ namespace {
         }
     }
 
+    // Sorting the visible sources by depth first, then only the tile bits,
+    // yields the same instance order: the full depth key and its ties.
+    TEST_P(TileBinning, SourceSortedMatchesFullKeySort) {
+        if (!gpu_backend_available(GetParam()) || GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        SplatTileBinner binner(GetParam());
+        for (const auto& [count, width, height] : {std::tuple{300u, 200u, 120u}, std::tuple{20000u, 1280u, 720u}}) {
+            const auto splats = make_splats(count, width, height, count + width + 1);
+            auto raster = make_raster(count, width, height, 4'000'000);
+            const auto expected = bin_on_cpu(splats, raster);
+            raster.unused = 256;
+            ASSERT_TRUE(binner.reserve(count, raster.tiles, raster.capacity));
+            auto binned = binner.bin(upload(splats), upload(std::vector<Raster>{raster}), count, raster.tiles, true);
+            ASSERT_TRUE(binned) << binned.error().detail();
+            const auto status = download<Status>(binner.status(), 1)[0];
+            ASSERT_EQ(status.error, 0u);
+            ASSERT_EQ(status.required, expected.keys.size()) << count;
+            std::vector<uint32_t> tiles(expected.keys.size());
+            std::transform(expected.keys.begin(), expected.keys.end(), tiles.begin(), [](uint64_t key) { return uint32_t(key >> 32); });
+            EXPECT_EQ(download<uint32_t>(binner.keys(), tiles.size()), tiles) << count;
+            EXPECT_EQ(download<uint32_t>(binner.indices(), expected.indices.size()), expected.indices) << count;
+            EXPECT_EQ(download<uint32_t>(binner.ranges(), expected.ranges.size()), expected.ranges) << count;
+        }
+    }
+
     TEST_P(TileBinning, OverflowReportsRequiredAndBinsNothing) {
         if (!gpu_backend_available(GetParam()) || GetParam() == GpuBackend::CUDA)
             GTEST_SKIP();
