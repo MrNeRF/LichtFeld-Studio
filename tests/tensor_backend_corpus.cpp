@@ -171,7 +171,7 @@ namespace {
 
 #define ENTRY(name, call, types, rule) \
     Entry { #name, call, types, Rule::rule }
-    const std::array<Entry, 72> kEntries{{
+    const std::array<Entry, 67> kEntries{{
         ENTRY(launch_unary_op_generic, "Tensor::exp|Tensor::isfinite", kUnary, Digest),
         ENTRY(launch_ieee_round_float, "Tensor::round", kF32, Digest),
         ENTRY(launch_binary_op_generic, "Tensor::add(Tensor)", kBinary, Digest),
@@ -242,7 +242,7 @@ namespace {
     }};
 #undef ENTRY
 
-    static_assert(kEntries.size() == 72);
+    static_assert(kEntries.size() == 67);
 
     std::string compact_dtype_name(DataType dtype) {
         switch (dtype) {
@@ -858,8 +858,7 @@ namespace {
         throw std::runtime_error("unknown rule");
     }
 
-    std::string statistics(const std::vector<Tensor>& outputs, std::string_view launcher,
-                           const Profile& profile) {
+    std::string statistics(const std::vector<Tensor>& outputs, std::string_view launcher) {
         auto values = outputs.front().to(DataType::Float32).cpu().to_vector();
         if (values.empty())
             return "mean=0,var=0,min=0,max=0,ks=0";
@@ -1234,7 +1233,7 @@ namespace {
                             bytes = download({outputs.front()});
                         }
                         const std::string result =
-                            rule == Rule::Stat ? statistics(outputs, entry.launcher, profile)
+                            rule == Rule::Stat ? statistics(outputs, entry.launcher)
                                                : digest(bytes);
                         std::ostringstream line;
                         line << entry.launcher << ' ' << entry.call << ' ' << profile.name << ' '
