@@ -29,13 +29,10 @@ namespace lfs::vis {
                                   const VulkanSceneDepthHistoryParams& params,
                                   std::size_t resource_slot);
         void invalidate(std::size_t resource_slot);
-        void invalidateAll();
         void shutdown();
 
         [[nodiscard]] VkImageView depthView(std::size_t resource_slot) const;
-        [[nodiscard]] VkImage depthImage(std::size_t resource_slot) const;
         [[nodiscard]] SceneDepthContract contract(std::size_t resource_slot) const;
-        [[nodiscard]] bool initialized() const;
 
     private:
         struct Impl;

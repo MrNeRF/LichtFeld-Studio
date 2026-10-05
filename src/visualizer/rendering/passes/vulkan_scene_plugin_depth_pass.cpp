@@ -394,8 +394,4 @@ namespace lfs::vis {
                    : VK_NULL_HANDLE;
     }
 
-    bool VulkanScenePluginDepthPass::initialized() const {
-        return impl_ && impl_->pipeline != VK_NULL_HANDLE;
-    }
-
 } // namespace lfs::vis

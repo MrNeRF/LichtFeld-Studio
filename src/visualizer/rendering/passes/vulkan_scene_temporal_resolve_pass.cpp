@@ -545,10 +545,6 @@ namespace lfs::vis {
             impl_->releaseHistory();
     }
 
-    void VulkanSceneTemporalResolvePass::shutdown() {
-        impl_.reset();
-    }
-
     VkImageView VulkanSceneTemporalResolvePass::outputView(const TemporalViewId view) const {
         if (!impl_ || !validTemporalViewId(view))
             return VK_NULL_HANDLE;
@@ -559,10 +555,6 @@ namespace lfs::vis {
     SceneHistoryContract VulkanSceneTemporalResolvePass::contract(const TemporalViewId view) const {
         return impl_ && validTemporalViewId(view) ? impl_->views[viewIndex(view)].contract
                                                   : SceneHistoryContract{};
-    }
-
-    bool VulkanSceneTemporalResolvePass::initialized() const {
-        return impl_ && impl_->pipeline != VK_NULL_HANDLE;
     }
 
     VulkanSceneTemporalResourceStats VulkanSceneTemporalResolvePass::resourceStats() const {

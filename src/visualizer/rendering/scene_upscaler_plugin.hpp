@@ -115,7 +115,6 @@ namespace lfs::vis {
         [[nodiscard]] bool createFeature(VkCommandBuffer command_buffer,
                                          const LfsSceneUpscalerFeatureConfigV1& config);
         [[nodiscard]] bool evaluate(const LfsSceneUpscalerEvaluateV1& evaluation);
-        void releaseFeature(std::uint32_t view);
         [[nodiscard]] std::optional<std::uint32_t> acquireViewIdentity();
         void releaseViewIdentity(std::uint32_t view);
         void shutdownRuntime();
