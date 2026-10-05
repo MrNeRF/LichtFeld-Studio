@@ -9,7 +9,7 @@
 #include "core/tensor_backend.hpp"
 #include "core/tensor_readback.hpp"
 #include "rendering/selection_ops.hpp"
-#if LFS_TENSOR_METAL
+#if LFS_TENSOR_METAL && !defined(LFS_GRAPHICS_VULKAN)
 #include "window/metal_graphics_context.hpp"
 #include <SDL3/SDL.h>
 #include <cstdlib>
@@ -34,7 +34,7 @@ namespace {
 
 } // namespace
 
-#if LFS_TENSOR_METAL
+#if LFS_TENSOR_METAL && !defined(LFS_GRAPHICS_VULKAN)
 TEST(ViewerNoCuda, MetalShutdownReleasesReservedFrameSlot) {
     if (!gpu_backend_available(GpuBackend::Metal))
         GTEST_SKIP() << "Metal backend unavailable";
