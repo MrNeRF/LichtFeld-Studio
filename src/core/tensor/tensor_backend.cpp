@@ -288,16 +288,36 @@ namespace lfs::core {
 
     void where_into(Tensor& output, const Tensor& condition, float value, const Tensor& source) {
         const auto backend = gpu_backend_of(output);
-        if (!output.is_valid() || !source.is_valid() || !condition.is_valid() || !backend ||
-            gpu_backend_of(source) != backend || gpu_backend_of(condition) != backend ||
-            !output.is_contiguous() || !source.is_contiguous() || !condition.is_contiguous() ||
-            output.shape() != source.shape() || output.numel() != condition.numel() ||
-            output.dtype() != source.dtype() || condition.dtype() != DataType::Bool ||
-            (output.dtype() != DataType::Float32 && output.dtype() != DataType::Float16))
-            throw TensorError("where_into requires matching contiguous Float32/Float16 GPU tensors and a Bool mask");
+        LFS_ASSERT_MSG(output.is_valid() && source.is_valid() && condition.is_valid() &&
+                           output.device() == source.device() && output.device() == condition.device() &&
+                           gpu_backend_of(source) == backend && gpu_backend_of(condition) == backend &&
+                           output.is_contiguous() && source.is_contiguous() && condition.is_contiguous() &&
+                           output.shape() == source.shape() && output.numel() == condition.numel() &&
+                           output.dtype() == source.dtype() && condition.dtype() == DataType::Bool &&
+                           (output.dtype() == DataType::Float32 || output.dtype() == DataType::Float16),
+                       "where_into requires matching contiguous Float32/Float16 tensors and a Bool mask");
         internal::preserve_lazy_snapshots_before_write(output);
         if (output.numel() == 0)
             return;
+        if (output.device() == Device::CPU) {
+            const auto* mask = condition.ptr<unsigned char>();
+            if (output.dtype() == DataType::Float32) {
+                const auto values = source.clone();
+                for (size_t i = 0; i < output.numel(); ++i)
+                    output.ptr<float>()[i] = mask[i] ? value : values.ptr<float>()[i];
+            } else {
+                const auto values = source.clone();
+                const auto scalar = detail::tensor_float_to_half(value);
+                for (size_t i = 0; i < output.numel(); ++i)
+                    output.ptr<detail::tensor_half_t>()[i] = mask[i] ? scalar : values.ptr<detail::tensor_half_t>()[i];
+            }
+            return;
+        }
+        if (output.storage_ptr() == source.storage_ptr() && output.data_ptr() != source.data_ptr()) {
+            const auto snapshot = source.clone();
+            where_into(output, condition, value, snapshot);
+            return;
+        }
         if (*backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
             internal::cuda_where_into(output, condition, value, source);
