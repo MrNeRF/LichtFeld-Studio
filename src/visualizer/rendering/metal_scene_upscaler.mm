@@ -41,6 +41,19 @@ kernel void pack(device const uchar* color [[buffer(0)]],
         mt.write(float4(motion[xy.y*p.extent.x+xy.x],0,0),xy);
     }
 }
+// Spatial has no depth/motion contract: do not expose optional resources in
+// its shader signature. Metal validates every reflected argument at dispatch.
+kernel void pack_spatial(device const uchar* color [[buffer(0)]],
+                         constant Params& p [[buffer(3)]],
+                         texture2d<float, access::write> ct [[texture(0)]],
+                         uint2 xy [[thread_position_in_grid]]) {
+    if (any(xy >= p.extent.xy)) return;
+    uint2 source = xy;
+    if (p.extent.z) source.y = p.extent.y - 1 - xy.y;
+    uint idx = (source.y * p.layout.x + source.x) * p.layout.z;
+    float4 c = p.layout.w ? float4(((device const float*)color)[idx], ((device const float*)color)[idx+1], ((device const float*)color)[idx+2], ((device const float*)color)[idx+3]) : float4(color[idx],color[idx+1],color[idx+2],color[idx+3])/255.0f;
+    ct.write(c, xy);
+}
 kernel void unpack(texture2d<float, access::read> source [[texture(0)]],
                    texture2d<float, access::sample> coverage [[texture(1)]],
                    device float4* output [[buffer(0)]],
@@ -103,16 +116,17 @@ kernel void unpack(texture2d<float, access::read> source [[texture(0)]],
         rendering::TensorSceneTemporalKernels kernels{core::GpuBackend::Metal};
         SceneTemporalCoordinator coordinator;
         std::array<std::shared_ptr<Feature>, size_t(TemporalViewId::Count)> features;
-        id<MTLComputePipelineState> pack, unpack;
+        id<MTLComputePipelineState> pack, pack_spatial, unpack;
 
         void ensureProgram() {
-            if (pack && unpack) return;
+            if (pack && pack_spatial && unpack) return;
             NSError* failure = nil;
             auto library = [reader.device() newLibraryWithSource:@(conversionSource) options:nil error:&failure];
             if (!library) throw std::runtime_error(failure.localizedDescription.UTF8String);
             pack = [reader.device() newComputePipelineStateWithFunction:[library newFunctionWithName:@"pack"] error:&failure];
+            pack_spatial = [reader.device() newComputePipelineStateWithFunction:[library newFunctionWithName:@"pack_spatial"] error:&failure];
             unpack = [reader.device() newComputePipelineStateWithFunction:[library newFunctionWithName:@"unpack"] error:&failure];
-            if (!pack || !unpack) throw std::runtime_error("MetalFX conversion pipeline creation failed");
+            if (!pack || !pack_spatial || !unpack) throw std::runtime_error("MetalFX conversion pipeline creation failed");
         }
         std::shared_ptr<Feature> makeFeature(SceneUpscalerBackend backend, glm::ivec2 input, glm::ivec2 output) {
             auto f = std::make_shared<Feature>();
@@ -216,10 +230,14 @@ kernel void unpack(texture2d<float, access::read> source [[texture(0)]],
                                             {r.frame.view.near_plane,r.frame.view.far_plane,r.frame.view.orthographic ? 1.f : 0.f,0}};
                         auto encoder = [command computeCommandEncoder];
                         if (!encoder) throw std::runtime_error("MetalFX input encoder unavailable");
-                        [encoder setComputePipelineState:impl_->pack];
-                        for (NSUInteger i=0;i<in.size();++i) [encoder setBuffer:in[i].buffer offset:in[i].offset atIndex:i];
+                        [encoder setComputePipelineState:temporal ? impl_->pack : impl_->pack_spatial];
+                        for (NSUInteger i=0;i<(temporal ? in.size() : 1u);++i) [encoder setBuffer:in[i].buffer offset:in[i].offset atIndex:i];
                         [encoder setBytes:&params length:sizeof(params) atIndex:3];
-                        [encoder setTexture:f->color atIndex:0]; [encoder setTexture:f->depth atIndex:1]; [encoder setTexture:f->motion atIndex:2];
+                        [encoder setTexture:f->color atIndex:0];
+                        if (temporal) {
+                            [encoder setTexture:f->depth atIndex:1];
+                            [encoder setTexture:f->motion atIndex:2];
+                        }
                         [encoder dispatchThreads:MTLSizeMake(r.render_extent.x,r.render_extent.y,1) threadsPerThreadgroup:MTLSizeMake(8,8,1)];
                         [encoder endEncoding];
                         if (temporal) {

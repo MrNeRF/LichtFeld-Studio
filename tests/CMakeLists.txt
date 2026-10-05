@@ -76,7 +76,8 @@ if((BUILD_TESTS OR BUILD_VISUALIZER_TESTS) AND LFS_TENSOR_METAL AND NOT LFS_GRAP
     target_link_libraries(metal_scene_upscaler_contracts PRIVATE
         lfs_tensor_rasterizer GTest::gtest_main "-framework MetalFX" "-framework Metal" "-framework Foundation")
     add_test(NAME MetalSceneUpscalerContracts COMMAND metal_scene_upscaler_contracts)
-    set_tests_properties(MetalSceneUpscalerContracts PROPERTIES LABELS "viewer;metal;gpu;upscaler" TIMEOUT 180)
+    set_tests_properties(MetalSceneUpscalerContracts PROPERTIES LABELS "viewer;metal;gpu;upscaler" TIMEOUT 180
+        ENVIRONMENT "MTL_DEBUG_LAYER=1")
 endif()
 
 # The tensor HDR tonemapper against libplacebo, on clips ffmpeg encodes.
