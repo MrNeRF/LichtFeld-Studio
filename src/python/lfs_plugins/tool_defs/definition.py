@@ -26,7 +26,7 @@ Example:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Callable
 
 
 def _localized_text(key: str, fallback: str) -> str:
@@ -41,12 +41,6 @@ def _localized_text(key: str, fallback: str) -> str:
         return fallback
 
 
-@runtime_checkable
-class ContextLike(Protocol):
-    """Protocol for context objects passed to poll functions."""
-
-    has_scene: bool
-    num_gaussians: int
 
 
 @dataclass(frozen=True)

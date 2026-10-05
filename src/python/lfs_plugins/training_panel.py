@@ -385,20 +385,7 @@ class TrainingPanel(Panel):
         model.bind_func("label_toolbar_stop", lambda: tr("training.action_stop"))
         model.bind_func("label_toolbar_save", lambda: tr("training.action_save"))
         model.bind_func("label_stop", lambda: tr("training_panel.stop"))
-        model.bind_func(
-            "label_switch_edit", lambda: tr("training_panel.switch_edit_mode")
-        )
-        model.bind_func("label_status_completed", lambda: tr("status.complete"))
-        model.bind_func("label_status_stopped", lambda: tr("status.stopped"))
-        model.bind_func("label_status_error", lambda: tr("status.error"))
-        model.bind_func("label_status_stopping", lambda: tr("status.stopping"))
-        model.bind_func(
-            "label_status_starting", lambda: tr("training_panel.preparing_training")
-        )
         model.bind_func("label_cancel_preparation", lambda: tr("common.cancel"))
-        model.bind_func(
-            "label_save_project", lambda: tr("training_panel.save_project")
-        )
         model.bind_func(
             "label_project_saved", lambda: tr("training_panel.project_saved")
         )
@@ -957,18 +944,6 @@ class TrainingPanel(Panel):
                 and not bool(getattr(params, prop, False))
             )
 
-        def _gut_enable_disabled():
-            params = _params()
-            if params is None or params.gut:
-                return False
-            return bool(
-                params.strategy == "igs+"
-                or params.mip_filter
-                or params.use_depth_loss
-                or params.use_normal_loss
-            )
-
-        model.bind_func("gut_disabled", _gut_enable_disabled)
         model.bind_func(
             "gut_mip_filter_disabled",
             lambda: _gut_feature_enable_disabled("mip_filter"),
@@ -1313,47 +1288,6 @@ class TrainingPanel(Panel):
         )
 
     def _bind_status(self, model, p):
-        def _status_state():
-            session = _training_session_state()
-            if session.get("restoring"):
-                return "restoring"
-            if session.get("error") and not session.get("hydrated") and not RuntimeState.has_trainer.value:
-                return "error"
-            state = RuntimeState.trainer_state.value
-            if (
-                not RuntimeState.has_trainer.value
-                and session.get("available")
-                and not session.get("hydrated")
-                and state in ("idle", "ready", "", None)
-            ):
-                state = "completed" if session.get("completed") else "paused"
-            if state == "stopping" and lf.trainer_saving_model():
-                return "saving"
-            return state
-
-        def _status_label():
-            state = _status_state()
-            it = RuntimeState.iteration.value
-            labels = {
-                "idle": tr("training_panel.idle"),
-                "preparing": tr("training_panel.preparing_training"),
-                "starting": tr("training_panel.preparing_training"),
-                "ready": tr("status.ready") if it == 0 else tr("training_panel.resume"),
-                "restoring": tr("training.status_restoring"),
-                "starting": tr("runtime.task_starting"),
-                "running": tr("training_panel.running"),
-                "paused": tr("status.paused"),
-                "saving": tr("training.status_saving"),
-                "stopping": tr("status.stopping"),
-                "completed": tr("status.complete"),
-                "stopped": tr("status.stopped"),
-                "error": tr("status.error"),
-            }
-            return labels.get(state, tr("status.unknown"))
-
-        def _status_mode():
-            return f"{tr('status.mode')} {_status_label()}"
-
         def _status_iteration():
             it = RuntimeState.iteration.value
             if it <= 0:
@@ -1382,7 +1316,6 @@ class TrainingPanel(Panel):
                 return f"{tr('training_panel.session_restore_failed')}: {session_error}"
             return lf.trainer_error() or ""
 
-        model.bind_func("status_mode", _status_mode)
         model.bind_func("status_iteration", _status_iteration)
         model.bind_func("status_gaussians", _status_gaussians)
         model.bind_func("progress_text", _progress_text)
@@ -1675,7 +1608,7 @@ class TrainingPanel(Panel):
         if saving == self._last_saving_model:
             return False
         self._last_saving_model = saving
-        for name in ("status_mode", "show_ctrl_stopping", "show_ctrl_saving"):
+        for name in ("show_ctrl_stopping", "show_ctrl_saving"):
             self._handle.dirty(name)
         return True
 
@@ -1763,7 +1696,6 @@ class TrainingPanel(Panel):
         )
         if session_key != self._last_session:
             self._last_session = session_key
-            self._handle.dirty("status_mode")
             self._handle.dirty("status_iteration")
             self._handle.dirty("progress_text")
             self._handle.dirty("btn_start")
@@ -1790,15 +1722,11 @@ class TrainingPanel(Panel):
             it = RuntimeState.iteration.value
             if it != self._last_iteration:
                 self._last_iteration = it
-                self._handle.dirty("status_mode")
                 self._handle.dirty("btn_start")
                 self._handle.dirty("status_iteration")
                 self._handle.dirty("progress_text")
                 self._handle.dirty("show_training_telemetry")
                 dirty = True
-            if state == "stopping":
-                self._handle.dirty("status_mode")
-
             ng = RuntimeState.num_gaussians.value
             if ng != self._last_num_gaussians:
                 self._last_num_gaussians = ng

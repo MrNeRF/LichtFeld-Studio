@@ -279,29 +279,3 @@ def get_tool_by_id(tool_id: str) -> ToolDef | None:
         if tool.id == tool_id:
             return tool
     return None
-
-
-def get_tools_by_group(group: str) -> list[ToolDef]:
-    """Get all builtin tools in a group, sorted by order.
-
-    Args:
-        group: Group name (e.g., "transform").
-
-    Returns:
-        List of tools in the group, sorted by order.
-    """
-    return sorted(
-        [t for t in BUILTIN_TOOLS if t.group == group],
-        key=lambda t: t.order,
-    )
-
-
-def get_all_groups() -> list[str]:
-    """Get all unique group names, in order of first appearance."""
-    seen = set()
-    groups = []
-    for tool in BUILTIN_TOOLS:
-        if tool.group not in seen:
-            seen.add(tool.group)
-            groups.append(tool.group)
-    return groups

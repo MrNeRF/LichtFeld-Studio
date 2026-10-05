@@ -1282,8 +1282,6 @@ class GalleryController:
                 raise ValueError(tr("error.preview"))
             metadata["_previewPng"] = base64.b64encode(gallery_preparation.publication_preview(preview)).decode("ascii")
 
-    def _owns_export(self, state):
-        return self._publish_steps.owns_export(state)
 
     def _cancel_own_export(self):
         return self._publish_steps.cancel_export()
@@ -1391,8 +1389,6 @@ class GalleryController:
     def _finish_local_update(self, job):
         return self._local_update_steps.advance(job)
 
-    def _prepare_update_backup(self, job):
-        return self._local_update_steps.prepare_backup(job)
 
     def _recover_failed_update(self, update, exc):
         return self._local_update_steps.recover_failure(update, exc)

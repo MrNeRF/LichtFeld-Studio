@@ -85,12 +85,6 @@ def should_show_startup_recent() -> bool:
     return True
 
 
-def try_show_startup_recent() -> bool:
-    """Enable the panel when the blank-session + MRU policy allows it."""
-    if not should_show_startup_recent():
-        return False
-    lf.ui.set_panel_enabled("lfs.startup_recent", True)
-    return True
 
 
 def build_project_rows(paths, *, max_rows: int = _MAX_ROWS, checks=None) -> list[dict]:
