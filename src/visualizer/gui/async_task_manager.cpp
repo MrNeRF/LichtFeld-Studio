@@ -1534,6 +1534,10 @@ namespace lfs::vis::gui {
             params.dataset.output_path = output_path;
             if (!cmd.init_path.empty())
                 params.init_path = lfs::core::path_to_utf8(cmd.init_path);
+            params.add_splat_paths = cmd.add_splat_paths;
+            params.add_splat_freeze = cmd.add_splat_freeze;
+            params.freeze_lr_scale = cmd.freeze_lr_scale;
+            params.exclude_frozen_add_splats_from_export = cmd.exclude_frozen_add_splats_from_export;
             if (!cmd.centralize_dataset.empty())
                 params.dataset.centralize_dataset = cmd.centralize_dataset;
             if (cmd.max_width.has_value() && *cmd.max_width >= 0)
