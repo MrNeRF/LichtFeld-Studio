@@ -1577,6 +1577,14 @@ def test_presentation_metadata_and_scene_content_have_separate_relationships(gal
     assert asset_sync_state(asset, dict(link, commitUuid=""), remote)["state"] == "unknown"
 
 
+def test_missing_hdr_background_is_not_reported_as_external_splat_data(gallery):
+    from lfs_plugins.gallery_actions import gallery_eligibility
+    asset = dict(id="project", commit_uuid="saved", exists=True)
+    failed = dict(project="project", commitUuid="saved", nativePreparation=True,
+                  failureReason="gallery_project_hdr_unavailable: The HDR background file is missing.")
+    assert gallery_eligibility(asset, dict(signed_in=True, job=failed))["reasons"] == ["hdr_missing"]
+
+
 def test_eligibility_uses_only_checks_for_the_saved_commit(gallery):
     from lfs_plugins.gallery_actions import gallery_actions, gallery_eligibility
     asset = dict(id="project", commit_uuid="saved", exists=True)

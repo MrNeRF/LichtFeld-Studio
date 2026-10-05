@@ -2851,6 +2851,7 @@
   "projects.gallery.eligibility.hdr": "HDR not supported by this Gallery",
   "projects.gallery.eligibility.no_splats": "No visible splats",
   "projects.gallery.eligibility.external_payloads": "External splat data is not embedded in the viewing copy",
+  "projects.gallery.eligibility.hdr_missing": "HDR background file not found. Choose it again and save the project.",
   "projects.gallery.eligibility.space": "Not enough remaining Gallery space",
   "projects.gallery.eligibility.not_checked": "Eligibility is checked while preparing the viewing copy",
   "projects.gallery.eligibility.copy": "This file is a copy of another project. Use Save Project As to publish it separately.",

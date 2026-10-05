@@ -2851,6 +2851,7 @@
   "projects.gallery.eligibility.hdr": "HDR non supportato da questa Galleria",
   "projects.gallery.eligibility.no_splats": "Nessuno splat visibile",
   "projects.gallery.eligibility.external_payloads": "I dati splat esterni non sono incorporati nella copia di visualizzazione",
+  "projects.gallery.eligibility.hdr_missing": "File di sfondo HDR non trovato. Selezionalo di nuovo e salva il progetto.",
   "projects.gallery.eligibility.space": "Spazio disponibile nella Galleria insufficiente",
   "projects.gallery.eligibility.not_checked": "La compatibilità viene verificata durante la preparazione della copia",
   "projects.gallery.eligibility.copy": "Questo file è una copia di un altro progetto. Usa Salva progetto con nome per pubblicarlo separatamente.",

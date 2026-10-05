@@ -2851,6 +2851,7 @@
   "projects.gallery.eligibility.hdr": "このギャラリーはHDRに対応していません",
   "projects.gallery.eligibility.no_splats": "表示されるスプラットがありません",
   "projects.gallery.eligibility.external_payloads": "外部スプラットデータが閲覧用コピーに埋め込まれていません",
+  "projects.gallery.eligibility.hdr_missing": "HDR背景ファイルが見つかりません。もう一度選択してプロジェクトを保存してください。",
   "projects.gallery.eligibility.space": "ギャラリーの空き容量が不足しています",
   "projects.gallery.eligibility.not_checked": "閲覧用コピーの準備中に公開条件を確認します",
   "projects.gallery.eligibility.copy": "このファイルは別のプロジェクトのコピーです。個別に公開するには「プロジェクトを別名で保存」を使用してください。",

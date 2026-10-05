@@ -2851,6 +2851,7 @@
   "projects.gallery.eligibility.hdr": "HDR von dieser Galerie nicht unterstützt",
   "projects.gallery.eligibility.no_splats": "Keine sichtbaren Splats",
   "projects.gallery.eligibility.external_payloads": "Externe Splat-Daten sind nicht in der Ansichtskopie eingebettet",
+  "projects.gallery.eligibility.hdr_missing": "HDR-Hintergrunddatei nicht gefunden. Erneut auswählen und das Projekt speichern.",
   "projects.gallery.eligibility.space": "Nicht genügend freier Galeriespeicher",
   "projects.gallery.eligibility.not_checked": "Die Eignung wird beim Vorbereiten der Ansichtskopie geprüft",
   "projects.gallery.eligibility.copy": "Diese Datei ist eine Kopie eines anderen Projekts. Mit „Projekt speichern unter“ separat veröffentlichen.",
