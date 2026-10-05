@@ -60,6 +60,7 @@ namespace lfs::rendering::vulkan {
         void invalidate(VkBuffer buffer);
         // Batch-boundary reset (beginCommandBatch): conservative writer + reuse-barrier visibility.
         void onBatchBegin();
+        void reset();
 
         // Merge accesses per VkBuffer, hazard-check once against pre-plan state, then update state.
         [[nodiscard]] std::vector<VkBufferMemoryBarrier2> plan(std::span<const DeclaredAccess> accesses);

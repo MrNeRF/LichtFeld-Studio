@@ -423,7 +423,6 @@ namespace {
         }
 
         // Expose protected dispatch / barrier APIs for scripted tests.
-        using VulkanGSPipeline::BufferBarrier;
         using VulkanGSPipeline::executeCompute;
         using VulkanGSPipeline::executeComputeIndirect;
 

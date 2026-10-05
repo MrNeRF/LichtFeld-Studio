@@ -154,6 +154,13 @@ namespace lfs::rendering::vulkan {
         }
     }
 
+    void BufferBarrierPlanner::reset() {
+        tracked_.clear();
+        force_conservative_.clear();
+        states_.clear();
+        stats_ = {};
+    }
+
     std::vector<VkBufferMemoryBarrier2> BufferBarrierPlanner::plan(
         std::span<const DeclaredAccess> accesses) {
         // 1) Merge per VkBuffer (simultaneity rule). Preserve first-seen order.
