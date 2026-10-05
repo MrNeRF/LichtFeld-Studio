@@ -36,6 +36,8 @@ namespace lfs::vis {
         std::array<std::shared_ptr<lfs::core::Tensor>,
                    static_cast<std::size_t>(TemporalViewId::Count)>
             color_history, depth_history;
+        std::array<std::array<std::shared_ptr<core::Tensor>, 2>, size_t(TemporalViewId::Count)> depth_buffers;
+        std::array<size_t, size_t(TemporalViewId::Count)> depth_cursor{};
 
         static std::size_t index(const TemporalViewId view) {
             return static_cast<std::size_t>(view);
@@ -183,7 +185,13 @@ namespace lfs::vis {
         }
         impl_->color_history[slot] = std::make_shared<lfs::core::Tensor>(resolved);
         // A public caller may mutate or recycle its input before the next frame.
-        impl_->depth_history[slot] = std::make_shared<lfs::core::Tensor>(request.depth->clone());
+        auto& depth_buffer = impl_->depth_buffers[slot][impl_->depth_cursor[slot]];
+        if (!depth_buffer || depth_buffer->shape() != request.depth->shape())
+            depth_buffer = std::make_shared<core::Tensor>(request.depth->clone());
+        else
+            depth_buffer->copy_from(*request.depth);
+        impl_->depth_history[slot] = depth_buffer;
+        impl_->depth_cursor[slot] ^= 1;
         if (!impl_->coordinator.commit(prepared, SceneHistoryStorage::Tensor,
                                        SceneHistoryStorage::Tensor)) {
             reset(request.view, TemporalResetReason::ResolveFailure);

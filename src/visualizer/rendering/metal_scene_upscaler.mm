@@ -2,8 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "metal_scene_upscaler.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
 #include "tensor_scene_temporal.hpp"
+#include "tensor_scene_texture.hpp"
 #import <MetalFX/MetalFX.h>
 #include <cstring>
 #include <cmath>
@@ -11,65 +13,6 @@
 
 namespace lfs::vis {
     namespace {
-        // MetalFX consumes textures, whereas the native compositor consumes
-        // packed tensors. Both conversions stay on the GPU and participate in
-        // MetalTensorReader's producer/consumer timeline and storage lifetime.
-        constexpr auto conversionSource = R"(
-#include <metal_stdlib>
-using namespace metal;
-struct Params { uint4 layout; uint4 extent; float4 depth; };
-kernel void pack(device const uchar* color [[buffer(0)]],
-                 device const float* depth [[buffer(1)]],
-                 device const float2* motion [[buffer(2)]],
-                 constant Params& p [[buffer(3)]],
-                 texture2d<float, access::write> ct [[texture(0)]],
-                 texture2d<float, access::write> dt [[texture(1)]],
-                 texture2d<float, access::write> mt [[texture(2)]],
-                 uint2 xy [[thread_position_in_grid]]) {
-    if (any(xy >= p.extent.xy)) return;
-    uint2 source = xy;
-    if (p.extent.z) source.y = p.extent.y - 1 - xy.y;
-    uint idx = (source.y * p.layout.x + source.x) * p.layout.z;
-    float4 c = p.layout.w ? float4(((device const float*)color)[idx], ((device const float*)color)[idx+1], ((device const float*)color)[idx+2], ((device const float*)color)[idx+3]) : float4(color[idx],color[idx+1],color[idx+2],color[idx+3])/255.0f;
-    ct.write(c, xy);
-    if (p.extent.w) {
-        float z = depth[source.y * p.layout.y + source.x];
-        float n = p.depth.x, f = p.depth.y;
-        float raster = (!isfinite(z) || z <= 0) ? 1.0f :
-            (p.depth.z ? (z-n)/(f-n) : f/(f-n)*(1.0f-n/max(z,n)));
-        dt.write(float4(clamp(raster,0.0f,1.0f)),xy);
-        mt.write(float4(motion[xy.y*p.extent.x+xy.x],0,0),xy);
-    }
-}
-// Spatial has no depth/motion contract: do not expose optional resources in
-// its shader signature. Metal validates every reflected argument at dispatch.
-kernel void pack_spatial(device const uchar* color [[buffer(0)]],
-                         constant Params& p [[buffer(3)]],
-                         texture2d<float, access::write> ct [[texture(0)]],
-                         uint2 xy [[thread_position_in_grid]]) {
-    if (any(xy >= p.extent.xy)) return;
-    uint2 source = xy;
-    if (p.extent.z) source.y = p.extent.y - 1 - xy.y;
-    uint idx = (source.y * p.layout.x + source.x) * p.layout.z;
-    float4 c = p.layout.w ? float4(((device const float*)color)[idx], ((device const float*)color)[idx+1], ((device const float*)color)[idx+2], ((device const float*)color)[idx+3]) : float4(color[idx],color[idx+1],color[idx+2],color[idx+3])/255.0f;
-    ct.write(c, xy);
-}
-kernel void unpack(texture2d<float, access::read> source [[texture(0)]],
-                   texture2d<float, access::sample> coverage [[texture(1)]],
-                   device float4* output [[buffer(0)]],
-                   constant float2& jitter [[buffer(1)]],
-                   uint2 xy [[thread_position_in_grid]]) {
-    if (xy.x >= source.get_width() || xy.y >= source.get_height()) return;
-    constexpr sampler linearClamp(coord::normalized, address::clamp_to_edge, filter::linear);
-    float2 uv = (float2(xy)+.5f)/float2(source.get_width(),source.get_height()) +
-                jitter/float2(coverage.get_width(),coverage.get_height());
-    // MetalFX reconstructs RGB and writes opaque alpha. Preserve scene
-    // coverage explicitly for environment/mesh composition and transparent capture.
-    float4 value = source.read(xy);
-    value.a = coverage.sample(linearClamp,uv).a;
-    output[xy.y*source.get_width()+xy.x] = value;
-}
-)";
         lfs::Error error(std::string detail) {
             return lfs::make_error({.code = lfs::ErrorCode::FailedPrecondition,
                 .domain = lfs::ErrorDomain::Rendering, .detail = std::move(detail),
@@ -87,7 +30,7 @@ kernel void unpack(texture2d<float, access::read> source [[texture(0)]],
         }
         bool validColor(const core::Tensor& color, glm::ivec2 extent) {
             return color.is_valid() && color.device() == core::Device::GPU &&
-                core::gpu_backend_of(color) == core::GpuBackend::Metal && color.is_contiguous() &&
+                core::tensor_supports_metal_access(color) && color.is_contiguous() &&
                 color.ndim() == 3 && color.size(0) >= size_t(extent.y) &&
                 color.size(1) >= size_t(extent.x) && color.size(2) == 4 &&
                 (color.dtype() == core::DataType::UInt8 || color.dtype() == core::DataType::Float32);
@@ -96,12 +39,14 @@ kernel void unpack(texture2d<float, access::read> source [[texture(0)]],
 
     bool metalFxBackendAvailable(SceneUpscalerBackend backend) {
         if (!isMetalFxBackend(backend)) return false;
-        @autoreleasepool {
-            auto device = MTLCreateSystemDefaultDevice();
-            return device && (backend == SceneUpscalerBackend::MetalFxSpatial
-                ? [MTLFXSpatialScalerDescriptor supportsDevice:device]
-                : [MTLFXTemporalScalerDescriptor supportsDevice:device]);
-        }
+        static const auto support = [] {
+            @autoreleasepool {
+                auto device = MTLCreateSystemDefaultDevice();
+                return std::array<bool, 2>{device && [MTLFXSpatialScalerDescriptor supportsDevice:device],
+                                          device && [MTLFXTemporalScalerDescriptor supportsDevice:device]};
+            }
+        }();
+        return support[backend == SceneUpscalerBackend::MetalFxSpatial ? 0 : 1];
     }
 
     struct MetalSceneUpscaler::Impl {
@@ -111,23 +56,29 @@ kernel void unpack(texture2d<float, access::read> source [[texture(0)]],
             id<MTLFXSpatialScaler> spatial;
             id<MTLFXTemporalScaler> temporal;
             id<MTLTexture> color, depth, motion, result;
+            core::Tensor packed_color, packed_depth, packed_motion, packed_result, motion_tensor;
+            std::array<uint32_t, 4> pitches;
+            std::array<std::shared_ptr<core::Tensor>, 2> outputs;
+            std::shared_ptr<core::Tensor> acquireOutput() {
+                for (auto& buffer : outputs) {
+                    if (buffer && buffer.use_count() == 1) return buffer;
+                    if (!buffer) {
+                        buffer = std::make_shared<core::Tensor>(core::Tensor::empty(
+                            {size_t(output.y), size_t(output.x), 4}, core::Device::GPU, core::DataType::Float32));
+                        return buffer;
+                    }
+                }
+                // A caller retaining both outputs must not see them overwritten.
+                // Keep the persistent pool bounded; this exceptional output is not cached.
+                return std::make_shared<core::Tensor>(core::Tensor::empty(
+                    {size_t(output.y), size_t(output.x), 4}, core::Device::GPU, core::DataType::Float32));
+            }
         };
         core::MetalTensorReader reader;
         rendering::TensorSceneTemporalKernels kernels{core::GpuBackend::Metal};
         SceneTemporalCoordinator coordinator;
         std::array<std::shared_ptr<Feature>, size_t(TemporalViewId::Count)> features;
-        id<MTLComputePipelineState> pack, pack_spatial, unpack;
-
-        void ensureProgram() {
-            if (pack && pack_spatial && unpack) return;
-            NSError* failure = nil;
-            auto library = [reader.device() newLibraryWithSource:@(conversionSource) options:nil error:&failure];
-            if (!library) throw std::runtime_error(failure.localizedDescription.UTF8String);
-            pack = [reader.device() newComputePipelineStateWithFunction:[library newFunctionWithName:@"pack"] error:&failure];
-            pack_spatial = [reader.device() newComputePipelineStateWithFunction:[library newFunctionWithName:@"pack_spatial"] error:&failure];
-            unpack = [reader.device() newComputePipelineStateWithFunction:[library newFunctionWithName:@"unpack"] error:&failure];
-            if (!pack || !pack_spatial || !unpack) throw std::runtime_error("MetalFX conversion pipeline creation failed");
-        }
+        rendering::TensorSceneTextureKernels conversion{core::GpuBackend::Metal};
         std::shared_ptr<Feature> makeFeature(SceneUpscalerBackend backend, glm::ivec2 input, glm::ivec2 output) {
             auto f = std::make_shared<Feature>();
             f->backend = backend; f->input = input; f->output = output;
@@ -162,6 +113,14 @@ kernel void unpack(texture2d<float, access::read> source [[texture(0)]],
             }
             f->color = texture(device, MTLPixelFormatRGBA16Float, input, colorUsage | MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead);
             f->result = texture(device, MTLPixelFormatRGBA16Float, output, resultUsage | MTLTextureUsageShaderRead);
+            const auto pitch = [](uint32_t bytes) { return (bytes + 255u) & ~255u; };
+            f->pitches = {pitch(input.x * 8), pitch(input.x * 4), pitch(input.x * 8), pitch(output.x * 8)};
+            f->packed_color = core::Tensor::empty({size_t(input.y), size_t(f->pitches[0])}, core::Device::GPU, core::DataType::UInt8);
+            f->packed_result = core::Tensor::empty({size_t(output.y), size_t(f->pitches[3])}, core::Device::GPU, core::DataType::UInt8);
+            if (backend == SceneUpscalerBackend::MetalFxTemporal) {
+                f->packed_depth = core::Tensor::empty({size_t(input.y), size_t(f->pitches[1])}, core::Device::GPU, core::DataType::UInt8);
+                f->packed_motion = core::Tensor::empty({size_t(input.y), size_t(f->pitches[2])}, core::Device::GPU, core::DataType::UInt8);
+            }
             return f;
         }
     };
@@ -179,7 +138,7 @@ kernel void unpack(texture2d<float, access::read> source [[texture(0)]],
             !r.color || !validColor(*r.color, r.render_extent))
             return error("MetalFX requires a contiguous four-channel Metal image and valid upscale extents");
         if (temporal && (!r.depth || !r.depth->is_valid() ||
-            core::gpu_backend_of(*r.depth) != core::GpuBackend::Metal ||
+            !core::tensor_supports_metal_access(*r.depth) ||
             r.depth->dtype() != core::DataType::Float32 || !r.depth->is_contiguous() ||
             r.frame.view.size != r.render_extent || r.frame.output_extent != r.output_extent ||
             r.frame.view.near_plane <= 0 || r.frame.view.far_plane <= r.frame.view.near_plane ||
@@ -190,13 +149,12 @@ kernel void unpack(texture2d<float, access::read> source [[texture(0)]],
         try {
             @autoreleasepool {
                 const core::GpuBackendScope scope(core::GpuBackend::Metal);
-                impl_->ensureProgram();
                 auto f = impl_->features[slot];
                 if (!f || f->backend != backend || f->input != r.render_extent || f->output != r.output_extent) {
                     f = impl_->makeFeature(backend, r.render_extent, r.output_extent);
                     impl_->coordinator.reset(r.view, TemporalResetReason::RenderSize);
                 }
-                core::Tensor motion;
+                auto& motion = f->motion_tensor;
                 if (temporal) {
                     prepared = impl_->coordinator.prepare({.view = r.view,
                         .requirements = {.depth = true, .motion = true, .jitter = !r.frame.view.orthographic,
@@ -215,31 +173,33 @@ kernel void unpack(texture2d<float, access::read> source [[texture(0)]],
                     auto generated = impl_->kernels.motion(*r.depth, params, motion);
                     if (!generated) { impl_->coordinator.discard(prepared); return std::move(generated).error(); }
                 }
-                auto result = std::make_shared<core::Tensor>(core::Tensor::empty(
-                    {size_t(r.output_extent.y), size_t(r.output_extent.x), 4}, core::Device::GPU, core::DataType::Float32));
-                const std::array<const core::Tensor*, 3> inputs{r.color.get(), temporal ? r.depth.get() : nullptr,
-                                                            temporal ? &motion : nullptr};
-                const std::array<core::Tensor*, 1> outputs{result.get()};
+                auto result = f->acquireOutput();
                 const auto jitter = sceneTemporalJitterPixels(prepared.frame.current_jitter, r.render_extent, false);
+                rendering::SceneTextureParameters params{
+                    .extents = {uint32_t(r.render_extent.x), uint32_t(r.render_extent.y), uint32_t(r.output_extent.x), uint32_t(r.output_extent.y)},
+                    .layout = {uint32_t(r.color->size(1)), r.color->dtype() == core::DataType::Float32 ? 1u : 0u, r.flip_y ? 1u : 0u, temporal ? 1u : 0u},
+                    .pitches = f->pitches,
+                    .depth = {r.frame.view.near_plane, r.frame.view.far_plane, r.frame.view.orthographic ? 1.f : 0.f, temporal ? float(r.depth->size(1)) : 0.f},
+                    .jitter = {temporal ? jitter.x : 0.f, temporal ? jitter.y : 0.f, 0, 0}};
+                if (auto packed = impl_->conversion.dispatch(false, params,
+                    {r.color.get(), temporal ? r.depth.get() : nullptr, temporal ? &motion : nullptr,
+                     &f->packed_color, temporal ? &f->packed_depth : nullptr, temporal ? &f->packed_motion : nullptr, nullptr, nullptr}); !packed)
+                    throw std::runtime_error(lfs::format_for_developer(packed.error()));
+                const std::array<const core::Tensor*, 3> inputs{&f->packed_color, temporal ? &f->packed_depth : nullptr, temporal ? &f->packed_motion : nullptr};
+                const std::array<core::Tensor*, 1> outputs{&f->packed_result};
                 auto command = impl_->reader.submitWrites(inputs, outputs,
                     [&](id<MTLCommandBuffer> command, auto in, auto out) {
-                        struct Params { std::array<uint32_t,4> layout, extent; std::array<float,4> depth; };
-                        const Params params{{uint32_t(r.color->size(1)), temporal ? uint32_t(r.depth->size(1)) : 0u,
-                                             4, r.color->dtype() == core::DataType::Float32 ? 1u : 0u},
-                                            {uint32_t(r.render_extent.x),uint32_t(r.render_extent.y),r.flip_y ? 1u : 0u,temporal ? 1u : 0u},
-                                            {r.frame.view.near_plane,r.frame.view.far_plane,r.frame.view.orthographic ? 1.f : 0.f,0}};
-                        auto encoder = [command computeCommandEncoder];
-                        if (!encoder) throw std::runtime_error("MetalFX input encoder unavailable");
-                        [encoder setComputePipelineState:temporal ? impl_->pack : impl_->pack_spatial];
-                        for (NSUInteger i=0;i<(temporal ? in.size() : 1u);++i) [encoder setBuffer:in[i].buffer offset:in[i].offset atIndex:i];
-                        [encoder setBytes:&params length:sizeof(params) atIndex:3];
-                        [encoder setTexture:f->color atIndex:0];
-                        if (temporal) {
-                            [encoder setTexture:f->depth atIndex:1];
-                            [encoder setTexture:f->motion atIndex:2];
-                        }
-                        [encoder dispatchThreads:MTLSizeMake(r.render_extent.x,r.render_extent.y,1) threadsPerThreadgroup:MTLSizeMake(8,8,1)];
-                        [encoder endEncoding];
+                        auto blit = [command blitCommandEncoder];
+                        if (!blit) throw std::runtime_error("MetalFX input blit unavailable");
+                        const auto copy = [&](size_t i, id<MTLTexture> destination) {
+                            [blit copyFromBuffer:in[i].buffer sourceOffset:in[i].offset
+                                sourceBytesPerRow:f->pitches[i] sourceBytesPerImage:f->pitches[i]*r.render_extent.y
+                                sourceSize:MTLSizeMake(r.render_extent.x, r.render_extent.y, 1)
+                                toTexture:destination destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                        };
+                        copy(0, f->color);
+                        if (temporal) { copy(1, f->depth); copy(2, f->motion); }
+                        [blit endEncoding];
                         if (temporal) {
                             auto scaler = f->temporal;
                             scaler.colorTexture = f->color; scaler.depthTexture = f->depth;
@@ -255,24 +215,25 @@ kernel void unpack(texture2d<float, access::read> source [[texture(0)]],
                             f->spatial.inputContentWidth = r.render_extent.x; f->spatial.inputContentHeight = r.render_extent.y;
                             [f->spatial encodeToCommandBuffer:command];
                         }
-                        encoder = [command computeCommandEncoder];
-                        if (!encoder) throw std::runtime_error("MetalFX output encoder unavailable");
-                        [encoder setComputePipelineState:impl_->unpack]; [encoder setTexture:f->result atIndex:0];
-                        [encoder setTexture:f->color atIndex:1];
-                        const glm::vec2 alphaJitter = temporal ? jitter : glm::vec2(0);
-                        [encoder setBytes:&alphaJitter length:sizeof(alphaJitter) atIndex:1];
-                        [encoder setBuffer:out[0].buffer offset:out[0].offset atIndex:0];
-                        [encoder dispatchThreads:MTLSizeMake(r.output_extent.x,r.output_extent.y,1) threadsPerThreadgroup:MTLSizeMake(8,8,1)];
-                        [encoder endEncoding];
+                        blit = [command blitCommandEncoder];
+                        if (!blit) throw std::runtime_error("MetalFX output blit unavailable");
+                        [blit copyFromTexture:f->result sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
+                            sourceSize:MTLSizeMake(r.output_extent.x, r.output_extent.y, 1)
+                            toBuffer:out[0].buffer destinationOffset:out[0].offset
+                            destinationBytesPerRow:f->pitches[3] destinationBytesPerImage:f->pitches[3]*r.output_extent.y];
+                        [blit endEncoding];
                         // Retain the old feature through completion, including a resize/reset/release.
                         [command addCompletedHandler:^(id<MTLCommandBuffer>) { (void)f; }];
                     });
                 if (!command) throw std::runtime_error("MetalFX command was not submitted");
+                if (auto unpacked = impl_->conversion.dispatch(true, params,
+                    {r.color.get(), nullptr, nullptr, &f->packed_result, nullptr, nullptr, result.get(), nullptr}); !unpacked)
+                    throw std::runtime_error(lfs::format_for_developer(unpacked.error()));
                 if (temporal && !impl_->coordinator.commit(prepared, SceneHistoryStorage::MetalFx))
                     throw std::runtime_error("MetalFX history commit failed");
                 if (!temporal) impl_->coordinator.reset(r.view);
                 impl_->features[slot] = std::move(f);
-                return TensorSceneTemporalResult{.color = std::move(result), .sequence = temporal ? prepared.frame.sequence+1 : 0,
+                return TensorSceneTemporalResult{.color = std::move(result), .sequence = temporal ? prepared.frame.sequence + 1 : 0,
                     .reset_reasons = temporal ? prepared.frame.reset_reasons : TemporalResetReason::None};
             }
         } catch (const std::exception& e) {

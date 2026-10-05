@@ -80,6 +80,8 @@ if((BUILD_TESTS OR BUILD_VISUALIZER_TESTS) AND LFS_TENSOR_METAL AND NOT LFS_GRAP
         ${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/tensor)
     target_compile_features(metal_scene_upscaler_contracts PRIVATE cxx_std_23)
     set_target_properties(metal_scene_upscaler_contracts PROPERTIES OBJCXX_STANDARD 23 OBJCXX_STANDARD_REQUIRED YES)
+    target_compile_options(metal_scene_upscaler_contracts PRIVATE
+        "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>")
     target_link_libraries(metal_scene_upscaler_contracts PRIVATE
         lfs_tensor_rasterizer GTest::gtest_main "-framework MetalFX" "-framework Metal" "-framework Foundation")
     add_test(NAME MetalSceneUpscalerContracts COMMAND metal_scene_upscaler_contracts)

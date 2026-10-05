@@ -379,7 +379,7 @@ TEST(PreferencesMigration, InvalidProjectManagerPreferencesFallBackWithoutContam
     EXPECT_EQ(readPreferences(*paths).at("theme"), "dark");
 }
 
-TEST(PreferencesMigration, StartupClearsBackendMissingFromBuildAndPreservesOptions) {
+TEST(PreferencesMigration, StartupIgnoresBackendMissingFromBuildAndPreservesSavedChoice) {
     const auto home = makeHome("lfs_preferences_tensor_missing");
     const ScopedLfsHome scoped_home(home);
     const auto paths = lfs::core::UserPaths::resolve();
@@ -398,6 +398,6 @@ TEST(PreferencesMigration, StartupClearsBackendMissingFromBuildAndPreservesOptio
     EXPECT_FALSE(sanitized.backend);
     EXPECT_EQ(sanitized.options.vulkan_device, "0");
     EXPECT_EQ(sanitized.options.vulkan_validation, 2);
-    EXPECT_FALSE(preferences.tensorBackend().backend);
-    EXPECT_EQ(readPreferences(*paths).at("tensor_backend").at("backend"), "auto");
+    EXPECT_EQ(preferences.tensorBackend().backend, lfs::core::GpuBackend::Vulkan);
+    EXPECT_EQ(readPreferences(*paths).at("tensor_backend").at("backend"), "vulkan");
 }

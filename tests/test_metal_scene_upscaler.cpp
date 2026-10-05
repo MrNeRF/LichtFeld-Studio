@@ -4,6 +4,7 @@
 #include "visualizer/rendering/metal_scene_upscaler.hpp"
 #include <gtest/gtest.h>
 #include <cmath>
+#include <vector>
 
 namespace lfs::vis {
     namespace {
@@ -74,6 +75,59 @@ namespace lfs::vis {
                 ASSERT_TRUE(resized); checkImage(*resized->color,{160,120},.6f);
             }
             checkImage(*retained,{128,96},.25f);
+        }
+        TEST_P(MetalFxContracts, OutputPoolReusesReleasedBuffersWithoutOverwritingRetainedFrames) {
+            MetalSceneUpscaler pipeline;
+            auto r = request();
+            auto first = pipeline.resolve(GetParam(),r); ASSERT_TRUE(first);
+            auto retained = first->color;
+            const auto* first_address = retained.get();
+            first->color.reset();
+            r.color->fill_(.7f);
+            auto second = pipeline.resolve(GetParam(),r); ASSERT_TRUE(second);
+            const auto* second_address = second->color.get();
+            EXPECT_NE(first_address,second_address);
+            auto third = pipeline.resolve(GetParam(),r); ASSERT_TRUE(third);
+            EXPECT_NE(third->color.get(),first_address);
+            EXPECT_NE(third->color.get(),second_address);
+            second->color.reset(); third->color.reset();
+            auto recycled = pipeline.resolve(GetParam(),r); ASSERT_TRUE(recycled);
+            EXPECT_EQ(recycled->color.get(),second_address);
+            checkImage(*retained,r.output_extent,.25f);
+        }
+        TEST_P(MetalFxContracts, PaddedUInt8RowsAndFlippedCoverageSurviveTextureRoundTrip) {
+            const GpuBackendScope scope(GpuBackend::Metal);
+            MetalSceneUpscaler pipeline;
+            auto r = request(TemporalViewId::Main,{33,25},{66,50});
+            std::vector<uint8_t> pixels(33*25*4,64);
+            for (int y=0;y<25;++y) for (int x=0;x<33;++x) pixels[(y*33+x)*4+3]=uint8_t(30+y*5);
+            auto cpu = Tensor::from_blob(pixels.data(),{25,33,4},Device::CPU,DataType::UInt8);
+            r.color = std::make_shared<Tensor>(cpu.to(Device::GPU));
+            r.flip_y = true;
+            auto result = pipeline.resolve(GetParam(),r); ASSERT_TRUE(result);
+            auto host = result->color->cpu();
+            const auto* values = host.ptr<float>();
+            for (int y=8;y<42;++y) {
+                const float source_y = 24.f-((float(y)+.5f)*.5f-.5f);
+                EXPECT_NEAR(values[(y*66+20)*4+3],(30.f+source_y*5.f)/255.f,1e-5f);
+                EXPECT_NEAR(values[(y*66+20)*4],64.f/255.f,.04f);
+            }
+        }
+        TEST(TensorTemporalContracts, RecycledDepthInputKeepsIndependentHistory) {
+            if (!gpu_backend_available(GpuBackend::Metal)) GTEST_SKIP();
+            TensorSceneTemporalPipeline recycled(GpuBackend::Metal), reference(GpuBackend::Metal);
+            auto reused = request();
+            for (int frame=0;frame<6;++frame) {
+                const float depth = frame%2 ? 12.f:4.f;
+                const float color = frame%2 ? .8f:.2f;
+                reused.depth->fill_(depth); reused.color->fill_(color);
+                auto stable = request(); stable.depth->fill_(depth); stable.color->fill_(color);
+                auto a=recycled.resolve(reused), b=reference.resolve(stable);
+                ASSERT_TRUE(a); ASSERT_TRUE(b);
+                auto ah=a->color->cpu(), bh=b->color->cpu();
+                const auto* av=ah.ptr<float>(); const auto* bv=bh.ptr<float>();
+                for (size_t i=0;i<ah.numel();++i) ASSERT_NEAR(av[i],bv[i],1e-6f);
+            }
         }
         TEST_P(MetalFxContracts, RejectsInvalidViewAndStorageBeforeSubmission) {
             MetalSceneUpscaler pipeline;

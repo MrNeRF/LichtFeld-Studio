@@ -110,7 +110,8 @@ magenta window despite a correct internal capture.
 
 Apple builds with Metal graphics expose `metalfx_spatial` and
 `metalfx_temporal` only when the system GPU supports the corresponding MetalFX
-scaler. These are framework-backed built-ins, not Vulkan provider modules.
+scaler. Both support queries are cached once per process. These are
+framework-backed built-ins, not Vulkan provider modules.
 They do not require the FidelityFX SDK, CUDA, MoltenVK, or Vulkan headers.
 Vulkan graphics builds retain FSR through their existing provider ABI; they do
 not advertise MetalFX. Preferences and Python/MCP use the same registry and
@@ -136,11 +137,19 @@ MetalFX writes opaque alpha, so output conversion restores scene coverage by
 bilinearly sampling the current color alpha at jitter-corrected coordinates.
 Coverage is not reconstructed by MetalFX's internal temporal history.
 
-Texture conversion and scaler execution are ordered through
-`MetalTensorReader::submitWrites`. Input snapshots, output storage and the
+Texture packing, view-depth conversion and output unpacking use a single-source
+Slang program dispatched through `GpuKernelModule`. It writes padded
+RGBA16F/R32F/RG32F byte layouts into reusable tensors; the native MetalFX code
+only creates scaler objects and blits buffers to textures and back through
+`MetalTensorReader::submitWrites`. The shared GPU timeline orders both kernel
+dispatches around scaler execution. Input snapshots, output storage and the
 feature are retained through command completion; resize and release do not
 wait on the CPU. Tensor consumers wait through the existing GPU timeline.
-A feature is recreated when extents change. Camera cuts, scene/backend/preset
+Each feature retains its conversion buffers, motion tensor and a bounded pool
+of two Float32 RGBA outputs. Released outputs are reused; if callers retain both,
+an uncached output preserves those frames. Basic tensor Temporal keeps two
+independent depth buffers per view and copies into the idle buffer, so raster
+reuse cannot overwrite history. A feature is recreated when extents change. Camera cuts, scene/backend/preset
 changes, projection/crop changes and explicit resets invalidate only the
 corresponding temporal history. Ineligible modes release history. Encoding
 failures retain the last complete frame and then fall back to native; changing
@@ -152,7 +161,8 @@ does not execute FSR or MetalFX in the export worker.
 
 GPU regression target: `metal_scene_upscaler_contracts`. It covers native
 producer/consumer ordering, alpha, independent panels/owners, crop calibration,
-jitter, reset reasons, resize, destruction with pending work and invalid inputs.
+jitter, reset reasons, resize, destruction with pending work, retained/recycled
+outputs, padded UInt8 rows with flipped coverage, reused depth and invalid inputs.
 The same target includes shared tracker/coordinator/registry contracts and
 basic Metal spatial/temporal checks. Existing `tensor_rasterizer_contracts`
 provide CPU-oracle and image-convergence coverage for the basic kernels.

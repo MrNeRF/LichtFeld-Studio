@@ -109,7 +109,7 @@ namespace lfs::vis {
 
         void setTensorBackend(const TensorPreferenceState& state);
         [[nodiscard]] TensorPreferenceState tensorBackend();
-        // Clear a saved backend missing from this build before startup freezes the choice.
+        // Ignore a saved backend missing from this build for this run before startup freezes the choice.
         [[nodiscard]] TensorPreferenceState sanitizeTensorBackend();
 
         void setProjectManagerDefaultView(std::string_view value);

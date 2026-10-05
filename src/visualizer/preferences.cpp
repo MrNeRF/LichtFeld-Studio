@@ -673,10 +673,9 @@ namespace lfs::vis {
         if (state.backend && std::find(core::kCompiledGpuBackends.begin(),
                                        core::kCompiledGpuBackends.end(), *state.backend) ==
                                  core::kCompiledGpuBackends.end()) {
-            LOG_WARN("Saved tensor backend {} is not compiled in this build; clearing the preference and selecting automatically",
+            LOG_WARN("Saved tensor backend {} is not compiled in this build; ignoring the preference for this run and selecting automatically",
                      core::gpu_backend_name(*state.backend));
             state.backend.reset();
-            setTensorBackend(state);
         }
         return state;
     }

@@ -4,7 +4,7 @@
 # Single-source splat rasterizer: Slang passes run through the tensor library
 # on Metal and Vulkan. It replaces the native Metal and vksplat rasterizers
 # pass by pass.
-add_library(lfs_tensor_rasterizer STATIC splat_projector.cpp splat_tile_binner.cpp splat_rasterizer.cpp splat_lod_selector.cpp splat_selection_query.cpp point_cloud_renderer.cpp tensor_scene_temporal.cpp)
+add_library(lfs_tensor_rasterizer STATIC splat_projector.cpp splat_tile_binner.cpp splat_rasterizer.cpp splat_lod_selector.cpp splat_selection_query.cpp point_cloud_renderer.cpp tensor_scene_temporal.cpp tensor_scene_texture.cpp)
 target_compile_features(lfs_tensor_rasterizer PUBLIC cxx_std_23)
 set_target_properties(lfs_tensor_rasterizer PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(lfs_tensor_rasterizer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -76,3 +76,6 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${_rasterizer_dir}/slang/config.slang"
     "${_rasterizer_dir}/slang/portal_compact.inc"
     "${_rasterizer_dir}/slang/display_color.inc")
+
+lfs_add_gpu_program(lfs_tensor_rasterizer tensor_scene_texture_program SOURCE tensor_scene_texture.slang
+    COMPUTE scene_texture_pack scene_texture_unpack)
