@@ -4,9 +4,7 @@
 
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
-#if LFS_HAS_CUDA
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
-#endif
+#include "core/tensor_label.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
 #include <gtest/gtest.h>
@@ -265,16 +263,13 @@ namespace {
     }
 
     TEST_F(VramProfilerMetricsTest, TensorLabelFlowsToMetricRow) {
-#if !LFS_HAS_CUDA
-        GTEST_SKIP() << "CUDA allocation tracking unavailable";
-#else
         if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA))
             GTEST_SKIP() << "CUDA allocation tracking unavailable";
         const lfs::core::GpuBackendScope scope(lfs::core::GpuBackend::CUDA);
         auto& p = VramProfiler::instance();
         lfs::core::Tensor labeled;
         {
-            lfs::core::CudaMemoryPool::LabelGuard label_guard("splat.positions.test");
+            LFS_LABEL_SCOPE("splat.positions.test");
             labeled = lfs::core::Tensor::zeros({64, 3}, lfs::core::Device::GPU,
                                                lfs::core::DataType::Float32);
         }
@@ -289,7 +284,6 @@ namespace {
             }
         }
         EXPECT_TRUE(found);
-#endif
     }
 
     TEST_F(VramProfilerMetricsTest, IterPerSecondGrowsAcrossIterations) {

@@ -8,6 +8,7 @@
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_label.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "core/tensor_trace.hpp"
 
