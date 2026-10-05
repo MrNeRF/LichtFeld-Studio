@@ -6,21 +6,15 @@
 namespace lfs::vis {
     // Capture bool-returning allocation failures without interrupting their
     // cleanup paths. Queued-attachment validation consumes the captured error.
+    // The per-thread current scope lives in the visualizer library, so scopes and
+    // records meet across module boundaries.
     class LFS_VIS_API GraphicsImportErrorScope {
-        inline static thread_local std::string* current_ = nullptr;
         std::string* previous_;
 
     public:
-        explicit GraphicsImportErrorScope(std::string& error) : previous_(current_) { current_ = &error; }
-        ~GraphicsImportErrorScope() {
-            if (previous_ && previous_->empty() && current_)
-                *previous_ = *current_;
-            current_ = previous_;
-        }
-        static void record(const std::string& error) {
-            if (current_ && current_->empty())
-                *current_ = error;
-        }
+        explicit GraphicsImportErrorScope(std::string& error);
+        ~GraphicsImportErrorScope();
+        static void record(const std::string& error);
     };
 
 } // namespace lfs::vis
