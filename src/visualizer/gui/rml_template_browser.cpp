@@ -36,13 +36,21 @@ namespace lfs::vis::gui {
         }
         std::string categoryLabel(const std::string& category) {
             static const std::map<std::string, std::string> keys{
-                {"Clean-up", "cleanup"},
-                {"Colour", "colour"},
-                {"Selection", "selection"},
-                {"Geometry", "geometry"},
-                {"Animation", "animation"}};
+                {"Clean-up", "node_template.category.cleanup"},
+                {"Colour", "node_template.category.colour"},
+                {"Selection", "node_template.category.selection"},
+                {"Geometry", "node_template.category.geometry"},
+                {"Animation", "node_template.category.animation"}};
             const auto found = keys.find(category);
-            return found == keys.end() ? category : LOC("node_template.category." + found->second);
+            return found == keys.end() ? category : LOC(found->second);
+        }
+        std::string kindLabel(const std::string& kind) {
+            static const std::map<std::string, std::string> keys{
+                {"splat", "node_template.kind.splat"},
+                {"mesh", "node_template.kind.mesh"},
+                {"points", "node_template.kind.points"}};
+            const auto found = keys.find(kind);
+            return found == keys.end() ? kind : LOC(found->second);
         }
     } // namespace
 
@@ -190,7 +198,7 @@ namespace lfs::vis::gui {
                      escaped(value.adjust) + "\">" + escaped(LOC("node_editor.template_adjust_short")) + " " +
                      escaped(value.adjust) + "</span><div class=\"template-card-bottom\"><div class=\"template-chips\">";
             for (const auto& kind : value.scene_kinds)
-                cards += "<span class=\"template-chip\">" + escaped(LOC("node_template.kind." + kind)) + "</span>";
+                cards += "<span class=\"template-chip\">" + escaped(kindLabel(kind)) + "</span>";
             cards += "</div><button class=\"btn btn--secondary\" data-action=\"add\"><span>" +
                      escaped(LOC("node_editor.template_add")) + "</span></button></div>";
             if (value.id == menu_id_)

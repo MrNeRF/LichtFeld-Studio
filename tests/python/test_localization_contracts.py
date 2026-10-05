@@ -438,7 +438,7 @@ def test_runtime_localization_refresh_updates_live_rml_documents():
         r"<[A-Za-z][^>]*>[ \t\r\n]*@tr:[A-Za-z0-9_.-]+[ \t\r\n]*</[A-Za-z][^>]*>"
     )
     translated_attribute = re.compile(
-        r"(?:title|placeholder)\s*=\s*([\"'])@tr:[A-Za-z0-9_.-]+\1",
+        r"(?:title|placeholder|aria-label)\s*=\s*([\"'])@tr:[A-Za-z0-9_.-]+\1",
         re.IGNORECASE,
     )
     for path in RML_DIR.rglob("*.rml"):
