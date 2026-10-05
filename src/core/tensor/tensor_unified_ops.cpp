@@ -2386,38 +2386,6 @@ namespace lfs::core {
         }
     }
 
-    std::pair<Tensor, Tensor> Tensor::_broadcasted(const Tensor& other, bool match_dtype) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
-                       "broadcast requires valid tensors");
-        LFS_ASSERT_MSG(device_ == other.device(),
-                       "broadcast operands must be on the same device");
-        internal::require_same_gpu_backend(*this, other, "broadcast");
-
-        auto bcast_shape = this->broadcast_shape(other.shape());
-        LFS_ASSERT_MSG(broadcast::can_broadcast(shape_.dims(), other.shape().dims()),
-                       "broadcast shapes are incompatible");
-
-        // _broadcasted consumers expect dense expanded storage.
-        Tensor a_broadcast = (shape_ == bcast_shape)
-                                 ? this->clone()
-                                 : broadcast_to(bcast_shape).contiguous();
-        Tensor b_broadcast = (other.shape() == bcast_shape)
-                                 ? other.clone()
-                                 : other.broadcast_to(bcast_shape).contiguous();
-
-        if (match_dtype && dtype_ != other.dtype()) {
-            auto common_dtype = promote_types(dtype_, other.dtype());
-            if (a_broadcast.dtype() != common_dtype) {
-                a_broadcast = a_broadcast.to(common_dtype);
-            }
-            if (b_broadcast.dtype() != common_dtype) {
-                b_broadcast = b_broadcast.to(common_dtype);
-            }
-        }
-
-        return {std::move(a_broadcast), std::move(b_broadcast)};
-    }
-
     // ============= STATIC CAT OPERATION =============
 
     Tensor Tensor::cat(const std::vector<Tensor>& tensors, int dim) {

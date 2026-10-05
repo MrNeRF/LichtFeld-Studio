@@ -805,8 +805,6 @@ namespace lfs::core {
         template <typename SrcT = float, typename Op>
         Tensor& binary_op_inplace_generic(const Tensor& other, Op op);
 
-        std::pair<Tensor, Tensor> _broadcasted(const Tensor& other, bool match_dtype = true) const;
-
         int resolve_dim(int dim) const {
             if (!is_valid())
                 return -1;
