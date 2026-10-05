@@ -46,15 +46,15 @@ namespace lfs::training {
             uint64_t parameter, packed, bounds, gradient;
             int32_t primitives, attributes;
             float lr, bc1_rcp, bc2_sqrt_rcp;
-            uint32_t apply_mean_step, apply_screen_share;
+            uint32_t apply_screen_share;
         };
 
         struct BatchParams {
             StepEntry steps[kMaxSteps];
             RowMasks rows;
-            uint64_t raw_scales, far_mask, screen_share;
-            int32_t raw_scales_count, far_count, screen_share_count;
-            float median_extent, r_min, r_max, screen_share_limit, screen_share_penalty;
+            uint64_t screen_share;
+            int32_t screen_share_count;
+            float screen_share_limit, screen_share_penalty;
             float beta1, beta2, eps;
         };
 
@@ -63,22 +63,15 @@ namespace lfs::training {
             BatchParams params{
                 .steps = {},
                 .rows = row_masks(masks, modifiers),
-                .raw_scales = mk::address(masks.raw_scales),
-                .far_mask = mk::address(masks.far_mask),
                 .screen_share = mk::address(masks.screen_share),
-                .raw_scales_count = count(masks.raw_scales),
-                .far_count = count(masks.far_mask),
                 .screen_share_count = count(masks.screen_share),
-                .median_extent = modifiers.median_extent,
-                .r_min = modifiers.r_min,
-                .r_max = modifiers.r_max,
                 .screen_share_limit = modifiers.screen_share_limit,
                 .screen_share_penalty = modifiers.screen_share_penalty,
                 .beta1 = hyper.beta1,
                 .beta2 = hyper.beta2,
                 .eps = hyper.eps,
             };
-            std::vector<const Tensor*> uses{&masks.frozen, &masks.crop_damping, &masks.raw_scales, &masks.far_mask,
+            std::vector<const Tensor*> uses{&masks.frozen, &masks.crop_damping,
                                             &masks.screen_share};
             int entries = 0;
             int max_primitives = 0;
@@ -105,7 +98,6 @@ namespace lfs::training {
                     .lr = step.lr,
                     .bc1_rcp = step.bc1_rcp,
                     .bc2_sqrt_rcp = step.bc2_sqrt_rcp,
-                    .apply_mean_step = step.apply_mean_step ? 1u : 0u,
                     .apply_screen_share = step.apply_screen_share ? 1u : 0u,
                 };
                 max_primitives = std::max(max_primitives, step.primitives);
@@ -209,16 +201,10 @@ namespace lfs::training {
                                     swizzled ? 1u : 0u, p.bits};
             mk::launch("adam_encode_zero", params, {&packed, &bounds, &flags, &touched}, n_blocks);
         }
-
-        void validate_far_mask(const bool* pointer) {
-            if (pointer == nullptr)
-                throw std::invalid_argument("mean-step far mask must not be null");
-        }
     } // namespace
 
     const lfs::gpu_ops::AdamOps& metal_adam_ops() {
         static const lfs::gpu_ops::AdamOps ops{
-            .validate_far_mask = validate_far_mask,
             .step_batch = step_batch,
             .step_sh = step_sh,
             .encode_zero = encode_zero,

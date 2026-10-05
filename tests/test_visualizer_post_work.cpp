@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "python/python_compat.hpp"
 #include "test_view_targets.hpp"
 #include <SDL3/SDL.h>
 
@@ -24,6 +25,8 @@
 #include "core/user_paths.hpp"
 #include "cuda_backend_test.hpp"
 #include "gui/import_error.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/scene_panel_native.hpp"
 #include "gui/scene_tree_session.hpp"
 #include "gui/string_keys.hpp"
 #include "input/input_controller.hpp"
@@ -38,7 +41,9 @@
 #include "io/splat_chapter.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
+#include "python/gil.hpp"
 #include "python/python_runtime.hpp"
+#include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/vulkan_view_render_state.hpp"
@@ -1513,6 +1518,194 @@ namespace {
 } // namespace
 
 namespace lfs::vis {
+
+    class SequencerFrameDemandTest : public VisualizerImplResetTest {
+    protected:
+        static void SetUpTestSuite() {
+            ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+                (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        }
+        static void TearDownTestSuite() {
+            lfs::event::LocalizationManager::getInstance().reset();
+        }
+    };
+
+    TEST_F(SequencerFrameDemandTest, PropagatesPlaybackStreamAndPreviewDemand) {
+        VisualizerImpl viewer(projectOptions());
+        auto& gui = *viewer.getGuiManager();
+        auto& sequencer = gui.sequencerUI();
+        auto& controller = sequencer.controller();
+        gui.startup_overlay_.dismiss();
+        gui.ui_layout_settle_frames_ = 0;
+        gui.rml_viewport_overlay_.render_needed_ = false;
+        gui.rml_viewport_overlay_.document_sync_dirty_ = false;
+        // The windowless fixture has no screen chrome render to settle its initial dirtiness.
+        gui.screen_host_.chrome_dirty_ = false;
+        gui.screen_host_.overlay_dirty_ = false;
+        // An unopened panel has pending localization, but must not keep us awake.
+        gui.setSequencerVisible(false);
+        ASSERT_TRUE(sequencer.ui_state_.show_pip_preview);
+        ASSERT_FALSE(gui.needsAnimationFrame());
+        ASSERT_FALSE(lfs::python::has_frame_callback());
+        ASSERT_FALSE(lfs::python::has_scene_time_callback());
+
+        const auto expect_demand = [&](const bool expected) {
+            EXPECT_EQ(sequencer.needsAnimationFrame(), expected);
+            EXPECT_EQ(gui.needsAnimationFrame(), expected);
+            const auto demand = viewer.collectFrameDemand(false, false);
+            EXPECT_EQ(demand.gui_animation, expected);
+            EXPECT_FALSE(demand.python_animation);
+            EXPECT_FALSE(demand.input_event);
+            // Isolate the GUI contribution from initial scene dirtiness in this
+            // windowless fixture. Both scheduler gates must follow it alone.
+            VisualizerImpl::FrameDemand settled;
+            settled.gui_animation = demand.gui_animation;
+            EXPECT_EQ(settled.shouldRenderFrame(), expected);
+            EXPECT_EQ(settled.needsContinuousLoop(), expected);
+        };
+
+        controller.setPlySequence(temporary_.path, "sequence",
+                                  {temporary_.path / "frame_0.ply", temporary_.path / "frame_1.ply"},
+                                  {"frame_0", "frame_1"}, 1.0f);
+        ASSERT_EQ(controller.timeline().realKeyframeCount(), 0);
+        sequencer.ply_stream_states_.assign(2, gui::SequencerUIManager::PlyStreamFrameState::Resident);
+        sequencer.last_ply_sequence_frame_ = 0;
+        controller.play();
+        expect_demand(true);
+        const auto first_frame = controller.plySequenceFrameIndex(controller.playhead());
+        // Use the scheduler's real eligibility decision to reach another tick,
+        // without pointer input, callbacks, or crossing a displayed-frame boundary.
+        VisualizerImpl::FrameDemand settled;
+        settled.gui_animation = viewer.collectFrameDemand(false, false).gui_animation;
+        if (settled.needsContinuousLoop()) {
+            sequencer.last_playback_tick_time_ = std::chrono::steady_clock::now() - std::chrono::milliseconds(10);
+            sequencer.tickPlaybackBeforeSceneRender();
+        }
+        EXPECT_GT(controller.playhead(), 0.0f);
+        EXPECT_EQ(controller.plySequenceFrameIndex(controller.playhead()), first_frame);
+        EXPECT_EQ(sequencer.last_ply_sequence_frame_, first_frame);
+        expect_demand(true);
+        controller.pause();
+        expect_demand(false);
+
+        // Stage worker handoff states deterministically, without filesystem timing.
+        sequencer.ply_stream_inflight_ = true;
+        expect_demand(true);
+        sequencer.ply_stream_inflight_ = false;
+        sequencer.ply_stream_completed_.push_back({.generation = sequencer.ply_stream_generation_.load() + 1});
+        expect_demand(true);
+        sequencer.drainPlySequenceStream();
+        expect_demand(false);
+        sequencer.ply_stream_requests_.push_back(0);
+        expect_demand(true);
+        sequencer.ply_stream_requests_.clear();
+        expect_demand(false);
+
+        // Remove unrelated pending panel localization while probing PiP alone.
+        auto panel = std::move(sequencer.panel_);
+        gui.setSequencerVisible(true);
+        sequencer.ui_state_.show_pip_preview = true;
+        sequencer.pip_needs_update_ = false;
+        sequencer.pip_last_key_ = sequencer.currentPipPreviewKey();
+        expect_demand(false);
+        controller.seek(0.5f);
+        // The pending key survives the real PiP rate-limit early return.
+        sequencer.pip_last_render_time_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        gui::UIContext context{};
+        context.viewer = &viewer;
+        sequencer.renderKeyframePreview(context);
+        expect_demand(true);
+        sequencer.pip_last_key_ = sequencer.currentPipPreviewKey();
+        expect_demand(false);
+        sequencer.ui_state_.show_pip_preview = false;
+        sequencer.panel_ = std::move(panel);
+        gui.setSequencerVisible(false);
+        controller.clearPlySequence();
+        controller.addKeyframeAtTime({}, 0.0f);
+        controller.addKeyframeAtTime({}, 1.0f);
+        controller.play();
+        sequencer.tickPlaybackBeforeSceneRender();
+        expect_demand(true);
+        controller.pause();
+        controller.beginScrub();
+        expect_demand(true);
+        controller.endScrub();
+        expect_demand(false);
+        gui.setSequencerVisible(true);
+        expect_demand(true);
+        gui.ui_hidden_ = true;
+        EXPECT_FALSE(gui.needsAnimationFrame());
+        controller.play();
+        EXPECT_TRUE(gui.needsAnimationFrame());
+        controller.pause();
+        EXPECT_FALSE(gui.needsAnimationFrame());
+        gui.ui_hidden_ = false;
+        gui.setSequencerVisible(false);
+        expect_demand(false);
+
+        // Pointer dragging remains an independent redraw source.
+        viewer.window_manager_ = std::make_unique<WindowManager>("Demand test", 640, 480);
+        auto& input = const_cast<FrameInputBuffer&>(viewer.window_manager_->frameInput());
+        input.had_event = true;
+        input.mouse_moved = true;
+        input.mouse_down[0] = true;
+        EXPECT_TRUE(viewer.inputFrameRequestsRender());
+        EXPECT_TRUE(viewer.collectFrameDemand(false, false).input_event);
+        input.beginFrame();
+        EXPECT_FALSE(viewer.inputFrameRequestsRender());
+    }
+
+    class SelectionSubmodeTest : public VisualizerImplResetTest {};
+
+    TEST_F(SelectionSubmodeTest, PublishesNativeEventDragAndNewViewerModes) {
+        const auto assert_mirror = [](gui::GizmoManager& gizmo) {
+            const int expected = static_cast<int>(gizmo.getSelectionSubMode());
+            EXPECT_EQ(lfs::python::get_selection_submode(), expected);
+            lfs::python::set_context({});
+            EXPECT_EQ(lfs::python::context().selection_submode, expected);
+        };
+        {
+            VisualizerImpl viewer(projectOptions());
+            auto& gizmo = viewer.getGuiManager()->gizmo();
+            for (int value = 0; value < 8; ++value) {
+                const auto mode = static_cast<SelectionSubMode>(value);
+                gizmo.setSelectionSubMode(mode);
+                EXPECT_EQ(gizmo.getSelectionSubMode(), mode);
+                assert_mirror(gizmo);
+                const auto next = static_cast<SelectionSubMode>((value + 1) % 8);
+                lfs::core::events::tools::SetSelectionSubMode{
+                    .selection_mode = static_cast<int>(next)}
+                    .emit();
+                EXPECT_EQ(gizmo.getSelectionSubMode(), next);
+                assert_mirror(gizmo);
+            }
+            for (const auto mode : {SelectionSubMode::Box, SelectionSubMode::Sphere}) {
+                gizmo.setSelectionVolumeFromDrag(mode, SelectionMode::Replace, 0,
+                                                 glm::vec3(0.0f), 1.0f);
+                EXPECT_EQ(gizmo.getSelectionSubMode(), mode);
+                assert_mirror(gizmo);
+            }
+        }
+        // A replacement viewer must not inherit the previous viewer's Sphere mirror.
+        VisualizerImpl replacement(projectOptions());
+        EXPECT_EQ(replacement.getGuiManager()->gizmo().getSelectionSubMode(), SelectionSubMode::Centers);
+        assert_mirror(replacement.getGuiManager()->gizmo());
+    }
+
+    TEST_F(SelectionSubmodeTest, PublicPythonGetterAndContextFollowNativeMode) {
+        ASSERT_TRUE(lfs::python::ensure_initialized());
+        VisualizerImpl viewer(projectOptions());
+        const lfs::python::GilAcquire gil;
+        const auto script = std::format(R"PY(
+import runpy
+import lichtfeld as lf
+contract = runpy.run_path(r"{}/tests/python/test_ui_api_completeness.py")
+contract["test_selection_submode_follows_native_mode"](lf)
+)PY",
+                                        PROJECT_ROOT_PATH);
+        const int result = PyRun_SimpleString(script.c_str());
+        EXPECT_EQ(result, 0);
+    }
 
     std::filesystem::path make_real_dataset_subset(
         const std::filesystem::path& destination,
@@ -16829,3 +17022,25 @@ namespace lfs::vis {
         EXPECT_EQ(viewer.frame_state_.state(), FrameStateMachine::State::RendererDead);
     }
 } // namespace lfs::vis
+
+TEST(ScenePanelLogDemandTest, BackgroundLogsWakeOnlyTheActiveLogTab) {
+    auto& logger = lfs::core::Logger::get();
+    // The CPU-only visualizer test binary runs gtest's own main, which leaves the logger uninitialized.
+    if (!logger.is_ready())
+        logger.init(lfs::core::LogLevel::Info);
+    // The panel's RML host requires a manager; an uninitialised one is never driven.
+    lfs::vis::gui::RmlUIManager manager;
+    lfs::vis::gui::NativeScenePanel panel(&manager);
+    const auto previous_level = logger.level();
+    logger.set_level(lfs::core::LogLevel::Info);
+    panel.setProjectActiveTab("logging");
+    lfs::python::consume_redraw_request();
+    LOG_INFO("GUI log demand check");
+    EXPECT_FALSE(lfs::python::has_redraw_request());
+    std::thread([] { LOG_INFO("Background log demand check"); }).join();
+    EXPECT_TRUE(lfs::python::consume_redraw_request());
+    panel.setProjectActiveTab("scene");
+    std::thread([] { LOG_INFO("Inactive log demand check"); }).join();
+    EXPECT_FALSE(lfs::python::consume_redraw_request());
+    logger.set_level(previous_level);
+}

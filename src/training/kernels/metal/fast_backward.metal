@@ -725,7 +725,6 @@ struct FastBackwardGeometryParams {
     device const float* grads;
     device const float4* normal_grads;
     device float* densification;
-    device const uchar* far_mask;
     device atomic_float* scale_loss;
     device atomic_float* opacity_loss;
     device const float* sparsity_sigmoid;
@@ -737,10 +736,9 @@ struct FastBackwardGeometryParams {
     FastAdamGroup opacity_adam;
     float beta1, beta2, eps;
     float scale_reg_weight, flatten_reg_weight, opacity_reg_weight, sparsity_rho, sparsity_grad_loss;
-    float median_extent, r_min, r_max;
-    float width, height, fx, fy;
+        float width, height, fx, fy;
     float clip_left, clip_right, clip_top, clip_bottom;
-    uint n, far_mask_n, sparsity_n, per_splat_mean_step;
+    uint n, sparsity_n;
 };
 
 static float fast_sigmoid(const float x) { return 1.0f / (1.0f + exp(-x)); }
@@ -980,14 +978,7 @@ kernel void fast_backward_geometry(constant FastBackwardGeometryParams& p [[buff
         }
     }
 
-    // The per-splat factor scales the applied mean step, not the gradient.
-    float mean_step_scale = 1.0f;
-    if (in_range && p.per_splat_mean_step != 0u && p.far_mask != nullptr && idx < p.far_mask_n &&
-        p.far_mask[idx] != 0u && scaling.param != nullptr && idx * 3u + 2u < uint(scaling.elements)) {
-        device const float* s = reinterpret_cast<device const float*>(scaling.param) + idx * 3u;
-        mean_step_scale = per_splat_mean_step_ratio(s[0], s[1], s[2], p.median_extent, p.r_min, p.r_max);
-    }
-    fast_adam_step(p.means_adam, mean_grads, idx, 3u, mean_step_scale, p.beta1, p.beta2, p.eps, scratch, t);
+    fast_adam_step(p.means_adam, mean_grads, idx, 3u, 1.0f, p.beta1, p.beta2, p.eps, scratch, t);
     fast_adam_step(p.rotation_adam, rotation_grads, idx, 4u, 1.0f, p.beta1, p.beta2, p.eps, scratch, t);
     fast_adam_step(p.scaling_adam, scale_grads, idx, 3u, 1.0f, p.beta1, p.beta2, p.eps, scratch, t);
     fast_adam_step(p.opacity_adam, opacity_grads, idx, 1u, 1.0f, p.beta1, p.beta2, p.eps, scratch, t);

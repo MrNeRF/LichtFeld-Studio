@@ -2,16 +2,16 @@
 
 struct Params {
     uint64_t parameter, packed, bounds, gradient, valueBounds;
-    uint64_t frozenMask, cropMask, rawScales, farMask, screenShare;
+    uint64_t frozenMask, cropMask, screenShare;
     uint64_t indices, scratch;
     uint primitives, attributes, bits, operation;
     uint slots, activeBases, valueBits, valueCells;
     uint indexCount, layout, entryCount, stage;
-    uint frozenCount, cropCount, scaleCount, farCount;
+    uint frozenCount, cropCount;
     uint screenCount;
     float lr, bc1, bc2, beta1, beta2, eps;
-    float frozenScale, cropScale, medianExtent, rMin;
-    float rMax, screenLimit, screenPenalty, stepSize;
+    float frozenScale, cropScale;
+    float screenLimit, screenPenalty, stepSize;
 };
 struct Push { uint64_t parameters; };
 
@@ -149,12 +149,6 @@ float rowScale(Params p, uint row, bool sh) {
         scale *= p.frozenScale;
     if (p.cropMask != 0 && row < p.cropCount && ((Ptr<uint8_t, Access.Read>)p.cropMask)[row] != 0)
         scale *= p.cropScale;
-    if (!sh && (p.entryCount & 1) != 0 && p.rawScales != 0 && p.farMask != 0 &&
-        row < p.farCount && row * 3 + 2 < p.scaleCount && ((Ptr<uint8_t, Access.Read>)p.farMask)[row] != 0 && p.medianExtent > 0.0f) {
-        Ptr<float, Access.Read> s = (Ptr<float, Access.Read>)p.rawScales;
-        float extent = exp((s[row * 3] + s[row * 3 + 1] + s[row * 3 + 2]) / 3.0f);
-        scale *= clamp(extent / p.medianExtent, p.rMin, p.rMax);
-    }
     return scale;
 }
 // First-moment-only term (see screen_share.cuh): feeding it into v overflows v.

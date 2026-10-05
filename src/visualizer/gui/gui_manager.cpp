@@ -8354,6 +8354,8 @@ namespace lfs::vis::gui {
             return true;
         if (global_context_menu_ && global_context_menu_->needsAnimationFrame())
             return true;
+        if (sequencer_ui_.needsAnimationFrame(!ui_hidden_))
+            return true;
         if (video_widget_ && video_widget_->isVideoPlaying())
             return true;
         if (ui_layout_settle_frames_ > 0)
@@ -8410,6 +8412,7 @@ namespace lfs::vis::gui {
         }
         add(rml_toast_overlay_ && rml_toast_overlay_->needsAnimationFrame(), "toast_overlay");
         add(global_context_menu_ && global_context_menu_->needsAnimationFrame(), "context_menu");
+        add(sequencer_ui_.needsAnimationFrame(!ui_hidden_), "sequencer");
         add(video_widget_ && video_widget_->isVideoPlaying(), "video");
         add(ui_layout_settle_frames_ > 0, "layout_settle");
         add(rml_viewport_overlay_.needsAnimationFrame(), "viewport_overlay");

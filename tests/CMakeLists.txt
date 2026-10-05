@@ -1177,10 +1177,14 @@ list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
 # instead of silently dropping coverage from the executable.
 set(TEST_SOURCES test_main.cpp ${TEST_FILES})
 
-# Also exercise the portable appearance references in Linux CUDA/Vulkan builds.
+# Also exercise the portable backend references in Linux CUDA/Vulkan builds.
 # Their _Float16 CPU oracle requires GCC or Clang.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    list(APPEND TEST_SOURCES test_training_ops_metal_appearance.cpp)
+    list(APPEND TEST_SOURCES
+        test_training_ops_metal_appearance.cpp
+        test_training_ops_metal_adam_sh.cpp
+        test_training_ops_metal_densify.cpp
+        test_training_ops_metal_fast.cpp)
 endif()
 
 # PyModalRegistry and its native-modal dispatch path for regression tests.

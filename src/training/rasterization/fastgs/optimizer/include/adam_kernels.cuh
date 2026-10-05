@@ -5,7 +5,6 @@
 #pragma once
 
 #include "adam_api.h"
-#include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/screen_share.cuh"
 #include "training/kernels/joint_adam_codec.cuh"
 #include "training/kernels/warp_reduce.cuh"
@@ -35,13 +34,6 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float beta1,
         const float beta2,
         const float eps,
-        const float* mean_step_scale_raw,
-        const int mean_step_scale_n,
-        const float mean_step_median_extent,
-        const float mean_step_r_min,
-        const float mean_step_r_max,
-        const bool* mean_step_far_mask,
-        const int mean_step_far_mask_n,
         const float* screen_share_max,
         const int screen_share_n,
         const float screen_share_limit,
@@ -80,20 +72,6 @@ namespace fast_lfs::optimizer::kernels::adam {
                 apply_step = false;
             else
                 row_lr *= cropbox_lr_scale;
-        }
-        if (ent.apply_mean_step && mean_step_scale_raw != nullptr &&
-            mean_step_far_mask != nullptr && prim < mean_step_far_mask_n &&
-            mean_step_far_mask[prim]) {
-            const int sb = prim * 3;
-            if (sb + 2 < mean_step_scale_n) {
-                row_lr *= lfs::training::per_splat_mean_step_ratio(
-                    mean_step_scale_raw[sb],
-                    mean_step_scale_raw[sb + 1],
-                    mean_step_scale_raw[sb + 2],
-                    mean_step_median_extent,
-                    mean_step_r_min,
-                    mean_step_r_max);
-            }
         }
 
         const int bidx = static_cast<int>(blockIdx.x);

@@ -200,7 +200,7 @@ namespace lfs::core::nn::models {
         return tile;
     }
 
-    std::size_t Lpips::estimated_peak_bytes(const int height, const int width) const {
+    std::size_t Lpips::estimated_peak_bytes(const int height, const int width, const bool masked) const {
         const auto tile = tile_size_for(height, width);
         if (tile == 0)
             return 0;
@@ -208,8 +208,21 @@ namespace lfs::core::nn::models {
         const std::size_t tile_w = std::min<std::size_t>(static_cast<std::size_t>(width), tile);
         const std::size_t crop_h = std::min<std::size_t>(static_cast<std::size_t>(height), tile_h + 2 * kTileHalo);
         const std::size_t crop_w = std::min<std::size_t>(static_cast<std::size_t>(width), tile_w + 2 * kTileHalo);
+        // Include the float mask, full-resolution weights and pooled block masks.
+        const auto allocation_size = [this](const std::size_t bytes) {
+            return gpu_backend_of(weights_.begin()->second) == GpuBackend::CUDA
+                       ? cuda_allocation_size(bytes)
+                       : bytes;
+        };
+        std::size_t mask_bytes = 0;
+        if (masked) {
+            mask_bytes = 2 * allocation_size(static_cast<std::size_t>(height) * width * sizeof(float));
+            for (int block = 1; block < kBlocks; ++block)
+                mask_bytes += allocation_size(static_cast<std::size_t>(height >> block) *
+                                              static_cast<std::size_t>(width >> block) * sizeof(float));
+        }
         if (compute_ == DataType::Float32 || gpu_backend_of(weights_.begin()->second) != GpuBackend::CUDA) {
-            std::size_t bytes = crop_h * crop_w * kExactBytesPerPixel;
+            std::size_t bytes = crop_h * crop_w * kExactBytesPerPixel + mask_bytes;
             if (compute_ == DataType::Float16 && dispatch_ &&
                 gpu_backend_of(weights_.begin()->second) == GpuBackend::Vulkan && !fast_weight_taps_.is_valid()) {
                 for (std::size_t i = 1; i < kLayers.size(); ++i)
@@ -222,7 +235,7 @@ namespace lfs::core::nn::models {
         // Count new allocations, including pool rounding. Existing buffers are
         // already reflected in cudaMemGetInfo; they need no second reservation.
         constexpr std::size_t driver_reserve = 64ULL * 1024 * 1024;
-        std::size_t bytes = driver_reserve;
+        std::size_t bytes = driver_reserve + mask_bytes;
         const auto feature_elems = 64 * crop_h * crop_w;
         for (const auto& buffer : fast_features_) {
             if (!buffer.is_valid() || buffer.numel() < feature_elems)

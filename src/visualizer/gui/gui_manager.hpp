@@ -58,6 +58,7 @@ struct SDL_Cursor;
 namespace lfs::vis {
     class WindowInputDispatchTest;
     class VisualizerImpl;
+    class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     class WindowManager;
     class GraphicsImportErrorScope;
     class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
@@ -268,6 +269,7 @@ namespace lfs::vis {
             std::string import_render_error_;
             std::unique_ptr<GraphicsImportErrorScope> import_error_capture_;
             friend class lfs::vis::WindowInputDispatchTest;
+            friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
             friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;

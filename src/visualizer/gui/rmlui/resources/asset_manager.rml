@@ -135,6 +135,8 @@
             </div>
             <div class="asset-gallery-notice" data-if="has_catalog_notice">{{catalog_notice}}</div>
             <div class="asset-gallery-notice" data-if="gallery_has_notice">{{gallery_notice}} <button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_needs_connection" data-event-click="gallery_refresh">{{gallery_connection_action_label}}</button></div>
+            <div class="asset-gallery-notice" data-if="gallery_has_undo"><button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_has_undo" data-event-click="gallery_undo">@tr:projects.gallery.action.undo</button></div>
+            <div class="asset-gallery-notice" data-if="gallery_has_recovery"><button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_has_recovery" data-event-click="gallery_open_recovery">{{g_action_open_recovery}}</button></div>
             <div class="asset-gallery-notice" data-if="gallery_needs_recovery"><button class="btn btn--secondary asset-button--toolbar24" data-event-click="transfer_open_recovery('journal')">{{g_action_open_recovery}}</button></div>
             <div class="gallery-empty" data-if="no_folders">{{no_folders_label}}</div>
             <div class="gallery-empty" data-if="empty_folder">{{empty_folder_label}}</div>

@@ -162,6 +162,7 @@ class _Handle:
 class _BindingModel:
     def __init__(self):
         self.func_bindings = {}
+        self.event_bindings = {}
         self.handle = _Handle()
 
     def bind(self, name, getter, setter=None):
@@ -171,7 +172,7 @@ class _BindingModel:
         self.func_bindings[name] = getter
 
     def bind_event(self, name, handler):
-        return None
+        self.event_bindings[name] = handler
 
     def bind_record_list(self, name):
         return None
@@ -5464,3 +5465,52 @@ def test_preview_operation_guards_confirmed_commit_and_identity(
         assert len(calls) == 1
         assert len(completed) == 1 and isinstance(completed[0], Exception)
         assert path.read_bytes() == b"unchanged project"
+
+
+def _gallery_control(panel, predicate):
+    """Resolve visibility and click dispatch from the shipped RML and model."""
+    import xml.etree.ElementTree as ET
+    path = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml"
+    root = ET.fromstring(path.read_text())
+    buttons = [element for element in root.iter("button")
+               if element.get("data-if") == predicate]
+    assert len(buttons) == 1, f"missing Gallery control: {predicate}"
+    button = buttons[0]
+    model = _BindingModel()
+    panel.on_bind_model(_BindingContext(model))
+    event = button.attrib["data-event-click"]
+    assert event in model.event_bindings
+    return model.func_bindings[predicate](), lambda: model.event_bindings[event](model.handle, None, [])
+
+
+def test_gallery_undo_control_dispatches_restore_and_hides_during_operation(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    calls = []
+    panel._gallery_controller = SimpleNamespace(undo_pull=lambda: calls.append("restore"))
+    state = dict(panel._gallery_state, undoPull={"backup": "/backup", "attempt": 0})
+    panel._gallery_changed(state)
+    visible, click = _gallery_control(panel, "gallery_has_undo")
+    assert visible
+    click()
+    assert calls == ["restore"]
+    panel._gallery_changed(dict(state, undoPull={"backup": "/backup", "operation": "restoring"}))
+    assert not _gallery_control(panel, "gallery_has_undo")[0]
+    panel._gallery_changed(dict(state, undoPull={"backup": "/backup", "attempt": 1, "error": "retry"}))
+    visible, click = _gallery_control(panel, "gallery_has_undo")
+    assert visible
+    click()
+    assert calls == ["restore", "restore"]
+
+
+def test_gallery_missing_backup_control_opens_recovery(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    calls = []
+    panel._gallery_controller = SimpleNamespace(undo_pull=lambda: None, command=calls.append)
+    assert not _gallery_control(panel, "gallery_has_recovery")[0]
+    panel._gallery_changed(dict(panel._gallery_state, undoPull={
+        "backup": "/backup", "attempt": 1, "backupMissing": True, "error": "gone"}))
+    assert not _gallery_control(panel, "gallery_has_undo")[0]
+    visible, click = _gallery_control(panel, "gallery_has_recovery")
+    assert visible
+    click()
+    assert calls == ["show_recovery_folder"]

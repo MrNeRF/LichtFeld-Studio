@@ -71,8 +71,6 @@ namespace lfs::training {
         using lfs::gpu_ops::DecayParams;
         using lfs::gpu_ops::GumbelParams;
         using lfs::gpu_ops::MrnfNoiseParams;
-        using lfs::gpu_ops::ProjectParams;
-        using lfs::gpu_ops::ScalarValidity;
         using lfs::gpu_ops::Tensor;
         namespace mk = metal;
 
@@ -101,21 +99,21 @@ namespace lfs::training {
         }
 
         struct DecayKernelParams {
-            uint64_t raw_opacity, log_scales, frozen, far_mask;
-            uint32_t frozen_count, far_count, count;
-            float opacity_decay, scale_decay, far_decay_scale, train_t;
+            uint64_t raw_opacity, log_scales, frozen;
+            uint32_t frozen_count, count;
+            float opacity_decay, scale_decay, train_t;
         };
 
-        void decay(Tensor& raw_opacity, Tensor& log_scales, const Tensor& frozen, const Tensor& far_mask,
+        void decay(Tensor& raw_opacity, Tensor& log_scales, const Tensor& frozen,
                    const DecayParams& p) {
             const size_t n = log_scales.shape()[0];
             if (n == 0)
                 return;
             const DecayKernelParams params{mk::address(raw_opacity), mk::address(log_scales), mk::address(frozen),
-                                           mk::address(far_mask), optional_count(frozen), optional_count(far_mask),
+                                           optional_count(frozen),
                                            count32(n, "MRNF decay"), p.opacity_decay, p.scale_decay,
-                                           p.far_decay_scale, p.train_t};
-            mk::launch_items("mrnf_decay", params, {&raw_opacity, &log_scales, &frozen, &far_mask}, n);
+                                           p.train_t};
+            mk::launch_items("mrnf_decay", params, {&raw_opacity, &log_scales, &frozen}, n);
         }
 
         Bounds percentile_bounds(const Tensor& means, const float percentile) {
@@ -143,27 +141,6 @@ namespace lfs::training {
             bounds.median_size = sorted[1] * 2.0f;
             bounds.max_extent = sorted[2];
             return bounds;
-        }
-
-        struct GeomeanParams {
-            uint64_t raw_scales, extents;
-            uint32_t count;
-        };
-
-        ScalarValidity median_extent(const Tensor& raw_scales) {
-            if (!raw_scales.is_valid() || raw_scales.numel() == 0)
-                return {};
-            const size_t n = raw_scales.shape()[0];
-            auto extents = Tensor::empty({n}, core::Device::GPU, core::DataType::Float32);
-            const GeomeanParams params{mk::address(raw_scales), mk::address(extents), count32(n, "MRNF median extent")};
-            mk::launch_items("mrnf_geomean_extent", params, {&raw_scales, &extents}, n);
-            constexpr std::array<uint32_t, 1> offsets{0};
-            constexpr std::array<uint32_t, 1> ranks{mk::kSelectMedian};
-            const float median = mk::selected_values(mk::radix_select(extents, n, 1, true, offsets, ranks), 1)[0];
-            ScalarValidity result;
-            result.value = std::isfinite(median) && median > 0.0f ? median : 0.0f;
-            result.valid = result.value > 0.0f;
-            return result;
         }
 
         struct GumbelKeyParams {
@@ -223,166 +200,19 @@ namespace lfs::training {
         }
 
         struct FoldParams {
-            uint64_t visibility, weight_max, densification, ratio_max;
+            uint64_t weight_max, densification;
             uint32_t count;
-            float ratio_power;
         };
-
-        void fold(Tensor& visibility, Tensor& weight_max, Tensor& densification, Tensor& ratio_max,
-                  const float ratio_power) {
-            const size_t n = visibility.numel();
-            if (n == 0)
-                return;
-            const FoldParams params{mk::address(visibility), mk::address(weight_max), mk::address(densification),
-                                    mk::address(ratio_max), count32(n, "MRNF fold"), ratio_power};
-            mk::launch_items("mrnf_fold", params, {&visibility, &weight_max, &densification, &ratio_max}, n);
-        }
 
         void fold_error(Tensor& weight_max, Tensor& densification) {
             const size_t n = weight_max.numel();
             if (n == 0)
                 return;
-            const FoldParams params{0, mk::address(weight_max), mk::address(densification), 0,
-                                    count32(n, "MRNF fold error"), 0.0f};
+            const FoldParams params{mk::address(weight_max), mk::address(densification),
+                                    count32(n, "MRNF fold error")};
             mk::launch_items("mrnf_fold_error", params, {&weight_max, &densification}, n);
         }
 
-        struct ProjectKernelParams {
-            uint64_t means, view, means2d, radii;
-            uint32_t count;
-            int32_t width, height;
-            float fx, fy, cx, cy, near_plane;
-        };
-
-        void project_centers(const Tensor& means, const Tensor& view, Tensor& means2d, Tensor& radii,
-                             const ProjectParams& p) {
-            const size_t n = means.shape()[0];
-            if (n == 0)
-                return;
-            if (p.image.w <= 0 || p.image.h <= 0)
-                throw std::invalid_argument(
-                    std::format("MRNF projection needs a positive image, got {}x{}", p.image.w, p.image.h));
-            const ProjectKernelParams params{mk::address(means), mk::address(view), mk::address(means2d),
-                                             mk::address(radii), count32(n, "MRNF projection"), p.image.w,
-                                             p.image.h, p.intrinsics.fx, p.intrinsics.fy, p.intrinsics.cx,
-                                             p.intrinsics.cy, p.near_plane};
-            mk::launch_items("mrnf_project_centers", params, {&means, &view, &means2d, &radii}, n);
-        }
-
-        struct CenterErrorParams {
-            uint64_t means2d, radii, error, scores;
-            uint32_t count;
-            int32_t width, height;
-        };
-
-        void gather_center_error(const Tensor& means2d, const Tensor& radii, const Tensor& error, Tensor& scores) {
-            const size_t n = means2d.shape()[0];
-            if (n == 0)
-                return;
-            const int height = static_cast<int>(error.shape()[0]);
-            const int width = static_cast<int>(error.shape()[1]);
-            if (width <= 0 || height <= 0)
-                throw std::invalid_argument(std::format("MRNF center error needs a positive image, got {}x{}", width, height));
-            const CenterErrorParams params{mk::address(means2d), mk::address(radii), mk::address(error),
-                                           mk::address(scores), count32(n, "MRNF center error"), width, height};
-            mk::launch_items("mrnf_gather_center_error", params, {&means2d, &radii, &error, &scores}, n);
-        }
-
-        struct FarMaskParams {
-            uint64_t means, mask;
-            mk::Float3 center;
-            uint32_t count;
-            float radius_sq;
-        };
-
-        void far_mask(const Tensor& means, Tensor& mask, const std::array<float, 3> center, const float radius) {
-            const size_t n = means.shape()[0];
-            if (n == 0)
-                return;
-            const FarMaskParams params{mk::address(means), mk::address(mask), {center[0], center[1], center[2]}, count32(n, "MRNF far mask"), radius * radius};
-            mk::launch_items("mrnf_far_mask", params, {&means, &mask}, n);
-        }
-
-        struct MeanAbsErrorParams {
-            uint64_t predicted, target, error;
-            uint32_t pixels, channels;
-        };
-
-        void mean_abs_error(const Tensor& predicted, const Tensor& target, Tensor& error) {
-            const size_t channels = predicted.shape()[0];
-            const size_t pixels = predicted.shape()[1] * predicted.shape()[2];
-            if (channels == 0 || pixels == 0)
-                throw std::invalid_argument(std::format("MRNF mean abs error needs a non-empty [C,H,W] image, got {}x{}",
-                                                        channels, pixels));
-            const MeanAbsErrorParams params{mk::address(predicted), mk::address(target), mk::address(error),
-                                            count32(pixels, "MRNF mean abs error"), static_cast<uint32_t>(channels)};
-            mk::launch_items("mrnf_mean_abs_error", params, {&predicted, &target, &error}, pixels);
-        }
-
-        struct SeedWeightsParams {
-            uint64_t error, alpha, weights;
-            uint32_t count;
-        };
-
-        void seed_weights(const Tensor& error, const Tensor& alpha, Tensor& weights) {
-            const size_t n = weights.numel();
-            if (n == 0)
-                return;
-            const SeedWeightsParams params{mk::address(error), mk::address(alpha), mk::address(weights),
-                                           count32(n, "MRNF seed weights")};
-            mk::launch_items("mrnf_seed_weights", params, {&error, &alpha, &weights}, n);
-        }
-
-        struct GatherSeedsParams {
-            uint64_t indices, target, alpha, depth, rgb, sampled_alpha, sampled_depth;
-            uint32_t count, pixels;
-            int32_t channels;
-        };
-
-        void gather_seeds(const Tensor& indices, const Tensor& target, const Tensor& alpha, const Tensor& depth,
-                          Tensor& rgb, Tensor& sampled_alpha, Tensor& sampled_depth) {
-            const size_t k = indices.numel();
-            if (k == 0)
-                return;
-            const size_t pixels = alpha.numel();
-            const int channels = static_cast<int>(target.shape()[0]);
-            if (pixels == 0 || channels <= 0)
-                throw std::invalid_argument(
-                    std::format("MRNF seed gather needs pixels and channels, got {} pixels and {} channels", pixels, channels));
-            const GatherSeedsParams params{mk::address(indices), mk::address(target), mk::address(alpha),
-                                           mk::address(depth), mk::address(rgb), mk::address(sampled_alpha),
-                                           mk::address(sampled_depth), count32(k, "MRNF seed gather"),
-                                           count32(pixels, "MRNF seed gather pixels"), channels};
-            mk::launch_items("mrnf_gather_seeds", params,
-                             {&indices, &target, &alpha, &depth, &rgb, &sampled_alpha, &sampled_depth}, k);
-        }
-
-        float sorted_median(const Tensor& values) {
-            if (!values.is_valid() || values.numel() == 0)
-                return 0.0f;
-            constexpr std::array<uint32_t, 1> offsets{0};
-            constexpr std::array<uint32_t, 1> ranks{mk::kSelectMedian};
-            const float median =
-                mk::selected_values(mk::radix_select(values, values.numel(), 1, false, offsets, ranks), 1)[0];
-            return std::isfinite(median) ? median : 0.0f;
-        }
-
-        struct StarvationParams {
-            uint64_t weights, visibility;
-            uint32_t count;
-            float median;
-        };
-
-        void starvation_weights(Tensor& weights, const Tensor& visibility, const float median) {
-            const size_t n = weights.numel();
-            if (n == 0)
-                return;
-            const StarvationParams params{mk::address(weights), mk::address(visibility),
-                                          count32(n, "MRNF starvation"), median};
-            mk::launch_items("mrnf_starvation_weights", params, {&weights, &visibility}, n);
-        }
-
-        // Ascending positions of the set bytes, as thrust::copy_if; returns how many are set.
         size_t compact_bool_indices(const Tensor& mask, Tensor& indices, const size_t count) {
             if (mask.numel() == 0 || count == 0)
                 return 0;
@@ -433,18 +263,8 @@ namespace lfs::training {
             .noise = noise,
             .decay = decay,
             .percentile_bounds = percentile_bounds,
-            .median_extent = median_extent,
             .gumbel = gumbel,
-            .fold = fold,
             .fold_error = fold_error,
-            .project_centers = project_centers,
-            .gather_center_error = gather_center_error,
-            .far_mask = far_mask,
-            .mean_abs_error = mean_abs_error,
-            .seed_weights = seed_weights,
-            .gather_seeds = gather_seeds,
-            .sorted_median = sorted_median,
-            .starvation_weights = starvation_weights,
             .compact_bool_indices = compact_bool_indices,
             .prune_bounds = prune_bounds,
             .replace_parent_weights = replace_parent_weights,

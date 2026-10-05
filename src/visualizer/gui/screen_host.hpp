@@ -28,6 +28,10 @@ namespace Rml {
     class Element;
 } // namespace Rml
 
+namespace lfs::vis {
+    class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
+} // namespace lfs::vis
+
 namespace lfs::vis::gui {
 
     class GlobalContextMenu;
@@ -148,6 +152,8 @@ namespace lfs::vis::gui {
         void openAreaMenu(screen::AreaId id, float x, float y);
 
     private:
+        friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
+
         AreaEditor& editorFor(std::string_view editor);
         void syncPanelEditors();
         void rebuildChrome();

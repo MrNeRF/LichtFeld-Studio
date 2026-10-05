@@ -151,25 +151,20 @@ TEST_F(MrnfOpsBytes, NoiseAndDecayMatchLaunchers) {
         auto raw_b = raw.clone();
         auto scales_b = log_scales.clone();
         const auto raw_before = bytes(raw);
-        Tensor far;
-        if (masked) {
-            far = mask_of(n, 3);
-        }
         kernels::launch_mrnf_decay(
             raw_b.ptr<float>(), scales_b.ptr<float>(),
             masked ? frozen.ptr<bool>() : nullptr, masked ? n : 0,
-            masked ? far.ptr<bool>() : nullptr, masked ? n : 0,
-            0.02f, 0.01f, masked ? 0.25f : 1.f, 0.4f, n);
+            0.02f, 0.01f, 0.4f, n);
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-        cuda_ops().decay(raw, log_scales, frozen, far,
-                         {.opacity_decay = 0.02f, .scale_decay = 0.01f, .far_decay_scale = masked ? 0.25f : 1.f, .train_t = 0.4f});
+        cuda_ops().decay(raw, log_scales, frozen,
+                         {.opacity_decay = 0.02f, .scale_decay = 0.01f, .train_t = 0.4f});
         same(raw, raw_b);
         same(log_scales, scales_b);
         changed(raw, raw_before);
     }
 }
 
-TEST_F(MrnfOpsBytes, BoundsAndMedianMatchLaunchers) {
+TEST_F(MrnfOpsBytes, BoundsMatchLauncher) {
     constexpr size_t n = 129;
     auto means = pattern({n, 3}, 3.f, 2);
     kernels::MRNFBounds direct{};
@@ -182,15 +177,6 @@ TEST_F(MrnfOpsBytes, BoundsAndMedianMatchLaunchers) {
     same_float(actual.median_size, direct.median_size);
     same_float(actual.max_extent, direct.max_extent);
     EXPECT_GT(actual.max_extent, 0.f);
-
-    auto scales = pattern({n, 3}, 0.8f, 4);
-    float direct_median = -1.f;
-    bool direct_valid = false;
-    kernels::launch_median_geomean_extent(scales.ptr<float>(), n, &direct_median, &direct_valid);
-    const auto extent = cuda_ops().median_extent(scales);
-    same_float(extent.value, direct_median);
-    EXPECT_EQ(extent.valid, direct_valid);
-    EXPECT_TRUE(extent.valid);
 }
 
 TEST_F(MrnfOpsBytes, GumbelMatchesLauncher) {
@@ -229,33 +215,8 @@ TEST_F(MrnfOpsBytes, GumbelMatchesLauncher) {
     same(all, all_direct);
 }
 
-TEST_F(MrnfOpsBytes, FoldProjectAndErrorMatchLaunchers) {
+TEST_F(MrnfOpsBytes, FoldErrorMatchesLauncher) {
     constexpr size_t n = 64;
-    auto vis = pattern({n}, 1.f, 1).abs();
-    auto weight = pattern({n}, 0.2f, 2);
-    auto dens = pattern({2, n}, 0.5f, 3);
-    auto ratio = pattern({n}, 0.1f, 4);
-    auto vis_b = vis.clone();
-    auto weight_b = weight.clone();
-    auto dens_b = dens.clone();
-    auto ratio_b = ratio.clone();
-    const auto dens_before = bytes(dens);
-    kernels::launch_fold_densification_and_zero(
-        vis_b.ptr<float>(), weight_b.ptr<float>(), dens_b.ptr<float>(), n, nullptr, 2, ratio_b.ptr<float>(), 0.75f);
-    cuda_ops().fold(vis, weight, dens, ratio, 0.75f);
-    same(vis, vis_b);
-    same(weight, weight_b);
-    same(dens, dens_b);
-    same(ratio, ratio_b);
-    changed(dens, dens_before);
-    Tensor no_ratio;
-    kernels::launch_fold_densification_and_zero(
-        vis_b.ptr<float>(), weight_b.ptr<float>(), dens_b.ptr<float>(), n, nullptr, 2, nullptr, 0.f);
-    cuda_ops().fold(vis, weight, dens, no_ratio, 0.f);
-    same(vis, vis_b);
-    same(weight, weight_b);
-    same(dens, dens_b);
-
     auto max_a = pattern({n}, 0.3f, 6);
     auto max_b = max_a.clone();
     auto err_a = pattern({2, n}, 0.8f, 7);
@@ -266,101 +227,4 @@ TEST_F(MrnfOpsBytes, FoldProjectAndErrorMatchLaunchers) {
     same(max_a, max_b);
     same(err_a, err_b);
     changed(err_a, err_before);
-
-    auto means = pattern({n, 3}, 1.f, 12);
-    std::vector<float> view{
-        1.f, 0.f, 0.f, 0.f,
-        0.f, 1.f, 0.f, 0.f,
-        0.f, 0.f, 1.f, 2.f,
-        0.f, 0.f, 0.f, 1.f};
-    auto w2c = Tensor::from_vector(view, {4, 4}, Device::GPU);
-    auto means2d = Tensor::zeros({n, 2}, Device::GPU);
-    auto radii = Tensor::zeros({n}, Device::GPU);
-    auto means2d_b = means2d.clone();
-    auto radii_b = radii.clone();
-    const ops::ProjectParams project{.image = {.h = 8, .w = 12}, .intrinsics = {.fx = 20.f, .fy = 18.f, .cx = 6.f, .cy = 4.f}, .near_plane = 0.01f};
-    kernels::launch_project_visible_centers(
-        means.ptr<float>(), w2c.ptr<float>(), 20.f, 18.f, 6.f, 4.f, 12, 8, 0.01f,
-        means2d_b.ptr<float>(), radii_b.ptr<float>(), n);
-    cuda_ops().project_centers(means, w2c, means2d, radii, project);
-    same(means2d, means2d_b);
-    same(radii, radii_b);
-    changed(means2d, bytes(Tensor::zeros({n, 2}, Device::GPU)));
-
-    auto error = pattern({8, 12}, 1.f, 15).abs();
-    auto scores = Tensor::zeros({n}, Device::GPU);
-    auto scores_b = scores.clone();
-    kernels::launch_gather_center_error(
-        means2d_b.ptr<float>(), radii_b.ptr<float>(), error.ptr<float>(), 12, 8, scores_b.ptr<float>(), n);
-    cuda_ops().gather_center_error(means2d, radii, error, scores);
-    same(scores, scores_b);
-
-    auto far = Tensor::zeros_bool({n}, Device::GPU);
-    auto far_b = far.clone();
-    kernels::launch_far_field_mask(means.ptr<float>(), 0.1f, -0.2f, 0.3f, 1.5f, far_b.ptr<bool>(), n);
-    cuda_ops().far_mask(means, far, {0.1f, -0.2f, 0.3f}, 1.5f);
-    same(far, far_b);
-    changed(far, bytes(Tensor::zeros_bool({n}, Device::GPU)));
-}
-
-TEST_F(MrnfOpsBytes, SeedsMedianAndStarvationMatchLaunchers) {
-    constexpr int height = 6;
-    constexpr int width = 8;
-    constexpr size_t hw = static_cast<size_t>(height * width);
-    auto predicted = pattern({3, height, width}, 1.f, 1);
-    auto target = pattern({3, height, width}, 0.7f, 2);
-    auto error = Tensor::zeros({height, width}, Device::GPU);
-    auto error_b = error.clone();
-    kernels::launch_mean_abs_error_hw(
-        predicted.ptr<float>(), target.ptr<float>(), 3, height, width, error_b.ptr<float>());
-    cuda_ops().mean_abs_error(predicted, target, error);
-    same(error, error_b);
-    changed(error, bytes(Tensor::zeros({height, width}, Device::GPU)));
-
-    auto alpha = pattern({hw}, 0.5f, 3).abs().clamp(0.f, 1.f);
-    auto weights = error.clone().reshape({hw});
-    auto weights_b = error_b.clone().reshape({hw});
-    kernels::launch_seed_weights_from_error_alpha(
-        weights_b.ptr<float>(), alpha.ptr<float>(), weights_b.ptr<float>(), hw);
-    cuda_ops().seed_weights(weights, alpha, weights);
-    same(weights, weights_b);
-
-    constexpr size_t k = 5;
-    std::vector<int64_t> pixels{1, 4, 7, 20, 40};
-    auto cpu = Tensor::empty({k}, Device::CPU, DataType::Int64);
-    for (size_t i = 0; i < k; ++i) {
-        cpu.ptr<int64_t>()[i] = pixels[i];
-    }
-    auto indices = cpu.gpu();
-    auto depth = pattern({hw}, 2.f, 6).abs();
-    auto rgb = Tensor::zeros({k, 3}, Device::GPU);
-    auto out_alpha = Tensor::zeros({k}, Device::GPU);
-    auto out_depth = Tensor::zeros({k}, Device::GPU);
-    auto rgb_b = rgb.clone();
-    auto alpha_b = out_alpha.clone();
-    auto depth_b = out_depth.clone();
-    kernels::launch_gather_seed_payloads(
-        indices.ptr<int64_t>(), k, hw, target.ptr<float>(), 3, alpha.ptr<float>(), depth.ptr<float>(),
-        rgb_b.ptr<float>(), alpha_b.ptr<float>(), depth_b.ptr<float>());
-    cuda_ops().gather_seeds(indices, target, alpha, depth, rgb, out_alpha, out_depth);
-    same(rgb, rgb_b);
-    same(out_alpha, alpha_b);
-    same(out_depth, depth_b);
-    changed(rgb, bytes(Tensor::zeros({k, 3}, Device::GPU)));
-
-    constexpr size_t count = 33;
-    auto values = pattern({count}, 3.f, 9).abs();
-    const float direct = kernels::launch_sorted_median(values.ptr<float>(), values.numel());
-    const float actual = cuda_ops().sorted_median(values);
-    same_float(actual, direct);
-    EXPECT_GT(actual, 0.f);
-
-    auto starved = pattern({count}, 1.f, 10).abs();
-    auto vis = pattern({count}, 2.f, 11).abs();
-    auto starved_b = starved.clone();
-    const auto starved_before = bytes(starved);
-    kernels::launch_apply_explore_starvation_weights(starved_b.ptr<float>(), vis.ptr<float>(), vis.numel(), direct);
-    cuda_ops().starvation_weights(starved, vis, actual);
-    same(starved, starved_b);
-    changed(starved, starved_before);
 }

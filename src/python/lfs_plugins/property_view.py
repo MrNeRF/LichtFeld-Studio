@@ -91,7 +91,6 @@ BOOL_PROPS = (
     "enable_eval",
     "eval_all",
     "eval_mask_invert",
-    "background_improvements",
 )
 
 SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space", "eval_space")
@@ -138,7 +137,6 @@ def _run(
 
 BASIC_RUNS = (
     _run("basic_struct", "iterations", "max_cap"),
-    _run("basic_background", "background_improvements", visibility_condition_id="dep_mrnf"),
     _run(
         "basic_bilateral_toggle",
         "use_bilateral_grid",
@@ -305,7 +303,7 @@ def _basic_runs(*ids):
 METHOD_RUNS = _basic_runs("basic_struct")
 CAMERA_RUNS = _basic_runs("basic_undistort", "basic_mip_filter")
 MASK_RUNS = _basic_runs("basic_live_start", "mask_invert", "mask_threshold", "mask_alpha", "mask_penalties")
-BACKGROUND_RUNS = _basic_runs("basic_background", "bg_mode")
+BACKGROUND_RUNS = _basic_runs("bg_mode")
 EXPOSURE_ACTIVATION_RUNS = (_run("basic_exposure_correction", "use_exposure_correction"),)
 APPEARANCE_RUNS = _basic_runs(
     "ppisp_exif", "ppisp_freeze",

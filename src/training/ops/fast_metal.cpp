@@ -588,14 +588,13 @@ namespace lfs::training {
 
         struct BackwardGeometryParams {
             uint64_t means, scales, rotations, opacities, view, camera, n_touched, grads, normal_grads;
-            uint64_t densification, far_mask, scale_loss, opacity_loss, sparsity_sigmoid, sparsity_z, sparsity_u;
+            uint64_t densification, scale_loss, opacity_loss, sparsity_sigmoid, sparsity_z, sparsity_u;
             AdamGroupParams means_adam, rotation_adam, scaling_adam, opacity_adam;
             float beta1, beta2, eps;
             float scale_reg_weight, flatten_reg_weight, opacity_reg_weight, sparsity_rho, sparsity_grad_loss;
-            float median_extent, r_min, r_max;
             float width, height, fx, fy;
             float clip_left, clip_right, clip_top, clip_bottom;
-            uint32_t n, far_mask_n, sparsity_n, per_splat_mean_step;
+            uint32_t n, sparsity_n;
         };
 
         // A read-only per-pixel map given as [H, W] or [1, H, W], made contiguous.
@@ -755,14 +754,12 @@ namespace lfs::training {
             const bool opacity_loss = adam.opacity_reg_weight > 0.f && present(adam.opacity_reg_loss);
             const bool sparsity = present(adam.sparsity_sigmoid);
             const auto& means_group = group(AdamSlot::Means);
-            const bool far_mask = present(adam.far_mask) && means_group.enabled && means_group.primitives > 0;
+
             const ClipBounds clip = clip_bounds(f);
             uses = {&f.means, &f.scales, &f.rotations, &f.opacities, &f.view, &f.camera, &s.n_touched, &s.grads,
                     &normal_grads_use};
             if (count_visible)
                 uses.push_back(&densification);
-            if (far_mask)
-                uses.push_back(&adam.far_mask);
             if (scale_loss)
                 uses.push_back(&adam.scale_reg_loss);
             if (opacity_loss)
@@ -780,7 +777,7 @@ namespace lfs::training {
                 .grads = mk::address(s.grads),
                 .normal_grads = normal_channel ? mk::address(s.normal_grads) : 0,
                 .densification = count_visible ? mk::address(densification) : 0,
-                .far_mask = far_mask ? mk::address(adam.far_mask) : 0,
+
                 .scale_loss = scale_loss ? mk::address(adam.scale_reg_loss) : 0,
                 .opacity_loss = opacity_loss ? mk::address(adam.opacity_reg_loss) : 0,
                 .sparsity_sigmoid = sparsity ? mk::address(adam.sparsity_sigmoid) : 0,
@@ -798,9 +795,7 @@ namespace lfs::training {
                 .opacity_reg_weight = adam.opacity_reg_weight,
                 .sparsity_rho = adam.sparsity_rho,
                 .sparsity_grad_loss = adam.sparsity_grad_loss,
-                .median_extent = adam.median_extent,
-                .r_min = adam.r_min,
-                .r_max = adam.r_max,
+
                 .width = static_cast<float>(f.width),
                 .height = static_cast<float>(f.height),
                 .fx = f.fx,
@@ -810,11 +805,9 @@ namespace lfs::training {
                 .clip_top = clip.top,
                 .clip_bottom = clip.bottom,
                 .n = f.n,
-                .far_mask_n = far_mask ? static_cast<uint32_t>(std::min<size_t>(adam.far_mask.numel(),
-                                                                                static_cast<size_t>(means_group.primitives)))
-                                       : 0,
+
                 .sparsity_n = sparsity ? mk::count32(adam.sparsity_sigmoid.numel(), "sparsity") : 0,
-                .per_splat_mean_step = adam.per_splat_mean_step ? 1u : 0u,
+
             };
             launch("fast_backward_geometry", geometry, std::span<const Tensor* const>(uses), blocks, 1, 256,
                    {{kMipFilterConstant, f.mip_filter ? 1u : 0u}});
@@ -916,13 +909,14 @@ namespace lfs::training {
                                                           .elements = static_cast<int>(count),
                                                           .attributes = 1,
                                                           .enabled = true};
-            const lfs::gpu_ops::BackwardAdam adam{.groups = {off, off, off, opacity, off, off},
-                                                  .scale_reg_loss = none,
-                                                  .opacity_reg_loss = none,
-                                                  .sparsity_sigmoid = none,
-                                                  .sparsity_z = none,
-                                                  .sparsity_u = none,
-                                                  .far_mask = none};
+            const lfs::gpu_ops::BackwardAdam adam{
+                .groups = {off, off, off, opacity, off, off},
+                .scale_reg_loss = none,
+                .opacity_reg_loss = none,
+                .sparsity_sigmoid = none,
+                .sparsity_z = none,
+                .sparsity_u = none,
+            };
             const Tensor grad = Tensor::zeros_like(image);
             backward(saved, {.image = grad, .alpha = none, .depth = none, .normal = none}, none, none, none, none,
                      adam, DensificationType::None);

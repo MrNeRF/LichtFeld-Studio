@@ -62,7 +62,7 @@ function(lfs_add_gpu_program target name)
                 add_custom_command(OUTPUT "${output}" "${output}.json" BYPRODUCTS "${cuda_source}"
                     COMMAND "${LFS_GPU_SLANGC}" "${source}" ${defines} -entry "${entry}" -stage compute
                         -target cuda -fp-mode precise -line-directive-mode none -o "${cuda_source}" -reflection-json "${output}.json"
-                    COMMAND "${CMAKE_CUDA_COMPILER}" --ptx --std=c++17 --fmad=false
+                    COMMAND "${CMAKE_CUDA_COMPILER}" --ptx --std=c++17 --fmad=false -DSLANG_CUDA_ENABLE_HALF=1
                         "${cuda_source}" -o "${output}"
                     DEPENDS "${source}" "${LFS_GPU_SLANGC}" VERBATIM)
                 list(APPEND outputs "${output}" "${output}.json")

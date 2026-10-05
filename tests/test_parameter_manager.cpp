@@ -722,7 +722,6 @@ namespace {
         const std::vector<std::vector<std::string>> cases{
             {"--sh-degree-interval", "1000"},
             {"--morton-reorder-interval", "3000"},
-            {"--fill-pacing-iter", "1234"},
             {"--eval", "--eval-steps", "1000"},
         };
         for (const auto& flags : cases) {

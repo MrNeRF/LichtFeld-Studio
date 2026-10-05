@@ -29,6 +29,7 @@ namespace lfs::gpu_ops {
         void (*normalize_scalar)(Out values, In scalar, float skip_below);
         // Optional upload/layout specialization; callers retain their default path.
         Tensor (*upload_image_chw)(In cpu_hwc) = nullptr;
+        Tensor (*quantize_to_8bit_grid)(In image) = nullptr;
     };
 
 } // namespace lfs::gpu_ops

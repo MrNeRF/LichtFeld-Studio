@@ -45,6 +45,10 @@
 namespace lfs::training {
 
     namespace {
+        // LPIPS tiles exactly, so the budget only trades speed for memory: 384 MiB evaluates 10 MP views at
+        // full speed instead of reserving 1.5 GiB on top of training.
+        constexpr std::size_t kEvalLpipsActivationBudget = 384ULL << 20;
+
         struct TensorLayoutInfo {
             int n;
             int c;
@@ -168,6 +172,11 @@ namespace lfs::training {
     } // namespace
 
     lfs::core::Tensor image_for_metrics_and_save(const lfs::core::Tensor& image) {
+        if (image.device() == lfs::core::Device::GPU && image.dtype() == lfs::core::DataType::Float32) {
+            const auto* ops = training_ops(*lfs::core::gpu_backend_of(image)).training_image;
+            if (ops && ops->quantize_to_8bit_grid)
+                return ops->quantize_to_8bit_grid(image);
+        }
         return image.clamp(0.0f, 1.0f)
             .mul(255.0f)
             .add(0.5f)
@@ -1166,16 +1175,9 @@ namespace lfs::training {
             _lpips_load_attempted = true;
             const auto& weights_path = *_lpips_weights_path;
             try {
-                // Up to a quarter of the free device memory, never below the
-                // default: a device with room runs LPIPS untiled instead of
-                // recomputing tile halos.
-                const std::size_t free_bytes =
-                    lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend()).free_bytes;
-                const std::size_t budget =
-                    std::max(lfs::core::nn::models::default_lpips_activation_budget(), free_bytes / 4);
                 auto loaded = lfs::core::nn::models::Lpips::load(
                     weights_path, lfs::core::Device::GPU, lfs::core::DataType::Float16,
-                    lfs::core::nn::models::InputScaling::Identity, budget);
+                    lfs::core::nn::models::InputScaling::Identity, kEvalLpipsActivationBudget);
                 if (loaded) {
                     const auto backend = lfs::core::default_gpu_backend();
                     const auto* lpips = training_ops(backend).lpips;
@@ -1335,7 +1337,7 @@ namespace lfs::training {
                     const std::pair<int, int> image_size{image_height, image_width};
                     const bool size_changed = !lpips_preflight_size || *lpips_preflight_size != image_size;
                     lpips_preflight_size = image_size;
-                    const auto required = _lpips_metric->estimated_peak_bytes(image_height, image_width);
+                    const auto required = _lpips_metric->estimated_peak_bytes(image_height, image_width, mask.is_valid());
                     const std::size_t free_bytes =
                         lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend()).free_bytes;
                     const bool lpips_preflight_ok = free_bytes >= required && free_bytes != 0;
@@ -1352,7 +1354,7 @@ namespace lfs::training {
                         auto evaluate_lpips = [&, pred_lpips, target_lpips] {
                             const auto lpips_wall_start = std::chrono::steady_clock::now();
                             auto value = mask.is_valid()
-                                             ? _lpips_metric->forward(pred_lpips, target_lpips, mask_as_float01(mask),
+                                             ? _lpips_metric->forward(pred_lpips, target_lpips, mask,
                                                                       lfs::core::nn::models::InputScaling::Identity)
                                              : _lpips_metric->forward(pred_lpips, target_lpips,
                                                                       lfs::core::nn::models::InputScaling::Identity);

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <utility>
+
 // This file contains template method implementations that require the full Tensor definition
 // It should be included at the END of tensor.hpp, after Tensor class is fully defined
 
@@ -106,7 +108,7 @@ namespace lfs::core {
                                 internal::ExecContext{result.stream()});
                         } else {
                             // CPU fallback
-                            const int* in_ptr = input_tensor.template ptr<int>();
+                            const int* in_ptr = std::as_const(input_tensor).template ptr<int>();
                             int* out_ptr = result.template ptr<int>();
                             const size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -133,7 +135,7 @@ namespace lfs::core {
                             }
                         } else {
                             // CPU fallback: cast element-wise to avoid instantiating op(int).
-                            const int* in_ptr = input_tensor.template ptr<int>();
+                            const int* in_ptr = std::as_const(input_tensor).template ptr<int>();
                             const size_t n = result.numel();
                             if (dtype == DataType::Int32) {
                                 int* out_ptr = result.template ptr<int>();
@@ -156,7 +158,7 @@ namespace lfs::core {
                             internal::ExecContext{result.stream()});
                     } else {
                         // CPU fallback: apply operation element-wise
-                        const float* in_ptr = input_tensor.template ptr<float>();
+                        const float* in_ptr = std::as_const(input_tensor).template ptr<float>();
                         float* out_ptr = result.template ptr<float>();
                         const size_t n = result.numel();
                         for (size_t i = 0; i < n; ++i) {
@@ -198,7 +200,7 @@ namespace lfs::core {
                             internal::ExecContext{result.stream()});
                     } else {
                         // CPU fallback
-                        const unsigned char* in_ptr = input_tensor.template ptr<unsigned char>();
+                        const unsigned char* in_ptr = std::as_const(input_tensor).template ptr<unsigned char>();
                         unsigned char* out_ptr = result.template ptr<unsigned char>();
                         size_t n = result.numel();
                         for (size_t i = 0; i < n; ++i) {
@@ -212,7 +214,7 @@ namespace lfs::core {
                             input_tensor, result, op,
                             internal::ExecContext{result.stream()});
                     } else {
-                        const uint8_t* in_ptr = input_tensor.template ptr<uint8_t>();
+                        const uint8_t* in_ptr = std::as_const(input_tensor).template ptr<uint8_t>();
                         unsigned char* out_ptr = result.template ptr<unsigned char>();
                         const size_t n = result.numel();
                         for (size_t i = 0; i < n; ++i) {
@@ -226,7 +228,7 @@ namespace lfs::core {
                             input_tensor, result, op,
                             internal::ExecContext{result.stream()});
                     } else {
-                        const int* in_ptr = input_tensor.template ptr<int>();
+                        const int* in_ptr = std::as_const(input_tensor).template ptr<int>();
                         unsigned char* out_ptr = result.template ptr<unsigned char>();
                         const size_t n = result.numel();
                         for (size_t i = 0; i < n; ++i) {
@@ -241,7 +243,7 @@ namespace lfs::core {
                             internal::ExecContext{result.stream()});
                     } else {
                         // CPU fallback
-                        const float* in_ptr = input_tensor.template ptr<float>();
+                        const float* in_ptr = std::as_const(input_tensor).template ptr<float>();
                         unsigned char* out_ptr = result.template ptr<unsigned char>();
                         size_t n = result.numel();
                         for (size_t i = 0; i < n; ++i) {
@@ -307,7 +309,7 @@ namespace lfs::core {
             }
         } else {
             // CPU fallback: apply fused operation element-wise
-            const float* in_ptr = base.template ptr<float>();
+            const float* in_ptr = std::as_const(base).template ptr<float>();
             float* out_ptr = result.template ptr<float>();
             size_t n = result.numel();
             for (size_t i = 0; i < n; ++i) {
@@ -369,8 +371,8 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const detail::tensor_half_t* left_ptr = left_tensor.template ptr<detail::tensor_half_t>();
-                            const detail::tensor_half_t* right_ptr = right_tensor.template ptr<detail::tensor_half_t>();
+                            const detail::tensor_half_t* left_ptr = std::as_const(left_tensor).template ptr<detail::tensor_half_t>();
+                            const detail::tensor_half_t* right_ptr = std::as_const(right_tensor).template ptr<detail::tensor_half_t>();
                             detail::tensor_half_t* out_ptr = result.template ptr<detail::tensor_half_t>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -388,8 +390,8 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const detail::tensor_half_t* left_ptr = left_broadcast.template ptr<detail::tensor_half_t>();
-                            const detail::tensor_half_t* right_ptr = right_broadcast.template ptr<detail::tensor_half_t>();
+                            const detail::tensor_half_t* left_ptr = std::as_const(left_broadcast).template ptr<detail::tensor_half_t>();
+                            const detail::tensor_half_t* right_ptr = std::as_const(right_broadcast).template ptr<detail::tensor_half_t>();
                             detail::tensor_half_t* out_ptr = result.template ptr<detail::tensor_half_t>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -417,8 +419,8 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const int64_t* left_ptr = left_tensor.template ptr<int64_t>();
-                            const int64_t* right_ptr = right_tensor.template ptr<int64_t>();
+                            const int64_t* left_ptr = std::as_const(left_tensor).template ptr<int64_t>();
+                            const int64_t* right_ptr = std::as_const(right_tensor).template ptr<int64_t>();
                             int64_t* out_ptr = result.template ptr<int64_t>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -434,8 +436,8 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const int64_t* left_ptr = left_broadcast.template ptr<int64_t>();
-                            const int64_t* right_ptr = right_broadcast.template ptr<int64_t>();
+                            const int64_t* left_ptr = std::as_const(left_broadcast).template ptr<int64_t>();
+                            const int64_t* right_ptr = std::as_const(right_broadcast).template ptr<int64_t>();
                             int64_t* out_ptr = result.template ptr<int64_t>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -461,8 +463,8 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const uint8_t* left_ptr = left_tensor.template ptr<uint8_t>();
-                            const uint8_t* right_ptr = right_tensor.template ptr<uint8_t>();
+                            const uint8_t* left_ptr = std::as_const(left_tensor).template ptr<uint8_t>();
+                            const uint8_t* right_ptr = std::as_const(right_tensor).template ptr<uint8_t>();
                             uint8_t* out_ptr = result.template ptr<uint8_t>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -478,8 +480,8 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const uint8_t* left_ptr = left_broadcast.template ptr<uint8_t>();
-                            const uint8_t* right_ptr = right_broadcast.template ptr<uint8_t>();
+                            const uint8_t* left_ptr = std::as_const(left_broadcast).template ptr<uint8_t>();
+                            const uint8_t* right_ptr = std::as_const(right_broadcast).template ptr<uint8_t>();
                             uint8_t* out_ptr = result.template ptr<uint8_t>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -505,8 +507,8 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const int* left_ptr = left_tensor.template ptr<int>();
-                            const int* right_ptr = right_tensor.template ptr<int>();
+                            const int* left_ptr = std::as_const(left_tensor).template ptr<int>();
+                            const int* right_ptr = std::as_const(right_tensor).template ptr<int>();
                             int* out_ptr = result.template ptr<int>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -522,8 +524,8 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const int* left_ptr = left_broadcast.template ptr<int>();
-                            const int* right_ptr = right_broadcast.template ptr<int>();
+                            const int* left_ptr = std::as_const(left_broadcast).template ptr<int>();
+                            const int* right_ptr = std::as_const(right_broadcast).template ptr<int>();
                             int* out_ptr = result.template ptr<int>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -549,8 +551,8 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const uint32_t* left_ptr = left_tensor.template ptr<uint32_t>();
-                            const uint32_t* right_ptr = right_tensor.template ptr<uint32_t>();
+                            const uint32_t* left_ptr = std::as_const(left_tensor).template ptr<uint32_t>();
+                            const uint32_t* right_ptr = std::as_const(right_tensor).template ptr<uint32_t>();
                             uint32_t* out_ptr = result.template ptr<uint32_t>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -566,8 +568,8 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const uint32_t* left_ptr = left_broadcast.template ptr<uint32_t>();
-                            const uint32_t* right_ptr = right_broadcast.template ptr<uint32_t>();
+                            const uint32_t* left_ptr = std::as_const(left_broadcast).template ptr<uint32_t>();
+                            const uint32_t* right_ptr = std::as_const(right_broadcast).template ptr<uint32_t>();
                             uint32_t* out_ptr = result.template ptr<uint32_t>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -596,8 +598,8 @@ namespace lfs::core {
                         if (!needs_broadcast) {
                             // Simple element-wise operation
                             pin_operands({&left_tensor, &right_tensor});
-                            const float* left_ptr = left_tensor.template ptr<float>();
-                            const float* right_ptr = right_tensor.template ptr<float>();
+                            const float* left_ptr = std::as_const(left_tensor).template ptr<float>();
+                            const float* right_ptr = std::as_const(right_tensor).template ptr<float>();
                             float* out_ptr = result.template ptr<float>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -614,8 +616,8 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const float* left_ptr = left_broadcast.template ptr<float>();
-                            const float* right_ptr = right_broadcast.template ptr<float>();
+                            const float* left_ptr = std::as_const(left_broadcast).template ptr<float>();
+                            const float* right_ptr = std::as_const(right_broadcast).template ptr<float>();
                             float* out_ptr = result.template ptr<float>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -675,8 +677,8 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const unsigned char* left_ptr = left_tensor.template ptr<unsigned char>();
-                            const unsigned char* right_ptr = right_tensor.template ptr<unsigned char>();
+                            const unsigned char* left_ptr = std::as_const(left_tensor).template ptr<unsigned char>();
+                            const unsigned char* right_ptr = std::as_const(right_tensor).template ptr<unsigned char>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -692,8 +694,8 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const unsigned char* left_ptr = left_broadcast.template ptr<unsigned char>();
-                            const unsigned char* right_ptr = right_broadcast.template ptr<unsigned char>();
+                            const unsigned char* left_ptr = std::as_const(left_broadcast).template ptr<unsigned char>();
+                            const unsigned char* right_ptr = std::as_const(right_broadcast).template ptr<unsigned char>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -719,8 +721,8 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const detail::tensor_half_t* left_ptr = left_tensor.template ptr<detail::tensor_half_t>();
-                            const detail::tensor_half_t* right_ptr = right_tensor.template ptr<detail::tensor_half_t>();
+                            const detail::tensor_half_t* left_ptr = std::as_const(left_tensor).template ptr<detail::tensor_half_t>();
+                            const detail::tensor_half_t* right_ptr = std::as_const(right_tensor).template ptr<detail::tensor_half_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -738,8 +740,8 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const detail::tensor_half_t* left_ptr = left_broadcast.template ptr<detail::tensor_half_t>();
-                            const detail::tensor_half_t* right_ptr = right_broadcast.template ptr<detail::tensor_half_t>();
+                            const detail::tensor_half_t* left_ptr = std::as_const(left_broadcast).template ptr<detail::tensor_half_t>();
+                            const detail::tensor_half_t* right_ptr = std::as_const(right_broadcast).template ptr<detail::tensor_half_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -767,8 +769,8 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const int64_t* left_ptr = left_tensor.template ptr<int64_t>();
-                            const int64_t* right_ptr = right_tensor.template ptr<int64_t>();
+                            const int64_t* left_ptr = std::as_const(left_tensor).template ptr<int64_t>();
+                            const int64_t* right_ptr = std::as_const(right_tensor).template ptr<int64_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -784,8 +786,8 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const int64_t* left_ptr = left_broadcast.template ptr<int64_t>();
-                            const int64_t* right_ptr = right_broadcast.template ptr<int64_t>();
+                            const int64_t* left_ptr = std::as_const(left_broadcast).template ptr<int64_t>();
+                            const int64_t* right_ptr = std::as_const(right_broadcast).template ptr<int64_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -811,8 +813,8 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const int* left_ptr = left_tensor.template ptr<int>();
-                            const int* right_ptr = right_tensor.template ptr<int>();
+                            const int* left_ptr = std::as_const(left_tensor).template ptr<int>();
+                            const int* right_ptr = std::as_const(right_tensor).template ptr<int>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -828,8 +830,8 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const int* left_ptr = left_broadcast.template ptr<int>();
-                            const int* right_ptr = right_broadcast.template ptr<int>();
+                            const int* left_ptr = std::as_const(left_broadcast).template ptr<int>();
+                            const int* right_ptr = std::as_const(right_broadcast).template ptr<int>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -855,8 +857,8 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const uint32_t* left_ptr = left_tensor.template ptr<uint32_t>();
-                            const uint32_t* right_ptr = right_tensor.template ptr<uint32_t>();
+                            const uint32_t* left_ptr = std::as_const(left_tensor).template ptr<uint32_t>();
+                            const uint32_t* right_ptr = std::as_const(right_tensor).template ptr<uint32_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -872,8 +874,8 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const uint32_t* left_ptr = left_broadcast.template ptr<uint32_t>();
-                            const uint32_t* right_ptr = right_broadcast.template ptr<uint32_t>();
+                            const uint32_t* left_ptr = std::as_const(left_broadcast).template ptr<uint32_t>();
+                            const uint32_t* right_ptr = std::as_const(right_broadcast).template ptr<uint32_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -899,8 +901,8 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const uint8_t* left_ptr = left_tensor.template ptr<uint8_t>();
-                            const uint8_t* right_ptr = right_tensor.template ptr<uint8_t>();
+                            const uint8_t* left_ptr = std::as_const(left_tensor).template ptr<uint8_t>();
+                            const uint8_t* right_ptr = std::as_const(right_tensor).template ptr<uint8_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -916,8 +918,8 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const uint8_t* left_ptr = left_broadcast.template ptr<uint8_t>();
-                            const uint8_t* right_ptr = right_broadcast.template ptr<uint8_t>();
+                            const uint8_t* left_ptr = std::as_const(left_broadcast).template ptr<uint8_t>();
+                            const uint8_t* right_ptr = std::as_const(right_broadcast).template ptr<uint8_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -943,8 +945,8 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const float* left_ptr = left_tensor.template ptr<float>();
-                            const float* right_ptr = right_tensor.template ptr<float>();
+                            const float* left_ptr = std::as_const(left_tensor).template ptr<float>();
+                            const float* right_ptr = std::as_const(right_tensor).template ptr<float>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -960,8 +962,8 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const float* left_ptr = left_broadcast.template ptr<float>();
-                            const float* right_ptr = right_broadcast.template ptr<float>();
+                            const float* left_ptr = std::as_const(left_broadcast).template ptr<float>();
+                            const float* right_ptr = std::as_const(right_broadcast).template ptr<float>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
@@ -1007,7 +1009,7 @@ namespace lfs::core {
                 internal::ExecContext{result.stream()});
         } else {
             // CPU fallback: apply scalar operation element-wise
-            const float* in_ptr = input_tensor.template ptr<float>();
+            const float* in_ptr = std::as_const(input_tensor).template ptr<float>();
             float* out_ptr = result.template ptr<float>();
             size_t n = result.numel();
             for (size_t i = 0; i < n; ++i) {
@@ -1083,8 +1085,8 @@ namespace lfs::core {
         } else {
             // CPU fallback: gather then apply operation
             pin_operands({&flat_input, &indices_tensor});
-            const float* src = flat_input.template ptr<float>();
-            const int* idx = indices_tensor.template ptr<int>();
+            const float* src = std::as_const(flat_input).template ptr<float>();
+            const int* idx = std::as_const(indices_tensor).template ptr<int>();
             float* dst = result.template ptr<float>();
             size_t total = flat_input.numel();
 

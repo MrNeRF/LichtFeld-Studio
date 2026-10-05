@@ -99,26 +99,12 @@ namespace lfs::training {
         void set_frozen_lr_scale(float scale);
         void set_crop_damping_mask(lfs::core::Tensor mask);
         void set_cropbox_lr_scale(float scale);
-        void set_per_splat_mean_step(bool enabled,
-                                     float median_extent,
-                                     float r_min,
-                                     float r_max);
-        // Retain the allocation for both explicit and fused Adam; CPU inputs are uploaded.
-        void set_mean_step_far_mask(lfs::core::Tensor mask);
         void set_screen_share_cap(const float* max_share, int n, float limit, float penalty);
         void refresh_screen_share_buffer();
         // Collection is independent of the hinge: refinement can still consume
         // projected sizes while the strategy defers scale shrinkage.
         void set_collect_projected_screen_share(bool enabled) noexcept { collect_projected_screen_share_ = enabled; }
         [[nodiscard]] bool collect_projected_screen_share() const noexcept { return collect_projected_screen_share_; }
-        [[nodiscard]] bool per_splat_mean_step() const noexcept { return per_splat_mean_step_; }
-        [[nodiscard]] const bool* mean_step_far_mask() const noexcept {
-            return mean_step_far_mask_;
-        }
-        [[nodiscard]] int mean_step_far_mask_n() const noexcept { return mean_step_far_mask_n_; }
-        [[nodiscard]] const lfs::core::Tensor& mean_step_far_mask_storage() const noexcept {
-            return mean_step_far_mask_storage_;
-        }
         [[nodiscard]] const lfs::core::Tensor& crop_damping_mask() const noexcept {
             return crop_damping_mask_;
         }
@@ -200,13 +186,6 @@ namespace lfs::training {
         float frozen_lr_scale_ = 0.0f;
         lfs::core::Tensor crop_damping_mask_;
         float cropbox_lr_scale_ = 1.0f;
-        bool per_splat_mean_step_ = false;
-        float mean_step_median_extent_ = 0.0f;
-        float mean_step_r_min_ = 1.0f;
-        float mean_step_r_max_ = 300.0f;
-        lfs::core::Tensor mean_step_far_mask_storage_;
-        const bool* mean_step_far_mask_ = nullptr;
-        int mean_step_far_mask_n_ = 0;
         const float* screen_share_max_ = nullptr;
         int screen_share_n_ = 0;
         float screen_share_limit_ = 0.0f;
@@ -223,7 +202,6 @@ namespace lfs::training {
         [[nodiscard]] const lfs::gpu_ops::AdamOps& adam_ops() const;
         [[nodiscard]] lfs::gpu_ops::AdamHyper adam_hyper() const;
         [[nodiscard]] lfs::gpu_ops::AdamModifiers adam_modifiers() const;
-        void validate_mean_step_far_mask();
         size_t compute_new_capacity(size_t current_capacity, size_t required_size) const;
 
         // Quantized-moment helpers. Moments are uint8 (m signed @ zero-point 128, v as

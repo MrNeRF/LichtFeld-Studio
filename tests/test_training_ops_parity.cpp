@@ -504,21 +504,14 @@ namespace {
         constexpr ops::AdamModifiers modifiers{
             .frozen_lr_scale = 0.25f,
             .cropbox_lr_scale = 0.5f,
-            .median_extent = 1.5f,
-            .r_min = 1.f,
-            .r_max = 300.f,
             .screen_share_limit = 0.3f,
             .screen_share_penalty = 0.05f,
         };
         constexpr ops::AdamHyper hyper{.beta1 = 0.9f, .beta2 = 0.999f, .eps = 1e-15f};
         const Tensor frozen = bool_mask(n, 5);
         const Tensor crop = bool_mask(n, 7);
-        const Tensor raw_scales = pattern({n, 3}, 2.f, 17);
-        const Tensor far = bool_mask(n, 3);
         const Tensor share = pattern({n}, 0.4f, 23).abs();
-        const ops::AdamMasks masks{frozen, crop, raw_scales, far, share};
-        table->validate_far_mask(far.ptr<bool>());
-        out.snapshot.exact_i("adam.validate_far_mask", 1);
+        const ops::AdamMasks masks{frozen, crop, share};
 
         struct Group {
             Tensor parameter, packed, bounds, gradient;
@@ -551,7 +544,6 @@ namespace {
                 .lr = 0.01f * static_cast<float>(i + 1),
                 .bc1_rcp = bc1(1),
                 .bc2_sqrt_rcp = bc2(1),
-                .apply_mean_step = i == 0,
                 .apply_screen_share = i == 2,
             });
         }
@@ -1008,8 +1000,7 @@ namespace {
         keep(out.snapshot, backend, "mrnf.noise", means, kExact);
         auto raw = pattern_mrnf({n}, 1.5f, 9);
         auto log_scales = pattern_mrnf({n, 3}, 0.4f, 11);
-        const Tensor far = bool_mask(n, 3);
-        table->decay(raw, log_scales, frozen, far, {.opacity_decay = 0.02f, .scale_decay = 0.01f, .far_decay_scale = 0.25f, .train_t = 0.4f});
+        table->decay(raw, log_scales, frozen, {.opacity_decay = 0.02f, .scale_decay = 0.01f, .train_t = 0.4f});
         keep(out.snapshot, backend, "mrnf.decay.opacity", raw, kExact);
         keep(out.snapshot, backend, "mrnf.decay.scales", log_scales, kExact);
 
@@ -1021,11 +1012,6 @@ namespace {
         keep_f(out.snapshot, "mrnf.bounds.cz", bounds.center[2], kExact);
         keep_f(out.snapshot, "mrnf.bounds.median", bounds.median_size, kExact);
         keep_f(out.snapshot, "mrnf.bounds.max", bounds.max_extent, kExact);
-        auto extent_scales = pattern_mrnf({bounds_n, 3}, 0.8f, 4);
-        const ops::ScalarValidity extent = table->median_extent(extent_scales);
-        keep_f(out.snapshot, "mrnf.extent", extent.value, kExact);
-        out.snapshot.exact_i("mrnf.extent.valid", extent.valid ? 1 : 0);
-
         auto weights = pattern_mrnf({n}, 1.f, 8).abs();
         auto host = weights.cpu();
         for (size_t i = 0; i < n; i += 5) {
@@ -1039,62 +1025,12 @@ namespace {
         keep(out.snapshot, backend, "mrnf.gumbel", top, kExact);
 
         constexpr size_t fold_n = 64;
-        auto vis = pattern_mrnf({fold_n}, 1.f, 1).abs();
-        auto weight = pattern_mrnf({fold_n}, 0.2f, 2);
-        auto dens = pattern_mrnf({2, fold_n}, 0.5f, 3);
-        auto ratio = pattern_mrnf({fold_n}, 0.1f, 4);
-        table->fold(vis, weight, dens, ratio, 0.75f);
-        keep(out.snapshot, backend, "mrnf.fold.dens", dens, kExact);
         auto max_error = pattern_mrnf({fold_n}, 0.3f, 6);
         auto err = pattern_mrnf({2, fold_n}, 0.8f, 7);
         table->fold_error(max_error, err);
         keep(out.snapshot, backend, "mrnf.fold_error", err, kExact);
 
         auto project_means = pattern_mrnf({fold_n, 3}, 1.f, 12);
-        const auto w2c = Tensor::from_vector(
-            std::vector<float>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 2, 0, 0, 0, 1}, {4, 4}, Device::GPU);
-        auto means2d = Tensor::zeros({fold_n, 2}, Device::GPU);
-        auto radii = Tensor::zeros({fold_n}, Device::GPU);
-        const ops::ProjectParams project{.image = {.h = 8, .w = 12}, .intrinsics = {.fx = 20.f, .fy = 18.f, .cx = 6.f, .cy = 4.f}, .near_plane = 0.01f};
-        table->project_centers(project_means, w2c, means2d, radii, project);
-        keep(out.snapshot, backend, "mrnf.project.means2d", means2d, kReduce);
-        keep(out.snapshot, backend, "mrnf.project.radii", radii, kExact);
-        auto image_error = pattern_mrnf({8, 12}, 1.f, 15).abs();
-        auto scores = Tensor::zeros({fold_n}, Device::GPU);
-        table->gather_center_error(means2d, radii, image_error, scores);
-        keep(out.snapshot, backend, "mrnf.center_error", scores, kReduce);
-        auto far_mask = Tensor::zeros({fold_n}, Device::GPU, DataType::Bool);
-        table->far_mask(project_means, far_mask, {0.1f, -0.2f, 0.3f}, 1.5f);
-        keep(out.snapshot, backend, "mrnf.far", far_mask, kExact);
-
-        constexpr int height = 6;
-        constexpr int width = 8;
-        constexpr size_t hw = static_cast<size_t>(height * width);
-        auto predicted = pattern_mrnf({3, height, width}, 1.f, 1);
-        auto target = pattern_mrnf({3, height, width}, 0.7f, 2);
-        auto pixel_error = Tensor::zeros({height, width}, Device::GPU);
-        table->mean_abs_error(predicted, target, pixel_error);
-        keep(out.snapshot, backend, "mrnf.mae", pixel_error, kReduce);
-        auto alpha = pattern_mrnf({hw}, 0.5f, 3).abs().clamp(0.f, 1.f);
-        auto seed_weights = pixel_error.clone().reshape({hw});
-        table->seed_weights(seed_weights, alpha, seed_weights);
-        keep(out.snapshot, backend, "mrnf.seeds", seed_weights, kReduce);
-        const auto pixel_indices = i64_rows({1, 4, 7, 20, 40});
-        auto depth = pattern_mrnf({hw}, 2.f, 6).abs();
-        auto rgb = Tensor::zeros({5, 3}, Device::GPU);
-        auto out_alpha = Tensor::zeros({5}, Device::GPU);
-        auto out_depth = Tensor::zeros({5}, Device::GPU);
-        table->gather_seeds(pixel_indices, target, alpha, depth, rgb, out_alpha, out_depth);
-        keep(out.snapshot, backend, "mrnf.gather.rgb", rgb, kExact);
-        keep(out.snapshot, backend, "mrnf.gather.depth", out_depth, kExact);
-        auto median_values = pattern_mrnf({33}, 3.f, 9).abs();
-        const float median = table->sorted_median(median_values);
-        keep_f(out.snapshot, "mrnf.median", median, kExact);
-        auto starved = pattern_mrnf({33}, 1.f, 10).abs();
-        auto vis_starve = pattern_mrnf({33}, 2.f, 11).abs();
-        table->starvation_weights(starved, vis_starve, median);
-        keep(out.snapshot, backend, "mrnf.starvation", starved, kExact);
-
         auto prune = bool_mask(fold_n, 3);
         auto compact = Tensor::full({fold_n}, -1, Device::GPU, DataType::Int64);
         const size_t compacted = table->compact_bool_indices(prune, compact, fold_n);

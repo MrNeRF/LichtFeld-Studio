@@ -202,3 +202,19 @@ def test_rml_layout_does_not_advertise_removed_compatibility_methods(lf, method)
 def test_rml_sublayout_uses_collapsing_headers_instead_of_tree_aliases(lf):
     assert not hasattr(lf.ui.RmlSubLayout, "tree_node")
     assert not hasattr(lf.ui.RmlSubLayout, "tree_pop")
+
+
+@pytest.mark.integration
+def test_selection_submode_follows_native_mode(lf):
+    # Headless imports have no native viewer to receive selection events.
+    if lf.get_scene() is None:
+        pytest.skip("requires a native viewer (also run by SelectionSubmodeTest)")
+    original = lf.ui.get_selection_submode()
+    modes = ("centers", "rectangle", "polygon", "lasso", "rings", "color", "box", "sphere")
+    try:
+        for expected, mode in enumerate(modes):
+            lf.ui.set_selection_mode(mode)
+            assert lf.ui.get_selection_submode() == expected
+            assert lf.ui.context().selection_submode == expected
+    finally:
+        lf.ui.set_selection_mode(modes[original])

@@ -1665,7 +1665,6 @@ TEST_P(GutScreenShare, MrnfPreservesGrowthCoverageAndConstrainsMatureSplats) {
             params.gut = true;
             params.sh_degree = 0;
             params.max_cap = n;
-            params.background_improvements = false;
             params.use_edge_map = false;
             params.start_refine = 2000;
             params.refine_every = 250;
@@ -1719,7 +1718,6 @@ TEST_P(GutScreenShare, MrnfClipsAfterGrowthAndLeavesUnsetLimitUnchanged) {
             params.gut = true;
             params.sh_degree = 0;
             params.max_cap = n; // isolate clipping: no spare growth budget
-            params.background_improvements = false;
             params.use_edge_map = false;
             params.start_refine = 2000;
             params.refine_every = 250;
@@ -1805,7 +1803,6 @@ TEST_F(GutScreenShareStrategy, RendererSwitchStartsANewMeasurementWindow) {
     params.gut = true;
     params.max_cap = 100;
     params.sh_degree = 0;
-    params.background_improvements = false;
     strategy.initialize(params);
     ASSERT_TRUE(strategy.get_optimizer().collect_projected_screen_share());
     model->_max_screen_share.fill_(.5f);
@@ -1835,7 +1832,6 @@ TEST_F(GutScreenShareStrategy, MatureRefinementsReduceActualProjectedAreaBelowLi
         params.gut = true;
         params.sh_degree = 0;
         params.max_cap = 1;
-        params.background_improvements = false;
         params.use_edge_map = false;
         params.start_refine = 2000;
         params.refine_every = 250;

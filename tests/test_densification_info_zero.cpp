@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Fused densification-info fold-and-zero tests.
- * The fused operation must match separate max/add and zero operations.
+ * The fused operation must match separate max and zero operations.
  */
 
 #include "core/tensor.hpp"
@@ -37,13 +37,11 @@ namespace {
 
 class DensificationInfoZeroTest : public lfs::test::CudaBackendTest {};
 
-TEST_F(DensificationInfoZeroTest, MrnfFoldMatchesMultiStepReference) {
+TEST_F(DensificationInfoZeroTest, MrnfFoldKeepsVisibilityAndMaxesErrorAcrossSteps) {
     constexpr size_t N = 8;
-    auto vis = Tensor::zeros({N}, Device::GPU);
     auto refine_max = Tensor::zeros({N}, Device::GPU);
-
-    std::vector<float> vis_ref(N, 0.f);
-    std::vector<float> refine_ref(N, 0.f);
+    std::vector<float> visibility(N, 0.f);
+    std::vector<float> error_max(N, 0.f);
 
     const std::vector<std::pair<std::vector<float>, std::vector<float>>> steps = {
         {{1, 0, 2, 0, 0, 3, 0, 0}, {0.5f, 0, 1.0f, 0, 0, 0.2f, 0, 0}},
@@ -51,33 +49,24 @@ TEST_F(DensificationInfoZeroTest, MrnfFoldMatchesMultiStepReference) {
         {{1, 1, 1, 1, 1, 1, 1, 1}, {9, 8, 7, 6, 5, 4, 3, 2}},
     };
 
-    for (const auto& [r0, r1] : steps) {
-        auto info = make_info(r0, r1);
-
-        mrnf_strategy::launch_fold_densification_and_zero(
-            vis.ptr<float>(),
-            refine_max.ptr<float>(),
-            info.ptr<float>(),
-            N);
+    for (const auto& [visible, error] : steps) {
+        for (size_t i = 0; i < N; ++i) {
+            visibility[i] += visible[i];
+            error_max[i] = std::max(error_max[i], error[i]);
+        }
+        auto info = make_info(visibility, error);
+        mrnf_strategy::launch_fold_densification_error_and_zero(
+            refine_max.ptr<float>(), info.ptr<float>(), N);
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
+        const auto info_h = to_host(info);
         for (size_t i = 0; i < N; ++i) {
-            refine_ref[i] = std::max(refine_ref[i], r1[i]);
-            vis_ref[i] += r0[i];
+            EXPECT_FLOAT_EQ(info_h[i], visibility[i]) << "visibility row must persist, i=" << i;
+            EXPECT_FLOAT_EQ(info_h[N + i], 0.f) << "error row must be cleared, i=" << i;
         }
-
-        auto info_h = to_host(info);
-        for (float v : info_h) {
-            EXPECT_FLOAT_EQ(v, 0.f) << "densification_info must be zeroed after fold";
-        }
-    }
-
-    auto vis_h = to_host(vis);
-    auto ref_h = to_host(refine_max);
-    ASSERT_EQ(vis_h.size(), N);
-    for (size_t i = 0; i < N; ++i) {
-        EXPECT_FLOAT_EQ(vis_h[i], vis_ref[i]) << "vis i=" << i;
-        EXPECT_FLOAT_EQ(ref_h[i], refine_ref[i]) << "refine i=" << i;
+        const auto refine_h = to_host(refine_max);
+        for (size_t i = 0; i < N; ++i)
+            EXPECT_FLOAT_EQ(refine_h[i], error_max[i]) << "refine i=" << i;
     }
 }
 

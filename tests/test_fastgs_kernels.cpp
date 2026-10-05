@@ -2457,51 +2457,6 @@ TEST_F(NormalLossRegression, AxisTieAndGrazingBranchDiscontinuities) {
     EXPECT_GT(std::sqrt(grazing_jump), 1.5);
 }
 
-class FastGSFusedAdamSettingsTest : public lfs::test::CudaBackendTest {};
-
-TEST_F(FastGSFusedAdamSettingsTest, CarriesPerSplatMeanStepAndBoundsFarMask) {
-    auto parameter = Tensor::zeros({4, 3}, Device::GPU);
-    Tensor none;
-    lfs::gpu_ops::BackwardAdamParam group{
-        .parameter = parameter,
-        .packed_moments = none,
-        .joint_bounds = none,
-        .sh_value_bounds = none,
-        .frozen_mask = none,
-        .crop_damping_mask = none,
-        .screen_share = none,
-        .primitives = 4,
-        .enabled = true};
-    for (const size_t count : {0u, 2u, 4u, 8u}) {
-        SCOPED_TRACE(count);
-        auto mask = Tensor::zeros({count}, Device::GPU, DataType::Bool);
-        lfs::gpu_ops::BackwardAdam settings{
-            .groups = {group, group, group, group, group, group},
-            .scale_reg_loss = none,
-            .opacity_reg_loss = none,
-            .sparsity_sigmoid = none,
-            .sparsity_z = none,
-            .sparsity_u = none,
-            .far_mask = mask,
-            .median_extent = 0.25f,
-            .r_min = 1.5f,
-            .r_max = 42.0f,
-            .per_splat_mean_step = true};
-        const auto fused = fast_adam_settings(settings);
-        EXPECT_TRUE(fused.enabled);
-        EXPECT_TRUE(fused.per_splat_mean_step);
-        EXPECT_EQ(fused.mean_step_far_mask, count > 0 ? mask.ptr<bool>() : nullptr);
-        EXPECT_EQ(fused.mean_step_far_mask_n, std::min(count, size_t{4}));
-        EXPECT_FLOAT_EQ(fused.mean_step_median_extent, 0.25f);
-        EXPECT_FLOAT_EQ(fused.mean_step_r_min, 1.5f);
-        EXPECT_FLOAT_EQ(fused.mean_step_r_max, 42.0f);
-        settings.groups[0].primitives = 0;
-        EXPECT_EQ(fast_adam_settings(settings).mean_step_far_mask_n, 0);
-        settings.per_splat_mean_step = false;
-        EXPECT_FALSE(fast_adam_settings(settings).per_splat_mean_step);
-    }
-}
-
 class NormalLossHunt : public lfs::test::CudaBackendTest {};
 
 TEST_F(NormalLossHunt, JointRotationCodec100kSteps) {
@@ -2647,8 +2602,7 @@ TEST_F(ScreenShareAdamHinge, HingeDoesNotInflateSecondMoment) {
         entry.bias_correction2_sqrt_rcp = bc2;
         fast_lfs::optimizer::adam_step_joint_contiguous_batched(
             &entry, 1, nullptr, 0, 1.0f, nullptr, 0, 1.0f,
-            beta1, beta2, eps, nullptr, nullptr, 0, 0.0f, 1.0f, 300.0f,
-            nullptr, 0, screen_share.ptr<float>(), 1, limit, penalty);
+            beta1, beta2, eps, nullptr, screen_share.ptr<float>(), 1, limit, penalty);
     }
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 

@@ -50,22 +50,14 @@ struct AdamStep {
     float lr;
     float bc1_rcp;
     float bc2_sqrt_rcp;
-    uint apply_mean_step;
     uint apply_screen_share;
 };
 
 struct AdamBatchParams {
     AdamStep steps[kAdamMaxSteps];
     AdamRowMasks rows;
-    device const float* raw_scales;
-    device const bool* far_mask;
     device const float* screen_share;
-    int raw_scales_count;
-    int far_count;
     int screen_share_count;
-    float median_extent;
-    float r_min;
-    float r_max;
     float screen_share_limit;
     float screen_share_penalty;
     float beta1;
@@ -88,13 +80,6 @@ kernel void adam_step_batch(constant AdamBatchParams& p [[buffer(0)]], uint2 gro
 
     float row_lr = step.lr;
     const bool apply_step = in_range && adam_row_rate(p.rows, prim, row_lr);
-    if (step.apply_mean_step != 0u && p.raw_scales != nullptr && p.far_mask != nullptr && prim < p.far_count &&
-        p.far_mask[prim]) {
-        const int sb = prim * 3;
-        if (sb + 2 < p.raw_scales_count)
-            row_lr *= per_splat_mean_step_ratio(p.raw_scales[sb], p.raw_scales[sb + 1], p.raw_scales[sb + 2],
-                                                p.median_extent, p.r_min, p.r_max);
-    }
 
     const float4 old_mm = step.bounds[group.x];
     float us_u[kAdamMaxAttributes];
