@@ -1884,14 +1884,11 @@ namespace lfs::core {
         Tensor clamp(float min_val, float max_val) const;
 
         Tensor clamp_min(float min) const {
-            return clamp(min, dtype_ == DataType::Int32 ? std::numeric_limits<float>::infinity()
-                                                        : std::numeric_limits<float>::max());
+            return clamp(min, std::numeric_limits<float>::infinity());
         }
 
         Tensor clamp_max(float max) const {
-            return clamp(dtype_ == DataType::Int32 ? -std::numeric_limits<float>::infinity()
-                                                   : std::numeric_limits<float>::lowest(),
-                         max);
+            return clamp(-std::numeric_limits<float>::infinity(), max);
         }
 
         Tensor& clamp_(float min_val, float max_val);

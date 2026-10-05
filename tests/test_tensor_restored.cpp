@@ -96,6 +96,41 @@ namespace {
         EXPECT_FALSE(a.all_close(a.add(1.0f)));
     }
 
+    TEST_P(RestoredTensor, OneSidedClampPreservesUnboundedInfinities) {
+        const float inf = std::numeric_limits<float>::infinity();
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+            SCOPED_TRACE(static_cast<int>(dtype));
+            auto input = values({-inf, 99, -2, 99, 0, 99, 2, 99, inf, 99, nan, 99}, {6, 2}).to(dtype);
+            const auto check = [&](const Tensor& result, const std::vector<float>& expected) {
+                EXPECT_EQ(result.dtype(), dtype);
+                const auto actual = result.to(DataType::Float32).to_vector();
+                ASSERT_EQ(actual.size(), expected.size());
+                for (size_t i = 0; i < actual.size(); ++i) {
+                    if (std::isnan(expected[i]))
+                        EXPECT_TRUE(std::isnan(actual[i])) << i;
+                    else
+                        EXPECT_EQ(actual[i], expected[i]) << i;
+                }
+            };
+            for (const bool strided : {false, true}) {
+                SCOPED_TRACE(strided);
+                const auto view = input.slice(1, 0, 1);
+                const auto x = strided ? view : view.contiguous();
+                check(x.clamp_min(-1), {-1, -1, 0, 2, inf, nan});
+                check(x.clamp_max(1), {-inf, -2, 0, 1, 1, nan});
+                check(x, {-inf, -2, 0, 2, inf, nan});
+                auto lower_owner = input.clone(), upper_owner = input.clone();
+                auto lower = strided ? lower_owner.slice(1, 0, 1) : x.clone();
+                auto upper = strided ? upper_owner.slice(1, 0, 1) : x.clone();
+                check(lower.clamp_min_(-1), {-1, -1, 0, 2, inf, nan});
+                check(upper.clamp_max_(1), {-inf, -2, 0, 1, 1, nan});
+                check(lower_owner.slice(1, 1, 2), std::vector<float>(6, 99));
+                check(upper_owner.slice(1, 1, 2), std::vector<float>(6, 99));
+            }
+        }
+    }
+
     TEST_P(RestoredTensor, HalfClampAndStridedMutation) {
         const float nan = std::numeric_limits<float>::quiet_NaN();
         auto input = values({-4, 99, 0.5f, 99, 4, 99, nan, 99}, {4, 2}).to(DataType::Float16);
