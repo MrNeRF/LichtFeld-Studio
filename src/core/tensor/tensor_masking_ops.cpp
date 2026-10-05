@@ -1998,17 +1998,6 @@ namespace lfs::core {
         return result;
     }
 
-    std::vector<Tensor> Tensor::nonzero_split() const {
-        std::vector<Tensor> result;
-        result.reserve(ndim());
-        Tensor coordinates = nonzero();
-        for (size_t axis = 0; axis < ndim(); ++axis) {
-            result.push_back(
-                coordinates.slice(1, axis, axis + 1).squeeze(1).contiguous());
-        }
-        return result;
-    }
-
     // Pythonic Indexing
     TensorIndexer Tensor::operator[](const Tensor& idx) {
         LFS_ASSERT_MSG(is_valid() && idx.is_valid(),
@@ -2056,32 +2045,6 @@ namespace lfs::core {
     }
 
     // Element Access
-    float& Tensor::at(std::initializer_list<size_t> indices) {
-        LFS_ASSERT_MSG(is_valid(),
-                       "mutable at() requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                       "mutable at() requires Float32");
-        LFS_ASSERT_MSG(indices.size() == shape_.rank(),
-                       "mutable at() index rank mismatch");
-        LFS_ASSERT_MSG(device_ == Device::CPU,
-                       "mutable at() cannot return a host reference to CUDA memory");
-
-        std::vector<size_t> idx_vec(indices);
-
-        size_t linear_idx = 0;
-        // Use actual strides_ member, not shape_.strides() which assumes contiguous layout
-        // This is critical for non-contiguous tensors (e.g., sliced views)
-
-        for (size_t i = 0; i < idx_vec.size(); ++i) {
-            LFS_ASSERT_MSG(idx_vec[i] < shape_[i],
-                           std::format("at() index {} is out of bounds for dimension {} of size {}",
-                                       idx_vec[i], i, shape_[i]));
-            linear_idx += idx_vec[i] * strides_[i];
-        }
-
-        return ptr<float>()[linear_idx];
-    }
-
     float Tensor::at(std::initializer_list<size_t> indices) const {
         LFS_ASSERT_MSG(is_valid(),
                        "at() requires a valid tensor");
@@ -2159,18 +2122,7 @@ namespace lfs::core {
         return from_vector_impl(bytes, shape, device, DataType::Bool);
     }
 
-    void Tensor::set_bool(std::initializer_list<size_t> indices, bool value) {
-
-        preserve_lazy_snapshots_before_write();
-        set_bool(std::span<const size_t>(indices.begin(), indices.size()), value);
-    }
-
-    bool Tensor::get_bool(std::initializer_list<size_t> indices) const {
-        return get_bool(std::span<const size_t>(indices.begin(), indices.size()));
-    }
-
     // Location: After the existing get_bool/set_bool implementations (around line 800+)
-    // grep -C 3 "bool Tensor::get_bool"
 
     void Tensor::set_bool(std::span<const size_t> indices, bool value) {
 
@@ -2330,22 +2282,6 @@ namespace lfs::core {
                 break;
             }
         }
-    }
-
-    MaskedTensorProxy::operator Tensor() const {
-        LFS_ASSERT_MSG(tensor_ != nullptr && tensor_->is_valid() && mask_.is_valid(),
-                       "masked tensor conversion requires valid tensors");
-        LFS_ASSERT_MSG(is_bool_like(mask_.dtype()),
-                       "masked tensor conversion requires a Bool or UInt8 mask");
-        LFS_ASSERT_MSG(mask_.device() == tensor_->device(),
-                       "masked tensor conversion requires mask and tensor on the same device");
-        internal::require_same_gpu_backend(
-            *tensor_, mask_, "masked tensor conversion");
-        if (mask_.shape() == tensor_->shape()) {
-            return tensor_->masked_select(mask_);
-        }
-        // A one-dimensional mask selects rows from an N-dimensional tensor.
-        return tensor_->index_select(0, mask_);
     }
 
     void TensorIndexer::operator=(float value) {

@@ -415,14 +415,13 @@ class GalleryAssetMixin:
     def _selected_gallery_badge_value(self, name):
         asset = self._get_selected_asset()
         if not asset:
-            return False if name in ("gallery_has_badge", "gallery_ring", "health_badge", "gallery_has_reason") else 0.0 if name == "gallery_progress_value" else ""
+            return ""
         return self._gallery_badge(asset).get(name, "")
 
     def _bind_gallery_model(self, model):
-        for name in ("gallery_icon", "gallery_tone", "gallery_tooltip", "gallery_reason", "gallery_has_reason", "gallery_has_badge", "gallery_ring", "gallery_progress_value", "health_badge", "health_tone"):
+        for name in ("gallery_tooltip",):
             model.bind_func("selected_" + name, lambda name=name: self._selected_gallery_badge_value(name))
         values = {
-            "gallery_supported": lambda: not self._gallery_state.get("unsupported", False),
             "gallery_signed_in": lambda: self._portal_connection_state() == "connected" and not self._gallery_state.get("relink_required", False),
             "gallery_checked": self._gallery_checked_label,
             "gallery_needs_connection": lambda: connection_action(self._portal_connection_state())[0] is not None,
@@ -435,25 +434,18 @@ class GalleryAssetMixin:
             "gallery_toast_open": lambda: bool((self._gallery_toast or {}).get("path")),
             "gallery_update_all_visible": lambda: bool(self._gallery_update_candidates()),
             "gallery_update_all_label": lambda: tr("action.update_all", count=len(self._gallery_update_candidates())),
-            "gallery_update_all_enabled": lambda: bool(self._gallery_update_candidates()) and not self._gallery_state.get("busy") and self._gallery_state.get("phase", "idle") == "idle",
             "gallery_empty": lambda: not self._backend_load_active and self._selected_folder_id == SCOPE_PUBLISHED and self._gallery_state.get("connected", False) and not self._gallery_state.get("scenes"),
-            "gallery_local_empty": lambda: not self._backend_load_active and self._selected_folder_id not in GALLERY_SCOPES and not (self._all_display_assets() if self._selected_folder_id == "__all__" else self._asset_index_assets()),
-            "gallery_empty_pull": lambda: bool(self._gallery_state.get("scenes")) and not self._asset_index_assets(),
-            "gallery_published_count": lambda: len(self._gallery_rows()),
-            "gallery_attention_count": lambda: len(self._gallery_rows(True)),
             "gallery_selected_reason": lambda: ((self._gallery_badge(self._get_selected_asset()).get("gallery_action_reason") or self._gallery_badge(self._get_selected_asset()).get("gallery_reason")) if self._get_selected_asset() else ""),
             "gallery_has_selected_reason": lambda: bool(self._get_selected_asset() and (
                 self._gallery_badge(self._get_selected_asset()).get("gallery_action_reason")
                 or self._gallery_badge(self._get_selected_asset()).get("gallery_reason"))),
             "gallery_selected_state": lambda: self._gallery_badge(self._get_selected_asset())["gallery_label"] if self._get_selected_asset() else "",
             "gallery_can_copy": lambda: self._gallery_verb_enabled(self._get_selected_asset() or {}, "copy"),
-            "gallery_remote": lambda: bool((self._get_selected_asset() or {}).get("remote_only")),
             "gallery_linked": lambda: self._has_gallery_link(),
             "gallery_notice": self._gallery_notice_text,
             "gallery_has_notice": lambda: bool(self._gallery_notice_text()),
             "gallery_needs_recovery": lambda: self._gallery_state.get("storage_issue", False),
             "gallery_exchange_summary": lambda: " · ".join(filter(None, (self._gallery_published_summary(), self._gallery_checked_label()))),
-            "gallery_selected_format": lambda: ((self._get_selected_asset() or {}).get("source_format") or "licht").upper(),
             "gallery_multi_summary": lambda: tr("multi.summary", **self._gallery_counts()),
             "gallery_publish_many": lambda: tr("multi.publish", count=self._gallery_counts()["ready"]),
             "gallery_update_many": lambda: tr("multi.update", count=self._gallery_counts()["linked"]),
@@ -465,9 +457,7 @@ class GalleryAssetMixin:
         }
         for name, getter in values.items():
             model.bind_func(name, getter)
-        for key in ("sidebar.title", "sidebar.published", "sidebar.attention",
-                    "action.open", "action.copy",
-                    "info.format", "state.remote_only", "action.open_local", "action.open_recovery"):
+        for key in ("action.open", "action.copy", "action.open_local", "action.open_recovery"):
             model.bind_func("g_" + key.replace(".", "_"), lambda k=key: tr(k))
         for action in ("toast_open", "toast_portal", "toast_copy", "copy", "update_all", "refresh", "undo",
                        "publish_many", "update_many", "open_recovery"):

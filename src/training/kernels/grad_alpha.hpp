@@ -9,23 +9,6 @@
 
 namespace lfs::training::kernels {
 
-    // Computes grad_alpha[h,w] = -sum_c(grad_image[..., c, ...] * bg_color[c]).
-    void launch_fused_grad_alpha(
-        const float* grad_image,
-        const float* bg_color,
-        float* grad_alpha,
-        int H, int W,
-        bool is_chw_layout,
-        cudaStream_t stream = nullptr);
-
-    // Computes grad_alpha[h,w] = -sum_c(grad_image[c,h,w] * bg_image[c,h,w]).
-    void launch_fused_grad_alpha_with_image(
-        const float* grad_image,
-        const float* bg_image,
-        float* grad_alpha,
-        int H, int W,
-        cudaStream_t stream = nullptr);
-
     /**
      * @brief Add gradients from src to dst buffer (dst += src)
      *

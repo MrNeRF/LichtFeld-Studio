@@ -352,24 +352,6 @@ namespace lfs::io::project {
         std::unique_ptr<Impl> impl_;
     };
 
-    class LFS_IO_API MappedRegion {
-    public:
-        MappedRegion(MappedRegion&&) noexcept;
-        MappedRegion& operator=(MappedRegion&&) noexcept;
-        MappedRegion(const MappedRegion&) = delete;
-        MappedRegion& operator=(const MappedRegion&) = delete;
-        ~MappedRegion();
-
-        [[nodiscard]] std::span<const std::byte> bytes() const noexcept;
-        [[nodiscard]] std::uint64_t file_offset() const noexcept;
-
-    private:
-        friend class ProjectReader;
-        struct Impl;
-        explicit MappedRegion(std::unique_ptr<Impl> impl);
-        std::unique_ptr<Impl> impl_;
-    };
-
     class ProjectWriter;
 
     class LFS_IO_API MaterializeRetirementSink {
@@ -451,9 +433,6 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<std::vector<std::byte>> read_preview() const;
         [[nodiscard]] lfs::Result<BoundedInputStream>
         open_bounded_stream(const ChunkInfo& chunk) const;
-        [[nodiscard]] lfs::Result<MappedRegion>
-        map_stored_range(const ChunkInfo& chunk, std::uint64_t relative_offset,
-                         std::uint64_t length) const;
 
         [[nodiscard]] lfs::Result<CleanProof>
         make_clean_proof(const ChunkInfo& chunk, std::uint64_t mutation_epoch) const;

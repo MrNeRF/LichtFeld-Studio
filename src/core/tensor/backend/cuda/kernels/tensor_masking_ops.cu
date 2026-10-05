@@ -24,7 +24,6 @@
 #include <thrust/functional.h>
 #include <thrust/gather.h>
 #include <thrust/iterator/counting_iterator.h>
-#include <thrust/iterator/permutation_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/scan.h>
@@ -710,31 +709,6 @@ namespace lfs::core::tensor_ops {
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.gather_i64");
     }
 
-    // ============= OPTIMIZED: Fused Gather + Unary Operation =============
-    // This uses thrust::permutation_iterator for ZERO-COPY gather combined with
-    // thrust::transform for fusion - inspired by NVIDIA's parrot library
-    template <typename UnaryOp>
-    void launch_gather_fused_unary(const float* in, const int* idx, float* out,
-                                   size_t in_size, size_t out_size,
-                                   UnaryOp op, cudaStream_t stream) {
-        auto in_ptr = thrust::device_pointer_cast(in);
-        auto idx_ptr = thrust::device_pointer_cast(idx);
-        auto out_ptr = thrust::device_pointer_cast(out);
-
-        // Clamp indices to valid range
-        auto clamped_idx = thrust::make_transform_iterator(idx_ptr,
-                                                           ops::index_clamp_op(in_size));
-
-        // Create zero-copy permutation view: applies gather WITHOUT materializing
-        auto permuted_view = thrust::make_permutation_iterator(in_ptr, clamped_idx);
-
-        // Single fused kernel: gather + unary operation!
-        thrust::transform(thrust::cuda::par_nosync.on(stream),
-                          permuted_view, permuted_view + out_size,
-                          out_ptr,
-                          op);
-    }
-
     template <typename T>
     __device__ inline void scatter_add(T* dst, T value) {
         atomicAdd(dst, value);
@@ -879,89 +853,8 @@ namespace lfs::core::tensor_ops {
                         transform_idx, data_ptr);
     }
 
-    // ============= Multi-Tensor Gather (Zip Gather) =============
-    // Gather from multiple tensors simultaneously using the same indices
-    // Uses zip_iterator to fuse multiple gathers into single memory transaction
-
-    void launch_zip_gather_2(const float* input1, const float* input2,
-                             const int* indices,
-                             float* output1, float* output2,
-                             size_t input_size, size_t index_size,
-                             size_t stride1, size_t stride2,
-                             cudaStream_t stream) {
-        if (input_size == 0 || index_size == 0)
-            return;
-
-        auto in1_ptr = thrust::device_pointer_cast(input1);
-        auto in2_ptr = thrust::device_pointer_cast(input2);
-        auto idx_ptr = thrust::device_pointer_cast(indices);
-        auto out1_ptr = thrust::device_pointer_cast(output1);
-        auto out2_ptr = thrust::device_pointer_cast(output2);
-
-        // Clamp indices to valid range
-        auto clamped_idx = thrust::make_transform_iterator(idx_ptr,
-                                                           ops::index_clamp_op(input_size));
-
-        auto input1_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride1));
-        auto input2_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride2));
-        auto gathered1 = thrust::make_permutation_iterator(in1_ptr, input1_idx);
-        auto gathered2 = thrust::make_permutation_iterator(in2_ptr, input2_idx);
-        auto gathered = thrust::make_zip_iterator(thrust::make_tuple(gathered1, gathered2));
-
-        // Create zip iterator for outputs
-        auto zipped_output = thrust::make_zip_iterator(
-            thrust::make_tuple(out1_ptr, out2_ptr));
-
-        // Single gather operation copies both tensors!
-        thrust::copy(thrust::cuda::par_nosync.on(stream),
-                     gathered, gathered + index_size,
-                     zipped_output);
-    }
-
-    void launch_zip_gather_3(const float* input1, const float* input2, const float* input3,
-                             const int* indices,
-                             float* output1, float* output2, float* output3,
-                             size_t input_size, size_t index_size,
-                             size_t stride1, size_t stride2, size_t stride3,
-                             cudaStream_t stream) {
-        if (input_size == 0 || index_size == 0)
-            return;
-
-        auto in1_ptr = thrust::device_pointer_cast(input1);
-        auto in2_ptr = thrust::device_pointer_cast(input2);
-        auto in3_ptr = thrust::device_pointer_cast(input3);
-        auto idx_ptr = thrust::device_pointer_cast(indices);
-        auto out1_ptr = thrust::device_pointer_cast(output1);
-        auto out2_ptr = thrust::device_pointer_cast(output2);
-        auto out3_ptr = thrust::device_pointer_cast(output3);
-
-        // Clamp indices
-        auto clamped_idx = thrust::make_transform_iterator(idx_ptr,
-                                                           ops::index_clamp_op(input_size));
-
-        auto input1_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride1));
-        auto input2_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride2));
-        auto input3_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride3));
-        auto gathered1 = thrust::make_permutation_iterator(in1_ptr, input1_idx);
-        auto gathered2 = thrust::make_permutation_iterator(in2_ptr, input2_idx);
-        auto gathered3 = thrust::make_permutation_iterator(in3_ptr, input3_idx);
-        auto gathered = thrust::make_zip_iterator(thrust::make_tuple(gathered1, gathered2, gathered3));
-
-        // Zip three output sequences
-        auto zipped_output = thrust::make_zip_iterator(
-            thrust::make_tuple(out1_ptr, out2_ptr, out3_ptr));
-
-        // Single gather for all three tensors!
-        thrust::copy(thrust::cuda::par_nosync.on(stream),
-                     gathered, gathered + index_size,
-                     zipped_output);
-    }
-
     // ============= Explicit Instantiations for Fused Gather =============
     // We need to explicitly instantiate the common functor types used with gather
-    template LFS_CORE_API void launch_gather_fused_unary<ops::abs_op>(const float*, const int*, float*, size_t, size_t, ops::abs_op, cudaStream_t);
-    template LFS_CORE_API void launch_gather_fused_unary<ops::sqrt_op>(const float*, const int*, float*, size_t, size_t, ops::sqrt_op, cudaStream_t);
-    template LFS_CORE_API void launch_gather_fused_unary<ops::neg_op>(const float*, const int*, float*, size_t, size_t, ops::neg_op, cudaStream_t);
 
     // ============= Explicit Instantiations for Scatter Operations =============
     // Instantiate for float, int, and byte-sized mask types

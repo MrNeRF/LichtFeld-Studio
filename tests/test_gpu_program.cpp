@@ -257,8 +257,7 @@ namespace {
             GTEST_SKIP() << "Backend is compute-only";
         constexpr size_t width = 32, height = 32;
         // Left triangle counter-clockwise, right triangle clockwise (NDC +Y up).
-        std::array<std::array<float, 4>, 6> positions{{{-0.9f, -0.5f, 0.5f, 1}, {-0.1f, -0.5f, 0.5f, 1}, {-0.5f, 0.5f, 0.5f, 1},
-                                                       {0.1f, -0.5f, 0.5f, 1}, {0.5f, 0.5f, 0.5f, 1}, {0.9f, -0.5f, 0.5f, 1}}};
+        std::array<std::array<float, 4>, 6> positions{{{-0.9f, -0.5f, 0.5f, 1}, {-0.1f, -0.5f, 0.5f, 1}, {-0.5f, 0.5f, 0.5f, 1}, {0.1f, -0.5f, 0.5f, 1}, {0.5f, 0.5f, 0.5f, 1}, {0.9f, -0.5f, 0.5f, 1}}};
         std::array<std::array<float, 4>, 6> colors{};
         colors.fill({1, 1, 1, 1});
         auto vertices = Tensor::from_blob(positions.data(), {6, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
@@ -366,8 +365,7 @@ namespace {
         auto b = feature_bindings(values, values.size() * 6);
         const auto bindings = b.list();
         FeatureParams params{.count = uint32_t(values.size())};
-        auto dispatched = (*loaded)->dispatch({.function = "waveOps", .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
-                                               .groups = {M::groups_for(values.size(), 64), 1, 1}});
+        auto dispatched = (*loaded)->dispatch({.function = "waveOps", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .groups = {M::groups_for(values.size(), 64), 1, 1}});
         ASSERT_TRUE(dispatched) << dispatched.error().detail();
         const auto out = to_uint(b.output);
         const uint32_t width = out[4];
@@ -412,8 +410,7 @@ namespace {
         auto b = feature_bindings(values, groups);
         const auto bindings = b.list();
         FeatureParams params{.count = uint32_t(values.size())};
-        auto dispatched = (*loaded)->dispatch({.function = "sharedReduce", .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
-                                               .groups = {uint32_t(groups), 1, 1}, .group = {256, 1, 1}});
+        auto dispatched = (*loaded)->dispatch({.function = "sharedReduce", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .groups = {uint32_t(groups), 1, 1}, .group = {256, 1, 1}});
         ASSERT_TRUE(dispatched) << dispatched.error().detail();
         const auto out = to_uint(b.output);
         for (size_t g = 0; g < groups; ++g) {
@@ -438,8 +435,7 @@ namespace {
         b.counters = Tensor::from_blob(const_cast<int32_t*>(init.data()), {4}, Device::CPU, DataType::Int32).to(Device::GPU);
         const auto bindings = b.list();
         FeatureParams params{.count = uint32_t(values.size())};
-        auto dispatched = (*loaded)->dispatch({.function = "atomics", .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
-                                               .groups = {M::groups_for(values.size(), 64), 1, 1}});
+        auto dispatched = (*loaded)->dispatch({.function = "atomics", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .groups = {M::groups_for(values.size(), 64), 1, 1}});
         ASSERT_TRUE(dispatched) << dispatched.error().detail();
         uint32_t sum = 0, min = 0x7fffffff, max = 0, bits = 0;
         for (const auto v : values) {
@@ -474,8 +470,7 @@ namespace {
         b.longs = Tensor::from_blob(longs.data(), {kCount}, Device::CPU, DataType::Int64).to(Device::GPU);
         const auto bindings = b.list();
         FeatureParams params{.count = uint32_t(kCount)};
-        auto dispatched = (*loaded)->dispatch({.function = "narrowAndWide", .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
-                                               .groups = {M::groups_for(kCount, 64), 1, 1}});
+        auto dispatched = (*loaded)->dispatch({.function = "narrowAndWide", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .groups = {M::groups_for(kCount, 64), 1, 1}});
         ASSERT_TRUE(dispatched) << dispatched.error().detail();
         auto h = b.halves.to(DataType::Float32).to(Device::CPU);
         auto s = b.shorts.to(Device::CPU);
@@ -530,7 +525,8 @@ namespace {
         FeatureParams params{.count = 4};
         auto dispatched = (*loaded)->dispatch({.function = "markIndirect",
                                                .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
-                                               .indirect = &b.counters, .indirect_offset = 2});
+                                               .indirect = &b.counters,
+                                               .indirect_offset = 2});
         EXPECT_FALSE(dispatched);
     }
 

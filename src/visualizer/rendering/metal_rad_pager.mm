@@ -5,7 +5,7 @@
 #include "core/memory_pressure.hpp"
 #include "core/sh_layout.hpp"
 #include "core/tensor_backend.hpp"
-#include "frame_budget.hpp"
+#include "metal_frame_budget.hpp"
 #include "lod_upload_engine.hpp"
 #include <algorithm>
 #include <atomic>

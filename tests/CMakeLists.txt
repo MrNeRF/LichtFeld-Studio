@@ -100,10 +100,20 @@ if(BUILD_TESTS)
     add_test(NAME GpuProgramContracts COMMAND gpu_program_contracts)
     set_tests_properties(GpuProgramContracts PROPERTIES LABELS "tensor;gpu" TIMEOUT 120)
     if(TARGET lfs_tensor_rasterizer)
-        add_executable(tensor_rasterizer_contracts test_splat_tile_binner.cpp test_splat_rasterizer.cpp)
+        add_executable(tensor_rasterizer_contracts
+            test_splat_tile_binner.cpp
+            test_splat_rasterizer.cpp
+            test_splat_lod_selector.cpp
+            test_splat_raster_contracts.cpp
+            test_splat_projection_contracts.cpp
+            test_splat_spark_gut_contracts.cpp
+            test_splat_rad_contracts.cpp)
         target_link_libraries(tensor_rasterizer_contracts PRIVATE lfs_tensor_rasterizer GTest::gtest_main)
         target_compile_features(tensor_rasterizer_contracts PRIVATE cxx_std_23)
         add_test(NAME TensorRasterizerContracts COMMAND tensor_rasterizer_contracts)
+        # The contracts check precise-math oracles; MoltenVK compiles its MSL
+        # with fast math unless told otherwise.
+        set_tests_properties(TensorRasterizerContracts PROPERTIES ENVIRONMENT "MVK_CONFIG_FAST_MATH_ENABLED=0")
         set_tests_properties(TensorRasterizerContracts PROPERTIES LABELS "tensor;gpu" TIMEOUT 180)
     endif()
 endif()
@@ -576,8 +586,7 @@ set_source_files_properties(test_tensor_expression_cuda.cu PROPERTIES
 function(lfs_tensor_private_access)
     set(_prefixes
         test_main test_tensor_ tensor_ bench_tensor_ test_allocator_ test_cuda_ test_stale_stream_
-        test_zero_stride_ test_strided_reduce_ expression_reference cuda_backend_test test_alloc_counter
-        test_zip_gather)
+        test_zero_stride_ test_strided_reduce_ expression_reference cuda_backend_test test_alloc_counter)
     foreach(_src IN LISTS ARGN)
         get_filename_component(_name "${_src}" NAME)
         foreach(_prefix IN LISTS _prefixes)
@@ -830,14 +839,11 @@ set(TEST_FILES
     test_strided_reduce_w2.cpp
     test_tensor_masking.cpp
     test_strided_tensor_ops.cpp
-    test_tensor_lazy_gather.cpp
-    test_zip_gather.cpp
     test_tensor_ordering_distance.cpp
     test_tensor_kmeans_workflow.cpp
     test_tensor_masked_select_rows.cpp
     test_tensor_bitwise.cpp
     test_tensor_accessor.cpp
-    test_tensor_random_advanced.cpp
     test_tensor_indexing_advanced.cpp
     test_tensor_clamping.cpp
     test_tensor_cumsum_convenience.cpp
@@ -1068,7 +1074,6 @@ set(TEST_FILES
     test_mesh_data.cpp
     test_mesh_offscreen_renderer.cpp
     test_align_transform.cpp
-    test_openmesh_bridge.cpp
     test_mesh_loader.cpp
     test_colmap_image_layout.cpp
     test_missing_dataset_images.cpp

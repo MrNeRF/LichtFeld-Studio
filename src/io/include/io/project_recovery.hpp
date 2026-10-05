@@ -76,7 +76,6 @@ namespace lfs::io::project {
         RecoverySession& operator=(RecoverySession&&) noexcept;
         ~RecoverySession();
 
-        [[nodiscard]] bool valid() const noexcept;
         [[nodiscard]] WriterLockLease writer_lock() const noexcept;
         [[nodiscard]] const std::filesystem::path&
         master_path() const noexcept;

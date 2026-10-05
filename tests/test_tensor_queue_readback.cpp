@@ -132,23 +132,16 @@ namespace {
             const GpuBackendScope scope(GpuBackend::Vulkan);
             TensorWorkQueue independent(GpuBackend::Vulkan);
             TensorWorkQueue legacy(GpuBackend::Vulkan, TensorWorkQueue::Mode::LegacyOrdered);
-            TensorWorkQueue borrowed(GpuBackend::Vulkan, independent.native_handle());
-            TensorWorkQueue implicit(GpuBackend::Vulkan, nullptr);
             TensorFence fence(GpuBackend::Vulkan);
             EXPECT_EQ(independent.backend(), GpuBackend::Vulkan);
             EXPECT_TRUE(fence.ready());
             EXPECT_TRUE(independent.ready());
             independent.record(fence);
             legacy.wait_for(fence);
-            borrowed.wait_for(fence);
-            implicit.record(fence);
             independent.wait();
             legacy.wait();
-            borrowed.wait();
-            implicit.wait();
             EXPECT_TRUE(fence.ready());
             EXPECT_TRUE(independent.ready());
-            EXPECT_THROW(TensorWorkQueue(GpuBackend::Vulkan, reinterpret_cast<void*>(~uintptr_t{0})), std::runtime_error);
             std::atomic<bool> called{false};
             independent.enqueue_host_callback([](void* flag) {
                 static_cast<std::atomic<bool>*>(flag)->store(true);
@@ -158,20 +151,10 @@ namespace {
             EXPECT_TRUE(called.load());
         } else {
             EXPECT_THROW((void)TensorWorkQueue(GpuBackend::Vulkan), std::runtime_error);
-            EXPECT_THROW(TensorWorkQueue(GpuBackend::Vulkan, nullptr), std::runtime_error);
             EXPECT_THROW((void)TensorFence(GpuBackend::Vulkan), std::runtime_error);
         }
         if (!gpu_backend_available(GpuBackend::CUDA)) {
             EXPECT_THROW((void)TensorWorkQueue(GpuBackend::CUDA), std::runtime_error);
-#if !LFS_HAS_CUDA
-            EXPECT_THROW(TensorWorkQueue(GpuBackend::CUDA, nullptr), std::runtime_error);
-#else
-            // A borrowed adapter can exist without touching the runtime. Its
-            // first GPU operation must still report an unavailable device.
-            TensorWorkQueue borrowed(GpuBackend::CUDA, nullptr);
-            EXPECT_THROW(borrowed.wait(), std::runtime_error);
-            EXPECT_THROW((void)borrowed.ready(), std::runtime_error);
-#endif
             EXPECT_THROW(TensorWorkQueue(GpuBackend::CUDA, nullptr, nullptr), std::runtime_error);
             EXPECT_THROW((void)TensorFence(GpuBackend::CUDA), std::runtime_error);
         }
@@ -203,7 +186,6 @@ namespace {
         readback.enqueue(copy);
         readback.wait();
         EXPECT_EQ(destination.to_vector(), (std::vector<float>{1.f, 2.f, 3.f, 4.f, 5.f, 6.f}));
-        EXPECT_FALSE(reserved_allocation_bytes(source).has_value());
     }
 
     TEST(TensorQueueContract, VulkanQueueUploadReadbackAndFenceReuse) {
@@ -345,38 +327,28 @@ namespace {
     TEST(TensorQueueContract, MetalQueuesFencesAndCallbacks) {
         if (!gpu_backend_available(GpuBackend::Metal)) {
             EXPECT_THROW((void)TensorWorkQueue(GpuBackend::Metal), std::runtime_error);
-            EXPECT_THROW(TensorWorkQueue(GpuBackend::Metal, nullptr), std::runtime_error);
             EXPECT_THROW((void)TensorFence(GpuBackend::Metal), std::runtime_error);
             GTEST_SKIP();
         }
         const GpuBackendScope scope(GpuBackend::Metal);
         TensorWorkQueue independent(GpuBackend::Metal);
         TensorWorkQueue legacy(GpuBackend::Metal, TensorWorkQueue::Mode::LegacyOrdered);
-        TensorWorkQueue borrowed(GpuBackend::Metal, independent.native_handle());
-        TensorWorkQueue implicit(GpuBackend::Metal, nullptr);
         TensorFence fence(GpuBackend::Metal);
         EXPECT_EQ(independent.backend(), GpuBackend::Metal);
         EXPECT_NE(independent.native_handle(), nullptr);
         EXPECT_NE(independent.native_handle(), legacy.native_handle());
-        EXPECT_EQ(borrowed.native_handle(), independent.native_handle());
-        EXPECT_EQ(implicit.native_handle(), nullptr);
         // Metal queues share a submission timeline. Drain work left by earlier
         // tests before asserting idle readiness; a fresh handle does not imply
         // an independent, already-completed GPU timeline.
-        implicit.wait();
+        independent.wait();
         EXPECT_TRUE(fence.ready());
         EXPECT_TRUE(independent.ready());
         independent.record(fence);
         legacy.wait_for(fence);
-        borrowed.wait_for(fence);
-        implicit.record(fence);
         independent.wait();
         legacy.wait();
-        borrowed.wait();
-        implicit.wait();
         EXPECT_TRUE(fence.ready());
         EXPECT_TRUE(independent.ready());
-        EXPECT_THROW(TensorWorkQueue(GpuBackend::Metal, reinterpret_cast<void*>(~uintptr_t{0})), std::runtime_error);
         EXPECT_THROW(fence.record(reinterpret_cast<void*>(~uintptr_t{0})), std::invalid_argument);
         EXPECT_THROW(fence.record(TensorExecutionTarget::default_queue(GpuBackend::Vulkan)), std::invalid_argument);
 
@@ -394,13 +366,6 @@ namespace {
         independent.wait();
         EXPECT_TRUE(called.load());
         EXPECT_TRUE(independent.ready());
-
-        // A destroyed queue's handle is no longer a valid target.
-        void* const stale = [] {
-            const TensorWorkQueue temporary(GpuBackend::Metal);
-            return temporary.native_handle();
-        }();
-        EXPECT_THROW(TensorWorkQueue(GpuBackend::Metal, stale), std::runtime_error);
     }
 
     TEST(TensorQueueContract, MetalExecutionTargetUploadReadbackAndTimestamps) {
@@ -578,7 +543,9 @@ namespace {
         for (bool default_stream : {false, true}) {
             SCOPED_TRACE(default_stream);
             TensorWorkQueue owned(GpuBackend::CUDA);
-            TensorWorkQueue producer(GpuBackend::CUDA, default_stream ? nullptr : owned.native_handle());
+            const TensorExecutionTarget producer = default_stream
+                                                       ? TensorExecutionTarget::default_queue(GpuBackend::CUDA)
+                                                       : TensorExecutionTarget(owned);
             TensorWorkQueue consumer(GpuBackend::CUDA);
             TensorExecutionTarget::Scope producer_scope(producer);
             const auto target = TensorExecutionTarget::current();
@@ -641,9 +608,11 @@ namespace {
                 SCOPED_TRACE(default_stream);
                 SCOPED_TRACE(strided);
                 TensorWorkQueue owned(GpuBackend::CUDA);
-                TensorWorkQueue producer(GpuBackend::CUDA, default_stream ? nullptr : owned.native_handle());
+                const TensorExecutionTarget producer = default_stream
+                                                           ? TensorExecutionTarget::default_queue(GpuBackend::CUDA)
+                                                           : TensorExecutionTarget(owned);
                 TensorWorkQueue consumer(GpuBackend::CUDA);
-                TensorWorkQueue::Scope producer_scope(producer);
+                TensorExecutionTarget::Scope producer_scope(producer);
                 Tensor source = Tensor::full({2, 3}, 1.f, Device::GPU);
                 Tensor view = strided ? source.transpose(0, 1) : source;
                 TensorReadback readback;
@@ -786,18 +755,16 @@ namespace {
         EXPECT_EQ(destination.to_vector(), std::vector<float>(32, 5.f));
     }
 
-    TEST(TensorQueueReadback, BorrowedTimelineImportsSurviveBlockedWaitAndReplacement) {
+    TEST(TensorQueueReadback, TimelineImportsSurviveBlockedWaitAndReplacement) {
         if (!gpu_backend_available(GpuBackend::CUDA))
             GTEST_SKIP();
         auto device_owner = HeadlessAdoptedDevice::try_create(true);
         if (!device_owner)
             GTEST_SKIP() << "Timeline exports unavailable";
         const auto device = static_cast<VkDevice>(device_owner->handles().device);
-        for (bool default_stream : {false, true}) {
-            SCOPED_TRACE(default_stream);
-            TensorWorkQueue owner(GpuBackend::CUDA);
-            auto borrowed = std::make_unique<TensorWorkQueue>(GpuBackend::CUDA,
-                                                              default_stream ? nullptr : owner.native_handle());
+        for (const auto mode : {TensorWorkQueue::Mode::Independent, TensorWorkQueue::Mode::LegacyOrdered}) {
+            SCOPED_TRACE(static_cast<int>(mode));
+            auto queue = std::make_unique<TensorWorkQueue>(GpuBackend::CUDA, mode);
             VkExportSemaphoreCreateInfo export_info{VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
 #ifdef _WIN32
             export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
@@ -813,11 +780,11 @@ namespace {
             ASSERT_EQ(vkCreateSemaphore(device, &info, nullptr, &semaphore), VK_SUCCESS);
             auto token = std::make_shared<int>(1);
             std::weak_ptr<int> weak = token;
-            borrowed->set_consumer_timeline(device, {semaphore, 1, token});
+            queue->set_consumer_timeline(device, {semaphore, 1, token});
             token.reset();
-            borrowed->wait_timeline(1);
-            borrowed->set_consumer_timeline(device, {});
-            auto destroyed = std::async(std::launch::async, [&] { borrowed.reset(); });
+            queue->wait_timeline(1);
+            queue->set_consumer_timeline(device, {});
+            auto destroyed = std::async(std::launch::async, [&] { queue.reset(); });
             const auto status = destroyed.wait_for(20ms);
             EXPECT_EQ(status, std::future_status::timeout);
             EXPECT_FALSE(weak.expired());
@@ -827,7 +794,6 @@ namespace {
             EXPECT_EQ(vkSignalSemaphore(device, &signal), VK_SUCCESS);
             destroyed.get();
             EXPECT_TRUE(weak.expired());
-            owner.wait();
             vkDestroySemaphore(device, semaphore, nullptr);
         }
     }

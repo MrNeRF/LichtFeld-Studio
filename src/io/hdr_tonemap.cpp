@@ -59,8 +59,4 @@ namespace lfs::io {
         }
     }
 
-    const char* hdrFormatType(const HdrFormat fmt) {
-        return isHdrFormat(fmt) ? "HDR" : "SDR";
-    }
-
 } // namespace lfs::io

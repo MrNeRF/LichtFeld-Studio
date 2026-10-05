@@ -4,7 +4,6 @@ static const uint LFS_PUSH_CONSTANT_SIZE = 48;
 
 // 0 masked_fill, 1 and_live, 2 compact select, 3 compact scatter, 4 nonzero,
 // 5 predicate values for an inclusive scan. Selected offsets are scan[i] - 1.
-// 6 scalar where (data[i] = mask[i] ? fill : source[i]).
 [SpecializationConstant]
 const uint kMode = 0;
 // Element codes follow DataType: 0 Float32, 1 Float16, 2 Int32, 3 Int64, 4 UInt8, 5 Bool.
@@ -158,13 +157,6 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID,
         {
             if (predicate(parameters.maskAddress, index))
                 copyElement(parameters.sourceAddress, scan[index] - 1u, parameters.dataAddress, index);
-        }
-        else if (kMode == 6)
-        {
-            if (predicate(parameters.maskAddress, index))
-                storeFill(parameters.dataAddress, index, parameters.fillLow, parameters.fillHigh);
-            else
-                copyElement(parameters.sourceAddress, index, parameters.dataAddress, index);
         }
         else
         {

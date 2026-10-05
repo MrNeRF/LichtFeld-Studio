@@ -67,14 +67,12 @@ namespace lfs::training {
         lfs::core::Tensor tv_loss_gpu(int image_idx);
 
         /// Accumulate TV loss gradients into the current image slice (+=).
-        void tv_backward(float tv_weight);
         void tv_backward(float tv_weight, int image_idx);
 
         /// Adam + projection + scheduler for the image trained this iteration.
         void step_image(int image_idx, float tv_weight);
 
         /// Apply Adam with all accumulated gradients
-        void optimizer_step();
         void optimizer_step(int image_idx);
 
         /// Clear gradients for next iteration
@@ -136,7 +134,6 @@ namespace lfs::training {
         void allocate_resident_slots();
         // Device slot holding image_idx, uploading its grid and Adam moments on a miss.
         [[nodiscard]] int resident_slot(int image_idx);
-        [[nodiscard]] float* device_slice(lfs::core::Tensor& resident, int slot) const;
         void write_back(int slot) const;
         // Makes the host tensors current (waits for pending write-backs).
         void flush_resident() const;

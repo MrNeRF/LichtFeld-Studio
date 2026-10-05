@@ -177,51 +177,6 @@ namespace lfs::vis {
         }
     }
 
-    void RenderingManager::restoreSplitViewMode(const SplitViewMode mode) {
-        // Hold across cancellation and mode change to exclude drag release sequences.
-        // Acquire transition before settings/history locks; release settings before
-        // pushing history.
-        const auto transition_lock = acquireDepthWindowTransitionLock(view_source_.activeView());
-        SplitViewMode current_mode;
-        {
-            std::lock_guard<std::mutex> lock(settings_mutex_);
-            auto settings = activeSettingsLocked();
-            if (settings.split_view_mode == mode) {
-                return;
-            }
-            current_mode = settings.split_view_mode;
-        }
-        cancelDepthWindowDragBeforeSplitModeChange(current_mode, mode);
-
-        std::vector<SplitViewService::ModeChangeResult> changes;
-        {
-            std::lock_guard<std::mutex> lock(settings_mutex_);
-            auto settings = activeSettingsLocked();
-            SplitViewMode previous_mode = settings.split_view_mode;
-            if (settings.split_view_mode != SplitViewMode::Disabled) {
-                changes.push_back(
-                    this->state().split_view_service_.toggleMode(settings, settings.split_view_mode));
-                applyDepthWindowModeTransitionLocked(
-                    previous_mode,
-                    settings.split_view_mode);
-                previous_mode = settings.split_view_mode;
-            }
-            if (mode != SplitViewMode::Disabled) {
-                changes.push_back(this->state().split_view_service_.toggleMode(settings, mode));
-                applyDepthWindowModeTransitionLocked(
-                    previous_mode,
-                    settings.split_view_mode);
-            }
-            markViewDirty(view_source_.activeView(), DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
-
-            storeActiveSettingsLocked(settings);
-        }
-        for (const auto& change : changes)
-            applySplitModeChange(change);
-        if (mode != SplitViewMode::GTComparison)
-            invalidateCameraMetricsRequests(true);
-    }
-
     void RenderingManager::handleGoToCamView(const int cam_id) {
         setCurrentCameraId(cam_id);
         LOG_DEBUG("Current camera ID set to: {}", cam_id);

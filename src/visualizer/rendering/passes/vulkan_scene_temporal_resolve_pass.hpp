@@ -106,11 +106,9 @@ namespace lfs::vis {
         // Retain immutable pipeline state while freeing all per-view color and
         // depth history allocations after submitted users have retired.
         void releaseHistory();
-        void shutdown();
 
         [[nodiscard]] VkImageView outputView(TemporalViewId view) const;
         [[nodiscard]] SceneHistoryContract contract(TemporalViewId view) const;
-        [[nodiscard]] bool initialized() const;
         [[nodiscard]] VulkanSceneTemporalResourceStats resourceStats() const;
 
     private:

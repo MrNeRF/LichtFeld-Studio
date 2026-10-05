@@ -533,10 +533,6 @@ namespace lfs::vis {
         return true;
     }
 
-    void SceneUpscalerPlugin::releaseFeature(const std::uint32_t view) {
-        releaseViewIdentity(view);
-    }
-
     void SceneUpscalerPlugin::shutdownRuntime() {
         std::scoped_lock lock(impl_->mutex);
         if (!impl_->runtime_initialized)

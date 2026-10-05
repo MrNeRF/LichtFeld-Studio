@@ -102,8 +102,6 @@ namespace lfs::vis {
             TemporalResetReason reason = TemporalResetReason::HistoryDisabled);
         void shutdown();
 
-        [[nodiscard]] std::size_t residentOutputCount() const;
-
     private:
         struct Impl;
         std::unique_ptr<Impl> impl_;

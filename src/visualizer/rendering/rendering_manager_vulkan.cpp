@@ -319,7 +319,6 @@ namespace lfs::vis {
                     max_dimension};
         }
 
-
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeGTComparePlaceholderTensor(
             glm::ivec2 size,
             const glm::vec3 tint) {

@@ -490,10 +490,6 @@ namespace lfs::core {
         return labels;
     }
 
-    Tensor radius_connected_components(const Tensor& points, const float radius) {
-        return radius_connected_components(points, radius, Tensor{});
-    }
-
     Tensor mutual_radius_components(const Tensor& points, const Tensor& radii) {
         LFS_ASSERT_MSG(points.is_valid() && points.ndim() == 2 && points.size(1) == 3 && points.dtype() == DataType::Float32,
                        "mutual_radius_components requires Float32 [N,3] points");

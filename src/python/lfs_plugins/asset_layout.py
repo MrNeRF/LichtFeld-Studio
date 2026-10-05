@@ -2,12 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Projects geometry in dp; shared by DOM sizing and regression tests."""
 import math
-RESULTS_MIN_HEIGHT = 160.0
-SIDEBAR_PADDING = 16.0
-GALLERY_SECTION_HEIGHT = 140.0
-LOCAL_SECTION_HEIGHT = 77.0
-FOLDER_ROW_HEIGHT = 34.0
-RESIZE_HANDLES_HEIGHT = 20.0
 GALLERY_CARD_GAP = 10.0
 GALLERY_CARD_PREFERRED_WIDTH = 208.0
 GALLERY_HORIZONTAL_CHROME = 48.0
@@ -22,8 +16,6 @@ BREAKPOINT_MEDIUM_MAX = 1000.0
 GRID_GAP = 12.0
 GRID_HORIZONTAL_PADDING = 24.0
 LIST_ACTION_COLUMN_WIDTH = 32.0
-THUMBNAIL_MIN = 112.0
-THUMBNAIL_MAX = 320.0
 INSPECTOR_COLUMN_MIN = 320.0
 THUMBNAIL_DEFAULTS = {
     "compact": 112.0,
@@ -147,19 +139,6 @@ def gallery_slot_width(width, *, preferred=GALLERY_CARD_PREFERRED_WIDTH,
     return max(1.0, (content_width - gap * (columns - 1)) / columns)
 
 
-def panel_layout(height, *, folder_count=0, folders_collapsed=False, info_height=220.0,
-                 toolbar_height=115.0, results_header_height=49.0, sidebar_content_height=None):
-    content = (SIDEBAR_PADDING + GALLERY_SECTION_HEIGHT + LOCAL_SECTION_HEIGHT
-               + (0 if folders_collapsed else FOLDER_ROW_HEIGHT * folder_count))
-    if sidebar_content_height is not None:
-        content = sidebar_content_height
-    sidebar = min(content, height * 0.4)
-    available = max(0.0, height - toolbar_height - results_header_height - RESIZE_HANDLES_HEIGHT)
-    # At exceptionally short sizes, the sidebar yields after Info has collapsed.
-    sidebar = min(sidebar, max(0.0, available - RESULTS_MIN_HEIGHT))
-    info = min(max(0.0, info_height), max(0.0, available - sidebar - RESULTS_MIN_HEIGHT))
-    return dict(sidebar=sidebar, info=info, results=available - sidebar - info,
-                main_min_height=sidebar + 10.0 + results_header_height + RESULTS_MIN_HEIGHT)
 
 
 def list_columns(width, measured=None, overrides=None):

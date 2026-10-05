@@ -494,29 +494,6 @@ namespace lfs::io::project {
             return std::format("{}:{}", node.to_string(), fourcc);
         }
 
-        WorldOriginProvenance project_provenance(
-            const lfs::io::ImportWorldOriginProvenance value) {
-            using Import =
-                lfs::io::ImportWorldOriginProvenance;
-            switch (value) {
-            case Import::None:
-                return WorldOriginProvenance::None;
-            case Import::CentralizeByPointCloud:
-                return WorldOriginProvenance::
-                    CentralizeByPointCloud;
-            case Import::CentralizeByCameras:
-                return WorldOriginProvenance::
-                    CentralizeByCameras;
-            case Import::User:
-                return WorldOriginProvenance::User;
-            case Import::Import:
-                return WorldOriginProvenance::Import;
-            }
-            assert(false &&
-                   "unhandled import georeference provenance");
-            return WorldOriginProvenance::None;
-        }
-
     } // namespace
 
     lfs::Result<void> preflight_first_save_destination(
@@ -2509,12 +2486,6 @@ namespace lfs::io::project {
         return impl_->source_path;
     }
 
-    void ProjectDocument::forget_source_path() noexcept {
-        if (impl_) {
-            impl_->source_path.reset();
-        }
-    }
-
     const ProjectReader* ProjectDocument::source_reader() const noexcept {
         return impl_->source_reader.get();
     }
@@ -3317,36 +3288,6 @@ namespace lfs::io::project {
             impl_->mark(FOURCC_SFMO, uuid);
         }
         return {};
-    }
-
-    lfs::Result<void> ProjectDocument::set_georeference(
-        const ProjectGeoreference& value) {
-        if (auto result =
-                impl_->project.set_georeference(value);
-            !result) {
-            return result;
-        }
-        impl_->mark(FOURCC_PROJ);
-        return {};
-    }
-
-    lfs::Result<void> ProjectDocument::capture_georeference(
-        const lfs::io::LoadResult& load_result) {
-        ProjectGeoreference value;
-        if (load_result.georeference) {
-            value = ProjectGeoreference{
-                .crs = load_result.georeference->crs,
-                .world_origin =
-                    load_result.georeference->world_origin,
-                .world_unit_scale =
-                    load_result.georeference->world_unit_scale,
-                .world_origin_provenance =
-                    project_provenance(
-                        load_result.georeference
-                            ->world_origin_provenance),
-            };
-        }
-        return set_georeference(value);
     }
 
     const SplatChapterPayload*

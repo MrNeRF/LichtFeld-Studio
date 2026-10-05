@@ -105,18 +105,6 @@ TEST_F(BoolAnyAllTest, SumReturnsInt64CountOnCpuAndCuda) {
         EXPECT_EQ(result.item<int64_t>(), 3) << device_name(device);
     }
 }
-
-TEST_F(BoolAnyAllTest, AnyScalarReturnsHostBoolOnCpuAndCuda) {
-    for (const auto device : {Device::CPU, Device::GPU}) {
-        const auto all_false = Tensor::full_bool({4}, false, device);
-        auto one_true = all_false.clone();
-        one_true.set_bool({2}, true);
-
-        EXPECT_FALSE(all_false.any_scalar()) << device_name(device);
-        EXPECT_TRUE(one_true.any_scalar()) << device_name(device);
-    }
-}
-
 TEST_F(BoolAnyAllTest, LargeBoolSumPreservesDensificationCounts) {
     constexpr size_t count = 5'000'000;
 
@@ -131,17 +119,17 @@ TEST_F(BoolAnyAllTest, GetBoolSupportsRanksSpansAndCuda) {
     const auto cpu = Tensor::from_vector(
         std::vector<bool>{false, true, false, false, false, false, true, false},
         {2, 2, 2}, Device::CPU);
-    EXPECT_TRUE(cpu.get_bool({0, 0, 1}));
-    EXPECT_TRUE(cpu.get_bool({1, 1, 0}));
-    EXPECT_FALSE(cpu.get_bool({1, 0, 1}));
+    EXPECT_TRUE(cpu.get_bool(std::array<size_t, 3>{0, 0, 1}));
+    EXPECT_TRUE(cpu.get_bool(std::array<size_t, 3>{1, 1, 0}));
+    EXPECT_FALSE(cpu.get_bool(std::array<size_t, 3>{1, 0, 1}));
 
     const std::array<size_t, 3> index = {1, 1, 0};
     EXPECT_TRUE(cpu.get_bool(std::span<const size_t>(index)));
 
     const auto cuda = cpu.to(Device::GPU);
-    EXPECT_TRUE(cuda.get_bool({0, 0, 1}));
-    EXPECT_TRUE(cuda.get_bool({1, 1, 0}));
-    EXPECT_FALSE(cuda.get_bool({0, 1, 1}));
+    EXPECT_TRUE(cuda.get_bool(std::array<size_t, 3>{0, 0, 1}));
+    EXPECT_TRUE(cuda.get_bool(std::array<size_t, 3>{1, 1, 0}));
+    EXPECT_FALSE(cuda.get_bool(std::array<size_t, 3>{0, 1, 1}));
 }
 
 // ============= Full Reduction Tests =============
@@ -170,7 +158,7 @@ TEST_F(BoolAnyAllTest, Any_FullReduction_AllTrue) {
 
 TEST_F(BoolAnyAllTest, Any_FullReduction_OneTrue) {
     auto lfs_tensor = Tensor::zeros({3, 4, 5}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({1, 2, 3}, true);
+    lfs_tensor.set_bool(std::array<size_t, 3>{1, 2, 3}, true);
 
     auto torch_tensor = torch::zeros({3, 4, 5}, torch::kBool);
     torch_tensor.index_put_({1, 2, 3}, true);
@@ -206,7 +194,7 @@ TEST_F(BoolAnyAllTest, All_FullReduction_AllTrue) {
 
 TEST_F(BoolAnyAllTest, All_FullReduction_OneFalse) {
     auto lfs_tensor = Tensor::ones({3, 4, 5}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({1, 2, 3}, false);
+    lfs_tensor.set_bool(std::array<size_t, 3>{1, 2, 3}, false);
 
     auto torch_tensor = torch::ones({3, 4, 5}, torch::kBool);
     torch_tensor.index_put_({1, 2, 3}, false);
@@ -223,8 +211,8 @@ TEST_F(BoolAnyAllTest, All_FullReduction_OneFalse) {
 TEST_F(BoolAnyAllTest, Any_Dim0_2D) {
     // Create a 3x4 tensor with specific pattern
     auto lfs_tensor = Tensor::zeros({3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({0, 1}, true); // Column 1 has at least one true
-    lfs_tensor.set_bool({2, 3}, true); // Column 3 has at least one true
+    lfs_tensor.set_bool(std::array<size_t, 2>{0, 1}, true); // Column 1 has at least one true
+    lfs_tensor.set_bool(std::array<size_t, 2>{2, 3}, true); // Column 3 has at least one true
 
     auto torch_tensor = torch::zeros({3, 4}, torch::kBool);
     torch_tensor.index_put_({0, 1}, true);
@@ -238,8 +226,8 @@ TEST_F(BoolAnyAllTest, Any_Dim0_2D) {
 
 TEST_F(BoolAnyAllTest, Any_Dim1_2D) {
     auto lfs_tensor = Tensor::zeros({3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({0, 2}, true); // Row 0 has at least one true
-    lfs_tensor.set_bool({1, 0}, true); // Row 1 has at least one true
+    lfs_tensor.set_bool(std::array<size_t, 2>{0, 2}, true); // Row 0 has at least one true
+    lfs_tensor.set_bool(std::array<size_t, 2>{1, 0}, true); // Row 1 has at least one true
     // Row 2 has no true values
 
     auto torch_tensor = torch::zeros({3, 4}, torch::kBool);
@@ -254,8 +242,8 @@ TEST_F(BoolAnyAllTest, Any_Dim1_2D) {
 
 TEST_F(BoolAnyAllTest, All_Dim0_2D) {
     auto lfs_tensor = Tensor::ones({3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({1, 0}, false); // Column 0 has a false
-    lfs_tensor.set_bool({0, 2}, false); // Column 2 has a false
+    lfs_tensor.set_bool(std::array<size_t, 2>{1, 0}, false); // Column 0 has a false
+    lfs_tensor.set_bool(std::array<size_t, 2>{0, 2}, false); // Column 2 has a false
 
     auto torch_tensor = torch::ones({3, 4}, torch::kBool);
     torch_tensor.index_put_({1, 0}, false);
@@ -269,9 +257,9 @@ TEST_F(BoolAnyAllTest, All_Dim0_2D) {
 
 TEST_F(BoolAnyAllTest, All_Dim1_2D) {
     auto lfs_tensor = Tensor::ones({3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({0, 1}, false); // Row 0 has a false
+    lfs_tensor.set_bool(std::array<size_t, 2>{0, 1}, false); // Row 0 has a false
     // Row 1 all true
-    lfs_tensor.set_bool({2, 3}, false); // Row 2 has a false
+    lfs_tensor.set_bool(std::array<size_t, 2>{2, 3}, false); // Row 2 has a false
 
     auto torch_tensor = torch::ones({3, 4}, torch::kBool);
     torch_tensor.index_put_({0, 1}, false);
@@ -285,8 +273,8 @@ TEST_F(BoolAnyAllTest, All_Dim1_2D) {
 
 TEST_F(BoolAnyAllTest, Any_Dim0_3D) {
     auto lfs_tensor = Tensor::zeros({2, 3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({0, 1, 2}, true);
-    lfs_tensor.set_bool({1, 0, 3}, true);
+    lfs_tensor.set_bool(std::array<size_t, 3>{0, 1, 2}, true);
+    lfs_tensor.set_bool(std::array<size_t, 3>{1, 0, 3}, true);
 
     auto torch_tensor = torch::zeros({2, 3, 4}, torch::kBool);
     torch_tensor.index_put_({0, 1, 2}, true);
@@ -300,8 +288,8 @@ TEST_F(BoolAnyAllTest, Any_Dim0_3D) {
 
 TEST_F(BoolAnyAllTest, Any_Dim1_3D) {
     auto lfs_tensor = Tensor::zeros({2, 3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({0, 1, 2}, true);
-    lfs_tensor.set_bool({1, 2, 0}, true);
+    lfs_tensor.set_bool(std::array<size_t, 3>{0, 1, 2}, true);
+    lfs_tensor.set_bool(std::array<size_t, 3>{1, 2, 0}, true);
 
     auto torch_tensor = torch::zeros({2, 3, 4}, torch::kBool);
     torch_tensor.index_put_({0, 1, 2}, true);
@@ -315,8 +303,8 @@ TEST_F(BoolAnyAllTest, Any_Dim1_3D) {
 
 TEST_F(BoolAnyAllTest, Any_Dim2_3D) {
     auto lfs_tensor = Tensor::zeros({2, 3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({0, 0, 1}, true);
-    lfs_tensor.set_bool({1, 2, 3}, true);
+    lfs_tensor.set_bool(std::array<size_t, 3>{0, 0, 1}, true);
+    lfs_tensor.set_bool(std::array<size_t, 3>{1, 2, 3}, true);
 
     auto torch_tensor = torch::zeros({2, 3, 4}, torch::kBool);
     torch_tensor.index_put_({0, 0, 1}, true);
@@ -330,8 +318,8 @@ TEST_F(BoolAnyAllTest, Any_Dim2_3D) {
 
 TEST_F(BoolAnyAllTest, All_Dim2_3D) {
     auto lfs_tensor = Tensor::ones({2, 3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({0, 1, 2}, false);
-    lfs_tensor.set_bool({1, 0, 0}, false);
+    lfs_tensor.set_bool(std::array<size_t, 3>{0, 1, 2}, false);
+    lfs_tensor.set_bool(std::array<size_t, 3>{1, 0, 0}, false);
 
     auto torch_tensor = torch::ones({2, 3, 4}, torch::kBool);
     torch_tensor.index_put_({0, 1, 2}, false);
@@ -347,8 +335,8 @@ TEST_F(BoolAnyAllTest, All_Dim2_3D) {
 
 TEST_F(BoolAnyAllTest, Any_Dim0_Keepdim) {
     auto lfs_tensor = Tensor::zeros({3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({0, 1}, true);
-    lfs_tensor.set_bool({2, 3}, true);
+    lfs_tensor.set_bool(std::array<size_t, 2>{0, 1}, true);
+    lfs_tensor.set_bool(std::array<size_t, 2>{2, 3}, true);
 
     auto torch_tensor = torch::zeros({3, 4}, torch::kBool);
     torch_tensor.index_put_({0, 1}, true);
@@ -365,7 +353,7 @@ TEST_F(BoolAnyAllTest, Any_Dim0_Keepdim) {
 
 TEST_F(BoolAnyAllTest, All_Dim1_Keepdim) {
     auto lfs_tensor = Tensor::ones({3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({1, 2}, false);
+    lfs_tensor.set_bool(std::array<size_t, 2>{1, 2}, false);
 
     auto torch_tensor = torch::ones({3, 4}, torch::kBool);
     torch_tensor.index_put_({1, 2}, false);
@@ -487,7 +475,7 @@ TEST_F(BoolAnyAllTest, All_SingleElement) {
 
 TEST_F(BoolAnyAllTest, Any_NonContiguousSlice) {
     auto base = Tensor::zeros({4, 4}, Device::CPU, DataType::Bool);
-    base.set_bool({2, 2}, true);
+    base.set_bool(std::array<size_t, 2>{2, 2}, true);
 
     auto slice = base.slice(0, 0, 3).slice(1, 0, 3); // 3x3 slice
     ASSERT_FALSE(slice.is_contiguous());
@@ -505,7 +493,7 @@ TEST_F(BoolAnyAllTest, Any_NonContiguousSlice) {
 
 TEST_F(BoolAnyAllTest, All_NonContiguousSlice) {
     auto base = Tensor::ones({4, 4}, Device::CPU, DataType::Bool);
-    base.set_bool({1, 1}, false);
+    base.set_bool(std::array<size_t, 2>{1, 1}, false);
 
     auto slice = base.slice(0, 0, 3).slice(1, 0, 3); // 3x3 slice
     ASSERT_FALSE(slice.is_contiguous());
@@ -523,8 +511,8 @@ TEST_F(BoolAnyAllTest, All_NonContiguousSlice) {
 
 TEST_F(BoolAnyAllTest, Any_NonContiguousSlice_AxisReduction) {
     auto base = Tensor::zeros({4, 4}, Device::CPU, DataType::Bool);
-    base.set_bool({0, 1}, true);
-    base.set_bool({2, 0}, true);
+    base.set_bool(std::array<size_t, 2>{0, 1}, true);
+    base.set_bool(std::array<size_t, 2>{2, 0}, true);
 
     auto slice = base.slice(0, 0, 3).slice(1, 0, 3); // 3x3 slice
     ASSERT_FALSE(slice.is_contiguous());

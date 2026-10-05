@@ -747,19 +747,6 @@ void VulkanGSPipelineBuffers::undoReorderSH(Buffer<T>& coeffs, size_t num_splats
     coeffs.resize(4 * SH_DIM * num_splats);
 }
 
-void VulkanGSPipelineBuffers::assignScalesOpacs(
-    Buffer<float>& scales_opacs,
-    size_t n, const float* scales, const float* opacs) {
-    scales_opacs.resize(4 * n);
-    for (size_t i = 0; i < n; i++) {
-        float* so = &scales_opacs[4 * i];
-        so[0] = scales[3 * i];
-        so[1] = scales[3 * i + 1];
-        so[2] = scales[3 * i + 2];
-        so[3] = opacs[i];
-    }
-}
-
 #define _INSTANTIATE_BUFFER(dtype)                                                                                           \
     template _VulkanBuffer& VulkanGSPipeline::resizeDeviceBuffer(Buffer<dtype>& buffer, size_t new_size, bool no_shrink);    \
     template _VulkanBuffer& VulkanGSPipeline::clearDeviceBuffer(Buffer<dtype>& buffer, size_t new_size);                     \

@@ -57,17 +57,6 @@ namespace lfs::core {
                                              const glm::vec3& crop_max,
                                              const glm::mat4& points_to_cropbox);
 
-    /**
-     * @brief Crop SplatData by a bounding box (creates new filtered copy)
-     * @param splat_data The splat data to crop
-     * @param bounding_box The bounding box to crop by
-     * @param inverse If true, keep points outside the box instead of inside
-     * @return New SplatData containing the selected points
-     */
-    LFS_CORE_API SplatData crop_by_cropbox(const SplatData& splat_data,
-                                           const lfs::geometry::BoundingBox& bounding_box,
-                                           bool inverse = false);
-
     // Soft crop: mark gaussians as deleted in-place (for undo/redo support)
     // Returns the applied deletion mask
     LFS_CORE_API Tensor soft_crop_by_cropbox(SplatData& splat_data,

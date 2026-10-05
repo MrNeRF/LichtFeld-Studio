@@ -19,7 +19,6 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
-#include <initializer_list>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -238,46 +237,13 @@ namespace lfs::test::licht {
     [[nodiscard]] vis::project::PanelCameraProjectState rolled_panel_camera(float tag);
     [[nodiscard]] ProjectSessionChapters make_populated_session_chapters();
 
-    struct PopulatedProjectFixture {
-        PopulatedProjectFixture();
-        ~PopulatedProjectFixture();
-        PopulatedProjectFixture(PopulatedProjectFixture&&) noexcept;
-        PopulatedProjectFixture& operator=(PopulatedProjectFixture&&) noexcept;
-
-        std::unique_ptr<ProjectDocument> document;
-        core::Uuid project_uuid;
-        core::Uuid dataset_reference;
-        core::Uuid background_reference;
-        core::Uuid ppisp_reference;
-        core::Uuid root_node;
-        core::Uuid training_node;
-        core::Uuid imported_node;
-        core::Uuid point_node;
-        core::Uuid mesh_node;
-        core::Uuid crop_node;
-        core::Uuid ellipsoid_node;
-        core::Uuid camera_node;
-        core::Uuid checkpoint_uuid;
-        ProjectManifest manifest;
-        ProjectGeoreference georeference;
-        std::array<float, 16> edited_transform{};
-        CameraRecord camera;
-        std::vector<ReferenceRecord> references;
-        std::vector<SceneNodeRecord> nodes;
-        ParameterManagerSnapshot parameters;
-    };
-
-    [[nodiscard]] PopulatedProjectFixture make_populated_project_fixture();
     [[nodiscard]] std::unique_ptr<ProjectDocument>
     make_empty_document(core::Uuid project_uuid, std::uint64_t created_at_unix_ns = 100);
-    [[nodiscard]] std::unique_ptr<core::SplatData> make_matrix_splat(bool cuda = false);
     [[nodiscard]] std::unique_ptr<core::SplatData> make_splat(std::size_t count);
     [[nodiscard]] std::shared_ptr<core::PointCloud> make_point_cloud(std::size_t count);
     [[nodiscard]] std::shared_ptr<core::MeshData> make_triangle_mesh();
     [[nodiscard]] ProjectDocumentSaveOptions deterministic_document_save_options(
         std::uint32_t uuid_namespace, std::uint64_t identity_tag,
         std::uint64_t wallclock_unix_ns);
-    [[nodiscard]] std::vector<std::byte>
-    byte_values(std::initializer_list<std::uint8_t> values);
 
 } // namespace lfs::test::licht

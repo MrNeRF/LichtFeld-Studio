@@ -11,13 +11,6 @@
 #include <optional>
 #include <vector>
 
-TEST(CameraThumbnailPolicyTest, InvertedVisibleRowRangeIsEmpty) {
-    const std::optional<std::pair<std::size_t, std::size_t>> range =
-        lfs::vis::gui::cameraThumbnailVisibleRowRange(8, 3, 12);
-
-    EXPECT_FALSE(range.has_value());
-}
-
 TEST(CameraThumbnailPolicyTest, RequestsAllCamerasSelectedFirst) {
     const std::vector<int> all = {10, 11, 12, 13};
     const std::vector<int> visible = {10, 11, 12, 12};

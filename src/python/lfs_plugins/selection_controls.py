@@ -546,22 +546,6 @@ class SelectionControlsController:
             return None
         return self._draw_commit_view()
 
-    def _native_window_scales(self):
-        """Read current projected scales before the displayed cache is refreshed.
-
-        Reconciliation must not seed from the previous window's cached scales.
-        """
-        getter = getattr(lf.selection, "get_depth_filter_window", None)
-        if callable(getter):
-            try:
-                _enabled, _near, _far, scale_x, scale_y, _ox, _oy = getter()
-                return (
-                    _clamp(_parse_float(scale_x, _DEFAULT_WINDOW_SCALE), 0.05, 1.0),
-                    _clamp(_parse_float(scale_y, _DEFAULT_WINDOW_SCALE), 0.05, 1.0),
-                )
-            except Exception:
-                pass
-        return self._window_scale, self._window_scale_y
 
     def _rebase_view_reference(self, view):
         commit = self._draw_commit_value()
@@ -569,9 +553,6 @@ class SelectionControlsController:
         self._ref_scale_x[key] = float(commit.get("scale_x", self._window_scale))
         self._ref_scale_y[key] = float(commit.get("scale_y", self._window_scale_y))
 
-    def _seed_all_references(self, scale_x, scale_y):
-        self._ref_scale_x[self._active_view] = scale_x
-        self._ref_scale_y[self._active_view] = scale_y
 
     def _draw_commit_value(self):
         value = RuntimeState.depth_window_draw_commit.value

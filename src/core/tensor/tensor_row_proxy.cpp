@@ -361,32 +361,4 @@ namespace lfs::core {
         return Tensor(*this).neg();
     }
 
-    Tensor TensorRowProxy::pow(float exponent) const {
-        return Tensor(*this).pow(exponent);
-    }
-
-    Tensor TensorRowProxy::sqrt() const {
-        return Tensor(*this).sqrt();
-    }
-
-    Tensor TensorRowProxy::abs() const {
-        return Tensor(*this).abs();
-    }
-
-    Tensor TensorRowProxy::neg() const {
-        return Tensor(*this).neg();
-    }
-
-    Tensor TensorRowProxy::sum() const {
-        return Tensor(*this).sum();
-    }
-
-    Tensor TensorRowProxy::mean() const {
-        return Tensor(*this).mean();
-    }
-
-    Tensor TensorRowProxy::square() const {
-        return Tensor(*this).square();
-    }
-
 } // namespace lfs::core

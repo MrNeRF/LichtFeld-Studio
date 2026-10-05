@@ -71,22 +71,6 @@ namespace lfs::python {
     }
 
     void PyModalRegistry::show_message(const std::string& title, const std::string& message,
-                                       MessageStyle style) {
-        std::lock_guard lock(mutex_);
-        PyModalDialog modal;
-        modal.id = "modal_" + std::to_string(next_id_++);
-        modal.title = title;
-        modal.message = message;
-        modal.buttons = {"OK"};
-        modal.type = ModalDialogType::Message;
-        modal.style = style;
-        modal.is_open = true;
-        modal.needs_open = true;
-        modals_.push_back(std::move(modal));
-        request_redraw();
-    }
-
-    void PyModalRegistry::show_message(const std::string& title, const std::string& message,
                                        MessageStyle style, nb::object callback) {
         std::lock_guard lock(mutex_);
         PyModalDialog modal;
@@ -112,26 +96,6 @@ namespace lfs::python {
         std::lock_guard lock(mutex_);
         modals_.clear();
         next_id_ = 0;
-    }
-
-    bool PyModalRegistry::can_lock_mutex_for_test() const {
-        if (!mutex_.try_lock()) {
-            return false;
-        }
-        mutex_.unlock();
-        return true;
-    }
-
-    void PyModalRegistry::run_pending_callback_for_test(std::function<void()> callback) {
-        std::vector<ModalCallbackAction> pending_callbacks;
-        {
-            std::lock_guard lock(mutex_);
-            pending_callbacks.push_back(std::move(callback));
-        }
-
-        for (auto& pending_callback : pending_callbacks) {
-            pending_callback();
-        }
     }
 
 } // namespace lfs::python

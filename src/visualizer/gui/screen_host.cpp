@@ -322,14 +322,6 @@ namespace lfs::vis::gui {
         return {};
     }
 
-    screen::AreaId ScreenHost::viewAt(const float x, const float y) const {
-        for (const auto& f : frames_) {
-            if (f.editor == screen::editors::kView3D && f.content.contains(x, y))
-                return f.id;
-        }
-        return {};
-    }
-
     std::optional<screen::Rect> ScreenHost::viewContent(const screen::AreaId id) const {
         const auto* f = area(id);
         if (!f || f->editor != screen::editors::kView3D)
@@ -986,13 +978,6 @@ namespace lfs::vis::gui {
     bool ScreenHost::needsAnimationFrame() const {
         return chrome_dirty_ || overlay_dirty_ || gestures_.active() || !pending_actions_.empty() ||
                chrome_tooltip_.needsFrame();
-    }
-
-    std::string ScreenHost::animationDemandDescription() const {
-        if (!needsAnimationFrame())
-            return {};
-        return std::format("screen(chrome_dirty={},overlay_dirty={},gesture={},actions={})", chrome_dirty_,
-                           overlay_dirty_, gestures_.active(), pending_actions_.size());
     }
 
 } // namespace lfs::vis::gui

@@ -300,6 +300,4 @@ struct VulkanGSPipelineBuffers {
     static void reorderSH(Buffer<T>& coeffs);
     template <typename T>
     static void undoReorderSH(Buffer<T>& coeffs, size_t num_splats);
-
-    static void assignScalesOpacs(Buffer<float>& scales_opacs, size_t n, const float* scales, const float* opacs);
 };

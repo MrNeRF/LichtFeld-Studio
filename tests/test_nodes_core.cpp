@@ -219,12 +219,9 @@ namespace {
     };
 
     TEST(NodesCoreMetadata, RegistriesExposeFrozenTypes) {
-        TreeTypeRegistry trees;
         SocketTypeRegistry sockets;
         NodeTypeRegistry nodes;
         register_builtin_nodes(nodes);
-        ASSERT_EQ(trees.list().size(), 1u);
-        EXPECT_EQ(trees.list()[0].id, "lfs.geometry");
         EXPECT_EQ(sockets.list().size(), 8u);
         EXPECT_GE(nodes.list().size(), 45u);
         EXPECT_FALSE(nodes.find("lfs.object_info"));
@@ -883,7 +880,7 @@ namespace {
         EXPECT_EQ(mesh_points.geometry.points->positions.shape()[0], 3u);
     }
 
-    TEST_P(NodesCore, CorePayloadConversionsDropDeletedRowsAndNormalizeU8Colours) {
+    TEST_P(NodesCore, CorePayloadConversionsDropDeletedRows) {
         Geometry original = splats(1);
         auto data = splat_data_from_geometry(original);
         ASSERT_NE(data, nullptr);
@@ -898,18 +895,6 @@ namespace {
         auto restored = splat_data_from_geometry(filtered);
         ASSERT_NE(restored, nullptr);
         EXPECT_EQ(restored->shN_canonical().shape(), TensorShape({2, 3, 3}));
-
-        Tensor colors = Tensor::empty({2, 3}, Device::CPU, lfs::core::DataType::UInt8);
-        const std::uint8_t bytes[] = {0, 127, 255, 255, 64, 0};
-        std::memcpy(colors.data_ptr(), bytes, sizeof(bytes));
-        if (device() == Device::GPU)
-            colors = colors.to(device());
-        lfs::core::PointCloud cloud(tensor({0, 0, 0, 1, 0, 0}, {2, 3}), colors);
-        Geometry points = geometry_from_point_cloud(cloud);
-        const auto normalized = host<float>(points.points->colors);
-        EXPECT_FLOAT_EQ(normalized[0], 0.0f);
-        EXPECT_NEAR(normalized[1], 127.0f / 255.0f, 1e-6f);
-        EXPECT_FLOAT_EQ(normalized[2], 1.0f);
     }
 
     TEST_P(NodesCore, InsideMeshAndNeighbourCountProduceFields) {
@@ -2165,7 +2150,7 @@ namespace {
             const auto points = tensor(xyz, {count, 3});
             const bool all = std::ranges::all_of(selected, [](bool value) { return value; });
             std::vector<float> mask(selected.begin(), selected.end());
-            const auto actual = all ? lfs::core::radius_connected_components(points, radius)
+            const auto actual = all ? lfs::core::radius_connected_components(points, radius, Tensor{})
                                     : lfs::core::radius_connected_components(points, radius, tensor(mask, {count}).to(lfs::core::DataType::Bool));
             EXPECT_EQ(actual.device(), device());
             EXPECT_EQ(actual.dtype(), lfs::core::DataType::Int32);
@@ -2195,7 +2180,7 @@ namespace {
         cut[2500] = false;
         check(line, std::vector<bool>(chain, true), 0.01f);
         check(line, cut, 0.01f);
-        EXPECT_EQ(lfs::core::radius_connected_components(Tensor::empty({0, 3}, device()), 1.0f).numel(), 0u);
+        EXPECT_EQ(lfs::core::radius_connected_components(Tensor::empty({0, 3}, device()), 1.0f, Tensor{}).numel(), 0u);
     }
 
     TEST_P(NodesCore, RadiusNeighborMinMatchesBruteForceForFloatAndInt) {
@@ -3483,19 +3468,6 @@ namespace {
         EXPECT_LT(scales.min().item<float>(), scales.max().item<float>());
         EXPECT_TRUE(std::isfinite(scales.min().item<float>()));
     }
-
-    TEST_P(NodesCore, SeededSamplingDoesNotAdvanceGlobalRandomSequence) {
-        Tensor::manual_seed(71);
-        const auto expected = host<float>(Tensor::rand({10}, device()));
-        Tensor::manual_seed(71);
-        const auto weights = Tensor::ones({10}, device());
-        const auto uniform = Tensor::uniform({10}, 0, 1, device(), lfs::core::DataType::Float32, 13);
-        const auto samples = Tensor::multinomial(weights, 30, true, 29);
-        EXPECT_EQ(host<float>(uniform), host<float>(Tensor::uniform({10}, 0, 1, device(), lfs::core::DataType::Float32, 13)));
-        EXPECT_EQ(host<int64_t>(samples), host<int64_t>(Tensor::multinomial(weights, 30, true, 29)));
-        EXPECT_EQ(host<float>(Tensor::rand({10}, device())), expected);
-    }
-
     TEST_P(NodesCore, FloaterPreviewKeepsOnlyUnchangedCandidates) {
         const auto geometry = splats();
         const auto result = single("lfs.remove_floaters", geometry, [](Node& node) {

@@ -198,15 +198,6 @@ namespace lfs::vis {
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
                                                               std::optional<float> ortho_scale_override = std::nullopt);
-        std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(const lfs::core::SplatData& model,
-                                                                  SceneRenderState scene_state,
-                                                                  const glm::mat3& camera_rotation,
-                                                                  const glm::vec3& camera_position,
-                                                                  float focal_length_mm,
-                                                                  int width, int height,
-                                                                  std::optional<glm::vec3> background_color_override = std::nullopt,
-                                                                  std::optional<bool> orthographic_override = std::nullopt,
-                                                                  std::optional<float> ortho_scale_override = std::nullopt);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgba8(const lfs::core::SplatData& model,
                                                                    SceneRenderState scene_state,
                                                                    const glm::mat3& camera_rotation,
@@ -325,7 +316,6 @@ namespace lfs::vis {
         void endDepthWindowPreview(ViewId view);
         [[nodiscard]] GTComparisonMode getGTComparisonMode() const;
         [[nodiscard]] SplitViewMode getSplitViewMode() const;
-        void restoreSplitViewMode(SplitViewMode mode);
         [[nodiscard]] float getSplitPosition() const;
         [[nodiscard]] std::optional<float> getSplitDividerScreenX(ViewId view, const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const;

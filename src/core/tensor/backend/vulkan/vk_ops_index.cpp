@@ -39,11 +39,6 @@ namespace lfs::core::internal {
         constexpr uint32_t kLastPositionMode = 9;
         constexpr uint32_t kLastPositionAssignMode = 10;
 
-        constexpr uint32_t kUnaryNone = 0;
-        constexpr uint32_t kUnaryAbs = 1;
-        constexpr uint32_t kUnarySqrt = 2;
-        constexpr uint32_t kUnaryNeg = 3;
-
         constexpr uint32_t kRunAssign = 0;
         constexpr uint32_t kRunAdd = 1;
 
@@ -125,7 +120,6 @@ namespace lfs::core::internal {
         struct Launch {
             uint32_t mode;
             DataType dtype;
-            uint32_t unary = kUnaryNone;
             uint32_t boundary = 0;
             uint32_t run_op = kRunAssign;
             bool atomic_float = false;
@@ -142,7 +136,6 @@ namespace lfs::core::internal {
             const std::array constants{
                 launch.mode,
                 shader_dtype(launch.dtype),
-                launch.unary,
                 launch.boundary,
                 launch.run_op,
             };
@@ -369,31 +362,6 @@ namespace lfs::core::internal {
         launch.push.dim = static_cast<uint32_t>(program.dim);
         launch.push.input_dims = shader_dims(input_layout);
         launch.push.index_dims = shader_dims(index_layout);
-        const std::array reads{input, indices};
-        const std::array writes{output};
-        record_index(*context, launch, reads, writes);
-    }
-
-    void VulkanBackendOps::gather_fused_unary(
-        const StorageRef input, const StorageRef indices, const StorageRef output,
-        const PointwiseOp unary, const IndexProgram& program, ExecContext) {
-        LFS_FACADE_TRACE(gather_fused_unary);
-        LFS_ASSERT_MSG(input.dtype == DataType::Float32 && output.dtype == DataType::Float32,
-                       "Vulkan fused gather supports only Float32");
-        uint32_t unary_code = kUnaryNone;
-        switch (unary) {
-        case PointwiseOp::Abs: unary_code = kUnaryAbs; break;
-        case PointwiseOp::Sqrt: unary_code = kUnarySqrt; break;
-        case PointwiseOp::Neg: unary_code = kUnaryNeg; break;
-        default: LFS_ASSERT_MSG(false, "unsupported fused gather unary operation");
-        }
-        const auto context = acquire_vulkan_context();
-        Launch launch{.mode = kTakeMode, .dtype = DataType::Float32, .unary = unary_code};
-        launch.total = program.index_size;
-        launch.push.input_address = address(input);
-        launch.push.index_address = address(indices);
-        launch.push.value_address = address(output);
-        launch.push.input_size = checked_u32(program.input_size, "Vulkan gather input size exceeds uint32");
         const std::array reads{input, indices};
         const std::array writes{output};
         record_index(*context, launch, reads, writes);

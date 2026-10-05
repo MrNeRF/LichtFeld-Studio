@@ -5,6 +5,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "splat_rasterizer.hpp"
+#include "splat_selection_query.hpp"
 
 #include <algorithm>
 #include <array>
@@ -25,6 +26,9 @@ namespace {
     using lfs::rendering::SplatRasterizer;
     using lfs::rendering::SplatRasterMode;
     using lfs::rendering::SplatRasterParameters;
+    using lfs::rendering::SplatSelectionInputs;
+    using lfs::rendering::SplatSelectionParameters;
+    using lfs::rendering::SplatSelectionQuery;
 
     constexpr uint32_t kWidth = 160, kHeight = 96;
 
@@ -146,6 +150,42 @@ namespace {
         EXPECT_FALSE(rasterizer.rasterize(projected, nullptr, count, SplatRasterMode::Gaussian, raster));
     }
 
+    TEST_P(SplatRasterizing, RectangleAndPolygonSelectionMatchKnownCenters) {
+        if (!lfs::core::gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        const std::array<float, 15> means{0, 0, 2, -.6f, -.6f, 2, 1.2f, 0, 2, 0, .9f, 2, 0, 0, 2};
+        const std::array<uint8_t, 5> deleted{0, 0, 0, 0, 1};
+        const auto means_gpu = upload(means.data(), sizeof(means));
+        const auto deleted_gpu = upload(deleted.data(), sizeof(deleted));
+        const SplatSelectionInputs base{.means = &means_gpu, .deleted = &deleted_gpu};
+        SplatSelectionParameters parameters;
+        parameters.intrinsics = {50, 50, 50.5f, 50.5f};
+        parameters.image = {100, 100, 0, 0};
+        parameters.scene = {0, 0, 0, uint32_t(deleted.size())};
+        parameters.source[0] = uint32_t(deleted.size());
+        auto output = Tensor::zeros({deleted.size()}, Device::GPU, DataType::UInt8);
+        SplatSelectionQuery query(GetParam());
+        const std::vector<uint8_t> expected{1, 1, 0, 0, 0};
+
+        const std::array<float, 4> rectangle{30, 30, 60, 60};
+        parameters.source = {uint32_t(deleted.size()), 1, 1, 0};
+        auto inputs = base;
+        inputs.primitives = std::as_bytes(std::span(rectangle));
+        auto selected = query.query(inputs, parameters, output);
+        ASSERT_TRUE(selected) << selected.error().detail();
+        EXPECT_EQ(download<uint8_t>(output, deleted.size()), expected);
+
+        const std::array<float, 6> polygon{25, 25, 70, 25, 45, 65};
+        parameters.source = {uint32_t(deleted.size()), 2, 0, 3};
+        parameters.aabb = {20, 20, 60, 50};
+        inputs.primitives = {};
+        inputs.polygon_vertices = std::as_bytes(std::span(polygon));
+        selected = query.query(inputs, parameters, output);
+        ASSERT_TRUE(selected) << selected.error().detail();
+        EXPECT_EQ(download<uint8_t>(output, deleted.size()), expected);
+    }
+
     // A completed dense frame of the same source count switches to source
     // sorting; the image must not change.
     TEST_P(SplatRasterizing, SourceSortedFrameMatchesFirstFrame) {
@@ -209,7 +249,10 @@ namespace {
             else if (mantissa) { // subnormal
                 int e = -1;
                 uint32_t m = mantissa;
-                do { ++e; m <<= 1; } while (!(m & 1024));
+                do {
+                    ++e;
+                    m <<= 1;
+                } while (!(m & 1024));
                 value |= ((112 - e) << 23) | ((m & 1023) << 13);
             }
             float result;

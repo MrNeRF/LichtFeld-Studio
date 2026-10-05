@@ -230,110 +230,6 @@ TEST_F(MaskedSelectRowsTest, CompareWithPyTorch_LargeScale) {
     compare_tensors(tensor.index_select(0, mask), torch_tensor.index({torch_mask}), 1e-5f, 1e-6f, "LargeScale");
 }
 
-// Tests for operator[] with boolean mask (PyTorch-style indexing)
-TEST_F(MaskedSelectRowsTest, OperatorBracket_2D_CPU) {
-    const std::vector<float> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
-    const std::vector<bool> mask_data = {true, false, true, true};
-
-    const auto tensor = Tensor::from_vector(data, {4, 3}, Device::CPU);
-    const auto mask = Tensor::from_vector(mask_data, {4}, Device::CPU);
-
-    // Use operator[] like PyTorch: tensor[mask]
-    const Tensor result = tensor[mask];
-
-    const auto torch_tensor = torch::tensor(data, torch::kFloat32).reshape({4, 3});
-    const auto torch_mask = torch::tensor({true, false, true, true});
-    const auto torch_result = torch_tensor.index({torch_mask});
-
-    EXPECT_EQ(result.size(0), 3);
-    EXPECT_EQ(result.size(1), 3);
-    compare_tensors(result, torch_result, 1e-5f, 1e-7f, "operator[] CPU");
-}
-
-TEST_F(MaskedSelectRowsTest, OperatorBracket_2D_CUDA) {
-    const std::vector<float> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
-    const std::vector<bool> mask_data = {true, false, true, true};
-
-    const auto tensor = Tensor::from_vector(data, {4, 3}, Device::GPU);
-    const auto mask = Tensor::from_vector(mask_data, {4}, Device::GPU);
-
-    // Use operator[] like PyTorch: tensor[mask]
-    const Tensor result = tensor[mask];
-
-    const auto torch_tensor = torch::tensor(data, torch::kCUDA).reshape({4, 3});
-    const auto torch_mask = torch::tensor({true, false, true, true}, torch::kCUDA);
-    const auto torch_result = torch_tensor.index({torch_mask});
-
-    EXPECT_EQ(result.size(0), 3);
-    EXPECT_EQ(result.size(1), 3);
-    compare_tensors(result, torch_result, 1e-5f, 1e-7f, "operator[] CUDA");
-}
-
-TEST_F(MaskedSelectRowsTest, OperatorBracket_3D_CUDA) {
-    std::vector<float> data(24);
-    std::iota(data.begin(), data.end(), 1.0f);
-
-    const auto tensor = Tensor::from_vector(data, {4, 2, 3}, Device::GPU);
-    const auto mask = Tensor::from_vector(std::vector<bool>{false, true, true, false}, {4}, Device::GPU);
-
-    const Tensor result = tensor[mask];
-
-    const auto torch_tensor = torch::tensor(data, torch::kCUDA).reshape({4, 2, 3});
-    const auto torch_mask = torch::tensor(std::vector<int>{0, 1, 1, 0}, torch::kCUDA).to(torch::kBool);
-    const auto torch_result = torch_tensor.index({torch_mask});
-
-    EXPECT_EQ(result.size(0), 2);
-    EXPECT_EQ(result.size(1), 2);
-    EXPECT_EQ(result.size(2), 3);
-    compare_tensors(result, torch_result, 1e-5f, 1e-7f, "operator[] 3D CUDA");
-}
-
-TEST_F(MaskedSelectRowsTest, OperatorBracket_LargeScale_CUDA) {
-    constexpr size_t N = 100000;
-    constexpr size_t M = 3;
-
-    const auto tensor = Tensor::randn({N, M}, Device::GPU);
-    const auto mask = Tensor::rand({N}, Device::GPU) < 0.3f;
-
-    // Test operator[]
-    const Tensor result = tensor[mask];
-
-    const size_t expected = mask.to(DataType::Int32).sum().item<int>();
-    EXPECT_EQ(result.size(0), expected);
-    EXPECT_EQ(result.size(1), M);
-
-    // Verify same result as index_select
-    const auto result_direct = tensor.index_select(0, mask);
-    EXPECT_EQ(result.size(0), result_direct.size(0));
-
-    const auto vec1 = result.cpu().to_vector();
-    const auto vec2 = result_direct.cpu().to_vector();
-    for (size_t i = 0; i < vec1.size(); ++i) {
-        EXPECT_FLOAT_EQ(vec1[i], vec2[i]);
-    }
-}
-
-TEST_F(MaskedSelectRowsTest, OperatorBracket_PointCloudFilter_CUDA) {
-    // Simulates the trim_distant_points use case
-    constexpr size_t N = 50000;
-
-    const auto means = Tensor::randn({N, 3}, Device::GPU);
-    const auto colors = Tensor::randn({N, 3}, Device::GPU);
-
-    // Create a mask keeping 95% of points
-    const auto keep_mask = Tensor::rand({N}, Device::GPU) < 0.95f;
-    const size_t expected = keep_mask.to(DataType::Int32).sum().item<int>();
-
-    // Filter using operator[]
-    const Tensor filtered_means = means[keep_mask];
-    const Tensor filtered_colors = colors[keep_mask];
-
-    EXPECT_EQ(filtered_means.size(0), expected);
-    EXPECT_EQ(filtered_means.size(1), 3);
-    EXPECT_EQ(filtered_colors.size(0), expected);
-    EXPECT_EQ(filtered_colors.size(1), 3);
-}
-
 TEST_F(MaskedSelectRowsTest, LogicalNotFiltersDeletedRows) {
     const auto rows = Tensor::from_vector(
         std::vector<float>{1.0f, 10.0f,
@@ -344,8 +240,28 @@ TEST_F(MaskedSelectRowsTest, LogicalNotFiltersDeletedRows) {
     const auto deleted = Tensor::from_vector(
         std::vector<bool>{false, true, false, true}, {4}, Device::GPU);
 
-    const Tensor kept = rows[~deleted];
+    const Tensor kept = rows.index_select(0, ~deleted);
     EXPECT_EQ(kept.shape(), TensorShape({2, 2}));
     EXPECT_EQ(kept.cpu().to_vector(),
               (std::vector<float>{1.0f, 10.0f, 3.0f, 30.0f}));
+}
+
+TEST_F(MaskedSelectRowsTest, PointCloudFilter_CUDA) {
+    // Simulates the trim_distant_points use case
+    constexpr size_t N = 50000;
+
+    const auto means = Tensor::randn({N, 3}, Device::GPU);
+    const auto colors = Tensor::randn({N, 3}, Device::GPU);
+
+    // Create a mask keeping 95% of points
+    const auto keep_mask = Tensor::rand({N}, Device::GPU) < 0.95f;
+    const size_t expected = keep_mask.to(DataType::Int32).sum().item<int>();
+
+    const Tensor filtered_means = means.index_select(0, keep_mask);
+    const Tensor filtered_colors = colors.index_select(0, keep_mask);
+
+    EXPECT_EQ(filtered_means.size(0), expected);
+    EXPECT_EQ(filtered_means.size(1), 3);
+    EXPECT_EQ(filtered_colors.size(0), expected);
+    EXPECT_EQ(filtered_colors.size(1), 3);
 }

@@ -145,7 +145,6 @@ namespace lfs::core {
         GpuKernelModule(const GpuKernelModule&) = delete;
         GpuKernelModule& operator=(const GpuKernelModule&) = delete;
 
-        [[nodiscard]] GpuBackend backend() const;
         // Device address of the tensor's first element; 0 for an invalid or
         // empty tensor. The tensor must live on this module's backend.
         [[nodiscard]] uint64_t address(const Tensor& tensor) const;

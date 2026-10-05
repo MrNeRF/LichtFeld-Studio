@@ -188,7 +188,7 @@ namespace {
         EXPECT_EQ(lfs::core::param::OptimizationParameters::mcmc_defaults().strategy, "mcmc");
     }
 
-    TEST(ParameterManagerTest, SessionCopyTracksExplicitSourcesAndResetBaseline) {
+    TEST(ParameterManagerTest, SessionCopyTracksExplicitSources) {
         lfs::vis::ParameterManager manager;
         const auto load_result = manager.ensureLoaded();
         ASSERT_TRUE(load_result.has_value()) << load_result.error();
@@ -208,15 +208,6 @@ namespace {
         const auto cli_session = manager.copySessionParams();
         EXPECT_FLOAT_EQ(cli_session.opacity_lr, 0.123f);
         EXPECT_EQ(cli_session.max_cap, 1'234'567);
-
-        manager.modifyActiveParams([](auto& params) {
-            params.opacity_lr = 0.75f;
-            params.max_cap = 42;
-        });
-        manager.resetToDefaults("mrnf");
-        const auto reset_current = manager.copyActiveParams();
-        EXPECT_FLOAT_EQ(reset_current.opacity_lr, 0.123f);
-        EXPECT_EQ(reset_current.max_cap, 1'234'567);
 
         lfs::core::param::TrainingParameters checkpoint_params;
         checkpoint_params.optimization = lfs::core::param::OptimizationParameters::igs_plus_defaults();
@@ -612,8 +603,8 @@ namespace {
         EXPECT_FLOAT_EQ(manager.getActiveParams().image_count_scaler, 1.f);
     }
 
-    // Catches the command-line lock being lost on reset or replace-load, or never released.
-    TEST(ParameterManagerTest, CliIterationLockSurvivesResetAndReplaceLoad) {
+    // Catches the command-line lock being lost on replace-load, or never released.
+    TEST(ParameterManagerTest, CliIterationLockSurvivesReplaceLoad) {
         lfs::vis::ParameterManager manager;
         lfs::core::param::TrainingParameters params;
         params.optimization = lfs::core::param::OptimizationParameters::mrnf_defaults();
@@ -626,10 +617,6 @@ namespace {
         EXPECT_EQ(manager.getActiveParams().to_json(), seeded);
         EXPECT_EQ(manager.getCurrentParams("mcmc").iterations,
                   2 * lfs::core::param::OptimizationParameters::mcmc_defaults().iterations);
-        manager.modifyActiveParams([](auto& opt) { opt.iterations = 999; });
-        manager.resetToDefaults();
-        manager.autoScaleSteps(600);
-        EXPECT_EQ(manager.getActiveParams().to_json(), seeded);
         const auto captured = manager.capturePendingProjectState();
         ASSERT_TRUE(captured);
         manager.clearSession();
@@ -649,10 +636,6 @@ namespace {
         params.optimization = lfs::core::param::OptimizationParameters::mrnf_defaults();
         params.optimization.iterations = 2500;
         params.cli_iterations_set = true;
-        manager.setSessionDefaults(params);
-        manager.importParams(params.optimization);
-        manager.autoScaleSteps(600);
-        EXPECT_EQ(manager.getActiveParams().iterations, 5000u);
         manager.setSessionDefaults(params);
         manager.importTrainingParams(params);
         manager.autoScaleSteps(600);

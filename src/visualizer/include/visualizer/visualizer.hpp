@@ -82,7 +82,6 @@ namespace lfs::vis {
     LFS_VIS_API void setRuntimeServiceControls(RuntimeServiceControls controls);
     LFS_VIS_API bool toggleMcpRuntimeEnabled();
     LFS_VIS_API bool toggleMcpRuntimeBinding();
-    [[nodiscard]] LFS_VIS_API std::uint64_t runtimeServiceRevision();
 
     struct LFS_VIS_API ProjectPayloadInfo {
         std::string chapter;

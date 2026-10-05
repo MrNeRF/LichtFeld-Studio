@@ -331,25 +331,13 @@ namespace lfs::vis {
         if (impl_ && resource_slot < impl_->resources.size())
             impl_->resources[resource_slot].contract = {};
     }
-    void VulkanSceneDepthHistoryPass::invalidateAll() {
-        if (impl_)
-            for (auto& resource : impl_->resources)
-                resource.contract = {};
-    }
     void VulkanSceneDepthHistoryPass::shutdown() { impl_.reset(); }
     VkImageView VulkanSceneDepthHistoryPass::depthView(std::size_t slot) const {
         return impl_ && slot < impl_->resources.size() ? impl_->resources[slot].view
                                                        : VK_NULL_HANDLE;
     }
-    VkImage VulkanSceneDepthHistoryPass::depthImage(std::size_t slot) const {
-        return impl_ && slot < impl_->resources.size() ? impl_->resources[slot].image
-                                                       : VK_NULL_HANDLE;
-    }
     SceneDepthContract VulkanSceneDepthHistoryPass::contract(std::size_t slot) const {
         return impl_ && slot < impl_->resources.size() ? impl_->resources[slot].contract
                                                        : SceneDepthContract{};
-    }
-    bool VulkanSceneDepthHistoryPass::initialized() const {
-        return impl_ && impl_->pipeline != VK_NULL_HANDLE;
     }
 } // namespace lfs::vis

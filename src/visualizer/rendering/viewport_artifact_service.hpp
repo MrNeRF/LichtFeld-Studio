@@ -23,10 +23,8 @@ namespace lfs::vis {
         ViewportArtifactService(const ViewportArtifactService&) = delete;
         ViewportArtifactService& operator=(const ViewportArtifactService&) = delete;
 
-        [[nodiscard]] bool hasGpuFrame() const;
         [[nodiscard]] std::optional<lfs::rendering::ViewerBackend> viewerBackend() const { return metadata_.viewer_backend; }
 
-        [[nodiscard]] const std::optional<lfs::rendering::GpuFrame>& gpuFrame() const { return gpu_frame_; }
         [[nodiscard]] glm::ivec2 renderedSize() const { return rendered_size_; }
         [[nodiscard]] uint64_t artifactGeneration() const { return artifact_generation_; }
 
@@ -34,7 +32,6 @@ namespace lfs::vis {
 
         void clearViewportOutput();
         void invalidateCapturedImage();
-        void updateFromFrameResources(const FrameResources& resources, bool viewport_output_updated);
         void updateFromImageOutput(std::shared_ptr<lfs::core::Tensor> image,
                                    const lfs::rendering::FrameMetadata& metadata,
                                    const glm::ivec2& rendered_size,
@@ -65,7 +62,6 @@ namespace lfs::vis {
         void invalidateCapture();
         void setMetadata(const CachedRenderMetadata& metadata);
         CachedRenderMetadata metadata_;
-        std::optional<lfs::rendering::GpuFrame> gpu_frame_;
         glm::ivec2 rendered_size_{0};
         std::shared_ptr<lfs::core::Tensor> captured_image_;
         std::shared_ptr<lfs::core::Tensor> lazy_captured_image_;

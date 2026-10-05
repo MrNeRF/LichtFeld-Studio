@@ -22,7 +22,6 @@
 #include "core/tensor_label.hpp"
 #include "core/tensor_vulkan_interop.hpp"
 #include "core/vulkan_helpers.hpp"
-#include "kernels/where_scalar.cuh"
 #include "runtime/size_bucketed_pool.hpp"
 
 #include <atomic>
@@ -496,20 +495,6 @@ namespace lfs::core {
         result.compute_capability_major = properties.major;
         return result;
     }
-
-    namespace internal {
-
-        void cuda_where_into(Tensor& output, const Tensor& condition, float value, const Tensor& source) {
-            LFS_FACADE_TRACE(where);
-            pin_operands({&output, &condition, &source});
-            condition.sync_to_stream(output.stream());
-            source.sync_to_stream(output.stream());
-            launch_where_scalar(output.data_ptr(), condition.data_ptr(), value, source.data_ptr(),
-                                output.numel(), output.dtype() == DataType::Float16, output.stream());
-            condition.record_stream(output.stream());
-            source.record_stream(output.stream());
-        }
-    } // namespace internal
 
     namespace cuda {
         thread_local unsigned external_memory_import_depth = 0;

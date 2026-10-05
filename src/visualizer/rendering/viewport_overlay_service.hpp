@@ -95,7 +95,6 @@ namespace lfs::vis {
         [[nodiscard]] float rectX1() const { return rect_.x1; }
         [[nodiscard]] float rectY1() const { return rect_.y1; }
         [[nodiscard]] bool rectAddMode() const { return rect_.add_mode; }
-        [[nodiscard]] std::optional<SplitViewPanelId> rectPanel() const { return rect_.panel; }
         [[nodiscard]] bool rectTracksCursor() const { return rect_.track_cursor; }
 
         void setPolygon(const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode,
@@ -135,7 +134,6 @@ namespace lfs::vis {
         [[nodiscard]] bool polygonClosed() const { return polygon_.closed; }
         [[nodiscard]] bool polygonAddMode() const { return polygon_.add_mode; }
         [[nodiscard]] bool polygonWorldSpace() const { return polygon_.world_space; }
-        [[nodiscard]] std::optional<SplitViewPanelId> polygonPanel() const { return polygon_.panel; }
 
         void setLasso(const std::vector<std::pair<float, float>>& points, bool add_mode,
                       std::optional<SplitViewPanelId> panel, bool track_cursor) {
@@ -156,7 +154,6 @@ namespace lfs::vis {
         [[nodiscard]] bool isLassoPreviewActive() const { return lasso_.active; }
         [[nodiscard]] const std::vector<std::pair<float, float>>& lassoPoints() const { return lasso_.points; }
         [[nodiscard]] bool lassoAddMode() const { return lasso_.add_mode; }
-        [[nodiscard]] std::optional<SplitViewPanelId> lassoPanel() const { return lasso_.panel; }
         [[nodiscard]] bool lassoTracksCursor() const { return lasso_.track_cursor; }
 
         [[nodiscard]] int hoveredGaussianId() const { return hovered_gaussian_id_; }

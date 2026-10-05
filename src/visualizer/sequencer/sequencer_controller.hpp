@@ -82,7 +82,6 @@ namespace lfs::vis {
         // Generic tracks use the same revision and project persistence as camera tracks.
         void animationTracksChanged();
         [[nodiscard]] float framesPerSecond() const { return frames_per_second_; }
-        void setFramesPerSecond(float fps);
         [[nodiscard]] ModifierResult prepareExportFrame(ModifierManager& nodes,
                                                         float seconds, float fps) const;
 

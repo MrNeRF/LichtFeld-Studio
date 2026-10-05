@@ -36,31 +36,12 @@ namespace lfs::core::internal {
             program.second, program.seed, context.cuda_stream);
     }
 
-    void CudaBackendOps::bernoulli(
-        const StorageRef output, const RandomProgram& program,
-        const ExecContext context) {
-        LFS_FACADE_TRACE(bernoulli);
-        tensor_ops::launch_bernoulli(
-            cuda_pointer<float>(output), program.count, program.first,
-            program.seed, context.cuda_stream);
-    }
-
     void CudaBackendOps::randint(
         const StorageRef output, const RandomProgram& program,
         const ExecContext context) {
         LFS_FACADE_TRACE(randint);
         tensor_ops::launch_randint(
             cuda_pointer<int>(output), program.count, program.low, program.high,
-            program.seed, context.cuda_stream);
-    }
-
-    void CudaBackendOps::multinomial(
-        const StorageRef weights, const StorageRef output,
-        const RandomProgram& program, const ExecContext context) {
-        LFS_FACADE_TRACE(multinomial);
-        tensor_ops::launch_multinomial(
-            cuda_const_pointer<float>(weights), cuda_pointer<int64_t>(output),
-            program.count, program.sample_count, program.replacement,
             program.seed, context.cuda_stream);
     }
 

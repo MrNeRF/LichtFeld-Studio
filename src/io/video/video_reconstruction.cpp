@@ -468,31 +468,4 @@ namespace lfs::io::video {
         return "unknown";
     }
 
-    std::string_view videoReconstructionSelectionIssueId(
-        const VideoReconstructionSelectionIssue issue) noexcept {
-        switch (issue) {
-        case VideoReconstructionSelectionIssue::InvalidBackendId:
-            return "invalid_backend_id";
-        case VideoReconstructionSelectionIssue::InvalidPresetId:
-            return "invalid_preset_id";
-        case VideoReconstructionSelectionIssue::InvalidFallback:
-            return "invalid_fallback";
-        case VideoReconstructionSelectionIssue::InvalidNativePreset:
-            return "invalid_native_preset";
-        case VideoReconstructionSelectionIssue::SizeLimitExceeded:
-            return "size_limit_exceeded";
-        case VideoReconstructionSelectionIssue::InvalidJson:
-            return "invalid_json";
-        case VideoReconstructionSelectionIssue::InvalidShape:
-            return "invalid_shape";
-        case VideoReconstructionSelectionIssue::UnsupportedVersion:
-            return "unsupported_version";
-        case VideoReconstructionSelectionIssue::MissingField:
-            return "missing_field";
-        case VideoReconstructionSelectionIssue::InvalidVersion:
-            return "invalid_version";
-        }
-        return "unknown";
-    }
-
 } // namespace lfs::io::video

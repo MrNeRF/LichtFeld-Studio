@@ -404,8 +404,6 @@ namespace lfs::training {
     template <typename Sampler>
     class PipelinedDataLoader {
     public:
-        using BatchType = std::vector<CameraExample>;
-
         PipelinedDataLoader(std::shared_ptr<CameraDataset> dataset,
                             Sampler sampler,
                             lfs::io::PipelinedLoaderConfig config = {},

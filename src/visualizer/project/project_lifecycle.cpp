@@ -9464,11 +9464,6 @@ namespace lfs::vis::project {
         }
     }
 
-    bool ProjectLifecycle::isApplicationClosePending()
-        const {
-        return application_close_pending_;
-    }
-
     void ProjectLifecycle::setSuppressTrainingAdoption(
         const bool suppress) {
         suppress_training_adoption_ = suppress;

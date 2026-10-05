@@ -13,7 +13,7 @@
  *   - zeros_direct / reserve direct allocs (memory_pressure path)
  *   - rasterizer arena physical commits (cudaMalloc fallback + VMM cuMemCreate)
  *
- * Pool cache hits (slab free-list, size-bucket reuse) must NOT call record().
+ * Pool cache hits (slab free-list, size-bucket reuse) must NOT call record_site().
  * Designed for always-on release builds: one relaxed atomic increment per
  * real driver alloc site.
  *
@@ -54,9 +54,6 @@ namespace lfs::core::alloc_counter {
 
     /// Same as snapshot(); named for readability at log sites.
     [[nodiscard]] LFS_CORE_API std::uint64_t total() noexcept;
-
-    /// Increment the counter. Call ONLY at real driver alloc success sites.
-    LFS_CORE_API void record(std::uint64_t n = 1) noexcept;
 
     /// Increment and attribute to a physical @p site (+ current TLS logical tag).
     LFS_CORE_API void record_site(Site site, std::uint64_t n = 1) noexcept;

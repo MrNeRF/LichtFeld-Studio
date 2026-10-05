@@ -214,25 +214,6 @@ namespace lfs::vis {
         return mrnf_session_;
     }
 
-    void ParameterManager::resetToDefaults(const std::string_view strategy) {
-        std::lock_guard lock(params_mutex_);
-        if (strategy.empty() || strategy == "mcmc") {
-            mcmc_current_ = mcmc_session_;
-            mcmc_current_references_ =
-                mcmc_session_references_;
-        }
-        if (strategy.empty() || lfs::core::param::is_mrnf_strategy(strategy)) {
-            mrnf_current_ = mrnf_session_;
-            mrnf_current_references_ =
-                mrnf_session_references_;
-        }
-        if (strategy.empty() || strategy == "igs+") {
-            igs_current_ = igs_session_;
-            igs_current_references_ =
-                igs_session_references_;
-        }
-    }
-
     void ParameterManager::clearSession() {
         if (const auto result = ensureLoaded(); !result) {
             LOG_ERROR("Failed to load params: {}", result.error());
@@ -325,31 +306,6 @@ namespace lfs::vis {
         export_formats_ = params.export_formats;
 
         LOG_INFO("Session: strategy={}, iter={}, resize={}", opt.strategy, opt.iterations, dataset_config_.resize_factor);
-    }
-
-    void ParameterManager::importParams(const lfs::core::param::OptimizationParameters& params) {
-        std::lock_guard lock(params_mutex_);
-        cli_step_locked_strategy_.reset();
-        if (!params.strategy.empty()) {
-            setActiveStrategy(params.strategy);
-        }
-        if (active_strategy_ == "mcmc") {
-            mcmc_session_ = params;
-            mcmc_current_ = params;
-            mcmc_session_references_ = {};
-            mcmc_current_references_ = {};
-        } else if (lfs::core::param::is_mrnf_strategy(active_strategy_)) {
-            mrnf_session_ = params;
-            mrnf_current_ = params;
-            mrnf_session_references_ = {};
-            mrnf_current_references_ = {};
-        } else if (active_strategy_ == "igs+") {
-            igs_session_ = params;
-            igs_current_ = params;
-            igs_session_references_ = {};
-            igs_current_references_ = {};
-        }
-        LOG_INFO("Imported params: strategy={}, iter={}, sh={}", params.strategy, params.iterations, params.sh_degree);
     }
 
     std::expected<void, lfs::Error> ParameterManager::importConfigFile(const std::filesystem::path& path, const bool import_dataset) {

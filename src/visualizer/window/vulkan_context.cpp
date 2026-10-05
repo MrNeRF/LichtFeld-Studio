@@ -1981,16 +1981,6 @@ namespace lfs::vis {
         return retired;
     }
 
-    bool VulkanContext::getTimelineSemaphoreCounterValue(const VkSemaphore semaphore,
-                                                         std::uint64_t& out_value) const {
-        out_value = 0;
-        if (device_ == VK_NULL_HANDLE || semaphore == VK_NULL_HANDLE) {
-            return false;
-        }
-        const VkResult result = vkGetSemaphoreCounterValue(device_, semaphore, &out_value);
-        return result == VK_SUCCESS;
-    }
-
     bool VulkanContext::waitForRetiredFrameSubmitSerial(const std::uint64_t serial) {
         if (serial == 0 || device_ == VK_NULL_HANDLE) {
             return true;
@@ -3632,8 +3622,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;

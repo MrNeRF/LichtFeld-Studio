@@ -29,7 +29,6 @@ namespace {
             internal::clear_lazy_ir_for_testing();
             internal::lazy_executor_clear_registry_for_testing();
             internal::lazy_executor_reset_diagnostics_for_testing();
-            internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
             internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
             internal::lazy_executor_set_size_heuristic_override_for_testing(false);
             internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
@@ -43,7 +42,6 @@ namespace {
             internal::clear_lazy_ir_for_testing();
             internal::lazy_executor_clear_registry_for_testing();
             internal::lazy_executor_reset_diagnostics_for_testing();
-            internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
             internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
             internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt);
             internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
@@ -387,33 +385,6 @@ TEST(TensorLazyIrTest, OnModePlannerDiagnosticsTrackRootFallbackWhenPlanHasNoRoo
     EXPECT_EQ(diagnostics.cache_hits, 0u);
     EXPECT_EQ(diagnostics.cache_misses, 0u);
     EXPECT_EQ(diagnostics.root_fallbacks, 1u);
-}
-
-TEST(TensorLazyIrTest, OnModePlannerDebugDumpOverrideControlsFlag) {
-    LazyTestGuard guard;
-
-    internal::lazy_executor_set_debug_dump_override_for_testing(false);
-    EXPECT_FALSE(internal::lazy_executor_debug_dump_enabled_for_testing());
-
-    internal::lazy_executor_set_debug_dump_override_for_testing(true);
-    EXPECT_TRUE(internal::lazy_executor_debug_dump_enabled_for_testing());
-
-    internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
-    internal::lazy_executor_set_debug_dump_override_for_testing(false);
-    EXPECT_FALSE(internal::lazy_executor_debug_dump_enabled_for_testing());
-}
-
-TEST(TensorLazyIrTest, OnModePointwiseFusionOverrideControlsFlag) {
-    LazyTestGuard guard;
-
-    internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-    EXPECT_FALSE(internal::lazy_executor_pointwise_fusion_enabled_for_testing());
-
-    internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
-    EXPECT_TRUE(internal::lazy_executor_pointwise_fusion_enabled_for_testing());
-
-    internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
-    EXPECT_TRUE(internal::lazy_executor_pointwise_fusion_enabled_for_testing());
 }
 
 TEST(TensorLazyIrTest, OnModePointwiseFusionReducesLaunchesWithParity) {

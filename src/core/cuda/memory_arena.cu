@@ -93,140 +93,6 @@ namespace lfs::core {
         frame_contexts_.clear();
     }
 
-    RasterizerMemoryArena::RasterizerMemoryArena(RasterizerMemoryArena&& other) noexcept {
-        std::scoped_lock lock(other.arena_mutex_, other.frame_mutex_, other.sync_mutex_,
-                              other.last_frame_event_mutex_, other.stats_mutex_);
-        device_arenas_ = std::move(other.device_arenas_);
-        frame_contexts_ = std::move(other.frame_contexts_);
-        config_ = other.config_;
-        frame_counter_ = other.frame_counter_.load();
-        generation_counter_ = other.generation_counter_.load();
-        growth_timing_ = std::move(other.growth_timing_);
-        if (!growth_timing_) {
-            growth_timing_ = std::make_shared<GrowthTiming>();
-        }
-        other.growth_timing_ = std::make_shared<GrowthTiming>();
-        creation_time_ = other.creation_time_;
-        total_frames_processed_ = other.total_frames_processed_.load();
-        active_frames_ = other.active_frames_;
-        pending_render_frames_ = other.pending_render_frames_;
-        active_training_frames_ = other.active_training_frames_;
-        last_handoff_frame_id_ = other.last_handoff_frame_id_;
-        render_handoff_token_ = other.render_handoff_token_;
-        next_render_handoff_token_ = other.next_render_handoff_token_;
-        render_handoff_deadline_ = other.render_handoff_deadline_;
-        training_turns_owed_ = other.training_turns_owed_;
-        viewer_admission_ = other.viewer_admission_;
-        other.viewer_admission_ = {};
-        other.training_turns_owed_ = 0;
-        other.render_handoff_token_ = 0;
-        last_frame_event_ = other.last_frame_event_;
-        last_frame_event_valid_ = other.last_frame_event_valid_;
-        last_frame_gpu_complete_ = other.last_frame_gpu_complete_;
-        external_release_semaphore_ = other.external_release_semaphore_;
-        external_release_value_ = other.external_release_value_;
-        release_stream_ = other.release_stream_;
-        release_event_ = other.release_event_;
-        release_pending_ = other.release_pending_;
-        release_stream_failed_ = other.release_stream_failed_;
-        release_submitted_at_ = other.release_submitted_at_;
-        std::copy(std::begin(other.viewer_turn_ring_), std::end(other.viewer_turn_ring_), viewer_turn_ring_);
-        viewer_turn_count_ = other.viewer_turn_count_;
-        training_step_ms_ = other.training_step_ms_;
-        viewer_record_ms_ = other.viewer_record_ms_;
-        last_training_begin_ = other.last_training_begin_;
-        last_tenant_was_training_ = other.last_tenant_was_training_;
-        other.last_frame_event_ = nullptr;
-        other.last_frame_event_valid_ = false;
-        other.last_frame_gpu_complete_ = false;
-        other.external_release_semaphore_ = nullptr;
-        other.external_release_value_ = 0;
-        other.release_stream_ = nullptr;
-        other.release_event_ = nullptr;
-        other.release_pending_ = false;
-    }
-
-    RasterizerMemoryArena& RasterizerMemoryArena::operator=(RasterizerMemoryArena&& other) noexcept {
-        if (this != &other) {
-            drain_external_release();
-            std::scoped_lock lock(
-                arena_mutex_,
-                other.arena_mutex_,
-                frame_mutex_,
-                other.frame_mutex_,
-                sync_mutex_,
-                other.sync_mutex_,
-                last_frame_event_mutex_,
-                other.last_frame_event_mutex_,
-                stats_mutex_,
-                other.stats_mutex_);
-            device_arenas_ = std::move(other.device_arenas_);
-            frame_contexts_ = std::move(other.frame_contexts_);
-            config_ = other.config_;
-            frame_counter_ = other.frame_counter_.load();
-            generation_counter_ = other.generation_counter_.load();
-            growth_timing_ = std::move(other.growth_timing_);
-            if (!growth_timing_) {
-                growth_timing_ = std::make_shared<GrowthTiming>();
-            }
-            other.growth_timing_ = std::make_shared<GrowthTiming>();
-            creation_time_ = other.creation_time_;
-            total_frames_processed_ = other.total_frames_processed_.load();
-            active_frames_ = other.active_frames_;
-            pending_render_frames_ = other.pending_render_frames_;
-            active_training_frames_ = other.active_training_frames_;
-            last_handoff_frame_id_ = other.last_handoff_frame_id_;
-            render_handoff_token_ = other.render_handoff_token_;
-            next_render_handoff_token_ = other.next_render_handoff_token_;
-            render_handoff_deadline_ = other.render_handoff_deadline_;
-            training_turns_owed_ = other.training_turns_owed_;
-            viewer_admission_ = other.viewer_admission_;
-            other.viewer_admission_ = {};
-            other.training_turns_owed_ = 0;
-            other.render_handoff_token_ = 0;
-            if (release_event_) {
-                if (release_pending_) {
-                    log_teardown_status(cudaEventSynchronize(release_event_), "drain viewer release event (arena move assignment)");
-                }
-                log_teardown_status(cudaEventDestroy(release_event_), "destroy viewer release event (arena move assignment)");
-            }
-            release_stream_ = other.release_stream_;
-            release_event_ = other.release_event_;
-            release_pending_ = other.release_pending_;
-            release_stream_failed_ = other.release_stream_failed_;
-            release_submitted_at_ = other.release_submitted_at_;
-            std::copy(std::begin(other.viewer_turn_ring_), std::end(other.viewer_turn_ring_), viewer_turn_ring_);
-            viewer_turn_count_ = other.viewer_turn_count_;
-            training_step_ms_ = other.training_step_ms_;
-            viewer_record_ms_ = other.viewer_record_ms_;
-            last_training_begin_ = other.last_training_begin_;
-            last_tenant_was_training_ = other.last_tenant_was_training_;
-            other.release_stream_ = nullptr;
-            other.release_event_ = nullptr;
-            other.release_pending_ = false;
-            if (last_frame_event_) {
-                const cudaError_t destroy_status = cudaEventDestroy(last_frame_event_);
-                if (destroy_status != cudaSuccess) {
-                    ensure_cuda_success(
-                        destroy_status, "cudaEventDestroy(arena frame completion)",
-                        "context=arena move assignment", LFS_SOURCE_SITE_CURRENT(),
-                        CudaFailureDisposition::LogOnlyNoLatch);
-                }
-            }
-            last_frame_event_ = other.last_frame_event_;
-            last_frame_event_valid_ = other.last_frame_event_valid_;
-            last_frame_gpu_complete_ = other.last_frame_gpu_complete_;
-            external_release_semaphore_ = other.external_release_semaphore_;
-            external_release_value_ = other.external_release_value_;
-            other.last_frame_event_ = nullptr;
-            other.last_frame_event_valid_ = false;
-            other.last_frame_gpu_complete_ = false;
-            other.external_release_semaphore_ = nullptr;
-            other.external_release_value_ = 0;
-        }
-        return *this;
-    }
-
     bool RasterizerMemoryArena::is_vmm_supported(int device) const {
         // Check compute capability
         int major = 0, minor = 0;
@@ -316,12 +182,6 @@ namespace lfs::core {
 
     std::optional<uint64_t> RasterizerMemoryArena::try_begin_frame(cudaStream_t stream, bool from_rendering) {
         return begin_frame_impl(stream, from_rendering, std::nullopt);
-    }
-
-    std::optional<uint64_t> RasterizerMemoryArena::try_begin_frame_for(uint32_t timeout_ms,
-                                                                       cudaStream_t stream,
-                                                                       bool from_rendering) {
-        return begin_frame_impl(stream, from_rendering, timeout_ms);
     }
 
     RasterizerMemoryArena::RenderHandoffToken
@@ -1186,16 +1046,6 @@ namespace lfs::core {
         }
 
         return {};
-    }
-
-    void RasterizerMemoryArena::reset_frame(uint64_t frame_id) {
-        std::lock_guard<std::mutex> lock(frame_mutex_);
-
-        auto it = frame_contexts_.find(frame_id);
-        if (it != frame_contexts_.end()) {
-            // Keep buffers but mark as reusable
-            it->second.total_allocated = 0;
-        }
     }
 
     void RasterizerMemoryArena::cleanup_frames(int keep_recent) {
@@ -2824,10 +2674,6 @@ namespace lfs::core {
     RasterizerMemoryArena* GlobalArenaManager::try_get_arena() {
         std::lock_guard<std::mutex> lock(init_mutex_);
         return shutdown_ ? nullptr : arena_.get();
-    }
-
-    bool GlobalArenaManager::install_external_backing(RasterizerMemoryArena::ExternalBacking backing) {
-        return get_arena().install_external_backing(std::move(backing));
     }
 
     bool GlobalArenaManager::try_install_external_backing(RasterizerMemoryArena::ExternalBacking backing,

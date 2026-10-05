@@ -77,7 +77,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/lod_page_cache.cpp
         rendering/lod_upload_engine.cpp
         rendering/spark_lod_controller.cpp
-        $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/split_view_composition.cpp>
         rendering/split_view_service.cpp
         rendering/viewport_artifact_service.cpp
         rendering/viewport_frame_lifecycle_service.cpp
@@ -230,7 +229,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operation/undo_entry.cpp
         operation/depth_window_undo_entry.cpp
         operation/undo_history.cpp
-        operation/operation.cpp
         operation/pipeline.cpp
         operation/ops/select_ops.cpp
         operation/ops/edit_ops.cpp
@@ -444,7 +442,7 @@ if(LFS_TENSOR_METAL)
     unset(_lfs_metal_arc_sources)
     set_target_properties(lfs_visualizer PROPERTIES OBJCXX_STANDARD 23 OBJCXX_STANDARD_REQUIRED YES)
     target_include_directories(lfs_visualizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-    target_link_libraries(lfs_visualizer PRIVATE lfs_metal_viewer lfs_tensor_rasterizer)
+    target_link_libraries(lfs_visualizer PRIVATE lfs_tensor_rasterizer "-framework Metal" "-framework Foundation")
     target_link_libraries(lfs_visualizer PRIVATE "-framework QuartzCore")
 endif()
 

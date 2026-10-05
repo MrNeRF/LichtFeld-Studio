@@ -352,10 +352,6 @@ namespace lfs::core {
         return storage_accounting_state().vulkan_external.live_bytes.load(std::memory_order_relaxed);
     }
 
-    void Tensor::log_storage_memory() {
-        log_storage_memory({});
-    }
-
     void Tensor::log_storage_memory(const std::string_view label) {
         if (label.empty()) {
             LOG_INFO("{}", storage_memory_summary());
@@ -2361,30 +2357,6 @@ namespace lfs::core {
 
     // ============= Special operations =============
 
-    Tensor Tensor::normalize(int dim, float eps) const {
-        LFS_ASSERT_MSG(is_valid(),
-                       "normalize requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                       "normalize currently supports only Float32");
-        LFS_ASSERT_MSG(std::isfinite(eps) && eps > 0.0f,
-                       "normalize epsilon must be finite and positive");
-        if (dim != -1) {
-            const int resolved = resolve_dim(dim);
-            LFS_ASSERT_MSG(resolved >= 0 && resolved < static_cast<int>(shape_.rank()),
-                           "normalize dimension is out of range");
-        }
-
-        if (dim == -1) {
-            auto m = mean();
-            auto s = std({}, false, false).add(eps);
-            return sub(m).div(s);
-        }
-        std::vector<int> axes = {dim};
-        auto m = mean(axes, true);
-        auto s = std(axes, true, false).add(eps);
-        return sub(m).div(s);
-    }
-
     Tensor Tensor::logit(float eps) const {
         LFS_ASSERT_MSG(is_valid(),
                        "logit requires a valid tensor");
@@ -2497,12 +2469,6 @@ namespace lfs::core {
         return *this;
     }
 
-    Tensor& Tensor::clamp_min_(float min) {
-
-        preserve_lazy_snapshots_before_write();
-        return clamp_(min, std::numeric_limits<float>::max());
-    }
-
     Tensor& Tensor::clamp_max_(float max) {
 
         preserve_lazy_snapshots_before_write();
@@ -2608,118 +2574,7 @@ namespace lfs::core {
         return oss.str();
     }
 
-    // ============= Debug Functions =============
-
-    void Tensor::print_formatted() const {
-        print_formatted({}, 10);
-    }
-
-    void Tensor::print_formatted(const std::string& name, size_t max_per_dim) const {
-        std::println("\n=== {} ===", name.empty() ? "Tensor" : name);
-        std::println("{}", str());
-
-        if (!is_valid()) {
-            std::println("  (invalid tensor)");
-            return;
-        }
-
-        if (shape_.rank() == 1) {
-            print_1d(max_per_dim);
-        } else if (shape_.rank() == 2) {
-            print_2d(max_per_dim);
-        } else {
-            std::println("  [Higher dimensional tensor - showing first slice]");
-            auto first_slice = slice(0, 0, 1);
-            first_slice.squeeze().print_2d(max_per_dim);
-        }
-    }
-
-    void Tensor::print_1d(size_t max_elem) const {
-        if (!is_valid())
-            return;
-
-        auto values = debug_values(std::min(max_elem, numel()));
-        std::print("  [");
-
-        for (size_t i = 0; i < values.size(); ++i) {
-            if (i > 0)
-                std::print(", ");
-            std::print("{:8.4f}", values[i]);
-        }
-
-        if (numel() > max_elem) {
-            std::print(", ... ({} more)", numel() - max_elem);
-        }
-        std::println("]");
-    }
-
-    void Tensor::print_2d(size_t max_per_dim) const {
-        if (!is_valid() || shape_.rank() != 2)
-            return;
-
-        size_t rows = std::min(max_per_dim, shape_[0]);
-        size_t cols = std::min(max_per_dim, shape_[1]);
-
-        auto values = debug_values(shape_[0] * shape_[1]);
-
-        for (size_t i = 0; i < rows; ++i) {
-            std::print("  [");
-            for (size_t j = 0; j < cols; ++j) {
-                if (j > 0)
-                    std::print(", ");
-                size_t idx = i * shape_[1] + j;
-                std::print("{:8.4f}", values[idx]);
-            }
-            if (shape_[1] > cols) {
-                std::print(", ... ({} more)", shape_[1] - cols);
-            }
-            std::print("]");
-
-            if (i == rows - 1 && shape_[0] > rows) {
-                std::print("  ... ({} more rows)", shape_[0] - rows);
-            }
-            std::println("");
-        }
-    }
-
     // ============= Utility Functions =============
-
-    std::optional<Tensor> Tensor::try_reshape(TensorShape shape) const {
-        if (!is_valid()) {
-            return std::nullopt;
-        }
-
-        if (shape.elements() != numel()) {
-            return std::nullopt;
-        }
-
-        return reshape(shape);
-    }
-
-    std::vector<Tensor> Tensor::split_batch(const Tensor& tensor, size_t batch_size) {
-        std::vector<Tensor> batches;
-        LFS_ASSERT_MSG(tensor.is_valid(),
-                       "split_batch requires a valid tensor");
-        LFS_ASSERT_MSG(tensor.shape().rank() > 0,
-                       "split_batch requires at least one tensor dimension");
-        LFS_ASSERT_MSG(batch_size > 0,
-                       "split_batch batch size must be positive");
-
-        size_t total_size = tensor.shape()[0];
-        if (total_size == 0) {
-            batches.push_back(tensor);
-            return batches;
-        }
-        size_t num_batches = (total_size + batch_size - 1) / batch_size;
-
-        for (size_t i = 0; i < num_batches; ++i) {
-            size_t start = i * batch_size;
-            size_t end = std::min(start + batch_size, total_size);
-            batches.push_back(tensor.slice(0, start, end));
-        }
-
-        return batches;
-    }
 
     float Tensor::item() const {
         materialize_if_deferred();
@@ -3091,53 +2946,6 @@ namespace lfs::core {
 
     // ============= Validation & Assertions =============
 
-    Tensor& Tensor::assert_shape(TensorShape expected) {
-        return assert_shape(std::move(expected), {});
-    }
-
-    Tensor& Tensor::assert_shape(TensorShape expected, const std::string& msg) {
-        if (!is_valid()) {
-            std::string error_msg = "Cannot assert shape on invalid tensor";
-            throw TensorError(error_msg, this);
-        }
-
-        if (shape_ != expected) {
-            std::string error_msg = msg.empty() ? "Shape assertion failed: expected " + expected.str() + " but got " + shape_.str() : msg;
-            throw TensorError(error_msg, this);
-        }
-        return *this;
-    }
-
-    Tensor& Tensor::assert_device(Device expected) {
-        if (!is_valid()) {
-            std::string error_msg = "Cannot assert device on invalid tensor";
-            throw TensorError(error_msg, this);
-        }
-
-        if (device_ != expected) {
-            std::string error_msg = "Device assertion failed: expected " +
-                                    std::string(device_name(expected)) + " but got " +
-                                    std::string(device_name(device_));
-            throw TensorError(error_msg, this);
-        }
-        return *this;
-    }
-
-    Tensor& Tensor::assert_dtype(DataType expected) {
-        if (!is_valid()) {
-            std::string error_msg = "Cannot assert dtype on invalid tensor";
-            throw TensorError(error_msg, this);
-        }
-
-        if (dtype_ != expected) {
-            std::string error_msg = "DataType assertion failed: expected " +
-                                    std::string(dtype_name(expected)) + " but got " +
-                                    std::string(dtype_name(dtype_));
-            throw TensorError(error_msg, this);
-        }
-        return *this;
-    }
-
     Tensor& Tensor::assert_finite() {
         if (!is_valid()) {
             std::string error_msg = "Cannot assert finite on invalid tensor";
@@ -3209,61 +3017,6 @@ namespace lfs::core {
         }
         const float* const values = ptr<float>();
         return std::any_of(values, values + numel(), [](const float x) { return std::isinf(x); });
-    }
-
-    bool Tensor::all_close(const Tensor& other, float rtol, float atol) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
-                       "all_close requires valid tensors");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
-                       "all_close currently supports only Float32 tensors");
-        LFS_ASSERT_MSG(std::isfinite(rtol) && std::isfinite(atol) &&
-                           rtol >= 0.0f && atol >= 0.0f,
-                       "all_close tolerances must be finite and non-negative");
-        internal::require_same_gpu_backend(*this, other, "all_close");
-
-        if (shape_ != other.shape_ || dtype_ != other.dtype_) {
-            return false;
-        }
-
-        if (numel() == 0) {
-            return true;
-        }
-
-        Tensor a_materialized;
-        Tensor b_materialized;
-        const Tensor& a = contiguous_read(a_materialized);
-        const Tensor& b = other.contiguous_read(b_materialized);
-
-        if (a.device_ == Device::GPU) {
-            // Only flags and a count come back. Equal values, infinities
-            // included, are close; the clamped tolerance keeps an infinite b
-            // from accepting every difference, as the host loop does.
-            if (a.has_nan() || b.has_nan()) {
-                return false;
-            }
-            const Tensor tolerance = b.abs().mul(rtol).add(atol).clamp_max(std::numeric_limits<float>::max());
-            const Tensor close = a.eq(b).logical_or(a.sub(b).abs().le(tolerance));
-            return close.count_nonzero() == numel();
-        }
-
-        const float* const a_data = a.ptr<float>();
-        const float* const b_data = b.ptr<float>();
-
-        for (size_t i = 0; i < numel(); ++i) {
-            if (a_data[i] == b_data[i]) {
-                continue;
-            }
-            if (!std::isfinite(a_data[i]) || !std::isfinite(b_data[i])) {
-                return false;
-            }
-            float diff = std::abs(a_data[i] - b_data[i]);
-            float tol = atol + rtol * std::abs(b_data[i]);
-            if (diff > tol) {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     // ============= Capacity Management =============

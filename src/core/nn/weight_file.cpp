@@ -29,10 +29,6 @@ namespace lfs::core::nn {
 
     } // namespace
 
-    bool WeightFile::contains(const std::string_view name) const {
-        return tensors_.find(std::string(name)) != tensors_.end();
-    }
-
     std::vector<std::string> WeightFile::names() const {
         std::vector<std::string> out;
         out.reserve(tensors_.size());

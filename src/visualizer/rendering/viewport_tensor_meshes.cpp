@@ -128,9 +128,9 @@ namespace lfs::vis {
         std::unique_ptr<Module> mesh_program;
         std::unique_ptr<Module> depth_program;
         bool failed = false;
-        Tensor white;          // 1x1 RGBA8 for absent textures
-        Tensor dummy_shadow;   // 1 float
-        Tensor depth;          // [H,W] attachment
+        Tensor white;        // 1x1 RGBA8 for absent textures
+        Tensor dummy_shadow; // 1 float
+        Tensor depth;        // [H,W] attachment
         std::unordered_map<std::uint64_t, Mesh> meshes;
         std::uint64_t frame = 0;
 
@@ -143,7 +143,8 @@ namespace lfs::vis {
             auto seed = Module::load(viewport_depth_program_entries());
             if (!mesh || !seed || !(*mesh)->supports_raster()) {
                 LOG_ERROR("Could not load tensor mesh programs: {}",
-                          !mesh ? mesh.error().detail() : !seed ? seed.error().detail() : "raster unsupported");
+                          !mesh ? mesh.error().detail() : !seed ? seed.error().detail()
+                                                                : "raster unsupported");
                 failed = true;
                 return false;
             }

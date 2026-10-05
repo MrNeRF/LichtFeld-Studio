@@ -567,63 +567,6 @@ namespace lfs::io {
         });
     }
 
-    lfs::Result<std::vector<std::string>> JsonChapterDom::array_uuids(
-        const std::string_view path) const {
-        return guarded_dom_operation<std::vector<std::string>>(
-            path, [&]() -> lfs::Result<std::vector<std::string>> {
-                auto resolved = resolve_node(root_, path, "enumerate");
-                if (!resolved) {
-                    return std::move(resolved).error();
-                }
-                if (*resolved == nullptr) {
-                    return std::vector<std::string>{};
-                }
-                if (!(*resolved)->is_array()) {
-                    return make_dom_error(
-                        lfs::ErrorCode::FailedPrecondition,
-                        "The JSON chapter has an incompatible structure.",
-                        std::format("Cannot enumerate '{}': value is {}, expected an array",
-                                    path, (*resolved)->type_name()),
-                        path);
-                }
-
-                std::vector<std::string> uuids;
-                uuids.reserve((*resolved)->size());
-                std::unordered_set<std::string_view> seen;
-                seen.reserve((*resolved)->size());
-                for (std::size_t i = 0; i < (*resolved)->size(); ++i) {
-                    const Json& element = (**resolved)[i];
-                    if (!element.is_object()) {
-                        return make_dom_error(
-                            lfs::ErrorCode::DataLoss,
-                            "The JSON chapter contains an invalid UUID array.",
-                            std::format("Element {} of '{}' is {}, expected an object",
-                                        i, path, element.type_name()),
-                            path);
-                    }
-                    const auto member = element.find("uuid");
-                    if (member == element.end() || !member->is_string() ||
-                        !is_canonical_uuid(member->get_ref<const std::string&>())) {
-                        return make_dom_error(
-                            lfs::ErrorCode::DataLoss,
-                            "The JSON chapter contains an invalid UUID array.",
-                            std::format("Element {} of '{}' has no canonical UUID", i, path),
-                            path);
-                    }
-                    const std::string& uuid = member->get_ref<const std::string&>();
-                    if (!seen.insert(uuid).second) {
-                        return make_dom_error(
-                            lfs::ErrorCode::DataLoss,
-                            "The JSON chapter contains a duplicate UUID.",
-                            std::format("UUID '{}' occurs more than once in '{}'", uuid, path),
-                            path, uuid);
-                    }
-                    uuids.push_back(uuid);
-                }
-                return uuids;
-            });
-    }
-
     lfs::Result<std::vector<std::pair<std::string, const JsonChapterDom::Json*>>>
     JsonChapterDom::array_item_refs(const std::string_view path) const {
         return guarded_dom_operation<std::vector<std::pair<std::string, const Json*>>>(
@@ -804,10 +747,6 @@ namespace lfs::io {
         return owner_->remove_element_value(array_path_, uuid_, path);
     }
 
-    bool JsonChapterDom::Element::exists() const {
-        return owner_->find_array_element_node(owner_->root_, array_path_, uuid_) != nullptr;
-    }
-
     std::optional<JsonChapterDom::Json> JsonChapterDom::Element::get_json(
         const std::string_view path) const {
         const Json* element = owner_->find_array_element_node(owner_->root_, array_path_, uuid_);
@@ -821,10 +760,6 @@ namespace lfs::io {
     lfs::Result<void> JsonChapterDom::Element::set_json(
         const std::string_view path, Json value) {
         return owner_->set_element_value(array_path_, uuid_, path, std::move(value));
-    }
-
-    bool JsonChapterDom::ConstElement::exists() const {
-        return owner_->find_array_element_node(owner_->root_, array_path_, uuid_) != nullptr;
     }
 
     std::optional<JsonChapterDom::Json> JsonChapterDom::ConstElement::get_json(

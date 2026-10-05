@@ -12,10 +12,6 @@ namespace lfs::core::internal {
         g_facade_trace_enabled.store(enabled, std::memory_order_relaxed);
     }
 
-    bool facade_trace_enabled_for_testing() {
-        return g_facade_trace_enabled.load(std::memory_order_relaxed);
-    }
-
     void facade_trace_reset_for_testing() {
         for (auto& counter : g_facade_trace_counters) {
             counter.store(0, std::memory_order_relaxed);

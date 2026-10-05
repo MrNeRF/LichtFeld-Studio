@@ -742,10 +742,6 @@ namespace lfs::mcp {
         std::string serialized;
         EXPECT_NO_THROW(serialized = serialize_response(response));
         EXPECT_NE(serialized.find("\xEF\xBF\xBD"), std::string::npos);
-
-        EXPECT_NO_THROW(
-            serialized = serialize_notification("event", json{{"error", std::string("\xFF")}}));
-        EXPECT_NE(serialized.find("\xEF\xBF\xBD"), std::string::npos);
     }
 
     TEST(McpProtocolTest, ToolsCallMissingNameReturnsInvalidParams) {

@@ -128,9 +128,6 @@ namespace lfs::nodes {
                                                  std::move(type_id), std::move(evaluate), context_dependent});
           }()) {}
 
-    bool Field::valid() const noexcept {
-        return static_cast<bool>(node_);
-    }
     std::string_view Field::type_id() const noexcept {
         return node_ ? node_->type_id : std::string_view{};
     }
@@ -163,10 +160,6 @@ namespace lfs::nodes {
         core::Tensor value = field.node_->evaluate(context, *this);
         values_.emplace(key, value);
         return value;
-    }
-
-    void FieldMemo::clear() {
-        values_.clear();
     }
 
     Field constant_field(const Value& value, std::string_view type_id) {
@@ -340,13 +333,6 @@ namespace lfs::nodes {
                                               opacity, s.scene_scale, core::SplatData::ShNLayout::Canonical);
         result->set_active_sh_degree(s.sh_degree);
         return result;
-    }
-
-    Geometry geometry_from_point_cloud(const core::PointCloud& points) {
-        core::Tensor colors = points.colors;
-        if (colors.is_valid() && colors.dtype() == core::DataType::UInt8)
-            colors = colors.to(core::DataType::Float32) / 255.0f;
-        return Geometry{std::nullopt, PointsComponent{points.means, colors, {}}, std::nullopt};
     }
 
     core::PointCloud point_cloud_from_geometry(const Geometry& geometry) {

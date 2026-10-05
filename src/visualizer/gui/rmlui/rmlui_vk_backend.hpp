@@ -516,7 +516,6 @@ private:
             m_set_to_pool.clear();
         }
 
-
         bool Alloc_Descriptor(VkDevice p_device, VkDescriptorSetLayout* p_layouts, VkDescriptorSet* p_sets,
                               uint32_t descriptor_count_for_creation = 1) noexcept {
             RMLUI_VK_ASSERTMSG(p_layouts, "you have to pass a valid and initialized VkDescriptorSetLayout (probably you must create it)");

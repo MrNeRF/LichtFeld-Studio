@@ -5,6 +5,7 @@
 #include "core/splat_data.hpp"
 #include "cuda_backend_test.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/ops/mcmc_cuda.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "training/strategies/improved_gs_plus.hpp"
 #include "training/strategies/mcmc.hpp"
@@ -16,6 +17,17 @@ using namespace lfs::core;
 using namespace lfs::training;
 
 namespace {
+    std::vector<int64_t> sample_weights(const Tensor& weights) {
+        const auto opacity = Tensor::ones({weights.numel()}, Device::GPU);
+        const auto scales = Tensor::zeros({weights.numel(), 3}, Device::GPU);
+        auto indices = Tensor::empty({256}, Device::GPU, DataType::Int64);
+        auto sampled_opacity = Tensor::empty({256}, Device::GPU);
+        auto sampled_scales = Tensor::empty({256, 3}, Device::GPU);
+        cuda_mcmc_ops().sample(weights, opacity, scales, {}, indices, sampled_opacity,
+                               sampled_scales, lfs::gpu_ops::SampleDomain::All, 29);
+        return indices.to_vector_int64();
+    }
+
     // Joint (u,log_s) is the only Adam codec — tests assert joint moment state.
     SplatData create_test_splat_data(const int n_gaussians = 100) {
         std::vector<float> means_data(n_gaussians * 3, 0.0f);
@@ -123,7 +135,7 @@ TEST_F(CropDampingStrategyTest, McmcRejectedRowsAreNeverSampledAtZeroScale) {
     EXPECT_FLOAT_EQ(damped_cpu[0], 0.0f);
     EXPECT_GT(damped_cpu[1], 0.0f);
 
-    const auto samples = Tensor::multinomial(damped_weights, 256, true).to_vector_int64();
+    const auto samples = sample_weights(damped_weights);
     EXPECT_TRUE(std::none_of(samples.begin(), samples.end(), [](const int64_t index) {
         return index == 0;
     }));
@@ -157,7 +169,7 @@ TEST_F(CropDampingStrategyTest, IgsPlusRejectedRowsAreNeverSampledAtZeroScale) {
     EXPECT_FLOAT_EQ(damped_cpu[0], 0.0f);
     EXPECT_GT(damped_cpu[1], 0.0f);
 
-    const auto samples = Tensor::multinomial(damped_scores, 256, true).to_vector_int64();
+    const auto samples = sample_weights(damped_scores);
     EXPECT_TRUE(std::none_of(samples.begin(), samples.end(), [](const int64_t index) {
         return index == 0;
     }));

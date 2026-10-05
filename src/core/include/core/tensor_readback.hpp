@@ -29,7 +29,6 @@ namespace lfs::core {
         // Accepts strided tensors and follows the source's storage backend.
         // Complete the previous download before reusing this slot.
         void enqueue(const Tensor& source);
-        void enqueue(const Tensor& source, TensorWorkQueue& queue);
         void enqueue(const Tensor& source, TensorExecutionTarget target);
         // Byte range is measured in the source's contiguous logical layout.
         void enqueue_range(const Tensor& source, std::size_t byte_offset,

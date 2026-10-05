@@ -13920,8 +13920,6 @@ contract["test_selection_submode_follows_native_mode"](lf)
             ASSERT_NE(gui, nullptr);
             gui->requestExitConfirmation(false);
             EXPECT_FALSE(gui->isExitConfirmationPending());
-            EXPECT_FALSE(
-                lfs::python::is_exit_popup_open());
         }
     }
 

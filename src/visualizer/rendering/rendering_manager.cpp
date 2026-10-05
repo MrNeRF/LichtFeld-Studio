@@ -29,10 +29,10 @@
 #include "visualizer/app_store.hpp"
 
 #include <algorithm>
-#include <limits>
 #include <bit>
 #include <cassert>
 #include <cmath>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>

@@ -419,45 +419,10 @@ namespace lfs::io {
         (void)prefetch_queue_.push(std::move(request));
     }
 
-    void PipelinedImageLoader::canonicalize(const std::vector<ImageRequest>& requests) {
-        constexpr size_t CHUNK_SIZE = 32;
-        for (size_t offset = 0; offset < requests.size(); offset += CHUNK_SIZE) {
-            const size_t count = std::min(CHUNK_SIZE, requests.size() - offset);
-            std::vector<ImageRequest> chunk;
-            chunk.reserve(count);
-            chunk.insert(chunk.end(), requests.begin() + static_cast<std::ptrdiff_t>(offset),
-                         requests.begin() + static_cast<std::ptrdiff_t>(offset + count));
-            prefetch(chunk);
-
-            for (size_t i = 0; i < count; ++i) {
-                auto completion = get_completion();
-                if (!completion) {
-                    throw std::runtime_error(legacy_message_from(completion.error()));
-                }
-                if (!completion->outcome) {
-                    throw std::runtime_error(legacy_message_from(completion->outcome.error()));
-                }
-                // Destroying the completion here releases decoded GPU payloads;
-                // only the final encoded run-cache/spill representation remains.
-            }
-        }
-    }
-
     ReadyImage PipelinedImageLoader::get() {
         auto completion = get_completion();
         if (!completion) {
             throw std::runtime_error(legacy_message_from(completion.error()));
-        }
-        if (!completion->outcome) {
-            throw std::runtime_error(legacy_message_from(completion->outcome.error()));
-        }
-        return std::move(*completion->outcome);
-    }
-
-    std::optional<ReadyImage> PipelinedImageLoader::try_get() {
-        auto completion = try_get_completion();
-        if (!completion) {
-            return std::nullopt;
         }
         if (!completion->outcome) {
             throw std::runtime_error(legacy_message_from(completion->outcome.error()));
@@ -513,14 +478,6 @@ namespace lfs::io {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             });
         }
-    }
-
-    std::optional<LoaderCompletion> PipelinedImageLoader::try_get_completion() {
-        const auto sequence_id = output_queue_.try_pop();
-        if (!sequence_id) {
-            return std::nullopt;
-        }
-        return take_completion(*sequence_id);
     }
 
     std::optional<LoaderCompletion> PipelinedImageLoader::try_get_completion_for(
@@ -838,10 +795,6 @@ namespace lfs::io {
                 jpeg_cache_bytes_ += size;
             }
         }
-    }
-
-    void PipelinedImageLoader::put_in_jpeg_cache(const std::string& cache_key, std::vector<uint8_t>&& data) {
-        put_in_jpeg_cache(cache_key, std::make_shared<std::vector<uint8_t>>(std::move(data)));
     }
 
     void PipelinedImageLoader::invalidate_cache_entry(const std::string& cache_key) {

@@ -149,13 +149,4 @@ namespace lfs::io {
         return lfs::core::load_checkpoint_header(path);
     }
 
-    std::expected<int, std::string> CheckpointLoader::getIteration(
-        const std::filesystem::path& path) {
-        auto header = loadHeader(path);
-        if (!header) {
-            return std::unexpected(header.error());
-        }
-        return header->iteration;
-    }
-
 } // namespace lfs::io

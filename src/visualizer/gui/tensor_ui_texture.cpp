@@ -91,16 +91,15 @@ namespace lfs::vis::gui {
                     return false;
                 for (int y = 0; y < region.height; ++y) {
                     const auto* source = region.pixels +
-                        static_cast<std::size_t>(y) * region.width * region.channels;
+                                         static_cast<std::size_t>(y) * region.width * region.channels;
                     auto* target = host_rgba.data() +
-                        (static_cast<std::size_t>(region.y + y) * width + region.x) * 4;
+                                   (static_cast<std::size_t>(region.y + y) * width + region.x) * 4;
                     expandToRgba8(source, target, static_cast<std::size_t>(region.width),
                                   region.channels);
                 }
             }
             auto host = lfs::core::Tensor::from_blob(
-                host_rgba.data(), {static_cast<std::size_t>(height),
-                                   static_cast<std::size_t>(width), 4},
+                host_rgba.data(), {static_cast<std::size_t>(height), static_cast<std::size_t>(width), 4},
                 lfs::core::Device::CPU, lfs::core::DataType::UInt8);
             image = std::make_shared<lfs::core::Tensor>(uploadToGpu(host));
             publish();
@@ -188,7 +187,7 @@ namespace lfs::vis::gui {
         } catch (const std::exception& error) {
             // LFS-CENSUS-OK(empty-catch): normalize tensor failures into the public structured result.
             return lfs::Result<void>::failure(textureError(lfs::ErrorCode::Unavailable,
-                                                            error.what()));
+                                                           error.what()));
         }
     }
 

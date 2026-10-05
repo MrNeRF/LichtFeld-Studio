@@ -611,8 +611,6 @@ TEST_F(OperatorRegistryPropsTest, EditorContextDisablesTransformToolsForMixedLoc
 
     EXPECT_FALSE(editor.canTransformSelectedNode());
     EXPECT_FALSE(editor.isToolAvailable(lfs::vis::ToolType::Translate));
-    EXPECT_STREQ(editor.getToolUnavailableReason(lfs::vis::ToolType::Translate),
-                 "selection contains locked nodes");
 }
 
 TEST_F(OperatorRegistryPropsTest, EditorContextDisablesTransformToolsForMixedUnsupportedSelection) {
@@ -625,8 +623,6 @@ TEST_F(OperatorRegistryPropsTest, EditorContextDisablesTransformToolsForMixedUns
 
     EXPECT_FALSE(editor.canTransformSelectedNode());
     EXPECT_FALSE(editor.isToolAvailable(lfs::vis::ToolType::Translate));
-    EXPECT_STREQ(editor.getToolUnavailableReason(lfs::vis::ToolType::Translate),
-                 "selection contains unsupported nodes");
 }
 
 TEST_F(OperatorRegistryPropsTest, LegacyTransformRotateUsesEditableTargetPivotOnly) {
@@ -699,11 +695,6 @@ TEST_F(OperatorRegistryPropsTest, VisualizerFacingTransformSelectionUsesVisualiz
     EXPECT_NEAR(selection_center.x, expected_center.x, 1e-5f);
     EXPECT_NEAR(selection_center.y, expected_center.y, 1e-5f);
     EXPECT_NEAR(selection_center.z, expected_center.z, 1e-5f);
-
-    const glm::mat4 selected_world = scene_manager_->getSelectedNodeVisualizerWorldTransform();
-    EXPECT_NEAR(selected_world[3].x, 10.0f, 1e-5f);
-    EXPECT_NEAR(selected_world[3].y, -20.0f, 1e-5f);
-    EXPECT_NEAR(selected_world[3].z, -30.0f, 1e-5f);
 }
 
 TEST_F(OperatorRegistryPropsTest, LegacySelectionWorldCenterRemainsDataWorld) {
@@ -738,11 +729,6 @@ TEST_F(OperatorRegistryPropsTest, LegacySelectionWorldCenterRemainsDataWorld) {
     EXPECT_NEAR(data_world[3].x, 10.0f, 1e-5f);
     EXPECT_NEAR(data_world[3].y, 20.0f, 1e-5f);
     EXPECT_NEAR(data_world[3].z, 30.0f, 1e-5f);
-
-    const glm::mat4 visualizer_world = scene_manager_->getSelectedNodeVisualizerWorldTransform();
-    EXPECT_NEAR(visualizer_world[3].x, 10.0f, 1e-5f);
-    EXPECT_NEAR(visualizer_world[3].y, -20.0f, 1e-5f);
-    EXPECT_NEAR(visualizer_world[3].z, -30.0f, 1e-5f);
 }
 
 TEST_F(OperatorRegistryPropsTest, LegacySelectInvertUsesVisibleMaskWithHiddenSibling) {

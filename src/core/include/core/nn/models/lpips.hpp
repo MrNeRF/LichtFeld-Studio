@@ -53,7 +53,6 @@ namespace lfs::core::nn::models {
 
         [[nodiscard]] DataType compute_dtype() const { return compute_; }
         [[nodiscard]] Device device() const { return device_; }
-        [[nodiscard]] std::size_t weights_bytes() const;
         [[nodiscard]] std::size_t arena_bytes() const { return arena_.capacity(); }
         [[nodiscard]] std::size_t workspace_bytes() const { return workspace_.bytes(); }
         [[nodiscard]] std::size_t activation_budget_bytes() const { return activation_budget_bytes_; }

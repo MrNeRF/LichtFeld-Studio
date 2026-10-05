@@ -603,38 +603,4 @@ namespace {
         Tensor::release_freed_memory();
         EXPECT_TRUE(kept.expired());
     }
-
-    class TensorWhereInto : public TensorVulkanBufferQuery,
-                            public testing::WithParamInterface<std::pair<GpuBackend, DataType>> {};
-
-    TEST_P(TensorWhereInto, SelectsScalarAndPreservesSourceWithAliasedOutput) {
-        const auto [backend, dtype] = GetParam();
-        if (!gpu_backend_available(backend))
-            GTEST_SKIP() << "Source backend unavailable";
-        const GpuBackendScope scope(backend);
-        const Tensor source = Tensor::from_vector(std::vector<float>{1, 2, 3, 4}, {4}, Device::GPU).to(dtype);
-        const Tensor mask = Tensor::from_vector(std::vector<float>{1, 0, 1, 0}, {4}, Device::GPU).to(DataType::Bool);
-        Tensor output = Tensor::empty({4}, Device::GPU, dtype);
-        where_into(output, mask, -20.0f, source);
-        const auto verify = [](const Tensor& tensor, const std::array<float, 4>& expected) {
-            TensorReadback readback;
-            readback.enqueue(tensor.to(DataType::Float32));
-            std::array<float, 4> values{};
-            readback.wait(std::as_writable_bytes(std::span(values)));
-            EXPECT_EQ(values, expected);
-        };
-        verify(output, {-20, 2, -20, 4});
-        where_into(output, mask, 13.0f, output);
-        verify(output, {13, 2, 13, 4});
-        verify(source, {1, 2, 3, 4});
-    }
-
-    INSTANTIATE_TEST_SUITE_P(TensorBackends, TensorWhereInto,
-                             testing::Values(std::pair{GpuBackend::CUDA, DataType::Float32},
-                                             std::pair{GpuBackend::CUDA, DataType::Float16},
-                                             std::pair{GpuBackend::Vulkan, DataType::Float32},
-                                             std::pair{GpuBackend::Vulkan, DataType::Float16},
-                                             std::pair{GpuBackend::Metal, DataType::Float32},
-                                             std::pair{GpuBackend::Metal, DataType::Float16}));
-
 } // namespace

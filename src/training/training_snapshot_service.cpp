@@ -1795,11 +1795,6 @@ namespace lfs::training {
     PendingTrainingSnapshot::~PendingTrainingSnapshot() =
         default;
 
-    bool PendingTrainingSnapshot::ready() const {
-        std::scoped_lock lock(impl_->mutex);
-        return impl_->drained;
-    }
-
     lfs::Result<CapturedTrainingSnapshot>
     PendingTrainingSnapshot::wait() {
         std::unique_lock lock(impl_->mutex);

@@ -258,16 +258,6 @@ namespace lfs::core::nn::models {
 #endif
     }
 
-    std::size_t Lpips::weights_bytes() const {
-        std::size_t bytes = 0;
-        for (const auto& [name, tensor] : weights_) {
-            (void)name;
-            if (tensor.is_valid())
-                bytes += tensor.bytes();
-        }
-        return bytes;
-    }
-
     void Lpips::release_activations() {
         arena_ = ActivationArena{};
         workspace_ = Tensor{};

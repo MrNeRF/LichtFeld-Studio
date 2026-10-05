@@ -30,19 +30,11 @@ namespace lfs::vis {
         [[nodiscard]] lfs::core::param::DatasetConfig& getDatasetConfig() { return dataset_config_; }
         [[nodiscard]] const lfs::core::param::DatasetConfig& getDatasetConfig() const { return dataset_config_; }
 
-        // Reset current to session defaults
-        void resetToDefaults(std::string_view strategy = "");
-
         // Restore built-in defaults and clear cached dataset configuration.
         void clearSession();
 
         // Set or replace session defaults from explicit params.
         void setSessionDefaults(const lfs::core::param::TrainingParameters& params);
-
-        // Set current params (e.g., from loaded checkpoint)
-
-        // Import params: overwrites both session and current for active strategy
-        void importParams(const lfs::core::param::OptimizationParameters& params);
 
         // Import editable configuration, preserving loaded dataset paths and omitted fields.
         std::expected<void, lfs::Error> importConfigFile(const std::filesystem::path& path, bool import_dataset = true);

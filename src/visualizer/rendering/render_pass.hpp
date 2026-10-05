@@ -198,9 +198,6 @@ namespace lfs::vis {
     }
 
     struct FrameResources {
-        CachedRenderMetadata cached_metadata;
-        std::optional<lfs::rendering::GpuFrame> cached_gpu_frame;
-        glm::ivec2 cached_result_size{0};
         bool splats_presented = false;
         bool split_view_executed = false;
         bool splat_pre_rendered = false;

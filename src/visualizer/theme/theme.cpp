@@ -78,10 +78,6 @@ namespace lfs::vis {
 
     namespace {
 
-        json colorToJson(const ThemeColor& c) {
-            return json::array({c.x, c.y, c.z, c.w});
-        }
-
         ThemeColor colorFromJson(const json& j) {
             if (j.is_array() && j.size() >= 4) {
                 return {j[0].get<float>(), j[1].get<float>(), j[2].get<float>(), j[3].get<float>()};
@@ -112,15 +108,6 @@ namespace lfs::vis {
                 return std::nullopt;
             }
             return ThemeGradient{colorFromJson(*start), colorFromJson(*end)};
-        }
-
-        json gradientToJson(const ThemeGradient& gradient) {
-            return json{{"start", colorToJson(gradient.start)},
-                        {"end", colorToJson(gradient.end)}};
-        }
-
-        json vec2ToJson(const ThemeVec2& v) {
-            return json::array({v.x, v.y});
         }
 
         ThemeVec2 vec2FromJson(const json& j) {
@@ -1132,139 +1119,6 @@ namespace lfs::vis {
         }
 
         return any_reloaded;
-    }
-
-    bool saveTheme(const Theme& t, const std::string& path) {
-        try {
-            json j;
-            j["name"] = t.name;
-
-            auto& palette = j["palette"];
-            palette["background"] = colorToJson(t.palette.background);
-            palette["surface"] = colorToJson(t.palette.surface);
-            palette["surface_bright"] = colorToJson(t.palette.surface_bright);
-            palette["primary"] = colorToJson(t.palette.primary);
-            palette["primary_dim"] = colorToJson(t.palette.primary_dim);
-            palette["secondary"] = colorToJson(t.palette.secondary);
-            palette["text"] = colorToJson(t.palette.text);
-            palette["text_dim"] = colorToJson(t.palette.text_dim);
-            palette["border"] = colorToJson(t.palette.border);
-            palette["success"] = colorToJson(t.palette.success);
-            palette["warning"] = colorToJson(t.palette.warning);
-            palette["error"] = colorToJson(t.palette.error);
-            palette["info"] = colorToJson(t.palette.info);
-            palette["row_even"] = colorToJson(t.palette.row_even);
-            palette["row_odd"] = colorToJson(t.palette.row_odd);
-
-            auto& sizes = j["sizes"];
-            sizes["window_rounding"] = t.sizes.window_rounding;
-            sizes["frame_rounding"] = t.sizes.frame_rounding;
-            sizes["popup_rounding"] = t.sizes.popup_rounding;
-            sizes["scrollbar_rounding"] = t.sizes.scrollbar_rounding;
-            sizes["grab_rounding"] = t.sizes.grab_rounding;
-            sizes["tab_rounding"] = t.sizes.tab_rounding;
-            sizes["border_size"] = t.sizes.border_size;
-            sizes["child_border_size"] = t.sizes.child_border_size;
-            sizes["popup_border_size"] = t.sizes.popup_border_size;
-            sizes["window_padding"] = vec2ToJson(t.sizes.window_padding);
-            sizes["frame_padding"] = vec2ToJson(t.sizes.frame_padding);
-            sizes["item_spacing"] = vec2ToJson(t.sizes.item_spacing);
-            sizes["item_inner_spacing"] = vec2ToJson(t.sizes.item_inner_spacing);
-            sizes["indent_spacing"] = t.sizes.indent_spacing;
-            sizes["scrollbar_size"] = t.sizes.scrollbar_size;
-            sizes["grab_min_size"] = t.sizes.grab_min_size;
-            sizes["toolbar_button_size"] = t.sizes.toolbar_button_size;
-            sizes["toolbar_padding"] = t.sizes.toolbar_padding;
-            sizes["toolbar_spacing"] = t.sizes.toolbar_spacing;
-
-            auto& fonts = j["fonts"];
-            fonts["regular_path"] = t.fonts.regular_path;
-            fonts["bold_path"] = t.fonts.bold_path;
-            fonts["base_size"] = t.fonts.base_size;
-            fonts["small_size"] = t.fonts.small_size;
-            fonts["large_size"] = t.fonts.large_size;
-            fonts["heading_size"] = t.fonts.heading_size;
-            fonts["section_size"] = t.fonts.section_size;
-
-            auto& menu = j["menu"];
-            menu["bg_lighten"] = t.menu.bg_lighten;
-            menu["hover_lighten"] = t.menu.hover_lighten;
-            menu["active_alpha"] = t.menu.active_alpha;
-            menu["popup_lighten"] = t.menu.popup_lighten;
-            menu["popup_rounding"] = t.menu.popup_rounding;
-            menu["popup_border_size"] = t.menu.popup_border_size;
-            menu["border_alpha"] = t.menu.border_alpha;
-            menu["bottom_border_darken"] = t.menu.bottom_border_darken;
-            menu["frame_padding"] = vec2ToJson(t.menu.frame_padding);
-            menu["item_spacing"] = vec2ToJson(t.menu.item_spacing);
-            menu["popup_padding"] = vec2ToJson(t.menu.popup_padding);
-
-            auto& ctx = j["context_menu"];
-            ctx["rounding"] = t.context_menu.rounding;
-            ctx["header_alpha"] = t.context_menu.header_alpha;
-            ctx["header_hover_alpha"] = t.context_menu.header_hover_alpha;
-            ctx["header_active_alpha"] = t.context_menu.header_active_alpha;
-            ctx["padding"] = vec2ToJson(t.context_menu.padding);
-            ctx["item_spacing"] = vec2ToJson(t.context_menu.item_spacing);
-
-            auto& viewport = j["viewport"];
-            viewport["corner_radius"] = t.viewport.corner_radius;
-            viewport["border_size"] = t.viewport.border_size;
-            viewport["border_alpha"] = t.viewport.border_alpha;
-            viewport["border_darken"] = t.viewport.border_darken;
-
-            auto& shadows = j["shadows"];
-            shadows["enabled"] = t.shadows.enabled;
-            shadows["offset"] = vec2ToJson(t.shadows.offset);
-            shadows["blur"] = t.shadows.blur;
-            shadows["alpha"] = t.shadows.alpha;
-
-            auto& vignette = j["vignette"];
-            vignette["enabled"] = t.vignette.enabled;
-            vignette["intensity"] = t.vignette.intensity;
-            vignette["radius"] = t.vignette.radius;
-            vignette["softness"] = t.vignette.softness;
-
-            auto& button = j["button"];
-            button["tint_normal"] = t.button.tint_normal;
-            button["tint_hover"] = t.button.tint_hover;
-            button["tint_active"] = t.button.tint_active;
-
-            auto& overlay = j["overlay"];
-            overlay["background"] = colorToJson(t.overlay.background);
-            overlay["text"] = colorToJson(t.overlay.text);
-            overlay["text_dim"] = colorToJson(t.overlay.text_dim);
-            overlay["border"] = colorToJson(t.overlay.border);
-            overlay["icon"] = colorToJson(t.overlay.icon);
-            overlay["highlight"] = colorToJson(t.overlay.highlight);
-            overlay["selection"] = colorToJson(t.overlay.selection);
-            overlay["selection_flash"] = colorToJson(t.overlay.selection_flash);
-
-            const auto write_gradient = [&j](const char* name,
-                                             const std::optional<ThemeGradient>& gradient) {
-                if (gradient)
-                    j["gradients"][name] = gradientToJson(*gradient);
-            };
-            write_gradient("window_body", t.gradients.window_body);
-            write_gradient("panel_body", t.gradients.panel_body);
-            write_gradient("window_title", t.gradients.window_title);
-            write_gradient("section_header", t.gradients.section_header);
-            write_gradient("section_header_hover", t.gradients.section_header_hover);
-            write_gradient("progress", t.gradients.progress);
-            write_gradient("scrubber_track", t.gradients.scrubber_track);
-            write_gradient("scrubber_fill", t.gradients.scrubber_fill);
-            write_gradient("histogram_header", t.gradients.histogram_header);
-            write_gradient("histogram_fill", t.gradients.histogram_fill);
-            write_gradient("histogram_selection", t.gradients.histogram_selection);
-
-            std::ofstream file;
-            if (!lfs::core::open_file_for_write(lfs::core::utf8_to_path(path), file))
-                return false;
-            file << j.dump(2);
-            return true;
-        } catch (...) {
-            return false;
-        }
     }
 
     namespace {

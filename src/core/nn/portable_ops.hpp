@@ -9,7 +9,7 @@
 namespace lfs::core::nn::portable {
     Tensor gemm(const Tensor& a, const Tensor& b, bool trans_b, const Tensor* bias,
                 Activation activation, const Tensor* residual = nullptr, const Tensor* scale = nullptr);
-    Tensor norm(const Tensor& input, const Tensor& weight, const Tensor* bias, float eps);
+    Tensor norm(const Tensor& input, const Tensor& weight, const Tensor& bias, float eps);
     Tensor softmax(const Tensor& input, const Tensor* mask);
     Tensor attention(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor* mask, float scale);
     Tensor activate(const Tensor& input, Activation activation);

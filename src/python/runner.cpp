@@ -2290,40 +2290,6 @@ def _lfs_format_code(code):
         return result;
     }
 
-    bool has_capability(const std::string& name) {
-        (void)ensure_initialized();
-        if (!ensure_plugins_loaded())
-            return false;
-        const GilAcquire gil;
-        bool result = false;
-
-        PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");
-        if (lfs_plugins) {
-            PyObject* registry_class = PyObject_GetAttrString(lfs_plugins, "CapabilityRegistry");
-            if (registry_class) {
-                PyObject* instance_method = PyObject_GetAttrString(registry_class, "instance");
-                PyObject* registry = PyObject_CallNoArgs(instance_method);
-                if (registry) {
-                    PyObject* has_method = PyObject_GetAttrString(registry, "has");
-                    PyObject* py_name = PyUnicode_FromString(name.c_str());
-                    PyObject* py_result = PyObject_CallOneArg(has_method, py_name);
-                    if (py_result) {
-                        result = PyObject_IsTrue(py_result);
-                        Py_DECREF(py_result);
-                    }
-                    Py_DECREF(py_name);
-                    Py_DECREF(has_method);
-                    Py_DECREF(registry);
-                }
-                Py_DECREF(instance_method);
-                Py_DECREF(registry_class);
-            }
-            Py_DECREF(lfs_plugins);
-        }
-
-        return result;
-    }
-
     std::vector<CapabilityInfo> list_capabilities() {
         std::vector<CapabilityInfo> result;
         (void)ensure_initialized();

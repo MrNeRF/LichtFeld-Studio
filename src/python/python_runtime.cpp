@@ -48,9 +48,6 @@ namespace lfs::python {
         HasPopupsCallback g_popup_has_callback = nullptr;
         EnsureInitializedCallback g_ensure_initialized_callback = nullptr;
 
-        // Exit popup state for window close callback (thread-safe)
-        std::atomic<bool> g_exit_popup_open{false};
-
         // Graphics-thread callback queue (set once during module init, before any reader threads)
         std::thread::id g_graphics_thread_id{};
         std::mutex g_graphics_callbacks_mutex;
@@ -1135,22 +1132,6 @@ namespace lfs::python {
         }
     }
 
-    void draw_python_menu_items(MenuLocation location) {
-        if (!g_bridge.draw_menus)
-            return;
-#ifndef NDEBUG
-        assert(Py_IsInitialized() && "Python not initialized before draw_python_menu_items");
-#endif
-        if (!can_acquire_gil())
-            return;
-
-        if (g_bridge.prepare_ui)
-            g_bridge.prepare_ui();
-
-        const GilAcquire gil;
-        g_bridge.draw_menus(location);
-    }
-
     std::vector<MenuBarEntry> get_menu_bar_entries() {
         if (g_ensure_initialized_callback)
             g_ensure_initialized_callback();
@@ -1171,20 +1152,6 @@ namespace lfs::python {
             &result);
 
         return result;
-    }
-
-    void draw_menu_bar_entry(const std::string& idname) {
-        if (!g_bridge.draw_menu_bar_entry)
-            return;
-
-        if (!can_acquire_gil())
-            return;
-
-        if (g_bridge.prepare_ui)
-            g_bridge.prepare_ui();
-
-        const GilAcquire gil;
-        g_bridge.draw_menu_bar_entry(idname.c_str());
     }
 
     void collect_menu_content(const std::string& idname, MenuItemVisitor visitor, void* user_data) {
@@ -1418,9 +1385,6 @@ namespace lfs::python {
         return g_overlay_draw_context;
     }
 
-    bool is_exit_popup_open() { return g_exit_popup_open.load(); }
-    void set_exit_popup_open(bool open) { g_exit_popup_open.store(open); }
-
     void set_graphics_thread_id(std::thread::id id) { g_graphics_thread_id = id; }
 
     bool on_graphics_thread() {
@@ -1542,12 +1506,6 @@ namespace lfs::python {
     void update_trainer_loaded(bool has_trainer, int max_iterations, int initial_iteration) {
         if (g_signal_bridge_callbacks.trainer_loaded) {
             g_signal_bridge_callbacks.trainer_loaded(has_trainer, max_iterations, initial_iteration);
-        }
-    }
-
-    void update_psnr(float psnr) {
-        if (g_signal_bridge_callbacks.psnr) {
-            g_signal_bridge_callbacks.psnr(psnr);
         }
     }
 

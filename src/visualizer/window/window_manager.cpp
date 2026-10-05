@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "window_manager.hpp"
-#include "graphics_context.hpp"
 #include "core/environment.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
+#include "graphics_context.hpp"
 #include "gui/gui_manager.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"

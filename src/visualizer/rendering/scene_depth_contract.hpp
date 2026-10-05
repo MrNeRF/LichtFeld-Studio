@@ -53,10 +53,6 @@ namespace lfs::vis {
         [[nodiscard]] bool matchesRenderExtent(const glm::ivec2 extent) const noexcept {
             return available() && valid() && width == extent.x && height == extent.y;
         }
-
-        [[nodiscard]] constexpr bool requiresLinearization() const noexcept {
-            return encoding == SceneDepthEncoding::VulkanNdc;
-        }
     };
 
     [[nodiscard]] inline SceneDepthContract makeSceneDepthContract(

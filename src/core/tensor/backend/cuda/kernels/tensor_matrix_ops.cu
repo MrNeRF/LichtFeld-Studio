@@ -337,35 +337,11 @@ namespace lfs::core::tensor_ops {
             data[idx] = ((idx / n) == (idx % n)) ? 1.0f : 0.0f;
     }
 
-    __global__ void diag_kernel(const float* diagonal, float* matrix, size_t n) {
-        int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx < n * n)
-            matrix[idx] = ((idx / n) == (idx % n)) ? diagonal[idx / n] : 0.0f;
-    }
-
-    __global__ void extract_diag_kernel(const float* matrix, float* diagonal, size_t n) {
-        int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx < n)
-            diagonal[idx] = matrix[idx * n + idx];
-    }
-
     // Launch functions
     void launch_eye(float* data, size_t m, size_t n, cudaStream_t stream) {
         int bs = 256;
         eye_kernel<<<(m * n + bs - 1) / bs, bs, 0, stream>>>(data, m, n);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.eye");
-    }
-
-    void launch_diag(const float* diagonal, float* matrix, size_t n, cudaStream_t stream) {
-        int bs = 256;
-        diag_kernel<<<(n * n + bs - 1) / bs, bs, 0, stream>>>(diagonal, matrix, n);
-        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.diag");
-    }
-
-    void launch_extract_diag(const float* matrix, float* diagonal, size_t n, cudaStream_t stream) {
-        int bs = 256;
-        extract_diag_kernel<<<(n + bs - 1) / bs, bs, 0, stream>>>(matrix, diagonal, n);
-        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.extract_diag");
     }
 
     void launch_sgemm(const float* a, const float* b, float* c, size_t m, size_t n, size_t k, cudaStream_t stream) {

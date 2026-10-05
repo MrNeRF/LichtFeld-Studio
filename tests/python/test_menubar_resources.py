@@ -772,13 +772,12 @@ def test_scene_tree_removes_models_header_space_and_confirms_all_node_deletes():
     assert "removeNodesByIdsWithResult(live_ids" in scene_graph_cpp
     assert "live_names" not in scene_graph_cpp
     request_body = scene_graph_cpp.split("void SceneGraphElement::requestDeleteNodes", 1)[1].split(
-        "void SceneGraphElement::deleteSelectedNodes", 1
+        "void SceneGraphElement::toggleChildrenTraining", 1
     )[0]
     assert "the complete selection is no longer removable" in request_body
     assert "Scene node deletion request aborted" in request_body
     assert "continue;" not in request_body
     assert scene_graph_cpp.count("requestDeleteNodes({node_id})") == 2
-    assert "requestDeleteNodes(ids);" in scene_graph_cpp
     assert "deleteEnabledSelectedNodeIds" not in scene_graph_cpp
     bulk_delete = scene_graph_cpp.split('kind == "delete_selected"', 1)[1].split(
         '} else if (kind == "set_easing"', 1

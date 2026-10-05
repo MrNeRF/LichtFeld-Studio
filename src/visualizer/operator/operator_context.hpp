@@ -52,19 +52,14 @@ namespace lfs::vis::op {
         [[nodiscard]] SceneManager& scene() { return scene_; }
         [[nodiscard]] const SceneManager& scene() const { return scene_; }
 
-        [[nodiscard]] bool hasSelection() const;
         [[nodiscard]] std::vector<std::string> selectedNodes() const;
-        [[nodiscard]] std::string activeNode() const;
 
         void setModalEvent(const ModalEvent& event);
         [[nodiscard]] const ModalEvent* event() const { return current_event_.get(); }
-        [[nodiscard]] glm::vec2 mousePosition() const { return last_mouse_pos_; }
-        [[nodiscard]] glm::vec2 mouseDelta() const;
 
     private:
         SceneManager& scene_;
         std::unique_ptr<ModalEvent> current_event_;
-        glm::vec2 last_mouse_pos_{0.0f};
     };
 
 } // namespace lfs::vis::op

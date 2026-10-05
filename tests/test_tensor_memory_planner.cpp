@@ -114,7 +114,6 @@ TEST(TensorMemoryPlannerTest, LivenessComputationPointwiseChain) {
 
 TEST(TensorMemoryPlannerTest, EarlyReleaseFiresForLinearChain) {
     LazyTestGuard guard;
-    internal::lazy_executor_set_memory_planner_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
     // Build a chain of shape operations that create IR-tracked dependencies.
@@ -137,7 +136,6 @@ TEST(TensorMemoryPlannerTest, EarlyReleaseFiresForLinearChain) {
 
 TEST(TensorMemoryPlannerTest, PeakCacheBytesReducedVsNaive) {
     LazyTestGuard guard;
-    internal::lazy_executor_set_memory_planner_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
     constexpr int rows = 1024;
@@ -161,7 +159,6 @@ TEST(TensorMemoryPlannerTest, PeakCacheBytesReducedVsNaive) {
 
 TEST(TensorMemoryPlannerTest, RootNodeNotReleasedEarly) {
     LazyTestGuard guard;
-    internal::lazy_executor_set_memory_planner_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
     auto a = Tensor::ones({2, 3}, Device::CPU, DataType::Float32).add(1.0f);
@@ -189,7 +186,6 @@ TEST(TensorMemoryPlannerTest, RootNodeNotReleasedEarly) {
 
 TEST(TensorMemoryPlannerTest, MultiConsumerNodeReleasedAfterLastConsumer) {
     LazyTestGuard guard;
-    internal::lazy_executor_set_memory_planner_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
     // Build a chain: base → step1 → step2 → step3 → root.
@@ -217,7 +213,6 @@ TEST(TensorMemoryPlannerTest, MultiConsumerNodeReleasedAfterLastConsumer) {
 TEST(TensorMemoryPlannerTest, FusionAndEarlyReleaseCoexist) {
     LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
-    internal::lazy_executor_set_memory_planner_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
     // Fused pointwise chain feeding into shape operations.

@@ -14,9 +14,6 @@ const uint kMode = 0;
 // Element codes follow DataType: 0 Float32, 1 Float16, 2 Int32, 3 Int64, 4 UInt8, 5 Bool.
 [SpecializationConstant]
 const uint kDType = 0;
-// Fused gather unary: 0 none, 1 abs, 2 sqrt, 3 neg.
-[SpecializationConstant]
-const uint kUnary = 0;
 // 0 assert (records a device fault and writes zero), 1 clamp, 2 wrap.
 [SpecializationConstant]
 const uint kBoundary = 0;
@@ -225,14 +222,6 @@ int combineInt(int accumulator, int value)
     return value;
 }
 
-float applyUnary(float value)
-{
-    if (kUnary == 1) return abs(value);
-    if (kUnary == 2) return sqrt(value);
-    if (kUnary == 3) return -value;
-    return value;
-}
-
 // First fault wins; the host reads code, index and extent after the wait.
 void recordFault(uint64_t faultAddress, int index, uint extent, uint opId)
 {
@@ -396,11 +385,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
             uint64_t sourceIndex;
             if (!gatherSource(tid, parameters, sourceIndex))
                 storeZero(parameters.valueAddress, tid);
-            else if (kMode != 1 || kUnary == 0)
-                copyElement(parameters.inputAddress, sourceIndex, parameters.valueAddress, tid);
             else
-                ((Ptr<float, Access.ReadWrite>)parameters.valueAddress)[tid] =
-                    applyUnary(((Ptr<float, Access.Read>)parameters.inputAddress)[sourceIndex]);
+                copyElement(parameters.inputAddress, sourceIndex, parameters.valueAddress, tid);
         }
         else if (kMode == 8)
         {

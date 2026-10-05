@@ -171,14 +171,6 @@ namespace lfs::vis {
 
     void VulkanSceneTemporalPipeline::shutdown() { impl_.reset(); }
 
-    VkImageView VulkanSceneTemporalPipeline::outputView(const TemporalViewId view) const {
-        return impl_ ? impl_->resolve.outputView(view) : VK_NULL_HANDLE;
-    }
-
-    SceneHistoryContract VulkanSceneTemporalPipeline::contract(const TemporalViewId view) const {
-        return impl_ ? impl_->resolve.contract(view) : SceneHistoryContract{};
-    }
-
     VulkanSceneTemporalResourceStats VulkanSceneTemporalPipeline::resourceStats() const {
         return impl_ ? impl_->resolve.resourceStats() : VulkanSceneTemporalResourceStats{};
     }

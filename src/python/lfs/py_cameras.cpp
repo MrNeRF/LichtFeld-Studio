@@ -156,9 +156,6 @@ namespace lfs::python {
         return PyTensor(cam_->load_and_get_depth(resize_factor, max_width), true);
     }
 
-    core::Camera* PyCamera::camera() { return cam_; }
-    const core::Camera* PyCamera::camera() const { return cam_; }
-
     void register_cameras(nb::module_& m) {
         // Camera class
         nb::class_<PyCamera>(m, "Camera")

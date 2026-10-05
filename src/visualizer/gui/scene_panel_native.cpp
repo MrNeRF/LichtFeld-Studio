@@ -1349,10 +1349,6 @@ namespace lfs::vis::gui {
         }
     }
 
-    std::unordered_set<int> NativeScenePanel::visibleCameraUids() const {
-        return tree_el_ ? tree_el_->visibleCameraUids() : std::unordered_set<int>{};
-    }
-
     SceneTreeSessionChrome NativeScenePanel::captureTreeChrome(
         const core::Scene& scene) const {
         SceneTreeSessionChrome chrome;

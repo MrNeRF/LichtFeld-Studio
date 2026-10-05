@@ -600,25 +600,6 @@ namespace lfs::vis::screen {
         return true;
     }
 
-    bool ScreenLayout::setWeights(const SplitId split, const std::vector<float>& weights) {
-        if (!root_)
-            return false;
-        Node* node = findSplitNode(*root_, split);
-        if (!node || weights.size() != node->children.size())
-            return false;
-        for (const float w : weights) {
-            if (!std::isfinite(w) || w <= 0.0f)
-                return false;
-        }
-        node->weights = weights;
-        renormalize(node->weights);
-        return true;
-    }
-
-    const ScreenLayout::Node* ScreenLayout::findSplit(const SplitId split) const {
-        return root_ ? findSplitNode(const_cast<Node&>(*root_), split) : nullptr;
-    }
-
     LayoutGeometry ScreenLayout::solve(const Rect& bounds, const LayoutMetrics& metrics, const AreaId maximized) const {
         LayoutGeometry out;
         out.bounds = bounds;

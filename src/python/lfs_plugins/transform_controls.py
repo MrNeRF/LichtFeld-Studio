@@ -44,10 +44,8 @@ _STEP_CONFIG = {
 
 _AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
 _NUMERIC_TRANSFORM_TOOL_IDS = ("builtin.translate", "builtin.rotate", "builtin.scale")
-_SPACE_LOCAL = 0
 _SPACE_WORLD = 1
 _PIVOT_ORIGIN = 0
-_PIVOT_BOUNDS = 1
 _MISSING = object()
 
 

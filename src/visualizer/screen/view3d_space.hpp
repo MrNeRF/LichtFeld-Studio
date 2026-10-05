@@ -42,9 +42,6 @@ namespace lfs::vis::screen {
 
     [[nodiscard]] LFS_VIS_API ViewAxis alignedViewAxis(const glm::mat3& rotation);
 
-    // Human-readable view name, e.g. "Top Orthographic" or "User Perspective".
-    [[nodiscard]] LFS_VIS_API std::string viewLabel(const View3DSpace& view);
-
     // Switches projection, keeping the apparent size of what is at the pivot
     // when entering orthographic. `viewport_height` is in pixels.
     void setOrthographic(View3DSpace& view, bool enabled, float viewport_height);

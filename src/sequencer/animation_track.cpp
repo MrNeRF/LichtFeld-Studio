@@ -115,13 +115,6 @@ namespace lfs::sequencer {
         return keyframes_.back().value;
     }
 
-    float AnimationTrack::startTime() const {
-        if (keyframes_.empty()) {
-            return 0.0f;
-        }
-        return keyframes_.front().time;
-    }
-
     float AnimationTrack::endTime() const {
         if (keyframes_.empty()) {
             return 0.0f;

@@ -128,7 +128,6 @@ namespace {
             });
             compare("attention", [](const Layers& l) { return nn::attention(l.heads, l.heads, l.heads); });
             compare("layer_norm", [](const Layers& l) { return nn::layer_norm(l.tokens, l.bias, l.bias); });
-            compare("softmax", [](const Layers& l) { return nn::softmax(l.tokens); });
             compare("gelu", [](const Layers& l) { return nn::gelu(l.tokens); });
             compare("conv3x3", [](const Layers& l) {
                 return nn::conv2d(l.image, l.kernel3, &l.channels, {.pad_h = 1, .pad_w = 1});

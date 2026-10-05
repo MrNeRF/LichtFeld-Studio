@@ -335,7 +335,7 @@ namespace lfs::core::internal {
                 viewport.viewportCount = viewport.scissorCount = 1;
                 VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
                 raster.polygonMode = VK_POLYGON_MODE_FILL;
-                raster.cullMode = draw.cull == Module::Cull::Back ? VK_CULL_MODE_BACK_BIT
+                raster.cullMode = draw.cull == Module::Cull::Back    ? VK_CULL_MODE_BACK_BIT
                                   : draw.cull == Module::Cull::Front ? VK_CULL_MODE_FRONT_BIT
                                                                      : VK_CULL_MODE_NONE;
                 // Vulkan decides facing in framebuffer space; the negative-height

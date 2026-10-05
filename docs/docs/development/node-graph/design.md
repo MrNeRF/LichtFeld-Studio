@@ -40,7 +40,7 @@ Non-goals for v1
 ```
 src/core/nodes/            (part of lfs_core, namespace lfs::nodes)
   types       Geometry, components, Value, Field, SocketType ids
-  registry    TreeTypeRegistry, SocketTypeRegistry, NodeTypeRegistry
+  registry    SocketTypeRegistry, NodeTypeRegistry
   tree        NodeTree (nodes, links, interface), JSON (de)serialisation,
               validation, implicit conversions
   evaluator   lazy topological evaluation, per-modifier output cache

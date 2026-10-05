@@ -39,7 +39,6 @@ namespace lfs::sequencer {
 
         [[nodiscard]] std::optional<AnimationValue> evaluate(float time) const;
 
-        [[nodiscard]] float startTime() const;
         [[nodiscard]] float endTime() const;
 
     private:

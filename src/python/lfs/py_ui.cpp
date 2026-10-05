@@ -3976,7 +3976,6 @@ namespace lfs::python {
         m.def(
             "set_exit_popup_open",
             [](bool open) {
-                set_exit_popup_open(open);
                 if (auto* gui = get_gui_manager()) {
                     gui->noteExitPopupMirror(open);
                 }
@@ -5819,17 +5818,11 @@ namespace lfs::python {
         PyBridge bridge;
         bridge.begin_ui_frame = []() { begin_keyboard_ui_frame(); };
         bridge.prepare_ui = []() {};
-        bridge.draw_menus = [](MenuLocation loc) { PyMenuRegistry::instance().draw_menu_items(loc); };
-        bridge.has_menus = [](MenuLocation loc) { return PyMenuRegistry::instance().has_items(loc); };
         bridge.get_menu_bar_entries = [](MenuBarEntryVisitor visitor, void* ctx) {
             auto entries = PyMenuRegistry::instance().get_menu_bar_entries();
             for (auto* entry : entries) {
                 visitor(entry->idname.c_str(), entry->label.c_str(), entry->order, ctx);
             }
-        };
-        bridge.draw_menu_bar_entry = [](const char* idname) {
-            if (idname)
-                PyMenuRegistry::instance().draw_menu_bar_entry(idname);
         };
         bridge.collect_menu_content = [](const char* idname, MenuItemVisitor visitor, void* ctx) {
             if (!idname)

@@ -165,19 +165,6 @@ namespace lfs::io {
             bool synchronize = true);
 
         /**
-         * @brief Encode grayscale GPU tensor to JPEG bytes
-         *
-         * @param image Tensor in GPU memory, format: [H,W] float32 normalized [0-1]
-         * @param quality JPEG quality (1-100)
-         * @param cuda_stream Optional CUDA stream for async operations
-         * @return JPEG bytes
-         */
-        std::vector<uint8_t> encode_grayscale_to_jpeg(
-            const lfs::core::Tensor& image,
-            int quality = 100,
-            void* cuda_stream = nullptr);
-
-        /**
          * @brief Batch encode raw RGB uint8 GPU data to JPEG bytes
          *
          * @param gpu_ptrs Vector of GPU device pointers to RGB24 data (HWC, uint8)

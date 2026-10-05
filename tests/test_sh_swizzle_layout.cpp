@@ -62,11 +62,11 @@ namespace {
         // Build a swizzled buffer from the canonical view.
         const size_t swizzled_floats = sh_swizzled_float_count(N, K);
         Tensor swizzled = Tensor::zeros({swizzled_floats}, Device::GPU);
-        reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K);
+        reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K, K);
 
         // Deswizzle back into a fresh canonical buffer.
         Tensor recovered = Tensor::empty({N, K, 3}, Device::GPU);
-        undo_reorder_sh_from_swizzled(swizzled.ptr<float>(), recovered.ptr<float>(), N, K);
+        undo_reorder_sh_from_swizzled(swizzled.ptr<float>(), recovered.ptr<float>(), N, K, K);
         cudaDeviceSynchronize();
 
         // Bitwise compare.
@@ -130,7 +130,7 @@ namespace {
         Tensor canonical = Tensor::from_vector(host_canonical, {N, K, 3}, Device::GPU);
         const size_t swizzled_floats = sh_swizzled_float_count(N);
         Tensor swizzled = Tensor::zeros({swizzled_floats}, Device::GPU);
-        reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K);
+        reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K, K);
         cudaDeviceSynchronize();
 
         auto host = swizzled.to(Device::CPU);
@@ -171,14 +171,14 @@ namespace {
 
         Tensor canonical = Tensor::from_vector(host_canonical, {N, K, 3}, Device::GPU);
         Tensor swizzled = Tensor::zeros({sh_swizzled_float_count(N)}, Device::GPU);
-        reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K);
+        reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K, K);
 
         const std::vector<int> selected = {0, 5, 31, 32, 69};
         Tensor indices = Tensor::from_vector(selected, {selected.size()}, Device::GPU).to(DataType::Int64);
         Tensor gathered = Tensor::empty({selected.size(), K, 3}, Device::GPU);
         shN_swizzled_gather_to_linear_i64(
             swizzled.ptr<float>(), indices.ptr<std::int64_t>(),
-            gathered.ptr<float>(), selected.size(), K);
+            gathered.ptr<float>(), selected.size(), K, K);
         cudaDeviceSynchronize();
 
         auto gathered_cpu = gathered.to(Device::CPU);
@@ -205,7 +205,7 @@ namespace {
         Tensor canonical = Tensor::from_vector(host_canonical, {N, K, 3}, Device::GPU);
         const size_t swizzled_floats = sh_swizzled_float_count(N);
         Tensor swizzled = Tensor::zeros({swizzled_floats}, Device::GPU);
-        reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K);
+        reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K, K);
         cudaDeviceSynchronize();
 
         auto host = swizzled.to(Device::CPU);

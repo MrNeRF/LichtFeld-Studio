@@ -75,9 +75,9 @@ namespace lfs::rendering {
         // Blends `count` ProjectedSplat records (and 3DGUT geometry) into
         // color(), depth() and pick(). An instance overflow sets status().error.
         [[nodiscard]] lfs::Result<void> rasterize(const core::Tensor& projected, const core::Tensor* gut, uint32_t count,
-                                             SplatRasterMode mode, const SplatRasterParameters& parameters,
-                                             const SplatRasterOverlay* overlay = nullptr,
-                                             const SplatRasterLogical* logical = nullptr);
+                                                  SplatRasterMode mode, const SplatRasterParameters& parameters,
+                                                  const SplatRasterOverlay* overlay = nullptr,
+                                                  const SplatRasterLogical* logical = nullptr);
 
         // Writes the display image (packed RGBA8) and linear view depth
         // (Float32) of the last rasterize() into rgba() and linear_depth(). An

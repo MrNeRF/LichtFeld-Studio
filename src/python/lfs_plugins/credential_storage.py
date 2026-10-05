@@ -11,16 +11,11 @@ import platform
 import shutil
 import subprocess
 import tempfile
-from typing import Protocol
 
 
 from .private_directory import mkdir_private
 
 
-class CredentialBackend(Protocol):
-    def read(self) -> bytes | None: ...
-    def write(self, value: bytes) -> None: ...
-    def delete(self) -> None: ...
 
 
 class FileBackend:

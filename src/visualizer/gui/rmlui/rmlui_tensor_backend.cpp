@@ -8,10 +8,10 @@
 #include "core/tensor.hpp"
 #include "gui/rmlui/rml_image_file.hpp"
 #include "gui/ui_texture.hpp"
+#include "rendering/tensor_frame_uploads.hpp"
 #include "rmlui_composite_program.hpp"
 #include "rmlui_draw_program.hpp"
 #include "rmlui_mask_program.hpp"
-#include "rendering/tensor_frame_uploads.hpp"
 #include "window/graphics_context.hpp"
 
 #include <RmlUi/Core/Matrix4.h>
@@ -93,7 +93,8 @@ namespace lfs::vis::gui {
             std::uintptr_t id = 0;
             const auto [last, error] = std::from_chars(value.data(), value.data() + value.size(), id);
             return error == std::errc{} && last == value.data() + value.size()
-                       ? std::optional{id} : std::nullopt;
+                       ? std::optional{id}
+                       : std::nullopt;
         }
     } // namespace
 
@@ -242,7 +243,8 @@ namespace lfs::vis::gui {
             auto& parameters = entry.parameters;
             const auto matrix = Rml::Matrix4f::ProjectOrtho(
                                     0.0f, float(destination.size(1)), float(destination.size(0)),
-                                    0.0f, -10000.0f, 10000.0f) * context * transform;
+                                    0.0f, -10000.0f, 10000.0f) *
+                                context * transform;
             std::memcpy(parameters.transform.data(), matrix.data(), sizeof(parameters.transform));
             parameters.translation = {translation.x, translation.y};
             parameters.target_size = {uint32_t(destination.size(1)), uint32_t(destination.size(0))};
@@ -310,7 +312,7 @@ namespace lfs::vis::gui {
         auto composite = Module::load(rmlui_composite_program_entries());
         auto mask = Module::load(rmlui_mask_program_entries());
         if (!draw || !composite || !mask) {
-            const auto detail = !draw ? draw.error().detail()
+            const auto detail = !draw        ? draw.error().detail()
                                 : !composite ? composite.error().detail()
                                              : mask.error().detail();
             LOG_ERROR("Could not load tensor RmlUi program: {}", detail);
@@ -427,7 +429,7 @@ namespace lfs::vis::gui {
         std::unique_ptr<Geometry> geometry(reinterpret_cast<Geometry*>(handle));
         if (geometry)
             impl_->geometry_bytes -= std::min(impl_->geometry_bytes,
-                geometry->positions.bytes() + geometry->colors.bytes() + geometry->texcoords.bytes());
+                                              geometry->positions.bytes() + geometry->colors.bytes() + geometry->texcoords.bytes());
     }
 
     Rml::TextureHandle TensorRmlUiRenderer::GenerateTexture(Rml::Span<const Rml::byte> source,
@@ -531,9 +533,10 @@ namespace lfs::vis::gui {
             const std::array bindings{Module::Binding{0, &coverage},
                                       Module::Binding{8, &impl_->clip_mask, Module::Access::ReadWrite}};
             auto result = impl_->mask_program->dispatch({.function = "intersectMask",
-                .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
-                .groups = {Module::groups_for(coverage.size(1), 64), uint32_t(coverage.size(0)), 1}});
-            if (!result) LOG_ERROR("Tensor RmlUi clip intersection failed: {}", result.error().detail());
+                                                         .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
+                                                         .groups = {Module::groups_for(coverage.size(1), 64), uint32_t(coverage.size(0)), 1}});
+            if (!result)
+                LOG_ERROR("Tensor RmlUi clip intersection failed: {}", result.error().detail());
         } else {
             impl_->render(*geometry, translation, nullptr, impl_->clip_mask, "maskFragment",
                           inverse ? 0.0f : 1.0f, true,
@@ -575,9 +578,10 @@ namespace lfs::vis::gui {
         const std::array bindings{Module::Binding{0, source},
                                   Module::Binding{8, destination, Module::Access::ReadWrite}};
         auto result = impl_->composite_program->dispatch({.function = "composite",
-            .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
-            .groups = {Module::groups_for(source->size(1), 64), uint32_t(source->size(0)), 1}});
-        if (!result) LOG_ERROR("Tensor RmlUi layer composite failed: {}", result.error().detail());
+                                                          .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
+                                                          .groups = {Module::groups_for(source->size(1), 64), uint32_t(source->size(0)), 1}});
+        if (!result)
+            LOG_ERROR("Tensor RmlUi layer composite failed: {}", result.error().detail());
     }
     void TensorRmlUiRenderer::PopLayer() {
         if (impl_->layer_stack.size() <= 1)

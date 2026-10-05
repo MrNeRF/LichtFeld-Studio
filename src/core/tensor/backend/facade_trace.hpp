@@ -38,7 +38,6 @@ namespace lfs::core::internal {
     }
 
     LFS_CORE_API void facade_trace_enable_for_testing(bool enabled);
-    LFS_LOCAL_SYMBOL bool facade_trace_enabled_for_testing();
     LFS_CORE_API void facade_trace_reset_for_testing();
     LFS_CORE_API std::array<uint64_t, kFacadeEntryCount> facade_trace_snapshot_for_testing();
     LFS_CORE_API std::string_view facade_entry_name(FacadeEntry entry);

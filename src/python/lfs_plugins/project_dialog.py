@@ -20,8 +20,8 @@ def form_content(kind: str, data: dict[str, Any], *, tr: Callable[[str], str],
         row_class = "modal-field modal-field--multiline" if multiline else "modal-field"
         return f'<div class="{row_class}">{caption}{control}</div>'
 
-    def fact(key: str, value: Any, *, id: str = "") -> str:
-        return form_row(key, f'<span id="{id}" class="modal-field-value" title="{text(value)}">{text(value)}</span>')
+    def fact(key: str, value: Any) -> str:
+        return form_row(key, f'<span id="" class="modal-field-value" title="{text(value)}">{text(value)}</span>')
 
     def field(name: str, key: str) -> str:
         return form_row(key, f'<input id="{name}" name="{name}" type="text" value="{text(data.get(name, ""))}" />', name)
