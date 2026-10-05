@@ -86,7 +86,9 @@ jobs:
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Configure
-        run: cmake --preset macos-release -DBUILD_TESTS=ON -DLFS_METAL_TEST_REQUIRE_DEVICE=ON -DLFS_TEST_METAL_VULKAN_INTEROP=ON -DLFS_BUILD_VULKAN_DEPTH_TESTS=ON
+        # Hosted runners cannot run the Metal tensor backend, so CI tests the hybrid
+        # build (Vulkan graphics, Metal and Vulkan tensors) instead of the Metal-only default.
+        run: cmake --preset macos-release -DLFS_GRAPHICS_BACKEND=Vulkan -DLFS_TENSOR_METAL=ON -DLFS_TENSOR_VULKAN=ON -DBUILD_TESTS=ON -DLFS_METAL_TEST_REQUIRE_DEVICE=ON -DLFS_TEST_METAL_VULKAN_INTEROP=ON -DLFS_BUILD_VULKAN_DEPTH_TESTS=ON
 
       - name: Remove vcpkg build intermediates
         run: |
