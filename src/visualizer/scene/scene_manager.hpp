@@ -89,7 +89,6 @@ namespace lfs::vis {
         void setPlyPath(std::string name, const std::filesystem::path& path);
         void setPlyPath(const core::Uuid& uuid, const std::filesystem::path& path);
         void clearPlyPath(core::NodeId id);
-        void clearPlyPath(std::string name);
         void clearPlyPath(const core::Uuid& uuid);
         void setDatasetPath(const std::filesystem::path& path);
 
@@ -187,7 +186,6 @@ namespace lfs::vis {
         // Full transform for selected node (includes rotation and scale)
         void setSelectedNodeTransform(const glm::mat4& transform);
         glm::mat4 getSelectedNodeTransform() const; // Returns local transform
-        [[nodiscard]] glm::mat4 getSelectedNodeVisualizerWorldTransform() const;
 
         // Multi-selection support
         [[nodiscard]] glm::vec3 getSelectionCenter() const;
@@ -196,15 +194,11 @@ namespace lfs::vis {
 
         // Cropbox operations for selected node
         core::NodeId getSelectedNodeCropBoxId() const;
-        core::CropBoxData* getSelectedNodeCropBox();
-        const core::CropBoxData* getSelectedNodeCropBox() const;
         core::NodeId getActiveSelectionCropBoxId() const;
         void syncCropBoxToRenderSettings();
 
         // Ellipsoid operations for selected node
         core::NodeId getSelectedNodeEllipsoidId() const;
-        core::EllipsoidData* getSelectedNodeEllipsoid();
-        const core::EllipsoidData* getSelectedNodeEllipsoid() const;
         core::NodeId getActiveSelectionEllipsoidId() const;
 
         std::expected<void, std::string> loadDataset(const std::filesystem::path& path,
@@ -318,7 +312,6 @@ namespace lfs::vis {
         void setAppearanceModel(std::unique_ptr<AppearanceTensorModel> model);
         void clearAppearanceModel();
         [[nodiscard]] const AppearanceTensorModel* getAppearanceTensorModel() const { return appearance_tensor_model_.get(); }
-        [[nodiscard]] bool hasAppearanceController() const;
         [[nodiscard]] bool hasAppearanceModel() const { return appearance_tensor_model_ != nullptr; }
 
         // Drop the GUI's borrowed scene-image tensor and drain the GPU so no

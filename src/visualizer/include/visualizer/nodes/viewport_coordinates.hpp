@@ -24,8 +24,6 @@ namespace lfs::vis::nodes {
         ViewportCoordinates(const core::Scene& scene, core::NodeId host);
 
         [[nodiscard]] bool valid() const noexcept { return valid_; }
-        [[nodiscard]] const glm::mat4& localToWorld() const noexcept { return local_to_world_; }
-        [[nodiscard]] const glm::mat4& worldToLocal() const noexcept { return world_to_local_; }
         [[nodiscard]] glm::vec3 pointToWorld(const glm::vec3& local) const;
         [[nodiscard]] glm::vec3 pointToLocal(const glm::vec3& world) const;
         [[nodiscard]] float radiusToLocal(float world_radius) const;

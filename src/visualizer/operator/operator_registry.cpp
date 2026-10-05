@@ -285,17 +285,6 @@ namespace lfs::vis::op {
         return result;
     }
 
-    bool OperatorRegistry::poll(BuiltinOp op) const {
-        std::lock_guard lock(mutex_);
-        const auto idx = static_cast<size_t>(op);
-        assert(idx < builtins_.size());
-
-        if (!builtins_[idx].is_registered) {
-            return false;
-        }
-        return pollImpl(builtins_[idx]);
-    }
-
     bool OperatorRegistry::poll(const std::string& class_id) const {
         std::lock_guard lock(mutex_);
 

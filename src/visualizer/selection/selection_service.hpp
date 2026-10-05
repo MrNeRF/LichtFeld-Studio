@@ -189,7 +189,6 @@ namespace lfs::vis {
         void cancelStroke();
 
         [[nodiscard]] bool isStrokeActive() const { return stroke_active_; }
-        [[nodiscard]] size_t getTotalGaussianCount() const;
         [[nodiscard]] bool hasScreenPositions() const;
         [[nodiscard]] std::shared_ptr<core::Tensor> getScreenPositions() const;
 
@@ -228,7 +227,6 @@ namespace lfs::vis {
             return interactive_selection_.preview_brush_point_count;
         }
         void setTestingScreenPositions(std::shared_ptr<core::Tensor> screen_positions);
-        void setTestingScreenPositionsForCamera(int camera_index, std::shared_ptr<core::Tensor> screen_positions);
         void setTestingViewport(ViewportInfo viewport);
         void setTestingContainmentIntrinsics(std::optional<rendering::CameraIntrinsics> intrinsics);
         void setTestingHoveredGaussianId(std::optional<int> hovered_gaussian_id);
@@ -413,7 +411,6 @@ namespace lfs::vis {
             int camera_index, const SelectionProjectionContext& projection_context) const;
         [[nodiscard]] std::shared_ptr<core::Tensor> renderScreenPositionsForProjectionContext(
             const SelectionProjectionContext& projection_context) const;
-        [[nodiscard]] bool hasTestingScreenPositionsForCamera(int camera_index) const;
         [[nodiscard]] bool commandCameraValidationRequired(int camera_index) const;
         void clearInteractivePreviewState();
         bool allowPassiveHoverPreview(glm::vec2 cursor_pos);
@@ -439,7 +436,6 @@ namespace lfs::vis {
         size_t selection_output_buffer_index_ = 0;
         uint64_t interactive_selection_generation_ = 0;
         std::shared_ptr<core::Tensor> testing_screen_positions_;
-        std::unordered_map<int, std::shared_ptr<core::Tensor>> testing_camera_screen_positions_;
         std::optional<ViewportInfo> testing_viewport_;
         std::optional<rendering::CameraIntrinsics> testing_containment_intrinsics_;
         std::optional<int> testing_hovered_gaussian_id_;

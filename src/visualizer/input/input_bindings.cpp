@@ -1707,10 +1707,6 @@ namespace lfs::vis::input {
         capture_state_ = CaptureState{};
     }
 
-    void InputBindings::captureKey(int key, int mods) {
-        captureKey(key, key, mods);
-    }
-
     void InputBindings::captureKey(const int physical_key, const int logical_key, const int mods) {
         if (!capture_state_.active)
             return;

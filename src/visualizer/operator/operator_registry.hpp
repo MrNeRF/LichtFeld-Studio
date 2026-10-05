@@ -51,7 +51,6 @@ namespace lfs::vis::op {
         [[nodiscard]] std::vector<const OperatorDescriptor*> getAllOperators() const;
         [[nodiscard]] const OperatorDescriptor* getDescriptor(BuiltinOp op) const;
         [[nodiscard]] const OperatorDescriptor* getDescriptor(const std::string& class_id) const;
-        [[nodiscard]] bool poll(BuiltinOp op) const;
         [[nodiscard]] bool poll(const std::string& class_id) const;
         void invalidatePollCache(PollDependency changed = PollDependency::ALL);
 
