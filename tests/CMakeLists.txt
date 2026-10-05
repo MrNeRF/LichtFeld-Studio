@@ -52,6 +52,25 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+# The tensor HDR tonemapper against libplacebo, on clips ffmpeg encodes.
+if(LFS_TENSOR_METAL AND BUILD_TESTS)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(HDR_TEST_FFMPEG REQUIRED libavcodec libavformat libavutil)
+    find_program(LFS_HDR_TEST_FFMPEG NAMES ffmpeg)
+    add_executable(hdr_tonemap_contracts test_hdr_tonemap_tensor.cpp)
+    target_compile_features(hdr_tonemap_contracts PRIVATE cxx_std_23)
+    # FFmpeg links through lfs_video; a second link merges "-framework X" pairs.
+    target_include_directories(hdr_tonemap_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src/io)
+    target_include_directories(hdr_tonemap_contracts SYSTEM PRIVATE ${HDR_TEST_FFMPEG_INCLUDE_DIRS})
+    target_compile_definitions(hdr_tonemap_contracts PRIVATE LFS_HDR_TEST_FFMPEG="${LFS_HDR_TEST_FFMPEG}"
+        $<$<BOOL:${LFS_USE_VULKAN}>:LFS_USE_VULKAN>)
+    target_link_libraries(hdr_tonemap_contracts PRIVATE lfs_video lfs_core GTest::gtest_main)
+    add_test(NAME HdrTonemapContracts COMMAND hdr_tonemap_contracts)
+    # libplacebo is the precise-math reference; MoltenVK defaults to fast math.
+    set_tests_properties(HdrTonemapContracts PROPERTIES ENVIRONMENT "MVK_CONFIG_FAST_MATH_ENABLED=0"
+        LABELS "tensor;gpu;video" TIMEOUT 300)
+endif()
+
 # Standalone tensor/training proofs must not pull in the Vulkan window or its
 # test harness when the core Vulkan backend is disabled.
 if(LFS_TENSOR_METAL AND BUILD_TESTS AND NOT LFS_TENSOR_VULKAN)

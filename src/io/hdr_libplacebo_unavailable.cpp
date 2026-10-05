@@ -2,30 +2,34 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "hdr_libplacebo.hpp"
+#include "hdr_tonemap_tensor.hpp"
 
 namespace lfs::io {
-    class HdrLibplaceboRenderer::Impl {};
+    class HdrLibplaceboRenderer::Impl {
+    public:
+        HdrTensorRenderer renderer;
+    };
 
     HdrLibplaceboRenderer::HdrLibplaceboRenderer() : impl_(std::make_unique<Impl>()) {}
     HdrLibplaceboRenderer::~HdrLibplaceboRenderer() = default;
 
     bool HdrLibplaceboRenderer::isAvailable(std::string& error) {
-        error = "HDR libplacebo is unavailable in the Metal-only build because its current path requires Vulkan";
-        return false;
+        return impl_->renderer.isAvailable(error);
     }
 
-    bool HdrLibplaceboRenderer::tonemapToSdr(const AVFrame*, const AVStream*, HdrFormat,
-                                             int, int, std::vector<unsigned char>&,
-                                             std::string& error, HdrTonemapTiming*) {
-        return isAvailable(error);
+    bool HdrLibplaceboRenderer::tonemapToSdr(const AVFrame* frame, const AVStream* stream,
+                                             HdrFormat format, int width, int height,
+                                             std::vector<unsigned char>& output,
+                                             std::string& error, HdrTonemapTiming* timing) {
+        return impl_->renderer.tonemapToSdr(frame, stream, format, width, height, output, error, timing);
     }
 
-    bool HdrLibplaceboRenderer::tonemapToSdrRgba(const AVFrame*, const AVStream*, HdrFormat,
-                                                 int, int, int,
-                                                 std::vector<unsigned char>&,
+    bool HdrLibplaceboRenderer::tonemapToSdrRgba(const AVFrame* frame, const AVStream* stream,
+                                                 HdrFormat format, int width, int height,
+                                                 int rotation, std::vector<unsigned char>& output,
                                                  std::string& error) {
-        return isAvailable(error);
+        return impl_->renderer.tonemapToSdrRgba(frame, stream, format, width, height, rotation, output, error);
     }
 
-    void HdrLibplaceboRenderer::reset() {}
+    void HdrLibplaceboRenderer::reset() { impl_->renderer.reset(); }
 } // namespace lfs::io

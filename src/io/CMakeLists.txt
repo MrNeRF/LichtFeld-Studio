@@ -51,6 +51,8 @@ add_library(lfs_video STATIC
         hdr_tonemap.hpp
         hdr_tonemap.cpp
         hdr_libplacebo.hpp
+        hdr_tonemap_tensor.hpp
+        hdr_tonemap_tensor.cpp
         video_player.hpp
         video_player.cpp
 )
@@ -59,6 +61,7 @@ if(LFS_USE_VULKAN)
 else()
     target_sources(lfs_video PRIVATE hdr_libplacebo_unavailable.cpp)
 endif()
+lfs_add_gpu_program(lfs_video hdr_tonemap_program SOURCE hdr_tonemap.slang COMPUTE decode measure resample gamut render)
 if(LFS_HAS_CUDA)
     target_sources(lfs_video PRIVATE
         video/color_convert.cuh

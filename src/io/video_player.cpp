@@ -1058,7 +1058,7 @@ namespace lfs::io {
                 decoded_frame_.height = output_height;
                 decoded_frame_.gpu_rotation = true;
                 if (!logged_hdr_rgba_preview_path_) {
-                    LOG_INFO("HDR preview: libplacebo RGBA8 readback -> Vulkan UI upload "
+                    LOG_INFO("HDR preview: GPU tonemap RGBA8 readback -> UI upload "
                              "(CPU RGB/RGBA conversion bypassed, GPU rotation={} deg)",
                              rotation);
                     logged_hdr_rgba_preview_path_ = true;
