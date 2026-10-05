@@ -70,15 +70,17 @@ namespace lfs::core {
                     !offsets.insert(binding.parameter_offset).second)
                     return program_error(ErrorCode::InvalidArgument,
                                          std::format("Invalid/repeated tensor binding offset {} in {} parameter bytes", offset, result.parameters.size()));
-                if (!tensor || !tensor->is_valid() || tensor->numel() == 0 || !tensor->is_contiguous() ||
-                    tensor->device() != Device::GPU || gpu_backend_of(*tensor) != backend)
-                    return program_error(ErrorCode::InvalidArgument,
-                                         std::format("Binding at {} requires a nonempty contiguous {} tensor; present={}, valid={}",
-                                                     offset, gpu_backend_name(backend), tensor != nullptr, tensor && tensor->is_valid()));
                 uint64_t pointer = 0;
                 std::memcpy(&pointer, result.parameters.data() + offset, sizeof(pointer));
                 if (pointer != 0)
                     return program_error(ErrorCode::InvalidArgument, std::format("Pointer field at {} must be zero, observed {}", offset, pointer));
+                if (!tensor)
+                    continue;
+                if (!tensor->is_valid() || tensor->numel() == 0 || !tensor->is_contiguous() ||
+                    tensor->device() != Device::GPU || gpu_backend_of(*tensor) != backend)
+                    return program_error(ErrorCode::InvalidArgument,
+                                         std::format("Binding at {} requires a nonempty contiguous {} tensor; present={}, valid={}",
+                                                     offset, gpu_backend_name(backend), true, tensor->is_valid()));
                 pointer = program.address(*tensor);
                 std::memcpy(result.parameters.data() + offset, &pointer, sizeof(pointer));
                 (binding.access == GpuKernelModule::Access::Read ? result.reads : result.writes).push_back(tensor);
@@ -134,12 +136,27 @@ namespace lfs::core {
                                                                std::format("Threadgroup dimension {}: shader requires {}, observed {}", i, signature.thread_group[i], dispatch.group[i])));
                 if (dispatch.group[i] == 0)
                     return Result<void>::failure(program_error(ErrorCode::InvalidArgument, std::format("Threadgroup dimension {} is zero", i)));
-                if (dispatch.groups[i] == 0)
+                if (!dispatch.indirect && dispatch.groups[i] == 0)
                     return {};
+            }
+            if (const auto* indirect = dispatch.indirect) {
+                if (impl_->backend == GpuBackend::CUDA)
+                    return Result<void>::failure(program_error(ErrorCode::Unsupported, "Indirect dispatch is unavailable on CUDA programs"));
+                if (!indirect->is_valid() || !indirect->is_contiguous() || indirect->device() != Device::GPU ||
+                    gpu_backend_of(*indirect) != impl_->backend ||
+                    (indirect->dtype() != DataType::Int32 && indirect->dtype() != DataType::UInt32) ||
+                    indirect->numel() < dispatch.indirect_offset + 3)
+                    return Result<void>::failure(program_error(
+                        ErrorCode::InvalidArgument,
+                        std::format("Indirect arguments need three contiguous {} Int32/UInt32 values at element {}; valid={}, numel={}",
+                                    gpu_backend_name(impl_->backend), dispatch.indirect_offset, indirect->is_valid(),
+                                    indirect->is_valid() ? indirect->numel() : 0)));
             }
             auto args = bind_arguments(*impl_->program, impl_->backend, dispatch.arguments, signature.parameter_bytes, signature.tensor_offsets);
             if (!args)
                 return Result<void>::failure(std::move(args).error());
+            if (dispatch.indirect)
+                args->reads.push_back(dispatch.indirect);
             impl_->program->dispatch(dispatch, *args);
             return {};
         });

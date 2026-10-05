@@ -4,6 +4,8 @@
 #include "core/tensor_backend.hpp"
 #include "core/tensor_vignette.hpp"
 #include "program_contract.hpp"
+#include "program_features.hpp"
+#include "program_features_variant.hpp"
 #include <array>
 #include <cmath>
 #include <gtest/gtest.h>
@@ -319,6 +321,257 @@ namespace {
                         EXPECT_EQ(host.ptr<float>()[index + c], 0) << x << ',' << y;
                     EXPECT_NEAR(host.ptr<float>()[index + 3], alpha, 2e-6f) << x << ',' << y;
                 }
+        }
+    }
+
+    struct FeatureParams {
+        uint64_t values = 0, output = 0, counters = 0, halves = 0, shorts = 0, longs = 0;
+        uint32_t count = 0, padding = 0;
+    };
+
+    // Binds every pointer of FeatureParams; unused ones point at `spare`.
+    struct FeatureBindings {
+        Tensor values, output, counters, halves, shorts, longs;
+        std::array<M::Binding, 6> list() {
+            return {M::Binding{0, &values}, M::Binding{8, &output, M::Access::ReadWrite},
+                    M::Binding{16, &counters, M::Access::ReadWrite}, M::Binding{24, &halves, M::Access::ReadWrite},
+                    M::Binding{32, &shorts, M::Access::ReadWrite}, M::Binding{40, &longs, M::Access::ReadWrite}};
+        }
+    };
+
+    FeatureBindings feature_bindings(const std::vector<uint32_t>& values, size_t outputs) {
+        return {.values = Tensor::from_blob(const_cast<uint32_t*>(values.data()), {values.size()}, Device::CPU, DataType::Int32).to(Device::GPU),
+                .output = Tensor::zeros({outputs}, Device::GPU, DataType::Int32),
+                .counters = Tensor::zeros({4}, Device::GPU, DataType::Int32),
+                .halves = Tensor::zeros({values.size()}, Device::GPU, DataType::Float16),
+                .shorts = Tensor::zeros({values.size() * 2}, Device::GPU, DataType::UInt8),
+                .longs = Tensor::zeros({values.size()}, Device::GPU, DataType::Int64)};
+    }
+
+    std::vector<uint32_t> to_uint(const Tensor& tensor) {
+        auto host = tensor.to(Device::CPU);
+        const auto* data = host.ptr<int32_t>();
+        return std::vector<uint32_t>(reinterpret_cast<const uint32_t*>(data), reinterpret_cast<const uint32_t*>(data) + host.numel());
+    }
+
+    TEST_P(Programs, SubgroupOperationsMatchCpu) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        GpuBackendScope scope(GetParam());
+        auto loaded = M::load(program_features_entries(), GetParam());
+        ASSERT_TRUE(loaded) << loaded.error().detail();
+        std::vector<uint32_t> values(200);
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = uint32_t((i * 7 + 3) % 17);
+        auto b = feature_bindings(values, values.size() * 6);
+        const auto bindings = b.list();
+        FeatureParams params{.count = uint32_t(values.size())};
+        auto dispatched = (*loaded)->dispatch({.function = "waveOps", .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
+                                               .groups = {M::groups_for(values.size(), 64), 1, 1}});
+        ASSERT_TRUE(dispatched) << dispatched.error().detail();
+        const auto out = to_uint(b.output);
+        const uint32_t width = out[4];
+        ASSERT_TRUE(width == 32 || width == 64) << width;
+        for (size_t lane0 = 0; lane0 < values.size(); lane0 += width) {
+            uint32_t prefix = 0, sum = 0, odd = 0, ballot = 0;
+            for (size_t i = lane0; i < lane0 + width; ++i)
+                if (i < values.size()) {
+                    sum += values[i];
+                    odd += values[i] & 1u;
+                }
+            for (size_t i = lane0; i < std::min(values.size(), lane0 + width); ++i) {
+                prefix += values[i];
+                if (values[i] > 8u && i - lane0 < 32)
+                    ballot |= 1u << (i - lane0);
+            }
+            for (size_t i = lane0; i < std::min(values.size(), lane0 + width); ++i) {
+                const size_t lane = i - lane0;
+                uint32_t expected_prefix = 0;
+                for (size_t j = lane0; j <= i; ++j)
+                    expected_prefix += values[j];
+                const size_t next = lane0 + (lane + 1) % width;
+                EXPECT_EQ(out[i * 6], expected_prefix) << i;
+                EXPECT_EQ(out[i * 6 + 1], sum) << i;
+                EXPECT_EQ(out[i * 6 + 2], odd) << i;
+                EXPECT_EQ(out[i * 6 + 3], next < values.size() ? values[next] : 0u) << i;
+                EXPECT_EQ(out[i * 6 + 5], ballot) << i;
+            }
+        }
+    }
+
+    TEST_P(Programs, ThreadgroupMemoryReduces) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        GpuBackendScope scope(GetParam());
+        auto loaded = M::load(program_features_entries(), GetParam());
+        ASSERT_TRUE(loaded) << loaded.error().detail();
+        std::vector<uint32_t> values(1000);
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = uint32_t(i % 97);
+        const size_t groups = (values.size() + 255) / 256;
+        auto b = feature_bindings(values, groups);
+        const auto bindings = b.list();
+        FeatureParams params{.count = uint32_t(values.size())};
+        auto dispatched = (*loaded)->dispatch({.function = "sharedReduce", .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
+                                               .groups = {uint32_t(groups), 1, 1}, .group = {256, 1, 1}});
+        ASSERT_TRUE(dispatched) << dispatched.error().detail();
+        const auto out = to_uint(b.output);
+        for (size_t g = 0; g < groups; ++g) {
+            uint32_t expected = 0;
+            for (size_t i = g * 256; i < std::min(values.size(), (g + 1) * 256); ++i)
+                expected += values[i];
+            EXPECT_EQ(out[g], expected) << g;
+        }
+    }
+
+    TEST_P(Programs, GlobalAtomicsMatchCpu) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        GpuBackendScope scope(GetParam());
+        auto loaded = M::load(program_features_entries(), GetParam());
+        ASSERT_TRUE(loaded) << loaded.error().detail();
+        std::vector<uint32_t> values(5000);
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = uint32_t((i * 2654435761u) % 1000 + 5);
+        auto b = feature_bindings(values, 1);
+        const std::vector<int32_t> init{0, int32_t(0x7fffffff), 0, 0};
+        b.counters = Tensor::from_blob(const_cast<int32_t*>(init.data()), {4}, Device::CPU, DataType::Int32).to(Device::GPU);
+        const auto bindings = b.list();
+        FeatureParams params{.count = uint32_t(values.size())};
+        auto dispatched = (*loaded)->dispatch({.function = "atomics", .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
+                                               .groups = {M::groups_for(values.size(), 64), 1, 1}});
+        ASSERT_TRUE(dispatched) << dispatched.error().detail();
+        uint32_t sum = 0, min = 0x7fffffff, max = 0, bits = 0;
+        for (const auto v : values) {
+            sum += v;
+            min = std::min(min, v);
+            max = std::max(max, v);
+            bits |= 1u << (v & 31u);
+        }
+        EXPECT_EQ(to_uint(b.counters), (std::vector<uint32_t>{sum, min, max, bits}));
+    }
+
+    TEST_P(Programs, HalfShortAndLongStorageRoundTrip) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        GpuBackendScope scope(GetParam());
+        auto loaded = M::load(program_features_entries(), GetParam());
+        ASSERT_TRUE(loaded) << loaded.error().detail();
+        constexpr size_t kCount = 333;
+        std::vector<uint32_t> values(kCount, 0);
+        auto b = feature_bindings(values, 1);
+        std::vector<float> halves(kCount);
+        std::vector<uint16_t> shorts(kCount);
+        std::vector<int64_t> longs(kCount);
+        for (size_t i = 0; i < kCount; ++i) {
+            halves[i] = float(i) * 0.25f - 30.0f;
+            shorts[i] = uint16_t(i * 197 % 65535 + (i == 7 ? 65535 - 197 * 7 % 65535 : 0));
+            longs[i] = (int64_t(i) << 33) - 7;
+        }
+        b.halves = Tensor::from_blob(halves.data(), {kCount}, Device::CPU, DataType::Float32).to(DataType::Float16).to(Device::GPU);
+        // No 16-bit integer dtype: bind the raw bytes.
+        b.shorts = Tensor::from_blob(shorts.data(), {kCount * 2}, Device::CPU, DataType::UInt8).to(Device::GPU);
+        b.longs = Tensor::from_blob(longs.data(), {kCount}, Device::CPU, DataType::Int64).to(Device::GPU);
+        const auto bindings = b.list();
+        FeatureParams params{.count = uint32_t(kCount)};
+        auto dispatched = (*loaded)->dispatch({.function = "narrowAndWide", .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
+                                               .groups = {M::groups_for(kCount, 64), 1, 1}});
+        ASSERT_TRUE(dispatched) << dispatched.error().detail();
+        auto h = b.halves.to(DataType::Float32).to(Device::CPU);
+        auto s = b.shorts.to(Device::CPU);
+        const auto* short_out = reinterpret_cast<const uint16_t*>(s.ptr<uint8_t>());
+        auto l = b.longs.to(Device::CPU);
+        for (size_t i = 0; i < kCount; ++i) {
+            EXPECT_FLOAT_EQ(h.ptr<float>()[i], halves[i] * 2.0f) << i;
+            EXPECT_EQ(short_out[i], uint16_t(shorts[i] + 1)) << i;
+            EXPECT_EQ(l.ptr<int64_t>()[i], longs[i] * 3 - (int64_t(1) << 40)) << i;
+        }
+    }
+
+    TEST_P(Programs, IndirectDispatchUsesGpuWrittenCounts) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP() << "Indirect dispatch is Vulkan and Metal only";
+        GpuBackendScope scope(GetParam());
+        auto loaded = M::load(program_features_entries(), GetParam());
+        ASSERT_TRUE(loaded) << loaded.error().detail();
+        for (const uint32_t count : {300u, 0u}) {
+            std::vector<uint32_t> values(300);
+            for (size_t i = 0; i < values.size(); ++i)
+                values[i] = uint32_t(i * 3);
+            auto b = feature_bindings(values, values.size());
+            const auto bindings = b.list();
+            FeatureParams params{.count = count};
+            const auto bytes = std::as_bytes(std::span(&params, 1));
+            ASSERT_TRUE((*loaded)->dispatch({.function = "prepareIndirect", .arguments = {bytes, bindings}, .group = {1, 1, 1}}));
+            // The marker's own count covers every value; only the GPU-written
+            // threadgroup count decides how many run.
+            FeatureParams all{.count = uint32_t(values.size())};
+            auto dispatched = (*loaded)->dispatch({.function = "markIndirect",
+                                                   .arguments = {std::as_bytes(std::span(&all, 1)), bindings},
+                                                   .indirect = &b.counters});
+            ASSERT_TRUE(dispatched) << dispatched.error().detail();
+            const auto out = to_uint(b.output);
+            const size_t launched = size_t(count + 63) / 64 * 64;
+            for (size_t i = 0; i < values.size(); ++i)
+                EXPECT_EQ(out[i], i < launched ? values[i] + 1 : 0u) << count << " " << i;
+        }
+    }
+
+    TEST_P(Programs, IndirectDispatchRejectsShortArguments) {
+        if (!gpu_backend_available(GetParam()) || GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        GpuBackendScope scope(GetParam());
+        auto loaded = M::load(program_features_entries(), GetParam());
+        ASSERT_TRUE(loaded) << loaded.error().detail();
+        auto b = feature_bindings(std::vector<uint32_t>(4), 4);
+        const auto bindings = b.list();
+        FeatureParams params{.count = 4};
+        auto dispatched = (*loaded)->dispatch({.function = "markIndirect",
+                                               .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
+                                               .indirect = &b.counters, .indirect_offset = 2});
+        EXPECT_FALSE(dispatched);
+    }
+
+    TEST_P(Programs, NullBindingIsAnAbsentOptionalInput) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        GpuBackendScope scope(GetParam());
+        auto loaded = M::load(program_features_entries(), GetParam());
+        ASSERT_TRUE(loaded) << loaded.error().detail();
+        auto b = feature_bindings(std::vector<uint32_t>(70), 70);
+        std::vector<int64_t> longs(70);
+        for (size_t i = 0; i < longs.size(); ++i)
+            longs[i] = int64_t(i) + 100;
+        b.longs = Tensor::from_blob(longs.data(), {longs.size()}, Device::CPU, DataType::Int64).to(Device::GPU);
+        FeatureParams params{.count = 70};
+        const auto bytes = std::as_bytes(std::span(&params, 1));
+        auto present = b.list();
+        ASSERT_TRUE((*loaded)->dispatch({.function = "optionalInput", .arguments = {bytes, present}, .groups = {2, 1, 1}}));
+        auto with = to_uint(b.output);
+        auto absent = b.list();
+        absent[5].tensor = nullptr;
+        ASSERT_TRUE((*loaded)->dispatch({.function = "optionalInput", .arguments = {bytes, absent}, .groups = {2, 1, 1}}));
+        auto without = to_uint(b.output);
+        for (size_t i = 0; i < 70; ++i) {
+            EXPECT_EQ(with[i], uint32_t(i + 100)) << i;
+            EXPECT_EQ(without[i], 7u) << i;
+        }
+    }
+
+    TEST_P(Programs, CompileDefinesBuildVariants) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        GpuBackendScope scope(GetParam());
+        for (const auto& [entries, expected] : {std::pair{program_features_entries(), 0u}, std::pair{program_features_variant_entries(), 5u}}) {
+            auto loaded = M::load(entries, GetParam());
+            ASSERT_TRUE(loaded) << loaded.error().detail();
+            auto b = feature_bindings(std::vector<uint32_t>(1), 1);
+            const auto bindings = b.list();
+            FeatureParams params{.count = 1};
+            ASSERT_TRUE((*loaded)->dispatch({.function = "variant", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .group = {1, 1, 1}}));
+            EXPECT_EQ(to_uint(b.output)[0], expected);
         }
     }
 

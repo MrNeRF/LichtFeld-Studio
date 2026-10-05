@@ -79,6 +79,8 @@ namespace lfs::core::internal::metal {
         // Threads to run, or threadgroups when group_size is set.
         MTLSize grid;
         MTLSize group_size{};
+        // GPU address of three uint32 threadgroup counts; replaces grid.
+        uint64_t indirect = 0;
     };
 
     template <class Params>

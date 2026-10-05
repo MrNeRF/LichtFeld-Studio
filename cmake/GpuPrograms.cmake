@@ -5,14 +5,18 @@ find_program(LFS_GPU_SLANGC NAMES slangc
     HINTS "${VCPKG_INSTALLED_DIR}/${VCPKG_HOST_TRIPLET}/tools/shader-slang"
           "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/shader-slang"
     PATH_SUFFIXES tools/shader-slang REQUIRED)
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 # One Slang module, any number of compute entries, and optional raster entries.
 # Artifacts are embedded, so installed builds never depend on source/build paths.
 # MSL is generated at build time; Metal loads it using the system compiler. This
 # works with Command Line Tools, without the optional offline Metal Toolchain.
 function(lfs_add_gpu_program target name)
-    cmake_parse_arguments(PROGRAM "" "SOURCE" "COMPUTE;VERTEX;FRAGMENT" ${ARGN})
+    # FindPython variables are directory-scoped; callers may be sibling directories.
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # DEFINES (NAME or NAME=VALUE) specialize the module; build each variant
+    # as its own program.
+    cmake_parse_arguments(PROGRAM "" "SOURCE" "COMPUTE;VERTEX;FRAGMENT;DEFINES" ${ARGN})
+    list(TRANSFORM PROGRAM_DEFINES PREPEND "-D" OUTPUT_VARIABLE defines)
     get_filename_component(source "${PROGRAM_SOURCE}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     set(directory "${CMAKE_CURRENT_BINARY_DIR}/gpu_programs/${name}")
     file(MAKE_DIRECTORY "${directory}")
@@ -31,7 +35,7 @@ function(lfs_add_gpu_program target name)
             if(LFS_TENSOR_VULKAN)
                 set(output "${directory}/${entry}.spv")
                 add_custom_command(OUTPUT "${output}" "${output}.json"
-                    COMMAND "${LFS_GPU_SLANGC}" "${source}" -entry "${entry}" -stage "${slang_stage}"
+                    COMMAND "${LFS_GPU_SLANGC}" "${source}" ${defines} -entry "${entry}" -stage "${slang_stage}"
                         -target spirv -profile glsl_460 -emit-spirv-directly -fvk-use-entrypoint-name
                         -fvk-use-scalar-layout -fp-mode precise -line-directive-mode none -o "${output}" -reflection-json "${output}.json"
                     DEPENDS "${source}" "${LFS_GPU_SLANGC}" VERBATIM)
@@ -41,7 +45,7 @@ function(lfs_add_gpu_program target name)
             if(LFS_TENSOR_METAL)
                 set(output "${directory}/${entry}.metal")
                 add_custom_command(OUTPUT "${output}" "${output}.json"
-                    COMMAND "${LFS_GPU_SLANGC}" "${source}" -entry "${entry}" -stage "${slang_stage}"
+                    COMMAND "${LFS_GPU_SLANGC}" "${source}" ${defines} -entry "${entry}" -stage "${slang_stage}"
                         -target metal -fp-mode precise -line-directive-mode none -o "${output}" -reflection-json "${output}.json"
                     DEPENDS "${source}" "${LFS_GPU_SLANGC}" VERBATIM)
                 list(APPEND outputs "${output}" "${output}.json")
@@ -51,7 +55,7 @@ function(lfs_add_gpu_program target name)
                 set(cuda_source "${directory}/${entry}.cu")
                 set(output "${directory}/${entry}.ptx")
                 add_custom_command(OUTPUT "${output}" "${output}.json" BYPRODUCTS "${cuda_source}"
-                    COMMAND "${LFS_GPU_SLANGC}" "${source}" -entry "${entry}" -stage compute
+                    COMMAND "${LFS_GPU_SLANGC}" "${source}" ${defines} -entry "${entry}" -stage compute
                         -target cuda -fp-mode precise -line-directive-mode none -o "${cuda_source}" -reflection-json "${output}.json"
                     COMMAND "${CMAKE_CUDA_COMPILER}" --ptx --std=c++17 --fmad=false
                         "${cuda_source}" -o "${output}"

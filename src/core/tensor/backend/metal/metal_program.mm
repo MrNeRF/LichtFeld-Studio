@@ -77,7 +77,8 @@ namespace lfs::core::internal {
                                           .buffers = {},
                                           .params = arguments.parameters,
                                           .grid = MTLSizeMake(launch.groups[0], launch.groups[1], launch.groups[2]),
-                                          .group_size = MTLSizeMake(launch.group[0], launch.group[1], launch.group[2])});
+                                          .group_size = MTLSizeMake(launch.group[0], launch.group[1], launch.group[2]),
+                                          .indirect = launch.indirect ? address(*launch.indirect) + launch.indirect_offset * sizeof(uint32_t) : 0});
             }
 
             void draw(std::span<const Module::Draw> draws, std::span<const ProgramArguments> arguments) override {

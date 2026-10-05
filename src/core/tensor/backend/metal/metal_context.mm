@@ -209,7 +209,9 @@ namespace lfs::core::internal::metal {
             [arguments_ setAddress:params.gpuAddress + params_used_ atIndex:slot];
             params_used_ += (dispatch.params.size() + kParamsAlignment - 1) / kParamsAlignment * kParamsAlignment;
         }
-        if (dispatch.group_size.width == 0) {
+        if (dispatch.indirect != 0) {
+            [encoder dispatchThreadgroupsWithIndirectBuffer:dispatch.indirect threadsPerThreadgroup:dispatch.group_size];
+        } else if (dispatch.group_size.width == 0) {
             const NSUInteger width = std::min(dispatch.pipeline.maxTotalThreadsPerThreadgroup, kThreadgroupWidth);
             [encoder dispatchThreads:dispatch.grid threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
         } else {
