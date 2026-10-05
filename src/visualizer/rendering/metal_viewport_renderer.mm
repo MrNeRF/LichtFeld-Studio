@@ -32,6 +32,7 @@
 #include <map>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -210,6 +211,7 @@ namespace lfs::vis {
             uint32_t gpu_capacity = 0, gpu_source_count = 0, gpu_chunks = 0;
             bool points = false;
             bool tensor = false; // drawn by the tensor-program rasterizer
+            id<MTLBuffer> tensor_status; // host copy of its RasterStatus, read on completion
             Image color, depth;
         };
     } // namespace
@@ -234,6 +236,7 @@ namespace lfs::vis {
         // Opt-in single-source rasterizer (tensor programs) for the plain splat view.
         const bool tensor_raster = core::environment::flag("LFS_TENSOR_RASTER");
         std::unique_ptr<rendering::SplatProjector> projector;
+        core::GpuBackend projector_backend{};
         core::Tensor tensor_projected;
         id<MTLBuffer> projected, gut_geometry;
         bool profiling_enabled = false;
@@ -279,6 +282,7 @@ namespace lfs::vis {
             std::unique_ptr<MetalRadPager> pager;
             // Tensor-program raster scratch and display outputs.
             std::unique_ptr<rendering::SplatRasterizer> tensor_raster;
+            core::GpuBackend tensor_backend{};
         };
         std::unordered_map<RenderTargetId, TargetState, RenderTargetIdHash> targets;
         std::unordered_set<RenderTargetId, RenderTargetIdHash> released_targets;
@@ -608,7 +612,10 @@ namespace lfs::vis {
             }
             return lod_trees.insert_or_assign(&tree, std::move(metadata)).first->second;
         }
-        Frame& acquire(Slot output, const rendering::ViewportRenderRequest& request, uint32_t count, bool points = false, bool tensor = false) {
+        // `tensor` names the backend of the resident splats when the tensor
+        // rasterizer draws the frame.
+        Frame& acquire(Slot output, const rendering::ViewportRenderRequest& request, uint32_t count, bool points = false,
+                       std::optional<core::GpuBackend> tensor = std::nullopt) {
             auto& state = target(output);
             // The published image may be cached by the compositor even after
             // its last GPU consumer completes. Never recycle it until another
@@ -637,7 +644,7 @@ namespace lfs::vis {
                         throw std::runtime_error(std::format("Metal viewport instance count exceeds 32-bit indexing (required={}, capacity={})", status.required_instances, capacity));
                     capacity = std::max(capacity, withGrowthHeadroom(status.required_instances));
                 }
-                if (frame->points == points && frame->tensor == tensor && frame->size == request.frame_view.size && frame->count >= count && frame->capacity >= capacity)
+                if (frame->points == points && frame->tensor == tensor.has_value() && frame->size == request.frame_view.size && frame->count >= count && frame->capacity >= capacity)
                     return *frame;
             }
             // Account for all Metal allocations on the shared device, including
@@ -657,17 +664,23 @@ namespace lfs::vis {
             f.capacity = capacity;
             f.generation = ++generation;
             f.points = points;
-            f.tensor = tensor;
+            f.tensor = tensor.has_value();
             if (tensor) {
                 auto& state = target(output);
-                const core::GpuBackendScope scope(core::GpuBackend::Metal);
-                if (!state.tensor_raster) {
-                    state.tensor_raster = std::make_unique<rendering::SplatRasterizer>(core::GpuBackend::Metal);
+                const core::GpuBackendScope scope(*tensor);
+                if (!state.tensor_raster || state.tensor_backend != *tensor) {
+                    state.tensor_raster = std::make_unique<rendering::SplatRasterizer>(*tensor);
+                    state.tensor_backend = *tensor;
                     LOG_INFO("Metal viewport target {} rasterizes splats with tensor programs", output.value);
                 }
                 if (auto reserved = state.tensor_raster->reserve(count, f.size.x, f.size.y, capacity); !reserved)
                     throw lfs::Exception(reserved.error());
-                if (!tensor_projected.is_valid() || tensor_projected.bytes() < size_t(count) * sizeof(ProjectedSplat))
+                // Tensor storage may be device-only (Vulkan): stage the status.
+                f.tensor_status = [device newBufferWithLength:sizeof(RasterStatus) options:MTLResourceStorageModeShared];
+                if (!f.tensor_status)
+                    throw lfs::Exception(nativeError("Metal raster status staging allocation failed", lfs::ErrorCode::ResourceExhausted));
+                if (!tensor_projected.is_valid() || tensor_projected.bytes() < size_t(count) * sizeof(ProjectedSplat) ||
+                    core::gpu_backend_of(tensor_projected) != *tensor)
                     tensor_projected = core::Tensor::empty({std::max<size_t>(16, size_t(count) * sizeof(ProjectedSplat))}, core::Device::GPU, core::DataType::UInt8);
             } else if (!points) {
                 f.raster = std::make_unique<RasterFrame>(device, f.size.x, f.size.y, count, capacity, raster_scratch);
@@ -1149,11 +1162,12 @@ namespace lfs::vis {
             // The tensor-program rasterizer covers Gaussian views with overlays so
             // far; LOD cuts, 3DGUT and the portal profile stay native. It reads
             // the resident tensors directly, so they must live on Metal.
-            const auto on_metal = [](const core::Tensor* tensor) { return !tensor || core::gpu_backend_of(*tensor) == core::GpuBackend::Metal; };
-            const bool tensor_frame = i.tensor_raster && !pager && !gpu_lod && !request.lod_indices && !request.gut &&
-                                      request.splat_render_profile == 0 && on_metal(&model.means_raw()) &&
-                                      on_metal(selection_enabled ? selection : nullptr) && on_metal(preview_enabled ? preview : nullptr);
-            auto& f = i.acquire(slot, request, draw_count, false, tensor_frame);
+            const auto splat_backend = core::gpu_backend_of(model.means_raw());
+            const auto beside_splats = [&](const core::Tensor* tensor) { return !tensor || core::gpu_backend_of(*tensor) == splat_backend; };
+            const bool tensor_frame = i.tensor_raster && splat_backend && !pager && !gpu_lod && !request.lod_indices && !request.gut &&
+                                      request.splat_render_profile == 0 && beside_splats(selection_enabled ? selection : nullptr) &&
+                                      beside_splats(preview_enabled ? preview : nullptr);
+            auto& f = i.acquire(slot, request, draw_count, false, tensor_frame ? splat_backend : std::nullopt);
             if (i.profiling_enabled && !f.gpu_profile)
                 f.gpu_profile = std::make_unique<GpuProfile>(i.reader.device());
             auto* profile = i.profiling_enabled ? f.gpu_profile.get() : nullptr;
@@ -1396,9 +1410,11 @@ namespace lfs::vis {
             // on the tensor timeline; one native blit publishes the outputs.
             const auto submit_tensor = [&]() -> id<MTLCommandBuffer> {
                 auto& state = i.target(slot);
-                const core::GpuBackendScope scope(core::GpuBackend::Metal);
-                if (!i.projector)
-                    i.projector = std::make_unique<rendering::SplatProjector>(core::GpuBackend::Metal);
+                const core::GpuBackendScope scope(state.tensor_backend);
+                if (!i.projector || i.projector_backend != state.tensor_backend) {
+                    i.projector = std::make_unique<rendering::SplatProjector>(state.tensor_backend);
+                    i.projector_backend = state.tensor_backend;
+                }
                 const auto resident = [](const core::Tensor& tensor) { return tensor.is_valid() && tensor.numel() ? &tensor : nullptr; };
                 rendering::SplatSources sources;
                 sources.means = &model.means_raw();
@@ -1481,8 +1497,9 @@ namespace lfs::vis {
                               sourceSize:MTLSizeMake(width, height, 1) toTexture:f.color.texture destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
                     [blit copyFromBuffer:views[1].buffer sourceOffset:views[1].offset sourceBytesPerRow:width * 4 sourceBytesPerImage:width * height * 4
                               sourceSize:MTLSizeMake(width, height, 1) toTexture:f.depth.texture destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                    [blit copyFromBuffer:views[2].buffer sourceOffset:views[2].offset toBuffer:f.tensor_status destinationOffset:0 size:sizeof(RasterStatus)];
                     [blit endEncoding];
-                    finish(command, views[2].buffer, views[2].offset);
+                    finish(command, f.tensor_status, 0);
                 });
             };
             f.command = f.tensor ? submit_tensor() : i.reader.submit(inputs_tensors, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
