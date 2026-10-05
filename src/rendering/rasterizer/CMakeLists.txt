@@ -14,3 +14,8 @@ endif()
 if(LFS_TENSOR_METAL)
     add_subdirectory(metal)
 endif()
+
+# Single-source Slang rasterizer through the tensor library (Metal and Vulkan).
+if(LFS_TENSOR_METAL OR LFS_TENSOR_VULKAN)
+    add_subdirectory(tensor)
+endif()
