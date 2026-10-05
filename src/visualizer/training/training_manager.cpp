@@ -1141,7 +1141,7 @@ namespace lfs::vis {
                 if (*prepared) {
                     pending_install = std::move(**prepared);
                 }
-                LOG_DEBUG("After training model initialization: {}", lfs::core::Tensor::storage_memory_summary());
+                LOG_INFO("After training model initialization - {}", lfs::core::Tensor::storage_memory_summary());
             }
 
             if (scene_) {
@@ -1184,7 +1184,7 @@ namespace lfs::vis {
                 return lfs::Result<void>::failure(
                     training_initialization_error(result.error()));
             }
-            LOG_DEBUG("After trainer initialization: {}", lfs::core::Tensor::storage_memory_summary());
+            LOG_INFO("After trainer initialization - {}", lfs::core::Tensor::storage_memory_summary());
             lfs::core::Tensor::trim_memory_pool();
             if (scene_) {
                 installExportableDensifyBarrier();

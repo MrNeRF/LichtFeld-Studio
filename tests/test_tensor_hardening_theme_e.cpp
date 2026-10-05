@@ -239,7 +239,7 @@ TEST_F(CudaTest, E9_MultinomialLargeFiniteWeightsMatchesTorch) {
     constexpr int samples = 20'000;
     const float maximum = std::numeric_limits<float>::max();
     const auto weights = lfs_float_tensor({maximum, maximum}, {2}, Device::GPU);
-    const auto ours = int64_values(Tensor::multinomial(weights, samples, true));
+    const auto ours = Tensor::multinomial(weights, samples, true).to_vector_int64();
     // LibTorch 2.7.1 overflows its Float32 cumulative sum for
     // {FLT_MAX, FLT_MAX}: CUDA asserts and CPU collapses to the last bucket.
     // Multinomial probabilities are scale invariant, so normalized {1, 1}
@@ -270,7 +270,7 @@ TEST_F(CudaTest, E10_SparseNoReplacementMultinomialMatchesTorchContract) {
     std::vector<int64_t> torch_cuda_values;
 
     try {
-        ours_values = int64_values(Tensor::multinomial(weights, 2, false));
+        ours_values = Tensor::multinomial(weights, 2, false).to_vector_int64();
     } catch (const std::exception&) {
         ours_threw = true;
     }

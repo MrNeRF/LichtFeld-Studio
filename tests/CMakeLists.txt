@@ -74,7 +74,7 @@ endif()
 # Standalone tensor/training proofs must not pull in the Vulkan window or its
 # test harness when the core Vulkan backend is disabled.
 if(LFS_TENSOR_METAL AND BUILD_TESTS AND NOT LFS_TENSOR_VULKAN)
-    add_executable(metal_tensor_contracts test_tensor_metal.cpp)
+    add_executable(metal_tensor_contracts test_tensor_metal.cpp test_tensor_restored.cpp)
     target_compile_features(metal_tensor_contracts PRIVATE cxx_std_23)
     target_compile_definitions(metal_tensor_contracts PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
     target_include_directories(metal_tensor_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -672,6 +672,7 @@ if(NOT LFS_HAS_CUDA)
     set(TEST_SOURCES
         test_main.cpp
         test_tensor_backend_semantics.cpp
+        test_tensor_restored.cpp
         test_nodes_core.cpp
         test_nodes_scene.cpp
         test_nodes_modifier_manager.cpp
@@ -820,6 +821,7 @@ set(TEST_FILES
     device_fault_cuda_utils.cu
     test_selection_ops.cpp
     test_tensor_point_ops.cpp
+    test_tensor_restored.cpp
     test_tensor_expression.cpp
     test_tensor_expression_cuda.cu
     test_tensor_warp_reduce.cpp
@@ -1207,6 +1209,7 @@ if(LFS_TENSOR_VULKAN)
         test_tensor_vulkan_cuda_bridge.cpp
         test_tensor_backend_parity.cpp
         test_tensor_backend_semantics.cpp
+        test_tensor_restored.cpp
         test_ply_vulkan_q16_bands.cpp
         test_viewer_vulkan_load.cpp
         test_headless_vulkan_device_selection.cpp

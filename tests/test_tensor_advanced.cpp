@@ -28,10 +28,6 @@ TEST(TensorAdvancedTest, StackPreservesValuesAndRejectsEmptyInput) {
     EXPECT_THROW(Tensor::stack({}, 0), std::runtime_error);
 }
 
-
-
-
-
 TEST(TensorAdvancedTest, ApplyAndInplaceChainsHaveDistinctOwnership) {
     auto input = Tensor::ones({4}, Device::GPU);
     const auto applied = input.apply([](const Tensor& tensor) { return tensor.add(1.0f); })

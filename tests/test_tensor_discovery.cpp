@@ -836,8 +836,6 @@ TEST_F(DiscoverySweep, ArangeDoesNotIncludeFloatingEndpoint) {
     expect_float_tensor(actual, expected, "floating-point arange endpoint exclusion");
 }
 
-
-
 TEST_F(DiscoverySweep, AdaptiveAvgPoolRejectsEmptySpatialInput) {
     for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");

@@ -330,8 +330,6 @@ TEST_F(TensorRandomTest, RandIntDistribution) {
     }
 }
 
-// ============= Multinomial Tests =============
-=======
 // ============= Bernoulli Tests =============
 
 TEST_F(TensorRandomTest, BernoulliBasic) {
