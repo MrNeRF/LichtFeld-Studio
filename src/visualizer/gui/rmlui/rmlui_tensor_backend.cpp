@@ -6,6 +6,7 @@
 #include "core/gpu_kernel_module.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/rml_image_file.hpp"
 #include "gui/rmlui/tensor_frosted_glass.hpp"
 #include "gui/ui_texture.hpp"
@@ -293,7 +294,9 @@ namespace lfs::vis::gui {
                     return layer;
                 }
             }
-            return Tensor::zeros(shape, Device::GPU, DataType::UInt8);
+            auto layer = Tensor::zeros(shape, Device::GPU, DataType::UInt8);
+            layer.set_name("ui.layer");
+            return layer;
         }
 
         void recycleLayers() {
@@ -411,6 +414,9 @@ namespace lfs::vis::gui {
                                             {indices.size(), 4}, DataType::Float32);
             result->texcoords = uploads.upload(std::span<const std::array<float, 2>>(texcoords),
                                                {indices.size(), 2}, DataType::Float32);
+            result->positions.set_name("ui.geometry.positions");
+            result->colors.set_name("ui.geometry.colors");
+            result->texcoords.set_name("ui.geometry.texcoords");
             result->vertices = uint32_t(indices.size());
             impl_->geometry_bytes += result->positions.bytes() + result->colors.bytes() + result->texcoords.bytes();
             return reinterpret_cast<Rml::CompiledGeometryHandle>(result.release());
@@ -443,9 +449,11 @@ namespace lfs::vis::gui {
         try {
             auto texture = std::make_unique<Texture>();
             texture->linear = false;
-            texture->image = std::make_shared<Tensor>(impl_->uploads.upload(
+            auto image = std::make_shared<Tensor>(impl_->uploads.upload(
                 std::as_bytes(std::span(source.data(), source.size())),
                 {std::size_t(dimensions.y), std::size_t(dimensions.x), 4}, DataType::UInt8));
+            image->set_name("ui.texture");
+            texture->image = std::move(image);
             impl_->texture_bytes += texture->image->bytes();
             ++impl_->texture_generation;
             return reinterpret_cast<Rml::TextureHandle>(texture.release());
@@ -697,6 +705,20 @@ namespace lfs::vis::gui {
     bool TensorRmlUiRenderer::currentContextUsedPreviewTexture() const { return impl_->preview_used; }
     UiRendererMemoryStatistics TensorRmlUiRenderer::memoryStatistics() const {
         const std::size_t backdrop_bytes = impl_->frosted_glass.bytes();
+        std::size_t layer_bytes = 0;
+        for (const auto& [_, layer] : impl_->layers)
+            layer_bytes += layer->image.bytes();
+        for (const auto& layer : impl_->free_layers)
+            layer_bytes += layer.bytes();
+        auto& profiler = lfs::diagnostics::VramProfiler::instance();
+        profiler.recordCurrentBytes("metal.ui", "compiled geometry", impl_->geometry_bytes,
+                                    lfs::diagnostics::VramAllocationMethod::Metal);
+        profiler.recordCurrentBytes("metal.ui", "textures", impl_->texture_bytes,
+                                    lfs::diagnostics::VramAllocationMethod::Metal);
+        profiler.recordCurrentBytes("metal.ui", "layers", layer_bytes,
+                                    lfs::diagnostics::VramAllocationMethod::Metal);
+        profiler.recordCurrentBytes("metal.ui", "frosted glass", backdrop_bytes,
+                                    lfs::diagnostics::VramAllocationMethod::Metal);
         return {.block_bytes = impl_->geometry_bytes + impl_->texture_bytes + backdrop_bytes,
                 .allocation_bytes = impl_->geometry_bytes + impl_->texture_bytes + backdrop_bytes};
     }

@@ -5,6 +5,7 @@
 
 #include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <atomic>
 
@@ -36,8 +37,12 @@ namespace lfs::training {
             .allocation_bytes = [](const size_t bytes) { return core::gpu_allocation_bytes(core::GpuBackend::Metal, bytes); },
             .direct_storage_live_bytes = [] { return size_t{0}; },
             .last_error = []() -> std::optional<std::string> { return std::nullopt; },
-            .device_baseline_bytes = [] { return size_t{0}; },
-            .sample_memory = [] {},
+            .device_baseline_bytes = [] {
+                return core::gpu_backend_memory_info(core::GpuBackend::Metal, true).allocated_bytes;
+            },
+            .sample_memory = [] {
+                (void)core::gpu_backend_memory_info(core::GpuBackend::Metal, true);
+            },
         };
         return ops;
     }

@@ -116,7 +116,8 @@ namespace lfs::rendering {
                 // The job table is filled with -1 every frame; Int32 keeps fill_ available.
                 depth_jobs = Tensor::empty({slots * 2}, Device::GPU, DataType::Int32);
                 std::tie(partial_color, partial_depth, partial_pick) =
-                    std::tuple_cat(carve_arena<3>({slots * 256 * 16, slots * 256 * 16, slots * 256 * 4}));
+                    std::tuple_cat(carve_arena<3>({slots * 256 * 16, slots * 256 * 16, slots * 256 * 4},
+                                                  "rasterizer.depth_batch_arena"));
                 parallel_instances = needed;
                 trim = true;
             }
@@ -204,7 +205,8 @@ namespace lfs::rendering {
             const core::GpuBackendScope scope(s.backend);
             const size_t pixels = size_t(width) * height;
             std::tie(s.color, s.depth, s.pick, s.rgba, s.linear_depth) =
-                std::tuple_cat(carve_arena<5>({pixels * 8, pixels * 16, pixels * 4, pixels * 4, pixels * 4}));
+                std::tuple_cat(carve_arena<5>({pixels * 8, pixels * 16, pixels * 4, pixels * 4, pixels * 4},
+                                              "rasterizer.output_arena"));
             s.width = width;
             s.height = height;
             s.presented = false;

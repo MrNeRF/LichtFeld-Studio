@@ -350,6 +350,7 @@ namespace lfs::diagnostics {
                         hooked_arena_bytes += row.live_bytes;
                     }
                     break;
+                case VramAllocationMethod::Metal:
                 case VramAllocationMethod::External:
                 default:
                     break;

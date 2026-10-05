@@ -7,6 +7,7 @@
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
 #include "core/tensor_upload.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "metal_frame_budget.hpp"
 #include "metal_rad_pager.hpp"
 #include "point_cloud_renderer.hpp"
@@ -101,6 +102,7 @@ namespace lfs::vis {
         }
         std::atomic<uint64_t> generation{uint64_t{1} << 63};
         std::atomic<uint64_t> native_ticket_serial{0};
+        std::atomic<size_t> native_render_target_bytes{0};
         uint64_t reserveNativeTicket() {
             auto value = native_ticket_serial.load(std::memory_order_relaxed);
             for (;;) {
@@ -192,6 +194,15 @@ namespace lfs::vis {
         // Native output for the tensor compositor, which copies it into tensors.
         struct Image {
             id<MTLTexture> texture;
+            size_t bytes = 0;
+            ~Image() {
+                if (!bytes)
+                    return;
+                const auto remaining = native_render_target_bytes.fetch_sub(bytes) - bytes;
+                lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                    "metal.graphics", "viewport render targets", remaining,
+                    lfs::diagnostics::VramAllocationMethod::Metal);
+            }
             void init(MetalViewportPresentation&, id<MTLDevice> metal, uint32_t w, uint32_t h,
                       MTLPixelFormat native_format) {
                 auto descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:native_format width:w height:h mipmapped:NO];
@@ -200,6 +211,11 @@ namespace lfs::vis {
                 texture = [metal newTextureWithDescriptor:descriptor];
                 if (!texture)
                     throw lfs::Exception(nativeError(std::format("Metal viewport image allocation failed (extent={}x{}, format={}, allocated={}, recommended={})", w, h, uint64_t(native_format), metal.currentAllocatedSize, metal.recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
+                bytes = size_t(w) * h * 4;
+                const auto total = native_render_target_bytes.fetch_add(bytes) + bytes;
+                lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                    "metal.graphics", "viewport render targets", total,
+                    lfs::diagnostics::VramAllocationMethod::Metal);
             }
         };
 #endif
