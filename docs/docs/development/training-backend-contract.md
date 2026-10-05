@@ -31,7 +31,6 @@ matrix is:
 | Masking | supported | supported |
 | Segmentation | supported | supported |
 | Background modes | supported | supported |
-| Background Improvements | supported | supported |
 | Exposure correction | supported | supported |
 | Bilateral grid | supported | supported |
 | PPISP | supported | supported |
@@ -40,9 +39,7 @@ matrix is:
 This matrix describes backend compatibility, not complete option availability.
 Detailed numeric controls, strategy-specific applicability, mutually exclusive
 option groups, and dataset requirements still belong to the property registry
-and the later resolved UI model. For example, Background Improvements is an MRNF
-option even though the backend matrix also reports its backend support state.
-Localized conflict reasons continue to come from the existing backend-conflict
+and the later resolved UI model. Localized conflict reasons continue to come from the existing backend-conflict
 result instead of duplicating UI text in the descriptor.
 
 ## Compatibility rules
