@@ -2216,6 +2216,8 @@ def test_list_gallery_column_stays_a_compact_status_icon(panel_module, monkeypat
         assert model.func_bindings["asset_list_gallery_compact"]() is True
         expected = list_column_widths(width)
         for name, value in expected.items():
+            assert panel._list_column_width(name) == value
+        if name != "name":
             assert model.func_bindings[f"asset_list_{name}_width"]() == f"{value:.1f}dp"
     resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
     root = ET.fromstring((resources / "asset_manager.rml").read_text())
@@ -4547,7 +4549,9 @@ def test_A4_list_gallery_header_fits_before_modified(panel_module, width, modifi
             expected_binding = None if column == 'name' else binding
             assert header.find(cell).get('data-style-width') == expected_binding
             assert row.find(cell).get('data-style-width') == expected_binding
-            assert model.func_bindings[binding]() == f'{value:.1f}dp'
+            assert panel._list_column_width(column) == value
+            if column != 'name':
+                assert model.func_bindings[binding]() == f'{value:.1f}dp'
         columns = list_columns(width)
         visible = 2 + sum(columns[key] for key in ('size', 'modified', 'folder'))
         # Fixed chrome includes the dedicated 32 dp column after Size.
