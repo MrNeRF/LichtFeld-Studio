@@ -104,18 +104,22 @@ namespace lfs::core {
     std::optional<size_t> reserved_allocation_bytes(const Tensor& tensor) {
         if (!tensor.is_valid() || tensor.is_external_storage())
             return std::nullopt;
-        if (tensor.is_empty())
-            return size_t{0};
         if (tensor.device() == Device::CPU) {
             if (!tensor.owns_memory())
-                return std::nullopt;
+                return tensor.is_empty() && !tensor.is_view() ? std::optional<size_t>{0} : std::nullopt;
             const auto rows = tensor.ndim() == 0 ? size_t{1} : tensor.shape()[0];
-            return rows == 0 ? size_t{0} : tensor.bytes() / rows * std::max(rows, tensor.capacity());
+            const auto capacity = std::max(rows, tensor.capacity());
+            if (capacity == 0)
+                return size_t{0};
+            size_t row_bytes = dtype_size(tensor.dtype());
+            for (size_t axis = 1; axis < tensor.ndim(); ++axis)
+                row_bytes *= tensor.shape()[axis];
+            return row_bytes * capacity;
         }
         const auto storage = internal::storage_ref(tensor);
         if (storage.meta && storage.meta->gpu_descriptor.byte_size != 0)
             return static_cast<size_t>(storage.meta->gpu_descriptor.byte_size);
-        return std::nullopt;
+        return tensor.is_empty() ? std::optional<size_t>{0} : std::nullopt;
     }
 
     size_t gpu_allocation_bytes(const GpuBackend backend, const size_t bytes) {

@@ -251,8 +251,14 @@ namespace {
         tensor.reserve(16);
         ASSERT_TRUE(reserved_allocation_bytes(tensor));
         EXPECT_GE(*reserved_allocation_bytes(tensor), 16 * sizeof(float));
+        const auto empty = Tensor::empty({0, 3}, device());
+        EXPECT_EQ(reserved_allocation_bytes(empty), 0u);
         if (!GetParam())
             return;
+        const auto reserved_empty = Tensor::zeros_direct({0, 3}, 16, device());
+        EXPECT_EQ(reserved_empty.numel(), 0u);
+        ASSERT_TRUE(reserved_allocation_bytes(reserved_empty));
+        EXPECT_GE(*reserved_allocation_bytes(reserved_empty), 16 * 3 * sizeof(float));
         TensorWorkQueue owner(*GetParam());
         Tensor result;
         {
