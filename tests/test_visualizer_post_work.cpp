@@ -44,6 +44,7 @@
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
+#include "python_test_support.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/vulkan_view_render_state.hpp"
@@ -1693,6 +1694,9 @@ namespace lfs::vis {
     }
 
     TEST_F(SelectionSubmodeTest, PublicPythonGetterAndContextFollowNativeMode) {
+        const auto module_dir = lfs::test::findPythonModuleDir();
+        ASSERT_FALSE(module_dir.empty()) << "Could not locate built lichtfeld module for Python tests";
+        lfs::test::prependPythonPath(module_dir);
         ASSERT_TRUE(lfs::python::ensure_initialized());
         VisualizerImpl viewer(projectOptions());
         const lfs::python::GilAcquire gil;
