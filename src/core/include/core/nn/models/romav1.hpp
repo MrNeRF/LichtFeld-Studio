@@ -66,6 +66,7 @@ namespace lfs::core::nn::models {
         [[nodiscard]] DataType compute_dtype() const { return compute_; }
         [[nodiscard]] Device device() const { return device_; }
         [[nodiscard]] int resolution() const { return resolution_; }
+        [[nodiscard]] std::size_t weights_bytes() const;
         [[nodiscard]] static constexpr int default_resolution() { return 448; }
 
     private:

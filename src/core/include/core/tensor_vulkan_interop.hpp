@@ -81,5 +81,9 @@ namespace lfs::core {
                                             Copied };
     [[nodiscard]] LFS_CORE_API SplatPublication splat_publication(GpuBackend backend);
 
+    // All operands are contiguous GPU tensors on one backend; output and source
+    // have the same shape and Float32 or Float16 dtype. The mask has one Bool per element.
+    LFS_CORE_API void where_into(Tensor& output, const Tensor& condition, float value, const Tensor& source);
+
     LFS_CORE_API std::optional<TensorVulkanBuffer> tensor_vulkan_buffer(const Tensor& tensor);
 } // namespace lfs::core

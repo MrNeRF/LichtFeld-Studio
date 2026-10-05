@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "../facade_trace.hpp"
+#include "../tensor_vulkan_interop.hpp"
 #include "vk_backend_ops.hpp"
 
 #include "../../internal/tensor_impl.hpp"
@@ -205,6 +206,28 @@ namespace lfs::core::internal {
             return total;
         }
     } // namespace
+
+    void vulkan_where_into(Tensor& output, const Tensor& condition, float value, const Tensor& source) {
+        LFS_FACADE_TRACE(where);
+        pin_operands({&output, &condition, &source});
+        const auto context = acquire_vulkan_context();
+        const auto [low, high] = fill_bits(output.dtype(), scalar_operand(value));
+        const auto destination = storage_ref(output);
+        const auto mask = storage_ref(condition);
+        const auto input = storage_ref(source);
+        const MaskPush push{
+            .data_address = address(destination),
+            .mask_address = address(mask),
+            .source_address = address(input),
+            .count = checked_u32(output.numel(), "Vulkan where_into count exceeds uint32"),
+            .fill_low = low,
+            .fill_high = high,
+        };
+        const std::array reads{mask, input};
+        const std::array writes{destination};
+        record_mask(*context, 6, output.dtype(), kBytePredicate, push, reads, writes,
+                    dispatch_groups(*context, output.numel()));
+    }
 
     void VulkanBackendOps::masked_fill(
         const StorageRef output, const StorageRef mask, const MaskProgram& program, ExecContext) {
