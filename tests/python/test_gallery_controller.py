@@ -2243,6 +2243,7 @@ def test_publish_preserves_gallery_description_text_exactly(gallery, monkeypatch
     from lfs_plugins.gallery_file_panel import GalleryFilePanel
     module = import_module("lfs_plugins.gallery_file_panel")
     monkeypatch.setattr(module.lf.ui, "request_redraw", lambda: None, raising=False)
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _id: None, raising=False)
     description = 'first line\n"quoted" <tag> & 😀 https://example.com/a?x=1&y=2\n'
     submitted = []
     controller = SimpleNamespace(

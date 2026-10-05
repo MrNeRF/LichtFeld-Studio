@@ -2916,6 +2916,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "gallery_identity": self._gallery_state.get("identity"),
         })
 
+    def remember_gallery_details(self, project_id: str, title: str, description: str) -> None:
+        if project_id not in self._asset_index_assets():
+            return
+        if self._library_command(
+            "update_asset", project_id, gallery_details_draft={"title": title, "description": description}
+        ) is not None:
+            self.refresh_catalog(scan_folders=False)
+
     def open_project_operation(self, _handle=None, _ev=None, args=None) -> None:
         action = self._resolve_event_value(args, _ev, "data-project-operation")
         if not action and args:

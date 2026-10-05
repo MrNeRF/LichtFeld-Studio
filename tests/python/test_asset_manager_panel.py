@@ -3934,6 +3934,50 @@ def test_file_menu_publish_review_prefills_unpublished_draft(panel_module, monke
     assert reviews[0]["fields"]["description"] == ("Prepared text" if panel_available else "")
 
 
+def test_publish_review_keeps_the_entered_details_for_the_next_attempt(panel_module, monkeypatch, tmp_path):
+    # A failed upload is retried from a fresh review, which must offer the typed details, not the project name.
+    from lfs_plugins import gallery_file_panel
+    from lfs_plugins.asset_index import AssetIndex
+
+    project_id = str(uuid.uuid4())
+    project_path = tmp_path / "project-a.licht"
+    project_path.write_bytes(b"local project")
+    catalog = tmp_path / "library.json"
+    catalog.write_text(json.dumps({
+        "schema_version": 6,
+        "folders": {"default": {"path": str(tmp_path)}},
+        "projects": {project_id: {"path": str(project_path), "folder_id": "default", "name": "project-a", "name_origin": "user"}},
+    }))
+    index = AssetIndex(library_path=catalog, default_folder_path=tmp_path)
+    assert index.load()
+    monkeypatch.setattr(index, "_inspect_path", lambda _path, *_args: SimpleNamespace(project_uuid=project_id))
+    library = panel_module.AssetManagerPanel()
+    library._asset_index = index
+    library._gallery_state = {"links": {}, "scenes": []}
+    monkeypatch.setattr(library, "refresh_catalog", lambda **kwargs: None)
+    state = {"identity": "account", "signed_in": True, "links": {}}
+    published = []
+    controller = SimpleNamespace(
+        service=SimpleNamespace(identity=lambda: "account"), upload_format="sog", snapshot=lambda: state,
+        subscribe=lambda changed: (changed(state), lambda: None)[1],
+        publish_asset=lambda asset, details, upload_format, **kwargs: published.append(details))
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel_object",
+                        lambda panel_id: library if panel_id == "lfs.asset_manager" else None, raising=False)
+    monkeypatch.setattr(panel_module.lf.ui, "set_panel_enabled", lambda *_args: None, raising=False)
+    monkeypatch.setattr(panel_module.lf.ui, "request_redraw", lambda: None, raising=False)
+    monkeypatch.setattr(panel_module.lf, "project_poll_write", lambda: {"path": ""}, raising=False)
+    review = gallery_file_panel.GalleryFilePanel()
+    review.show(controller=controller, asset=index.get_asset_dict(project_id), scene=None, action="publish",
+                fields={"title": "project-a", "description": "", "upload_format": "sog"})
+    review._set("title", "Playground")
+    review._set("description", "Small training of a playground")
+    review._submit()
+
+    assert published[0]["title"] == "Playground"
+    assert library._gallery_details(index.get_asset_dict(project_id)) == {
+        "title": "Playground", "description": "Small training of a playground"}
+
+
 def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     panel.select_gallery_scope()
