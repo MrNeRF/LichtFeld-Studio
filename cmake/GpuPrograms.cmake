@@ -66,6 +66,15 @@ function(lfs_add_gpu_program target name)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/embed_gpu_program.py"
             "${directory}" "${name}" ${embed_args}
         DEPENDS ${outputs} "${CMAKE_SOURCE_DIR}/tools/embed_gpu_program.py" VERBATIM)
+    # The syntax-only Windows preflight builds lfs_shader_headers before replaying
+    # compile commands, so the generated header must be reachable from it.
+    string(MAKE_C_IDENTIFIER "${target}_${name}_gpu_program" program_target)
+    add_custom_target("${program_target}" DEPENDS "${directory}/${name}.cpp" "${directory}/${name}.hpp")
+    add_dependencies(${target} "${program_target}")
+    if(NOT TARGET lfs_shader_headers)
+        add_custom_target(lfs_shader_headers)
+    endif()
+    add_dependencies(lfs_shader_headers "${program_target}")
     target_sources(${target} PRIVATE "${directory}/${name}.cpp")
     target_include_directories(${target} PRIVATE "${directory}")
 endfunction()
