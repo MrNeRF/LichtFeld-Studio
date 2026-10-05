@@ -375,12 +375,12 @@ void evaluateScalar(uint index, uniform Parameters parameters)
     }
     if (kArity == 5)
     {
-        if (kInputDType == kFloat32)
+        if (kInputDType == kFloat32 || kInputDType == kFloat16)
         {
-            const float value = ((Ptr<float, Access.Read>)parameters.lhsAddress)[index];
+            const float value = loadFloat(parameters.lhsAddress, index);
             const float maximum = asfloat(uint(parameters.scalarInt64));
-            ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[index] =
-                isnan(value) ? value : min(max(value, parameters.scalarFloat), maximum);
+            const float result = isnan(value) ? value : min(max(value, parameters.scalarFloat), maximum);
+            storeFloat(parameters.outputAddress, index, result);
         }
         else
         {

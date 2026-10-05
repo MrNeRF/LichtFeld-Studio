@@ -483,9 +483,9 @@ namespace lfs::core::internal {
             const bool integer = input.dtype == DataType::Int32;
             LFS_ASSERT_MSG(input.dtype == output.dtype &&
                                ((integer && minimum.kind == ScalarKind::Int32 && maximum.kind == ScalarKind::Int32) ||
-                                (input.dtype == DataType::Float32 && minimum.kind == ScalarKind::Float &&
+                                ((input.dtype == DataType::Float32 || input.dtype == DataType::Float16) && minimum.kind == ScalarKind::Float &&
                                  maximum.kind == ScalarKind::Float)),
-                           "Metal clamp requires matching Float32 or Int32 operands");
+                           "Metal clamp requires matching Float32, Float16 or Int32 operands");
             struct ClampParams {
                 uint64_t input_offset;
                 uint64_t output_offset;

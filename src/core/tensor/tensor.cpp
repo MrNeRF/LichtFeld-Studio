@@ -2418,8 +2418,8 @@ namespace lfs::core {
         preserve_lazy_snapshots_before_write();
         LFS_ASSERT_MSG(is_valid(),
                        "clamp_ requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
-                       "clamp_ currently supports only Float32 and Int32");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Float16 || dtype_ == DataType::Int32,
+                       "clamp_ currently supports Float32, Float16 and Int32");
         LFS_ASSERT_MSG(!std::isnan(min_val) && !std::isnan(max_val) && min_val <= max_val,
                        "clamp_ bounds must not be NaN and must be ordered");
         if (dtype_ == DataType::Int32) {
@@ -2443,7 +2443,7 @@ namespace lfs::core {
         }
 
         if (device_ == Device::GPU) {
-            if (dtype_ == DataType::Float32) {
+            if (dtype_ == DataType::Float32 || dtype_ == DataType::Float16) {
                 internal::backend_ops_for(*this).clamp_scalar(
                     internal::storage_ref(*this), internal::scalar_operand(min_val),
                     internal::scalar_operand(max_val), numel(),
@@ -2461,6 +2461,15 @@ namespace lfs::core {
                     internal::ExecContext{stream()});
             }
         } else {
+            if (dtype_ == DataType::Float16) {
+                const auto* src = ptr<detail::tensor_half_t>();
+                auto* dst = (*this).ptr<detail::tensor_half_t>();
+                for (size_t i = 0; i < numel(); ++i) {
+                    const float value = detail::tensor_half_to_float(src[i]);
+                    dst[i] = detail::tensor_float_to_half(std::isnan(value) ? value : std::clamp(value, min_val, max_val));
+                }
+                return *this;
+            }
             if (dtype_ == DataType::Float32) {
                 float* data = ptr<float>();
                 for (size_t i = 0; i < numel(); ++i) {
@@ -2488,13 +2497,13 @@ namespace lfs::core {
     Tensor& Tensor::clamp_min_(float min) {
 
         preserve_lazy_snapshots_before_write();
-        return clamp_(min, std::numeric_limits<float>::max());
+        return clamp_(min, std::numeric_limits<float>::infinity());
     }
 
     Tensor& Tensor::clamp_max_(float max) {
 
         preserve_lazy_snapshots_before_write();
-        return clamp_(std::numeric_limits<float>::lowest(), max);
+        return clamp_(-std::numeric_limits<float>::infinity(), max);
     }
 
     // ============= Cumulative sum =============

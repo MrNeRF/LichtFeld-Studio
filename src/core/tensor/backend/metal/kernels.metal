@@ -438,6 +438,10 @@ kernel void clamp_values(device const uchar* input_buffer [[buffer(0)]],
         const float value = ((device const float*)(input_buffer + params.input_offset))[index];
         ((device float*)(output_buffer + params.output_offset))[index] =
             isnan(value) ? value : min(max(value, params.float_minimum), params.float_maximum);
+    } else if (kInputDType == LFS_DT_Float16) {
+        const float value = float(((device const half*)(input_buffer + params.input_offset))[index]);
+        ((device half*)(output_buffer + params.output_offset))[index] =
+            half(isnan(value) ? value : min(max(value, params.float_minimum), params.float_maximum));
     } else {
         const int value = ((device const int*)(input_buffer + params.input_offset))[index];
         ((device int*)(output_buffer + params.output_offset))[index] =

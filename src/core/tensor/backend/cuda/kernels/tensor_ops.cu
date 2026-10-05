@@ -341,6 +341,32 @@ namespace lfs::core::tensor_ops {
         launch_clamp_fused(data, data, min_val, max_val, n, stream);
     }
 
+    // Float16 clamp via promote-to-float (preserves NaN semantics of f32 path).
+    __global__ void clamp_half_kernel(const __half* __restrict__ src, __half* __restrict__ dst,
+                                      float min_val, float max_val, size_t n) {
+        const size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
+        for (size_t i = tid; i < n; i += stride) {
+            const float v = __half2float(src[i]);
+            dst[i] = __float2half(clamp_preserving_nan(v, min_val, max_val));
+        }
+    }
+
+    void launch_clamp_fused_half(const __half* src, __half* dst, float min_val, float max_val,
+                                 size_t n, cudaStream_t stream) {
+        if (n == 0)
+            return;
+        constexpr int BLOCK = 256;
+        int grid = static_cast<int>((n + BLOCK - 1) / BLOCK);
+        const int optimal = GPUConfig::get().optimal_grid_size(BLOCK);
+        if (grid > optimal)
+            grid = optimal;
+        if (grid < 1)
+            grid = 1;
+        clamp_half_kernel<<<grid, BLOCK, 0, stream>>>(src, dst, min_val, max_val, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.clamp_fused_half");
+    }
+
     // ============= TYPE CONVERSIONS (USING FUNCTORS) =============
 
     template <typename SrcT, typename DstT>

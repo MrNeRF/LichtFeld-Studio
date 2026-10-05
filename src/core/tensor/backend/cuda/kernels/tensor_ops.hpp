@@ -55,6 +55,7 @@ namespace lfs::core::tensor_ops {
     // ============= Clamp Scalar Operations =============
     LFS_CORE_API void launch_clamp_scalar(float* data, float min_val, float max_val, size_t n, cudaStream_t stream);
     LFS_CORE_API void launch_clamp_fused(const float* src, float* dst, float min_val, float max_val, size_t n, cudaStream_t stream);
+    LFS_CORE_API void launch_clamp_fused_half(const __half* src, __half* dst, float min_val, float max_val, size_t n, cudaStream_t stream);
     LFS_CORE_API void launch_clamp_scalar_int(int* data, int min_val, int max_val, size_t n, cudaStream_t stream);
 
     LFS_CORE_API void launch_reduce_op(const void* input, void* output,
