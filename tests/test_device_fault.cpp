@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Device-fault reference kernel and ValidatedIndexToken coverage for the ABI,
+// Device-fault reference kernel coverage for the ABI,
 // graph capture, first-fault handling, and device traps.
 
 #include "core/cuda_error.hpp"
