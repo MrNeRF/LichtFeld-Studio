@@ -720,5 +720,15 @@ TEST_P(TensorClampRegression, HalfStridedWritesAndEmptyInputs) {
     EXPECT_NO_THROW(empty.clamp_(-1.0f, 1.0f));
 }
 
+TEST_P(TensorClampRegression, OneSidedInplacePreservesUnboundedInfinity) {
+    const float inf = std::numeric_limits<float>::infinity();
+    auto lower = Tensor::from_vector({-inf, -2.0f, 2.0f, inf}, {4}, GetParam());
+    auto upper = lower.clone();
+    lower.clamp_min_(-1.0f);
+    upper.clamp_max_(1.0f);
+    EXPECT_EQ(lower.to_vector(), (std::vector<float>{-1, -1, 2, inf}));
+    EXPECT_EQ(upper.to_vector(), (std::vector<float>{-inf, -2, 1, 1}));
+}
+
 INSTANTIATE_TEST_SUITE_P(CpuAndCuda, TensorClampRegression,
                          ::testing::Values(Device::CPU, Device::CUDA));
