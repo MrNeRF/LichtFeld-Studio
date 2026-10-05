@@ -228,6 +228,9 @@ namespace lfs::rendering {
                 frame.flags |= kDepthBatches;
                 frame.mask_limits[2] = s.parallel_instances;
             }
+            // Dense 3DGUT frames blend one subgroup per 8x4 pixels.
+            if (mode == SplatRasterMode::Gut && s.previous.required > uint64_t(frame.tiles) * 512)
+                frame.flags |= kSingleSimd;
         }
         s.upload(s.raster, frame);
         if (overlay && !overlay->selection_colors.empty())

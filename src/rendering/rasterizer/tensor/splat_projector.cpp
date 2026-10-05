@@ -62,8 +62,9 @@ namespace lfs::rendering {
             in.storage == SplatShStorage::RadSigned8 || in.objects.size() % kSceneObjectBytes ||
             (in.objects.size() > kSceneObjectBytes && !in.object_indices) ||
             (overlay && overlay->parameters.size() != kOverlayParameterBytes))
-            return failure(std::format("Splat projection inputs are incomplete (count={}, degree={}, primitive={}, storage={}, projected_bytes={}, objects={})",
-                                       in.count, degree, uint32_t(primitive), uint32_t(in.storage), projected.bytes(), in.objects.size() / kSceneObjectBytes));
+            return failure(std::format("Splat projection inputs are incomplete (count={}, degree={}, primitive={}, storage={}, projected_bytes={}, gut_bytes={}, objects={}, overlay_bytes={})",
+                                       in.count, degree, uint32_t(primitive), uint32_t(in.storage), projected.bytes(), gut ? gut->bytes() : 0,
+                                       in.objects.size() / kSceneObjectBytes, overlay ? overlay->parameters.size() : 0));
         if (in.count == 0)
             return {};
         const core::GpuBackendScope scope(s.backend);
