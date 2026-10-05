@@ -10,6 +10,7 @@
 #include "core/error.hpp"
 #include "core/gpu_device_info.hpp"
 #include "core/memory_pressure.hpp"
+#include "core/tensor_label.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
 #include <algorithm>
@@ -498,6 +499,9 @@ namespace lfs::core::internal::metal {
 
     StorageRef Context::allocate(const size_t bytes, const bool host_writable) {
         const size_t capacity = size_class(bytes);
+        const auto scoped_label = current_tensor_label();
+        const auto allocation_label =
+            scoped_label.empty() ? std::string_view{"tensor.storage"} : scoped_label;
         std::lock_guard lock(memory_mutex_);
         Block block;
         // Large requests vary in size, so they also take a cached block up to a
@@ -567,7 +571,7 @@ namespace lfs::core::internal::metal {
         try {
             lfs::diagnostics::VramProfiler::instance().recordAllocation(
                 storage.data, capacity, lfs::diagnostics::VramAllocationMethod::Metal,
-                "tensor.storage");
+                allocation_label);
         } catch (...) {
             // Diagnostics must never make a tensor allocation fail.
         }

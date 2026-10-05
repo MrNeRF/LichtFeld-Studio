@@ -15,6 +15,7 @@
 #include "core/tensor_backend.hpp"
 #include "core/tensor_execution.hpp"
 #include "core/tensor_image.hpp"
+#include "core/tensor_label.hpp"
 #include "core/tensor_upload.hpp"
 #include "eval_mask.hpp"
 #include "io/loader.hpp"
@@ -1140,6 +1141,7 @@ namespace lfs::training {
                 lfs::core::default_gpu_backend(), Family::Photometric)) {
             throw std::runtime_error(*reason);
         }
+        lfs::core::TensorLabelScope evaluation_label("eval.workspace");
 
         std::unique_ptr<lfs::io::PipelinedImageLoader> fallback_image_loader;
         if (!image_loader) {
@@ -1168,6 +1170,7 @@ namespace lfs::training {
         size_t evaluated_images = 0;
         size_t saved_images = 0;
         std::optional<std::pair<int, int>> lpips_preflight_size;
+        bool lpips_allocator_trimmed = false;
         double lpips_elapsed_ms = 0.0;
         std::size_t lpips_timed_images = 0;
 
@@ -1313,7 +1316,10 @@ namespace lfs::training {
             view.masked = mask.is_valid();
             evaluated_images++;
 
-            const auto gt_float = image_as_float01(gt_image).clamp(0.0f, 1.0f);
+            auto gt_float = image_as_float01(gt_image);
+            if (gt_image.dtype() != lfs::core::DataType::UInt8)
+                gt_float = gt_float.clamp(0.0f, 1.0f);
+            gt_float.set_name("eval.gt_float");
             std::optional<float> lpips;
             std::function<void()> deferred_lpips;
             std::future<void> pending_lpips;
@@ -1351,7 +1357,16 @@ namespace lfs::training {
                                   _lpips_metric->tile_size_for(image_height, image_width), required, free_bytes);
                     }
                     if (lpips_preflight_ok) {
+                        if (!lpips_allocator_trimmed) {
+                            // PSNR/SSIM scalar readback has completed their GPU work.
+                            // Return their free blocks before the much larger LPIPS
+                            // workspace establishes the terminal evaluation peak.
+                            lfs::core::gpu_trim_cached_memory(
+                                lfs::core::default_gpu_backend());
+                            lpips_allocator_trimmed = true;
+                        }
                         auto evaluate_lpips = [&, pred_lpips, target_lpips] {
+                            lfs::core::TensorLabelScope lpips_label("eval.lpips");
                             const auto lpips_wall_start = std::chrono::steady_clock::now();
                             auto value = mask.is_valid()
                                              ? _lpips_metric->forward(pred_lpips, target_lpips, mask,
@@ -1565,7 +1580,9 @@ namespace lfs::training {
                     gt_vis = gt_vis * mask_3d;
                     render_vis = r_output.image * mask_3d;
                 }
-                const std::vector<lfs::core::Tensor> rgb_images = {gt_vis.clone(), render_vis.clone()};
+                // The saver prepares one CPU grid synchronously before enqueueing, so
+                // retaining two extra full-resolution GPU clones only raises eval peak.
+                const std::vector<lfs::core::Tensor> rgb_images = {gt_vis, render_vis};
                 auto stamp = _params.include_provenance ? lfs::core::make_provenance_stamp()
                                                         : lfs::core::make_minimal_provenance_stamp();
                 if (_params.include_provenance) {

@@ -15,6 +15,7 @@
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_execution.hpp"
+#include "core/tensor_label.hpp"
 #include "core/tensor_readback.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "core/tensor_upload.hpp"
@@ -858,8 +859,10 @@ namespace lfs::training {
             if (device_scratch.is_valid())
                 return;
             lfs::core::TensorWorkQueue::Scope scope(*d2h_queue);
+            lfs::core::TensorLabelScope label("training.snapshot.device_scratch");
             device_scratch = lfs::core::Tensor::empty({config.band_bytes}, lfs::core::Device::GPU,
                                                       lfs::core::DataType::UInt8);
+            device_scratch.set_name("training.snapshot.device_scratch");
         }
 
         void calibrate_once(

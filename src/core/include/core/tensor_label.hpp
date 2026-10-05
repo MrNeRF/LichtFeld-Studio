@@ -8,6 +8,9 @@
 #include <string_view>
 
 namespace lfs::core {
+    [[nodiscard]] LFS_CORE_API std::string_view current_tensor_label() noexcept;
+    [[nodiscard]] LFS_CORE_API std::string exchange_tensor_label(std::string label) noexcept;
+
     class LFS_CORE_API TensorLabelScope {
     public:
         explicit TensorLabelScope(std::string_view label);

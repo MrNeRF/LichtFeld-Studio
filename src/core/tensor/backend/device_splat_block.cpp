@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/splat_block.hpp"
+#include "core/tensor_label.hpp"
 
 #include <limits>
 #include <stdexcept>
@@ -20,8 +21,10 @@ namespace lfs::core {
                 if (reserve_bytes == 0) {
                     throw std::runtime_error("SplatExportableStorage::create: layout is empty");
                 }
+                TensorLabelScope label("splat.exportable");
                 auto backing = std::make_shared<Tensor>(
                     Tensor::zeros({reserve_bytes}, Device::GPU, DataType::UInt8));
+                backing->set_name("splat.exportable");
                 auto block = std::make_shared<ExportableBlock>();
                 block->device_ptr = backing->data_ptr();
                 block->reserved_bytes = backing->bytes();

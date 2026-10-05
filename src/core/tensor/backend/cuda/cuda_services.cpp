@@ -64,7 +64,6 @@ namespace lfs::core {
 
     namespace {
         std::atomic<CudaMemoryPool*> g_cuda_memory_pool_instance{nullptr};
-        thread_local std::string g_pool_pending_label;
     } // namespace
 
     CudaMemoryPool* try_live_cuda_memory_pool() noexcept {
@@ -90,30 +89,16 @@ namespace lfs::core {
         return pool;
     }
 
-    TensorLabelScope::TensorLabelScope(std::string_view label)
-        : previous_(std::move(g_pool_pending_label)) {
-        if (!label.empty())
-            g_pool_pending_label.assign(label);
-    }
-
-    TensorLabelScope::~TensorLabelScope() {
-        g_pool_pending_label = std::move(previous_);
-    }
-
     CudaMemoryPool::LabelGuard::LabelGuard(std::string_view label)
-        : previous_(std::move(g_pool_pending_label)),
-          active_(!label.empty()) {
-        if (active_) {
-            g_pool_pending_label.assign(label);
-        }
-    }
+        : previous_(exchange_tensor_label(std::string(label))),
+          active_(!label.empty()) {}
 
     CudaMemoryPool::LabelGuard::~LabelGuard() {
-        g_pool_pending_label = std::move(previous_);
+        static_cast<void>(exchange_tensor_label(std::move(previous_)));
     }
 
     std::string_view CudaMemoryPool::current_label() noexcept {
-        return g_pool_pending_label;
+        return current_tensor_label();
     }
 
     namespace internal {

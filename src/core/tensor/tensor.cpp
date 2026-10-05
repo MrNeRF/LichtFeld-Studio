@@ -932,7 +932,14 @@ namespace lfs::core {
             return;
         }
         try {
-            lfs::diagnostics::VramProfiler::instance().relabelAllocation(data_, state_->name);
+            // Every region of the packed training block has the same allocation
+            // base. Attribute that physical allocation to the block instead of
+            // whichever parameter view happened to receive a name last.
+            const std::string_view label =
+                storage_meta_ && storage_meta_->external_kind == "splat.exportable"
+                    ? std::string_view{"splat.exportable"}
+                    : std::string_view{state_->name};
+            lfs::diagnostics::VramProfiler::instance().relabelAllocation(data_, label);
         } catch (...) {
             // Diagnostics must never throw out of tensor operations.
         }
