@@ -227,7 +227,6 @@ set(CORE_SOURCES
         cuda_error.cpp
         cuda_error_typed.cpp
         device_fault.cpp
-        validated_index_token.cpp
         error.cpp
         error_bus.cpp
         exif.cpp
@@ -271,7 +270,6 @@ set(CORE_SOURCES
         splat_exportable_storage.cpp
         sh_value_quant.cpp
         shareable_allocation_limit.cpp
-        training_snapshot.cpp
         mesh_data.cpp
         nodes/types.cpp
         nodes/registry.cpp

@@ -179,9 +179,6 @@ namespace lfs::core {
 
         uint64_t episode_count() const noexcept;
 
-        // Human-readable summary of the last episode, for a GUI status surface.
-        std::string last_status() const;
-
         // Test-only deterministic injection. `probe` returning true simulates a
         // native OOM at a checked allocation site for the given domain/bytes.
         void set_allocation_probe(std::function<bool(MemoryDomain, size_t)> probe);
