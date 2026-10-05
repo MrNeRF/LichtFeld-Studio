@@ -52,7 +52,6 @@ namespace lfs::core::internal {
         // radix.slang phases and key kinds used to group duplicate targets.
         constexpr uint32_t kExtractPhase = 0;
         constexpr uint32_t kHistogramPhase = 1;
-        constexpr uint32_t kScanPhase = 2;
         constexpr uint32_t kScatterPhase = 3;
         constexpr uint32_t kIndexKeys = 1;
         constexpr size_t kRadixBlockElements = kLocalSize * 8;
@@ -230,11 +229,7 @@ namespace lfs::core::internal {
                     const std::array writes{histogram};
                     dispatch(kHistogramPhase, block_groups, reads, writes);
                 }
-                {
-                    const std::array reads{histogram};
-                    const std::array writes{histogram};
-                    dispatch(kScanPhase, 1, reads, writes);
-                }
+                vk::scan_radix_histogram(histogram, 1, kRadixDigits * blocks);
                 {
                     const std::array reads{source_keys, source_positions, histogram};
                     const std::array writes{target_keys, target_positions};

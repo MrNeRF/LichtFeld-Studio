@@ -654,6 +654,18 @@ namespace lfs::core::internal {
         return true;
     }
 
+    void vk::scan_radix_histogram(StorageRef histogram, const size_t lines, const size_t entries) {
+        StridedLayout layout{};
+        layout.rank = 2;
+        layout.dims[0] = lines;
+        layout.dims[1] = entries;
+        layout.strides[0] = entries;
+        layout.strides[1] = 1;
+        layout.element_count = lines * entries;
+        histogram.dtype = DataType::Int32;
+        backend_ops(GpuBackend::Vulkan).cumsum(histogram, layout, 1, {});
+    }
+
     void VulkanBackendOps::cumsum(
         const StorageRef data, const StridedLayout& layout, const int dim, ExecContext) {
         LFS_FACADE_TRACE(cumsum);
