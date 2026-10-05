@@ -4129,6 +4129,8 @@ namespace lfs::vis {
     }
 
     std::expected<void, std::string> VisualizerImpl::startTraining() {
+        if (isTrainingStartPending())
+            return {};
         if (!trainer_manager_)
             return std::unexpected("Trainer manager not initialized");
         if (project_lifecycle_ &&
@@ -4157,12 +4159,18 @@ namespace lfs::vis {
                         !policy.at_step_boundaries) {
                         if (auto prepared =
                                 project_lifecycle_
-                                    ->prepareTrainingStartProject();
+                                    ->prepareTrainingStartProjectAsync([this]() -> lfs::Result<void> {
+                                        if (trainer_manager_->isPaused()) {
+                                            trainer_manager_->resumeTraining();
+                                        }
+                                        return {};
+                                    });
                             !prepared) {
                             return std::unexpected(
                                 lfs::format_for_developer(
                                     prepared.error()));
                         }
+                        return {};
                     }
                 }
             }
@@ -4193,12 +4201,21 @@ namespace lfs::vis {
         if (project_lifecycle_) {
             if (auto prepared =
                     project_lifecycle_
-                        ->prepareTrainingStartProject();
+                        ->prepareTrainingStartProjectAsync([this]() -> lfs::Result<void> {
+                            if (!trainer_manager_->startTraining()) {
+                                return visualizerFailure<void>(
+                                    lfs::ErrorCode::FailedPrecondition,
+                                    "The training manager rejected the start request.",
+                                    "Training start rejected after project preparation", "training.start");
+                            }
+                            return {};
+                        });
                 !prepared) {
                 return std::unexpected(
                     lfs::format_for_developer(
                         prepared.error()));
             }
+            return {};
         }
         if (!trainer_manager_->startTraining())
             return std::unexpected("The training manager rejected the start request");

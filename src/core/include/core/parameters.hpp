@@ -302,14 +302,6 @@ namespace lfs::core {
             // Fraction of MRNF growth budget spent splitting over-cap splats. 0 disables.
             float oversize_split_fraction = 0.15f;
             bool use_edge_map = true;
-            bool background_improvements = false;
-            float far_scene_min_fraction = 0.01f; // min deep-far splat fraction that activates far-field (0 = always on); mrnf_defaults() overrides to 0.0
-            bool growth_ratio_rank = false;       // rank growth by err/vis^growth_ratio_pow; mrnf_defaults() overrides to true
-            float growth_ratio_pow = 0.75f;
-            size_t fill_pacing_iter = 0; // pace cap fill until this iteration (0 = off); mrnf_defaults() overrides to 15000
-            size_t far_seed_dose = 0;    // far seeds per refine window (0 = starvation default); mrnf_defaults() overrides to 2000
-            // Config-file / C++ only (no registry, GUI, locale, or CLI).
-            bool explore_starvation_weighting = true;
 
             // Random initialization parameters
             bool random = false;        // Use random initialization instead of SfM

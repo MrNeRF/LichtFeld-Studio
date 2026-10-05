@@ -576,6 +576,8 @@ namespace lfs::core {
             storage_bytes);
 
         const size_t preserved_id = id_;
+        // Sibling handles share TensorState; publish its fields under the gate their materializations share.
+        std::unique_lock<std::mutex> publish_lock(lazy->gate);
         ensure_state();
         const bool preserved_tracked = state_->tracked;
         const std::string preserved_name = state_->name;
@@ -618,6 +620,7 @@ namespace lfs::core {
         if (state_.use_count() <= 1) {
             state_->lazy.reset();
         }
+        publish_lock.unlock();
 
         id_ = preserved_id;
         compute_alignment();
@@ -3576,11 +3579,14 @@ namespace lfs::core {
             const size_t copy_bytes =
                 checked_product(numel(), element_size, "reserve copy byte count");
             if (device_ == Device::CUDA) {
-                const cudaError_t status =
-                    cudaMemcpy(new_data, old_data, copy_bytes, cudaMemcpyDeviceToDevice);
+                // On the tensor's own stream: a legacy-stream copy does not wait for writes still queued on a
+                // non-blocking stream, and would copy what the storage held before them.
+                cudaError_t status = cudaMemcpyAsync(new_data, old_data, copy_bytes, cudaMemcpyDeviceToDevice, stream());
+                if (status == cudaSuccess)
+                    status = cudaStreamSynchronize(stream());
                 if (status != cudaSuccess) {
                     ensure_cuda_success(
-                        status, "cudaMemcpy(tensor reserve)",
+                        status, "cudaMemcpyAsync(tensor reserve)",
                         std::format("bytes={}, source_pointer={}, destination_pointer={}, "
                                     "tensor_shape={}, requested_capacity={}",
                                     copy_bytes, old_data, new_data, shape_.str(), new_capacity),

@@ -37,6 +37,43 @@ body {
     flex-shrink: 0;
 }
 
+.training-preparation-status {
+    display: flex;
+    align-items: center;
+    padding: 10dp 8dp;
+    margin-bottom: 6dp;
+    border-radius: 4dp;
+    background-color: #89b4fa14;
+}
+
+.training-preparation-label {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    white-space: normal;
+    text-align: left;
+    color: #cdd6f4;
+    font-size: 12dp;
+}
+
+.training-preparation-indicator {
+    width: 8dp;
+    height: 8dp;
+    flex-shrink: 0;
+    margin-right: 8dp;
+    border-radius: 4dp;
+    background-color: #89b4fa;
+}
+
+.training-preparation-indicator.is-active {
+    animation: training-preparation-pulse 0.8s quadratic-in-out infinite alternate;
+}
+
+@keyframes training-preparation-pulse {
+    from { opacity: 1; }
+    to { opacity: 0.35; }
+}
+
 #training-search-container {
     display: flex;
     align-items: center;
@@ -54,9 +91,10 @@ body {
     overflow-x: hidden;
     overflow-y: auto;
     padding-bottom: 6dp;
+    padding-right: 4dp;
 }
 
-/* Keep the scroll position legible without taking meaningful panel width. */
+/* A narrow scrollbar in its own gutter: the padding keeps it clear of the controls at every UI scale. */
 .training-scroll-region scrollbarvertical {
     width: 4dp;
 }
@@ -161,22 +199,37 @@ body {
 .training-panel-block > .training-subsection:first-child > .section-header {
 }
 
-.steps-scale-lock-row > .steps-scale-lock-btn {
+/* The lock belongs to the iterations label, so the field keeps the width of every other number field. */
+.prop-label--with-action {
+    display: flex;
+    align-items: center;
+}
+
+.prop-label__text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prop-label--with-action > .steps-scale-lock-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 22dp;
-    height: 20dp;
-    padding: 2dp;
+    width: 18dp;
+    height: 18dp;
+    margin-left: 4dp;
+    padding: 0;
     flex-shrink: 0;
     box-sizing: border-box;
     line-height: 0;
 }
 
-.steps-scale-lock-row > .steps-scale-lock-btn img {
+.prop-label--with-action > .steps-scale-lock-btn img {
     display: block;
-    width: 14dp;
-    height: 14dp;
+    width: 12dp;
+    height: 12dp;
 }
 
 .loss-graph-wrap {
@@ -198,7 +251,6 @@ body {
 }
 
 .loss-tick {
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     text-align: right;
     white-space: nowrap;

@@ -162,6 +162,7 @@ class _Handle:
 class _BindingModel:
     def __init__(self):
         self.func_bindings = {}
+        self.event_bindings = {}
         self.handle = _Handle()
 
     def bind(self, name, getter, setter=None):
@@ -171,7 +172,7 @@ class _BindingModel:
         self.func_bindings[name] = getter
 
     def bind_event(self, name, handler):
-        return None
+        self.event_bindings[name] = handler
 
     def bind_record_list(self, name):
         return None
@@ -3933,6 +3934,84 @@ def test_file_menu_publish_review_prefills_unpublished_draft(panel_module, monke
     assert reviews[0]["fields"]["description"] == ("Prepared text" if panel_available else "")
 
 
+def test_publish_review_keeps_the_entered_details_for_the_next_attempt(panel_module, monkeypatch, tmp_path):
+    # A failed upload is retried from a fresh review, which must offer the typed details, not the project name.
+    from lfs_plugins import gallery_file_panel
+    from lfs_plugins.asset_index import AssetIndex
+
+    project_id = str(uuid.uuid4())
+    project_path = tmp_path / "project-a.licht"
+    project_path.write_bytes(b"local project")
+    catalog = tmp_path / "library.json"
+    catalog.write_text(json.dumps({
+        "schema_version": 6,
+        "folders": {"default": {"path": str(tmp_path)}},
+        "projects": {project_id: {"path": str(project_path), "folder_id": "default", "name": "project-a", "name_origin": "user"}},
+    }))
+    index = AssetIndex(library_path=catalog, default_folder_path=tmp_path)
+    assert index.load()
+    monkeypatch.setattr(index, "_inspect_path", lambda _path, *_args: SimpleNamespace(project_uuid=project_id))
+    library = panel_module.AssetManagerPanel()
+    library._asset_index = index
+    library._gallery_state = {"links": {}, "scenes": []}
+    monkeypatch.setattr(library, "refresh_catalog", lambda **kwargs: None)
+    state = {"identity": "account", "signed_in": True, "links": {}}
+    published = []
+    controller = SimpleNamespace(
+        service=SimpleNamespace(identity=lambda: "account"), upload_format="sog", snapshot=lambda: state,
+        subscribe=lambda changed: (changed(state), lambda: None)[1],
+        publish_asset=lambda asset, details, upload_format, **kwargs: published.append(details))
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel_object",
+                        lambda panel_id: library if panel_id == "lfs.asset_manager" else None, raising=False)
+    monkeypatch.setattr(panel_module.lf.ui, "set_panel_enabled", lambda *_args: None, raising=False)
+    monkeypatch.setattr(panel_module.lf.ui, "request_redraw", lambda: None, raising=False)
+    monkeypatch.setattr(panel_module.lf, "project_poll_write", lambda: {"path": ""}, raising=False)
+    review = gallery_file_panel.GalleryFilePanel()
+    review.show(controller=controller, asset=index.get_asset_dict(project_id), scene=None, action="publish",
+                fields={"title": "project-a", "description": "", "upload_format": "sog"})
+    review._set("title", "Playground")
+    review._set("description", "Small training of a playground")
+    review._submit()
+
+    assert published[0]["title"] == "Playground"
+    assert library._gallery_details(index.get_asset_dict(project_id)) == {
+        "title": "Playground", "description": "Small training of a playground"}
+
+
+def test_missing_filter_removes_the_shown_missing_entries_only(panel_module, monkeypatch, tmp_path):
+    from lfs_plugins.asset_index import AssetIndex
+
+    present_id, missing_id, other_missing_id = (str(uuid.uuid4()) for _ in range(3))
+    present = tmp_path / "present.licht"
+    present.write_bytes(b"local project")
+    catalog = tmp_path / "library.json"
+    catalog.write_text(json.dumps({
+        "schema_version": 6,
+        "folders": {"default": {"path": str(tmp_path)}},
+        "projects": {
+            present_id: {"path": str(present), "folder_id": "default", "name": "present", "name_origin": "user"},
+            missing_id: {"path": str(tmp_path / "archived.licht"), "folder_id": "default", "name": "archived", "name_origin": "user"},
+            other_missing_id: {"path": str(tmp_path / "deleted.licht"), "folder_id": "default", "name": "deleted", "name_origin": "user"},
+        },
+    }))
+    index = AssetIndex(library_path=catalog, default_folder_path=tmp_path)
+    assert index.load()
+    index.reconcile_all()
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = index
+    monkeypatch.setattr(panel, "refresh_catalog", lambda **kwargs: None)
+    assert not panel.get_can_clean_missing()
+    panel._active_filter = "missing"
+    panel._search_query = "arch"
+    assert panel.get_can_clean_missing()
+
+    panel.on_clean_missing()
+
+    remaining = json.loads(catalog.read_text())["projects"]
+    assert set(remaining) == {present_id, other_missing_id}
+    assert present.read_bytes() == b"local project"
+
+
 def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     panel.select_gallery_scope()
@@ -5505,3 +5584,52 @@ def test_preview_operation_guards_confirmed_commit_and_identity(
         assert len(calls) == 1
         assert len(completed) == 1 and isinstance(completed[0], Exception)
         assert path.read_bytes() == b"unchanged project"
+
+
+def _gallery_control(panel, predicate):
+    """Resolve visibility and click dispatch from the shipped RML and model."""
+    import xml.etree.ElementTree as ET
+    path = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml"
+    root = ET.fromstring(path.read_text())
+    buttons = [element for element in root.iter("button")
+               if element.get("data-if") == predicate]
+    assert len(buttons) == 1, f"missing Gallery control: {predicate}"
+    button = buttons[0]
+    model = _BindingModel()
+    panel.on_bind_model(_BindingContext(model))
+    event = button.attrib["data-event-click"]
+    assert event in model.event_bindings
+    return model.func_bindings[predicate](), lambda: model.event_bindings[event](model.handle, None, [])
+
+
+def test_gallery_undo_control_dispatches_restore_and_hides_during_operation(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    calls = []
+    panel._gallery_controller = SimpleNamespace(undo_pull=lambda: calls.append("restore"))
+    state = dict(panel._gallery_state, undoPull={"backup": "/backup", "attempt": 0})
+    panel._gallery_changed(state)
+    visible, click = _gallery_control(panel, "gallery_has_undo")
+    assert visible
+    click()
+    assert calls == ["restore"]
+    panel._gallery_changed(dict(state, undoPull={"backup": "/backup", "operation": "restoring"}))
+    assert not _gallery_control(panel, "gallery_has_undo")[0]
+    panel._gallery_changed(dict(state, undoPull={"backup": "/backup", "attempt": 1, "error": "retry"}))
+    visible, click = _gallery_control(panel, "gallery_has_undo")
+    assert visible
+    click()
+    assert calls == ["restore", "restore"]
+
+
+def test_gallery_missing_backup_control_opens_recovery(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    calls = []
+    panel._gallery_controller = SimpleNamespace(undo_pull=lambda: None, command=calls.append)
+    assert not _gallery_control(panel, "gallery_has_recovery")[0]
+    panel._gallery_changed(dict(panel._gallery_state, undoPull={
+        "backup": "/backup", "attempt": 1, "backupMissing": True, "error": "gone"}))
+    assert not _gallery_control(panel, "gallery_has_undo")[0]
+    visible, click = _gallery_control(panel, "gallery_has_recovery")
+    assert visible
+    click()
+    assert calls == ["show_recovery_folder"]

@@ -354,8 +354,12 @@ namespace lfs::vis::input {
             const int version = j.value("version", 0);
             const std::string profile_name = j.value("name", "Custom");
 
-            if (version < 1 || version > PROFILE_VERSION) {
+            if (version < 1) {
                 LOG_WARN("Unknown profile version: {}", version);
+            } else if (version > PROFILE_VERSION) {
+                LOG_INFO("Profile '{}' was saved by a newer build (version {}, this build reads {}); bindings are "
+                         "matched by action name",
+                         profile_name, version, PROFILE_VERSION);
             }
 
             current_profile_name_ = profile_name;

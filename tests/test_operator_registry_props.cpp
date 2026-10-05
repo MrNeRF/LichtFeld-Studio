@@ -17,6 +17,7 @@
 #include "operator/operator_registry.hpp"
 #include "operator/ops/edit_ops.hpp"
 #include "operator/ops/transform_ops.hpp"
+#include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -879,6 +880,43 @@ TEST(PropertyRegistryTest, OperatorArgsRoundTripAndSnapshotIsCopy) {
 
     registry.unregister_operator_args("test.snapshot");
     EXPECT_FALSE(registry.get_group_snapshot("operator.test.snapshot").has_value());
+}
+
+TEST_F(OperatorRegistryPropsTest, ScenePollCacheTracksApplicationGeneration) {
+    constexpr const char* kOperatorId = "test.callback.scene_poll";
+    int poll_count = 0;
+    auto& scene = scene_manager_->getScene();
+    auto& registry = lfs::vis::op::operators();
+    registry.registerCallbackOperator(
+        lfs::vis::op::OperatorDescriptor{
+            .python_class_id = kOperatorId,
+            .label = "Scene Poll",
+            .poll_deps = lfs::vis::op::PollDependency::SCENE,
+        },
+        lfs::vis::op::CallbackOperator{
+            .poll = [&] {
+                ++poll_count;
+                return scene.getNode("content") != nullptr;
+            },
+        });
+
+    EXPECT_FALSE(registry.poll(kOperatorId));
+    EXPECT_FALSE(registry.poll(kOperatorId));
+    EXPECT_EQ(poll_count, 1);
+
+    add_node("content");
+    lfs::python::bump_scene_generation();
+    EXPECT_FALSE(scene_manager_->hasSelectedNode());
+    EXPECT_TRUE(registry.poll(kOperatorId));
+    EXPECT_TRUE(registry.poll(kOperatorId));
+    EXPECT_EQ(poll_count, 2);
+
+    scene.removeNode("content");
+    lfs::python::bump_scene_generation();
+    EXPECT_FALSE(scene_manager_->hasSelectedNode());
+    EXPECT_FALSE(registry.poll(kOperatorId));
+    EXPECT_FALSE(registry.poll(kOperatorId));
+    EXPECT_EQ(poll_count, 3);
 }
 
 TEST_F(OperatorRegistryPropsTest, CallbackInvokeReleasesRegistryMutexDuringInvoke) {

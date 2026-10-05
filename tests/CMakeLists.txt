@@ -523,6 +523,7 @@ set(TEST_FILES
     test_initial_scales.cpp
     test_system_info.cpp
     test_parameter_manager.cpp
+    test_training_manager_events.cpp
     test_mcp_protocol.cpp
     test_mcp_training_state.cpp
     test_mcp_app_utils.cpp
@@ -665,6 +666,8 @@ set(TEST_FILES
     test_rml_im_mode_layout.cpp
     test_rml_python_listener_lifetime.cpp
     test_status_bar_fit.cpp
+    test_gallery_file_panel_layout.cpp
+    test_rmlui_preview_decode.cpp
     test_training_progress_publisher.cpp
     test_startup_overlay_geometry.cpp
     test_vram_hud_geometry.cpp

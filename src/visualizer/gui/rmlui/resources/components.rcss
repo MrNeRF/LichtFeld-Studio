@@ -559,7 +559,6 @@ progress fill {
     border-width: 1dp;
     border-color: #45475a;
     border-radius: 6dp;
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     cursor: ew-resize;
     transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
@@ -592,7 +591,6 @@ progress fill {
     z-index: 1;
     width: 100%;
     text-align: right;
-    font-family: "JetBrains Mono";
     font-size: 12dp;
     color: #cdd6f4;
 }
@@ -1112,13 +1110,14 @@ crf-curve {
     flex: 1;
     min-width: 0;
     box-sizing: border-box;
-    font-family: "JetBrains Mono";
 }
 
+/* Square and exactly as tall as the 18dp fields beside it. */
 .num-step-btn {
-    width: 20dp;
+    width: 18dp;
     height: 18dp;
-    padding: 0 0 1dp 0;
+    padding: 0;
+    box-sizing: border-box;
     text-align: center;
     line-height: 16dp;
     font-size: 12dp;

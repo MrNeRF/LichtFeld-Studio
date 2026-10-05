@@ -91,7 +91,6 @@ BOOL_PROPS = (
     "enable_eval",
     "eval_all",
     "eval_mask_invert",
-    "background_improvements",
 )
 
 SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space", "eval_space")
@@ -137,7 +136,6 @@ def _run(
 
 BASIC_RUNS = (
     _run("basic_struct", "iterations", "max_cap"),
-    _run("basic_background", "background_improvements", visibility_condition_id="dep_mrnf"),
     _run(
         "basic_exposure_correction",
         "use_exposure_correction",

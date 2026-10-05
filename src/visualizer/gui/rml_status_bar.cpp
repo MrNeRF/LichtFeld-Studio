@@ -1233,7 +1233,10 @@ namespace lfs::vis::gui {
         std::string mode_rml;
         std::string mode_color;
 
-        if (content_type == SceneManager::ContentType::Empty) {
+        if (viewer && viewer->isTrainingStartPending()) {
+            mode_rml = LOC("training_panel.preparing_training");
+            mode_color = colorToRml(p.info);
+        } else if (content_type == SceneManager::ContentType::Empty) {
             mode_rml = LOC("mode.empty");
             mode_color = colorToRml(p.text_dim);
         } else if (content_type == SceneManager::ContentType::SplatFiles) {
@@ -1279,7 +1282,7 @@ namespace lfs::vis::gui {
                 break;
             }
             case TrainingState::Starting:
-                mode_rml = LOC("runtime.task_starting_ellipsis") + suffix;
+                mode_rml = LOC("training_panel.preparing_training");
                 mode_color = colorToRml(p.warning);
                 break;
             case TrainingState::Finished:

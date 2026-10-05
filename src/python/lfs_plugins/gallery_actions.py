@@ -43,6 +43,7 @@ def gallery_eligibility(entry, facts):
     if (commit and failure.get("project") == entry.get("id") and failure.get("commitUuid") == commit):
         reason = {"gallery_project_no_splats": "no_splats",
                   "gallery_project_payload_unavailable": "external_payloads",
+                  "gallery_project_hdr_unavailable": "hdr_missing",
                   "gallery_project_not_supported": "format"}.get(failure.get("failureReason", "").split(":", 1)[0])
         if reason and reason not in reasons:
             reasons.append(reason)

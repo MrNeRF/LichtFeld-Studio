@@ -43,6 +43,10 @@
 namespace lfs::training {
 
     namespace {
+        // LPIPS tiles exactly, so the budget only trades speed for memory: 384 MiB evaluates 10 MP views at
+        // full speed instead of reserving 1.5 GiB on top of training.
+        constexpr std::size_t kEvalLpipsActivationBudget = 384ULL << 20;
+
         struct TensorLayoutInfo {
             int n;
             int c;
@@ -165,6 +169,8 @@ namespace lfs::training {
     } // namespace
 
     lfs::core::Tensor image_for_metrics_and_save(const lfs::core::Tensor& image) {
+        if (image.device() == lfs::core::Device::CUDA && image.dtype() == lfs::core::DataType::Float32)
+            return kernels::quantize_to_8bit_grid(image);
         return image.clamp(0.0f, 1.0f)
             .mul(255.0f)
             .add(0.5f)
@@ -1150,7 +1156,7 @@ namespace lfs::training {
             try {
                 auto loaded = lfs::core::nn::models::Lpips::load(
                     weights_path, lfs::core::Device::CUDA, lfs::core::DataType::Float16,
-                    lfs::core::nn::models::InputScaling::Identity);
+                    lfs::core::nn::models::InputScaling::Identity, kEvalLpipsActivationBudget);
                 if (loaded) {
                     _lpips_metric.emplace(std::move(*loaded));
                 } else {
@@ -1288,7 +1294,8 @@ namespace lfs::training {
                     const std::pair<int, int> image_size{image_height, image_width};
                     const bool size_changed = !lpips_preflight_size || *lpips_preflight_size != image_size;
                     lpips_preflight_size = image_size;
-                    const auto required = _lpips_metric->estimated_peak_bytes(image_height, image_width);
+                    const auto required =
+                        _lpips_metric->estimated_peak_bytes(image_height, image_width, mask.is_valid());
                     std::size_t free_bytes = 0;
                     std::size_t total_bytes = 0;
                     const auto status = cudaMemGetInfo(&free_bytes, &total_bytes);
@@ -1308,7 +1315,7 @@ namespace lfs::training {
                                                  cudaEventRecord(lpips_start_event, lpips_stream) == cudaSuccess;
                         auto value = mask.is_valid()
                                          ? _lpips_metric->forward(
-                                               pred_lpips, target_lpips, mask_as_float01(mask),
+                                               pred_lpips, target_lpips, mask,
                                                lfs::core::nn::models::InputScaling::Identity)
                                          : _lpips_metric->forward(
                                                pred_lpips, target_lpips,

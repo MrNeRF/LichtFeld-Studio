@@ -6,6 +6,7 @@
 
 #include "core/camera.hpp"
 #include "core/error_latch.hpp"
+#include "core/event_bridge/event_bridge.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_exportable_storage.hpp"
@@ -25,6 +26,8 @@
 #include <optional>
 #include <stop_token>
 #include <thread>
+#include <typeindex>
+#include <utility>
 #include <vector>
 
 namespace lfs::core {
@@ -44,8 +47,11 @@ namespace lfs::vis {
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
     class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+    class VisualizerImplResetTest_AsyncPausedExplicitPreparationAdoptsItsSnapshot_Test;
 
     class LFS_VIS_API TrainerManager {
+        friend class VisualizerImplResetTest_AsyncPausedExplicitPreparationAdoptsItsSnapshot_Test;
+
     public:
         // Legacy State enum for backwards compatibility
         // Use TrainingState from training_state.hpp for new code
@@ -67,6 +73,9 @@ namespace lfs::vis {
         void setTrainerFromCheckpoint(std::unique_ptr<lfs::training::Trainer> trainer, int checkpoint_iteration);
         [[nodiscard]] bool clearTrainer();
         bool hasTrainer() const;
+        [[nodiscard]] std::uint64_t trainerGeneration() const {
+            return trainer_generation_.load(std::memory_order_acquire);
+        }
         [[nodiscard]] bool isDatasetEditable() const;
 
         // Link to viewer for notifications
@@ -88,6 +97,8 @@ namespace lfs::vis {
         // Wait for the off-thread initialization phase. Callers must not be the
         // viewer thread; the GUI start path intentionally returns in Starting.
         [[nodiscard]] lfs::Result<void> waitForInitialization();
+        void beginTrainingStartPreparation();
+        void finishTrainingStartPreparation(std::optional<lfs::Error> error = std::nullopt);
         void pauseTraining();
         void resumeTraining();
         void stopTraining();
@@ -282,6 +293,7 @@ namespace lfs::vis {
         std::mutex initialization_mutex_;
         std::condition_variable initialization_cv_;
         bool initialization_complete_ = true;
+        bool training_preparation_pending_ = false;
         std::optional<lfs::Error> initialization_error_;
         std::mutex initialization_gate_mutex_;
         std::condition_variable initialization_gate_cv_;
@@ -289,6 +301,8 @@ namespace lfs::vis {
         bool initialization_main_step_failed_ = false;
         std::atomic<bool> initialization_pause_requested_{false};
         std::jthread completion_reaper_;
+        // Handlers capture this, so the destructor removes them from the process-wide bridge.
+        std::vector<std::pair<std::type_index, lfs::event::HandlerId>> event_handlers_;
         VisualizerImpl* viewer_ = nullptr;
         core::Scene* scene_ = nullptr;
         std::function<bool(std::function<void()>, std::function<void()>)> test_scene_owner_poster_;
@@ -304,6 +318,7 @@ namespace lfs::vis {
         core::ErrorLatch last_training_error_;
         mutable std::mutex state_mutex_;
         mutable std::mutex trainer_lifetime_mutex_;
+        std::atomic<std::uint64_t> trainer_generation_{0};
 
         // Synchronization
         std::condition_variable completion_cv_;

@@ -10,6 +10,7 @@
 #include <visualizer/gui/panel_layout.hpp>
 #include <visualizer/gui/panel_registry.hpp>
 #include <visualizer/gui/resize_geometry.hpp>
+#include <visualizer/gui/rmlui/rmlui_manager.hpp>
 #include <visualizer/gui/scene_panel_native.hpp>
 #include <visualizer/gui/viewport_gizmo_geometry.hpp>
 
@@ -815,8 +816,13 @@ TEST_F(PanelLayoutRenderDemandTest, FloatingToolbarStaysOutsideTheDockResizeBand
 }
 
 TEST(ScenePanelLogDemandTest, BackgroundLogsWakeOnlyTheActiveLogTab) {
-    lfs::vis::gui::NativeScenePanel panel(nullptr);
     auto& logger = lfs::core::Logger::get();
+    // The CPU-only visualizer test binary runs gtest's own main, which leaves the logger uninitialized.
+    if (!logger.is_ready())
+        logger.init(lfs::core::LogLevel::Info);
+    // The panel's RML host requires a manager; an uninitialised one is never driven.
+    lfs::vis::gui::RmlUIManager manager;
+    lfs::vis::gui::NativeScenePanel panel(&manager);
     const auto previous_level = logger.level();
     logger.set_level(lfs::core::LogLevel::Info);
     panel.setProjectActiveTab("logging");

@@ -37,6 +37,7 @@ namespace lfs::vis::gui {
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
 
     namespace gui {
 
@@ -63,7 +64,7 @@ namespace lfs::vis {
             void setFloating(bool floating);
             [[nodiscard]] bool blocksPointer(double x, double y) const;
             [[nodiscard]] bool blocksKeyboard() const;
-            [[nodiscard]] bool needsAnimationFrame() const;
+            [[nodiscard]] bool needsAnimationFrame(bool ui_visible = true) const;
             [[nodiscard]] float preferredFloatingHeight() const;
             // Serialized status of the active PLY sequence (empty when inactive).
             // Used by MCP tooling to verify playback/scrub behaviour.
@@ -73,6 +74,7 @@ namespace lfs::vis {
             void setTimelineView(float zoom, float pan);
 
         private:
+            friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
             void renderSequencerPanel(const UIContext& ctx, const ViewportLayout& viewport,
                                       float panel_x, float panel_y, float panel_width,
                                       float panel_height, const PanelInputState& panel_input);

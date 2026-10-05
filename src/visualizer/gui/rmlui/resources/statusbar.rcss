@@ -518,11 +518,7 @@ body.fit-9 #gpu-mem {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-
-/* Keep metric columns stable when digits change. */
-#fps-value, #loss-value, #gaussians-value, #time-value, #eta-value, #step-value, #gpu-mem, #lfs-mem {
-    font-family: "JetBrains Mono";
-}
+/* Metric values keep a minimum width so changing digits do not move their neighbours. */
 #loss-value { min-width: 44dp; }
 #gaussians-value { min-width: 80dp; }
 #step-value { min-width: 100dp; }

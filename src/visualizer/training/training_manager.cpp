@@ -733,6 +733,9 @@ namespace lfs::vis {
     }
 
     TrainerManager::~TrainerManager() {
+        for (const auto& [type, id] : event_handlers_) {
+            lfs::event::EventBridge::instance().unsubscribe(type, id);
+        }
         if (g_last_stored_session_publish.owner == this) {
             g_last_stored_session_publish = {};
         }
@@ -857,6 +860,9 @@ namespace lfs::vis {
     }
 
     bool TrainerManager::canPerform(const TrainingAction action) const {
+        if (viewer_ && viewer_->isTrainingStartPending()) {
+            return action == TrainingAction::Stop;
+        }
         if (action == TrainingAction::Stop && !trainer_ && viewer_ &&
             getState() == TrainingState::Paused) {
             const auto session = viewer_->projectTrainingSessionState();
@@ -1041,6 +1047,7 @@ namespace lfs::vis {
                 scene_->setLiveModelMutex(nullptr);
             }
             trainer_.reset();
+            trainer_generation_.fetch_add(1, std::memory_order_release);
             // Model tensors retain their own shared ownership while edit/view mode
             // still uses the exportable block. The manager must not remain the final
             // owner after scene teardown.
@@ -1148,11 +1155,29 @@ namespace lfs::vis {
         }
 
         std::unique_lock lock(initialization_mutex_);
-        initialization_cv_.wait(lock, [this] { return initialization_complete_; });
+        initialization_cv_.wait(lock, [this] {
+            return !training_preparation_pending_ && initialization_complete_;
+        });
         if (initialization_error_) {
             return lfs::Result<void>::failure(*initialization_error_);
         }
         return {};
+    }
+
+    void TrainerManager::beginTrainingStartPreparation() {
+        std::lock_guard lock(initialization_mutex_);
+        training_preparation_pending_ = true;
+        initialization_error_.reset();
+    }
+
+    void TrainerManager::finishTrainingStartPreparation(std::optional<lfs::Error> error) {
+        {
+            std::lock_guard lock(initialization_mutex_);
+            training_preparation_pending_ = false;
+            if (error)
+                initialization_error_ = std::move(error);
+        }
+        initialization_cv_.notify_all();
     }
 
     void TrainerManager::runOnSceneOwnerThread(std::function<void()> run,
@@ -1549,6 +1574,13 @@ namespace lfs::vis {
     }
 
     void TrainerManager::stopTraining() {
+        if (viewer_ && !viewer_->isOnViewerThread()) {
+            runOnSceneOwnerThread([this] { stopTraining(); }, [] {});
+            return;
+        }
+        if (viewer_ && viewer_->cancelTrainingStartPreparation()) {
+            return;
+        }
         if (!canStop()) {
             LOG_TRACE("Cannot stop: {}", getActionBlockedReason(TrainingAction::Stop));
             return;
@@ -2471,42 +2503,46 @@ namespace lfs::vis {
 
         lfs::training::CommandCenter::instance().bind_state_events();
 
+        const auto keep = [this](const std::type_index type, const lfs::event::HandlerId id) {
+            event_handlers_.emplace_back(type, id);
+        };
+
         // Training control commands
-        cmd::StartTraining::when([this](const auto&) {
-            if (viewer_) {
-                if (auto result = viewer_->startTraining();
-                    !result) {
-                    LOG_ERROR(
-                        "Failed to start training: {}",
-                        result.error());
-                }
-                return;
-            }
-            startTraining();
-        });
+        keep(typeid(cmd::StartTraining), cmd::StartTraining::when([this](const auto&) {
+                 if (viewer_) {
+                     if (auto result = viewer_->startTraining();
+                         !result) {
+                         LOG_ERROR(
+                             "Failed to start training: {}",
+                             result.error());
+                     }
+                     return;
+                 }
+                 startTraining();
+             }));
 
-        cmd::PauseTraining::when([this](const auto&) {
-            pauseTraining();
-        });
+        keep(typeid(cmd::PauseTraining), cmd::PauseTraining::when([this](const auto&) {
+                 pauseTraining();
+             }));
 
-        cmd::ResumeTraining::when([this](const auto&) {
-            resumeTraining();
-        });
+        keep(typeid(cmd::ResumeTraining), cmd::ResumeTraining::when([this](const auto&) {
+                 resumeTraining();
+             }));
 
-        cmd::StopTraining::when([this](const auto&) {
-            stopTraining();
-        });
+        keep(typeid(cmd::StopTraining), cmd::StopTraining::when([this](const auto&) {
+                 stopTraining();
+             }));
 
         // Listen for training progress events - update loss buffer
-        state::TrainingProgress::when([this](const auto& event) {
-            updateLoss(event.loss);
-        });
+        keep(typeid(state::TrainingProgress), state::TrainingProgress::when([this](const auto& event) {
+                 updateLoss(event.loss);
+             }));
 
         // Listen for evaluation completed events - update PSNR buffer
-        state::EvaluationCompleted::when([this](const auto& event) {
-            updateEvaluationMetrics(event.iteration, event.psnr, event.ssim,
-                                    event.lpips);
-        });
+        keep(typeid(state::EvaluationCompleted), state::EvaluationCompleted::when([this](const auto& event) {
+                 updateEvaluationMetrics(event.iteration, event.psnr, event.ssim,
+                                         event.lpips);
+             }));
     }
 
     std::vector<std::shared_ptr<lfs::core::Camera>> TrainerManager::getAllCamList() const {

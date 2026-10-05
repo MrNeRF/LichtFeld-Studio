@@ -136,12 +136,6 @@ namespace {
             {"bounds_percentile", {"mrnf"}},
             {"use_error_map", {"mrnf"}},
             {"use_edge_map", {"mrnf"}},
-            {"background_improvements", {"mrnf"}},
-            {"far_scene_min_fraction", {"mrnf"}},
-            {"growth_ratio_rank", {"mrnf"}},
-            {"growth_ratio_pow", {"mrnf"}},
-            {"fill_pacing_iter", {"mrnf"}},
-            {"far_seed_dose", {"mrnf"}},
             {"prune_opacity", {"igs+"}},
             {"reset_every", {"igs+"}},
             {"min_opacity", {"mcmc"}},
@@ -574,7 +568,7 @@ namespace {
         EXPECT_EQ(mcmc_result->max_cap, 1'000'000);
 
         const auto mrnf_path = eval_config_path("mrnf_optimization_params.json");
-        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0xd673eeb0fe318eeULL);
+        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0xff1bdba9c3fd52dbULL);
         const auto mrnf_result = lfs::core::param::read_optim_params_from_json(mrnf_path);
         ASSERT_TRUE(mrnf_result.has_value()) << mrnf_result.error();
         EXPECT_FLOAT_EQ(mrnf_result->means_lr, 2e-05f);
@@ -592,22 +586,6 @@ namespace {
         EXPECT_EQ(igs_result->refine_every, 500u);
         EXPECT_FLOAT_EQ(igs_result->tv_loss_weight, 5.0f);
         EXPECT_EQ(igs_result->strategy, "igs+");
-    }
-
-    TEST_F(TrainingParametersTest, ExploreStarvationWeightingIsConfigResidue) {
-        const auto defaults = OptimizationParameters::mrnf_defaults();
-        EXPECT_TRUE(defaults.explore_starvation_weighting);
-
-        const auto default_json = defaults.to_json();
-        EXPECT_FALSE(default_json.contains("explore_starvation_weighting"));
-        EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "explore_starvation_weighting"));
-
-        auto json = defaults.to_json();
-        json["explore_starvation_weighting"] = false;
-        const auto parsed = OptimizationParameters::from_json(json);
-        EXPECT_FALSE(parsed.explore_starvation_weighting);
-        EXPECT_TRUE(parsed.validate().empty());
-        EXPECT_FALSE(parsed.to_json().at("explore_starvation_weighting").get<bool>());
     }
 
     TEST_F(TrainingParametersTest, SaveLoadRoundTripPreservesParameters) {

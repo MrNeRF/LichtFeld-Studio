@@ -332,6 +332,7 @@ namespace lfs::vis::gui {
 
     GizmoManager::GizmoManager(VisualizerImpl* viewer)
         : viewer_(viewer) {
+        python::set_selection_submode(static_cast<int>(selection_mode_));
     }
 
     bool GizmoManager::isCropToolActive() const {
@@ -3122,6 +3123,7 @@ namespace lfs::vis::gui {
     void GizmoManager::setSelectionSubMode(SelectionSubMode mode) {
         const bool was_volume_mode = isSelectionVolumeSubMode(selection_mode_);
         selection_mode_ = mode;
+        python::set_selection_submode(static_cast<int>(mode));
 
         if (auto* rm = viewer_->getRenderingManager()) {
             rm->setSelectionPreviewMode(toSelectionPreviewMode(mode));
@@ -3159,6 +3161,7 @@ namespace lfs::vis::gui {
         captureSelectionVolumeBase(source_generation);
         selection_volume_apply_mode_ = apply_mode;
         selection_mode_ = mode;
+        python::set_selection_submode(static_cast<int>(mode));
         crop_tool_shape_ = mode == SelectionSubMode::Sphere ? CropToolShape::Ellipsoid : CropToolShape::Box;
         crop_tool_initialized_ = true;
         crop_tool_target_node_id_ = selectedCropTargetNodeId().value_or(core::NULL_NODE);

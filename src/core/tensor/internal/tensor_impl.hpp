@@ -1083,11 +1083,12 @@ namespace lfs::core {
                         if (dev == Device::CUDA) {
                             pin_operands({&lhs_source, &rhs_operand});
                             tensor_ops::launch_float_binary_with_numeric_policy(
-                                lhs_source.ptr<float>(), rhs_operand.ptr<float>(),
+                                std::as_const(lhs_source).ptr<float>(), std::as_const(rhs_operand).ptr<float>(),
                                 out.ptr<float>(), out.numel(), op, out.stream());
                             tensor_ops::record_tensor_kernel_launch(1);
                         } else {
-                            apply_binary_cpu(lhs_source.ptr<float>(), rhs_operand.ptr<float>(),
+                            apply_binary_cpu(std::as_const(lhs_source).ptr<float>(),
+                                             std::as_const(rhs_operand).ptr<float>(),
                                              out.ptr<float>(), out.numel(), op);
                         }
                         return out;
