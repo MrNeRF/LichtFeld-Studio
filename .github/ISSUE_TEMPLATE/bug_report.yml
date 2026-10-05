@@ -1,0 +1,78 @@
+name: Bug report
+description: Report a crash or something that does not work as expected.
+labels:
+- bug
+body:
+- type: markdown
+  attributes:
+    value: Please report one main problem per issue and check for similar reports first. If you are unsure
+      whether this is a bug, choose **Question / unexpected behavior**.
+- type: dropdown
+  id: installation
+  attributes:
+    label: Installation method
+    description: How are you running LichtFeld Studio?
+    options:
+    - Official release
+    - Nightly build
+    - Built from source
+    - Other / not sure
+  validations:
+    required: true
+- type: input
+  id: version
+  attributes:
+    label: Version or build
+    description: Enter the version or build identifier. If unknown, provide the download link or approximate
+      download date.
+    placeholder: Version / build / download link
+  validations:
+    required: true
+- type: input
+  id: source
+  attributes:
+    label: Branch and commit (source builds only)
+    description: If you built from source, include the branch and commit SHA; include the fork URL if
+      applicable. Leave this blank for downloaded builds.
+  validations:
+    required: false
+- type: textarea
+  id: environment
+  attributes:
+    label: System and GPU
+    description: Include your operating system, GPU model, and NVIDIA driver version if known.
+    placeholder: Windows 11, RTX 4090 (24 GB), driver ...
+  validations:
+    required: true
+- type: textarea
+  id: reproduce
+  attributes:
+    label: Steps to reproduce
+    description: List the steps and relevant settings. For intermittent problems, describe when and how
+      often they happen.
+    placeholder: '1. Open ...
+
+      2. Select ...
+
+      3. ...'
+  validations:
+    required: true
+- type: textarea
+  id: behavior
+  attributes:
+    label: Expected and actual behavior
+    description: What did you expect, and what happened instead? Include the error message if available.
+    placeholder: 'Expected: ...
+
+      Actual: ...'
+  validations:
+    required: true
+- type: textarea
+  id: attachments
+  attributes:
+    label: Logs, screenshots, or extra details
+    description: 'Optional: attach logs or a small sample. For training/export problems, include relevant
+      dataset sizes and settings. If this worked before, mention the last working build. Remove private
+      information before sharing.'
+  validations:
+    required: false

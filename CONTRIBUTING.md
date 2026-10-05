@@ -23,6 +23,22 @@ Thanks for your interest in contributing!
    - Link related issues
    - Describe what you changed and why
 
+## Opening an Issue
+
+Search existing issues, then choose **Bug report**, **Feature request**, or
+**Question / unexpected behavior**. If you are unsure whether something is a
+bug, the question form is a good place to start.
+
+Keep each issue focused on one main problem or request and link related issues.
+For bugs, include your version/build, system and GPU, reproduction steps, and
+expected versus actual behavior. If you built from source, add the branch and
+commit SHA if available; a branch name alone changes over time. Separate what
+you observed from any suspected cause or proposed fix.
+
+For feature requests, describe the problem and desired behavior with a concrete
+example. Logs, screenshots, and small samples are welcome; remove private
+information before sharing.
+
 ## Localization
 
 `src/visualizer/gui/resources/locales/en.json` is the canonical locale bundle.
