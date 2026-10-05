@@ -34,29 +34,23 @@ namespace lfs::vis::gui {
             if (element)
                 element->SetInnerRML(element->GetTagName() == "button" ? "<span>" + escaped(value) + "</span>" : escaped(value));
         }
-        // Literal keys, so the localization contract test resolves each of them.
         std::string categoryLabel(const std::string& category) {
-            if (category == "Clean-up")
-                return LOC("node_template.category.cleanup");
-            if (category == "Colour")
-                return LOC("node_template.category.colour");
-            if (category == "Selection")
-                return LOC("node_template.category.selection");
-            if (category == "Geometry")
-                return LOC("node_template.category.geometry");
-            if (category == "Animation")
-                return LOC("node_template.category.animation");
-            return category;
+            static const std::map<std::string, std::string> keys{
+                {"Clean-up", "node_template.category.cleanup"},
+                {"Colour", "node_template.category.colour"},
+                {"Selection", "node_template.category.selection"},
+                {"Geometry", "node_template.category.geometry"},
+                {"Animation", "node_template.category.animation"}};
+            const auto found = keys.find(category);
+            return found == keys.end() ? category : LOC(found->second);
         }
-
         std::string kindLabel(const std::string& kind) {
-            if (kind == "splat")
-                return LOC("node_template.kind.splat");
-            if (kind == "mesh")
-                return LOC("node_template.kind.mesh");
-            if (kind == "points")
-                return LOC("node_template.kind.points");
-            return kind;
+            static const std::map<std::string, std::string> keys{
+                {"splat", "node_template.kind.splat"},
+                {"mesh", "node_template.kind.mesh"},
+                {"points", "node_template.kind.points"}};
+            const auto found = keys.find(kind);
+            return found == keys.end() ? kind : LOC(found->second);
         }
     } // namespace
 

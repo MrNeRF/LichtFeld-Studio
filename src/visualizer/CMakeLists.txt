@@ -49,7 +49,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         window/vulkan_image_barrier_tracker.cpp
         window/gpu_object_census.cpp
         window/vulkan_loader_probe.cpp
-        window/graphics_import_error_scope.cpp
 
         # Rendering
         rendering/camera_interaction_service.cpp

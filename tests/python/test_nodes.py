@@ -280,7 +280,7 @@ def test_posterize_selection_blends_rgb_and_fades_higher_sh(lf, numpy, weight):
     numpy.testing.assert_allclose(result.splats.shN.tolist(), 1.0 - weight, atol=1e-6)
 
 
-@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
 @pytest.mark.parametrize("keep", [0, 1])
 def test_posterize_field_after_geometry_changes(lf, numpy, device, keep):
     tree = lf.nodes.new_tree("Posterize changed domain")
@@ -310,7 +310,7 @@ def test_posterize_field_after_geometry_changes(lf, numpy, device, keep):
     assert result.splats.shN.shape == (keep, 1, 3)
 
 
-@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
 @pytest.mark.parametrize("levels", [0, 2, 32, 999])
 def test_posterize_degree_zero_and_level_limits(lf, numpy, device, levels):
     tree = lf.nodes.new_tree("Posterize zero SH degree")
@@ -328,7 +328,7 @@ def test_posterize_degree_zero_and_level_limits(lf, numpy, device, levels):
     numpy.testing.assert_allclose(result.splats.sh0.tolist(), expected, atol=1e-6)
 
 
-@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
 def test_posterize_field_after_same_size_colour_edit(lf, numpy, device):
     tree = lf.nodes.new_tree("Posterize changed colours")
     colour = tree.add_node("lfs.colour_attribute")
@@ -354,7 +354,7 @@ def test_posterize_field_after_same_size_colour_edit(lf, numpy, device):
     numpy.testing.assert_allclose(result.splats.sh0.tolist(), expected, atol=1e-6)
 
 
-@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
 def test_posterize_nan_selection_is_unselected(lf, numpy, device):
     tree = lf.nodes.new_tree("Posterize invalid selection")
     power = tree.add_node("lfs.math")
@@ -370,12 +370,43 @@ def test_posterize_nan_selection_is_unselected(lf, numpy, device):
     numpy.testing.assert_array_equal(result.splats.shN.tolist(), geometry.splats.shN.tolist())
 
 
-@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
 def test_posterize_without_splats(lf, device):
     tree = lf.nodes.new_tree("Posterize without splats")
     _insert_between(tree, tree.add_node("lfs.posterize"), "Geometry")
     result = _evaluate_on(lf.nodes.evaluate_tree, tree, lf.nodes.Geometry(), device)
     assert result.splats is None
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("device", ["cuda", "vulkan"])
+def test_posterize_on_a_named_backend_matches_cpu(lf, numpy, device):
+    tree = lf.nodes.new_tree("Posterize on a named backend")
+    colour = tree.add_node("lfs.separate_colour")
+    colour.set_input("Colour", (0.1047519339336952, 0.7735781815168312, 0.755501599559747))
+    first = tree.add_node("lfs.posterize")
+    first.set_input("Levels", 8)
+    index = tree.add_node("lfs.index")
+    compare = tree.add_node("lfs.compare")
+    compare.set_property("operation", "greater_equal")
+    compare.set_input("B", 1.0)
+    delete = tree.add_node("lfs.delete_geometry")
+    last = tree.add_node("lfs.posterize")
+    last.set_input("Levels", 3)
+    tree.unlink(tree.input_node, "Geometry", tree.output_node, "Geometry")
+    tree.link(tree.input_node, "Geometry", first, "Geometry")
+    tree.link(colour, "G", first, "Selection")
+    tree.link(first, "Geometry", delete, "Geometry")
+    tree.link(index, "Index", compare, "A")
+    tree.link(compare, "Result", delete, "Selection")
+    tree.link(delete, "Geometry", last, "Geometry")
+    tree.link(colour, "R", last, "Selection")
+    tree.link(last, "Geometry", tree.output_node, "Geometry")
+    expected = lf.nodes.evaluate_tree(tree, _geometry(lf, numpy), device="cpu")
+    result = _evaluate_on(lf.nodes.evaluate_tree, tree, _geometry(lf, numpy), device)
+    assert result.splats.means.shape == (1, 3)
+    numpy.testing.assert_allclose(result.splats.sh0.tolist(), expected.splats.sh0.tolist(), atol=1e-6)
+    numpy.testing.assert_allclose(result.splats.shN.tolist(), expected.splats.shN.tolist(), atol=1e-6)
 
 
 def test_graph_names_are_unique_on_create_rename_and_import(lf):

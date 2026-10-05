@@ -10,7 +10,7 @@
   <div id="window-frame" class="template-window">
     <div id="title-bar">
       <div class="template-title-copy"><span id="title-text">@tr:node_editor.templates_title</span><span class="preferences-description">@tr:node_editor.suggested_templates</span></div>
-      <button id="close-btn" data-action="close" title="@tr:common.close"><img src="../icon/scene/x.png"/></button>
+      <button id="close-btn" data-action="close" aria-label="@tr:common.close"><img src="../icon/scene/x.png"/></button>
     </div>
     <div id="content-wrap">
       <div id="template-browser-content" class="preferences-layout">
@@ -18,7 +18,7 @@
         <div class="template-results">
           <div class="asset-search-box">
             <img class="template-search-icon" src="../icon/scene/search.png"/>
-            <input id="template-search" type="text"/>
+            <input id="template-search" type="text" aria-label="@tr:node_editor.template_search"/>
             <span id="template-search-placeholder" class="asset-search-placeholder text-muted">@tr:node_editor.template_search</span>
           </div>
           <span id="template-results-label" class="text-muted"></span>
