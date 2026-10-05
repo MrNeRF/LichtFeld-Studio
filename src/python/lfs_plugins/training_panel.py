@@ -363,7 +363,7 @@ class TrainingPanel(Panel):
 
         params = lf.optimization_params()
         if params and params.has_params() and params.enable_eval:
-            self._sync_eval_steps_with_save_steps(params)
+            self._add_save_steps_to_eval_steps(params)
 
     def _bind_labels(self, model):
         model.bind_func(
@@ -1992,7 +1992,7 @@ class TrainingPanel(Panel):
             return False
         setattr(params, prop, val)
         if prop == "enable_eval" and val:
-            self._sync_eval_steps_with_save_steps(params)
+            self._add_save_steps_to_eval_steps(params)
         if prop in RENDER_SYNC:
             self._sync_render_setting(RENDER_SYNC[prop], val)
         if self._handle:
@@ -2710,7 +2710,7 @@ class TrainingPanel(Panel):
             if params and params.has_params() and self._new_save_step > 0:
                 params.add_save_step(self._new_save_step)
                 if params.enable_eval:
-                    self._sync_eval_steps_with_save_steps(params)
+                    self._add_save_steps_to_eval_steps(params)
                 self._refresh_save_steps_model(params)
 
     def _action_reset(self):
@@ -2737,7 +2737,7 @@ class TrainingPanel(Panel):
             return
 
         if params and params.has_params() and params.enable_eval:
-            self._sync_eval_steps_with_save_steps(params)
+            self._add_save_steps_to_eval_steps(params)
 
         conflict = lf.training_start_overwrite_conflict()
         if conflict is not None:
@@ -2942,13 +2942,12 @@ class TrainingPanel(Panel):
                 self._remove_from_eval_steps(params, step_to_remove)
             self._refresh_save_steps_model(params)
 
-    def _sync_eval_steps_with_save_steps(self, params):
+    def _add_save_steps_to_eval_steps(self, params):
         if not params or not params.has_params():
             return
-        save_steps_list = list(params.save_steps)
-        params.clear_eval_steps()
-        for step in save_steps_list:
-            params.add_eval_step(step)
+        for step in list(params.save_steps):
+            if step not in params.eval_steps:
+                params.add_eval_step(step)
 
     def _remove_from_eval_steps(self, params, step):
         if not params or not params.has_params():

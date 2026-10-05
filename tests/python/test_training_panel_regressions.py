@@ -1786,6 +1786,28 @@ def test_enabling_eval_clamps_existing_bad_test_every(training_panel_module, mon
     assert params.eval_steps == params.save_steps
 
 
+# Catches the panel replacing eval steps given with --eval-steps by the save steps.
+def test_enabling_eval_keeps_requested_eval_steps(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    params = _ParamsStub()
+    params.eval_steps = [300, 4000]
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(
+            optimization_params=lambda: params,
+            dataset_params=lambda: _DatasetStub(),
+            get_render_settings=lambda: None,
+            get_scene=lambda: SimpleNamespace(active_camera_count=5),
+        ),
+    )
+
+    panel._set_bool_prop("enable_eval", True)
+
+    assert params.eval_steps == [300, 4000, 7000]
+
+
 def test_enabling_eval_rejects_single_camera_split(training_panel_module, monkeypatch):
     panel = training_panel_module.TrainingPanel()
     params = _ParamsStub()
