@@ -1309,7 +1309,11 @@ namespace lfs::vis::gui {
                         aspect, photo_view ? photo_view->bounds_min : std::array<float, 3>{-1.0f, -1.0f, 0.0f},
                         photo_view ? photo_view->bounds_max : std::array<float, 3>{1.0f, 1.0f, 2.0f});
                     const glm::vec3 translation{placement.translation[0], placement.translation[1], placement.translation[2]};
-                    const auto transform = glm::translate(glm::mat4{1.0f}, translation) *
+                    // Face the standard scene camera by rotating the grounded
+                    // reconstruction 180 degrees around world Y, at the origin.
+                    // diag(-1, 1, -1) is an exact half-turn, not a reflection.
+                    const auto facing = glm::scale(glm::mat4{1.0f}, glm::vec3{-1.0f, 1.0f, -1.0f});
+                    const auto transform = facing * glm::translate(glm::mat4{1.0f}, translation) *
                                            glm::scale(glm::mat4{1.0f}, glm::vec3{aspect, 1.0f, 1.0f} * placement.scale);
                     node_name = scene_manager->addGeneratedSplatNode(
                         std::make_unique<core::SplatData>(std::move(*model)), "",

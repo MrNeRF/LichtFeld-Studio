@@ -62,6 +62,8 @@ conservative three-sigma bounds rest on the scene's Y=0 ground plane and are
 centered horizontally. Oversized reconstructions are uniformly reduced to a
 four-unit envelope suitable for the standard camera; smaller ones are not enlarged.
 The standard dataset-to-world boundary keeps it upright in LichtFeld's scene axes.
+A 180-degree rotation around world Y makes the source-facing side face the
+standard scene camera, rotating about the grounded origin.
 Import does not alter the camera, FOV, pivot, projection mode or Home position.
 Background pixels are reconstructed too; this feature does not remove them.
 
