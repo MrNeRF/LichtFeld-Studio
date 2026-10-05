@@ -1336,6 +1336,53 @@ result_values = (
     EXPECT_FLOAT_EQ(result.values[index++], 1.0f);
 }
 
+TEST_F(PythonIntegrationTest, RestoredTensorOperations) {
+    const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+x = lf.Tensor.normal([2, 2], mean=2, std=0, device="gpu")
+assert x.backend in ("cuda", "vulkan", "metal")
+assert x.all_close(lf.Tensor.ones([2, 2], device="gpu") * 2)
+assert x.allclose(x.clone())
+assert lf.Tensor.bernoulli([4], p=1, device="gpu").sum().item() == 4
+weights = lf.Tensor.ones([4], device="gpu")
+assert sorted(lf.Tensor.multinomial(weights, 4, seed=42).tolist()) == [0, 1, 2, 3]
+assert lf.Tensor.diag(weights).sum().item() == 4
+assert x.cdist(x).sum().item() == 0
+assert x.normalize().sum().item() == 0
+assert x.mod(x).sum().item() == 0
+assert x.reduce(lf.ReduceOp.SUM).item() == 8
+assert x.nonzero_split()[0].numel == 4
+assert x.linear(x).sum().item() == 32
+assert x.reshape([1, 2, 1, 2]).conv1x1(x).sum().item() == 32
+x[0, 1] = -3
+assert x[0, 1].item() == -3
+half = x.to("float16")
+assert half.clamp(-1, 1).to("float32").sum().item() == 2
+assert half.clamp_min_(-1) is half
+assert half.clamp_(-1, 1) is half
+assert half.to("float32").sum().item() == 2
+assert x.where_into_(x < 0, 5, x) is x
+assert x[0, 1].item() == 5
+indices = lf.Tensor.zeros([2], device="gpu", dtype="int32")
+assert x.gather_lazy(indices).tolist() == [2, 2]
+assert x.validate()["is_valid"]
+assert x.diff(x.clone())["num_different"] == 0
+assert x.stats()["backend"] == x.backend
+assert x.reserved_allocation_bytes >= 16
+assert lf.nn.softmax(x).sum().item() == 2
+assert lf.nn.silu(x).all_close(x.swish())
+assert lf.nn.rms_norm(x, lf.Tensor.ones([2], device="gpu")).shape == (2, 2)
+assert lf.nn.residual_scale(x, x, lf.Tensor.ones([2], device="gpu")).all_close(x * 2)
+sequence = half.reshape([1, 1, 2, 2])
+windows = lf.nn.window_partition(sequence, 3)
+assert lf.nn.window_unpartition(windows, 3, 2).to("float32").all_close(sequence.to("float32"))
+result_shape = (1,)
+result_values = [1.0]
+)PY");
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+}
+
 TEST_F(PythonIntegrationTest, PyTensorSyncWaitsForItsVulkanBackendWithCudaDefault) {
     using namespace lfs::core;
     if (!gpu_backend_available(GpuBackend::Vulkan))

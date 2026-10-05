@@ -1780,6 +1780,20 @@ The tables below list the most-used tensor APIs. For the full bound surface, see
 | `t.stack(tensors, dim=0)`                   | `Tensor` | Stack                    |
 | `t.where(condition, x, y)`                  | `Tensor` | Conditional select       |
 
+**Sampling and diagonal construction:**
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `t.normal(shape, mean=0.0, std=1.0, device='cuda', dtype='float32')` | `Tensor` | Normal samples; currently Float32 only |
+| `t.bernoulli(shape, p=0.5, device='cuda', dtype='float32')` | `Tensor` | Zeros and ones, probability `p` of one |
+| `t.multinomial(weights, num_samples, replacement=False, seed=None)` | `Tensor` | Int64 indices sampled from 1D weights on their device; an explicit seed does not change the global RNG |
+| `t.diag(diagonal)` | `Tensor` | Square matrix from a 1D tensor |
+
+Creation uses the existing device convention: `'cpu'` selects CPU, while `'gpu'`
+and the compatibility spelling `'cuda'` use the process's selected GPU backend.
+Operations on existing tensors preserve their backend. Supported shapes and
+dtypes follow the C++ tensor contracts; invalid inputs raise Python exceptions.
+
 **Properties:**
 
 | Property         | Type    | Description              |
@@ -1824,6 +1838,54 @@ The tables below list the most-used tensor APIs. For the full bound surface, see
 | `.masked_select()`, `.masked_fill()`| `Tensor` | Masked operations        |
 | `.zeros_like()`, `.ones_like()` etc.| `Tensor` | Like-constructors        |
 | `.from_dlpack()` / `.__dlpack__()`  | `Tensor` | DLPack interop           |
+
+**Additional tensor methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `.cdist(other, p=2.0)` | `Tensor` | Pairwise distances between rows; supports `p=0`, positive finite `p`, and infinity |
+| `.normalize(dim=-1, eps=1e-12)` | `Tensor` | Float32 standardization `(x - mean) / (population_std + eps)`; `dim=-1` means all elements, otherwise reduces the specified dimension |
+| `.mod(other)` | `Tensor` | Element-wise fmod with a tensor divisor; negative results follow the dividend's sign |
+| `.clamp(min, max)` / `.clamp_(min, max)` | `Tensor` | Out-of-place / in-place clamp, including Float16 |
+| `.clamp_min_(min)` | `Tensor` | In-place lower bound, including Float16 |
+| `.reduce(op, dim=None, keepdim=False)` | `Tensor` | Reduction selected by `lf.ReduceOp`; `None` reduces all dimensions |
+| `.all_close(other, rtol=1e-5, atol=1e-8)` / `.allclose(...)` | `bool` | Compare Float32 values with relative and absolute tolerances; NaNs do not compare equal |
+| `.nonzero_split()` | `list[Tensor]` | One Int64 index tensor per dimension |
+| `.linear(weight, bias=None)` | `Tensor` | Float32 `x @ weight.T` with optional bias; weights `[out_features, in_features]` |
+| `.conv1x1(weight, bias=None)` | `Tensor` | Float32 NCHW convolution; weights `[out_channels, in_channels]` |
+| `.where_into_(condition, value, source)` | `Tensor` | Write the scalar `value` where condition is true, otherwise `source`, into this tensor; overlapping source views are supported |
+| `.gather_lazy(indices)` | `Tensor` | Gather flat Int32 indices on the same device; returns an evaluated tensor, not a lazy Python expression |
+| `.reserved_allocation_bytes` | `int or None` | Read-only backing allocation size, including reserved capacity; `None` means unknown |
+| `.validate()` | `dict` | `is_valid`, `has_nan`, `has_inf`, `nan_count`, `inf_count`, and finite `min_val`, `max_val`, `mean_val` |
+| `.diff(other, tolerance=1e-5)` | `dict` | `shapes_match`, `dtypes_match`, `max_abs_diff`, `mean_abs_diff`, `max_rel_diff`, `num_different`, `total_elements`; the count uses absolute tolerance |
+| `.stats()` | `dict` | Finite-value `min`, `max`, `mean`, population `std`, plus `numel`, `shape`, `dtype`, `is_cuda`, `backend` |
+
+In-place methods return the same Python tensor, so calls can be chained. Element
+writes use existing indexing, for example `x[1, 2] = 3.0`, including tensor views.
+Inspection computes reductions on the tensor backend and reads back scalar
+results. For shape or dtype mismatches, inspect the flags returned by `diff`
+before interpreting its numeric fields.
+
+`lf.ReduceOp` contains `SUM`, `MEAN`, `MAX`, `MIN`, `PROD`, `ANY`, `ALL`, `STD`,
+`VAR`, `ARGMAX`, `ARGMIN`, `COUNT_NONZERO`, and `NORM`. Logical reductions use Bool
+inputs; `STD` and `VAR` use the sample correction. As in C++, `COUNT_NONZERO` and
+`NORM` are enum members but are rejected by `reduce`: call `.count_nonzero()` and
+`.norm()` instead. Other dtype restrictions also follow the C++ operation.
+
+**Neural operations (`lf.nn`):**
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `softmax(input, mask=None)` | `Tensor` | Softmax over the last dimension; optional broadcastable additive mask |
+| `silu(input)` | `Tensor` | `input * sigmoid(input)` |
+| `rms_norm(input, weight, eps=1e-6)` | `Tensor` | Normalize by `sqrt(mean(input**2) + eps)` on the last dimension, then apply channel weights |
+| `residual_scale(x, hidden, gamma)` | `Tensor` | `x + hidden * gamma`, broadcasting gamma over the last dimension |
+| `window_partition(input, window_size)` | `Tensor` | 1D sequence windows: `[B,H,N,d]` to `[B*n_windows,H,window_size,d]`, padding N with zeros |
+| `window_unpartition(windows, window_size, original_n)` | `Tensor` | Restore `[B,H,N,d]` and remove sequence padding |
+| `RomaV1.weights_bytes` | `int` | Read-only resident weight bytes; zero before loading and after `close()`, without triggering a download |
+
+The functional neural operations run on CPU or the input tensor's GPU backend.
+Window operations preserve Float16, including padding.
 
 **Operators:** `+`, `-`, `*`, `/`, `**`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `[]` (indexing/slicing)
 
