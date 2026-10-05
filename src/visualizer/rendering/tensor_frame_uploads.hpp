@@ -22,7 +22,7 @@ namespace lfs::vis {
             auto destination = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU, dtype);
             if (bytes.empty())
                 return destination;
-            slots_.emplace_back().enqueue(destination, bytes, nullptr);
+            slots_.emplace_back().enqueue_in_batch(destination, bytes);
             return destination;
         }
 

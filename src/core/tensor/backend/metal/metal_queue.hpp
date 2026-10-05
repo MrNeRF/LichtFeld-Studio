@@ -25,6 +25,8 @@ namespace lfs::core::internal::metal_queue {
     uint64_t submit();
     // Commits the batch of serial if it is still open; never blocks.
     [[nodiscard]] bool ready(uint64_t serial);
+    // Whether serial has completed, without committing its batch.
+    [[nodiscard]] bool completed(uint64_t serial);
     // Raises batch failures and device faults.
     void wait(uint64_t serial);
     // Leaves failures and faults to the thread that owns the work.

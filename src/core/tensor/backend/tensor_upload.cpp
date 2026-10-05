@@ -63,6 +63,8 @@ namespace lfs::core {
         cudaEvent_t cuda_completion = nullptr;
 #endif
         bool pending = false;
+        bool next_in_batch = false, in_batch = false;
+        uint64_t metal_serial = 0;
     };
     TensorUpload::TensorUpload() = default;
     TensorUpload::~TensorUpload() {
@@ -96,6 +98,14 @@ namespace lfs::core {
         if (gpu_backend_of(destination) != target.backend())
             throw std::invalid_argument("TensorUpload queue backend mismatch");
         enqueue(std::move(destination), source, target.native_handle());
+    }
+    void TensorUpload::enqueue_in_batch(Tensor destination, std::span<const std::byte> source) {
+        if (pending())
+            throw std::logic_error("TensorUpload already pending");
+        if (!impl_)
+            impl_ = std::make_unique<Impl>();
+        impl_->next_in_batch = true;
+        enqueue(std::move(destination), source, nullptr);
     }
     void TensorUpload::enqueue(Tensor destination, const Tensor& source) {
         const auto stream = gpu_backend_of(destination) == GpuBackend::CUDA
@@ -157,6 +167,7 @@ namespace lfs::core {
         if (!impl_)
             impl_ = std::make_unique<Impl>();
         auto& s = *impl_;
+        s.in_batch = std::exchange(s.next_in_batch, false);
         s.source = source;
         s.destination = std::move(destination);
         s.completion = {};
@@ -216,7 +227,8 @@ namespace lfs::core {
                 s.source = {};
                 const auto* const meta = internal::storage_ref(s.destination).meta;
                 const uint64_t serial = meta ? meta->pending_value.load(std::memory_order_acquire) : 0;
-                if (internal::metal_queue::ready(serial)) {
+                s.metal_serial = serial;
+                if (s.in_batch ? internal::metal_queue::completed(serial) : internal::metal_queue::ready(serial)) {
                     s.pending = false;
                     s.destination = {};
                 } else {
@@ -241,7 +253,7 @@ namespace lfs::core {
         } else
 #endif
             if (gpu_backend_of(s.destination) == GpuBackend::Metal) {
-            if (!s.completion.ready())
+            if (s.in_batch ? !internal::metal_queue::completed(s.metal_serial) : !s.completion.ready())
                 return false;
         } else {
 #if LFS_HAS_CUDA

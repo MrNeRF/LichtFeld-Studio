@@ -38,6 +38,12 @@
 
 namespace lfs::vis {
     namespace {
+        // A quarter more than measured, so a moving camera does not overflow again at once.
+        uint32_t withGrowthHeadroom(const uint64_t required) {
+            return static_cast<uint32_t>(std::min<uint64_t>(required + required / 4, std::numeric_limits<uint32_t>::max()));
+        }
+    } // namespace
+    namespace {
         using namespace rendering::metal;
         using Slot = RenderTargetId;
         bool nativeStorage(const core::Tensor& tensor) {
@@ -258,6 +264,9 @@ namespace lfs::vis {
             Frame* latest = nullptr;
             size_t next = 0;
             uint32_t needed_capacity = 0;
+            // Instances an overflowing frame needed, recorded on GPU completion so
+            // the retry sizes from it instead of waiting for that frame's slot.
+            std::shared_ptr<std::atomic<uint64_t>> overflow_required = std::make_shared<std::atomic<uint64_t>>(0);
             std::unique_ptr<MetalRadPager> pager;
         };
         std::unordered_map<RenderTargetId, TargetState, RenderTargetIdHash> targets;
@@ -597,7 +606,11 @@ namespace lfs::vis {
             if (state.frames[index].get() == state.latest && state.latest)
                 index = state.next++ % state.frames.size();
             auto& frame = state.frames[index];
-            uint32_t capacity = std::max(state.needed_capacity, static_cast<uint32_t>(std::min<uint64_t>(uint64_t(count) * 16 + 4096, 16u * 1024u * 1024u)));
+            if (const uint64_t reported = state.overflow_required->exchange(0, std::memory_order_acq_rel))
+                state.needed_capacity = std::max(state.needed_capacity, withGrowthHeadroom(reported));
+            // Start near typical tile coverage and grow from measured demand: an
+            // overflowing frame keeps the last image and requests a redraw that fits.
+            uint32_t capacity = std::max(state.needed_capacity, static_cast<uint32_t>(std::min<uint64_t>(uint64_t(count) * 2 + 4096, 16u * 1024u * 1024u)));
             // A failed encode has no readable status. Replace it transactionally
             // too, so an admission/allocation failure cannot discard owned slots.
             if (frame && frame->command) {
@@ -611,7 +624,7 @@ namespace lfs::vis {
                 if (status.error != RasterError::None) {
                     if (status.required_instances > std::numeric_limits<uint32_t>::max())
                         throw std::runtime_error(std::format("Metal viewport instance count exceeds 32-bit indexing (required={}, capacity={})", status.required_instances, capacity));
-                    capacity = std::max(capacity, static_cast<uint32_t>(status.required_instances));
+                    capacity = std::max(capacity, withGrowthHeadroom(status.required_instances));
                 }
                 if (frame->points == points && frame->size == request.frame_view.size && frame->count >= count && frame->capacity >= capacity)
                     return *frame;
@@ -1062,7 +1075,7 @@ namespace lfs::vis {
                 if (status.required_instances > std::numeric_limits<uint32_t>::max())
                     throw std::runtime_error(std::format("Metal instance indexing overflow (required_instances={}, max={})", status.required_instances, std::numeric_limits<uint32_t>::max()));
                 if (status.error != RasterError::None)
-                    i.target(slot).needed_capacity = static_cast<uint32_t>(status.required_instances);
+                    i.target(slot).needed_capacity = withGrowthHeadroom(status.required_instances);
             }
             // Overflow fallback may only sample a matching published extent.
             // acquire() keeps this publication alive throughout the attempt.
@@ -1373,13 +1386,18 @@ namespace lfs::vis {
                 }];
                 const auto completion_retry = i.retry_callback;
                 const auto completion_status = f.raster->statusBuffer();
-                if (completion_retry) {
-                    [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
-                        if (completed.status == MTLCommandBufferStatusError ||
-                            static_cast<const RasterStatus*>(completion_status.contents)->error != RasterError::None)
-                            completion_retry();
-                    }];
-                }
+                const auto overflow_required = i.target(slot).overflow_required;
+                [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+                    const auto* status = static_cast<const RasterStatus*>(completion_status.contents);
+                    if (completed.status != MTLCommandBufferStatusError && status->error != RasterError::None) {
+                        uint64_t seen = overflow_required->load(std::memory_order_relaxed);
+                        while (status->required_instances > seen &&
+                               !overflow_required->compare_exchange_weak(seen, status->required_instances, std::memory_order_acq_rel)) {
+                        }
+                    }
+                    if (completion_retry && (completed.status == MTLCommandBufferStatusError || status->error != RasterError::None))
+                        completion_retry();
+                }];
             });
             if (pager && gpu_lod)
                 pager->noteRendererCompletion(serial);

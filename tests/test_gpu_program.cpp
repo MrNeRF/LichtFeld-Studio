@@ -43,6 +43,30 @@ namespace {
             EXPECT_FLOAT_EQ(host.ptr<float>()[i], values[i] * 2 + 3) << i;
     }
 
+    TEST_P(Programs, DependentDispatchChainStaysOrdered) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        GpuBackendScope scope(GetParam());
+        auto loaded = M::load(program_contract_entries(), GetParam());
+        ASSERT_TRUE(loaded) << loaded.error().detail();
+        constexpr size_t kCount = 4099;
+        constexpr int kSteps = 256;
+        std::array buffers{Tensor::zeros({kCount}, Device::GPU), Tensor::zeros({kCount}, Device::GPU)};
+        const Params params{.count = uint32_t(kCount), .scale = 1, .bias = 1};
+        for (int step = 0; step < kSteps; ++step) {
+            const std::array bindings{M::Binding{0, &buffers[step % 2]},
+                                      M::Binding{8, &buffers[(step + 1) % 2], M::Access::ReadWrite}};
+            auto dispatched = (*loaded)->dispatch({.function = "transform",
+                                                   .arguments = {std::as_bytes(std::span(&params, 1)), bindings},
+                                                   .groups = {M::groups_for(kCount, 64), 1, 1}});
+            ASSERT_TRUE(dispatched) << step << ": " << dispatched.error().detail();
+        }
+        // Each step adds one to the previous step's output.
+        auto host = buffers[kSteps % 2].to(Device::CPU);
+        for (size_t i = 0; i < kCount; ++i)
+            ASSERT_EQ(host.ptr<float>()[i], float(kSteps)) << i;
+    }
+
     TEST_P(Programs, SameSlangRasterBlendDepthAndLoadMatchCpuPixels) {
         if (!gpu_backend_available(GetParam()))
             GTEST_SKIP();

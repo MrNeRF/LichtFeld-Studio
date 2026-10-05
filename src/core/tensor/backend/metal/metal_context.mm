@@ -870,6 +870,14 @@ namespace lfs::core::internal::metal_queue {
         return true;
     }
 
+    bool completed(const uint64_t serial) {
+        if (@available(macOS 26.0, *)) {
+            const auto context = context_for(serial);
+            return !context || context->completed() >= serial;
+        }
+        return true;
+    }
+
     void wait(const uint64_t serial) { metal_wait(serial); }
 
     void wait_completed(const uint64_t serial) {

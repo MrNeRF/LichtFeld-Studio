@@ -31,6 +31,11 @@ namespace lfs::core {
         void enqueue(Tensor destination, const Tensor& source, void* execution_target);
         void enqueue(Tensor destination, std::span<const std::byte> source,
                      void* execution_target);
+        // Per-frame uploads on the current queue. On Metal a queued copy joins
+        // the open batch instead of being submitted at once, and poll() never
+        // submits it: the frame's own submission carries it. Other uploads
+        // submit early so their copies overlap the work that consumes them.
+        void enqueue_in_batch(Tensor destination, std::span<const std::byte> source);
         [[nodiscard]] bool pending() const noexcept;
         [[nodiscard]] bool poll();
         void wait();
