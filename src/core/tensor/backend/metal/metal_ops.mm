@@ -3215,7 +3215,7 @@ namespace lfs::core::internal {
         }
     }
 
-    void MetalBackendOps::nn_norm(const StorageRef input, const StorageRef weight, const std::optional<StorageRef> bias,
+    void MetalBackendOps::nn_norm(const StorageRef input, const StorageRef weight, const StorageRef bias,
                                   const StorageRef output, const NormProgram& program, ExecContext) {
         LFS_FACADE_TRACE(nn_norm);
         if (program.rows == 0)
@@ -3224,22 +3224,22 @@ namespace lfs::core::internal {
             uint64_t input, weight, bias, output;
             uint32_t rows, cols;
             float eps;
-            uint32_t has_bias;
+            uint32_t padding;
         };
         static_assert(sizeof(Params) == 48);
         const auto context = acquire_context();
         const Params params{
             .input = address_of(*context, input),
             .weight = address_of(*context, weight),
-            .bias = bias ? address_of(*context, *bias) : 0,
+            .bias = address_of(*context, bias),
             .output = address_of(*context, output),
             .rows = checked_u32(program.rows, "Metal norm rows exceed uint32"),
             .cols = checked_u32(program.cols, "Metal norm columns exceed uint32"),
             .eps = program.eps,
-            .has_bias = bias ? 1u : 0u,
+            .padding = 0,
         };
         (void)checked_u32(program.rows * program.cols, "Metal norm input exceeds uint32");
-        const std::array uses{input, weight, bias.value_or(weight), output};
+        const std::array uses{input, weight, bias, output};
         const uint32_t dtype = static_cast<uint32_t>(output.dtype);
         // A SIMD group per row, eight rows per threadgroup.
         context->dispatch(uses, {.pipeline = context->pipeline("nn_norm", {{1, dtype}, {2, dtype}}),

@@ -115,7 +115,7 @@ namespace lfs::core::internal {
                        std::optional<StorageRef>, StorageRef, const LinearProgram&, ExecContext) override;
         void nn_attention(StorageRef, StorageRef, StorageRef, std::optional<StorageRef>, StorageRef,
                           const AttentionProgram&, ExecContext) override;
-        void nn_norm(StorageRef, StorageRef, std::optional<StorageRef>, StorageRef, const NormProgram&,
+        void nn_norm(StorageRef, StorageRef, StorageRef, StorageRef, const NormProgram&,
                      ExecContext) override;
         void nn_conv2d(StorageRef, StorageRef, std::optional<StorageRef>, StorageRef, const ConvProgram&,
                        ExecContext) override;

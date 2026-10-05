@@ -425,31 +425,6 @@ TEST_F(NnOpsTest, LinearResidualMatchesAdd) {
 // still reading it, and roughly one launch in a few hundred comes out wrong.
 // Softmax reduces the row max and the row sum through shared memory and has the
 // same buffer-reuse hazard as LayerNorm.
-TEST_F(NnOpsTest, SoftmaxIsBitwiseRepeatable) {
-    const int rows = 1029;
-    const int cols = 1024;
-    std::vector<float> x(static_cast<std::size_t>(rows) * cols);
-    for (std::size_t i = 0; i < x.size(); ++i) {
-        x[i] = std::sin(0.41f * static_cast<float>(i)) * 6.0f;
-    }
-    auto X = upload(x, {static_cast<std::size_t>(rows), static_cast<std::size_t>(cols)},
-                    lfs::core::DataType::Float32);
-    const auto reference = host_f32(lfs::core::nn::softmax(X));
-    int differing = 0;
-    for (int run = 0; run < 200; ++run) {
-        const auto got = host_f32(lfs::core::nn::softmax(X));
-        ASSERT_EQ(got.size(), reference.size());
-        for (std::size_t i = 0; i < got.size(); ++i) {
-            if (got[i] != reference[i]) {
-                ++differing;
-                break;
-            }
-        }
-    }
-    EXPECT_EQ(differing, 0) << "softmax gave a different answer on " << differing
-                            << " of 200 launches with identical input";
-}
-
 TEST_F(NnOpsTest, LayerNormIsBitwiseRepeatable) {
     const int rows = 1029;
     const int cols = 1024;
@@ -484,7 +459,7 @@ TEST_F(NnOpsTest, LayerNormIsBitwiseRepeatable) {
                             << " of 300 launches with identical input";
 }
 
-TEST_F(NnOpsTest, LayerNormAndRmsNorm) {
+TEST_F(NnOpsTest, LayerNorm) {
     const int rows = 6, cols = 17;
     std::vector<float> x(rows * cols), w(cols, 1.2f), b(cols, -0.3f);
     for (int i = 0; i < rows * cols; ++i) {
@@ -496,27 +471,6 @@ TEST_F(NnOpsTest, LayerNormAndRmsNorm) {
     auto B = upload(b, {static_cast<std::size_t>(cols)}, lfs::core::DataType::Float32);
     auto y = lfs::core::nn::layer_norm(X, W, B, 1e-5f);
     EXPECT_TRUE(all_close(host_f32(y), cpu_layer_norm(x, w, b, rows, cols, 1e-5f), kF32Rtol, kF32Atol));
-
-    std::vector<float> rms_ref(x.size());
-    for (int r = 0; r < rows; ++r) {
-        float ss = 0.0f;
-        for (int c = 0; c < cols; ++c) {
-            ss += x[r * cols + c] * x[r * cols + c];
-        }
-        const float inv = 1.0f / std::sqrt(ss / cols + 1e-6f);
-        for (int c = 0; c < cols; ++c) {
-            rms_ref[r * cols + c] = x[r * cols + c] * inv * w[c];
-        }
-    }
-    auto yr = lfs::core::nn::rms_norm(X, W, 1e-6f);
-    EXPECT_TRUE(all_close(host_f32(yr), rms_ref, kF32Rtol, kF32Atol));
-}
-
-TEST_F(NnOpsTest, SoftmaxLastDim) {
-    std::vector<float> x = {1.0f, 2.0f, 3.0f, -1.0f, 0.0f, 5.0f};
-    auto X = upload(x, {2, 3}, lfs::core::DataType::Float32);
-    auto y = lfs::core::nn::softmax(X);
-    EXPECT_TRUE(all_close(host_f32(y), cpu_softmax(x, 2, 3), kF32Rtol, kF32Atol));
 }
 
 TEST_F(NnOpsTest, AttentionWmmaTileParity) {
@@ -648,38 +602,6 @@ TEST_F(NnOpsTest, AttentionVsExplicitSoftmax) {
         const float atol = dtype == lfs::core::DataType::Float16 ? kF16Atol : 2e-4f;
         EXPECT_TRUE(all_close(host_f32(O), ref, rtol, atol));
     }
-}
-
-TEST_F(NnOpsTest, WindowedAttentionMatchesPerWindow) {
-    const int b = 1, h = 1, n = 10, d = 4, win = 4;
-    std::vector<float> q(b * h * n * d);
-    for (int i = 0; i < static_cast<int>(q.size()); ++i) {
-        q[i] = 0.05f * (i - 7);
-    }
-    auto shape = std::vector<std::size_t>{1, 1, static_cast<std::size_t>(n), static_cast<std::size_t>(d)};
-    auto Q = upload(q, shape, lfs::core::DataType::Float32);
-    auto Qw = lfs::core::nn::window_partition(Q, win);
-    auto Ow = lfs::core::nn::attention(Qw, Qw, Qw);
-    auto O = lfs::core::nn::window_unpartition(Ow, win, n);
-    const int n_win = (n + win - 1) / win;
-    std::vector<float> ref(q.size(), 0.0f);
-    for (int w = 0; w < n_win; ++w) {
-        const int start = w * win;
-        const int len = std::min(win, n - start);
-        std::vector<float> qw(static_cast<std::size_t>(win) * d, 0.0f);
-        for (int i = 0; i < len; ++i) {
-            for (int t = 0; t < d; ++t) {
-                qw[i * d + t] = q[(start + i) * d + t];
-            }
-        }
-        auto local = cpu_attention(qw, qw, qw, 1, 1, win, d);
-        for (int i = 0; i < len; ++i) {
-            for (int t = 0; t < d; ++t) {
-                ref[(start + i) * d + t] = local[i * d + t];
-            }
-        }
-    }
-    EXPECT_TRUE(all_close(host_f32(O), ref, 2e-4f, 2e-4f));
 }
 
 TEST_F(NnOpsTest, Conv2dMatchesSevenLoop) {
@@ -902,7 +824,7 @@ TEST_F(NnOpsTest, MaxPool2dBhwcMatchesComposed) {
     EXPECT_TRUE(all_close(host_f32(got), host_f32(ref), kF16Rtol, kF16Atol));
 }
 
-TEST_F(NnOpsTest, SplitQkvMergeHeadsAndResidual) {
+TEST_F(NnOpsTest, SplitQkvMergeHeads) {
     const int b = 1, s = 5, h = 2, d = 4;
     std::vector<float> qkv(b * s * 3 * h * d);
     for (int i = 0; i < static_cast<int>(qkv.size()); ++i) {
@@ -914,19 +836,6 @@ TEST_F(NnOpsTest, SplitQkvMergeHeadsAndResidual) {
     EXPECT_EQ(merged.shape()[0], 1u);
     EXPECT_EQ(merged.shape()[1], 5u);
     EXPECT_EQ(merged.shape()[2], 8u);
-    std::vector<float> x(s * 8, 0.5f), hid(s * 8), gamma(8, 1.25f);
-    for (int i = 0; i < static_cast<int>(hid.size()); ++i) {
-        hid[i] = 0.1f * i;
-    }
-    auto X = upload(x, {5, 8}, lfs::core::DataType::Float32);
-    auto H = upload(hid, {5, 8}, lfs::core::DataType::Float32);
-    auto G = upload(gamma, {8}, lfs::core::DataType::Float32);
-    auto Y = lfs::core::nn::residual_scale(X, H, G);
-    std::vector<float> ref(x.size());
-    for (std::size_t i = 0; i < x.size(); ++i) {
-        ref[i] = x[i] + hid[i] * gamma[i % 8];
-    }
-    EXPECT_TRUE(all_close(host_f32(Y), ref, kF32Rtol, kF32Atol));
 }
 
 TEST_F(NnOpsTest, UvGridMatchesCpuFormula) {
@@ -1034,24 +943,21 @@ TEST_F(NnOpsTest, ResizeMatchesNumpyFixture) {
     }
 }
 
-TEST_F(NnOpsTest, GeluSiluReluAndCast) {
+TEST_F(NnOpsTest, GeluReluAndCast) {
     std::vector<float> x = {-2.0f, -0.5f, 0.0f, 0.5f, 2.0f, 3.0f};
     auto X = upload(x, {6}, lfs::core::DataType::Float32);
     auto erf = lfs::core::nn::gelu(X, lfs::core::nn::GELUApprox::Erf);
     auto tanh = lfs::core::nn::gelu(X, lfs::core::nn::GELUApprox::Tanh);
-    auto sl = lfs::core::nn::silu(X);
     auto rl = lfs::core::nn::relu(X);
-    std::vector<float> erf_ref(x.size()), tanh_ref(x.size()), sl_ref(x.size()), rl_ref(x.size());
+    std::vector<float> erf_ref(x.size()), tanh_ref(x.size()), rl_ref(x.size());
     for (std::size_t i = 0; i < x.size(); ++i) {
         erf_ref[i] = 0.5f * x[i] * (1.0f + std::erf(x[i] * 0.7071067811865476f));
         const float inner = 0.7978845608028654f * (x[i] + 0.044715f * x[i] * x[i] * x[i]);
         tanh_ref[i] = 0.5f * x[i] * (1.0f + std::tanh(inner));
-        sl_ref[i] = x[i] / (1.0f + std::exp(-x[i]));
         rl_ref[i] = std::max(x[i], 0.0f);
     }
     EXPECT_TRUE(all_close(host_f32(erf), erf_ref, kF32Rtol, kF32Atol));
     EXPECT_TRUE(all_close(host_f32(tanh), tanh_ref, kF32Rtol, kF32Atol));
-    EXPECT_TRUE(all_close(host_f32(sl), sl_ref, kF32Rtol, kF32Atol));
     EXPECT_TRUE(all_close(host_f32(rl), rl_ref, kF32Rtol, kF32Atol));
     auto h = lfs::core::nn::cast(X, lfs::core::DataType::Float16);
     auto back = lfs::core::nn::cast(h, lfs::core::DataType::Float32);

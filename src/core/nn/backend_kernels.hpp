@@ -19,7 +19,7 @@ namespace lfs::core::nn::dedicated {
                   const TensorShape& output_shape, std::size_t batch, std::size_t m, std::size_t n, std::size_t k,
                   bool trans_b, bool batched_b, Activation activation);
     // Layer norm over the last dimension, or RMS norm without a bias.
-    Tensor norm(const Tensor& input, const Tensor& weight, const Tensor* bias, float eps);
+    Tensor norm(const Tensor& input, const Tensor& weight, const Tensor& bias, float eps);
     // [B, H, N, d] attention; the mask strides step batch, head, query and key.
     Tensor attention(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor* mask, float scale,
                      const std::array<long long, 4>& mask_strides);
