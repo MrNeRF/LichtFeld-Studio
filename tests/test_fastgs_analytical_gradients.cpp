@@ -302,6 +302,7 @@ namespace {
                 sh_rest.data_ptr<float>(),
                 result.shN.data_ptr<float>(),
                 n,
+                static_cast<std::uint32_t>(k - 1),
                 static_cast<std::uint32_t>(k - 1));
         }
         return result;

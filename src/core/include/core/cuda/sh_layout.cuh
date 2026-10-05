@@ -10,14 +10,7 @@
 
 namespace lfs::core {
 
-    void reorder_sh_to_swizzled(
-        const float* src_canonical,
-        float* dst_swizzled,
-        std::size_t n_primitives,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream = nullptr);
-
-    // Variant where canonical rows contain `src_coeffs_rest` coefficients but the
+    // Canonical rows contain `src_coeffs_rest` coefficients but the
     // destination swizzled buffer has room for `layout_coeffs_rest`. Coefficients beyond
     // src_coeffs_rest are zero-filled in the destination layout.
     void reorder_sh_to_swizzled(
@@ -28,18 +21,8 @@ namespace lfs::core {
         std::uint32_t layout_coeffs_rest,
         cudaStream_t stream = nullptr);
 
-    // Inverse of reorder_sh_to_swizzled: copy the first `active_coeffs_rest` coefficients of
-    // the first n primitives back into canonical [N, K, 3] layout. dst must be at least
-    // n * active_coeffs_rest * 3 floats.
-    void undo_reorder_sh_from_swizzled(
-        const float* src_swizzled,
-        float* dst_canonical,
-        std::size_t n_primitives,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream = nullptr);
-
-    // Variant where the source swizzled buffer uses `layout_coeffs_rest` slots while the
-    // output canonical rows contain only `dst_coeffs_rest` coefficients.
+    // Inverse of reorder_sh_to_swizzled: copy dst_coeffs_rest coefficients from
+    // source rows with layout_coeffs_rest slots into canonical [N, K, 3] rows.
     void undo_reorder_sh_from_swizzled(
         const float* src_swizzled,
         float* dst_canonical,
@@ -117,16 +100,8 @@ namespace lfs::core {
         cudaStream_t stream = nullptr);
 
     // Gather selected primitives from swizzled storage into contiguous linear rows laid out as
-    // [n_src, active_coeffs_rest, 3]. This is the selected-row inverse of
+    // [n_src, dst_coeffs_rest, 3]. This is the selected-row inverse of
     // reorder_sh_to_swizzled and is used by densification paths that only need child rows.
-    void shN_swizzled_gather_to_linear(
-        const float* src_swizzled,
-        const int* src_indices,
-        float* dst_linear,
-        std::size_t n_src,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream = nullptr);
-
     void shN_swizzled_gather_to_linear(
         const float* src_swizzled,
         const int* src_indices,
@@ -142,66 +117,30 @@ namespace lfs::core {
         const std::int64_t* src_indices,
         float* dst_linear,
         std::size_t n_src,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream = nullptr);
-
-    void shN_swizzled_gather_to_linear_i64(
-        const float* src_swizzled,
-        const std::int64_t* src_indices,
-        float* dst_linear,
-        std::size_t n_src,
         std::uint32_t dst_coeffs_rest,
         std::uint32_t layout_coeffs_rest,
         cudaStream_t stream = nullptr);
 
-    // Append n_src linear rows (laid out as [n_src, active_coeffs_rest, 3]) into the
+    // Append n_src linear rows (laid out as [n_src, src_coeffs_rest, 3]) into the
     // swizzled buffer starting at primitive index dst_offset.
     void shN_swizzled_gather_from_linear(
         float* dst_swizzled,
         std::size_t dst_offset,
         const float* src_linear,
         std::size_t n_src,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream = nullptr);
-
-    void shN_swizzled_gather_from_linear(
-        float* dst_swizzled,
-        std::size_t dst_offset,
-        const float* src_linear,
-        std::size_t n_src,
         std::uint32_t src_coeffs_rest,
         std::uint32_t layout_coeffs_rest,
         cudaStream_t stream = nullptr);
 
-    // Scatter linear rows ([n_src, active_coeffs_rest, 3]) into specific primitive indices
+    // Scatter linear rows ([n_src, src_coeffs_rest, 3]) into specific primitive indices
     // of the swizzled buffer (equivalent of index_put_ on dim 0).
     void shN_swizzled_scatter_linear(
         float* dst_swizzled,
         const int* dst_indices,
         const float* src_linear,
         std::size_t n_src,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream = nullptr);
-
-    void shN_swizzled_scatter_linear(
-        float* dst_swizzled,
-        const int* dst_indices,
-        const float* src_linear,
-        std::size_t n_src,
         std::uint32_t src_coeffs_rest,
         std::uint32_t layout_coeffs_rest,
-        cudaStream_t stream = nullptr);
-
-    // Pack split resident SH storage into VkSplat's full 16-coefficient packed layout:
-    // sh0 [N, 1, 3] or [N, 3] + swizzled shN rest -> [ceil(N/32), 12, 32] float4.
-    // dst_full_swizzled must have sh_swizzled_float_count(n) floats. src_shN_swizzled
-    // may be null, in which case the rest coefficients are packed as zeros.
-    void sh_swizzled_pack_full_from_split(
-        const float* src_sh0,
-        const float* src_shN_swizzled,
-        float* dst_full_swizzled,
-        std::size_t n_primitives,
-        std::uint32_t active_coeffs_rest,
         cudaStream_t stream = nullptr);
 
 } // namespace lfs::core
