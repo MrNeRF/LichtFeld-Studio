@@ -29,8 +29,8 @@ struct Constants {
 
 struct Parameters {
     Ptr<uint8_t, Access.Read> planes;
-    Ptr<float4, Access.Read> source;
-    Ptr<float4, Access.ReadWrite> image;
+    Ptr<uint2, Access.Read> source;
+    Ptr<uint2, Access.ReadWrite> image;
     Ptr<Constants, Access.Read> c;
     Ptr<float, Access.Read> dovi;
     Ptr<float, Access.ReadWrite> lut;
@@ -38,11 +38,13 @@ struct Parameters {
     Ptr<uint8_t, Access.ReadWrite> output;
     Ptr<uint, Access.ReadWrite> tiles;
     Ptr<float, Access.Read> pq_table;  // libplacebo's 1024-step PQ EOTF table, padded
+    Ptr<float, Access.Read> scaler_lut;
+    Ptr<uint, Access.ReadWrite> chroma_image;
     uint source_width;
     uint source_height;
     uint target_width;
     uint target_height;
-    uint mode;        // resample: vertical; render: rotation; render and resample: + 4 FP16 input
+    uint mode;        // resample: vertical, + 2 exact half scale; render: rotation, + 4 fused peak detection
     uint taps;        // resample: 0 lanczos, else hermite taps; render: output channels
     float blur;
     uint gamut_map;
@@ -62,6 +64,9 @@ static const uint DOVI_COMPONENT = 226;  // pivot count, 9 pivots, 8 pieces of 2
 static const uint GAMUT_I = 48;
 static const uint GAMUT_C = 32;
 static const uint GAMUT_H = 256;
+groupshared uint render_sum[256];
+groupshared uint render_peak[256];
+groupshared uint render_black[256];
 
 float3 transform(float4 rows[3], float3 v) {
     return float3(dot(rows[0].xyz, v), dot(rows[1].xyz, v), dot(rows[2].xyz, v));
@@ -76,6 +81,26 @@ float3 fp16(float3 v) {
     uint3 h = f32tof16(v);
     h = select(abs(f16tof32(h)) > abs(v), h - 1u, h);
     return f16tof32(h);
+}
+
+uint2 store_source(float3 color) {
+    const uint4 h = f32tof16(float4(fp16(color), 1.0));
+    return uint2(h.x | (h.y << 16u), h.z | (h.w << 16u));
+}
+
+float4 load_source(uint2 packed) {
+    const uint4 h = uint4(packed.x & 0xffffu, packed.x >> 16u,
+                          packed.y & 0xffffu, packed.y >> 16u);
+    return f16tof32(h);
+}
+
+uint store_chroma(float2 color) {
+    const uint2 h = f32tof16(fp16(float3(color, 0.0)).xy);
+    return h.x | (h.y << 16u);
+}
+
+float2 read_chroma(uint packed) {
+    return f16tof32(uint2(packed & 0xffffu, packed >> 16u));
 }
 
 float pq_eotf(float x) {
@@ -109,39 +134,16 @@ uint load(Constants q, uint c, int x, int y) {
     return (value >> component.w) & q.layout.y;
 }
 
-float lanczos(float x) {
-    x = abs(x);
-    if (x > 3.0)
-        return 0.0;
-    if (x < 1e-8)
-        return 1.0;
-    const float a = x * PI;
-    const float b = a / 3.0;
-    return sin(a) / a * (sin(b) / b);
-}
-
-void lanczos_row(float offset, out float w[6]) {
-    float sum = 0.0;
-    for (int n = 0; n < 6; ++n) {
-        w[n] = lanczos(float(n) - 2.0 - offset);
-        sum += w[n];
-    }
-    for (int n = 0; n < 6; ++n)
-        w[n] /= sum;
-}
-
 // pl_shader_sample_ortho2 taps around a texel-space position. libplacebo reads
 // the normalized weights from 256 subpixel rows, linearly interpolated.
 int lanczos_weights(float position, out float w[6]) {
     const float start = floor(position);
     const float row = (position - start) * 255.0;
     const float first = floor(row);
-    float a[6];
-    float b[6];
-    lanczos_row(first / 255.0, a);
-    lanczos_row(min(first + 1.0, 255.0) / 255.0, b);
+    const uint row0 = uint(first) * 6u;
+    const uint row1 = uint(min(first + 1.0, 255.0)) * 6u;
     for (int n = 0; n < 6; ++n)
-        w[n] = lerp(a[n], b[n], row - first);
+        w[n] = lerp(p.scaler_lut[row0 + uint(n)], p.scaler_lut[row1 + uint(n)], row - first);
     return int(start) - 2;
 }
 
@@ -174,6 +176,21 @@ float2 chroma(Constants q, int2 pixel) {
         result += q.flags.x != 0u ? wx[i] * column : column;
     }
     return result;
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void chroma_vertical(uint3 tid : SV_DispatchThreadID) {
+    const Constants q = p.c[0];
+    if (tid.x >= q.layout.z || tid.y >= p.source_height)
+        return;
+    const float position = float(tid.y) * q.chroma.z + q.chroma.w;
+    float wy[6];
+    const int y0 = lanczos_weights(position, wy);
+    float2 color = float2(0.0);
+    for (int j = 0; j < 6; ++j)
+        color += wy[j] * load_chroma(q, int(tid.x), clamp(y0 + j, 0, int(q.layout.w) - 1));
+    p.chroma_image[tid.y * q.layout.z + tid.x] = store_chroma(q.sample.y * color);
 }
 
 // pl_shader_dovi_reshape on one component.
@@ -214,7 +231,20 @@ void decode(uint3 tid : SV_DispatchThreadID) {
         return;
     const Constants q = p.c[0];
     const int2 pixel = int2(tid.xy);
-    float3 color = float3(q.sample.y * (float(load(q, 0u, pixel.x, pixel.y)) * q.sample.x), chroma(q, pixel));
+    float2 chroma_value;
+    if (q.flags.x != 0u && q.flags.y != 0u) {
+        const float position = float(pixel.x) * q.chroma.x + q.chroma.y;
+        float wx[6];
+        const int x0 = lanczos_weights(position, wx);
+        chroma_value = float2(0.0);
+        for (int i = 0; i < 6; ++i) {
+            const int x = clamp(x0 + i, 0, int(q.layout.z) - 1);
+            chroma_value += wx[i] * read_chroma(p.chroma_image[tid.y * q.layout.z + uint(x)]);
+        }
+    } else {
+        chroma_value = chroma(q, pixel);
+    }
+    float3 color = float3(q.sample.y * (float(load(q, 0u, pixel.x, pixel.y)) * q.sample.x), chroma_value);
     if (q.flags.z != 0u) {
         const float3 signal = clamp(color, 0.0, 1.0);
         color = float3(reshape(0u, color.x, signal), reshape(1u, color.y, signal), reshape(2u, color.z, signal));
@@ -222,7 +252,7 @@ void decode(uint3 tid : SV_DispatchThreadID) {
     color = transform(q.decode, color) + float3(q.decode[0].w, q.decode[1].w, q.decode[2].w);
     if (q.flags.z != 0u)
         color = pq_oetf(transform(q.dovi_lms, pq_eotf(color)));
-    p.image[tid.y * p.source_width + tid.x] = float4(color, 1.0);
+    p.image[tid.y * p.source_width + tid.x] = store_source(color);
 }
 
 // ---- peak detection (pl_shader_detect_peak, percentile 100, black cutoff 1%)
@@ -235,6 +265,15 @@ float3 linearize(Constants q, float3 color) {
     color = select(color > 0.5, exp((color - HLG_C) * (1.0 / HLG_A)) + HLG_B, 4.0 * color * color);
     color *= 1.0 / 12.0;
     return color * (q.hlg.z * pow(max(dot(q.luma.xyz, color), 0.0), q.hlg.w));
+}
+
+uint peak_value(Constants q, float3 color) {
+    float luma = dot(q.luma.xyz, color) * (203.0 / 10000.0);
+    luma = pow(clamp(luma, 0.0, 1.0), PQ_M1);
+    luma = (PQ_C1 + PQ_C2 * luma) / (1.0 + PQ_C3 * luma);
+    luma = pow(luma, PQ_M2);
+    luma *= smoothstep(0.0, 0.01, luma);
+    return uint(16383.0 * luma);
 }
 
 // One thread per libplacebo 16x16 work group: PQ sum, maximum, black count.
@@ -252,13 +291,8 @@ void measure(uint3 tid : SV_DispatchThreadID) {
     uint black = 0u;
     for (uint i = 0u; i < 256u; ++i) {
         const uint2 pixel = min(origin + uint2(i % 16u, i / 16u), last);
-        const float3 color = linearize(q, p.source[pixel.y * p.source_width + pixel.x].xyz);
-        float luma = dot(q.luma.xyz, color) * (203.0 / 10000.0);
-        luma = pow(clamp(luma, 0.0, 1.0), PQ_M1);
-        luma = (PQ_C1 + PQ_C2 * luma) / (1.0 + PQ_C3 * luma);
-        luma = pow(luma, PQ_M2);
-        luma *= smoothstep(0.0, 0.01, luma);
-        const uint y = uint(16383.0 * luma);
+        const float3 color = linearize(q, load_source(p.source[pixel.y * p.source_width + pixel.x]).xyz);
+        const uint y = peak_value(q, color);
         sum += y;
         peak = max(peak, y);
         black += y == 0u ? 1u : 0u;
@@ -279,8 +313,7 @@ float hermite(float x) {
 }
 
 float4 read_source(uint index) {
-    const float4 color = p.source[index];
-    return (p.mode & 4u) != 0u ? float4(fp16(color.xyz), 1.0) : color;
+    return load_source(p.source[index]);
 }
 
 [shader("compute")]
@@ -296,7 +329,13 @@ void resample(uint3 tid : SV_DispatchThreadID) {
     const int taps = p.taps == 0u ? 6 : int(p.taps);
     float w[16];
     int base = int(start) - (taps / 2 - 1);
-    if (p.taps == 0u) {
+    if ((p.mode & 2u) != 0u) {
+        base = int(vertical ? tid.y : tid.x) * 2 - 1;
+        w[0] = 0.078125;
+        w[1] = 0.421875;
+        w[2] = 0.421875;
+        w[3] = 0.078125;
+    } else if (p.taps == 0u) {
         float lanczos_w[6];
         base = lanczos_weights(position, lanczos_w);
         for (int n = 0; n < 6; ++n)
@@ -315,7 +354,7 @@ void resample(uint3 tid : SV_DispatchThreadID) {
         const uint at = uint(clamp(base + n, 0, int(from) - 1));
         color += w[n] * read_source(vertical ? at * p.source_width + tid.x : tid.y * p.source_width + at).xyz;
     }
-    p.image[tid.y * p.target_width + tid.x] = float4(color, 1.0);
+    p.image[tid.y * p.target_width + tid.x] = store_source(color);
 }
 
 // ---- perceptual gamut mapping LUT (pl_gamut_map_perceptual)
@@ -483,20 +522,48 @@ float tone_map(Constants q, float x) {
 }
 
 [shader("compute")]
-[numthreads(8, 8, 1)]
-void render(uint3 tid : SV_DispatchThreadID) {
-    if (tid.x >= p.target_width || tid.y >= p.target_height)
+[numthreads(16, 16, 1)]
+void render(uint3 tid : SV_DispatchThreadID, uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID) {
+    const bool detect_peak = (p.mode & 4u) != 0u;
+    const bool outside = tid.x >= p.target_width || tid.y >= p.target_height;
+    if (outside && !detect_peak)
         return;
     const Constants q = p.c[0];
+    const uint2 at_pixel = min(tid.xy, uint2(p.target_width, p.target_height) - 1u);
     const uint rotation = p.mode & 3u;
-    uint2 pixel = tid.xy;
+    uint2 pixel = at_pixel;
     if (rotation == 1u)
-        pixel = uint2(tid.y, p.source_height - 1u - tid.x);
+        pixel = uint2(at_pixel.y, p.source_height - 1u - at_pixel.x);
     else if (rotation == 2u)
-        pixel = uint2(p.source_width - 1u - tid.x, p.source_height - 1u - tid.y);
+        pixel = uint2(p.source_width - 1u - at_pixel.x, p.source_height - 1u - at_pixel.y);
     else if (rotation == 3u)
-        pixel = uint2(p.source_width - 1u - tid.y, tid.x);
+        pixel = uint2(p.source_width - 1u - at_pixel.y, at_pixel.x);
     float3 color = linearize(q, read_source(pixel.y * p.source_width + pixel.x).xyz);
+
+    if (detect_peak) {
+        const uint lane = local.y * 16u + local.x;
+        const uint y = peak_value(q, color);
+        render_sum[lane] = y;
+        render_peak[lane] = y;
+        render_black[lane] = y == 0u ? 1u : 0u;
+        GroupMemoryBarrierWithGroupSync();
+        for (uint stride = 128u; stride != 0u; stride >>= 1u) {
+            if (lane < stride) {
+                render_sum[lane] += render_sum[lane + stride];
+                render_peak[lane] = max(render_peak[lane], render_peak[lane + stride]);
+                render_black[lane] += render_black[lane + stride];
+            }
+            GroupMemoryBarrierWithGroupSync();
+        }
+        if (lane == 0u) {
+            const uint tile = group.y * ((p.source_width + 15u) / 16u) + group.x;
+            p.tiles[tile * 3u] = render_sum[0];
+            p.tiles[tile * 3u + 1u] = render_peak[0];
+            p.tiles[tile * 3u + 2u] = render_black[0];
+        }
+    }
+    if (outside)
+        return;
 
     float3 lms = transform(q.rgb_to_lms, color);
     float3 ipt = pq_oetf(0.0203000009059906 * lms);

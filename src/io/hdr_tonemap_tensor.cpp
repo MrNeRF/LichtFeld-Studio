@@ -4,6 +4,8 @@
 #include "hdr_tonemap_tensor.hpp"
 #include "core/gpu_kernel_module.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_readback.hpp"
+#include "core/tensor_upload.hpp"
 #include "hdr_tonemap_program.hpp"
 
 extern "C" {
@@ -21,6 +23,7 @@ extern "C" {
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <numbers>
 #include <optional>
 #include <random>
 #include <span>
@@ -32,6 +35,8 @@ namespace lfs::io {
         using lfs::core::Device;
         using lfs::core::GpuKernelModule;
         using lfs::core::Tensor;
+        using lfs::core::TensorReadback;
+        using lfs::core::TensorUpload;
 
         // The constants and math below mirror libplacebo v7.360 (colorspace.c,
         // tone_mapping.c, shaders/colorspace.c) for what HdrLibplaceboRenderer
@@ -98,6 +103,8 @@ namespace lfs::io {
             uint64_t output = 0;
             uint64_t tiles = 0;
             uint64_t pq_table = 0;
+            uint64_t scaler_lut = 0;
+            uint64_t chroma_image = 0;
             uint32_t source_width = 0;
             uint32_t source_height = 0;
             uint32_t target_width = 0;
@@ -107,7 +114,7 @@ namespace lfs::io {
             float blur = 1.0f;
             uint32_t gamut_map = 0;
         };
-        constexpr uint32_t FP16_INPUT = 4;
+        constexpr uint32_t FUSED_PEAK = 4;
 
         bool equal(const Chromaticity a, const Chromaticity b) {
             return std::fabs(a.x - b.x) < 1e-6 && std::fabs(a.y - b.y) < 1e-6;
@@ -458,7 +465,8 @@ namespace lfs::io {
         struct Source {
             Space space;
             Constants constants;
-            std::vector<uint8_t> planes;
+            std::array<std::span<const uint8_t>, 4> planes;
+            size_t plane_bytes = 0;
             std::vector<float> dovi;
         };
 
@@ -485,9 +493,10 @@ namespace lfs::io {
                     error = "HDR tensor tonemapper requires positive plane strides";
                     return false;
                 }
-                plane_offset[plane] = static_cast<uint32_t>(source.planes.size());
+                plane_offset[plane] = static_cast<uint32_t>(source.plane_bytes);
                 const size_t bytes = static_cast<size_t>(frame->linesize[plane]) * rows;
-                source.planes.insert(source.planes.end(), frame->data[plane], frame->data[plane] + bytes);
+                source.planes[plane] = {frame->data[plane], bytes};
+                source.plane_bytes += bytes;
             }
             for (size_t i = 0; i < 3; ++i) {
                 const AVComponentDescriptor& comp = desc->comp[i];
@@ -653,9 +662,32 @@ namespace lfs::io {
             return noise;
         }
 
-        Tensor upload(const std::span<std::byte> bytes) {
-            return Tensor::from_blob(bytes.data(), {bytes.size()}, Device::CPU, DataType::UInt8).to(Device::GPU);
+        std::vector<float> lanczosTable() {
+            std::vector<float> table(256 * 6);
+            for (size_t row = 0; row < 256; ++row) {
+                const float offset = float(row) / 255.0f;
+                float sum = 0.0f;
+                for (size_t tap = 0; tap < 6; ++tap) {
+                    float x = std::fabs(float(tap) - 2.0f - offset);
+                    float value = 0.0f;
+                    if (x <= 3.0f) {
+                        if (x < 1e-8f) {
+                            value = 1.0f;
+                        } else {
+                            const float a = x * float(std::numbers::pi);
+                            const float b = a / 3.0f;
+                            value = std::sin(a) / a * (std::sin(b) / b);
+                        }
+                    }
+                    table[row * 6 + tap] = value;
+                    sum += value;
+                }
+                for (size_t tap = 0; tap < 6; ++tap)
+                    table[row * 6 + tap] /= sum;
+            }
+            return table;
         }
+
     } // namespace
 
     class HdrTensorRenderer::Impl {
@@ -705,20 +737,38 @@ namespace lfs::io {
             // hdr_update_peak
             const float source_peak = space.transfer == Transfer::HLG ? space.hdr.max_luma : PQ_PEAK;
             const bool detect = peak_detection && source_peak > SDR_WHITE + 1e-6f && !space.hdr.avg_pq_y;
-            if (!detect)
+            consumePeak(detect);
+            if (!detect) {
                 peak_ = {};
+            } else if (peak_.avg_pq) {
+                space.hdr.max_pq_y = peak_.max_pq;
+                space.hdr.avg_pq_y = peak_.avg_pq;
+            }
+            constants.tone = spline(space);
 
-            Tensor planes = upload(std::as_writable_bytes(std::span(source.planes)));
-            Tensor constant_tensor = upload(std::as_writable_bytes(std::span(&constants, 1)));
+            Tensor& planes = uploadPlanes(source);
+            Tensor& constant_tensor = upload(constant_tensor_, constant_upload_,
+                                             std::as_bytes(std::span(&constants, 1)));
             Tensor dovi;
             if (!source.dovi.empty())
                 dovi = Tensor::from_vector(source.dovi, {source.dovi.size()}, Device::GPU);
-            Tensor image = Tensor::empty({source_height, source_width, 4}, Device::GPU, DataType::Float32);
+            Tensor image = Tensor::empty({source_height, source_width, 2}, Device::GPU, DataType::UInt32);
+            Tensor chroma_image;
+            if (constants.flags[0] && constants.flags[1]) {
+                chroma_image = Tensor::empty({source_height, constants.layout[2]}, Device::GPU, DataType::UInt32);
+                Parameters chroma;
+                chroma.source_height = source_height;
+                if (!dispatch("chroma_vertical", chroma, constants.layout[2], source_height, error, &planes,
+                              nullptr, nullptr, &constant_tensor, nullptr, nullptr, nullptr, nullptr, nullptr,
+                              nullptr, &chroma_image))
+                    return false;
+            }
             Parameters decode;
             decode.source_width = source_width;
             decode.source_height = source_height;
             if (!dispatch("decode", decode, source_width, source_height, error, &planes, nullptr, &image,
-                          &constant_tensor, source.dovi.empty() ? nullptr : &dovi))
+                          &constant_tensor, source.dovi.empty() ? nullptr : &dovi, nullptr, nullptr, nullptr,
+                          nullptr, nullptr, chroma_image.is_valid() ? &chroma_image : nullptr))
                 return false;
 
             if (detect && up && !measure(image, source_width, source_height, constant_tensor, error))
@@ -736,11 +786,11 @@ namespace lfs::io {
                 scale.source_height = current_height;
                 scale.target_width = vertical ? current_width : image_width;
                 scale.target_height = vertical ? image_height : current_height;
-                scale.mode = (vertical ? 1u : 0u) | FP16_INPUT;
+                scale.mode = (vertical ? 1u : 0u) | (from == 2 * to ? 2u : 0u);
                 scale.taps = up ? 0u : 2u * static_cast<uint32_t>(std::ceil(blur));
                 scale.blur = blur;
-                Tensor scaled = Tensor::empty({scale.target_height, scale.target_width, 4}, Device::GPU,
-                                              DataType::Float32);
+                Tensor scaled = Tensor::empty({scale.target_height, scale.target_width, 2}, Device::GPU,
+                                              DataType::UInt32);
                 if (!dispatch("resample", scale, scale.target_width, scale.target_height, error, nullptr, &image,
                               &scaled))
                     return false;
@@ -748,15 +798,9 @@ namespace lfs::io {
                 current_width = scale.target_width;
                 current_height = scale.target_height;
             }
-            if (detect && !up && !measure(image, image_width, image_height, constant_tensor, error))
+            const bool fused_peak = detect && !up && rotation == 0;
+            if (detect && !up && !fused_peak && !measure(image, image_width, image_height, constant_tensor, error))
                 return false;
-            if (peak_.avg_pq) {
-                space.hdr.max_pq_y = peak_.max_pq;
-                space.hdr.avg_pq_y = peak_.avg_pq;
-            }
-            constants.tone = spline(space);
-            constant_tensor = upload(std::as_writable_bytes(std::span(&constants, 1)));
-
             const bool gamut_map = !equal(space.hdr.prim, BT709);
             if (gamut_map && (!gamut_input_ || !equal(*gamut_input_, space.hdr.prim))) {
                 gamut_lut_ = Tensor::empty({GAMUT_FLOATS}, Device::GPU, DataType::Float32);
@@ -770,17 +814,28 @@ namespace lfs::io {
             const uint32_t channels = rgba ? 4u : 3u;
             Tensor target = Tensor::empty({static_cast<size_t>(height), static_cast<size_t>(width), channels},
                                           Device::GPU, DataType::UInt8);
+            Tensor peak_tiles;
+            uint32_t peak_groups = 0;
+            if (fused_peak) {
+                peak_groups = ((image_width + 15) / 16) * ((image_height + 15) / 16);
+                peak_tiles = Tensor::empty({static_cast<size_t>(peak_groups) * 3}, Device::GPU, DataType::UInt32);
+            }
             Parameters render;
             render.source_width = image_width;
             render.source_height = image_height;
             render.target_width = width;
             render.target_height = height;
-            render.mode = rotation | (detect && !up ? FP16_INPUT : 0u);
+            render.mode = rotation | (fused_peak ? FUSED_PEAK : 0u);
             render.taps = channels;
             render.gamut_map = gamut_map;
             if (!dispatch("render", render, width, height, error, nullptr, &image, nullptr, &constant_tensor, nullptr,
-                          gamut_map ? &gamut_lut_ : nullptr, &dither_, &target))
+                          gamut_map ? &gamut_lut_ : nullptr, &dither_, &target,
+                          fused_peak ? &peak_tiles : nullptr))
                 return false;
+            if (fused_peak) {
+                peak_groups_ = peak_groups;
+                peak_readback_.enqueue(peak_tiles);
+            }
             if (timing)
                 timing->render_seconds =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - render_started).count();
@@ -797,6 +852,7 @@ namespace lfs::io {
 
         void reset() {
             std::lock_guard lock(mutex_);
+            consumePeak(false);
             peak_ = {};
         }
 
@@ -815,31 +871,61 @@ namespace lfs::io {
                 return false;
             }
             static const std::vector<float> noise = blueNoise();
+            static const std::vector<float> scaler = lanczosTable();
             dither_ = Tensor::from_vector(noise, {noise.size()}, Device::GPU);
             pq_table_ = Tensor::from_vector(pqTable(), {pqTable().size()}, Device::GPU);
+            scaler_lut_ = Tensor::from_vector(scaler, {scaler.size()}, Device::GPU);
             program_ = std::move(*loaded);
             return true;
+        }
+
+        Tensor& upload(Tensor& destination, TensorUpload& slot, const std::span<const std::byte> bytes) {
+            if (slot.pending())
+                slot.wait();
+            if (!destination.is_valid() || destination.bytes() != bytes.size())
+                destination = Tensor::empty({bytes.size()}, Device::GPU, DataType::UInt8);
+            slot.enqueue_in_batch(destination, bytes);
+            return destination;
+        }
+
+        Tensor& uploadPlanes(const Source& source) {
+            if (!plane_tensor_.is_valid() || plane_tensor_.bytes() != source.plane_bytes)
+                plane_tensor_ = Tensor::empty({source.plane_bytes}, Device::GPU, DataType::UInt8);
+            size_t offset = 0;
+            for (size_t plane = 0; plane < source.planes.size(); ++plane) {
+                const auto bytes = std::as_bytes(source.planes[plane]);
+                if (bytes.empty())
+                    continue;
+                TensorUpload& slot = plane_uploads_[plane];
+                if (slot.pending())
+                    slot.wait();
+                slot.enqueue_in_batch(plane_tensor_.slice(0, offset, offset + bytes.size()), bytes);
+                offset += bytes.size();
+            }
+            return plane_tensor_;
         }
 
         bool dispatch(const std::string_view function, const Parameters& parameters, const uint32_t threads_x,
                       const uint32_t threads_y, std::string& error, const Tensor* planes, const Tensor* source,
                       Tensor* image = nullptr, const Tensor* constants = nullptr, const Tensor* dovi = nullptr,
                       Tensor* lut = nullptr, const Tensor* dither = nullptr, Tensor* output = nullptr,
-                      Tensor* tiles = nullptr, const Tensor* pq_table = nullptr) {
+                      Tensor* tiles = nullptr, const Tensor* pq_table = nullptr, Tensor* chroma = nullptr) {
             using Access = GpuKernelModule::Access;
             const std::array bindings{
                 GpuKernelModule::Binding{0, planes}, GpuKernelModule::Binding{8, source},
                 GpuKernelModule::Binding{16, image, Access::ReadWrite}, GpuKernelModule::Binding{24, constants},
                 GpuKernelModule::Binding{32, dovi}, GpuKernelModule::Binding{40, lut, Access::ReadWrite},
                 GpuKernelModule::Binding{48, dither}, GpuKernelModule::Binding{56, output, Access::ReadWrite},
-                GpuKernelModule::Binding{64, tiles, Access::ReadWrite}, GpuKernelModule::Binding{72, pq_table}};
+                GpuKernelModule::Binding{64, tiles, Access::ReadWrite}, GpuKernelModule::Binding{72, pq_table},
+                GpuKernelModule::Binding{80, &scaler_lut_}, GpuKernelModule::Binding{88, chroma, Access::ReadWrite}};
             const bool linear = function == "measure" || function == "gamut";
+            const bool render = function == "render";
             auto result = program_->dispatch(
                 {.function = function,
                  .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
-                 .groups = {GpuKernelModule::groups_for(threads_x, linear ? 64 : 8),
-                            GpuKernelModule::groups_for(threads_y, linear ? 1 : 8), 1},
-                 .group = {linear ? 64u : 8u, linear ? 1u : 8u, 1}});
+                 .groups = {GpuKernelModule::groups_for(threads_x, linear ? 64 : render ? 16 : 8),
+                            GpuKernelModule::groups_for(threads_y, linear ? 1 : render ? 16 : 8), 1},
+                 .group = {linear ? 64u : render ? 16u : 8u, linear ? 1u : render ? 16u : 8u, 1}});
             if (!result) {
                 error = std::string(result.error().detail());
                 return false;
@@ -859,11 +945,22 @@ namespace lfs::io {
             if (!dispatch("measure", parameters, groups, 1, error, nullptr, &image, nullptr, &constants, nullptr,
                           nullptr, nullptr, nullptr, &tiles))
                 return false;
-            const Tensor host = tiles.cpu();
-            const auto* values = static_cast<const uint32_t*>(host.data_ptr());
+            peak_groups_ = groups;
+            peak_readback_.enqueue(tiles);
+            return true;
+        }
+
+        void consumePeak(const bool use_result) {
+            if (!peak_readback_.pending())
+                return;
+            peak_values_.resize(static_cast<size_t>(peak_groups_) * 3);
+            peak_readback_.wait(std::as_writable_bytes(std::span(peak_values_)));
+            if (!use_result)
+                return;
+            const uint32_t* values = peak_values_.data();
             uint64_t sum = 0, active = 0;
             uint32_t peak = 0;
-            for (uint32_t i = 0; i < groups; ++i) {
+            for (uint32_t i = 0; i < peak_groups_; ++i) {
                 const uint32_t pixels = 256 - values[i * 3 + 2];
                 if (!pixels)
                     continue;
@@ -887,18 +984,25 @@ namespace lfs::io {
             const float coefficient = 1.0f - std::exp(-1.0f / 20.0f);
             peak_.avg_pq += coefficient * (avg_pq - peak_.avg_pq);
             peak_.max_pq += coefficient * (max_pq - peak_.max_pq);
-            const float delta = float(active) / float(groups) * std::fabs(avg_pq - peak_.avg_pq);
+            const float delta = float(active) / float(peak_groups_) * std::fabs(avg_pq - peak_.avg_pq);
             const float mix_coefficient = smoothstep(1.0f * 1e-2f, 3.0f * 1e-2f, delta);
             peak_.avg_pq = mix(peak_.avg_pq, avg_pq, mix_coefficient);
             peak_.max_pq = mix(peak_.max_pq, max_pq, mix_coefficient);
-            return true;
         }
 
         std::mutex mutex_;
         std::unique_ptr<GpuKernelModule> program_;
         Tensor dither_;
         Tensor pq_table_;
+        Tensor scaler_lut_;
+        Tensor plane_tensor_;
+        Tensor constant_tensor_;
         Tensor gamut_lut_;
+        std::array<TensorUpload, 4> plane_uploads_;
+        TensorUpload constant_upload_;
+        TensorReadback peak_readback_;
+        std::vector<uint32_t> peak_values_;
+        uint32_t peak_groups_ = 0;
         std::optional<Primaries> gamut_input_;
         Peak peak_;
     };

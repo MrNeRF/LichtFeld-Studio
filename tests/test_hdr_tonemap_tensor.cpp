@@ -20,12 +20,14 @@ extern "C" {
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <memory>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -44,16 +46,18 @@ namespace {
     };
 
     // A bars-over-gradient frame encoded as 10-bit 4:2:0 HEVC.
-    std::unique_ptr<Clip> generate(const std::filesystem::path& path, const bool pq) {
+    std::unique_ptr<Clip> generate(const std::filesystem::path& path, const bool pq,
+                                   const int width = 320, const int half_height = 90) {
         const std::string command = std::format(
             "'{}' -hide_banner -loglevel error -y "
-            "-f lavfi -i smptehdbars=s=320x90 "
-            "-f lavfi -i gradients=s=320x90:c0=black:c1=white:x0=0:y0=0:x1=319:y1=0:nb_colors=2 "
+            "-f lavfi -i smptehdbars=s={}x{} "
+            "-f lavfi -i gradients=s={}x{}:c0=black:c1=white:x0=0:y0=0:x1={}:y1=0:nb_colors=2 "
             "-filter_complex '[0]format=yuv444p[a];[1]format=yuv444p[b];[a][b]vstack,format=yuv420p10le' "
             "-frames:v 1 -c:v libx265 -x265-params "
             "'log-level=error:lossless=1:colorprim=bt2020:colormatrix=bt2020nc:transfer={}{}' "
             "-color_primaries bt2020 -colorspace bt2020nc -color_trc {} '{}'",
-            LFS_HDR_TEST_FFMPEG, pq ? "smpte2084" : "arib-std-b67",
+            LFS_HDR_TEST_FFMPEG, width, half_height, width, half_height, width - 1,
+            pq ? "smpte2084" : "arib-std-b67",
             pq ? ":hdr10=1:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(40000000,50):max-cll=4000,1000"
                : "",
             pq ? "smpte2084" : "arib-std-b67", path.string());
@@ -174,6 +178,50 @@ namespace {
     };
 
     class HdrTensorTonemap : public testing::TestWithParam<Case> {};
+
+    TEST(HdrTonemapPerformance, DISABLED_FourK) {
+        if (!std::filesystem::exists(LFS_HDR_TEST_FFMPEG))
+            GTEST_SKIP() << "ffmpeg is unavailable";
+        const auto directory = std::filesystem::temp_directory_path() / "lfs-hdr-benchmark";
+        std::filesystem::create_directories(directory);
+        const auto clip = generate(directory / "clip.mkv", true, 3840, 1080);
+        std::filesystem::remove_all(directory);
+        ASSERT_NE(clip, nullptr) << "ffmpeg could not encode the HEVC test clip";
+
+        const auto benchmark = [&](auto& renderer, const char* name, const bool preview) {
+            std::vector<unsigned char> pixels;
+            std::string error;
+            std::vector<double> elapsed;
+            elapsed.reserve(31);
+            for (int call = 0; call < 31; ++call) {
+                const auto started = std::chrono::steady_clock::now();
+                const bool rendered = preview
+                                          ? renderer.tonemapToSdrRgba(clip->frame, clip->stream(), HdrFormat::HDR10,
+                                                                      1920, 1080, 0, pixels, error)
+                                          : renderer.tonemapToSdr(clip->frame, clip->stream(), HdrFormat::HDR10,
+                                                                  3840, 2160, pixels, error);
+                ASSERT_TRUE(rendered) << error;
+                elapsed.push_back(1000.0 * std::chrono::duration<double>(
+                                                 std::chrono::steady_clock::now() - started)
+                                                 .count());
+            }
+            std::sort(elapsed.begin() + 1, elapsed.end());
+            const double mean = std::accumulate(elapsed.begin() + 1, elapsed.end(), 0.0) / 30.0;
+            std::printf("%s %s: first %.3f ms, steady mean %.3f ms, median %.3f ms, min %.3f ms\n", name,
+                        preview ? "4K->1080 RGBA" : "4K RGB", elapsed[0], mean, elapsed[16], elapsed[1]);
+        };
+
+        HdrTensorRenderer tensor;
+        benchmark(tensor, "tensor", false);
+        HdrTensorRenderer tensor_preview;
+        benchmark(tensor_preview, "tensor", true);
+#ifdef LFS_USE_VULKAN
+        HdrLibplaceboRenderer libplacebo;
+        benchmark(libplacebo, "libplacebo", false);
+        HdrLibplaceboRenderer libplacebo_preview;
+        benchmark(libplacebo_preview, "libplacebo", true);
+#endif
+    }
 
     TEST_P(HdrTensorTonemap, MatchesLibplacebo) {
         const Case& c = GetParam();
