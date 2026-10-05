@@ -15,6 +15,8 @@ lfs_add_gpu_program(lfs_tensor_rasterizer splat_sort SOURCE splat_sort.slang
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_tiles SOURCE splat_tiles.slang
     COMPUTE tile_counts tile_status tile_instances tile_ranges)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_project SOURCE splat_project.slang COMPUTE project_splats)
+# Parity tests load the passes directly against the native kernels.
+target_include_directories(lfs_tensor_rasterizer PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/gpu_programs/splat_project")
 # Shared includes of the Slang passes; the program rules depend only on their sources.
 cmake_path(ABSOLUTE_PATH CMAKE_CURRENT_SOURCE_DIR NORMALIZE OUTPUT_VARIABLE _rasterizer_dir)
 cmake_path(GET _rasterizer_dir PARENT_PATH _rasterizer_dir)
