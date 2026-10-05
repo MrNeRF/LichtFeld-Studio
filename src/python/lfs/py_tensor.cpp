@@ -4,10 +4,13 @@
 
 #include "py_tensor.hpp"
 #include "core/gpu_backend_fwd.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_backend_vulkan.hpp"
 #include "core/tensor_completion.hpp"
 #include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_debug.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 #include "python/python_runtime.hpp"
 
 #include <cstring>
@@ -1756,7 +1759,147 @@ namespace lfs::python {
         return PyTensor(Tensor::where(condition.tensor_, x.tensor_, y.tensor_));
     }
 
+    PyTensor PyTensor::normal(const std::vector<int64_t>& shape, float mean, float std,
+                              const std::string& device, const std::string& dtype) {
+        return PyTensor(Tensor::normal(to_tensor_shape(shape), mean, std, parse_device(device), parse_dtype(dtype)));
+    }
+
+    PyTensor PyTensor::bernoulli(const std::vector<int64_t>& shape, float p,
+                                 const std::string& device, const std::string& dtype) {
+        return PyTensor(Tensor::bernoulli(to_tensor_shape(shape), p, parse_device(device), parse_dtype(dtype)));
+    }
+
+    PyTensor PyTensor::multinomial(const PyTensor& weights, int num_samples,
+                                   bool replacement, std::optional<uint64_t> seed) {
+        return PyTensor(Tensor::multinomial(weights.tensor_, num_samples, replacement, seed));
+    }
+
+    PyTensor PyTensor::diag(const PyTensor& diagonal) {
+        return PyTensor(Tensor::diag(diagonal.tensor_));
+    }
+
+    PyTensor PyTensor::cdist(const PyTensor& other, float p) const {
+        return PyTensor(tensor_.cdist(other.tensor_, p));
+    }
+
+    PyTensor PyTensor::normalize(int dim, float eps) const {
+        return PyTensor(tensor_.normalize(dim, eps));
+    }
+
+    PyTensor PyTensor::mod(const PyTensor& other) const {
+        return PyTensor(tensor_.mod(other.tensor_));
+    }
+
+    PyTensor& PyTensor::clamp_(float min_val, float max_val) {
+        tensor_.clamp_(min_val, max_val);
+        return *this;
+    }
+
+    PyTensor& PyTensor::clamp_min_(float min_val) {
+        tensor_.clamp_min_(min_val);
+        return *this;
+    }
+
+    PyTensor PyTensor::reduce(core::ReduceOp op, std::optional<int> dim, bool keepdim) const {
+        core::ReduceArgs args;
+        if (dim) {
+            args.axes = {*dim};
+        }
+        args.keepdim = keepdim;
+        return PyTensor(tensor_.reduce(op, args));
+    }
+
+    bool PyTensor::all_close(const PyTensor& other, float rtol, float atol) const {
+        return tensor_.all_close(other.tensor_, rtol, atol);
+    }
+
+    std::vector<PyTensor> PyTensor::nonzero_split() const {
+        std::vector<PyTensor> result;
+        for (auto& indices : tensor_.nonzero_split()) {
+            result.emplace_back(std::move(indices));
+        }
+        return result;
+    }
+
+    PyTensor PyTensor::linear(const PyTensor& weight, const std::optional<PyTensor>& bias) const {
+        return PyTensor(bias ? tensor_.linear(weight.tensor_, bias->tensor_) : tensor_.linear(weight.tensor_));
+    }
+
+    PyTensor PyTensor::conv1x1(const PyTensor& weight, const std::optional<PyTensor>& bias) const {
+        return PyTensor(bias ? tensor_.conv1x1(weight.tensor_, bias->tensor_) : tensor_.conv1x1(weight.tensor_));
+    }
+
+    PyTensor& PyTensor::where_into_(const PyTensor& condition, float value, const PyTensor& source) {
+        core::where_into(tensor_, condition.tensor_, value, source.tensor_);
+        return *this;
+    }
+
+    PyTensor PyTensor::gather_lazy(const PyTensor& indices) const {
+        return PyTensor(tensor_.gather_lazy(indices.tensor_).eval());
+    }
+
+    std::optional<size_t> PyTensor::reserved_allocation_bytes() const {
+        return core::reserved_allocation_bytes(tensor_);
+    }
+
+    nb::dict PyTensor::validate() const {
+        const auto result = core::debug::validate_tensor(tensor_);
+        nb::dict out;
+        out["is_valid"] = result.is_valid();
+        out["has_nan"] = result.has_nan;
+        out["has_inf"] = result.has_inf;
+        out["nan_count"] = result.nan_count;
+        out["inf_count"] = result.inf_count;
+        out["min_val"] = result.min_val;
+        out["max_val"] = result.max_val;
+        out["mean_val"] = result.mean_val;
+        return out;
+    }
+
+    nb::dict PyTensor::diff(const PyTensor& other, float tolerance) const {
+        const auto result = core::debug::diff_tensors(tensor_, other.tensor_, tolerance);
+        nb::dict out;
+        out["shapes_match"] = result.shapes_match;
+        out["dtypes_match"] = result.dtypes_match;
+        out["max_abs_diff"] = result.max_abs_diff;
+        out["mean_abs_diff"] = result.mean_abs_diff;
+        out["max_rel_diff"] = result.max_rel_diff;
+        out["num_different"] = result.num_different;
+        out["total_elements"] = result.total_elements;
+        return out;
+    }
+
+    nb::dict PyTensor::stats() const {
+        const auto result = core::debug::get_tensor_stats(tensor_);
+        nb::dict out;
+        out["min"] = result.min;
+        out["max"] = result.max;
+        out["mean"] = result.mean;
+        out["std"] = result.std;
+        out["numel"] = result.numel;
+        out["shape"] = shape();
+        out["dtype"] = dtype();
+        out["is_cuda"] = result.is_cuda;
+        out["backend"] = backend();
+        return out;
+    }
+
     void register_tensor(nb::module_& m) {
+        nb::enum_<core::ReduceOp>(m, "ReduceOp")
+            .value("SUM", core::ReduceOp::Sum)
+            .value("MEAN", core::ReduceOp::Mean)
+            .value("MAX", core::ReduceOp::Max)
+            .value("MIN", core::ReduceOp::Min)
+            .value("PROD", core::ReduceOp::Prod)
+            .value("ANY", core::ReduceOp::Any)
+            .value("ALL", core::ReduceOp::All)
+            .value("STD", core::ReduceOp::Std)
+            .value("VAR", core::ReduceOp::Var)
+            .value("ARGMAX", core::ReduceOp::Argmax)
+            .value("ARGMIN", core::ReduceOp::Argmin)
+            .value("COUNT_NONZERO", core::ReduceOp::CountNonzero)
+            .value("NORM", core::ReduceOp::Norm);
+
         nb::class_<PyTensor>(m, "Tensor")
             .def(nb::init<>())
 
@@ -2002,6 +2145,29 @@ namespace lfs::python {
             .def_static("cat", &PyTensor::cat, nb::arg("tensors"), nb::arg("dim") = 0, "Concatenate tensors")
             .def_static("stack", &PyTensor::stack, nb::arg("tensors"), nb::arg("dim") = 0, "Stack tensors")
             .def_static("where", &PyTensor::where, nb::arg("condition"), nb::arg("x"), nb::arg("y"), "Conditional select")
+
+            // Sampling and restored tensor operations
+            .def_static("normal", &PyTensor::normal, nb::arg("shape"), nb::arg("mean") = 0.0f, nb::arg("std") = 1.0f, nb::arg("device") = "cuda", nb::arg("dtype") = "float32", "Create Float32 normal random values with given mean and standard deviation")
+            .def_static("bernoulli", &PyTensor::bernoulli, nb::arg("shape"), nb::arg("p") = 0.5f, nb::arg("device") = "cuda", nb::arg("dtype") = "float32", "Create random zeros and ones with probability p of one")
+            .def_static("multinomial", &PyTensor::multinomial, nb::arg("weights"), nb::arg("num_samples"), nb::arg("replacement") = false, nb::arg("seed") = nb::none(), "Sample indices from 1D weights; an explicit seed leaves the global RNG unchanged")
+            .def_static("diag", &PyTensor::diag, nb::arg("diagonal"), "Create a square matrix from a 1D diagonal")
+            .def("cdist", &PyTensor::cdist, nb::arg("other"), nb::arg("p") = 2.0f, "Pairwise p-norm distances between rows")
+            .def("normalize", &PyTensor::normalize, nb::arg("dim") = -1, nb::arg("eps") = 1e-12f, "Standardize by mean and population std plus eps; dim=-1 reduces all elements")
+            .def("mod", &PyTensor::mod, nb::arg("other"), "Element-wise fmod with a tensor divisor (sign follows dividend)")
+            .def("clamp_", &PyTensor::clamp_, nb::arg("min"), nb::arg("max"), nb::rv_policy::reference, "In-place clamp values to range")
+            .def("clamp_min_", &PyTensor::clamp_min_, nb::arg("min"), nb::rv_policy::reference, "In-place clamp to a lower bound")
+            .def("reduce", &PyTensor::reduce, nb::arg("op"), nb::arg("dim") = nb::none(), nb::arg("keepdim") = false, "Reduce using ReduceOp; dim=None reduces all elements")
+            .def("all_close", &PyTensor::all_close, nb::arg("other"), nb::arg("rtol") = 1e-5f, nb::arg("atol") = 1e-8f, "Whether all values are close within absolute and relative tolerance")
+            .def("allclose", &PyTensor::all_close, nb::arg("other"), nb::arg("rtol") = 1e-5f, nb::arg("atol") = 1e-8f, "Alias for all_close")
+            .def("nonzero_split", &PyTensor::nonzero_split, "Nonzero indices as one tensor per dimension")
+            .def("linear", &PyTensor::linear, nb::arg("weight"), nb::arg("bias") = nb::none(), "Linear transform with optional bias; weight is [out_features, in_features]")
+            .def("conv1x1", &PyTensor::conv1x1, nb::arg("weight"), nb::arg("bias") = nb::none(), "NCHW 1x1 convolution with optional bias; weight is [out_channels, in_channels]")
+            .def("where_into_", &PyTensor::where_into_, nb::arg("condition"), nb::arg("value"), nb::arg("source"), nb::rv_policy::reference, "Write value where condition is true and source elsewhere into this tensor")
+            .def("gather_lazy", &PyTensor::gather_lazy, nb::arg("indices"), "Gather flat Int32 indices and return the evaluated tensor on the source backend")
+            .def_prop_ro("reserved_allocation_bytes", &PyTensor::reserved_allocation_bytes, "Reserved backing storage size in bytes, or None when unknown")
+            .def("validate", &PyTensor::validate, "Inspect NaN/Inf counts and finite min/max/mean; returns a dict")
+            .def("diff", &PyTensor::diff, nb::arg("other"), nb::arg("tolerance") = 1e-5f, "Compare shape, dtype and values; returns a dict of difference statistics")
+            .def("stats", &PyTensor::stats, "Return a dict of min/max/mean/population std and tensor metadata")
 
             // String representation
             .def("__repr__", &PyTensor::repr, "String representation")

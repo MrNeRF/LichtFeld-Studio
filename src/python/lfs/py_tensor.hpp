@@ -264,6 +264,31 @@ namespace lfs::python {
         static PyTensor stack(const std::vector<PyTensor>& tensors, int dim = 0);
         static PyTensor where(const PyTensor& condition, const PyTensor& x, const PyTensor& y);
 
+        // Sampling and restored tensor operations
+        static PyTensor normal(const std::vector<int64_t>& shape, float mean, float std,
+                               const std::string& device, const std::string& dtype);
+        static PyTensor bernoulli(const std::vector<int64_t>& shape, float p,
+                                  const std::string& device, const std::string& dtype);
+        static PyTensor multinomial(const PyTensor& weights, int num_samples,
+                                    bool replacement, std::optional<uint64_t> seed);
+        static PyTensor diag(const PyTensor& diagonal);
+        PyTensor cdist(const PyTensor& other, float p) const;
+        PyTensor normalize(int dim, float eps) const;
+        PyTensor mod(const PyTensor& other) const;
+        PyTensor& clamp_(float min_val, float max_val);
+        PyTensor& clamp_min_(float min_val);
+        PyTensor reduce(core::ReduceOp op, std::optional<int> dim, bool keepdim) const;
+        bool all_close(const PyTensor& other, float rtol, float atol) const;
+        std::vector<PyTensor> nonzero_split() const;
+        PyTensor linear(const PyTensor& weight, const std::optional<PyTensor>& bias) const;
+        PyTensor conv1x1(const PyTensor& weight, const std::optional<PyTensor>& bias) const;
+        PyTensor& where_into_(const PyTensor& condition, float value, const PyTensor& source);
+        PyTensor gather_lazy(const PyTensor& indices) const;
+        std::optional<size_t> reserved_allocation_bytes() const;
+        nb::dict validate() const;
+        nb::dict diff(const PyTensor& other, float tolerance) const;
+        nb::dict stats() const;
+
         // Access underlying tensor (for internal use)
         const core::Tensor& tensor() const { return tensor_; }
         core::Tensor& tensor() { return tensor_; }

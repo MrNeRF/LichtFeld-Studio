@@ -715,6 +715,33 @@ def tensor_backend_selftest(backend: str) -> None:
     Allocate, dispatch a small corpus, read back, shut the backend down, and reinitialize
     """
 
+class ReduceOp(enum.Enum):
+    SUM = 0
+
+    MEAN = 1
+
+    MAX = 2
+
+    MIN = 3
+
+    PROD = 4
+
+    ANY = 5
+
+    ALL = 6
+
+    STD = 7
+
+    VAR = 8
+
+    ARGMAX = 9
+
+    ARGMIN = 10
+
+    COUNT_NONZERO = 11
+
+    NORM = 12
+
 class Tensor:
     def __init__(self) -> None: ...
 
@@ -777,6 +804,15 @@ class Tensor:
 
     def item(self) -> float:
         """Extract scalar value"""
+
+    def float_(self) -> float:
+        """Extract as float"""
+
+    def int_(self) -> int:
+        """Extract as int"""
+
+    def bool_(self) -> bool:
+        """Extract as bool"""
 
     def numpy(self, copy: bool = True) -> object:
         """Convert to NumPy array"""
@@ -918,6 +954,12 @@ class Tensor:
     @overload
     def __itruediv__(self, arg: float, /) -> Tensor:
         """In-place divide scalar"""
+
+    def fill_(self, arg: float, /) -> Tensor:
+        """Fill tensor with value in-place"""
+
+    def zero_(self) -> Tensor:
+        """Zero tensor in-place"""
 
     def __neg__(self) -> Tensor:
         """Negate"""
@@ -1185,8 +1227,14 @@ class Tensor:
     def masked_fill(self, mask: Tensor, value: float) -> Tensor:
         """Fill elements where mask is true"""
 
+    def masked_fill_(self, mask: Tensor, value: float) -> Tensor:
+        """In-place fill elements where mask is true"""
+
     def nonzero(self) -> Tensor:
         """Indices of non-zero elements"""
+
+    def index_add_(self, dim: int, indices: Tensor, src: Tensor) -> Tensor:
+        """Add src into this tensor at indices along a dimension"""
 
     def matmul(self, other: Tensor) -> Tensor:
         """Matrix multiplication"""
@@ -1266,6 +1314,90 @@ class Tensor:
     @staticmethod
     def where(condition: Tensor, x: Tensor, y: Tensor) -> Tensor:
         """Conditional select"""
+
+    @staticmethod
+    def normal(shape: Sequence[int], mean: float = 0.0, std: float = 1.0, device: str = 'cuda', dtype: str = 'float32') -> Tensor:
+        """
+        Create Float32 normal random values with given mean and standard deviation
+        """
+
+    @staticmethod
+    def bernoulli(shape: Sequence[int], p: float = 0.5, device: str = 'cuda', dtype: str = 'float32') -> Tensor:
+        """Create random zeros and ones with probability p of one"""
+
+    @staticmethod
+    def multinomial(weights: Tensor, num_samples: int, replacement: bool = False, seed: int | None = None) -> Tensor:
+        """
+        Sample indices from 1D weights; an explicit seed leaves the global RNG unchanged
+        """
+
+    @staticmethod
+    def diag(diagonal: Tensor) -> Tensor:
+        """Create a square matrix from a 1D diagonal"""
+
+    def cdist(self, other: Tensor, p: float = 2.0) -> Tensor:
+        """Pairwise p-norm distances between rows"""
+
+    def normalize(self, dim: int = -1, eps: float = 9.999999960041972e-13) -> Tensor:
+        """
+        Standardize by mean and population std plus eps; dim=-1 reduces all elements
+        """
+
+    def mod(self, other: Tensor) -> Tensor:
+        """Element-wise fmod with a tensor divisor (sign follows dividend)"""
+
+    def clamp_(self, min: float, max: float) -> Tensor:
+        """In-place clamp values to range"""
+
+    def clamp_min_(self, min: float) -> Tensor:
+        """In-place clamp to a lower bound"""
+
+    def reduce(self, op: ReduceOp, dim: int | None = None, keepdim: bool = False) -> Tensor:
+        """Reduce using ReduceOp; dim=None reduces all elements"""
+
+    def all_close(self, other: Tensor, rtol: float = 9.999999747378752e-06, atol: float = 9.99999993922529e-09) -> bool:
+        """Whether all values are close within absolute and relative tolerance"""
+
+    def allclose(self, other: Tensor, rtol: float = 9.999999747378752e-06, atol: float = 9.99999993922529e-09) -> bool:
+        """Alias for all_close"""
+
+    def nonzero_split(self) -> list[Tensor]:
+        """Nonzero indices as one tensor per dimension"""
+
+    def linear(self, weight: Tensor, bias: Tensor | None = None) -> Tensor:
+        """
+        Linear transform with optional bias; weight is [out_features, in_features]
+        """
+
+    def conv1x1(self, weight: Tensor, bias: Tensor | None = None) -> Tensor:
+        """
+        NCHW 1x1 convolution with optional bias; weight is [out_channels, in_channels]
+        """
+
+    def where_into_(self, condition: Tensor, value: float, source: Tensor) -> Tensor:
+        """
+        Write value where condition is true and source elsewhere into this tensor
+        """
+
+    def gather_lazy(self, indices: Tensor) -> Tensor:
+        """
+        Gather flat Int32 indices and return the evaluated tensor on the source backend
+        """
+
+    @property
+    def reserved_allocation_bytes(self) -> int | None:
+        """Reserved backing storage size in bytes, or None when unknown"""
+
+    def validate(self) -> dict:
+        """Inspect NaN/Inf counts and finite min/max/mean; returns a dict"""
+
+    def diff(self, other: Tensor, tolerance: float = 9.999999747378752e-06) -> dict:
+        """
+        Compare shape, dtype and values; returns a dict of difference statistics
+        """
+
+    def stats(self) -> dict:
+        """Return a dict of min/max/mean/population std and tensor metadata"""
 
     def __repr__(self) -> str:
         """String representation"""

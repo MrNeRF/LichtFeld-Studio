@@ -374,6 +374,7 @@ endif()
 if(BUILD_PYTHON_STUBS)
     set(GENERATED_STUBS_DIR "${CMAKE_CURRENT_BINARY_DIR}/typings")
     set(COMMITTED_STUBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/stubs")
+    set(PYTHON_STUB_PATTERNS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/stubgen.pat")
     set(PYTHON_STUB_WORKFLOW_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/scripts/manage_stubs.py")
     set(GENERATED_STUBS_MARKER "${GENERATED_STUBS_DIR}/lichtfeld/py.typed")
     if(WIN32 AND LFS_GENERATOR_IS_MULTI_CONFIG)
@@ -427,7 +428,7 @@ import runpy
 sys.argv = ['stubgen', '-m', 'lichtfeld',
             '-M', r'${GENERATED_STUBS_DIR}/lichtfeld/py.typed',
             '-O', r'${GENERATED_STUBS_DIR}',
-            '-r']
+            '-r', '-P', '-p', r'${PYTHON_STUB_PATTERNS}']
 runpy.run_path(r'${NB_STUBGEN}', run_name='__main__')
 
 # Normalize CRLF -> LF and add space after comma in templates for consistency with linux
@@ -450,7 +451,7 @@ stub_marker.touch()
                 OUTPUT "${GENERATED_STUBS_MARKER}"
                 COMMAND "${Python_EXECUTABLE}" "${STUBGEN_WRAPPER}"
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-                DEPENDS lfs_py lfs_python_runtime "${NB_STUBGEN}"
+                DEPENDS lfs_py lfs_python_runtime "${NB_STUBGEN}" "${PYTHON_STUB_PATTERNS}" "${STUBGEN_WRAPPER}"
                 COMMENT "Generating Python stubs for lichtfeld (Windows)"
             )
             add_custom_target(lichtfeld_stub ALL DEPENDS "${GENERATED_STUBS_MARKER}")
@@ -458,6 +459,8 @@ stub_marker.touch()
     else()
         nanobind_add_stub(lichtfeld_stub
             MODULE lichtfeld
+            INCLUDE_PRIVATE
+            PATTERN_FILE "${PYTHON_STUB_PATTERNS}"
             OUTPUT_PATH ${GENERATED_STUBS_DIR}
             PYTHON_PATH ${CMAKE_CURRENT_BINARY_DIR}
             DEPENDS lfs_py
