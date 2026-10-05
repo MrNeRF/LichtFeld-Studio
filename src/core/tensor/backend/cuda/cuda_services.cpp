@@ -19,7 +19,6 @@
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor_cuda_interop.hpp"
-#include "core/tensor_label.hpp"
 #include "core/tensor_vulkan_interop.hpp"
 #include "core/vulkan_helpers.hpp"
 #include "runtime/size_bucketed_pool.hpp"
@@ -87,16 +86,6 @@ namespace lfs::core {
         static CudaMemoryPool pool;
         g_cuda_memory_pool_instance.store(&pool, std::memory_order_release);
         return pool;
-    }
-
-    TensorLabelScope::TensorLabelScope(std::string_view label)
-        : previous_(std::move(g_pool_pending_label)) {
-        if (!label.empty())
-            g_pool_pending_label.assign(label);
-    }
-
-    TensorLabelScope::~TensorLabelScope() {
-        g_pool_pending_label = std::move(previous_);
     }
 
     CudaMemoryPool::LabelGuard::LabelGuard(std::string_view label)
