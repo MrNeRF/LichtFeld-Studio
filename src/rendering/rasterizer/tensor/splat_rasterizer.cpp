@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "splat_rasterizer.hpp"
 
+#include "core/gpu_device_runtime.hpp"
 #include "core/gpu_kernel_module.hpp"
 #include "core/tensor_readback.hpp"
 #include "core/tensor_upload.hpp"
@@ -23,6 +24,7 @@
 #include <map>
 #include <span>
 #include <tuple>
+#include <utility>
 
 namespace lfs::rendering {
     namespace {
@@ -66,6 +68,11 @@ namespace lfs::rendering {
         std::unique_ptr<M> fast_blend, batch_blend, prefix_blend, present;
         Tensor raster, present_parameters, color, depth, pick, rgba, linear_depth;
         bool presented = false; // rgba and linear_depth hold an image of this extent
+        // Replaced scratch returns to the tensor cache, which keeps blocks for
+        // reuse; the viewer rarely regrows, so release them a frame later,
+        // once their last reads have completed.
+        bool trim = false;
+        uint32_t reserved_splats = 0, reserved_capacity = 0;
         // Depth-batch scratch, sized from the instances of a completed frame.
         Tensor depth_jobs, partial_color, partial_depth, partial_pick;
         uint32_t parallel_instances = 0;
@@ -98,6 +105,7 @@ namespace lfs::rendering {
                 std::tie(partial_color, partial_depth, partial_pick) =
                     std::tuple_cat(carve_arena<3>({slots * 256 * 16, slots * 256 * 16, slots * 256 * 4}));
                 parallel_instances = needed;
+                trim = true;
             }
             return parallel_instances != 0;
         }
@@ -160,6 +168,11 @@ namespace lfs::rendering {
         const uint32_t tiles = ((width + 15) / 16) * ((height + 15) / 16);
         if (auto r = s.binner.reserve(std::max(splats, 1u), tiles, capacity); !r)
             return r;
+        if (splats > s.reserved_splats || capacity > s.reserved_capacity) {
+            s.reserved_splats = std::max(s.reserved_splats, splats);
+            s.reserved_capacity = std::max(s.reserved_capacity, capacity);
+            s.trim = true;
+        }
         if (width != s.width || height != s.height) {
             const core::GpuBackendScope scope(s.backend);
             const size_t pixels = size_t(width) * height;
@@ -168,6 +181,7 @@ namespace lfs::rendering {
             s.width = width;
             s.height = height;
             s.presented = false;
+            s.trim = true;
         }
         return {};
     }
@@ -184,6 +198,8 @@ namespace lfs::rendering {
         if (parameters.flags & (kSourceSorted | kDepthBatches | kDepthPrefix))
             return failure(std::format("Splat raster flags {:#x} are chosen by the rasterizer", parameters.flags));
         const core::GpuBackendScope scope(s.backend);
+        if (std::exchange(s.trim, false))
+            core::gpu_trim_cached_memory(s.backend);
         auto frame = parameters;
         bool batches = false;
         if (s.previous_fits(count, frame.capacity)) {
