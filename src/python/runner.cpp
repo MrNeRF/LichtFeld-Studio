@@ -612,13 +612,6 @@ _add_dll_dirs()
                 LOG_ERROR("lfs_plugins.register_builtin_panels not found");
             }
 
-#ifdef LFS_DEV_PYTHON_SOURCE_DIR
-            if (builtin_panels_registered) {
-                start_dev_python_watcher(lfs_plugins);
-            } else {
-                LOG_INFO("Python dev hot reload watcher skipped because builtin panels were not registered");
-            }
-#endif
             Py_DECREF(lfs_plugins);
 
             if (builtin_panels_registered) {
@@ -921,6 +914,20 @@ _add_dll_dirs()
                     const GilAcquire gil;
                     std::lock_guard lock(g_plugin_init_mutex);
                     bridge_ready = ensure_python_bridge_ready_locked();
+#ifdef LFS_DEV_PYTHON_SOURCE_DIR
+                    if (bridge_ready && g_builtin_ui_ready.load(std::memory_order_acquire)) {
+                        PyObject* const lfs_plugins = PyImport_ImportModule("lfs_plugins");
+                        if (lfs_plugins) {
+                            start_dev_python_watcher(lfs_plugins);
+                            Py_DECREF(lfs_plugins);
+                        } else {
+                            PyErr_Print();
+                            LOG_WARN("Python dev hot reload: failed to import lfs_plugins");
+                        }
+                    } else {
+                        LOG_INFO("Python dev hot reload watcher skipped because builtin panels were not registered");
+                    }
+#endif
                     already_loaded = are_plugins_loaded();
                     if (bridge_ready && !already_loaded)
                         to_load = discover_enabled_plugins_locked();

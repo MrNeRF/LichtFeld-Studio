@@ -2889,7 +2889,7 @@ namespace lfs::app {
                             space->settings.focal_length_mm =
                                 lfs::rendering::vFovToFocalLength(*view.fov_degrees);
                         if (auto* rendering = viewer_impl->getRenderingManager())
-                            rendering->markDirty(vis::DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
+                            rendering->markCameraCut(id.value);
                     } else {
                         apply_view_arguments(view);
                     }

@@ -417,7 +417,8 @@ namespace lfs::app {
                         return json{{"error", "eye, target and up must form a valid look-at"}};
                     space->camera.setViewMatrix(*rotation, eye);
                     space->camera.camera.setPivot(target);
-                    notify_screen_changed(impl);
+                    if (auto* rendering = impl->getRenderingManager())
+                        rendering->markCameraCut(id.value);
                     auto result = view_info_json(view_info_from_space(*space));
                     result["view"] = id.value;
                     return result;

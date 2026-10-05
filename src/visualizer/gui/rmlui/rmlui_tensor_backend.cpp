@@ -44,6 +44,10 @@ namespace lfs::vis::gui {
         };
         struct Texture {
             std::shared_ptr<const Tensor> image;
+            // Cache captures own a writable image so a changed document can
+            // update the same allocation instead of cloning a new tensor.
+            // Loaded and externally supplied textures leave this empty.
+            std::shared_ptr<Tensor> writable_image;
             std::string name;
             // Generated textures (glyph atlases) sample nearest, like the Vulkan renderer.
             bool linear = true;
@@ -142,9 +146,17 @@ namespace lfs::vis::gui {
             Module::Scissor scissor;
         };
         std::vector<PendingDraw> pending;
+        std::vector<std::array<Module::Binding, 5>> batch_bindings;
+        std::vector<Module::Draw> batch_draws;
         Tensor* pending_target = nullptr;
         bool pending_clear = false;
         std::array<float, 4> pending_clear_value{};
+        struct TextureQuad {
+            float width = 0.0f;
+            float height = 0.0f;
+            Rml::CompiledGeometryHandle geometry = {};
+        };
+        std::vector<TextureQuad> texture_quads;
         std::vector<Tensor> free_layers;
         lfs::vis::TensorFrameUploads uploads;
 
@@ -191,8 +203,10 @@ namespace lfs::vis::gui {
             if (!base)
                 return false;
             const auto shape = lfs::core::TensorShape{base->size(0), base->size(1), 4};
-            if (!clip_mask.is_valid() || clip_mask.shape() != shape)
+            if (!clip_mask.is_valid() || clip_mask.shape() != shape) {
                 clip_mask = Tensor::zeros(shape, Device::GPU, DataType::UInt8);
+                clip_mask.set_name("ui.clip_mask");
+            }
             return true;
         }
 
@@ -203,31 +217,33 @@ namespace lfs::vis::gui {
                 pending_clear = false;
                 return;
             }
-            std::vector<std::array<Module::Binding, 5>> bindings(pending.size());
-            std::vector<Module::Draw> draws;
-            draws.reserve(pending.size());
+            batch_bindings.resize(pending.size());
+            batch_draws.clear();
+            batch_draws.reserve(pending.size());
             for (std::size_t i = 0; i < pending.size(); ++i) {
                 auto& entry = pending[i];
                 const Tensor* texture = entry.texture ? entry.texture.get() : &dummy_texture;
-                bindings[i] = {Module::Binding{0, &entry.positions}, Module::Binding{8, &entry.colors},
-                               Module::Binding{16, &entry.texcoords}, Module::Binding{24, texture},
-                               Module::Binding{32, entry.mask}};
-                draws.push_back({.vertex = "uiVertex",
-                                 .fragment = entry.fragment,
-                                 .arguments = {std::as_bytes(std::span(&entry.parameters, 1)), bindings[i]},
-                                 .color = pending_target,
-                                 .vertex_count = entry.vertices,
-                                 .scissor = entry.scissor,
-                                 .blend = entry.fragment == "maskFragment" ? Module::Blend::Opaque
-                                                                           : Module::Blend::PremultipliedAlpha,
-                                 .depth_compare = Module::Compare::Always,
-                                 .depth_write = false,
-                                 .clear_color = i == 0 && pending_clear,
-                                 .color_clear = pending_clear_value});
+                batch_bindings[i] = {Module::Binding{0, &entry.positions}, Module::Binding{8, &entry.colors},
+                                     Module::Binding{16, &entry.texcoords}, Module::Binding{24, texture},
+                                     Module::Binding{32, entry.mask}};
+                batch_draws.push_back({.vertex = "uiVertex",
+                                       .fragment = entry.fragment,
+                                       .arguments = {std::as_bytes(std::span(&entry.parameters, 1)), batch_bindings[i]},
+                                       .color = pending_target,
+                                       .vertex_count = entry.vertices,
+                                       .scissor = entry.scissor,
+                                       .blend = entry.fragment == "maskFragment" ? Module::Blend::Opaque
+                                                                                 : Module::Blend::PremultipliedAlpha,
+                                       .depth_compare = Module::Compare::Always,
+                                       .depth_write = false,
+                                       .clear_color = i == 0 && pending_clear,
+                                       .color_clear = pending_clear_value});
             }
-            auto result = draw_program->draw_batch(draws);
+            auto result = draw_program->draw_batch(batch_draws);
             if (!result)
-                LOG_ERROR("Tensor RmlUi draw batch of {} failed: {}", draws.size(), result.error().detail());
+                LOG_ERROR("Tensor RmlUi draw batch of {} failed: {}", batch_draws.size(), result.error().detail());
+            batch_draws.clear();
+            batch_bindings.clear();
             pending.clear();
             pending_target = nullptr;
             pending_clear = false;
@@ -335,6 +351,9 @@ namespace lfs::vis::gui {
             return;
         impl_->pending.clear();
         impl_->pending_target = nullptr;
+        for (const auto& quad : impl_->texture_quads)
+            ReleaseGeometry(quad.geometry);
+        impl_->texture_quads.clear();
         impl_->free_layers.clear();
         impl_->layers.clear();
         impl_->layer_stack = {0};
@@ -623,9 +642,16 @@ namespace lfs::vis::gui {
         auto* texture = reinterpret_cast<Texture*>(reuse);
         if (!texture)
             texture = new Texture;
-        // A full-width row range is already contiguous and would alias the
-        // layer, which is recycled after PopLayer; the cache needs its own copy.
-        texture->image = std::make_shared<Tensor>(source->slice({{y0, y1}, {x0, x1}, {0, 4}}).clone());
+        const auto source_region = source->slice({{y0, y1}, {x0, x1}, {0, 4}});
+        const lfs::core::TensorShape shape{static_cast<std::size_t>(y1 - y0),
+                                           static_cast<std::size_t>(x1 - x0), 4};
+        if (texture->writable_image && texture->writable_image->shape() == shape) {
+            texture->writable_image->copy_(source_region);
+        } else {
+            texture->writable_image = std::make_shared<Tensor>(source_region.clone());
+            texture->writable_image->set_name("ui.context_cache");
+        }
+        texture->image = texture->writable_image;
         return reinterpret_cast<Rml::TextureHandle>(texture);
     }
     Rml::TextureHandle TensorRmlUiRenderer::SaveLayerAsTexture() {
@@ -640,17 +666,32 @@ namespace lfs::vis::gui {
 
     void TensorRmlUiRenderer::renderTextureQuad(Rml::TextureHandle texture, float x, float y,
                                                 float width, float height) {
+        const auto found = std::ranges::find_if(
+            impl_->texture_quads,
+            [width, height](const Impl::TextureQuad& quad) {
+                return quad.width == width && quad.height == height;
+            });
+        if (found != impl_->texture_quads.end()) {
+            RenderGeometry(found->geometry, {x, y}, texture);
+            return;
+        }
         std::array<Rml::Vertex, 4> vertices{};
         const Rml::ColourbPremultiplied white(255, 255, 255, 255);
-        vertices[0] = {{x, y}, white, {0, 0}};
-        vertices[1] = {{x + width, y}, white, {1, 0}};
-        vertices[2] = {{x + width, y + height}, white, {1, 1}};
-        vertices[3] = {{x, y + height}, white, {0, 1}};
+        vertices[0] = {{0, 0}, white, {0, 0}};
+        vertices[1] = {{width, 0}, white, {1, 0}};
+        vertices[2] = {{width, height}, white, {1, 1}};
+        vertices[3] = {{0, height}, white, {0, 1}};
         constexpr std::array indices{0, 1, 2, 0, 2, 3};
         const auto geometry = CompileGeometry({vertices.data(), vertices.size()},
                                               {indices.data(), indices.size()});
-        RenderGeometry(geometry, {}, texture);
-        ReleaseGeometry(geometry);
+        if (!geometry)
+            return;
+        if (impl_->texture_quads.size() >= 32) {
+            ReleaseGeometry(impl_->texture_quads.front().geometry);
+            impl_->texture_quads.erase(impl_->texture_quads.begin());
+        }
+        impl_->texture_quads.push_back({width, height, geometry});
+        RenderGeometry(geometry, {x, y}, texture);
     }
 
     bool TensorRmlUiRenderer::renderFrostedGlass(

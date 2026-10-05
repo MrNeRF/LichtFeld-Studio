@@ -718,6 +718,7 @@ if(NOT LFS_HAS_CUDA)
         test_node_canvas_interaction.cpp
         test_mcp_node_tools.cpp
         test_mcp_screen_tools.cpp
+        test_viewport.cpp
         test_tensor_metal.cpp
         test_camera_priors_portable.cpp
         test_pipelined_loader_backends.cpp

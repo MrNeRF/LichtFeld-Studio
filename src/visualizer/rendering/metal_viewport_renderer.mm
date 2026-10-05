@@ -300,10 +300,10 @@ namespace lfs::vis {
         }
         uint64_t serial = 0;
         struct TargetState {
-            // One published frame and one writable frame are sufficient: acquire
-            // waits for the non-published frame's producer and consumer before
-            // reuse. A third target only retained another full color/depth pair.
-            std::array<std::unique_ptr<Frame>, 2> frames;
+            // Match the presentation queue depth. Two outputs force the viewer
+            // thread to wait for the frame from two poses ago even while the
+            // presenter still has a free drawable.
+            std::array<std::unique_ptr<Frame>, 3> frames;
             Frame* latest = nullptr;
             size_t next = 0;
             uint32_t needed_capacity = 0;

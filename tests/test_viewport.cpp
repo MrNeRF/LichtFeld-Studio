@@ -343,6 +343,17 @@ TEST(ViewportTest, PanDraggingRightMovesCameraLeftAndDraggingUpMovesCameraDown) 
     EXPECT_NEAR(viewport.camera.getPivot().z, 0.0f, 1e-4f);
 }
 
+TEST(ViewportTest, SettingTheSamePivotDoesNotRestartItsOverlayTimer) {
+    Viewport viewport(100, 100);
+    const glm::vec3 pivot(1.0f, 2.0f, 3.0f);
+    viewport.camera.setPivot(pivot);
+    const auto first_set_time = viewport.camera.pivot_set_time;
+
+    viewport.camera.setPivot(pivot);
+
+    EXPECT_EQ(viewport.camera.pivot_set_time, first_set_time);
+}
+
 TEST(ViewportTest, PanDraggingMovesProjectedContentWithCursorInVisualizerSpace) {
     Viewport viewport(100, 100);
     viewport.camera.t = glm::vec3(3.0f, 2.0f, 5.0f);

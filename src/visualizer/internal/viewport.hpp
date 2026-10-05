@@ -393,6 +393,9 @@ class Viewport {
         void initScreenPos(const glm::vec2& pos) { prePos = pos; }
 
         void setPivot(const glm::vec3& new_pivot) {
+            if (pivot.x == new_pivot.x && pivot.y == new_pivot.y &&
+                pivot.z == new_pivot.z)
+                return;
             pivot = new_pivot;
             pivot_set_time = std::chrono::steady_clock::now();
         }
