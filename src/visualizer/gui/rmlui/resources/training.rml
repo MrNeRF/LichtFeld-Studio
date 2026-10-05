@@ -462,9 +462,18 @@
               <span class="prop-label">{{label_eval_mask}}</span>
               <span class="text-disabled">{{eval_mask_path_display}}</span>
             </div>
+            <div class="setting-row" data-tooltip="training.tooltip.eval_mask_spec">
+              <span class="prop-label">{{label_eval_mask_spec}}</span>
+              <input type="text" class="number-input" data-value="eval_mask_spec_str" />
+            </div>
             <div class="setting-row">
               <span class="prop-label">&#160;</span>
               <button class="btn btn--secondary" data-tooltip="training.tooltip.eval_mask_browse" data-event-click="action('browse_eval_mask')">{{label_browse}}</button>
+              <button class="btn btn--secondary" data-tooltip="training.tooltip.eval_mask_folder" data-event-click="action('browse_eval_mask_folder')">{{label_mask_folder}}</button>
+            </div>
+            <div class="setting-row">
+              <span class="prop-label">&#160;</span>
+              <button class="btn btn--secondary" data-tooltip="training.tooltip.eval_mask_cropbox" data-event-click="action('use_cropbox_eval_mask')">{{label_use_cropbox}}</button>
               <button class="btn btn--secondary" data-tooltip="training.tooltip.eval_mask_clear" data-if="has_eval_mask_clear" data-event-click="action('clear_eval_mask')">{{label_clear}}</button>
             </div>
           </div>

@@ -365,6 +365,14 @@ namespace lfs::io {
     // Avoids repeated directory scans for every image.
     class MaskDirCache {
     public:
+        // Indexes one explicit mask folder instead of the dataset's mask sub-folders.
+        [[nodiscard]] static MaskDirCache for_folder(const fs::path& mask_dir) {
+            MaskDirCache cache;
+            if (safe_is_directory(mask_dir))
+                cache.dir_indices_.emplace_back(mask_dir, nullptr);
+            return cache;
+        }
+
         explicit MaskDirCache(const fs::path& base_path,
                               const CancelCallback& cancel_requested = nullptr) {
             for (const auto* folder : MASK_SEARCH_FOLDERS) {
@@ -424,6 +432,8 @@ namespace lfs::io {
         }
 
     private:
+        MaskDirCache() = default;
+
         static std::vector<fs::path> build_lookup_keys(const std::string& image_name) {
             const fs::path img_path = lfs::core::utf8_to_path(image_name);
             const fs::path stem_path = img_path.parent_path() / img_path.stem();

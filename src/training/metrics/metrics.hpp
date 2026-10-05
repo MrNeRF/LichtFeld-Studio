@@ -26,6 +26,10 @@
 #include <string>
 #include <vector>
 
+namespace lfs::io {
+    class MaskDirCache;
+}
+
 namespace lfs::training {
 
     // Peak Signal-to-Noise Ratio
@@ -179,8 +183,30 @@ namespace lfs::training {
         bool invert = false;
     };
 
+    struct EvaluationPoints {
+        lfs::core::Tensor means; // [N,3] CUDA Float32 in the training world frame
+        int radius = 2;
+        int close = 3;
+        bool invert = false;
+    };
+
+    struct EvaluationMaskSources {
+        const EvaluationMesh* mesh = nullptr;
+        const EvaluationPoints* points = nullptr;
+        const lfs::io::MaskDirCache* folder = nullptr;
+    };
+
     [[nodiscard]] lfs::Result<EvaluationMesh> load_evaluation_mesh(
         const std::filesystem::path& path, const std::array<float, 3>& training_origin, bool invert);
+
+    // Positions [N,3] of a splat or point cloud PLY, moved into the training frame.
+    [[nodiscard]] lfs::Result<lfs::core::Tensor> load_evaluation_points(
+        const std::filesystem::path& path, const std::array<float, 3>& training_origin);
+
+    // Closed box from 8 corners in the training frame, corner index bits = (x, y, z) side; selected exactly like a mesh.
+    [[nodiscard]] EvaluationMesh make_evaluation_box(const std::array<std::array<float, 3>, 8>& corners, bool invert);
+    [[nodiscard]] std::array<std::array<float, 3>, 8> axis_aligned_box_corners(
+        const std::array<float, 6>& box, const std::array<float, 3>& training_origin);
 
     using EvaluationRenderFn =
         std::function<lfs::Result<EvaluationRenderResult>(lfs::core::Camera&, float)>;
@@ -198,7 +224,7 @@ namespace lfs::training {
         const EvaluationRenderFn& render,
         const EvaluationViewInputs* cached_inputs = nullptr,
         lfs::io::PipelinedImageLoader* image_loader = nullptr,
-        const EvaluationMesh* mesh = nullptr,
+        const EvaluationMaskSources& mask_sources = {},
         const lfs::core::Tensor& background = {});
 
     [[nodiscard]] std::optional<float> mean_normal_angle_deg(
@@ -270,6 +296,16 @@ namespace lfs::training {
         void set_eval_mesh(EvaluationMesh mesh) { _eval_mesh = std::move(mesh); }
         [[nodiscard]] const EvaluationMesh* eval_mesh() const { return _eval_mesh ? &*_eval_mesh : nullptr; }
 
+        void set_eval_mask_folder(std::shared_ptr<const lfs::io::MaskDirCache> folder) {
+            _eval_mask_folder = std::move(folder);
+        }
+        void set_eval_points(EvaluationPoints points) { _eval_points = std::move(points); }
+        [[nodiscard]] EvaluationMaskSources mask_sources() const {
+            return {.mesh = eval_mesh(),
+                    .points = _eval_points ? &*_eval_points : nullptr,
+                    .folder = _eval_mask_folder.get()};
+        }
+
         void set_normal_prior_decode(const lfs::core::Camera::NormalPriorDecode& decode) {
             _normal_prior_decode = decode;
         }
@@ -320,5 +356,7 @@ namespace lfs::training {
         std::unique_ptr<MetricsReporter> _reporter;
         AppearanceFn appearance_;
         std::optional<EvaluationMesh> _eval_mesh;
+        std::shared_ptr<const lfs::io::MaskDirCache> _eval_mask_folder;
+        std::optional<EvaluationPoints> _eval_points;
     };
 } // namespace lfs::training

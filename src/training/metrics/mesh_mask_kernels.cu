@@ -596,4 +596,110 @@ namespace lfs::training {
             z_near, stream);
     }
 
+    namespace {
+        constexpr int POINT_THREADS = 256;
+
+        __global__ void splat_points_kernel(const float* __restrict__ means, const int count,
+                                            const MeshMaskCamera camera, const int radius,
+                                            const bool distorted, const lfs::core::UndistortParams distortion,
+                                            uint8_t* __restrict__ mask) {
+            const int i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i >= count)
+                return;
+            const float* p = means + 3 * i;
+            const auto& m = camera.world_to_camera;
+            const float x = m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3];
+            const float y = m[4] * p[0] + m[5] * p[1] + m[6] * p[2] + m[7];
+            const float z = m[8] * p[0] + m[9] * p[1] + m[10] * p[2] + m[11];
+            if (!(z > 1.0e-6f))
+                return;
+            float nx = x / z;
+            float ny = y / z;
+            if (distorted) {
+                float dx, dy;
+                apply_distortion(nx, ny, distortion, dx, dy);
+                nx = dx;
+                ny = dy;
+            }
+            const float u = camera.fx * nx + camera.cx;
+            const float v = camera.fy * ny + camera.cy;
+            if (!isfinite(u) || !isfinite(v) || u < -radius || v < -radius ||
+                u >= camera.width + radius || v >= camera.height + radius)
+                return;
+            const int cu = static_cast<int>(floorf(u));
+            const int cv = static_cast<int>(floorf(v));
+            for (int dy = -radius; dy <= radius; ++dy) {
+                const int py = cv + dy;
+                if (py < 0 || py >= camera.height)
+                    continue;
+                for (int dx = -radius; dx <= radius; ++dx) {
+                    const int px = cu + dx;
+                    if (px >= 0 && px < camera.width && dx * dx + dy * dy <= radius * radius)
+                        mask[static_cast<size_t>(py) * camera.width + px] = 1;
+                }
+            }
+        }
+
+        // One separable pass of a square max (dilate) or min (erode) filter; outside pixels count as
+        // 0 for dilation and 1 for erosion so closing keeps regions that touch the image border.
+        __global__ void morphology_pass_kernel(const uint8_t* __restrict__ input, uint8_t* __restrict__ output,
+                                               const int width, const int height, const int reach,
+                                               const bool horizontal, const bool dilate) {
+            const int index = blockIdx.x * blockDim.x + threadIdx.x;
+            if (index >= width * height)
+                return;
+            const int x = index % width;
+            const int y = index / width;
+            uint8_t value = dilate ? 0 : 1;
+            for (int offset = -reach; offset <= reach; ++offset) {
+                const int sx = horizontal ? x + offset : x;
+                const int sy = horizontal ? y : y + offset;
+                const uint8_t sample = (sx < 0 || sx >= width || sy < 0 || sy >= height)
+                                           ? (dilate ? 0 : 1)
+                                           : input[static_cast<size_t>(sy) * width + sx];
+                value = dilate ? max(value, sample) : min(value, sample);
+            }
+            output[index] = value;
+        }
+    } // namespace
+
+    lfs::core::Tensor splat_point_coverage(const lfs::core::Tensor& means, const MeshMaskCamera& camera, const int radius,
+                                           const int close, const lfs::core::UndistortParams* distortion,
+                                           cudaStream_t stream) {
+        LFS_ASSERT_MSG(means.device() == lfs::core::Device::CUDA && means.dtype() == lfs::core::DataType::Float32 &&
+                           means.ndim() == 2 && means.shape()[1] == 3,
+                       "Point mask means must be a CUDA Float32 [N,3] tensor");
+        LFS_ASSERT_MSG(camera.width > 0 && camera.height > 0 && radius >= 0 && close >= 0,
+                       "Point mask camera size and radii must be valid");
+        stream = resolve_stream(stream);
+        nvtxRangePush("splat_point_coverage");
+        const lfs::core::CUDAStreamGuard stream_guard(stream);
+        means.sync_to_stream(stream);
+        const auto points = means.contiguous();
+        const size_t pixels = static_cast<size_t>(camera.width) * camera.height;
+        auto mask = lfs::core::Tensor::zeros({static_cast<size_t>(camera.height), static_cast<size_t>(camera.width)},
+                                             lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+        const int count = static_cast<int>(points.shape()[0]);
+        if (count > 0) {
+            splat_points_kernel<<<(count + POINT_THREADS - 1) / POINT_THREADS, POINT_THREADS, 0, stream>>>(
+                points.ptr<float>(), count, camera, radius, distortion != nullptr,
+                distortion ? *distortion : lfs::core::UndistortParams{}, mask.ptr<uint8_t>());
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.point_mask.splat");
+        }
+        if (close > 0) {
+            auto scratch = lfs::core::Tensor::empty(mask.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+            const int blocks = static_cast<int>((pixels + POINT_THREADS - 1) / POINT_THREADS);
+            for (const bool dilate : {true, false}) {
+                morphology_pass_kernel<<<blocks, POINT_THREADS, 0, stream>>>(
+                    mask.ptr<uint8_t>(), scratch.ptr<uint8_t>(), camera.width, camera.height, close, true, dilate);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.point_mask.close_rows");
+                morphology_pass_kernel<<<blocks, POINT_THREADS, 0, stream>>>(
+                    scratch.ptr<uint8_t>(), mask.ptr<uint8_t>(), camera.width, camera.height, close, false, dilate);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.point_mask.close_columns");
+            }
+        }
+        nvtxRangePop();
+        return mask;
+    }
+
 } // namespace lfs::training

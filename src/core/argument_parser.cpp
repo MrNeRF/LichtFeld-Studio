@@ -95,7 +95,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--eval-all", "eval_all", Bool},
             OptimizationCliBinding{"--eval-space", "eval_space", Enum},
             OptimizationCliBinding{"--eval-mask", "eval_mask", String, false,
-                                   "; format: mesh:<file>"},
+                                   ". Sources: mesh:<file> pixels covered by the mesh; bbox:x0,y0,z0,x1,y1,z1 pixels covered by the axis-aligned box with that minimum and maximum corner; cropbox pixels covered by the training model's crop box; masks:<folder> one mask image per input image, matched by file name, white pixels scored; depth:near,far solid rendered pixels whose depth lies between near and far; points or points:radius,close pixels around the initial point cloud, each point drawn as a disk of radius pixels (default 2) with gaps up to twice close pixels filled (default 3); points:<file> the same around the points of a splat or point cloud PLY; none clears a mask stored in a resumed project. Meshes, boxes and point files use the dataset's coordinates"},
             OptimizationCliBinding{"--eval-mask-invert", "eval_mask_invert", Bool},
             OptimizationCliBinding{"--headless", "headless", Bool},
             OptimizationCliBinding{"--undistort", "undistort", Bool},
@@ -126,6 +126,8 @@ namespace lfs::core::args {
                 break;
             case prop::PropType::String:
                 display = std::any_cast<std::string>(value);
+                if (display.empty())
+                    display = "none";
                 break;
             case prop::PropType::Enum: {
                 const int enum_value = std::any_cast<int>(value);
@@ -215,40 +217,70 @@ namespace {
     }
 
     lfs::Result<std::string> parse_eval_mask(const std::string_view spec) {
+        constexpr std::string_view expected =
+            "Expected mesh:<file>, bbox:x0,y0,z0,x1,y1,z1, cropbox, masks:<folder>, depth:near,far, points:radius,close, "
+            "points:<file> or none";
+        const auto invalid = [&](std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Core,
+                .user_message = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        };
+        if (spec == "none")
+            return std::string{};
+        if (lfs::core::param::is_eval_mask_cropbox(spec))
+            return std::string(spec);
+        if (const auto file = lfs::core::param::eval_mask_points_file(spec)) {
+            const auto normalized = lfs::core::param::normalize_eval_mask(spec);
+            std::error_code error;
+            if (!std::filesystem::is_regular_file(
+                    lfs::core::utf8_to_path(std::string(*lfs::core::param::eval_mask_points_file(normalized))), error))
+                return invalid(std::format("Evaluation points file does not exist: {}", *file));
+            return normalized;
+        }
+        if (lfs::core::param::is_eval_mask_points(spec)) {
+            if (!lfs::core::param::parse_eval_mask_points(spec))
+                return invalid(std::format(
+                    "Invalid --eval-mask '{}'. Points need whole numbers radius,close with radius 0..32 and close 0..64",
+                    spec));
+            return lfs::core::param::normalize_eval_mask(spec);
+        }
+        if (lfs::core::param::is_eval_mask_depth(spec)) {
+            if (!lfs::core::param::parse_eval_mask_depth(spec))
+                return invalid(std::format(
+                    "Invalid --eval-mask '{}'. A depth range needs near,far with 0 <= near < far", spec));
+            return lfs::core::param::normalize_eval_mask(spec);
+        }
+        if (lfs::core::param::is_eval_mask_folder(spec)) {
+            const auto normalized = lfs::core::param::normalize_eval_mask(spec);
+            std::error_code error;
+            if (lfs::core::param::eval_mask_folder(spec).empty() ||
+                !std::filesystem::is_directory(
+                    lfs::core::utf8_to_path(std::string(lfs::core::param::eval_mask_folder(normalized))), error))
+                return invalid(std::format("Evaluation mask folder does not exist: {}", spec.substr(6)));
+            return normalized;
+        }
+        if (lfs::core::param::is_eval_mask_box(spec)) {
+            if (!lfs::core::param::parse_eval_mask_box(spec))
+                return invalid(std::format(
+                    "Invalid --eval-mask '{}'. A box needs six numbers x0,y0,z0,x1,y1,z1 with each minimum below its maximum",
+                    spec));
+            return lfs::core::param::normalize_eval_mask(spec);
+        }
         const auto separator = spec.find(':');
         const auto source = separator == std::string_view::npos
                                 ? spec
                                 : spec.substr(0, separator);
-        if (source != "mesh") {
-            return lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::InvalidArgument,
-                .domain = lfs::ErrorDomain::Core,
-                .user_message = std::format(
-                    "Invalid --eval-mask source '{}'. Expected mesh:<file>", source),
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            });
-        }
-        if (separator == std::string_view::npos || separator + 1 == spec.size()) {
-            return lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::InvalidArgument,
-                .domain = lfs::ErrorDomain::Core,
-                .user_message = "Invalid --eval-mask. Expected mesh:<file>",
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            });
-        }
-        const auto path = lfs::core::param::normalize_eval_mask_path(
-            spec.substr(separator + 1));
+        if (source != "mesh")
+            return invalid(std::format("Invalid --eval-mask source '{}'. {}", source, expected));
+        if (separator == std::string_view::npos || separator + 1 == spec.size())
+            return invalid(std::format("Invalid --eval-mask. {}", expected));
+        const auto path = lfs::core::param::normalize_eval_mask(spec.substr(separator + 1));
         std::error_code error;
-        if (!std::filesystem::is_regular_file(
-                lfs::core::utf8_to_path(path), error)) {
-            return lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::InvalidArgument,
-                .domain = lfs::ErrorDomain::Core,
-                .user_message = std::format(
-                    "Evaluation mesh file does not exist: {}", path),
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            });
-        }
+        if (!std::filesystem::is_regular_file(lfs::core::utf8_to_path(path), error))
+            return invalid(std::format("Evaluation mesh file does not exist: {}", path));
         return path;
     }
 
@@ -781,7 +813,7 @@ namespace {
                 std::unordered_map<std::string, lfs::core::param::EvalSpace>{
                     {"distorted", lfs::core::param::EvalSpace::Distorted},
                     {"undistorted", lfs::core::param::EvalSpace::Undistorted}});
-            ::args::ValueFlag<std::string> eval_mask(output_group, "mesh:<file>", lfs::core::args::optimization_cli_help("--eval-mask"), {"eval-mask"});
+            ::args::ValueFlag<std::string> eval_mask(output_group, "source", lfs::core::args::optimization_cli_help("--eval-mask"), {"eval-mask"});
             ::args::Flag eval_mask_invert(output_group, "eval_mask_invert", lfs::core::args::optimization_cli_help("--eval-mask-invert"), {"eval-mask-invert"});
             ::args::Flag no_download(output_group, "no_download", "Do not download optional model weights", {"no-download"});
             ::args::ValueFlagList<std::string> eval_steps(output_group, "eval_steps", "Evaluation iterations as a comma list, e.g. 1000,7000,30000 (replaces the default 7000,30000; the final iteration is always evaluated)", {"eval-steps"});
@@ -1563,6 +1595,8 @@ namespace {
                 setVal(eval_space_val, opt.eval_space);
                 setVal(eval_mask_val, opt.eval_mask);
                 setFlag(eval_mask_invert_flag, opt.eval_mask_invert);
+                if (eval_mask_val && eval_mask_val->empty())
+                    opt.eval_mask_invert = false;
                 setFlag(no_download_flag, params.no_download);
                 setFlag(headless_flag, opt.headless);
                 setFlag(auto_train_flag, opt.auto_train);
@@ -1678,7 +1712,7 @@ namespace {
                 note_opt("eval_all", eval_all_flag);
                 note_opt("eval_space", eval_space_val.has_value());
                 note_opt("eval_mask", eval_mask_val.has_value());
-                note_opt("eval_mask_invert", eval_mask_invert_flag);
+                note_opt("eval_mask_invert", eval_mask_invert_flag || (eval_mask_val && eval_mask_val->empty()));
                 note_opt("headless", headless_flag);
                 note_opt("auto_train", auto_train_flag);
                 note_opt("no_splash", no_splash_flag);

@@ -2157,14 +2157,16 @@ class OptimizationParams:
 
     @property
     def eval_mask(self) -> str:
-        """Absolute mesh path used to select evaluated pixels"""
+        """
+        Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range or points); training is not affected
+        """
 
     @eval_mask.setter
     def eval_mask(self, arg: str, /) -> None: ...
 
     @property
     def eval_mask_invert(self) -> bool:
-        """Evaluate pixels outside the mesh coverage"""
+        """Scores the pixels outside the evaluation mask instead"""
 
     @eval_mask_invert.setter
     def eval_mask_invert(self, arg: bool, /) -> None: ...

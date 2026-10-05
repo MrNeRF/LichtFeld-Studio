@@ -695,7 +695,7 @@ TEST(MetricsEvaluator, RgbaReferenceShowsTheRenderBackgroundWhereTransparent) {
                                      Device::CUDA);
         return lfs::training::EvaluationRenderResult{.output = std::move(output)};
     };
-    const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, nullptr, background);
+    const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, {}, background);
     ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
     const auto gt = prepared->inputs.gt_image.to(DataType::Float32).cpu().contiguous();
     ASSERT_EQ(gt.shape(), lfs::core::TensorShape({3, kH, kW}));
@@ -956,6 +956,53 @@ TEST(MetricsEvaluatorUndistort, ThinMaskFallsBackToPartialSsimWindows) {
     std::filesystem::remove_all(tmp);
 }
 
+// Catches geometric masks projected through a pinhole when GUT renders a distorted camera natively,
+// without --undistort: they must select the same pixels as the source-lens path of --undistort.
+TEST(MetricsEvaluatorUndistort, PointMaskFollowsTheNativeGutLens) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_native_gut_point_mask";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 64;
+    constexpr int kH = 48;
+    const auto image_path = tmp / "gt.png";
+    write_rgb_png(image_path, 130, 130, 130, kH, kW);
+
+    const lfs::training::EvaluationPoints points{
+        .means = Tensor::from_vector({-1.4f, -0.9f, 0.0f, 1.4f, 0.9f, 0.0f, 0.0f, 0.0f, 0.0f},
+                                     lfs::core::TensorShape({3, 3}), Device::CUDA),
+        .radius = 1,
+        .close = 0};
+    const auto render = [](Camera& render_camera, float) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        lfs::training::RenderOutput output;
+        output.image = Tensor::zeros({size_t{3}, static_cast<size_t>(render_camera.image_height()),
+                                      static_cast<size_t>(render_camera.image_width())},
+                                     Device::CUDA);
+        return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+    };
+    const auto mask_of = [&](Camera& camera, const bool gut, const bool undistort) {
+        auto params = make_eval_params(tmp / "out");
+        params.optimization.gut = gut;
+        params.optimization.undistort = undistort;
+        const auto prepared = prepare_evaluation_view(camera, params, render, nullptr, nullptr, {.points = &points});
+        EXPECT_TRUE(prepared.has_value()) << prepared.error().detail();
+        return prepared->metric_mask.cpu().to_vector_uint8();
+    };
+
+    auto prepared_camera = make_distorted_eval_camera(image_path, {}, kW, kH);
+    const auto source_lens = mask_of(*prepared_camera, false, true);
+    Camera native(Tensor::eye(3, Device::CUDA), prepared_camera->T(), static_cast<float>(kW), static_cast<float>(kW),
+                  0.5f * kW, 0.5f * kH, Tensor::from_vector({-0.3f}, lfs::core::TensorShape({1}), Device::CPU),
+                  Tensor(), CameraModelType::PINHOLE, "gt.png", image_path, {}, kW, kH, 0);
+    const auto native_lens = mask_of(native, true, false);
+    EXPECT_EQ(native_lens, source_lens);
+    EXPECT_NE(mask_of(native, false, false), source_lens) << "the lens no longer moves these points";
+    std::filesystem::remove_all(tmp);
+}
+
 // Catches the evaluation copy of a prepared camera losing its undistorted state, which makes the
 // GUT renderer apply the lens distortion a second time.
 TEST(MetricsEvaluatorUndistort, TransformCopyKeepsPreparedUndistortion) {
@@ -1015,7 +1062,7 @@ TEST(MetricsEvaluatorMeshMask, CoverageSelectsTheEvaluatedPixels) {
 
     for (const bool invert : {false, true}) {
         mesh.invert = invert;
-        const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, &mesh);
+        const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, {.mesh = &mesh});
         ASSERT_TRUE(prepared.has_value());
         EXPECT_TRUE(prepared->erode_ssim_mask);
         const auto mask = prepared->metric_mask.cpu().contiguous();
@@ -1029,7 +1076,7 @@ TEST(MetricsEvaluatorMeshMask, CoverageSelectsTheEvaluatedPixels) {
     mesh.invert = false;
     mesh.vertices = mesh.vertices - Tensor::from_vector({0.0f, 0.0f, 10.0f}, lfs::core::TensorShape({1, 3}),
                                                         Device::CUDA);
-    EXPECT_FALSE(prepare_evaluation_view(*camera, params, render, nullptr, nullptr, &mesh).has_value());
+    EXPECT_FALSE(prepare_evaluation_view(*camera, params, render, nullptr, nullptr, {.mesh = &mesh}).has_value());
     std::filesystem::remove_all(tmp);
 }
 
@@ -1306,4 +1353,50 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
     EXPECT_TRUE(record.at("evaluations")[1].at("psnr").is_null());
     EXPECT_FLOAT_EQ(record.at("evaluations")[1].at("evaluated_pixel_fraction"), 0.0f);
     EXPECT_FALSE(record.at("evaluations")[1].at("validity_mask_applied"));
+}
+
+// Catches a depth mask that compares accumulated instead of expected depth, keeps faint pixels,
+// excludes the range bounds, or loses inversion.
+TEST(MetricsEvaluator, DepthMaskSelectsSolidPixelsInsideTheRange) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_depth_eval_mask";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 6;
+    constexpr int kH = 4;
+    write_u8_hwc_png(tmp / "gt.png", std::vector<uint8_t>(static_cast<size_t>(kW) * kH * 3, 128), kH, kW);
+    auto camera = make_eval_camera(tmp / "gt.png", {}, kW, kH);
+    auto params = make_eval_params(tmp / "out");
+    params.optimization.eval_mask = "depth:2,4";
+
+    const std::array<float, kW> alpha_row{1.0f, 0.6f, 0.3f, 1.0f, 1.0f, 0.8f};
+    const std::array<float, kW> accumulated_row{3.0f, 1.8f, 0.9f, 5.0f, 2.0f, 4.0f};
+    const std::array<uint8_t, kW> expected_row{1, 1, 0, 0, 1, 0};
+    std::vector<float> alpha, accumulated;
+    for (int y = 0; y < kH; ++y) {
+        alpha.insert(alpha.end(), alpha_row.begin(), alpha_row.end());
+        accumulated.insert(accumulated.end(), accumulated_row.begin(), accumulated_row.end());
+    }
+    const auto render = [&](Camera&, float) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        lfs::training::RenderOutput output;
+        output.image = Tensor::zeros({size_t{3}, size_t{kH}, size_t{kW}}, Device::CUDA);
+        output.alpha = Tensor::from_vector(alpha, {size_t{1}, size_t{kH}, size_t{kW}}, Device::CUDA);
+        output.depth = Tensor::from_vector(accumulated, {size_t{1}, size_t{kH}, size_t{kW}}, Device::CUDA);
+        return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+    };
+
+    for (const bool invert : {false, true}) {
+        params.optimization.eval_mask_invert = invert;
+        const auto prepared = prepare_evaluation_view(*camera, params, render);
+        ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
+        const auto mask = prepared->metric_mask.cpu().contiguous().to_vector_uint8();
+        ASSERT_EQ(mask.size(), static_cast<size_t>(kW) * kH);
+        for (size_t i = 0; i < mask.size(); ++i)
+            EXPECT_EQ(mask[i], invert ? 1 - expected_row[i % kW] : expected_row[i % kW]) << i << " invert " << invert;
+    }
+    std::filesystem::remove_all(tmp);
 }

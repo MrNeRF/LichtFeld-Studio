@@ -493,7 +493,7 @@ namespace {
     // as when the project is opened on another machine.
     TEST(ProjectChapterTest, PresetWithAMissingEvaluationMaskStaysReadable) {
         TemporaryDirectory temporary;
-        const auto missing = lfs::core::param::normalize_eval_mask_path(
+        const auto missing = lfs::core::param::normalize_eval_mask(
             lfs::core::path_to_utf8(temporary.path / "moved_mask.obj"));
         auto snapshot = parameter_snapshot();
         snapshot.mcmc_current.enable_eval = true;

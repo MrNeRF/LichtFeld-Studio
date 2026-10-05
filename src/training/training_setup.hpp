@@ -33,6 +33,8 @@ namespace lfs::training {
         lfs::core::NodeId parent_id = lfs::core::NULL_NODE;
         lfs::core::NodeId point_cloud_node_id = lfs::core::NULL_NODE;
         glm::mat4 node_transform{1.0f};
+        // Removing the point cloud node drops the scene's initial point cloud; the points eval mask still needs it.
+        bool keep_initial_point_cloud = false;
         bool has_preserved_cropbox = false;
         lfs::core::CropBoxData preserved_cropbox_data{};
         glm::mat4 preserved_cropbox_transform{1.0f};

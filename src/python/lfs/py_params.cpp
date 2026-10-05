@@ -926,15 +926,15 @@ namespace lfs::python {
                 "eval_mask",
                 [](PyOptimizationParams& self) { return self.params().eval_mask; },
                 [](PyOptimizationParams&, const std::string& v) {
-                    modify_params([value = lfs::core::param::normalize_eval_mask_path(v)](
+                    modify_params([value = lfs::core::param::normalize_eval_mask(v)](
                                       auto& p) { p.eval_mask = value; });
                 },
-                "Absolute mesh path used to select evaluated pixels")
+                "Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range or points); training is not affected")
             .def_prop_rw(
                 "eval_mask_invert",
                 [](PyOptimizationParams& self) { return self.params().eval_mask_invert; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_mask_invert = v; }); },
-                "Evaluate pixels outside the mesh coverage")
+                "Scores the pixels outside the evaluation mask instead")
             .def_prop_rw(
                 "densify_error_map",
                 [](PyOptimizationParams& self) { return self.params().densify_error_map; },

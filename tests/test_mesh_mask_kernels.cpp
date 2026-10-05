@@ -4,6 +4,7 @@
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/tensor.hpp"
 #include "training/metrics/mesh_mask_kernels.cuh"
+#include "training/metrics/metrics.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -298,6 +299,59 @@ TEST_F(MeshMaskRasterizerTest, PixelCenterQuadMatchesAtTwoResolutions) {
                     << "pixel " << x << ',' << y << " at " << width << 'x' << height;
             }
         }
+    }
+}
+
+// Catches wrong box corner indexing or a missing training-origin shift: from the origin,
+// a box spanning z in [3, 5] covers exactly the projection of its near face.
+TEST_F(MeshMaskRasterizerTest, EvaluationBoxCoversItsNearFaceAfterOriginShift) {
+    const std::array<float, 3> origin{0.25f, -0.5f, 1.0f};
+    const auto box = lfs::training::make_evaluation_box(
+        lfs::training::axis_aligned_box_corners(
+            {-1.0f + origin[0], -1.0f + origin[1], 3.0f + origin[2],
+             1.0f + origin[0], 1.0f + origin[1], 5.0f + origin[2]},
+            origin),
+        true);
+    EXPECT_TRUE(box.invert);
+    const auto cam = camera(64, 48, 40.0f, 40.0f);
+    const auto coverage = lfs::training::rasterize_mesh_coverage(
+                              box.vertices, box.indices, cam, box.z_near)
+                              .cpu()
+                              .contiguous();
+    const auto* mask = coverage.ptr<uint8_t>();
+    for (int y = 0; y < cam.height; ++y) {
+        for (int x = 0; x < cam.width; ++x) {
+            const double nx = (x + 0.5 - cam.cx) / cam.fx;
+            const double ny = (y + 0.5 - cam.cy) / cam.fy;
+            const bool expected = std::abs(nx) <= 1.0 / 3.0 && std::abs(ny) <= 1.0 / 3.0;
+            EXPECT_EQ(mask[static_cast<size_t>(y) * cam.width + x], expected) << x << ',' << y;
+        }
+    }
+}
+
+// Catches a wrong splat radius, points behind the camera leaking in, or a closing that does not
+// bridge gaps up to twice its reach.
+TEST_F(MeshMaskRasterizerTest, PointSplatsDisksAndClosingBridgesSmallGaps) {
+    const auto cam = camera(32, 16, 20.0f, 20.0f);
+    const auto mask_of = [&](const std::vector<float>& points, const int radius, const int close) {
+        const auto means = Tensor::from_vector(points, TensorShape({points.size() / 3, 3}), Device::CUDA);
+        const auto cpu = lfs::training::splat_point_coverage(means, cam, radius, close).cpu().contiguous();
+        return std::vector<uint8_t>(cpu.ptr<uint8_t>(), cpu.ptr<uint8_t>() + cpu.numel());
+    };
+    const auto pixel_x = [&](const float u) { return (u - cam.cx) / cam.fx * 2.0f; };
+
+    const auto disk = mask_of({pixel_x(16.5f), 0.0f, 2.0f, 0.0f, 0.0f, -2.0f}, 2, 0);
+    EXPECT_EQ(std::count(disk.begin(), disk.end(), uint8_t{1}), 13);
+    EXPECT_EQ(disk[8 * 32 + 16], 1);
+    EXPECT_EQ(disk[8 * 32 + 18], 1);
+    EXPECT_EQ(disk[7 * 32 + 18], 0);
+
+    const std::vector<float> pair{pixel_x(10.5f), 0.0f, 2.0f, pixel_x(15.5f), 0.0f, 2.0f};
+    const auto bridged = mask_of(pair, 0, 2);
+    const auto separate = mask_of(pair, 0, 1);
+    for (int x = 0; x < 32; ++x) {
+        EXPECT_EQ(bridged[8 * 32 + x], x >= 10 && x <= 15) << "bridged x " << x;
+        EXPECT_EQ(separate[8 * 32 + x], x == 10 || x == 15) << "separate x " << x;
     }
 }
 

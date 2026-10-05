@@ -35,6 +35,18 @@ def tr_fallback(key, fallback):
     return result if result and result != key else fallback
 
 
+def _eval_mask_display(params):
+    if not (params and params.has_params() and params.eval_mask):
+        return tr("training.value.none")
+    if params.eval_mask == "cropbox":
+        return tr("training.value.crop_box")
+    if params.eval_mask.startswith("bbox:"):
+        return params.eval_mask
+    if params.eval_mask.startswith("masks:"):
+        return tr("training.value.mask_folder").format(os.path.basename(params.eval_mask[len("masks:"):].rstrip("/\\")))
+    return os.path.basename(params.eval_mask)
+
+
 class IterationRateTracker:
     WINDOW_SECONDS = 5.0
 
@@ -390,6 +402,9 @@ class TrainingPanel(Panel):
         model.bind_func("label_bg_color", lambda: tr("training_params.bg_color"))
         model.bind_func("label_bg_image", lambda: tr("training_params.bg_image"))
         model.bind_func("label_eval_mask", lambda: tr("training_params.eval_mask"))
+        model.bind_func("label_use_cropbox", lambda: tr("training_params.eval_mask_use_cropbox"))
+        model.bind_func("label_mask_folder", lambda: tr("training_params.eval_mask_folder"))
+        model.bind_func("label_eval_mask_spec", lambda: tr("training_params.eval_mask_spec"))
         model.bind_func(
             "label_bg_browse", lambda: tr("training_params.bg_image_browse")
         )
@@ -857,6 +872,20 @@ class TrainingPanel(Panel):
             ppisp_activation_step_setter,
         )
 
+        self._text_bufs["eval_mask_spec_str"] = None
+
+        def eval_mask_spec_getter():
+            if self._text_bufs["eval_mask_spec_str"] is None:
+                self._text_bufs["eval_mask_spec_str"] = (
+                    p().eval_mask if p() and p().has_params() else ""
+                )
+            return self._text_bufs["eval_mask_spec_str"]
+
+        def eval_mask_spec_setter(v):
+            self._text_bufs["eval_mask_spec_str"] = str(v)
+
+        model.bind("eval_mask_spec_str", eval_mask_spec_getter, eval_mask_spec_setter)
+
         self._text_bufs["max_width_str"] = None
 
         def max_width_getter():
@@ -951,6 +980,9 @@ class TrainingPanel(Panel):
         if key == "max_width_str":
             return f"{d.max_width:,}" if d and d.has_params() else ""
 
+        if key == "eval_mask_spec_str":
+            return p.eval_mask if p and p.has_params() else ""
+
         if key == "test_every_str":
             return f"{d.test_every:,}" if d and d.has_params() else "8"
 
@@ -979,6 +1011,8 @@ class TrainingPanel(Panel):
                 self._set_ppisp_activation_step(buf_val)
             elif prop == "max_width":
                 self._set_max_width(buf_val)
+            elif prop == "eval_mask_spec":
+                self._set_eval_mask_spec(buf_val)
             elif prop == "test_every":
                 self._set_test_every(buf_val)
             elif prop == "new_step":
@@ -1234,14 +1268,7 @@ class TrainingPanel(Panel):
                 else tr("training.value.none")
             ),
         )
-        model.bind_func(
-            "eval_mask_path_display",
-            lambda: (
-                os.path.basename(p().eval_mask)
-                if p() and p().has_params() and p().eval_mask
-                else tr("training.value.none")
-            ),
-        )
+        model.bind_func("eval_mask_path_display", lambda: _eval_mask_display(p()))
 
     def _bind_events(self, model):
         model.bind_event("toggle_section", self._on_toggle_section)
@@ -1903,6 +1930,19 @@ class TrainingPanel(Panel):
             return False
         return True
 
+    def _set_eval_mask_spec(self, val_str):
+        p = lf.optimization_params()
+        if not p or not p.has_params():
+            return False
+        previous = p.eval_mask
+        p.eval_mask = str(val_str).strip()
+        if "eval_mask" in (p.validate() or ""):
+            p.eval_mask = previous
+            return False
+        if self._handle:
+            self._handle.dirty_all()
+        return True
+
     def _set_max_width(self, val_str):
         d = lf.dataset_params()
         if not d or not d.has_params():
@@ -2405,16 +2445,36 @@ class TrainingPanel(Panel):
                     self._sync_text_bufs()
                     self._handle.dirty_all()
         elif action == "browse_eval_mask":
+            self._text_bufs["eval_mask_spec_str"] = None
             params = lf.optimization_params()
             start_dir = ""
-            if params and params.has_params() and params.eval_mask:
+            if params and params.has_params() and os.path.isabs(params.eval_mask):
                 start_dir = os.path.dirname(params.eval_mask)
             selected = lf.ui.open_mesh_file_dialog(start_dir)
             if selected and params and params.has_params():
                 params.eval_mask = selected
                 if self._handle:
                     self._handle.dirty_all()
+        elif action == "browse_eval_mask_folder":
+            self._text_bufs["eval_mask_spec_str"] = None
+            params = lf.optimization_params()
+            start_dir = ""
+            if params and params.has_params() and params.eval_mask.startswith("masks:"):
+                start_dir = params.eval_mask[len("masks:"):]
+            selected = lf.ui.open_folder_dialog(tr("training_params.eval_mask_folder"), start_dir)
+            if selected and params and params.has_params():
+                params.eval_mask = "masks:" + selected
+                if self._handle:
+                    self._handle.dirty_all()
+        elif action == "use_cropbox_eval_mask":
+            self._text_bufs["eval_mask_spec_str"] = None
+            params = lf.optimization_params()
+            if params and params.has_params():
+                params.eval_mask = "cropbox"
+                if self._handle:
+                    self._handle.dirty_all()
         elif action == "clear_eval_mask":
+            self._text_bufs["eval_mask_spec_str"] = None
             params = lf.optimization_params()
             if params and params.has_params():
                 params.eval_mask = ""

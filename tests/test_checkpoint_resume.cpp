@@ -527,6 +527,43 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
+    // Catches the seed cloud being dropped with its scene node before the evaluator reads it, and it
+    // being kept (with its memory) when no points mask asks for it.
+    TEST(TrainingSetupRegressionTest, PointsEvalMaskKeepsInitialPointCloudThroughModelInstall) {
+        constexpr size_t initial_points = 6;
+
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_training_setup_points_mask_seed";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir);
+        const auto init_path = temp_dir / "init_points.ply";
+        write_ascii_xyz_rgb_ply(init_path, initial_points);
+
+        const auto initial_cloud_after_install = [&](const bool eval, const std::string& mask) {
+            lfs::core::param::TrainingParameters params;
+            params.dataset.data_path = temp_dir / "dataset";
+            params.init_path = lfs::core::path_to_utf8(init_path);
+            params.optimization.enable_eval = eval;
+            params.optimization.eval_mask = mask;
+
+            lfs::core::Scene scene;
+            const auto applied = lfs::training::applyLoadResultToScene(params, scene, make_init_load_test_result());
+            EXPECT_TRUE(applied.has_value()) << applied.error();
+            const auto installed = lfs::training::initializeTrainingModel(params, scene);
+            EXPECT_TRUE(installed.has_value()) << installed.error();
+            EXPECT_EQ(first_point_cloud_count(scene), 0u);
+            return scene.getInitialPointCloud();
+        };
+
+        const auto kept = initial_cloud_after_install(true, "points:1,0");
+        ASSERT_NE(kept, nullptr);
+        EXPECT_EQ(static_cast<size_t>(kept->size()), initial_points);
+        EXPECT_EQ(initial_cloud_after_install(true, ""), nullptr);
+        EXPECT_EQ(initial_cloud_after_install(false, "points"), nullptr);
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
     TEST(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsGaussianInitAsPointCloudUntilTrainingStarts) {
         constexpr size_t initial_splats = 8;
 
@@ -2001,6 +2038,44 @@ namespace {
         EXPECT_EQ(roundtrip.size(), splat->size());
         EXPECT_EQ(tensor_fingerprint(roundtrip.means()), tensor_fingerprint(splat->means()));
         EXPECT_EQ(roundtrip.frozen_ranges().size(), 2u);
+    }
+
+    // Catches a mask spec that the trainer's setup dispatch mistakes for a mesh path or rejects
+    // although the evaluator supports it.
+    TEST(TrainerEvalMaskSetup, SpecsWithoutFilesInitializeTheTrainer) {
+        const lfs::test::licht::TemporaryDirectory dataset("lfs-trainer-eval-mask-setup");
+        std::string frames;
+        for (int i = 0; i < 8; ++i) {
+            const auto name = std::format("frame_{:04}.png", i + 1);
+            lfs::test::licht::write_file_bytes(dataset.path / name, lfs::test::licht::one_pixel_png());
+            frames += std::format(R"({}{{"file_path": "{}", "transform_matrix": [[1, 0, 0, {}], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]}})",
+                                  i == 0 ? "" : ",", name, 0.1f * i);
+        }
+        lfs::test::licht::write_file_bytes(
+            dataset.path / "transforms.json",
+            lfs::test::licht::byte_vector(std::format(
+                R"({{"fl_x": 1.0, "fl_y": 1.0, "cx": 0.5, "cy": 0.5, "w": 1, "h": 1, "frames": [{}]}})", frames)));
+
+        for (const std::string spec : {"depth:0.5,20", "points:1,2", "bbox:-1,-1,-1,1,1,1"}) {
+            lfs::core::param::TrainingParameters params;
+            params.dataset.data_path = dataset.path;
+            params.dataset.output_path = dataset.path / "output";
+            params.optimization.iterations = 1;
+            params.optimization.strategy = "mcmc";
+            params.optimization.sh_degree = 0;
+            params.optimization.headless = true;
+            params.optimization.max_cap = 100000;
+            params.optimization.enable_eval = true;
+            params.optimization.eval_mask = spec;
+
+            lfs::core::Scene scene;
+            ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene)) << spec;
+            ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene)) << spec;
+            lfs::training::Trainer trainer(scene);
+            const auto init = trainer.initialize(params);
+            EXPECT_TRUE(init) << spec << ": " << (init ? std::string{} : init.error());
+            trainer.shutdown();
+        }
     }
 
     class ProjectCheckpointTrainerInstall

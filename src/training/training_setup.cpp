@@ -316,6 +316,11 @@ namespace lfs::training {
             return {};
         }
 
+        bool evalMaskNeedsInitialPoints(const lfs::core::param::TrainingParameters& params) {
+            return params.optimization.enable_eval &&
+                   lfs::core::param::is_eval_mask_points(params.optimization.eval_mask);
+        }
+
         TrainingModelGraphInstall makeGraphInstall(const TrainingModelGraphCapture& context,
                                                    std::unique_ptr<lfs::core::SplatData> model) {
             TrainingModelGraphInstall install;
@@ -966,6 +971,7 @@ namespace lfs::training {
                     !result) {
                     return std::unexpected(std::move(result.error()));
                 }
+                loaded->keep_initial_point_cloud = evalMaskNeedsInitialPoints(params);
                 return std::optional<TrainingModelGraphInstall>{std::move(*loaded)};
             }
         }
@@ -1061,8 +1067,9 @@ namespace lfs::training {
         } else {
             LOG_INFO("Created training model with {} gaussians", model->size());
         }
-        return std::optional<TrainingModelGraphInstall>{
-            makeGraphInstall(context, std::move(model))};
+        auto install = makeGraphInstall(context, std::move(model));
+        install.keep_initial_point_cloud = evalMaskNeedsInitialPoints(params);
+        return std::optional<TrainingModelGraphInstall>{std::move(install)};
     }
 
     std::expected<void, std::string> installTrainingModel(
@@ -1074,7 +1081,10 @@ namespace lfs::training {
 
         if (install.point_cloud_node_id != lfs::core::NULL_NODE) {
             if (const auto* pc_node = scene.getNodeById(install.point_cloud_node_id)) {
+                auto initial_point_cloud = install.keep_initial_point_cloud ? scene.getInitialPointCloud() : nullptr;
                 scene.removeNode(pc_node->name, false);
+                if (initial_point_cloud)
+                    scene.setInitialPointCloud(std::move(initial_point_cloud));
             }
         }
 
