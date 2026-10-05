@@ -15,6 +15,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -29,6 +30,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/event_bridge/control_boundary.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
@@ -41,6 +43,7 @@
 #include "io/loader.hpp"
 #include "io/loaders/checkpoint_loader.hpp"
 #include "io/project_document.hpp"
+#include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "licht_test_support.hpp"
@@ -1841,6 +1844,120 @@ namespace {
             "Project resume test passed: strategy={}, sh_degree={}",
             strategy, sh_degree);
     }
+
+    class CheckpointBenchmarkTest : public CheckpointResumeTest {
+    protected:
+        void SetUp() override {
+            CheckpointResumeTest::SetUp();
+            profiler_enabled_ = lfs::diagnostics::VramProfiler::instance().enabled();
+            evaluation_handler_ = lfs::core::events::state::EvaluationCompleted::when(
+                [this](const auto& event) { evaluated_psnr_ = event.psnr; });
+        }
+
+        void TearDown() override {
+            lfs::event::EventBridge::instance().unsubscribe(
+                typeid(lfs::core::events::state::EvaluationCompleted), evaluation_handler_);
+            lfs::training::PerfBenchCollector::configure(false);
+            lfs::diagnostics::VramProfiler::instance().setEnabled(profiler_enabled_);
+            CheckpointResumeTest::TearDown();
+        }
+
+        lfs::core::param::TrainingParameters benchmarkParams() {
+            auto params = createParams(2);
+            params.dataset.max_width = 64;
+            params.optimization.perf_bench = true;
+            params.optimization.perf_bench_warmup = 0;
+            params.optimization.enable_eval = true;
+            params.optimization.enable_save_eval_images = false;
+            params.optimization.eval_steps = {1, 2};
+            params.optimization.save_steps.clear();
+            return params;
+        }
+
+        void trainFresh(const lfs::core::param::TrainingParameters& params, const bool save_project = false) {
+            evaluated_psnr_.reset();
+            lfs::core::Scene scene;
+            const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+            ASSERT_TRUE(loaded.has_value()) << loaded.error();
+            const auto model = lfs::training::initializeTrainingModel(params, scene);
+            ASSERT_TRUE(model.has_value()) << model.error();
+            lfs::training::Trainer trainer(scene);
+            const auto initialized = trainer.initialize(params);
+            ASSERT_TRUE(initialized.has_value()) << initialized.error();
+            if (save_project) {
+                lfs::training::grant_headless_project_saves(trainer, params);
+            }
+            const auto trained = trainer.train();
+            ASSERT_TRUE(trained.has_value()) << lfs::format_for_developer(trained.error());
+            EXPECT_EQ(trainer.get_current_iteration(), 2);
+            trainer.shutdown();
+        }
+
+        void expectReportPsnr(const double expected) {
+            std::ifstream report(output_path_ / "perf_bench.json");
+            ASSERT_TRUE(report.is_open());
+            const auto json = nlohmann::json::parse(report);
+            EXPECT_NEAR(json.at("last_psnr").get<double>(), expected, 1e-6);
+        }
+
+        std::optional<float> evaluated_psnr_;
+        lfs::event::HandlerId evaluation_handler_ = 0;
+        bool profiler_enabled_ = false;
+    };
+
+    TEST_P(CheckpointBenchmarkTest, ScheduledEvaluationAndSessionReset) {
+        auto params = benchmarkParams();
+        ASSERT_NO_FATAL_FAILURE(trainFresh(params));
+        ASSERT_TRUE(evaluated_psnr_.has_value());
+        EXPECT_TRUE(std::isfinite(*evaluated_psnr_));
+        expectReportPsnr(*evaluated_psnr_);
+
+        // A new run without evaluation must not inherit the previous PSNR.
+        std::filesystem::remove(output_path_ / "perf_bench.json");
+        params.optimization.enable_eval = false;
+        ASSERT_NO_FATAL_FAILURE(trainFresh(params));
+        EXPECT_FALSE(evaluated_psnr_.has_value());
+        expectReportPsnr(-1.0);
+    }
+
+    TEST_P(CheckpointBenchmarkTest, TerminalResumeEvaluation) {
+        auto params = benchmarkParams();
+        ASSERT_NO_FATAL_FAILURE(trainFresh(params, true));
+
+        const auto project_path = output_path_ / "project.licht";
+        auto document = lfs::io::project::ProjectDocument::open(project_path);
+        ASSERT_TRUE(document) << lfs::format_for_developer(document.error());
+        const auto bound = document->bound_checkpoint_uuid();
+        ASSERT_TRUE(bound);
+        ASSERT_TRUE(*bound);
+
+        lfs::core::Scene scene;
+        const auto hydration = document->hydrate(scene);
+        ASSERT_TRUE(hydration) << lfs::format_for_developer(hydration.error());
+        ASSERT_TRUE(hydration->checkpoint_header.has_value());
+        params.resume_project = project_path;
+        auto installed = lfs::training::installTrainerFromProjectCheckpoint(
+            scene, *document, **bound, params, lfs::core::path_to_utf8(project_path),
+            hydration->checkpoint_header->iteration);
+        ASSERT_TRUE(installed.has_value()) << installed.error();
+        auto& trainer = *installed->trainer;
+        ASSERT_EQ(trainer.get_current_iteration(), 2);
+        ASSERT_EQ(trainer.get_total_iterations(), 2);
+
+        evaluated_psnr_.reset();
+        std::filesystem::remove(output_path_ / "perf_bench.json");
+        const auto trained = trainer.train();
+        ASSERT_TRUE(trained.has_value()) << lfs::format_for_developer(trained.error());
+        ASSERT_TRUE(evaluated_psnr_.has_value());
+        EXPECT_TRUE(std::isfinite(*evaluated_psnr_));
+        expectReportPsnr(*evaluated_psnr_);
+        trainer.shutdown();
+    }
+
+    INSTANTIATE_TEST_SUITE_P(
+        Benchmark,
+        CheckpointBenchmarkTest,
+        ::testing::Values(std::make_tuple("mcmc", 0, 2, 2)));
 
     std::string TestName(const ::testing::TestParamInfo<CheckpointResumeTest::ParamType>& info) {
         const bool nightly = std::get<3>(info.param) > 10;

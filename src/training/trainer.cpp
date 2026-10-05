@@ -8059,6 +8059,9 @@ namespace lfs::training {
                                                             val_dataset_,
                                                             background_,
                                                             evaluation_image_loader.get());
+                        if (PerfBenchCollector::enabled() && metrics.valid) {
+                            PerfBenchCollector::instance().set_psnr(metrics.psnr);
+                        }
                         if (evaluator_->has_appearance()) {
                             const int n = eval_ppisp_applied_.load();
                             const int k = eval_ppisp_exif_.load();
@@ -8827,6 +8830,9 @@ namespace lfs::training {
                                                     val_dataset_,
                                                     background_,
                                                     evaluation_image_loader.get());
+                if (PerfBenchCollector::enabled() && metrics.valid) {
+                    PerfBenchCollector::instance().set_psnr(metrics.psnr);
+                }
                 LOG_INFO("{}", metrics.to_string());
                 photometric_loss_.arena().shrink_to_required();
             }
