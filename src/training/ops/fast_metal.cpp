@@ -64,6 +64,7 @@ namespace lfs::training {
             bool live = false;
             Tensor means, scales, rotations, opacities, sh0, shN, sh_bounds, view, camera, bg_color, bg_image;
             uint32_t n = 0, width = 0, height = 0, grid_w = 0, grid_h = 0;
+            size_t primitive_capacity = 0;
             uint32_t n_instances = 0, sorted = 0;
             uint32_t sh_bases = 1, sh_storage = 0, sh_layout_rest = 0;
             float fx = 0.f, fy = 0.f, cx = 0.f, cy = 0.f;
@@ -98,11 +99,12 @@ namespace lfs::training {
         }
 
         void reserve(Tensor& buffer, const size_t count, const DataType dtype,
-                     const std::string_view name) {
+                     const std::string_view name, const bool grow_with_headroom = true) {
             if (buffer.is_valid() && buffer.dtype() == dtype && buffer.numel() >= count)
                 return;
             buffer = Tensor();
-            buffer = Tensor::empty({std::max<size_t>(count + count / 4, 1024)}, Device::GPU, dtype);
+            const size_t capacity = grow_with_headroom ? count + count / 4 : count;
+            buffer = Tensor::empty({std::max<size_t>(capacity, 1024)}, Device::GPU, dtype);
             buffer.set_name(std::string(name));
         }
 
@@ -305,6 +307,8 @@ namespace lfs::training {
 
             Frame f;
             f.n = n;
+            const size_t model_capacity = std::max<size_t>(n, splats.means.capacity());
+            f.primitive_capacity = std::min(model_capacity, size_t{n} + n / 4);
             f.width = static_cast<uint32_t>(width);
             f.height = static_cast<uint32_t>(height);
             f.grid_w = div_up(f.width, kTile);
@@ -348,14 +352,21 @@ namespace lfs::training {
                 if (params.render_normal)
                     ensure_output(s.normal, 3, height, width, "fast.output.normal");
 
-                reserve(s.mean_box, size_t{n} * 4, DataType::Float32, "fast.preprocess.mean_box");
-                reserve(s.conic_opacity, size_t{n} * 4, DataType::Float32, "fast.preprocess.conic_opacity");
-                reserve(s.color_depth, size_t{n} * 4, DataType::Float32, "fast.preprocess.color_depth");
-                reserve(s.tile_info, size_t{n} * 4, DataType::UInt32, "fast.preprocess.tile_info");
-                reserve(s.n_touched, n, DataType::UInt32, "fast.preprocess.n_touched");
-                reserve(s.offsets, n, DataType::UInt32, "fast.preprocess.offsets");
+                reserve(s.mean_box, f.primitive_capacity * 4, DataType::Float32,
+                        "fast.preprocess.mean_box", false);
+                reserve(s.conic_opacity, f.primitive_capacity * 4, DataType::Float32,
+                        "fast.preprocess.conic_opacity", false);
+                reserve(s.color_depth, f.primitive_capacity * 4, DataType::Float32,
+                        "fast.preprocess.color_depth", false);
+                reserve(s.tile_info, f.primitive_capacity * 4, DataType::UInt32,
+                        "fast.preprocess.tile_info", false);
+                reserve(s.n_touched, f.primitive_capacity, DataType::UInt32,
+                        "fast.preprocess.n_touched", false);
+                reserve(s.offsets, f.primitive_capacity, DataType::UInt32,
+                        "fast.preprocess.offsets", false);
                 if (params.render_normal)
-                    reserve(s.normals, size_t{n} * 4, DataType::Float32, "fast.preprocess.normals");
+                    reserve(s.normals, f.primitive_capacity * 4, DataType::Float32,
+                            "fast.preprocess.normals", false);
                 reserve(s.ranges, size_t{n_tiles} * 2, DataType::UInt32, "fast.tiles.ranges");
                 reserve(s.final_transmittance, size_t{n_tiles} * kTilePixels, DataType::Float32,
                         "fast.tiles.final_transmittance");
@@ -680,9 +691,11 @@ namespace lfs::training {
             if (!std::ranges::any_of(adam.groups, [](const auto& g) { return g.enabled; }))
                 throw std::runtime_error("FastGS fused Adam state is not available");
 
-            reserve(s.grads, size_t{f.n} * kGradStride, DataType::Float32, "fast.backward.grads");
+            reserve(s.grads, f.primitive_capacity * kGradStride, DataType::Float32,
+                    "fast.backward.grads", false);
             if (normal_channel) {
-                reserve(s.normal_grads, size_t{f.n} * 4, DataType::Float32, "fast.backward.normal_grads");
+                reserve(s.normal_grads, f.primitive_capacity * 4, DataType::Float32,
+                        "fast.backward.normal_grads", false);
             }
             const Tensor none;
             const Tensor& normal_grads_use = normal_channel ? s.normal_grads : none;

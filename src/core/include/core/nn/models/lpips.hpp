@@ -80,6 +80,8 @@ namespace lfs::core::nn::models {
                                        const MaskWeights* mask);
         lfs::Result<float> run_tiled(const Tensor& pred, const Tensor& target,
                                      InputScaling scaling, const MaskWeights* mask);
+        lfs::Result<std::array<Tensor, 5>> extract_normalized_features(
+            const Tensor& input, InputScaling scaling);
         // Fast mode without taps: fused kernels writing ping-pong feature buffers,
         // no activation arena, no intermediate copies.
         lfs::Result<float> run_fast(const Tensor& pred, const Tensor& target,

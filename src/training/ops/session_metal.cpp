@@ -43,6 +43,7 @@ namespace lfs::training {
             .sample_memory = [] {
                 (void)core::gpu_backend_memory_info(core::GpuBackend::Metal, true);
             },
+            .release_workspaces_before_evaluation = true,
         };
         return ops;
     }
