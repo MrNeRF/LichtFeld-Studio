@@ -25,6 +25,7 @@
 #include "viewport_interaction_context.hpp"
 #include "viewport_overlay_service.hpp"
 #include "viewport_reference_state.hpp"
+#include "viewport_frame_desc.hpp"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -65,6 +66,7 @@ namespace lfs::vis {
         std::shared_ptr<const lfs::core::Tensor> viewport_depth_image_;
         ViewportEnvironment viewport_environment_;
         ViewportMeshPassDesc viewport_meshes_;
+        ViewportSplitView split_view_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
         StaleFrameGuard vksplat_stale_frame_guard_;

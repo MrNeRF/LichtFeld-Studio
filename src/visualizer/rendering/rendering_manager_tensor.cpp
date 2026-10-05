@@ -3,24 +3,95 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "rendering_manager.hpp"
+#include "rendering_manager_split_view.hpp"
 
+#include "core/camera.hpp"
 #include "core/logger.hpp"
 #include "core/training_manager.hpp"
+#include "display_tensors.hpp"
+#include "rendering/image_layout.hpp"
 #include "rendering/model_renderability.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene_renderer_factory.hpp"
+#include "viewport_appearance_correction.hpp"
 #include "viewport_request_builder.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include "window/graphics_context.hpp"
 
+#include <format>
 #include <limits>
 #include <utility>
 
 namespace lfs::vis {
+    namespace {
+        glm::ivec2 tensorImageSize(const lfs::core::Tensor& image) {
+            const auto layout = lfs::rendering::detectImageLayout(image);
+            return layout == lfs::rendering::ImageLayout::Unknown
+                       ? glm::ivec2{0, 0}
+                       : glm::ivec2{lfs::rendering::imageWidth(image, layout),
+                                    lfs::rendering::imageHeight(image, layout)};
+        }
+
+        std::shared_ptr<lfs::core::Tensor> ensureGpuDisplayTensor(
+            std::shared_ptr<lfs::core::Tensor> image) {
+            if (!image || !image->is_valid())
+                return {};
+            if (image->device() == lfs::core::Device::GPU)
+                return image;
+            auto gpu = image->to(lfs::core::Device::GPU);
+            return gpu.is_valid() ? std::make_shared<lfs::core::Tensor>(std::move(gpu)) : nullptr;
+        }
+
+        ViewportSplitPanel makeTensorSplitPanel(
+            std::shared_ptr<lfs::core::Tensor> image,
+            std::shared_ptr<lfs::core::Tensor> depth,
+            const RenderTargetId target,
+            const float start,
+            const float end,
+            const bool flip_y = false) {
+            const glm::ivec2 size = image ? tensorImageSize(*image) : glm::ivec2{0, 0};
+            const glm::vec2 clamp{
+                size.x > 0 ? (static_cast<float>(size.x) - 0.5f) / static_cast<float>(size.x) : 1.0f,
+                size.y > 0 ? (static_cast<float>(size.y) - 0.5f) / static_cast<float>(size.y) : 1.0f};
+            return {.target = target,
+                    .image = std::move(image),
+                    .depth = std::move(depth),
+                    .start_position = start,
+                    .end_position = end,
+                    .flip_y = flip_y,
+                    .image_size = size,
+                    .allocation_size = size,
+                    .uv_scale = {1.0f, 1.0f},
+                    .uv_clamp_max = clamp};
+        }
+
+        SplitViewCpuPanelDesc cpuPanelDesc(const ViewportSplitPanel& panel) {
+            return {.image = panel.image,
+                    .start_position = panel.start_position,
+                    .end_position = panel.end_position,
+                    .normalize_x_to_panel = panel.normalize_x_to_panel,
+                    .flip_y = panel.flip_y,
+                    .uv_scale = panel.uv_scale,
+                    .uv_clamp_max = panel.uv_clamp_max,
+                    .texcoord_scale = panel.texcoord_scale,
+                    .texcoord_offset = panel.texcoord_offset,
+                    .spatial_filter = panel.spatial_filter};
+        }
+
+        SplitViewCpuDesc cpuSplitViewDesc(const ViewportSplitView& split) {
+            return {.loss_visualization = split.loss_visualization,
+                    .left = cpuPanelDesc(split.left),
+                    .right = cpuPanelDesc(split.right),
+                    .split_position = split.split_position,
+                    .content_rect = split.content_rect,
+                    .coordinate_extent = split.coordinate_extent,
+                    .background = split.background};
+        }
+    } // namespace
+
     std::shared_ptr<lfs::core::Tensor> RenderingManager::composeSplitViewCpu(
-        const SplitViewCpuDesc&, const glm::ivec2&) {
-        // Split view is not available on Metal yet. Returning nothing keeps
-        // capture from manufacturing a view the user did not see.
-        return {};
+        const SplitViewCpuDesc& params, const glm::ivec2& output_size) {
+        return composeSplitViewCpuImage(params, output_size);
     }
 
     float RenderingManager::trainingRefreshIntervalSec(const ViewRenderState& view) const {
@@ -123,17 +194,13 @@ namespace lfs::vis {
         // has no scene tensor to allocate yet.
         if (!view.main_render_target_.valid())
             view.main_render_target_ = render_targets_.allocate();
+        if (!splitViewEnabled(context.settings.split_view_mode))
+            view.split_view_ = {};
         if (!context.scene_manager) {
             view.dirty_mask_.exchange(0, std::memory_order_acq_rel);
             clearViewportImageState(view, size);
             view.viewport_artifact_service_.clearViewportOutput();
             return {.size = size, .matches_viewport_extent = true, .rendered = true};
-        }
-
-        if (context.settings.split_view_mode != SplitViewMode::Disabled) {
-            static bool warned = false;
-            if (!std::exchange(warned, true))
-                LOG_WARN("Split view is unavailable on the Metal tensor compositor");
         }
 
         auto frame_settings = context.settings;
@@ -171,6 +238,17 @@ namespace lfs::vis {
             .hovered_gaussian_id = view.viewport_overlay_service_.hoveredGaussianId(),
             .selection_flash_intensity = view.animation_state_.selectionFlashIntensity(),
         };
+        if (!context.preparing_import) {
+            const glm::vec2 screen_position = context.viewport_region
+                                                  ? glm::vec2{context.viewport_region->x, context.viewport_region->y}
+                                                  : glm::vec2{0.0f};
+            const glm::vec2 screen_size = context.viewport_region
+                                              ? glm::vec2{context.viewport_region->width, context.viewport_region->height}
+                                              : glm::vec2{context.viewport.windowSize};
+            const auto panels = buildSplitViewInteractionPanels(
+                context.viewport, frame_settings, screen_position, screen_size);
+            view.viewport_interaction_context_.updatePickContext(panels);
+        }
 
         if (!has_model && !has_points) {
             // Meshes only: the compositor draws them over the background.
@@ -194,6 +272,293 @@ namespace lfs::vis {
                     .image_generation = view.vulkan_viewport_image_generation_,
                     .size = view.vulkan_viewport_image_size_};
         };
+
+        if (splitViewEnabled(frame_settings.split_view_mode)) {
+            if (!view.split_left_render_target_.valid())
+                view.split_left_render_target_ = render_targets_.allocate();
+            if (!view.split_right_render_target_.valid())
+                view.split_right_render_target_ = render_targets_.allocate();
+
+            struct PanelOutput {
+                std::shared_ptr<lfs::core::Tensor> image;
+                std::shared_ptr<lfs::core::Tensor> depth;
+                lfs::rendering::FrameMetadata metadata;
+            };
+            const auto render_panel = [&](const lfs::core::SplatData& panel_model,
+                                          SceneRenderState panel_state,
+                                          const glm::ivec2 panel_size,
+                                          const RenderTargetId target,
+                                          const std::optional<GTRenderCamera>& camera = std::nullopt,
+                                          const std::optional<SplitViewPanelId> panel_id = std::nullopt,
+                                          const glm::ivec2 subregion_origin = {0, 0},
+                                          const glm::ivec2 subregion_full_size = {0, 0})
+                -> std::expected<PanelOutput, std::string> {
+                FrameContext panel_context = frame_context;
+                panel_context.model = &panel_model;
+                panel_context.scene_state = std::move(panel_state);
+                panel_context.render_size = panel_size;
+                auto request = panel_id && subregion_full_size.x > 0 && subregion_full_size.y > 0
+                                   ? buildPlyComparisonRenderRequest(
+                                         panel_context, panel_size, context.viewport,
+                                         *panel_id, subregion_full_size)
+                                   : buildViewportRenderRequest(
+                                         panel_context, panel_size, nullptr, panel_id,
+                                         subregion_origin, subregion_full_size);
+                if (camera)
+                    applyGTComparisonRenderCamera(request.frame_view, request.equirectangular, *camera);
+                request.raster_backend =
+                    lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
+                request.gut = lfs::rendering::isGutBackend(request.raster_backend);
+                std::vector<std::uint32_t> lod_touched_chunks;
+                prepareLodRequest(frame_settings, &panel_model, request, lod_touched_chunks);
+                if (!scene_renderer_)
+                    scene_renderer_ = createSceneRenderer(*context.graphics_context);
+                auto rendered = scene_renderer_->render(panel_model, request, true, target);
+                if (!rendered)
+                    return std::unexpected(rendered.error());
+                noteLodPageGeneration(rendered->lod_page_generation);
+                if (rendered->lod_streaming_active)
+                    requestViewFollowUp(view, DirtyFlag::CAMERA);
+                auto outputs = scene_renderer_->readOutputTensors(target);
+                if (!outputs)
+                    return std::unexpected(lfs::format_for_developer(outputs.error()));
+                lfs::rendering::FrameMetadata metadata{
+                    .viewer_backend = lfs::rendering::ViewerBackend::Metal,
+                    .depth_panels = {lfs::rendering::FramePanelMetadata{
+                        .depth = outputs->depth, .start_position = 0.0f, .end_position = 1.0f}},
+                    .depth_panel_count = outputs->depth ? 1u : 0u,
+                    .valid = true,
+                    .far_plane = frame_settings.depth_clip_enabled
+                                     ? frame_settings.depth_clip_far
+                                     : lfs::rendering::DEFAULT_FAR_PLANE,
+                    .orthographic = camera ? false : frame_settings.orthographic};
+                return PanelOutput{std::move(outputs->color), std::move(outputs->depth), std::move(metadata)};
+            };
+            const auto publish_split = [&](ViewportSplitView split,
+                                           lfs::rendering::FrameMetadata metadata,
+                                           SplitViewInfo info,
+                                           std::optional<GTPresentedView> gt_view = std::nullopt) {
+                view.split_view_ = std::move(split);
+                ++view.split_view_image_generation_;
+                view.vulkan_viewport_image_ = view.split_view_.left.image;
+                view.viewport_depth_image_ = view.split_view_.left.depth;
+                view.vulkan_viewport_image_size_ = size;
+                view.vulkan_viewport_image_alloc_size_ = size;
+                view.vulkan_viewport_coordinate_size_ = size;
+                view.vulkan_viewport_image_flip_y_ = false;
+                view.vulkan_gt_comparison_content_size_ =
+                    splitViewUsesGTComparison(frame_settings.split_view_mode)
+                        ? glm::ivec2{view.split_view_.content_rect.z, view.split_view_.content_rect.w}
+                        : glm::ivec2{0, 0};
+                view.vulkan_gt_comparison_selection_view_ = std::move(gt_view);
+                FrameResources resources{.split_view_executed = true, .split_info = std::move(info)};
+                view.split_view_service_.updateInfo(resources);
+                const auto capture = view.split_view_;
+                view.viewport_artifact_service_.setLazyCapture(
+                    [capture, size] { return composeSplitViewCpuImage(cpuSplitViewDesc(capture), size); },
+                    metadata, size);
+                view.viewport_environment_ = {};
+                view.viewport_meshes_ = {};
+                initialized_ = true;
+                return ViewportFrameResult{
+                    .image = view.split_view_.left.image,
+                    .image_generation = view.split_view_image_generation_,
+                    .split_left_image_generation = view.split_view_image_generation_,
+                    .size = view.split_view_.left.image_size,
+                    .alloc_size = view.split_view_.left.allocation_size,
+                    .matches_viewport_extent = true,
+                    .rendered = true,
+                    .split_right_image = view.split_view_.right.image,
+                    .split_right_image_generation = view.split_view_image_generation_,
+                    .split_right_size = view.split_view_.right.image_size};
+            };
+
+            if (splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
+                const auto& scene = context.scene_manager->getScene();
+                const auto visible_nodes = scene.getVisibleSplatNodeSlots();
+                const auto pair = plyComparisonPairForOffset(visible_nodes.size(), frame_settings.split_view_offset);
+                if (!pair)
+                    return keep_previous("PLY comparison requires at least two visible Gaussian models");
+                const auto& left_slot = visible_nodes[pair->first];
+                const auto& right_slot = visible_nodes[pair->second];
+                if (!left_slot.node || !right_slot.node ||
+                    !hasRenderableGaussians(left_slot.node->model.get()) ||
+                    !hasRenderableGaussians(right_slot.node->model.get())) {
+                    return keep_previous("PLY comparison render slots are unavailable");
+                }
+                const auto layouts = makePlyComparisonPanelLayouts(size.x, frame_settings.split_position);
+                SceneRenderState left_state = scene_state;
+                SceneRenderState right_state = scene_state;
+                scopeSceneRenderStateToVisibleSplatNode(
+                    left_state, scene, *left_slot.node, static_cast<int>(left_slot.slot_index),
+                    scene_coords::nodeVisualizerWorldTransform(scene, left_slot.node->id));
+                scopeSceneRenderStateToVisibleSplatNode(
+                    right_state, scene, *right_slot.node, static_cast<int>(right_slot.slot_index),
+                    scene_coords::nodeVisualizerWorldTransform(scene, right_slot.node->id));
+                auto left = render_panel(*left_slot.node->model, std::move(left_state),
+                                         {std::max(layouts[0].panel.width, 1), size.y},
+                                         view.split_left_render_target_, std::nullopt,
+                                         SplitViewPanelId::Left,
+                                         {layouts[0].panel.x, 0}, size);
+                auto right = render_panel(*right_slot.node->model, std::move(right_state),
+                                          {std::max(layouts[1].panel.width, 1), size.y},
+                                          view.split_right_render_target_, std::nullopt,
+                                          SplitViewPanelId::Right,
+                                          {layouts[1].panel.x, 0}, size);
+                if (!left || !right) {
+                    return keep_previous(std::format(
+                        "PLY comparison panel rendering failed (left: {}; right: {})",
+                        left ? "ok" : left.error(), right ? "ok" : right.error()));
+                }
+                ViewportSplitView split{
+                    .enabled = true,
+                    .left = makeTensorSplitPanel(std::move(left->image), std::move(left->depth),
+                                                 view.split_left_render_target_,
+                                                 layouts[0].panel.start_position,
+                                                 layouts[0].panel.end_position),
+                    .right = makeTensorSplitPanel(std::move(right->image), std::move(right->depth),
+                                                  view.split_right_render_target_,
+                                                  layouts[1].panel.start_position,
+                                                  layouts[1].panel.end_position),
+                    .split_position = frame_settings.split_position,
+                    .content_rect = {0, 0, size.x, size.y},
+                    .coordinate_extent = size,
+                    .background = frame_settings.background_color};
+                split.left.texcoord_scale = layouts[0].texcoord_scale;
+                split.left.texcoord_offset = layouts[0].texcoord_offset;
+                split.right.texcoord_scale = layouts[1].texcoord_scale;
+                split.right.texcoord_offset = layouts[1].texcoord_offset;
+                return publish_split(
+                    std::move(split), makeSplitMetadata(left->metadata, right->metadata,
+                                                       frame_settings.split_position),
+                    {.enabled = true,
+                     .mode_label = "Split View",
+                     .detail_label = std::format("{} | {}", left_slot.node->name, right_slot.node->name),
+                     .left_name = left_slot.node->name,
+                     .right_name = right_slot.node->name});
+            }
+
+            auto& scene = context.scene_manager->getScene();
+            std::shared_ptr<lfs::core::Camera> camera;
+            if (frame_context.current_camera_id >= 0)
+                camera = scene.getCameraByUid(frame_context.current_camera_id);
+            if (!camera) {
+                for (const auto& candidate : scene.getAllCameras()) {
+                    if (candidate) {
+                        camera = candidate;
+                        break;
+                    }
+                }
+            }
+            if (!camera || !has_model)
+                return keep_previous("GT comparison requires a dataset camera and visible Gaussian model");
+
+            const GTComparisonMode gt_mode = frame_settings.gt_comparison_mode;
+            const glm::ivec2 gt_size = gtComparisonPreviewSize(*camera, size);
+            const bool rgb_reference = gtComparisonUsesRGBReference(gt_mode);
+            const std::filesystem::path reference_path = rgb_reference
+                                                             ? camera->image_path()
+                                                         : gt_mode == GTComparisonMode::Depth
+                                                             ? camera->depth_path()
+                                                             : camera->normal_path();
+            const bool has_reference = rgb_reference ? camera->has_image()
+                                       : gt_mode == GTComparisonMode::Depth ? camera->has_depth()
+                                                                            : camera->has_normal();
+            GTComparisonImageLookup lookup;
+            if (has_reference && !reference_path.empty()) {
+                const bool undistort =
+                    camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
+                    camera->is_undistort_precomputed() &&
+                    (rgb_reference || !camera->is_undistort_prepared());
+                lookup = getOrQueueGTComparisonImage({
+                    .camera_uid = camera->uid(),
+                    .mode = gt_mode,
+                    .image_path = reference_path,
+                    .preview_max_dimension = std::max(gt_size.x, gt_size.y),
+                    .image_size = gt_size,
+                    .undistort_requested = undistort,
+                    .undistort_params = undistort ? camera->undistort_params() : lfs::core::UndistortParams{},
+                    .depth_visualization_mode = frame_settings.depth_visualization_mode,
+                    .background_color = frame_settings.background_color,
+                    .camera = camera});
+                if (lookup.status == GTComparisonImageStatus::Loading)
+                    markViewDirty(context.view, DirtyFlag::SPLIT_VIEW, FrameReason::SettingsChange);
+            } else {
+                lookup.status = GTComparisonImageStatus::Failed;
+            }
+            std::shared_ptr<lfs::core::Tensor> reference = lookup.image;
+            if ((!reference || !reference->is_valid()) && lookup.stale_image && !lookup.grace_elapsed)
+                reference = lookup.stale_image;
+            if (!reference || !reference->is_valid()) {
+                const bool loading = lookup.status == GTComparisonImageStatus::Loading;
+                reference = makeGTComparePlaceholderTensor(
+                    gt_size, loading ? glm::vec3(0.09f) : glm::vec3(0.16f, 0.035f, 0.050f));
+            }
+            const auto reference_layout = lfs::rendering::detectImageLayout(*reference);
+            if (reference_layout == lfs::rendering::ImageLayout::Unknown)
+                return keep_previous("GT comparison produced an unsupported ground-truth image layout");
+            const glm::ivec2 reference_size{lfs::rendering::imageWidth(*reference, reference_layout),
+                                            lfs::rendering::imageHeight(*reference, reference_layout)};
+            const auto render_camera = detail::buildGTRenderCamera(
+                *camera, reference_size, detail::currentSceneTransform(context.scene_manager, camera->uid()));
+            if (!render_camera)
+                return keep_previous("GT comparison could not build the dataset render camera");
+            auto rendered = render_panel(*model, scene_state, reference_size,
+                                         view.split_right_render_target_, render_camera);
+            if (!rendered)
+                return keep_previous(std::format("GT comparison rendered panel failed: {}", rendered.error()));
+
+            std::shared_ptr<lfs::core::Tensor> compare = rendered->image;
+            if (gt_mode == GTComparisonMode::Depth) {
+                compare = makeDepthDisplayTensor(*rendered->depth,
+                                                 frame_settings.depth_visualization_mode,
+                                                 frame_settings.background_color);
+            } else if (gt_mode == GTComparisonMode::Normal) {
+                if (!render_camera->intrinsics)
+                    return keep_previous("Normal GT comparison requires pinhole camera intrinsics");
+                compare = makeNormalDisplayFromDepthTensor(*rendered->depth, *render_camera->intrinsics);
+            } else {
+                compare = applyViewportAppearanceCorrection(
+                    std::move(compare), context.scene_manager, frame_settings, camera->uid());
+            }
+            if (!compare || !compare->is_valid())
+                return keep_previous("GT comparison could not prepare the rendered display panel");
+
+            if (reference->device() == lfs::core::Device::CPU &&
+                gt_comparison_cuda_source_ == reference.get() && gt_comparison_cuda_image_) {
+                reference = gt_comparison_cuda_image_;
+            } else {
+                gt_comparison_cuda_source_ = reference.get();
+                reference = ensureGpuDisplayTensor(std::move(reference));
+                gt_comparison_cuda_image_ = reference;
+            }
+            compare = ensureGpuDisplayTensor(std::move(compare));
+            if (!reference || !compare)
+                return keep_previous("GT comparison failed to upload display panels to the GPU");
+
+            const SplitCompositeContentRect rect =
+                resolveSplitCompositeContentRect(size, true, reference_size);
+            ViewportSplitView split{
+                .enabled = true,
+                .loss_visualization = gtComparisonShowsLoss(gt_mode),
+                .left = makeTensorSplitPanel(std::move(reference), {}, view.split_left_render_target_,
+                                             0.0f, frame_settings.split_position, true),
+                .right = makeTensorSplitPanel(std::move(compare), std::move(rendered->depth),
+                                              view.split_right_render_target_,
+                                              frame_settings.split_position, 1.0f),
+                .split_position = frame_settings.split_position,
+                .content_rect = {rect.x, rect.y, rect.width, rect.height},
+                .coordinate_extent = size,
+                .background = frame_settings.background_color};
+            const auto presented = GTPresentedView{*render_camera, reference_size};
+            return publish_split(std::move(split), rendered->metadata,
+                                 makeGTSplitViewInfo(gt_mode, camera->image_name()), presented);
+        }
+
+        view.split_view_ = {};
+        view.vulkan_gt_comparison_content_size_ = {0, 0};
+        view.vulkan_gt_comparison_selection_view_.reset();
+        view.split_view_service_.updateInfo({});
         const bool render_points = frame_settings.point_cloud_mode || !has_model;
         if (!render_points) {
             if (!scene_renderer_)

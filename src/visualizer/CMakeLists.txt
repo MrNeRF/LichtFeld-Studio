@@ -64,6 +64,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/rendering_manager_vulkan.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/rendering_manager_tensor.cpp>
         rendering/rendering_manager_gt_cache.cpp
+        rendering/rendering_manager_split_view.cpp
         rendering/rendering_manager_lod.cpp
         rendering/display_tensors.cpp
         rendering/rendering_manager_viewport.cpp
@@ -449,6 +450,8 @@ if(NOT LFS_GRAPHICS_VULKAN_BUILD)
         SOURCE gui/rmlui/rmlui_mask.slang COMPUTE intersectMask)
     lfs_add_gpu_program(lfs_visualizer viewport_compose_program
         SOURCE rendering/viewport_compose.slang COMPUTE composeViewport)
+    lfs_add_gpu_program(lfs_visualizer split_view_tensor_program
+        SOURCE rendering/split_view_tensor.slang COMPUTE composeSplitView)
     lfs_add_gpu_program(lfs_visualizer viewport_vignette_program
         SOURCE rendering/viewport_vignette.slang COMPUTE applyVignette)
     lfs_add_gpu_program(lfs_visualizer viewport_overlay_program
