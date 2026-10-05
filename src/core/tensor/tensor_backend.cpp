@@ -286,39 +286,6 @@ namespace lfs::core {
         }
     }
 
-    void where_into(Tensor& output, const Tensor& condition, float value, const Tensor& source) {
-        const auto backend = gpu_backend_of(output);
-        if (!output.is_valid() || !source.is_valid() || !condition.is_valid() || !backend ||
-            gpu_backend_of(source) != backend || gpu_backend_of(condition) != backend ||
-            !output.is_contiguous() || !source.is_contiguous() || !condition.is_contiguous() ||
-            output.shape() != source.shape() || output.numel() != condition.numel() ||
-            output.dtype() != source.dtype() || condition.dtype() != DataType::Bool ||
-            (output.dtype() != DataType::Float32 && output.dtype() != DataType::Float16))
-            throw TensorError("where_into requires matching contiguous Float32/Float16 GPU tensors and a Bool mask");
-        internal::preserve_lazy_snapshots_before_write(output);
-        if (output.numel() == 0)
-            return;
-        if (*backend == GpuBackend::CUDA) {
-#if LFS_HAS_CUDA
-            internal::cuda_where_into(output, condition, value, source);
-#else
-            throw TensorError("CUDA tensor backend is unavailable");
-#endif
-        } else if (*backend == GpuBackend::Metal) {
-#ifdef LFS_TENSOR_METAL
-            internal::metal_where_into(output, condition, value, source);
-#else
-            throw TensorError("Metal tensor backend is unavailable");
-#endif
-        } else {
-#ifdef LFS_TENSOR_VULKAN
-            internal::vulkan_where_into(output, condition, value, source);
-#else
-            throw TensorError("Vulkan tensor backend is unavailable");
-#endif
-        }
-    }
-
     namespace {
 
         constexpr int kUnconfigured = -1;

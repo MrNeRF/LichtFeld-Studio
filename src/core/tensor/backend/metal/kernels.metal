@@ -1636,9 +1636,8 @@ kernel void index_op(device uchar* input_buffer [[buffer(0)]],
 // Masked ops, ported from mask.slang. kOp: 0 masked_fill, 1 and_live (keep a
 // mask byte only where the live mask is set), 2 compact select, 3 compact
 // scatter, 4 nonzero positions (Int64), 5 predicate values for an inclusive
-// scan, 6 where_into (the fill where selected, else the source); compacted
-// slots are scan[i] - 1. kPredicate reads a byte mask (0) or nonzero Float32
-// elements (1).
+// scan; compacted slots are scan[i] - 1. kPredicate reads a byte mask (0) or
+// nonzero Float32 elements (1).
 
 constant uint kPredicate [[function_constant(19)]];
 
@@ -1683,10 +1682,6 @@ kernel void mask_op(device uchar* data_buffer [[buffer(0)]],
             ((device long*)source)[scan[index] - 1] = long(index);
     } else if (kOp == 5) {
         scan[index] = selected ? 1u : 0u;
-    } else if (selected) {
-        store_fill(data, index, params.fill_low, params.fill_high);
-    } else {
-        copy_element(source, index, data, index);
     }
 }
 

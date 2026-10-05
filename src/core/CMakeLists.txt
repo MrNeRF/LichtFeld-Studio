@@ -116,7 +116,6 @@ set(TENSOR_SOURCES
         tensor/tensor_nn_ops.cpp
         tensor/backend/cuda/runtime/pinned_memory_allocator.cpp
         tensor/backend/cuda/kernels/tensor_exports.cu
-        tensor/backend/cuda/kernels/where_scalar.cu
         nn/ops.cpp
         nn/weight_file.cpp
         nn/weight_file_open.cpp
