@@ -441,6 +441,38 @@ TEST_F(PipelinedImageLoaderTest, SixteenBitPngDownscalesWithGpuLanczosAtFullPrec
     EXPECT_EQ(expected.cpu().to_vector(), actual.cpu().to_vector());
 }
 
+// Catches an immediate load that returns the lossy JPEG copy training cached for the same image although
+// the caller asked to bypass the cache, which evaluation references do.
+TEST_F(PipelinedImageLoaderTest, SkipBlobCacheIgnoresTheTrainingJpegCopy) {
+    constexpr int WIDTH = 64;
+    constexpr int HEIGHT = 48;
+    const lfs::test::licht::TemporaryDirectory temp("lfs-skip-blob-cache");
+    const auto png_path = temp.path / "image.png";
+    std::vector<uint8_t> pixels(static_cast<size_t>(WIDTH) * HEIGHT * 3);
+    for (size_t index = 0; index < pixels.size(); ++index)
+        pixels[index] = static_cast<uint8_t>((index * 2654435761u) >> 24);
+    ASSERT_TRUE(save_png(png_path, pixels.data(), WIDTH, HEIGHT, 3, 8, 1));
+
+    LoadParams params;
+    params.max_width = 40;
+    params.output_uint8 = true;
+    const auto lossless = PipelinedImageLoader(config()).load_image_immediate(png_path, params).cpu().to_vector_uint8();
+
+    PipelinedImageLoader loader(config());
+    ImageRequest request;
+    request.sequence_id = 0;
+    request.path = png_path;
+    request.params = params;
+    loader.prefetch({request});
+    const auto trained = loader.get();
+    ASSERT_TRUE(trained.error.empty()) << trained.error;
+    ASSERT_NE(loader.load_image_immediate(png_path, params).cpu().to_vector_uint8(), lossless)
+        << "training no longer caches a lossy copy, so this test checks nothing";
+
+    params.skip_blob_cache = true;
+    EXPECT_EQ(loader.load_image_immediate(png_path, params).cpu().to_vector_uint8(), lossless);
+}
+
 // Catches the alpha-as-mask path resizing RGBA on the host: its RGB would then differ
 // from the Lanczos result every other training image gets.
 TEST_F(PipelinedImageLoaderTest, AlphaAsMaskRgbUsesGpuLanczos) {

@@ -174,6 +174,7 @@ namespace lfs::training {
             load_params.resize_factor = params.dataset.resize_factor;
             load_params.max_width = params.dataset.max_width;
             load_params.output_uint8 = !params.dataset.loading_params.use_16bit_color;
+            load_params.skip_blob_cache = true;
             load_params.cuda_stream = lfs::core::getCurrentCUDAStream();
             if (params.optimization.undistort && camera.is_undistort_prepared() &&
                 params.optimization.eval_space == lfs::core::param::EvalSpace::Undistorted)
