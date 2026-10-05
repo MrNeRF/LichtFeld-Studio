@@ -14,4 +14,11 @@ lfs_add_gpu_program(lfs_tensor_rasterizer splat_sort SOURCE splat_sort.slang
     COMPUTE sort_histogram sort_digit_scan sort_digit_offsets sort_scatter)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_tiles SOURCE splat_tiles.slang
     COMPUTE tile_counts tile_status tile_instances tile_ranges)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/splat_types.slang")
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_project SOURCE splat_project.slang COMPUTE project_splats)
+# Shared includes of the Slang passes; the program rules depend only on their sources.
+cmake_path(ABSOLUTE_PATH CMAKE_CURRENT_SOURCE_DIR NORMALIZE OUTPUT_VARIABLE _rasterizer_dir)
+cmake_path(GET _rasterizer_dir PARENT_PATH _rasterizer_dir)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/splat_types.slang" "${CMAKE_CURRENT_SOURCE_DIR}/splat_overlay.slang"
+    "${_rasterizer_dir}/vulkan/shader/src/slang/portal_compact.inc"
+    "${_rasterizer_dir}/vulkan/shader/src/slang/display_color.inc")

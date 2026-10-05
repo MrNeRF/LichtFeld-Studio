@@ -46,6 +46,12 @@ lfs_add_metal_contract(metal_spark_gut_contracts spark_gut_contracts.mm MetalVie
 lfs_add_metal_contract(metal_selection_contracts selection_contracts.mm MetalViewerSelectionContracts)
 lfs_add_metal_contract(metal_viewer_contracts projection_contracts.mm MetalViewerProjectionContracts)
 lfs_add_metal_contract(metal_raster_contracts raster_contracts.mm MetalViewerRasterContracts)
+if(TARGET lfs_tensor_rasterizer)
+    # Slang tensor-program passes against the native Metal kernels they replace.
+    lfs_add_metal_contract(tensor_raster_parity tensor_raster_parity.mm TensorRasterParity)
+    target_link_libraries(tensor_raster_parity PRIVATE lfs_tensor_rasterizer)
+    set_target_properties(tensor_raster_parity PROPERTIES OBJCXX_STANDARD 23)
+endif()
 add_test(NAME MetalViewerPerspectiveDepthSnapshot
     COMMAND metal_raster_contracts --perspective-depth-boundary)
 add_test(NAME MetalViewerReversePerspectiveDepthSnapshot
