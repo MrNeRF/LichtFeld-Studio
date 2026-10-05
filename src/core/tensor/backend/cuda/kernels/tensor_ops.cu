@@ -277,12 +277,6 @@ namespace lfs::core::tensor_ops {
         }
     }
 
-    __global__ void init_scalar_int_kernel(int* __restrict__ ptr, int value) {
-        if (threadIdx.x == 0 && blockIdx.x == 0) {
-            *ptr = value;
-        }
-    }
-
     __global__ void init_scalar_int64_kernel(int64_t* __restrict__ ptr, int64_t value) {
         if (threadIdx.x == 0 && blockIdx.x == 0) {
             *ptr = value;
@@ -293,11 +287,6 @@ namespace lfs::core::tensor_ops {
     inline void init_scalar_gpu(float* d_ptr, float value, cudaStream_t stream = nullptr) {
         init_scalar_float_kernel<<<1, 1, 0, stream>>>(d_ptr, value);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.init_scalar_f32");
-    }
-
-    inline void init_scalar_gpu(int* d_ptr, int value, cudaStream_t stream = nullptr) {
-        init_scalar_int_kernel<<<1, 1, 0, stream>>>(d_ptr, value);
-        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.init_scalar_i32");
     }
 
     inline void init_scalar_gpu(int64_t* d_ptr, int64_t value, cudaStream_t stream = nullptr) {
@@ -350,47 +339,6 @@ namespace lfs::core::tensor_ops {
 
     void launch_clamp_scalar_int(int* data, int min_val, int max_val, size_t n, cudaStream_t stream) {
         launch_clamp_fused(data, data, min_val, max_val, n, stream);
-    }
-
-    // Float16 clamp via promote-to-float (preserves NaN semantics of f32 path).
-    __global__ void clamp_half_kernel(const __half* __restrict__ src, __half* __restrict__ dst,
-                                      float min_val, float max_val, size_t n) {
-        const size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-        const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
-        for (size_t i = tid; i < n; i += stride) {
-            const float v = __half2float(src[i]);
-            dst[i] = __float2half(clamp_preserving_nan(v, min_val, max_val));
-        }
-    }
-
-    void launch_clamp_scalar_half(__half* data, float min_val, float max_val, size_t n,
-                                  cudaStream_t stream) {
-        if (n == 0)
-            return;
-        constexpr int BLOCK = 256;
-        int grid = static_cast<int>((n + BLOCK - 1) / BLOCK);
-        const int optimal = GPUConfig::get().optimal_grid_size(BLOCK);
-        if (grid > optimal)
-            grid = optimal;
-        if (grid < 1)
-            grid = 1;
-        clamp_half_kernel<<<grid, BLOCK, 0, stream>>>(data, data, min_val, max_val, n);
-        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.clamp_half");
-    }
-
-    void launch_clamp_fused_half(const __half* src, __half* dst, float min_val, float max_val,
-                                 size_t n, cudaStream_t stream) {
-        if (n == 0)
-            return;
-        constexpr int BLOCK = 256;
-        int grid = static_cast<int>((n + BLOCK - 1) / BLOCK);
-        const int optimal = GPUConfig::get().optimal_grid_size(BLOCK);
-        if (grid > optimal)
-            grid = optimal;
-        if (grid < 1)
-            grid = 1;
-        clamp_half_kernel<<<grid, BLOCK, 0, stream>>>(src, dst, min_val, max_val, n);
-        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.clamp_fused_half");
     }
 
     // ============= TYPE CONVERSIONS (USING FUNCTORS) =============
