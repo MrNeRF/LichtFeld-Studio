@@ -3,6 +3,7 @@
 #include "io/apple_reframe.hpp"
 #include "apple_reframe_conversion.hpp"
 #include "core/path_utils.hpp"
+#include "core/logger.hpp"
 #include "core/splat_data.hpp"
 
 #import <Foundation/Foundation.h>
@@ -142,12 +143,17 @@ namespace lfs::io {
         checked = now;
         try {
             const auto helper = helperPath();
-            if (helper.empty())
+            if (helper.empty()) {
+                LOG_DEBUG("Apple Reframe helper is missing or not executable");
                 return false;
+            }
             TemporaryDirectory workspace;
             runHelper(helper, @[ @"--check" ], workspace.path / "check.log", {}, std::chrono::seconds(3));
             available = true;
-        } catch (...) { /* Unsupported private ABI or unavailable assets: hide the feature. */
+        } catch (const std::exception& error) {
+            LOG_DEBUG("Apple Reframe availability probe failed: {}", error.what());
+        } catch (...) {
+            LOG_DEBUG("Apple Reframe availability probe failed with an unknown exception");
         }
         return available;
     }

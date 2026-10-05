@@ -5,6 +5,7 @@
 from collections.abc import Callable
 from pathlib import Path, PureWindowsPath
 import threading
+import time
 import uuid
 
 import lichtfeld as lf
@@ -336,7 +337,7 @@ class CreateSplatFromPhotoOperator(Operator):
     description = "Create editable Gaussian splats from one photo using Apple Reframe"
 
     def execute(self, context) -> set:
-        if not _apple_reframe_available():
+        if not callable(getattr(lf, "create_splat_from_photo", None)):
             return {"CANCELLED"}
         path = lf.ui.open_image_file_dialog("")
         if not path:
@@ -346,14 +347,41 @@ class CreateSplatFromPhotoOperator(Operator):
         return {"FINISHED"}
 
 
+_reframe_probe_lock = threading.Lock()
+_reframe_probe_running = False
+_reframe_probe_checked = None
+_reframe_probe_ready = False
+
+
+def _probe_apple_reframe(available):
+    global _reframe_probe_running, _reframe_probe_checked, _reframe_probe_ready
+    ready = False
+    try:
+        ready = bool(available())
+    except Exception as exc:
+        lf.log.debug(f"Apple Reframe availability probe failed: {exc}")
+    finally:
+        with _reframe_probe_lock:
+            _reframe_probe_ready = ready
+            _reframe_probe_checked = time.monotonic()
+            _reframe_probe_running = False
+
+
 def _apple_reframe_available() -> bool:
+    """Read cached readiness; model loading always runs off the UI thread."""
+    global _reframe_probe_running
     available = getattr(lf, "apple_reframe_available", None)
     if not callable(available) or not callable(getattr(lf, "create_splat_from_photo", None)):
         return False
-    try:
-        return bool(available())
-    except Exception:
-        return False
+    with _reframe_probe_lock:
+        ready = _reframe_probe_ready
+        if _reframe_probe_running or (_reframe_probe_checked is not None
+                                     and time.monotonic() - _reframe_probe_checked < 30):
+            return ready
+        _reframe_probe_running = True
+    threading.Thread(target=_probe_apple_reframe, args=(available,),
+                     name="apple-reframe-availability", daemon=True).start()
+    return ready
 
 
 class ImportSsogOperator(Operator):
@@ -1002,6 +1030,7 @@ _operator_classes = [
 
 
 def register():
+    _apple_reframe_available()
     classes = list(_operator_classes)
     if callable(getattr(lf, "create_splat_from_photo", None)):
         classes.append(CreateSplatFromPhotoOperator)

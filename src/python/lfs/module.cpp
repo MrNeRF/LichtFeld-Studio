@@ -1950,20 +1950,24 @@ NB_MODULE(lichtfeld, m) {
         },
         "Switch from training to edit mode");
 
-    m.def("apple_reframe_available", [] {
-        nb::gil_scoped_release release;
-        return lfs::io::appleReframeAvailable(); }, "Whether Apple photo reconstruction is ready on this Mac");
+    m.def(
+        "apple_reframe_available", [] {
+            nb::gil_scoped_release release;
+            return lfs::io::appleReframeAvailable();
+        },
+        "Whether Apple photo reconstruction is ready on this Mac");
 #if defined(LFS_HAS_APPLE_REFRAME)
-    m.def("create_splat_from_photo", [](const std::string& path) {
-        nb::gil_scoped_release release;
-        if (!lfs::io::appleReframeAvailable())
-            throw std::runtime_error("Apple Reframe is unavailable on this Mac");
-        const auto photo = python_utf8_path(path);
-        if (!std::filesystem::is_regular_file(photo))
-            throw std::invalid_argument("Photo does not exist");
-        emit_project_cmd_marshaled("python.create_splat_from_photo", [photo] {
-            lfs::core::events::cmd::CreateSplatFromPhoto{.path = photo}.emit();
-        }); }, nb::arg("path"), "Create editable Gaussian splats from a photo with Apple Reframe");
+    m.def(
+        "create_splat_from_photo", [](const std::string& path) {
+            nb::gil_scoped_release release;
+            const auto photo = python_utf8_path(path);
+            if (!std::filesystem::is_regular_file(photo))
+                throw std::invalid_argument("Photo does not exist");
+            emit_project_cmd_marshaled("python.create_splat_from_photo", [photo] {
+                lfs::core::events::cmd::CreateSplatFromPhoto{.path = photo}.emit();
+            });
+        },
+        nb::arg("path"), "Create editable Gaussian splats from a photo with Apple Reframe");
 #endif
 
     m.def(

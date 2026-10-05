@@ -1046,33 +1046,30 @@ namespace lfs::vis::gui {
                                 .detection = LFS_SOURCE_SITE_CURRENT(),
                             });
                         }
+                        const auto progress = [this, job, index, total = requests.size()](const float pct,
+                                                                                          const std::string& stage) {
+                            jobs_.report(job, (static_cast<float>(index) + pct / 100.0F) / static_cast<float>(total), stage);
+                            publishImportOverlayState();
+                            wakeMainThreadForAsyncWork();
+                        };
+                        const auto cancel = [this, job, &stop_token]() {
+                            return stop_token.stop_requested() || jobs_.cancelRequested(job);
+                        };
+                        std::expected<lfs::io::LoadResult, std::string> staged;
+                        if (request.reframe_photo) {
+                            auto generated = lfs::io::createAppleReframeSplat(request.path, {.progress = progress, .cancel_requested = cancel});
+                            if (!generated) {
+                                user_error = generated.error().message;
+                                staged = std::unexpected(generated.error().format());
+                            } else {
+                                staged = std::move(*generated);
+                            }
+                        } else {
+                            staged = viewer_->getSceneManager()->stageSplatFile(request.path, progress, cancel,
+                                                                                request.active_sh_degree >= 0, &user_error);
+                        }
                         return lfs::from_legacy_expected<lfs::io::LoadResult>(
-                            [&](const auto& path, auto progress, auto cancel, bool preserve_raw, std::string* user_error)
-                                -> std::expected<lfs::io::LoadResult, std::string> {
-                                if (!request.reframe_photo)
-                                    return viewer_->getSceneManager()->stageSplatFile(path, progress, cancel, preserve_raw, user_error);
-                                auto generated = lfs::io::createAppleReframeSplat(path, {.progress = progress, .cancel_requested = cancel});
-                                if (!generated) {
-                                    if (user_error)
-                                        *user_error = generated.error().message;
-                                    return std::unexpected(generated.error().format());
-                                }
-                                return std::move(*generated);
-                            }(
-                                    request.path,
-                                    [this, job, index, total = requests.size()](const float pct,
-                                                                                const std::string& stage) {
-                                        jobs_.report(job,
-                                                     (static_cast<float>(index) + pct / 100.0F) /
-                                                         static_cast<float>(total),
-                                                     stage);
-                                        publishImportOverlayState();
-                                        wakeMainThreadForAsyncWork();
-                                    },
-                                    [this, job, &stop_token]() {
-                                        return stop_token.stop_requested() || jobs_.cancelRequested(job);
-                                    },
-                                    request.active_sh_degree >= 0, &user_error),
+                            std::move(staged),
                             lfs::LegacyErrorContext{
                                 .code = lfs::ErrorCode::Internal,
                                 .domain = lfs::ErrorDomain::IO,
@@ -1540,8 +1537,6 @@ namespace lfs::vis::gui {
             auto* manager = viewer_->getSceneManager();
             if (!manager || !manager->canClearScene())
                 throw std::runtime_error("The scene is not editable while training or another scene operation is active");
-            if (!io::appleReframeAvailable())
-                throw std::runtime_error("Apple Reframe is unavailable on this Mac");
             if (!startSplatLoad({command.path}, false,
                                 {core::path_to_utf8(command.path.stem()) + " (Reframe)"}, {}, std::nullopt, false, true))
                 throw std::runtime_error("Another import is active. Try again when it finishes.");

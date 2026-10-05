@@ -15,7 +15,11 @@ A macOS 27 or newer SDK/toolchain is required for the helper.
 The application deployment target remains macOS 26; only `bin/lfs-reframe` is
 compiled for arm64/macOS 27. The application does not link AlchemistBase.
 The helper is installed alongside the executable, including inside portable
-app bundles. Include it when signing the bundle's nested executables.
+app bundles. Portable installation discovers and ad-hoc signs all nested Mach-O
+files, including `lfs-reframe`, before sealing and verifying the bundle. This
+ad-hoc signature is for local distribution, not notarization. For notarized
+releases, re-sign the helper and other nested code with the release Developer ID
+and hardened-runtime options before signing and notarizing the outer bundle.
 
 `LFS_ENABLE_APPLE_REFRAME` defaults to **OFF**. Keep it **OFF for App Store
 builds**. The disabled build compiles the unavailable backend and neither
@@ -29,7 +33,12 @@ Reframe**. The item is absent unless all of these are true:
 - The process runs natively on Apple Silicon with macOS 27 or newer.
 - The helper successfully launches and loads both registered Photos models.
 
-Model readiness is cached for 30 seconds. If assets are missing, use the
+Model readiness is checked in a background worker at startup and refreshed on
+menu access after 30 seconds. Menus read the cached result without waiting; the
+item stays hidden until the first successful check. Operator items dispatch by
+stable operator ID and do not consume positional callback indices. Inference
+validates availability on the import worker rather than repeating the readiness
+probe on the UI thread. Probe failures are logged at debug level. If assets are missing, use the
 spatial-photo feature in Photos and let Apple's downloads finish. LichtFeld
 does not download/repackage these assets or request Apple's reserved
 entitlements. Apple's active UAF asset set is preferred; discovery falls back

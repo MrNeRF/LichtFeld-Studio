@@ -12,6 +12,13 @@ foreach(_required IN ITEMS "${_exe}" "${_icd}" "${_moltenvk}" "${_contents}/Info
     endif()
 endforeach()
 
+if("@LFS_ENABLE_APPLE_REFRAME@")
+    set(_reframe_helper "${_contents}/MacOS/lfs-reframe")
+    if(NOT EXISTS "${_reframe_helper}")
+        message(FATAL_ERROR "Enabled Apple Reframe bundle is missing its helper")
+    endif()
+endif()
+
 # CMake's actual installation manifest also covers generated files, helper
 # executables and dependency libraries that are not in a source resource tree.
 foreach(_installed IN LISTS CMAKE_INSTALL_MANIFEST_FILES)
@@ -124,4 +131,8 @@ execute_process(COMMAND /usr/bin/codesign --force --sign - "${_app}"
     COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND /usr/bin/codesign --verify --deep --strict "${_app}"
     COMMAND_ERROR_IS_FATAL ANY)
+if("@LFS_ENABLE_APPLE_REFRAME@")
+    execute_process(COMMAND /usr/bin/codesign --verify --strict "${_reframe_helper}"
+        COMMAND_ERROR_IS_FATAL ANY)
+endif()
 message(STATUS "Verified and ad-hoc signed portable macOS app: ${_app}")
