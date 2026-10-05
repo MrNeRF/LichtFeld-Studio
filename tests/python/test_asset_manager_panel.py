@@ -2217,8 +2217,8 @@ def test_list_gallery_column_stays_a_compact_status_icon(panel_module, monkeypat
         expected = list_column_widths(width)
         for name, value in expected.items():
             assert panel._list_column_width(name) == value
-        if name != "name":
-            assert model.func_bindings[f"asset_list_{name}_width"]() == f"{value:.1f}dp"
+            if name != "name":
+                assert model.func_bindings[f"asset_list_{name}_width"]() == f"{value:.1f}dp"
     resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
     root = ET.fromstring((resources / "asset_manager.rml").read_text())
     row = root.find('.//div[@class="asset-list-row"]')
