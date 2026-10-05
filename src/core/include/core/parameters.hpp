@@ -68,6 +68,41 @@ namespace lfs::core {
             return std::nullopt;
         }
 
+        // Grid the render is quantized to before metrics; Auto follows each reference image's encoding.
+        enum class EvalBitDepth {
+            Auto,
+            Eight,
+            Sixteen,
+            Float,
+        };
+
+        [[nodiscard]] inline constexpr std::string_view eval_bit_depth_name(const EvalBitDepth depth) noexcept {
+            switch (depth) {
+            case EvalBitDepth::Auto:
+                return "auto";
+            case EvalBitDepth::Eight:
+                return "8";
+            case EvalBitDepth::Sixteen:
+                return "16";
+            case EvalBitDepth::Float:
+                return "float";
+            }
+            return "auto";
+        }
+
+        [[nodiscard]] inline constexpr std::optional<EvalBitDepth> eval_bit_depth_from_string(
+            const std::string_view value) noexcept {
+            if (value == "auto")
+                return EvalBitDepth::Auto;
+            if (value == "8")
+                return EvalBitDepth::Eight;
+            if (value == "16")
+                return EvalBitDepth::Sixteen;
+            if (value == "float")
+                return EvalBitDepth::Float;
+            return std::nullopt;
+        }
+
         enum class DensifyErrorMap {
             Ssim,   // full SSIM (luminance × contrast × structure)
             SsimCs, // contrast × structure only (luminance excluded)
@@ -225,6 +260,7 @@ namespace lfs::core {
             bool enable_eval = false;                          // Only evaluate when explicitly enabled
             bool eval_all = false;                             // Train on every image and evaluate all of them
             EvalSpace eval_space = EvalSpace::Distorted;       // Reference image space used for evaluation
+            EvalBitDepth eval_bit_depth = EvalBitDepth::Auto;  // Grid the render is quantized to for evaluation
             std::string eval_mask = "";                        // Mesh path, bbox:..., cropbox, masks:<folder>, depth:near,far, points:radius,close or points:<file>; empty disables
             bool eval_mask_invert = false;                     // Score the pixels outside the evaluation mask instead
             float eval_mask_opacity = 0.85f;                   // Rendered opacity a pixel needs to count as covered by a splat mask

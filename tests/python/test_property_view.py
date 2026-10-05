@@ -499,6 +499,16 @@ EXPECTED_SELECT_ROWS = {
             (1, "training.options.eval_space.undistorted"),
         ),
     ),
+    "eval_bit_depth": (
+        "training_params.eval_bit_depth",
+        "training.tooltip.eval_bit_depth",
+        (
+            (0, "training.options.eval_bit_depth.auto"),
+            (1, "training.options.eval_bit_depth.eight"),
+            (2, "training.options.eval_bit_depth.sixteen"),
+            (3, "training.options.eval_bit_depth.float"),
+        ),
+    ),
 }
 
 EXPECTED_ADVANCED_IDS = (
@@ -567,7 +577,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 92
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 93
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 

@@ -44,6 +44,7 @@ using lfs::core::DataType;
 using lfs::core::Device;
 using lfs::core::SplatData;
 using lfs::core::Tensor;
+using lfs::core::param::EvalBitDepth;
 using lfs::training::CameraDataset;
 using lfs::training::DatasetConfig;
 using lfs::training::EvalMetrics;
@@ -652,6 +653,72 @@ TEST(MetricsEvaluator, DownscaledGroundTruthMatchesGpuLanczos) {
         EXPECT_NEAR(static_cast<float>(actual_values[index]), expected_u8, 1.0f) << index;
     }
 
+    std::filesystem::remove_all(tmp);
+}
+
+// Catches a 16-bit reference rounded to 8 bits, a render quantized to a grid other than the reference's,
+// and a forced depth that does not override the file's own encoding.
+TEST(MetricsEvaluator, EvaluationBitDepthFollowsTheReferenceEncoding) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_bit_depth";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 8;
+    constexpr int kH = 4;
+    std::vector<uint16_t> pixels16(static_cast<size_t>(kW) * kH * 3);
+    for (size_t index = 0; index < pixels16.size(); ++index)
+        pixels16[index] = static_cast<uint16_t>(1000 + 37 * index);
+    const auto path16 = tmp / "gt16.png";
+    ASSERT_TRUE(lfs::core::save_png(path16, pixels16.data(), kW, kH, 3, 16, 0));
+    const std::vector<uint8_t> pixels8(static_cast<size_t>(kW) * kH * 3, 77);
+    const auto path8 = tmp / "gt8.png";
+    write_u8_hwc_png(path8, pixels8, kH, kW);
+
+    constexpr float kRendered = 0.123456f;
+    const auto render = [](Camera& render_camera, float) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        lfs::training::RenderOutput output;
+        output.image = Tensor::full({size_t{3}, static_cast<size_t>(render_camera.image_height()),
+                                     static_cast<size_t>(render_camera.image_width())},
+                                    kRendered, Device::CUDA);
+        return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+    };
+    const auto prepare = [&](const std::filesystem::path& path, const EvalBitDepth setting) {
+        auto camera = make_eval_camera(path, {}, kW, kH);
+        auto params = make_eval_params(tmp / "out");
+        params.optimization.eval_bit_depth = setting;
+        auto prepared = prepare_evaluation_view(*camera, params, render);
+        EXPECT_TRUE(prepared.has_value()) << prepared.error().detail();
+        return std::move(*prepared);
+    };
+    const auto rendered_value = [](const lfs::training::PreparedEvaluationView& view) {
+        return view.output.image.cpu().to_vector().front();
+    };
+
+    const auto native16 = prepare(path16, EvalBitDepth::Auto);
+    EXPECT_EQ(native16.inputs.bit_depth, 16);
+    ASSERT_EQ(native16.inputs.gt_image.dtype(), DataType::Float32);
+    const auto gt16 = native16.inputs.gt_image.cpu().to_vector();
+    ASSERT_EQ(gt16.size(), pixels16.size());
+    for (int c = 0; c < 3; ++c)
+        for (int i = 0; i < kW * kH; ++i)
+            EXPECT_NEAR(gt16[static_cast<size_t>(c) * kW * kH + i], pixels16[static_cast<size_t>(i) * 3 + c] / 65535.0f,
+                        1e-6f);
+    EXPECT_FLOAT_EQ(rendered_value(native16), std::round(kRendered * 65535.0f) / 65535.0f);
+
+    const auto forced8 = prepare(path16, EvalBitDepth::Eight);
+    EXPECT_EQ(forced8.inputs.bit_depth, 8);
+    EXPECT_EQ(forced8.inputs.gt_image.dtype(), DataType::UInt8);
+    EXPECT_FLOAT_EQ(rendered_value(forced8), std::round(kRendered * 255.0f) / 255.0f);
+
+    const auto forced_float = prepare(path8, EvalBitDepth::Float);
+    EXPECT_EQ(forced_float.inputs.bit_depth, 32);
+    EXPECT_FLOAT_EQ(rendered_value(forced_float), kRendered);
+
+    EXPECT_EQ(prepare(path8, EvalBitDepth::Auto).inputs.bit_depth, 8);
     std::filesystem::remove_all(tmp);
 }
 

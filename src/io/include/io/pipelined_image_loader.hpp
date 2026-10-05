@@ -434,6 +434,7 @@ namespace lfs::io {
         void cold_process_thread_func(size_t worker_index);
 
         std::string make_cache_key(const std::filesystem::path& path, const LoadParams& params) const;
+        bool decodes_16bit(const LoadParams& params) const { return config_.use_16bit_color || params.decode_16bit; }
         bool is_jpeg_data(const std::vector<uint8_t>& data) const;
         std::vector<uint8_t> read_file(const std::filesystem::path& path) const;
         std::shared_ptr<std::vector<uint8_t>> load_cached_jpeg_blob(const std::string& cache_key);

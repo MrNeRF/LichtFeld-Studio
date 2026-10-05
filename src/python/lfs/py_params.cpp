@@ -825,6 +825,12 @@ namespace lfs::python {
             .value("DISTORTED", EvalSpace::Distorted)
             .value("UNDISTORTED", EvalSpace::Undistorted);
 
+        nb::enum_<EvalBitDepth>(m, "EvalBitDepth")
+            .value("AUTO", EvalBitDepth::Auto)
+            .value("EIGHT", EvalBitDepth::Eight)
+            .value("SIXTEEN", EvalBitDepth::Sixteen)
+            .value("FLOAT", EvalBitDepth::Float);
+
         nb::enum_<DensifyErrorMap>(m, "DensifyErrorMap")
             .value("SSIM", DensifyErrorMap::Ssim)
             .value("SSIM_CS", DensifyErrorMap::SsimCs);
@@ -1204,6 +1210,12 @@ namespace lfs::python {
                 "Reference images for evaluation with --undistort: distorted = the original "
                 "images, with the render warped into the original lens; undistorted = the "
                 "undistorted training images")
+            .def_prop_rw(
+                "eval_bit_depth",
+                [](PyOptimizationParams& self) { return self.params().eval_bit_depth; },
+                [](PyOptimizationParams&, EvalBitDepth v) { modify_params([v](auto& p) { p.eval_bit_depth = v; }); },
+                "Grid the render is quantized to before evaluation metrics: auto = each reference "
+                "image's own encoding (8-bit, 16-bit or float)")
             .def_prop_ro(
                 "save_steps",
                 [](PyOptimizationParams& self) -> std::vector<size_t> {

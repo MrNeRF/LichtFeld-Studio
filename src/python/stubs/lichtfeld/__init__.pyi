@@ -1980,6 +1980,15 @@ class EvalSpace(enum.Enum):
 
     UNDISTORTED = 1
 
+class EvalBitDepth(enum.Enum):
+    AUTO = 0
+
+    EIGHT = 1
+
+    SIXTEEN = 2
+
+    FLOAT = 3
+
 class DensifyErrorMap(enum.Enum):
     SSIM = 0
 
@@ -2467,6 +2476,15 @@ class OptimizationParams:
 
     @eval_space.setter
     def eval_space(self, arg: EvalSpace, /) -> None: ...
+
+    @property
+    def eval_bit_depth(self) -> EvalBitDepth:
+        """
+        Grid the render is quantized to before evaluation metrics: auto = each reference image's own encoding (8-bit, 16-bit or float)
+        """
+
+    @eval_bit_depth.setter
+    def eval_bit_depth(self, arg: EvalBitDepth, /) -> None: ...
 
     @property
     def save_steps(self) -> list[int]:

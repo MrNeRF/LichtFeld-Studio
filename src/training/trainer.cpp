@@ -3391,6 +3391,7 @@ namespace lfs::training {
                    entry.mask_threshold == opt_params.mask_threshold &&
                    entry.undistort_prepared == camera.is_undistort_prepared() &&
                    entry.eval_space == static_cast<int>(opt_params.eval_space) &&
+                   entry.eval_bit_depth == static_cast<int>(opt_params.eval_bit_depth) &&
                    entry.bg_color == opt_params.bg_color &&
                    entry.inputs.gt_image.is_valid();
         };
@@ -3498,6 +3499,7 @@ namespace lfs::training {
                 .mask_threshold = opt_params.mask_threshold,
                 .undistort_prepared = camera.is_undistort_prepared(),
                 .eval_space = static_cast<int>(opt_params.eval_space),
+                .eval_bit_depth = static_cast<int>(opt_params.eval_bit_depth),
                 .bg_color = opt_params.bg_color,
                 .inputs = prepared->inputs,
                 .last_used = ++camera_metrics_input_cache_clock_});

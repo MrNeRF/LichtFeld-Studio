@@ -66,6 +66,7 @@ namespace lfs::training {
         std::optional<float> ssim;
         std::optional<float> lpips;
         bool masked = false;
+        int bit_depth = 8;
         float evaluated_pixel_fraction = 0.0f;
         bool validity_mask_applied = false;
         std::string skipped_reason;
@@ -143,12 +144,17 @@ namespace lfs::training {
     };
 
     [[nodiscard]] lfs::core::Tensor image_for_metrics_and_save(const lfs::core::Tensor& image);
+    // 8 or 16 quantizes to that integer grid, 32 (float references) only clamps to [0, 1].
+    [[nodiscard]] lfs::core::Tensor image_for_metrics(const lfs::core::Tensor& image, int bit_depth);
+    [[nodiscard]] int evaluation_bit_depth(const std::filesystem::path& reference,
+                                           lfs::core::param::EvalBitDepth setting);
 
     struct EvaluationViewInputs {
         lfs::core::Tensor gt_image;
         lfs::core::Tensor user_mask;
         int source_width = 0;
         int source_height = 0;
+        int bit_depth = 8;
     };
 
     struct EvaluationRenderResult {

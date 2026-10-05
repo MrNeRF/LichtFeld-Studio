@@ -94,7 +94,7 @@ BOOL_PROPS = (
     "eval_mask_invert",
 )
 
-SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space", "eval_space")
+SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space", "eval_space", "eval_bit_depth")
 MIGRATED_PROP_IDS = NUMBER_PROPS + BOOL_PROPS + SELECT_PROPS
 
 # These registered properties are intentionally represented by bespoke widgets or
@@ -219,6 +219,7 @@ DATASET_RUNS = (
     _run("dataset_eval", "enable_eval", visibility_condition_id="has_dataset"),
     _run("dataset_eval_train", "eval_all", visibility_condition_id="dep_eval"),
     _run("dataset_eval_space", "eval_space", visibility_condition_id="dep_undistort"),
+    _run("dataset_eval_bit_depth", "eval_bit_depth", visibility_condition_id="dep_eval"),
     _run(
         "dataset_eval_mask_invert",
         "eval_mask_invert",

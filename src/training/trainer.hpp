@@ -160,6 +160,7 @@ namespace lfs::training {
             float mask_threshold = 0.0f;
             bool undistort_prepared = false;
             int eval_space = 0;
+            int eval_bit_depth = 0;
             std::array<float, 3> bg_color{};
             EvaluationViewInputs inputs;
             std::uint64_t last_used = 0;

@@ -1189,7 +1189,7 @@ namespace lfs::io {
                               describe_current_exception("non-standard nvImageCodec exception"));
                 }
             }
-        } else if (!config_.use_16bit_color && !needs_requested_processing) {
+        } else if (!decodes_16bit(params) && !needs_requested_processing) {
             const std::string path_str = lfs::core::path_to_utf8(path);
             int w = 0, h = 0, ch = 0;
             unsigned char* img_data = stbi_load(path_str.c_str(), &w, &h, &ch, 3);
@@ -1284,13 +1284,13 @@ namespace lfs::io {
 
     std::optional<PipelinedImageLoader::HostDecodeKind> PipelinedImageLoader::host_decode_kind(
         const std::filesystem::path& path, const LoadParams& params) {
-        if (!config_.use_16bit_color && !load_params_need_processing(params))
+        if (!decodes_16bit(params) && !load_params_need_processing(params))
             return std::nullopt;
         if (is_jpeg_file_signature(path) || load_cached_jpeg_blob(make_cache_key(path, params)))
             return std::nullopt;
         if (params.undistort)
             return HostDecodeKind::Float32;
-        return config_.use_16bit_color ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8;
+        return decodes_16bit(params) ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8;
     }
 
     PipelinedImageLoader::HostPixels PipelinedImageLoader::decode_on_host(
@@ -1331,11 +1331,11 @@ namespace lfs::io {
         if (params.undistort) {
             std::ostringstream key;
             key << lfs::core::path_to_utf8(path) << ":udr4_" << std::hex
-                << undistort_cache_hash(params, config_.use_16bit_color, 0x726762ULL);
+                << undistort_cache_hash(params, decodes_16bit(params), 0x726762ULL);
             return key.str();
         }
         auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
-        if (config_.use_16bit_color)
+        if (decodes_16bit(params))
             key += "_16b";
         return key;
     }
@@ -1433,7 +1433,7 @@ namespace lfs::io {
         } else {
             auto decode_params = params;
             decode_params.cuda_stream = stream;
-            const bool sixteen_bit = config_.use_16bit_color;
+            const bool sixteen_bit = decodes_16bit(params);
             if (auto ahead = take_decoded_ahead(path, sixteen_bit ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8)) {
                 if (!ahead->data || ahead->channels != 3)
                     throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
@@ -1455,7 +1455,7 @@ namespace lfs::io {
                                                    const std::string& cache_key,
                                                    void* cuda_stream,
                                                    const LoadParams& params) {
-        const bool lossless = config_.use_16bit_color || params.undistort;
+        const bool lossless = decodes_16bit(params) || params.undistort;
         if (lossless && !jpeg2k_cache_available_.load(std::memory_order_relaxed))
             return;
 

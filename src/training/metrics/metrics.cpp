@@ -173,7 +173,9 @@ namespace lfs::training {
             lfs::io::LoadParams load_params;
             load_params.resize_factor = params.dataset.resize_factor;
             load_params.max_width = params.dataset.max_width;
-            load_params.output_uint8 = !params.dataset.loading_params.use_16bit_color;
+            const int bit_depth = evaluation_bit_depth(camera.image_path(), params.optimization.eval_bit_depth);
+            load_params.output_uint8 = bit_depth == 8;
+            load_params.decode_16bit = bit_depth == 16;
             load_params.skip_blob_cache = true;
             load_params.cuda_stream = lfs::core::getCurrentCUDAStream();
             if (params.optimization.undistort && camera.is_undistort_prepared() &&
@@ -193,6 +195,37 @@ namespace lfs::training {
             .to(lfs::core::DataType::Float32)
             .div(255.0f)
             .contiguous();
+    }
+
+    lfs::core::Tensor image_for_metrics(const lfs::core::Tensor& image, const int bit_depth) {
+        assert(bit_depth == 8 || bit_depth == 16 || bit_depth == 32);
+        if (bit_depth == 8)
+            return image_for_metrics_and_save(image);
+        if (bit_depth == 16) {
+            assert(image.device() == lfs::core::Device::CUDA && image.dtype() == lfs::core::DataType::Float32);
+            return kernels::quantize_to_grid(image, 65535.0f);
+        }
+        return image.clamp(0.0f, 1.0f).contiguous();
+    }
+
+    int evaluation_bit_depth(const std::filesystem::path& reference, const lfs::core::param::EvalBitDepth setting) {
+        using lfs::core::param::EvalBitDepth;
+        switch (setting) {
+        case EvalBitDepth::Eight:
+            return 8;
+        case EvalBitDepth::Sixteen:
+            return 16;
+        case EvalBitDepth::Float:
+            return 32;
+        case EvalBitDepth::Auto:
+            break;
+        }
+        const float step = lfs::core::image_quantization_step(reference);
+        if (step == 1.0f / 255.0f)
+            return 8;
+        if (step == 1.0f / 65535.0f)
+            return 16;
+        return 32;
     }
 
     float PSNR::compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
@@ -535,11 +568,14 @@ namespace lfs::training {
                     fallback_image_loader = make_eval_image_loader(params);
                     image_loader = fallback_image_loader.get();
                 }
+                inputs.bit_depth = evaluation_bit_depth(camera.image_path(), params.optimization.eval_bit_depth);
                 inputs.gt_image = image_loader->load_image_immediate(
                     camera.image_path(), evaluation_load_params(camera, params));
                 if (!inputs.gt_image.is_valid() || inputs.gt_image.ndim() != 3 ||
                     inputs.gt_image.shape()[0] != 3)
                     return evaluation_error("failed to load evaluation image", LFS_SOURCE_SITE_CURRENT());
+                if (inputs.bit_depth == 32 && inputs.gt_image.dtype() == lfs::core::DataType::Float32)
+                    inputs.gt_image = inputs.gt_image.clamp(0.0f, 1.0f).contiguous();
 
                 if (undistorted_reference) {
                     auto [source_width, source_height, source_channels] =
@@ -940,7 +976,7 @@ namespace lfs::training {
 
             if (rendered->raw_image.is_valid())
                 rendered->raw_image = rendered->raw_image.clamp(0.0f, 1.0f);
-            rendered->output.image = image_for_metrics_and_save(rendered->output.image);
+            rendered->output.image = image_for_metrics(rendered->output.image, inputs.bit_depth);
 
             assert(inputs.gt_image.ndim() == 3);
             assert(inputs.gt_image.shape()[0] == 3);
@@ -1142,6 +1178,7 @@ namespace lfs::training {
             {"ssim", json_metric(view.ssim)},
             {"lpips", json_metric(view.lpips)},
             {"masked", view.masked},
+            {"bit_depth", view.bit_depth},
             {"evaluated_pixel_fraction", view.evaluated_pixel_fraction},
             {"validity_mask_applied", view.validity_mask_applied},
         };
@@ -1474,6 +1511,7 @@ namespace lfs::training {
             view.height = static_cast<int>(gt_image.shape()[1]);
             view.width = static_cast<int>(gt_image.shape()[2]);
             view.validity_mask_applied = prepared->validity_mask_applied;
+            view.bit_depth = prepared->inputs.bit_depth;
             view.evaluated_pixel_fraction = mask.is_valid()
                                                 ? mask.to(lfs::core::DataType::Float32).mean().item<float>()
                                                 : 1.0f;
