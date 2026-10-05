@@ -2,16 +2,23 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/gpu_preflight.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
+#include "core/events.hpp"
+#include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_readback.hpp"
 #include "rendering/selection_ops.hpp"
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <gtest/gtest.h>
+#include <latch>
 #include <random>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -81,4 +88,48 @@ TEST(ViewerNoCuda, CameraPathRenderDoesNotRequireTrainerOrCuda) {
     EXPECT_FALSE(lfs::app::training_params_are_viewer_only(params));
     params.render_path.emplace();
     EXPECT_TRUE(lfs::app::training_params_are_viewer_only(params));
+}
+
+TEST(ViewerNoCuda, RevealingEarlierSplatWaitsForCoherentAggregateAndRequestsRedraw) {
+    Scene scene;
+    constexpr size_t count = 500001;
+    const auto make_model = [](float value) {
+        return std::make_unique<SplatData>(
+            0, Tensor::full({count, 3}, value, Device::GPU),
+            Tensor::zeros({count, 1, 3}, Device::GPU), Tensor::zeros({count, 0, 3}, Device::GPU),
+            Tensor::full({count, 3}, -2.0f, Device::GPU),
+            Tensor::full({count, 4}, 0.5f, Device::GPU),
+            Tensor::full({count, 1}, 1.0f, Device::GPU), 1.0f);
+    };
+    const auto first = scene.addSplat("first", make_model(0.0f));
+    const auto second = scene.addSplat("second", make_model(1.0f));
+    scene.setNodeVisibility(first, false);
+    ASSERT_EQ(scene.getCombinedModel(), scene.getNodeById(second)->model.get());
+    std::latch release(1);
+    scene.setCombinedModelAllocator([&](TensorShape shape, size_t, DataType dtype, std::string_view) {
+        release.wait();
+        return Tensor::empty(std::move(shape), Device::GPU, dtype);
+    });
+    std::atomic<int> ready{0};
+    lfs::event::ScopedHandler handler;
+    handler.subscribe<events::state::CombinedModelBuildReady>([&](const auto& event) {
+        if (event.scene == &scene)
+            ++ready;
+    });
+    scene.setNodeVisibility(first, true);
+    // The old second-node alias must not be paired with slot zero (first).
+    EXPECT_EQ(scene.getCombinedModel(), nullptr);
+    release.count_down();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (scene.combinedModelBuildPending() && std::chrono::steady_clock::now() < deadline) {
+        (void)scene.getCombinedModel();
+        std::this_thread::yield();
+    }
+    EXPECT_FALSE(scene.combinedModelBuildPending());
+    ASSERT_NE(scene.getCombinedModel(), nullptr);
+    EXPECT_EQ(scene.getCombinedModel()->size(), 2 * count);
+    EXPECT_GE(ready.load(), 1);
+    const auto indices = scene.getTransformIndices()->cpu();
+    EXPECT_EQ(indices.ptr<int>()[0], 0);
+    EXPECT_EQ(indices.ptr<int>()[count], 1);
 }
