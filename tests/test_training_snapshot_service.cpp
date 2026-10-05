@@ -400,6 +400,8 @@ namespace {
         });
         const lfs::training::TrainingSnapshotCaptureRequest request{
             .iteration = 500,
+            // Checks the resident-memory measurement, not the gate: independent of the runner's free memory.
+            .relaxed_host_memory_gate = true,
             .strategy = strategy,
             .params = params,
             .capture_additional_cpu_state = [&](const lfs::core::Uuid&)
@@ -900,6 +902,8 @@ namespace {
             request{
                 .iteration = SAVED_ITERATION,
                 .snapshot_uuid = assigned_snapshot_uuid,
+                // Checks the captured bytes, not the gate: independent of the runner's free memory.
+                .relaxed_host_memory_gate = true,
                 .strategy = strategy,
                 .params = params,
             };
