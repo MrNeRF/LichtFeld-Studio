@@ -319,8 +319,6 @@ TEST_F(TensorRandomTest, RandIntDistribution) {
     }
 }
 
-// ============= Bernoulli Tests =============
-// ============= Multinomial Tests =============
 // ============= Seed Reproducibility Tests =============
 
 TEST_F(TensorRandomTest, ManualSeedReproducibility) {

@@ -412,8 +412,7 @@ TEST_F(AddNewGsTensorOpsTest, MultipleIndexSelect_LibTorchComparison) {
     }
 }
 
-// Test 8: Multinomial sampling (THE KEY OPERATION in add_new_gs!)
-// Test 9: Flatten operation (used for multinomial sampling)
+// Test 9: Flatten operation
 TEST_F(AddNewGsTensorOpsTest, Flatten_LibTorchComparison) {
     // Test with 1D tensor (already flat)
     {

@@ -230,7 +230,6 @@ TEST_F(MaskedSelectRowsTest, CompareWithPyTorch_LargeScale) {
     compare_tensors(tensor.index_select(0, mask), torch_tensor.index({torch_mask}), 1e-5f, 1e-6f, "LargeScale");
 }
 
-// Tests for operator[] with boolean mask (PyTorch-style indexing)
 TEST_F(MaskedSelectRowsTest, LogicalNotFiltersDeletedRows) {
     const auto rows = Tensor::from_vector(
         std::vector<float>{1.0f, 10.0f,
@@ -241,7 +240,7 @@ TEST_F(MaskedSelectRowsTest, LogicalNotFiltersDeletedRows) {
     const auto deleted = Tensor::from_vector(
         std::vector<bool>{false, true, false, true}, {4}, Device::GPU);
 
-    const Tensor kept = rows[~deleted];
+    const Tensor kept = rows.index_select(0, ~deleted);
     EXPECT_EQ(kept.shape(), TensorShape({2, 2}));
     EXPECT_EQ(kept.cpu().to_vector(),
               (std::vector<float>{1.0f, 10.0f, 3.0f, 30.0f}));
@@ -258,7 +257,6 @@ TEST_F(MaskedSelectRowsTest, PointCloudFilter_CUDA) {
     const auto keep_mask = Tensor::rand({N}, Device::GPU) < 0.95f;
     const size_t expected = keep_mask.to(DataType::Int32).sum().item<int>();
 
-    // Filter using operator[]
     const Tensor filtered_means = means.index_select(0, keep_mask);
     const Tensor filtered_colors = colors.index_select(0, keep_mask);
 
