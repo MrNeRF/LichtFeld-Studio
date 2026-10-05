@@ -120,7 +120,7 @@ namespace lfs::vis {
             glm::vec4 depth_params{0.0f, 0.0f, 0.0f, 0.0f};
             // xy = uv_scale, zw = uv_clamp_max for padded splat depth.
             glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
-            glm::vec4 depth_projection{0.0f};
+            glm::vec4 ndc_to_view_coeffs{0.0f};
         };
 
         struct ShapeOverlayPush {
@@ -131,20 +131,20 @@ namespace lfs::vis {
             glm::vec4 params{0.0f, 0.0f, 0.0f, 0.0f};
             // xy = uv_scale, zw = uv_clamp_max for padded splat depth.
             glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
-            glm::vec4 depth_projection{0.0f};
+            glm::vec4 ndc_to_view_coeffs{0.0f};
         };
 
         struct FrustumPush {
             glm::vec4 viewport_rect{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 params{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
-            glm::vec4 depth_projection{0.0f};
+            glm::vec4 ndc_to_view_coeffs{0.0f};
             glm::mat4 view{1.0f};
             glm::vec4 viewport_panel{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 projection{0.0f, 0.0f, 0.0f, 0.0f};
         };
         // 160 bytes exceeds the 128-byte Vulkan minimum for maxPushConstantsSize.
-        // Acceptable only because CUDA requires NVIDIA hardware (reports 256).
+        // createPipeline checks the actual physical-device limit before creating the layout.
         static_assert(sizeof(FrustumPush) <= 256);
 
         constexpr std::uint32_t kFrustumVertexCount = 48;
@@ -1341,6 +1341,17 @@ namespace lfs::vis {
                                           VkPipeline& pipeline,
                                           VkDescriptorSetLayout extra_descriptor_layout = VK_NULL_HANDLE,
                                           bool depth_test = false) {
+            if (push_constant) {
+                VkPhysicalDeviceProperties properties{};
+                vkGetPhysicalDeviceProperties(context->physicalDevice(), &properties);
+                if (push_constant->offset + push_constant->size > properties.limits.maxPushConstantsSize) {
+                    LOG_ERROR("Viewport {} push constants require {} bytes, but the device supports {}",
+                              label, push_constant->offset + push_constant->size,
+                              properties.limits.maxPushConstantsSize);
+                    return false;
+                }
+            }
+
             VkShaderModule vertex_module = lfs::vis::createShaderModule(device, vertex_spv, "Viewport");
             VkShaderModule fragment_module = lfs::vis::createShaderModule(device, fragment_spv, "Viewport");
             if (vertex_module == VK_NULL_HANDLE || fragment_module == VK_NULL_HANDLE) {
@@ -2462,7 +2473,7 @@ namespace lfs::vis {
                 push.effects = overlay.effects;
                 push.viewport_rect = ctx.viewport_rect_push;
                 push.depth_params = depth_params;
-                push.depth_projection = params.depth_blit.depth_projection;
+                push.ndc_to_view_coeffs = params.depth_blit.ndc_to_view_coeffs;
                 push.uv_region = glm::vec4(params.depth_blit.uv_scale,
                                            params.depth_blit.uv_clamp_max);
                 vkCmdBindDescriptorSets(command_buffer,
@@ -2510,7 +2521,7 @@ namespace lfs::vis {
                 .params = ctx.world_depth_params_push,
                 .uv_region = glm::vec4(params.depth_blit.uv_scale,
                                        params.depth_blit.uv_clamp_max),
-                .depth_projection = params.depth_blit.depth_projection};
+                .ndc_to_view_coeffs = params.depth_blit.ndc_to_view_coeffs};
             recordShapeOverlays(ctx.cmd, frame.shape_overlay, frame, world_shape_overlay_push);
         }
 
@@ -2565,7 +2576,7 @@ namespace lfs::vis {
                                         projection_mode);
                 push.uv_region = glm::vec4(params.depth_blit.uv_scale,
                                            params.depth_blit.uv_clamp_max);
-                push.depth_projection = params.depth_blit.depth_projection;
+                push.ndc_to_view_coeffs = params.depth_blit.ndc_to_view_coeffs;
                 push.view = batch.view;
                 push.viewport_panel = glm::vec4(batch.viewport_pos, batch.viewport_size);
                 push.projection = glm::vec4(batch.render_size, batch.focal_x, batch.focal_y);

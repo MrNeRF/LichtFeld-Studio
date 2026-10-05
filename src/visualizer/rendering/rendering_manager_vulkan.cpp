@@ -4003,7 +4003,7 @@ namespace lfs::vis {
                         mesh_frame.depth_blit.external_image_view = render_result->depth_image_view;
                         mesh_frame.depth_blit.external_image_generation = render_result->depth_generation;
                         mesh_frame.depth_blit.depth_is_ndc = true;
-                        mesh_frame.depth_blit.depth_projection = {
+                        mesh_frame.depth_blit.ndc_to_view_coeffs = {
                             projection[2][2], projection[3][2],
                             projection[2][3], projection[3][3]};
                         mesh_frame.depth_blit.flip_y = render_result->flip_y;
