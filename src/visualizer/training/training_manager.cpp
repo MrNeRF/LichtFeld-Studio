@@ -1117,29 +1117,34 @@ namespace lfs::vis {
         } else {
             std::optional<lfs::training::TrainingModelGraphInstall> pending_install;
             if (scene_) {
-                const std::size_t estimate =
-                    graph_capture->training_model
-                        ? static_cast<std::size_t>(graph_capture->training_model->size())
-                    : graph_capture->point_cloud
-                        ? static_cast<std::size_t>(graph_capture->point_cloud->size())
-                        : 0;
-                auto tensor_allocator_result =
-                    createTrainingSplatTensorAllocator(params, estimate);
-                if (!tensor_allocator_result) {
-                    return lfs::Result<void>::failure(std::move(tensor_allocator_result.error()));
-                }
-                auto tensor_allocator = std::move(*tensor_allocator_result);
-                trainer_->setSplatTensorAllocator(tensor_allocator);
+                // The shared tensor storage is sized from the assembled model: splats appended with
+                // --add-splat are only known once prepareTrainingModel has loaded them.
                 std::unique_lock scene_lock(trainer_->getRenderMutex());
                 auto prepared = lfs::training::prepareTrainingModel(
-                    params, *scene_, std::move(tensor_allocator),
-                    graph_capture ? &*graph_capture : nullptr);
+                    params, *scene_, {}, graph_capture ? &*graph_capture : nullptr);
                 if (!prepared) {
                     return lfs::Result<void>::failure(
                         training_initialization_error(prepared.error()));
                 }
                 if (*prepared) {
                     pending_install = std::move(**prepared);
+                }
+                auto* const model = pending_install ? pending_install->model.get() : graph_capture->training_model;
+                scene_lock.unlock();
+
+                auto tensor_allocator_result = createTrainingSplatTensorAllocator(
+                    params, model ? static_cast<std::size_t>(model->size()) : 0);
+                if (!tensor_allocator_result) {
+                    return lfs::Result<void>::failure(std::move(tensor_allocator_result.error()));
+                }
+                auto tensor_allocator = std::move(*tensor_allocator_result);
+                trainer_->setSplatTensorAllocator(tensor_allocator);
+                if (model) {
+                    scene_lock.lock();
+                    if (auto result = lfs::training::migrateTrainingModelToAllocator(params, *model, tensor_allocator);
+                        !result) {
+                        return lfs::Result<void>::failure(training_initialization_error(result.error()));
+                    }
                 }
                 LOG_INFO("After training model initialization - {}", lfs::core::Tensor::storage_memory_summary());
             }

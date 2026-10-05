@@ -2308,6 +2308,10 @@ namespace lfs::vis {
                 .is_dataset = true,
                 .output_path = params.dataset.output_path,
                 .init_path = params.init_path.value_or(std::string{}),
+                .add_splat_paths = params.add_splat_paths,
+                .add_splat_freeze = params.add_splat_freeze,
+                .freeze_lr_scale = params.freeze_lr_scale,
+                .exclude_frozen_add_splats_from_export = params.exclude_frozen_add_splats_from_export,
                 .centralize_dataset = params.dataset.centralize_dataset,
             }
                 .emit();
@@ -4648,7 +4652,8 @@ namespace lfs::vis {
         const auto preserved_camera = getViewport().camera;
         const auto preserved_transforms = collectResetTransforms(scene_manager_->getScene());
 
-        const auto& init_path = data_loader_->getParameters().init_path;
+        const auto& previous_params = data_loader_->getParameters();
+        const auto& init_path = previous_params.init_path;
         std::optional<lfs::core::param::TrainingParameters> reset_params;
         if (auto* const param_mgr = services().paramsOrNull(); param_mgr && param_mgr->ensureLoaded()) {
             reset_params = param_mgr->createForDataset(path, {});
@@ -4656,6 +4661,10 @@ namespace lfs::vis {
                 reset_params->dataset = trainer_manager_->getEditableDatasetParams();
                 reset_params->dataset.data_path = path;
                 reset_params->init_path = init_path;
+                reset_params->add_splat_paths = previous_params.add_splat_paths;
+                reset_params->add_splat_freeze = previous_params.add_splat_freeze;
+                reset_params->freeze_lr_scale = previous_params.freeze_lr_scale;
+                reset_params->exclude_frozen_add_splats_from_export = previous_params.exclude_frozen_add_splats_from_export;
             }
             data_loader_->setParameters(*reset_params);
         }

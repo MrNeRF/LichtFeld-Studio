@@ -63,7 +63,7 @@ namespace lfs::core {
             EVENT(ResumeTraining, );
             EVENT(StopTraining, );
             EVENT(ResetTraining, );
-            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false; bool stop_training = false; bool discard_changes = false; bool replace = false; std::vector<std::filesystem::path> paths = {}; bool user_batch = false;);
+            EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::vector<std::filesystem::path> add_splat_paths = {}; std::vector<bool> add_splat_freeze = {}; float freeze_lr_scale = 0.0f; bool exclude_frozen_add_splats_from_export = false; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false; bool stop_training = false; bool discard_changes = false; bool replace = false; std::vector<std::filesystem::path> paths = {}; bool user_batch = false;);
             EVENT(PrepareGalleryProject, std::filesystem::path source_path; std::filesystem::path destination; ExportFormat payload_format = ExportFormat::GALLERY_SOG; std::string expected_commit_uuid;);
             EVENT(CreateSplatFromPhoto, std::filesystem::path path;);
             EVENT(LoadGalleryScene, std::vector<std::filesystem::path> paths; std::vector<std::string> names; std::vector<glm::mat4> transforms; std::vector<int> sh_degrees; std::string group_name; bool hidden = false;);

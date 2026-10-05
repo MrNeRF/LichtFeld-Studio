@@ -5371,6 +5371,83 @@ contract["test_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(viewer.getScene().getNode("gallery-group"), nullptr);
     }
 
+    // Catches the startup dataset import dropping --add-splat, which trained the viewer's model
+    // without the added splats while headless training kept them.
+    TEST_F(VisualizerImplResetTest, DatasetImportKeepsAddedSplatSettings) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto splat = makeSplatFixture("added-splat");
+        const auto dataset = temporary_.path / "added-splat-dataset";
+        write_minimal_transforms_dataset(dataset);
+        core::events::cmd::LoadFile{
+            .path = dataset,
+            .is_dataset = true,
+            .add_splat_paths = {splat},
+            .add_splat_freeze = {true},
+            .freeze_lr_scale = 0.05f,
+            .exclude_frozen_add_splats_from_export = true,
+            .discard_changes = true}
+            .emit();
+        ASSERT_TRUE(waitUntil([&] { tasks.pollImportCompletion(); return !tasks.isImporting(); }));
+
+        const auto& params = viewer.getDataLoader()->getParameters();
+        EXPECT_EQ(params.add_splat_paths, std::vector<std::filesystem::path>{splat});
+        EXPECT_EQ(params.add_splat_freeze, std::vector<bool>{true});
+        EXPECT_FLOAT_EQ(params.freeze_lr_scale, 0.05f);
+        EXPECT_TRUE(params.exclude_frozen_add_splats_from_export);
+    }
+
+    // Catches the viewer sizing its shared training storage before --add-splat is appended: training
+    // failed to start once the added splats outgrew the headroom of the initial model.
+    TEST_F(VisualizerImplResetTest, TrainingStartFitsAddedSplatsInSharedStorage) {
+        if (!core::gpu_backend_available(core::default_gpu_backend()))
+            GTEST_SKIP() << "Selected tensor backend unavailable";
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        const auto* const context = viewer.getWindowManager()->getGraphicsContext();
+        if (core::default_gpu_backend() == core::GpuBackend::CUDA &&
+            (!context || !context->capabilities().external_memory_interop))
+            GTEST_SKIP() << "External memory interop unavailable";
+
+        const auto init = makeSplatFixture("training-init");
+        const auto added = temporary_.path / "training-added.ply";
+        ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(64),
+                                      {.output_path = added, .binary = true, .async = false}));
+        const auto dataset = temporary_.path / "training-added-dataset";
+        write_minimal_transforms_dataset(dataset);
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        core::events::cmd::LoadFile{
+            .path = dataset,
+            .is_dataset = true,
+            .init_path = init,
+            .add_splat_paths = {added},
+            .discard_changes = true}
+            .emit();
+        ASSERT_TRUE(waitUntil([&] { tasks.pollImportCompletion(); return !tasks.isImporting(); }));
+
+        auto* const manager = viewer.getTrainerManager();
+        ASSERT_TRUE(manager->startTraining());
+        ASSERT_TRUE(waitUntil(
+            [&] {
+                viewer.pumpPostedWorkForProjectWrite();
+                return manager->getState() == TrainingState::Running ||
+                       manager->getState() == TrainingState::Finished;
+            },
+            std::chrono::seconds(60)));
+        EXPECT_EQ(manager->getState(), TrainingState::Running);
+        ASSERT_NE(viewer.getScene().getTrainingModel(), nullptr);
+        EXPECT_EQ(viewer.getScene().getTrainingModel()->size(), 66);
+
+        manager->stopTraining();
+        ASSERT_TRUE(waitUntil(
+            [&] {
+                viewer.pumpPostedWorkForProjectWrite();
+                return manager->getState() == TrainingState::Finished && !manager->isCompletionPending();
+            },
+            std::chrono::seconds(60)));
+    }
+
     TEST(ImportComparisonTest, ProvisionalThirdUsesItsOwnSlotWithoutChangingDisplayedPair) {
         const size_t displayed_offset = 0;
         const auto validation_offset = plyComparisonImportOffset(3, displayed_offset, 2);
@@ -9451,7 +9528,7 @@ contract["test_selection_submode_follows_native_mode"](lf)
         }
     }
 
-    TEST_F(VisualizerImplResetTest, ResetTrainingPreservesExplicitInitPath) {
+    TEST_F(VisualizerImplResetTest, ResetTrainingPreservesInitPathAndAddedSplats) {
         ViewerOptions options;
         options.show_startup_overlay = false;
 
@@ -9464,12 +9541,21 @@ contract["test_selection_submode_follows_native_mode"](lf)
 
         lfs::core::param::TrainingParameters params;
         params.init_path = "seed_points.ply";
+        params.add_splat_paths = {"background.ply"};
+        params.add_splat_freeze = {true};
+        params.freeze_lr_scale = 0.05f;
+        params.exclude_frozen_add_splats_from_export = true;
         viewer.getDataLoader()->setParameters(params);
 
         lfs::core::events::cmd::ResetTraining{}.emit();
 
-        ASSERT_TRUE(viewer.getDataLoader()->getParameters().init_path.has_value());
-        EXPECT_EQ(*viewer.getDataLoader()->getParameters().init_path, "seed_points.ply");
+        const auto& reset = viewer.getDataLoader()->getParameters();
+        ASSERT_TRUE(reset.init_path.has_value());
+        EXPECT_EQ(*reset.init_path, "seed_points.ply");
+        EXPECT_EQ(reset.add_splat_paths, params.add_splat_paths);
+        EXPECT_EQ(reset.add_splat_freeze, params.add_splat_freeze);
+        EXPECT_FLOAT_EQ(reset.freeze_lr_scale, 0.05f);
+        EXPECT_TRUE(reset.exclude_frozen_add_splats_from_export);
 
         std::error_code ec;
         std::filesystem::remove_all(dataset_path, ec);
