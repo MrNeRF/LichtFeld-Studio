@@ -830,7 +830,6 @@ set(TEST_FILES
     test_strided_reduce_w2.cpp
     test_tensor_masking.cpp
     test_strided_tensor_ops.cpp
-    test_tensor_lazy_gather.cpp
     test_tensor_ordering_distance.cpp
     test_tensor_kmeans_workflow.cpp
     test_tensor_masked_select_rows.cpp

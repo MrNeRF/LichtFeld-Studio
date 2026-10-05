@@ -24,7 +24,6 @@
 #include <thrust/functional.h>
 #include <thrust/gather.h>
 #include <thrust/iterator/counting_iterator.h>
-#include <thrust/iterator/permutation_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/scan.h>
@@ -710,31 +709,6 @@ namespace lfs::core::tensor_ops {
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.gather_i64");
     }
 
-    // ============= OPTIMIZED: Fused Gather + Unary Operation =============
-    // This uses thrust::permutation_iterator for ZERO-COPY gather combined with
-    // thrust::transform for fusion - inspired by NVIDIA's parrot library
-    template <typename UnaryOp>
-    void launch_gather_fused_unary(const float* in, const int* idx, float* out,
-                                   size_t in_size, size_t out_size,
-                                   UnaryOp op, cudaStream_t stream) {
-        auto in_ptr = thrust::device_pointer_cast(in);
-        auto idx_ptr = thrust::device_pointer_cast(idx);
-        auto out_ptr = thrust::device_pointer_cast(out);
-
-        // Clamp indices to valid range
-        auto clamped_idx = thrust::make_transform_iterator(idx_ptr,
-                                                           ops::index_clamp_op(in_size));
-
-        // Create zero-copy permutation view: applies gather WITHOUT materializing
-        auto permuted_view = thrust::make_permutation_iterator(in_ptr, clamped_idx);
-
-        // Single fused kernel: gather + unary operation!
-        thrust::transform(thrust::cuda::par_nosync.on(stream),
-                          permuted_view, permuted_view + out_size,
-                          out_ptr,
-                          op);
-    }
-
     template <typename T>
     __device__ inline void scatter_add(T* dst, T value) {
         atomicAdd(dst, value);
@@ -881,9 +855,6 @@ namespace lfs::core::tensor_ops {
 
     // ============= Explicit Instantiations for Fused Gather =============
     // We need to explicitly instantiate the common functor types used with gather
-    template LFS_CORE_API void launch_gather_fused_unary<ops::abs_op>(const float*, const int*, float*, size_t, size_t, ops::abs_op, cudaStream_t);
-    template LFS_CORE_API void launch_gather_fused_unary<ops::sqrt_op>(const float*, const int*, float*, size_t, size_t, ops::sqrt_op, cudaStream_t);
-    template LFS_CORE_API void launch_gather_fused_unary<ops::neg_op>(const float*, const int*, float*, size_t, size_t, ops::neg_op, cudaStream_t);
 
     // ============= Explicit Instantiations for Scatter Operations =============
     // Instantiate for float, int, and byte-sized mask types

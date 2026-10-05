@@ -291,21 +291,6 @@ namespace {
                                  Tensor::from_vector(source, {count}, Device::CPU), ScatterMode::None);
         EXPECT_EQ(download(scatter_destination), cpu_destination.to_vector());
     }
-
-    TEST_F(TensorVulkanIndex, FusedGatherAppliesTheUnaryAfterTheRead) {
-        // Catches a fused gather that applies the unary to the index instead of
-        // the gathered value (the expression validates the indices on the host).
-        const std::vector<float> values = pattern(4099);
-        const Tensor source = upload_vulkan(Tensor::from_vector(values, {4099}, Device::CPU));
-        const std::vector<int> picks = pseudo_indices(6000, 4099, 17u);
-        const Tensor indices = upload_vulkan(Tensor::from_vector(picks, {picks.size()}, Device::CPU));
-        std::vector<float> expected(picks.size());
-        for (size_t i = 0; i < picks.size(); ++i) {
-            expected[i] = std::abs(values[static_cast<size_t>(picks[i])]);
-        }
-        expect_exact(source.gather_lazy(indices).map(lfs::core::ops::abs_op{}).eval(), expected, "fused abs");
-    }
-
     class TensorVulkanIndexNoAtomicFloat : public TensorVulkanIndex {
         TensorBackendOptions previous_options_;
         GpuBackend previous_backend_ = GpuBackend::CUDA;

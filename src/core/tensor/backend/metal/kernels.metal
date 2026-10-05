@@ -1412,11 +1412,9 @@ kernel void scan(device uchar* data_buffer [[buffer(0)]],
 // wins, 4 scatter add, 5 index_put (flat, clamped), 6 index_fill, 7 winners
 // (the last position of each target, for mode 3), 8 checked Int64-to-Int32
 // index conversion. kBoundary is 0 assert (records a device fault and writes
-// zero), 1 clamp or 2 wrap; kUnary applies abs (1), sqrt (2) or neg (3) after
-// a take. Elements move as kElementSize bytes; adds read kInputDType.
+// zero), 1 clamp or 2 wrap. Elements move as kElementSize bytes; adds read kInputDType.
 
 constant uint kBoundary [[function_constant(17)]];
-constant uint kUnary [[function_constant(18)]];
 
 struct IndexParams {
     ulong input_offset;
@@ -1581,12 +1579,8 @@ kernel void index_op(device uchar* input_buffer [[buffer(0)]],
         ulong source = 0;
         if (!gather_source(tid, indices, params, fault, source))
             store_zero(values, tid);
-        else if (kUnary == 0)
-            copy_element(input, source, values, tid);
         else
-            ((device float*)values)[tid] = kUnary == 1 ? abs(((device const float*)input)[source])
-                                           : kUnary == 2 ? sqrt(((device const float*)input)[source])
-                                                         : -((device const float*)input)[source];
+            copy_element(input, source, values, tid);
         return;
     }
     if (kOp == 5) {

@@ -285,10 +285,6 @@ namespace lfs::core {
                                 const StridedLayout& input_layout,
                                 const StridedLayout& index_layout,
                                 const IndexProgram& program, ExecContext context) = 0;
-            virtual void gather_fused_unary(StorageRef input, StorageRef indices,
-                                            StorageRef output, PointwiseOp unary,
-                                            const IndexProgram& program,
-                                            ExecContext context) = 0;
             virtual void index_select(StorageRef input, StorageRef indices,
                                       StorageRef output,
                                       const StridedLayout& input_layout,
@@ -618,10 +614,6 @@ namespace lfs::core {
                         const StridedLayout& input_layout,
                         const StridedLayout& index_layout,
                         const IndexProgram& program, ExecContext context) override;
-            void gather_fused_unary(StorageRef input, StorageRef indices,
-                                    StorageRef output, PointwiseOp unary,
-                                    const IndexProgram& program,
-                                    ExecContext context) override;
             void index_select(StorageRef input, StorageRef indices, StorageRef output,
                               const StridedLayout& input_layout,
                               const IndexProgram& program,
