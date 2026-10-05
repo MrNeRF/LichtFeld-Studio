@@ -4091,8 +4091,8 @@ namespace lfs::vis {
                     environmentBackgroundEnabled(frame_settings)) {
                     auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
                     if (vulkanSceneImageView(render_result->depth_image_view) != VK_NULL_HANDLE) {
-                        // Hardware depth attachment stores Vulkan-native NDC z; the
-                        // depth-blit pass can use it directly without near/far conversion.
+                        // The Vulkan point renderer exposes its hardware depth attachment
+                        // (NDC z); the Metal one writes linear view depth, cleared to -1.
                         mesh_frame.depth_blit.external_image = vulkanSceneImage(render_result->depth_image);
                         mesh_frame.depth_blit.external_image_view = vulkanSceneImageView(render_result->depth_image_view);
                         mesh_frame.depth_blit.external_image_layout = vulkanSceneImageLayout(render_result->depth_image_layout);
@@ -4101,8 +4101,15 @@ namespace lfs::vis {
                         mesh_frame.depth_blit.external_image_size = render_result->size;
                         mesh_frame.depth_blit.external_image_allocation_size =
                             render_result->size;
-                        mesh_frame.depth_blit.depth_is_ndc = true;
+                        mesh_frame.depth_blit.depth_is_ndc =
+                            render_result->viewer_backend != lfs::rendering::ViewerBackend::Metal;
                         mesh_frame.depth_blit.flip_y = render_result->flip_y;
+                        mesh_frame.depth_blit.near_plane = pc_request.frame_view.near_plane > 0.0f
+                                                               ? pc_request.frame_view.near_plane
+                                                               : 0.1f;
+                        mesh_frame.depth_blit.far_plane = pc_request.frame_view.far_plane > 0.0f
+                                                              ? pc_request.frame_view.far_plane
+                                                              : 1000.0f;
                     }
                     setVulkanMeshFrame(view_state, std::move(mesh_frame));
                 } else {
