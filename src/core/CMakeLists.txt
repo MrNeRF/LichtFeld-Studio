@@ -79,6 +79,7 @@ set(TENSOR_SOURCES
         tensor/backend/cuda/cuda_ops_movement.cpp
         tensor/backend/cuda/cuda_services.cpp
         tensor/tensor.cpp
+        tensor/tensor_trace.cpp
         tensor/tensor_method_bodies.cpp
         tensor/tensor_serialization.cpp
         tensor/tensor_factory.cpp
@@ -116,7 +117,6 @@ set(TENSOR_SOURCES
         tensor/tensor_nn_ops.cpp
         tensor/backend/cuda/runtime/pinned_memory_allocator.cpp
         tensor/backend/cuda/kernels/tensor_exports.cu
-        tensor/backend/cuda/kernels/where_scalar.cu
         nn/ops.cpp
         nn/weight_file.cpp
         nn/weight_file_open.cpp
@@ -227,7 +227,6 @@ set(CORE_SOURCES
         cuda_error.cpp
         cuda_error_typed.cpp
         device_fault.cpp
-        validated_index_token.cpp
         error.cpp
         error_bus.cpp
         exif.cpp
@@ -271,8 +270,6 @@ set(CORE_SOURCES
         splat_exportable_storage.cpp
         sh_value_quant.cpp
         shareable_allocation_limit.cpp
-        tensor_debug.cpp
-        training_snapshot.cpp
         mesh_data.cpp
         nodes/types.cpp
         nodes/registry.cpp

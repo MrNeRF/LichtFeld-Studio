@@ -72,7 +72,6 @@ namespace lfs::vis {
 
         [[nodiscard]] VkImageView motionView(std::size_t frame_slot) const;
         [[nodiscard]] VkImage motionImage(std::size_t frame_slot) const;
-        [[nodiscard]] bool initialized() const;
 
     private:
         struct Impl;

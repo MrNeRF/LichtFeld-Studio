@@ -89,7 +89,6 @@ namespace lfs::vis {
 
         // Tool availability
         [[nodiscard]] bool isToolAvailable(ToolType tool) const;
-        [[nodiscard]] const char* getToolUnavailableReason(ToolType tool) const;
 
         // Capability queries
         [[nodiscard]] bool canTransformSelectedNode() const;
@@ -149,12 +148,9 @@ namespace lfs::vis {
         bool has_selection_ = false;
         bool has_gaussians_ = false;
         bool has_editable_transform_selection_ = false;
-        bool has_splat_selection_ = false;
         bool has_editable_splat_selection_ = false;
         bool has_editable_align_selection_ = false;
-        bool has_locked_align_selection_ = false;
         bool tool_restore_guard_ = false;
-        std::string transform_selection_error_;
 
         // String-based operator system
         std::string active_operator_id_;

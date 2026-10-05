@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: MIT */
 
 #include "gui/rmlui/rmlui_vk_backend.hpp"
-#include "gui/rmlui/rml_image_file.hpp"
 #include "core/error.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "gui/rmlui/rml_image_file.hpp"
 #include "gui/rmlui/vulkan/rmlui_shaders_spv.hpp"
 #include "io/project_container.hpp"
 #include "python/python_runtime.hpp"

@@ -13,8 +13,6 @@ from lfs_plugins.tool_defs.definition import ToolDef, SubmodeDef, PivotModeDef
 from lfs_plugins.tool_defs.builtin import (
     BUILTIN_TOOLS,
     get_tool_by_id,
-    get_tools_by_group,
-    get_all_groups,
 )
 
 
@@ -201,25 +199,6 @@ class TestBuiltinTools:
         tool = get_tool_by_id("nonexistent.tool")
         assert tool is None
 
-    def test_get_tools_by_group(self):
-        """get_tools_by_group should return group tools."""
-        transform_tools = get_tools_by_group("transform")
-        assert len(transform_tools) >= 3
-        for tool in transform_tools:
-            assert tool.group == "transform"
-
-    def test_get_tools_by_group_sorted(self):
-        """get_tools_by_group should return sorted by order."""
-        tools = get_tools_by_group("transform")
-        orders = [t.order for t in tools]
-        assert orders == sorted(orders)
-
-    def test_get_all_groups(self):
-        """get_all_groups should return unique groups."""
-        groups = get_all_groups()
-        assert "select" in groups
-        assert "transform" in groups
-        assert len(groups) == len(set(groups))
 
     def test_select_tool_has_submodes(self):
         """Selection tool should have submodes."""

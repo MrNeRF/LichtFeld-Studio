@@ -27,11 +27,6 @@ namespace lfs::vis {
         glm::ivec2 subregion_origin,
         glm::ivec2 subregion_full_size);
 
-    [[nodiscard]] LFS_VIS_API lfs::rendering::SplitViewGaussianPanelRenderState buildSplitViewGaussianPanelRenderState(
-        const FrameContext& ctx, glm::ivec2 render_size,
-        const Viewport* source_viewport = nullptr,
-        std::optional<SplitViewPanelId> render_panel = std::nullopt);
-
     [[nodiscard]] LFS_VIS_API lfs::rendering::SplitViewPointCloudPanelRenderState buildSplitViewPointCloudPanelRenderState(
         const FrameContext& ctx, glm::ivec2 render_size,
         const Viewport* source_viewport = nullptr);
@@ -55,10 +50,6 @@ namespace lfs::vis {
 
     // Visible splat node shown in a PLY-comparison panel, or null when the
     // scene has fewer than two visible splat slots.
-    [[nodiscard]] LFS_VIS_API const core::SceneNode* plyComparisonNodeForPanel(
-        const core::Scene& scene,
-        size_t split_view_offset,
-        SplitViewPanelId panel);
 
     // Scope scene/crop/ellipsoid/selection overlay state to one visible splat node so
     // a per-node comparison render can use identity transform indices.

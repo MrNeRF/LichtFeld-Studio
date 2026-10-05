@@ -41,7 +41,6 @@ from .project_inspector import (
     InspectionFactsPipeline,
     dialog_model,
     contents_rows,
-    pending_removals,
     license_name,
     license_value,
     details_rows,
@@ -662,13 +661,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("sort_label", self.get_sort_label)
         model.bind_func("sort_tooltip", self.get_sort_tooltip)
         model.bind_func("filter_menu_label", lambda: tr("projects.toolbar.filter"))
-        model.bind_func("active_filter_label", self.get_filter_label)
-        model.bind_func("all_assets_selected", lambda: self._selected_folder_id == SCOPE_ALL)
-        model.bind_func("all_assets_count", self.get_all_assets_count)
-        model.bind_func("local_assets_count", self.get_local_assets_count)
         model.bind_func("selected_asset_id", self.get_selected_asset_id)
         model.bind_func("selected_count", self.get_selected_count)
-        model.bind_func("selected_count_text", self.get_selected_count_text)
         model.bind_func("show_selection_none", lambda: self._selection_type == "none")
         model.bind_func("show_selection_asset", lambda: self._selection_type == "asset")
         model.bind_func("show_selection_folder", lambda: self._selection_type == "folder")
@@ -680,10 +674,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("asset_list_show_folder", lambda: self._list_columns()["folder"])
         model.bind_func("asset_list_show_size", lambda: self._list_columns()["size"])
         for column in ("name", "gallery", "size", "modified", "folder"):
-            model.bind_func(
-                f"asset_list_{column}_width",
-                lambda column=column: f"{self._list_column_width(column):.1f}dp",
-            )
+            if column != "name":
+                model.bind_func(
+                    f"asset_list_{column}_width",
+                    lambda column=column: f"{self._list_column_width(column):.1f}dp",
+                )
             label_binding = "col_" + column + "_label"
             model.bind_func(label_binding, lambda column=column: self._list_header_label(column))
         model.bind_func("asset_list_gallery_compact", lambda: self._list_columns()["gallery"] == 32)
@@ -698,7 +693,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("is_medium", lambda: self._layout_class == "medium")
         model.bind_func("is_wide", lambda: self._layout_class == "wide")
         model.bind_func("gallery_review_open", self._gallery_review_open)
-        model.bind_func("inspector_width", lambda: f"{self._inspector_width:.1f}dp")
         model.bind_func("inspector_style_width", self.get_inspector_style_width)
         for section in self._inspector_sections:
             model.bind_func("inspector_" + section + "_expanded",
@@ -729,13 +723,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "SH " + self._selected_details_rows()["sh_degree"] if self._selected_details_rows().get("sh_degree") else ""))))
         model.bind_func("inspector_reclaimable_tooltip", lambda: "{} ({})".format(
             self._selected_details_rows().get("dead_bytes", ""), self._selected_details_rows().get("reclaimable_percent", "")))
-        model.bind_func("inspector_height", lambda: f"{self._inspector_preferred_height:.1f}dp")
         model.bind_func("inspector_style_height", self.get_inspector_style_height)
         model.bind_func("contents_undo_label", lambda: tr("projects.contents.undo"))
         model.bind_func("main_min_height", lambda: f"{self._main_min_height:.1f}dp")
-        model.bind_func(
-            "bottom_panel_height", lambda: f"{self._bottom_panel_height:.1f}dp"
-        )
         model.bind_func(
             "bottom_panel_resize_dragging", lambda: self._bottom_panel_dragging
         )
@@ -768,7 +758,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "quick_look_has_thumbnail",
             lambda: self.get_selected_asset_thumbnail_decorator() != "none",
         )
-        model.bind_func("asset_results_summary_visible", lambda: True)
         model.bind_func("asset_results_summary", self.get_asset_results_summary)
         model.bind_func("asset_search_empty", self.get_asset_search_empty)
         model.bind_func("catalog_notice", self.get_catalog_notice)
@@ -802,23 +791,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         )
         model.bind_func("selected_asset_path", self.get_selected_asset_path)
         model.bind_func("selected_asset_size", self.get_selected_asset_size)
-        model.bind_func("selected_asset_created", self.get_selected_asset_created)
         model.bind_func("selected_asset_modified", self.get_selected_asset_modified)
         for field, getter in {
             "inspector_saved": lambda: self._selected_details_rows().get("saved", ""),
             "inspector_saved_at": lambda: self._selected_details_rows().get("saved_at", ""),
             "inspector_opened": lambda: self._selected_details_rows().get("opened", ""),
-            "inspector_iteration": lambda: self._selected_details_rows().get("iteration", ""),
             "inspector_training_summary": lambda: self._inspector_fact_summary("iteration", "strategy"),
             "inspector_model_summary": lambda: self._inspector_fact_summary("gaussians", "sh_degree", "SH "),
-            "inspector_strategy": lambda: self._selected_details_rows().get("strategy", ""),
-            "inspector_resumable": lambda: bool(self._selected_details_rows().get("resumable")),
-            "inspector_gaussians": lambda: self._selected_details_rows().get("gaussians", ""),
-            "inspector_sh_degree": lambda: self._selected_details_rows().get("sh_degree", ""),
             "inspector_dataset": lambda: self._selected_details_rows().get("dataset", ""),
-            "inspector_dataset_path": lambda: self._selected_details_rows().get("dataset_path", ""),
-            "inspector_dataset_reachable": lambda: bool(self._selected_details_rows().get("dataset_reachable")),
-            "inspector_embedded": lambda: bool(self._selected_details_rows().get("embedded")),
             "inspector_has_metrics": lambda: bool(self._selected_details_rows().get("has_metrics")),
             "inspector_metrics": lambda: self._selected_details_rows().get("metrics", ""),
             "inspector_license": lambda: license_name(self._selected_details_rows().get("license_identifier", ""), tr),
@@ -829,19 +809,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "inspector_reclaimable": lambda: self._selected_details_rows().get("reclaimable_percent", ""),
             "inspector_saves": lambda: self._selected_details_rows().get("saves", ""),
             "inspector_autosave_newer": lambda: bool(self._selected_details_rows().get("autosave_newer")),
-            "inspector_has_details": lambda: bool(self._selected_inspection().get("details")),
-            "inspector_card_diagnostic": lambda: str(getattr(self._selected_inspection().get("card"), "diagnostic", "") or ""),
             "inspector_can_resume": lambda: self._project_available(self._get_selected_asset() or {}) and not self._selected_transfer_recovery() and bool(self._selected_details_rows().get("resumable")),
             "inspector_operations_expanded": self.get_operations_expanded,
-            "contents_pending": self.get_contents_pending,
-            "contents_has_pending": lambda: bool(self.get_contents_pending()),
             "inspector_has_saved": lambda: bool(self._selected_details_rows().get("saved")),
             "inspector_has_saved_at": lambda: bool(self._selected_details_rows().get("saved_at")),
             "inspector_has_opened": lambda: bool(self._selected_details_rows().get("opened")),
             "inspector_has_iteration": lambda: bool(self._selected_details_rows().get("iteration")),
-            "inspector_has_strategy": lambda: bool(self._selected_details_rows().get("strategy")),
             "inspector_has_gaussians": lambda: bool(self._selected_details_rows().get("gaussians")),
-            "inspector_has_sh_degree": lambda: bool(self._selected_details_rows().get("sh_degree")),
             "inspector_has_dataset": lambda: bool(self._selected_details_rows().get("dataset")),
             "inspector_has_license": lambda: bool(self._selected_details_rows().get("license_identifier")),
             "inspector_has_title": lambda: bool(self._selected_details_rows().get("title")),
@@ -854,29 +828,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "inspector_verify_label": lambda: tr("projects.property.verify"),
         }.items():
             model.bind_func(field, getter)
-        model.bind_func("selected_health_state", self.get_selected_health_state)
         model.bind_func("selected_health_label", self.get_selected_health_label)
         model.bind_func("selected_has_problem", self.selected_has_problem)
         model.bind_func("selected_fix_label", self.get_selected_fix_label)
-        model.bind_func("selected_fix_action", self.get_selected_fix_action)
-        model.bind_func(
-            "selected_asset_file_missing", self.get_selected_asset_file_missing
-        )
         model.bind_func(
             "selected_asset_can_locate", self.get_selected_asset_can_locate
         )
         model.bind_func(
             "selected_fix_requires_action",
             lambda: self.selected_has_problem() and not self.get_selected_asset_can_locate(),
-        )
-        model.bind_func("locate_section_title", self.get_locate_section_title)
-        model.bind_func(
-            "selected_asset_relocation_candidate",
-            self.get_selected_asset_relocation_candidate,
-        )
-        model.bind_func(
-            "selected_asset_has_relocation_candidate",
-            self.get_selected_asset_has_relocation_candidate,
         )
         model.bind_func(
             "selected_asset_expected_path", self.get_selected_asset_path
@@ -895,24 +855,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "no_search_results_label": "projects.status.no_search_results",
             "clear_search_label": "projects.action.clear_search",
             "search_placeholder": "projects.toolbar.search_icon",
-            "search_icon_label": "projects.toolbar.search_icon",
-            "info_tab_label": "projects.info_panel.info",
             "select_item_hint": "projects.status.select_item",
-            "asset_details_title": "projects.info_panel.asset_details",
             "folder_details_title": "projects.info_panel.folder_details",
-            "file_not_found_title": "projects.info_panel.file_not_found",
-            "found_at_label": "projects.info_panel.found_at",
-            "use_found_location_label": "projects.action.use_found_location",
             "prop_folder_label": "projects.property.folder",
             "prop_size_label": "projects.property.size",
             "prop_path_label": "projects.property.path",
-            "prop_created_label": "projects.property.created",
             "prop_modified_label": "projects.property.modified",
             "prop_expected_path_label": "projects.property.expected_path",
             "prop_assets_label": "projects.property.assets",
-            "locate_file_button_label": "projects.action.locate_file",
-            "load_button_label": "menu.file.open_project",
-            "inspector_title": "projects.inspector.title",
             "problem_title": "projects.inspector.problem",
             "project_section_title": "projects.inspector.project",
             "gallery_section_title": "projects.inspector.gallery",
@@ -921,7 +871,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "resume_button_label": "projects.action.resume_training",
             "scope_all_label": "projects.sidebar.all_projects",
             "view_menu_label": "projects.toolbar.view",
-            "filter_label": "projects.toolbar.filter",
             "no_folders_label": "projects.status.no_folders",
             "empty_folder_label": "projects.status.empty_folder",
             "thumbnail_size_label": "projects.toolbar.thumbnail_size",
@@ -951,7 +900,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("on_import_project", self.on_import_project),
             ("on_load_asset", self.on_load_asset),
             ("set_view_mode", self.set_view_mode),
-            ("cycle_sort_mode", self.cycle_sort_mode),
             ("open_sort_menu", self.open_sort_menu),
             ("sort_list_column", self.sort_list_column),
             ("close_quick_look", self.close_quick_look),
@@ -962,14 +910,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("toggle_inspector_section", self.toggle_inspector_section),
             ("open_inspector_menu", self.open_inspector_menu),
             ("refresh_catalog", self.refresh_catalog),
-            ("on_locate_file", self.on_locate_file),
-            ("on_use_found_location", self.on_use_found_location),
             ("on_selected_fix", self.on_selected_fix),
-            ("open_project_operation", self.open_project_operation),
             ("open_gallery_details", self.open_gallery_details),
             ("contents_action", self.on_contents_action),
             ("toggle_operations", self.toggle_operations),
-            ("on_bottom_panel_resize_start", self.on_bottom_panel_resize_start),
             ("close_panel", self._on_close_panel),
             ("clear_search", lambda *_args: self.set_search_query("")),
         ):
@@ -1010,9 +954,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dirty_fields(
             "is_compact", "is_narrow", "is_medium", "is_wide",
             "is_floating",
-            "inspector_width", "inspector_style_width", "inspector_height",
+            "inspector_style_width",
             "inspector_style_height", "thumbnail_size", "asset_card_slot_width",
-            "asset_card_thumbnail_height", "bottom_panel_height",
+            "asset_card_thumbnail_height",
             "main_min_height",
         )
 
@@ -1119,38 +1063,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         else:
             self._choose_sort("sort:" + field)
 
-    def get_filter_label(self) -> str:
-        return tr({
-            "all": "projects.filter.clear",
-            "local": "projects.filter.local",
-            "attention": "projects.filter.attention",
-            "not_published": "projects.filter.not_published",
-            "published": "projects.filter.published",
-            "missing": "projects.filter.missing",
-            "checkpoint": "projects.filter.checkpoint",
-            "dataset": "projects.filter.dataset",
-            "gallery": "projects.filter.gallery",
-        }.get(self._active_filter, "projects.toolbar.filter"))
-
-    def open_filter_menu(self, _handle=None, _ev=None, _args=None):
-        filters = [
-            ("projects.filter.clear", "all"),
-            ("projects.filter.local", "local"),
-            ("projects.filter.published", "published"),
-            ("projects.filter.not_published", "not_published"),
-            ("projects.filter.attention", "attention"),
-            ("projects.filter.missing", "missing"),
-            ("projects.filter.checkpoint", "checkpoint"),
-            ("projects.filter.dataset", "dataset"),
-            ("projects.filter.gallery", "gallery"),
-        ]
-
-        def choose(action: str) -> None:
-            self._set_filter(action)
-
-        self._show_shared_context_menu(
-            [{"label": tr(label), "action": action} for label, action in filters], choose
-        )
 
     def _set_filter(self, value: str) -> None:
         if value not in self.FILTERS:
@@ -1159,7 +1071,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._reset_scroll()
         self._refresh_records(assets=True, folders=True)
         self._dirty_selection()
-        self._dirty_fields("active_filter_label")
         self._persist_project_manager_state()
 
     def get_selected_asset_id(self) -> str:
@@ -1168,13 +1079,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def get_selected_count(self) -> int:
         return len(self._selected_asset_ids)
 
-    def get_selected_count_text(self) -> str:
-        count = len(self._selected_asset_ids)
-        if count == 0:
-            return tr("projects.status.select_item")
-        if count == 1:
-            return tr("projects.status.one_item_selected")
-        return tr("projects.status.multi_items_selected", count=count)
 
     @staticmethod
     def _sort_text(value: Any) -> str:
@@ -1610,11 +1514,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         except (OSError, OverflowError, TypeError, ValueError):
             return ""
 
-    def get_contents_pending(self):
-        rows = pending_removals(self._selected_inspection().get("details"))
-        if not rows:
-            return ""
-        return tr("projects.contents.pending_total").format(size=self._format_size(sum(int(row.get("bytes", 0)) for row in rows)))
 
     def _embed_contents_dataset(self, path, progress, cancel):
         details = self._native_io_call("inspect_project_details", path)
@@ -2215,32 +2114,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             )
         return rows
 
-    def get_all_assets_count(self) -> int:
-        query = self._search_query.strip().casefold()
-        if not query:
-            if self._catalog_snapshot is not None or self._catalog_preview is not None:
-                local_count = len(self._asset_index_assets())
-            else:
-                count = getattr(self._asset_index, "count", None)
-                local_count = int(count()) if callable(count) else len(self._asset_index_assets())
-            return local_count + len(self._gallery_remote_assets())
-        return sum(
-            self._asset_matches_query(asset, query)
-            for asset in self._all_display_assets().values()
-        )
-
-    def get_local_assets_count(self) -> int:
-        query = self._search_query.strip().casefold()
-        if not query:
-            if self._catalog_snapshot is not None or self._catalog_preview is not None:
-                return len(self._asset_index_assets())
-            count = getattr(self._asset_index, "count", None)
-            if callable(count):
-                return int(count())
-        return sum(
-            self._asset_matches_query(asset, query)
-            for asset in self._asset_index_assets().values()
-        )
 
     def get_asset_results_summary(self) -> str:
         try:
@@ -2343,9 +2216,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         asset = self._get_selected_asset()
         return self._format_size(asset.get("file_size_bytes", 0)) if asset else ""
 
-    def get_selected_asset_created(self) -> str:
-        asset = self._get_selected_asset()
-        return self._format_unix_ns(asset.get("created_at_unix_ns", 0)) if asset else ""
 
     def get_selected_asset_modified(self) -> str:
         if saved := self._selected_details_rows().get("saved_at"):
@@ -2378,9 +2248,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "update": "projects.action.update_version",
         }.get(action, "")) if action else ""
 
-    def get_selected_asset_file_missing(self) -> bool:
-        asset = self._get_selected_asset()
-        return bool(asset) and not bool(asset.get("exists", False))
 
     def get_selected_asset_can_locate(self) -> bool:
         asset = self._get_selected_asset()
@@ -2389,20 +2256,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "IDENTITY_MISMATCH",
         }
 
-    def get_locate_section_title(self) -> str:
-        asset = self._get_selected_asset()
-        if not asset:
-            return ""
-        if str(asset.get("status") or "") == "IDENTITY_MISMATCH":
-            return tr("projects.status.identity_mismatch")
-        return tr("projects.info_panel.file_not_found")
-
-    def get_selected_asset_relocation_candidate(self) -> str:
-        asset = self._get_selected_asset()
-        return str(asset.get("relocation_candidate") or "") if asset else ""
-
-    def get_selected_asset_has_relocation_candidate(self) -> bool:
-        return bool(self.get_selected_asset_relocation_candidate())
 
     def _get_selected_folder(self) -> Optional[Dict[str, Any]]:
         return self._asset_index_folders().get(self._selected_folder_id or "")
@@ -2459,9 +2312,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         else:
             self.open_quick_look()
 
-    def cycle_sort_mode(self, _handle=None, _ev=None, _args=None):
-        index = (self.SORT_MODES.index(self._sort_mode) + 1) % len(self.SORT_MODES)
-        self._choose_sort("sort:" + self.SORT_MODES[index])
 
     def open_view_menu(self, _handle=None, _ev=None, _args=None):
         items = [
@@ -2512,30 +2362,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._scan_asset_folders(folder_id=folder.id, directory=folder_path, recursive=False)
         return folder.id
 
-    def add_asset_folder(self, _handle=None, _ev=None, _args=None):
-        self.on_add_folder(None, None, None)
-
-    def on_add_folder(self, _handle=None, _ev=None, _args=None):
-        start = str(resolve_default_asset_directory())
-        directory = lf.ui.open_folder_dialog(
-            tr("projects.dialog.select_folder"), start
-        )
-        if directory:
-            folder_only = tr("projects.action.folder_only")
-            include_subfolders = tr("projects.action.include_subfolders")
-
-            def choose_scan(button: str) -> None:
-                if button == folder_only:
-                    self._add_folder_from_path(str(directory), recursive=False)
-                elif button == include_subfolders:
-                    self._add_folder_from_path(str(directory), recursive=True)
-
-            lf.ui.confirm_dialog(
-                tr("projects.dialog.scan_depth"),
-                tr("projects.dialog.scan_depth_message"),
-                [folder_only, include_subfolders, tr("common.cancel")],
-                choose_scan,
-            )
 
     def on_import_project(self, _handle=None, _ev=None, _args=None):
         if not self._asset_index:
@@ -2583,7 +2409,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dirty_fields(
             "selected_folder_id",
             "selected_drop_target",
-            "all_assets_selected",
             "show_selection_none",
             "show_selection_asset",
             "show_selection_folder",
@@ -2595,8 +2420,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._start_inspection_refresh()
         return True
 
-    def select_folder(self, _handle, _ev, args):
-        self._select_folder_id(self._resolve_event_value(args, _ev, "data-folder-id"))
 
     def _select_asset_id(
         self,
@@ -2646,7 +2469,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dirty_fields(
             "selected_asset_id",
             "selected_count",
-            "selected_count_text",
             "show_selection_none",
             "show_selection_asset",
             "show_selection_folder",
@@ -2656,35 +2478,26 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "selected_asset_has_folder",
             "selected_asset_path",
             "selected_asset_size",
-            "selected_asset_created",
             "selected_asset_modified",
-            "selected_health_state",
             "selected_health_label",
             "selected_has_problem",
             "selected_fix_label",
-            "selected_fix_action",
-            "selected_asset_file_missing",
             "selected_asset_can_locate",
             "open_button_label",
             "selected_fix_requires_action",
-            "locate_section_title",
-            "selected_asset_relocation_candidate",
-            "selected_asset_has_relocation_candidate",
             "selected_asset_expected_path",
             "quick_look_visible",
             "quick_look_thumbnail",
             "quick_look_has_thumbnail",
             "inspector_saved", "inspector_saved_at", "inspector_opened",
-            "inspector_iteration", "inspector_strategy", "inspector_resumable",
             "inspector_training_summary", "inspector_model_summary",
-            "inspector_gaussians", "inspector_sh_degree", "inspector_dataset",
-            "inspector_dataset_path", "inspector_dataset_reachable",
-            "inspector_embedded", "inspector_has_metrics", "inspector_metrics",
+            "inspector_dataset",
+            "inspector_has_metrics", "inspector_metrics",
             "inspector_license", "inspector_license_notice", "selected_project_title",
             "inspector_physical_size", "inspector_dead_bytes", "inspector_reclaimable",
-            "inspector_saves", "inspector_autosave_newer", "inspector_has_details",
-            "inspector_card_diagnostic", "inspector_can_resume",
-            "inspector_operations_expanded", "contents_pending", "contents_has_pending",
+            "inspector_saves", "inspector_autosave_newer",
+            "inspector_can_resume",
+            "inspector_operations_expanded",
             "inspector_gallery_action_label", "inspector_has_gallery_action", "inspector_gallery_action_enabled",
             "inspector_gallery_action_tooltip",
             "inspector_gallery_title", "inspector_gallery_description", "inspector_can_edit_gallery_details",
@@ -2748,13 +2561,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         except Exception as exc:
             self._log_error("Failed to relink .licht project: %s", exc)
 
-    def _selected_transfer_recovery(self, *, label=False):
+    def _selected_transfer_recovery(self):
         asset = self._get_selected_asset()
         if not asset:
             return ""
         badge = self._gallery_badge(asset)
         if not badge["health_badge"] and badge["gallery_action"] in ("resume", "retry"):
-            return badge["gallery_action_label"] if label else badge["gallery_action"]
+            return badge["gallery_action"]
         return ""
 
     def on_load_asset(self, _handle, _ev, args):
@@ -2822,11 +2635,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                           lambda values: self._project_form_changed(key, values),
                           width=560 if self._dialog_kind in {"remove_content", "compact_content", "license", "gallery_details"} else 720)
 
-    def _refresh_project_form(self, *, body: bool = True) -> None:
+    def _refresh_project_form(self) -> None:
         if not self._dialog_kind:
             return
         content, buttons = self._project_form()
-        lf.ui.form_dialog_update(self._dialog_key, buttons, content if body else None)
+        lf.ui.form_dialog_update(self._dialog_key, buttons, content)
 
     def _read_project_form(self, values) -> None:
         for key in ("destination", "format", "source", "name", "gallery_title", "gallery_description", "license_choice", "license_name", "license_text", "attribution"):
@@ -4072,7 +3885,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if folders:
             self._handle.update_record_list("folders", self.get_folder_list())
             self._handle.dirty("folders")
-            self._handle.dirty("all_assets_count")
         if assets:
             self._measure_text_columns()
             self._release_obsolete_thumbnail_sources()
@@ -4093,19 +3905,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 "asset_list_show_size",
                 "asset_list_gallery_compact",
                 "col_name_label", "col_gallery_label", "col_size_label", "col_modified_label", "col_folder_label",
-                "asset_list_name_width", "asset_list_gallery_width", "asset_list_size_width",
+                "asset_list_gallery_width", "asset_list_size_width",
                 "asset_list_modified_width", "asset_list_folder_width",
             ):
                 self._handle.dirty(field)
         self._request_model_update()
 
-    def _dirty_model(self, *fields):
-        field_set = set(fields)
-        self._refresh_records(
-            assets="assets" in field_set,
-            folders="folders" in field_set,
-        )
-        self._dirty_fields(*(field for field in fields if field not in ("assets", "folders")))
 
     def _dirty_fields(self, *fields: str) -> None:
         if not self._handle:
@@ -4830,8 +4635,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         except Exception:
             return False
 
-    def on_bottom_panel_resize_start(self, _handle, event, _args):
-        self._start_resize("inspector-height", event)
 
     def _list_columns(self):
         return list_columns(
@@ -4973,7 +4776,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._inspector_preferred_height = defaults["inspector_default"]
             self._info_preferred_height = self._inspector_preferred_height
             self._sync_panel_layout()
-            self._dirty_fields("inspector_height", "inspector_style_height", "bottom_panel_height")
+            self._dirty_fields("inspector_style_height", "bottom_panel_height")
         elif region.startswith("list-column:"):
             column = region.partition(":")[2]
             self._list_column_overrides.pop(column, None)
@@ -5033,7 +4836,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._resize_region = ""
             if region == "inspector-height":
                 self._dirty_fields(
-                    "bottom_panel_resize_dragging", "inspector_height", "inspector_style_height"
+                    "bottom_panel_resize_dragging", "inspector_style_height"
                 )
             else:
                 self._dirty_fields("bottom_panel_resize_dragging")

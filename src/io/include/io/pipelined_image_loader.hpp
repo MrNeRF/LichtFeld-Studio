@@ -239,16 +239,11 @@ namespace lfs::io {
 
         void prefetch(const std::vector<ImageRequest>& requests);
         void prefetch(size_t sequence_id, const std::filesystem::path& path, const LoadParams& params);
-        // Canonicalize a run's source set before normal training consumption.
-        // The encoded results remain available only in this loader's run cache.
-        void canonicalize(const std::vector<ImageRequest>& requests);
 
         ReadyImage get();
-        std::optional<ReadyImage> try_get();
         std::optional<ReadyImage> try_get_for(std::chrono::milliseconds timeout);
 
         [[nodiscard]] lfs::Result<LoaderCompletion> get_completion();
-        [[nodiscard]] std::optional<LoaderCompletion> try_get_completion();
         [[nodiscard]] std::optional<LoaderCompletion> try_get_completion_for(
             std::chrono::milliseconds timeout);
 
@@ -475,7 +470,6 @@ namespace lfs::io {
 
         std::shared_ptr<std::vector<uint8_t>> get_from_jpeg_cache(const std::string& cache_key);
         void put_in_jpeg_cache(const std::string& cache_key, std::shared_ptr<std::vector<uint8_t>> data);
-        void put_in_jpeg_cache(const std::string& cache_key, std::vector<uint8_t>&& data);
         void invalidate_cache_entry(const std::string& cache_key);
         void evict_jpeg_cache_if_needed(size_t required_bytes);
         size_t spill_least_recent_until_locked(size_t cached_bytes_target);

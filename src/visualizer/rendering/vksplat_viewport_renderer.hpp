@@ -225,9 +225,6 @@ namespace lfs::vis {
         void abandonReadbackTicket(std::uint64_t ticket) const;
         // Observability counters for LOG_PERF / GT compare cycles.
         [[nodiscard]] ReadbackStats readbackStats() const;
-        [[nodiscard]] std::size_t outstandingReadbackTickets() const;
-        [[nodiscard]] std::uint64_t readbackRingFullWaitCount() const;
-        [[nodiscard]] std::uint64_t readbackCellPinWaitCount() const;
 
         [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
             VulkanContext& context,

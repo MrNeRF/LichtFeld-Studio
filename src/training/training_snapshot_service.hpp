@@ -199,7 +199,6 @@ namespace lfs::training {
         operator=(const PendingTrainingSnapshot&) = delete;
         ~PendingTrainingSnapshot();
 
-        [[nodiscard]] bool ready() const;
         [[nodiscard]] lfs::Result<CapturedTrainingSnapshot>
         wait();
 

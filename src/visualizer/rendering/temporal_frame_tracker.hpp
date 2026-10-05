@@ -54,11 +54,6 @@ namespace lfs::vis {
         return (static_cast<std::uint32_t>(value) & static_cast<std::uint32_t>(reason)) != 0;
     }
 
-    [[nodiscard]] constexpr std::uint32_t temporalResetReasonMask(
-        const TemporalResetReason value) {
-        return static_cast<std::uint32_t>(value);
-    }
-
     struct TemporalFrameInput {
         lfs::rendering::FrameView view;
         glm::ivec2 output_extent{0, 0};

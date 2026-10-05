@@ -39,7 +39,7 @@ namespace lfs::rendering {
         // first and then only the tile bits of each instance: cheaper when
         // instances outnumber sources. Requires count <= capacity.
         [[nodiscard]] lfs::Result<void> bin(const core::Tensor& splats, const core::Tensor& raster,
-                                       uint32_t count, uint32_t tiles, bool source_sorted = false);
+                                            uint32_t count, uint32_t tiles, bool source_sorted = false);
 
         // Writes the depth-batch job of every chunk slot of the last bin() into
         // `jobs` (Int32 pairs); slots of tiles below the split stay -1.

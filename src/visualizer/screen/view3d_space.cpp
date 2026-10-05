@@ -260,23 +260,6 @@ namespace lfs::vis::screen {
         return ViewAxis::None;
     }
 
-    std::string viewLabel(const View3DSpace& view) {
-        const char* direction = "User";
-        switch (alignedViewAxis(view.camera.camera.R)) {
-        case ViewAxis::Top: direction = "Top"; break;
-        case ViewAxis::Bottom: direction = "Bottom"; break;
-        case ViewAxis::Front: direction = "Front"; break;
-        case ViewAxis::Back: direction = "Back"; break;
-        case ViewAxis::Right: direction = "Right"; break;
-        case ViewAxis::Left: direction = "Left"; break;
-        case ViewAxis::None: break;
-        }
-        const char* projection = view.settings.equirectangular ? "Panorama"
-                                 : view.settings.orthographic  ? "Orthographic"
-                                                               : "Perspective";
-        return std::string(direction) + " " + projection;
-    }
-
     void setOrthographic(View3DSpace& view, const bool enabled, const float viewport_height) {
         auto& s = view.settings;
         view.auto_orthographic = false;

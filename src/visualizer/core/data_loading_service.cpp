@@ -216,57 +216,6 @@ namespace lfs::vis {
         }
     }
 
-    std::expected<void, std::string> DataLoadingService::loadSOG(const std::filesystem::path& path) {
-        LOG_TIMER("LoadSOG");
-
-        try {
-            LOG_INFO("Loading SOG file: {}", lfs::core::path_to_utf8(path));
-
-            // Load through scene manager
-            if (!viewer_ || !viewer_->getGuiManager() ||
-                !viewer_->getGuiManager()->asyncTasks().startSplatLoad({path}, true)) {
-                throw std::runtime_error("Import already in progress");
-            }
-
-            LOG_INFO("Queued SOG for loading: {} (from: {})",
-                     lfs::core::path_to_utf8(path.filename()),
-                     lfs::core::path_to_utf8(displayParentPath(path)));
-
-            return {};
-        } catch (const std::exception& e) {
-            std::string error_msg = std::format("Failed to load SOG: {}", e.what());
-            LOG_ERROR("{} (Path: {})", error_msg, lfs::core::path_to_utf8(path));
-            return std::unexpected(error_msg);
-        }
-    }
-
-    std::expected<void, std::string> DataLoadingService::loadSplatFile(const std::filesystem::path& path) {
-        LOG_TIMER("LoadSplatFile");
-
-        try {
-            // Determine file type
-            if (lfs::io::is_ssog_path(path) || isSOGFile(path)) {
-                return loadSOG(path);
-            } else if (isPLYFile(path)) {
-                return loadPLY(path);
-            } else {
-                // Let the scene manager figure it out with the generic loader
-                LOG_INFO("Loading splat file: {}", lfs::core::path_to_utf8(path));
-                if (!viewer_ || !viewer_->getGuiManager() ||
-                    !viewer_->getGuiManager()->asyncTasks().startSplatLoad({path}, true)) {
-                    throw std::runtime_error("Import already in progress");
-                }
-
-                LOG_INFO("Queued splat file for loading: {}", lfs::core::path_to_utf8(path.filename()));
-                return {};
-            }
-        } catch (const std::exception& e) {
-            std::string error_msg = std::format("Failed to load splat file: {}", e.what());
-            LOG_ERROR("{} (Path: {})", error_msg, lfs::core::path_to_utf8(path));
-            return std::unexpected(error_msg);
-        }
-    }
-
     std::expected<void, std::string>
     DataLoadingService::loadSplatFiles(const std::vector<std::filesystem::path>& paths) {
         if (paths.empty()) {

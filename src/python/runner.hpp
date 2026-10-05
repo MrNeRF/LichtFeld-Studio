@@ -240,13 +240,6 @@ namespace lfs::python {
     CapabilityResult invoke_capability(const std::string& name, const std::string& args_json);
 
     /**
-     * @brief Check if a capability is registered.
-     * @param name Capability name.
-     * @return true if the capability exists.
-     */
-    bool has_capability(const std::string& name);
-
-    /**
      * @brief List all registered capabilities.
      * @return Vector of capability info.
      */

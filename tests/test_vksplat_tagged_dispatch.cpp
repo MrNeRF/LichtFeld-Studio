@@ -423,8 +423,6 @@ namespace {
         }
 
         // Expose protected dispatch / barrier APIs for scripted tests.
-        using VulkanGSPipeline::BufferBarrier;
-        using VulkanGSPipeline::bufferMemoryBarrier;
         using VulkanGSPipeline::executeCompute;
         using VulkanGSPipeline::executeComputeIndirect;
 
@@ -614,90 +612,6 @@ TEST(VkSplatTaggedDispatch, UntaggedDispatchInvalidatesForNextTaggedAccess) {
     pipeline.executeCompute(
         {{64u, 64u}}, nullptr, 0, cp,
         std::vector<_VulkanBuffer>{buf_a});
-
-    script.clear_recording();
-    pipeline.executeCompute(
-        {{64u, 64u}}, nullptr, 0, cp,
-        std::vector<TaggedBinding>{{buf_a, BufferUse::ComputeRead}});
-
-    ASSERT_EQ(script.buffer_barrier_calls(), 1u);
-    const CapturedBarrier2* cap = script.first_buffer_barrier_call();
-    ASSERT_NE(cap, nullptr);
-    ASSERT_EQ(cap->buffer_barriers.size(), 1u);
-    EXPECT_EQ(cap->buffer_barriers[0].buffer, buf_a.buffer);
-    expect_src_dst(cap->buffer_barriers[0],
-                   conservativeSrc(),
-                   scopeFor(BufferUse::ComputeRead));
-
-    pipeline.endCommandBatch(/*use_fence=*/false);
-}
-
-// Catches: legacy bufferMemoryBarrier not invalidating planner state (same G8 shape).
-TEST(VkSplatTaggedDispatch, LegacyBufferMemoryBarrierInvalidates) {
-    DispatchScript script;
-    BindScript bind(script);
-
-    TestablePipeline pipeline;
-    pipeline.install_fake_handles();
-    pipeline.setVulkanDispatch(make_scripted_dispatch());
-
-    auto buf_a = makeBuffer(0xA004);
-    auto cp = pipeline.make_fake_pipeline(1);
-
-    pipeline.beginCommandBatch();
-    pipeline.trackExternalParent(buf_a.buffer);
-
-    pipeline.executeCompute(
-        {{64u, 64u}}, nullptr, 0, cp,
-        std::vector<TaggedBinding>{{buf_a, BufferUse::ComputeWrite}});
-
-    // Legacy pair-overload barrier — must invalidate, and must route through dispatch.
-    pipeline.bufferMemoryBarrier(
-        {{buf_a, VulkanGSPipeline::COMPUTE_SHADER_WRITE}},
-        VulkanGSPipeline::COMPUTE_SHADER_READ);
-
-    script.clear_recording();
-    pipeline.executeCompute(
-        {{64u, 64u}}, nullptr, 0, cp,
-        std::vector<TaggedBinding>{{buf_a, BufferUse::ComputeRead}});
-
-    ASSERT_EQ(script.buffer_barrier_calls(), 1u);
-    const CapturedBarrier2* cap = script.first_buffer_barrier_call();
-    ASSERT_NE(cap, nullptr);
-    ASSERT_EQ(cap->buffer_barriers.size(), 1u);
-    EXPECT_EQ(cap->buffer_barriers[0].buffer, buf_a.buffer);
-    expect_src_dst(cap->buffer_barriers[0],
-                   conservativeSrc(),
-                   scopeFor(BufferUse::ComputeRead));
-
-    pipeline.endCommandBatch(/*use_fence=*/false);
-}
-
-// Catches: BufferBarrier (per-entry src/dst) overload not invalidating planner state (G8).
-TEST(VkSplatTaggedDispatch, LegacyBufferBarrierOverloadInvalidates) {
-    DispatchScript script;
-    BindScript bind(script);
-
-    TestablePipeline pipeline;
-    pipeline.install_fake_handles();
-    pipeline.setVulkanDispatch(make_scripted_dispatch());
-
-    auto buf_a = makeBuffer(0xA014);
-    auto cp = pipeline.make_fake_pipeline(1);
-
-    pipeline.beginCommandBatch();
-    pipeline.trackExternalParent(buf_a.buffer);
-
-    pipeline.executeCompute(
-        {{64u, 64u}}, nullptr, 0, cp,
-        std::vector<TaggedBinding>{{buf_a, BufferUse::ComputeWrite}});
-
-    // Per-entry src/dst overload — same invalidate contract as the pair overload.
-    pipeline.bufferMemoryBarrier({TestablePipeline::BufferBarrier{
-        buf_a,
-        VulkanGSPipeline::COMPUTE_SHADER_WRITE,
-        VulkanGSPipeline::COMPUTE_SHADER_READ,
-    }});
 
     script.clear_recording();
     pipeline.executeCompute(

@@ -311,8 +311,6 @@ namespace lfs::vis::project {
         closeSaveError() const;
         void markApplicationClosePending();
         void markCloseDiscardRequested();
-        [[nodiscard]] bool
-        isApplicationClosePending() const;
         void setSuppressTrainingAdoption(bool suppress);
         void bindTrainerSnapshotTarget(
             std::optional<std::filesystem::path> destination =

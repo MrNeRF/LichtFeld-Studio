@@ -232,7 +232,6 @@ namespace gsplat_lfs {
     using mat4 = glm::mat<4, 4, float>;
     using mat3x2 = glm::mat<3, 2, float>;
 
-#define N_THREADS_PACKED 256
-#define ALPHA_THRESHOLD  (1.f / 255.f)
+#define ALPHA_THRESHOLD (1.f / 255.f)
 
 } // namespace gsplat_lfs

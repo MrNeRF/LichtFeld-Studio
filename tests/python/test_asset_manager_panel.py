@@ -1105,25 +1105,6 @@ def test_import_registers_only_selected_licht_project(panel_module):
     assert panel.get_selected_asset_id() == asset["id"]
 
 
-def test_add_folder_uses_real_directory_picker(panel_module):
-    panel = panel_module.AssetManagerPanel()
-    selected = "/tmp/assets"
-    panel_module.lf._test_state.folder_dialog_path = selected
-    calls = []
-    panel._asset_index = _index(
-        add_folder=lambda path, recursive=None: calls.append((path, recursive))
-        or SimpleNamespace(id="selected-folder"),
-
-    )
-    panel.refresh_catalog = lambda **_kwargs: None
-    panel._scan_asset_folders = lambda **_kwargs: None
-
-    panel.on_add_folder()
-
-    assert len(panel_module.lf._test_state.confirm_dialogs) == 1
-    panel_module.lf._test_state.confirm_dialogs[-1][3]("projects.action.include_subfolders")
-    assert calls == [(selected, True)]
-    assert panel._selected_folder_id == "selected-folder"
 
 def test_folder_counts_match_search_results(panel_module):
     first = _project(name="Bicycle")
@@ -1169,23 +1150,6 @@ def test_project_filters_use_catalog_inspection_for_unselected_projects(panel_mo
         assert [row["id"] for row in panel.get_filtered_assets()] == [checkpoint["id"]]
 
 
-def test_filter_menu_names_the_all_option_as_a_clear_action(panel_module):
-    panel = panel_module.AssetManagerPanel()
-    panel._active_filter = "missing"
-
-    panel.open_filter_menu()
-
-    menu = panel_module.lf._test_state.context_menus[-1]
-    assert menu["items"][0] == {"label": "projects.filter.clear", "action": "all"}
-    menu["on_action"]("all")
-    assert panel._active_filter == "all"
-
-    assert panel.get_filter_label() == "projects.filter.clear"
-
-    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
-    rml = (resources / "asset_manager.rml").read_text()
-    assert '<select id="asset-filter-select" data-value="active_filter"' in rml
-    assert '<option value="local">@tr:projects.filter.local</option>' in rml
 
 
 def test_filter_summary_explains_empty_results_with_scope_count_and_filter(panel_module, monkeypatch):
@@ -1247,7 +1211,6 @@ def test_all_assets_navigation_and_folder_scopes_filter_catalog(panel_module):
     folders = panel.get_folder_list()
     assert {row["id"] for row in folders} == {"default", "archive"}
     assert all(row["can_manage"] for row in folders)
-    assert panel.get_all_assets_count() == 2
 
 def test_scope_dropdown_has_all_projects_and_watched_folders(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -2253,7 +2216,9 @@ def test_list_gallery_column_stays_a_compact_status_icon(panel_module, monkeypat
         assert model.func_bindings["asset_list_gallery_compact"]() is True
         expected = list_column_widths(width)
         for name, value in expected.items():
-            assert model.func_bindings[f"asset_list_{name}_width"]() == f"{value:.1f}dp"
+            assert panel._list_column_width(name) == value
+            if name != "name":
+                assert model.func_bindings[f"asset_list_{name}_width"]() == f"{value:.1f}dp"
     resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
     root = ET.fromstring((resources / "asset_manager.rml").read_text())
     row = root.find('.//div[@class="asset-list-row"]')
@@ -3138,8 +3103,6 @@ def test_use_found_location_relinks_selected_asset(panel_module):
     panel._update_selection_type()
     panel.refresh_catalog = lambda **_kwargs: relinked.append("refresh")
 
-    assert panel.get_selected_asset_has_relocation_candidate() is True
-    assert panel.get_selected_asset_relocation_candidate() == "/tmp/found.licht"
     assert panel.get_selected_asset_has_folder() is True
 
     panel.on_use_found_location()
@@ -3199,8 +3162,6 @@ def test_identity_mismatch_exposes_locate_and_relinks(panel_module):
     panel_module.lf._test_state.dialog_path = "/tmp/correct.licht"
 
     assert panel.get_selected_asset_can_locate() is True
-    assert panel.get_selected_asset_file_missing() is False
-    assert panel.get_locate_section_title() == "projects.status.identity_mismatch"
     assert panel._project_status_label(asset) == "projects.status.identity_mismatch"
 
     root = Path(__file__).resolve().parents[2]
@@ -3899,7 +3860,6 @@ def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     assert panel._active_filter == 'published'
     rows = panel._filtered_assets()
     assert {r['id'] for r in rows} == {local['id'],'remote:remote-only'}
-    assert panel.get_all_assets_count() == 2
     assert set(panel._asset_index.assets) == {local['id']}
     assert panel._select_asset_id('remote:remote-only')
     panel._repair_selection()
@@ -3914,22 +3874,8 @@ def test_all_projects_scope_includes_gallery_only_rows(panel_module):
     panel, local, _remote = _gallery_fixture(panel_module)
 
     assert [row["id"] for row in panel._filtered_assets()] == [local["id"], "remote:remote-only"]
-    assert panel.get_all_assets_count() == 2
-    assert panel.get_local_assets_count() == 1
 
 
-def test_count_getters_use_detached_catalog_during_verification(panel_module):
-    panel = panel_module.AssetManagerPanel()
-    asset = _project()
-    panel._asset_index = _index(count=lambda: pytest.fail("count waited on index lock"))
-    panel._library_service = SimpleNamespace(
-        snapshot=lambda: pytest.fail("count rebuilt catalog snapshot")
-    )
-    panel._catalog_snapshot = {"projects": {asset["id"]: asset}, "folders": {}}
-    panel._catalog_snapshot_epoch = None
-
-    assert panel.get_all_assets_count() == 1
-    assert panel.get_local_assets_count() == 1
 
 
 def test_mount_does_not_write_unchanged_project_manager_state(panel_module, monkeypatch):
@@ -4603,7 +4549,9 @@ def test_A4_list_gallery_header_fits_before_modified(panel_module, width, modifi
             expected_binding = None if column == 'name' else binding
             assert header.find(cell).get('data-style-width') == expected_binding
             assert row.find(cell).get('data-style-width') == expected_binding
-            assert model.func_bindings[binding]() == f'{value:.1f}dp'
+            assert panel._list_column_width(column) == value
+            if column != 'name':
+                assert model.func_bindings[binding]() == f'{value:.1f}dp'
         columns = list_columns(width)
         visible = 2 + sum(columns[key] for key in ('size', 'modified', 'folder'))
         # Fixed chrome includes the dedicated 32 dp column after Size.

@@ -209,7 +209,10 @@ namespace {
             else if (mantissa) { // subnormal
                 int e = -1;
                 uint32_t m = mantissa;
-                do { ++e; m <<= 1; } while (!(m & 1024));
+                do {
+                    ++e;
+                    m <<= 1;
+                } while (!(m & 1024));
                 value |= ((112 - e) << 23) | ((m & 1023) << 13);
             }
             float result;

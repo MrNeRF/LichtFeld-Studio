@@ -255,11 +255,6 @@ namespace lfs::vis {
             return rendering_manager_ ? rendering_manager_->getAverageFPS() : 0.0f;
         }
 
-        // Antialiasing state
-        bool isAntiAliasingEnabled() const {
-            return rendering_manager_ ? rendering_manager_->getSettings().antialiasing : false;
-        }
-
         tools::AlignTool* getAlignTool() {
             return align_tool_.get();
         }

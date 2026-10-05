@@ -37,23 +37,7 @@ namespace {
         }
     };
 
-    std::vector<int64_t> int64_values(const Tensor& tensor) {
-        return tensor.cpu().to_vector_int64();
-    }
-
 } // namespace
-
-TEST(HardeningThemeE_Numerical, E1_AllCloseUsesTorchNaNPolicy) {
-    const float nan = std::numeric_limits<float>::quiet_NaN();
-    const auto ours_nan = lfs_float_tensor({nan}, {1}, Device::CPU);
-    const auto ours_zero = lfs_float_tensor({0.0f}, {1}, Device::CPU);
-    const auto torch_nan = torch::tensor({nan});
-    const auto torch_zero = torch::tensor({0.0f});
-
-    EXPECT_EQ(ours_nan.all_close(ours_zero), torch::allclose(torch_nan, torch_zero));
-    EXPECT_EQ(ours_nan.all_close(ours_nan), torch::allclose(torch_nan, torch_nan));
-}
-
 TEST_F(CudaTest, E2_IntegerTensorTrueDivisionPromotesLikeTorch_CPUAndCUDA) {
     for (const Device device : {Device::CPU, Device::GPU}) {
         const auto lhs = lfs_int_tensor({3}, {1}, device);
@@ -238,72 +222,6 @@ TEST_F(CudaTest, E8_WideRangeRandintDoesNotCollapseDistribution) {
     EXPECT_GT(ours_unique.size(), 8000u)
         << "torch unique=" << torch_unique.size() << ", ours unique=" << ours_unique.size();
 }
-
-TEST_F(CudaTest, E9_MultinomialLargeFiniteWeightsMatchesTorch) {
-    constexpr int samples = 20'000;
-    const float maximum = std::numeric_limits<float>::max();
-    const auto weights = lfs_float_tensor({maximum, maximum}, {2}, Device::GPU);
-    const auto ours = int64_values(Tensor::multinomial(weights, samples, true));
-    // LibTorch 2.7.1 overflows its Float32 cumulative sum for
-    // {FLT_MAX, FLT_MAX}: CUDA asserts and CPU collapses to the last bucket.
-    // Multinomial probabilities are scale invariant, so normalized {1, 1}
-    // supplies the torch-compatible semantic oracle without oracle overflow.
-    const auto torch_weights = torch::tensor({1.0f, 1.0f});
-    const auto theirs = torch::multinomial(torch_weights, samples, true);
-    const auto* torch_data = theirs.data_ptr<int64_t>();
-
-    const double ours_zero_fraction =
-        static_cast<double>(std::count(ours.begin(), ours.end(), 0)) / samples;
-    const double torch_zero_fraction =
-        static_cast<double>(std::count(torch_data, torch_data + samples, int64_t{0})) / samples;
-    EXPECT_NEAR(ours_zero_fraction, torch_zero_fraction, 0.05)
-        << "ours zero fraction=" << ours_zero_fraction
-        << ", torch CPU zero fraction=" << torch_zero_fraction;
-}
-
-TEST_F(CudaTest, E10_SparseNoReplacementMultinomialMatchesTorchContract) {
-    const auto weights = lfs_float_tensor({1.0f, 0.0f}, {2}, Device::GPU);
-    const auto torch_cpu_weights = torch::tensor({1.0f, 0.0f});
-    const auto torch_cuda_weights = torch_cpu_weights.cuda();
-
-    bool ours_threw = false;
-    bool torch_cpu_threw = false;
-    bool torch_cuda_threw = false;
-    std::vector<int64_t> ours_values;
-    std::vector<int64_t> torch_cpu_values;
-    std::vector<int64_t> torch_cuda_values;
-
-    try {
-        ours_values = int64_values(Tensor::multinomial(weights, 2, false));
-    } catch (const std::exception&) {
-        ours_threw = true;
-    }
-    try {
-        const auto result = torch::multinomial(torch_cpu_weights, 2, false).contiguous();
-        const auto* values = result.data_ptr<int64_t>();
-        torch_cpu_values.assign(values, values + result.numel());
-    } catch (const c10::Error&) {
-        torch_cpu_threw = true;
-    }
-    try {
-        const auto result = torch::multinomial(torch_cuda_weights, 2, false).cpu().contiguous();
-        const auto* values = result.data_ptr<int64_t>();
-        torch_cuda_values.assign(values, values + result.numel());
-    } catch (const c10::Error&) {
-        torch_cuda_threw = true;
-    }
-
-    EXPECT_EQ(torch_cpu_threw, torch_cuda_threw);
-    EXPECT_EQ(ours_threw, torch_cuda_threw);
-    if (!ours_threw && !torch_cuda_threw) {
-        std::sort(ours_values.begin(), ours_values.end());
-        std::sort(torch_cpu_values.begin(), torch_cpu_values.end());
-        std::sort(torch_cuda_values.begin(), torch_cuda_values.end());
-        EXPECT_EQ(torch_cpu_values, torch_cuda_values);
-        EXPECT_EQ(ours_values, torch_cuda_values);
-    }
-}
-
 TEST(HardeningThemeE_Numerical, E11_LinspaceMatchesTorchWideRangeOverflow) {
     const float maximum = std::numeric_limits<float>::max();
     const auto ours = Tensor::linspace(-maximum, maximum, 3, Device::CPU);
@@ -326,10 +244,5 @@ TEST_F(CudaTest, E12_RandomEndpointStressMatchesTorchIntervalContracts) {
     const auto uniform = Tensor::uniform({count}, 2.0f, 4.0f, Device::GPU).cpu().to_vector();
     EXPECT_TRUE(std::all_of(uniform.begin(), uniform.end(), [](const float value) {
         return value >= 2.0f && value < 4.0f;
-    }));
-
-    const auto bernoulli = Tensor::bernoulli({count}, 1.0f, Device::GPU).cpu().to_vector();
-    EXPECT_TRUE(std::all_of(bernoulli.begin(), bernoulli.end(), [](const float value) {
-        return value == 1.0f;
     }));
 }

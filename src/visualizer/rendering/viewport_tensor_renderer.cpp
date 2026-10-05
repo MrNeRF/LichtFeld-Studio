@@ -1,25 +1,25 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "viewport_reference_renderer.hpp"
 #include "viewport_geometry.hpp"
+#include "viewport_reference_renderer.hpp"
 
+#include "core/executable_path.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include "core/gpu_kernel_module.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
+#include "internal/resource_paths.hpp"
+#include "tensor_frame_uploads.hpp"
 #include "view_render_state.hpp"
-#include "viewport_reference_state.hpp"
 #include "viewport_compose_program.hpp"
 #include "viewport_grid_program.hpp"
 #include "viewport_overlay_program.hpp"
-#include "tensor_frame_uploads.hpp"
+#include "viewport_reference_state.hpp"
 #include "viewport_tensor_meshes.hpp"
 #include "viewport_vignette_program.hpp"
-#include "core/executable_path.hpp"
-#include "core/image_io.hpp"
-#include "core/path_utils.hpp"
-#include "internal/resource_paths.hpp"
 #include "window/graphics_context.hpp"
 
 #include <algorithm>
@@ -79,7 +79,6 @@ namespace lfs::vis {
                            (result.floating_point || image.dtype() == DataType::UInt8);
             return result;
         }
-
 
         struct alignas(16) ComposeParameters {
             std::uint64_t destination = 0;
@@ -227,10 +226,10 @@ namespace lfs::vis {
             auto overlay = Module::load(viewport_overlay_program_entries());
             auto grid = Module::load(viewport_grid_program_entries());
             if (!compose || !vignette || !overlay || !grid) {
-                const auto detail = !compose ? compose.error().detail()
-                                  : !vignette ? vignette.error().detail()
-                                  : !overlay ? overlay.error().detail()
-                                               : grid.error().detail();
+                const auto detail = !compose    ? compose.error().detail()
+                                    : !vignette ? vignette.error().detail()
+                                    : !overlay  ? overlay.error().detail()
+                                                : grid.error().detail();
                 LOG_ERROR("Could not load tensor viewport compositor: {}", detail);
                 return false;
             }
@@ -251,7 +250,8 @@ namespace lfs::vis {
                 return false;
             const auto rect = framebufferRect(desc);
             const Tensor* scene = desc.scene_image && desc.scene_image->is_valid()
-                                      ? desc.scene_image.get() : &dummy;
+                                      ? desc.scene_image.get()
+                                      : &dummy;
             const ImageLayout layout = imageLayout(*scene);
             const bool has_scene = scene != &dummy && layout.valid;
             const auto valid_width = desc.scene_image_size.x > 0

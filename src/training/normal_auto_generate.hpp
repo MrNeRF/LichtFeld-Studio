@@ -32,12 +32,6 @@ namespace lfs::training {
         std::span<const NormalAutoGenerateJob> jobs,
         const NormalGenerateProgress& progress)>;
 
-    [[nodiscard]] bool normal_auto_generate_needed(
-        bool use_normal_loss,
-        bool normal_auto_generate,
-        float normal_loss_weight,
-        std::span<const std::shared_ptr<lfs::core::Camera>> cameras);
-
     struct NormalAutoGenerateOutcome {
         bool attempted = false;
         bool generated = false;

@@ -249,7 +249,6 @@ namespace lfs::vis {
     LFS_VIS_API void setThemeVignetteStyle(float intensity, float radius, float softness);
 
     // Persistence
-    LFS_VIS_API bool saveTheme(const Theme& t, const std::string& path);
     LFS_VIS_API bool loadTheme(Theme& t, const std::string& path);
 
     // Theme preference (for splash screen)

@@ -19,8 +19,7 @@ namespace lfs::vis::gui {
             if (!pixels)
                 return std::nullopt;
             const std::size_t count = static_cast<std::size_t>(width) * height;
-            RmlImageFile image{.path = path, .width = width, .height = height,
-                               .rgba = {pixels.get(), pixels.get() + count * 4}};
+            RmlImageFile image{.path = path, .width = width, .height = height, .rgba = {pixels.get(), pixels.get() + count * 4}};
             for (std::size_t i = 0; i < count; ++i) {
                 auto* p = image.rgba.data() + i * 4;
                 if (channels == 1) {

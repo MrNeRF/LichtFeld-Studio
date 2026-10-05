@@ -251,8 +251,6 @@ namespace lfs::core {
 
     GpuKernelModule::~GpuKernelModule() = default;
 
-    GpuBackend GpuKernelModule::backend() const { return impl_->backend; }
-
     uint64_t GpuKernelModule::address(const Tensor& tensor) const {
         if (!tensor.is_valid() || tensor.numel() == 0)
             return 0;

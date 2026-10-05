@@ -451,7 +451,6 @@ namespace lfs::core {
     struct TensorWorkQueue::Impl {
         GpuBackend backend = GpuBackend::CUDA;
         cudaStream_t stream = nullptr;
-        bool owns_stream = true;
         VulkanTimelinePoint consumer_point;
 #ifdef LFS_TENSOR_VULKAN
         VkDevice device = VK_NULL_HANDLE;
@@ -473,8 +472,7 @@ namespace lfs::core {
 #endif
         uint64_t recorder_id = 0;
         bool vulkan_queue = false;
-        bool borrowed_queue = false;
-        // Id of an owned or borrowed Metal queue; 0 is the default queue.
+        // Id of the owned Metal queue; 0 is the default queue.
         uint64_t metal_queue = 0;
         bool owns_metal_queue = false;
         uint64_t counter = 0;
@@ -545,7 +543,7 @@ namespace lfs::core {
         ~Impl() {
             stop_callbacks();
 #if LFS_HAS_CUDA
-            if (stream && owns_stream) {
+            if (stream) {
                 (void)cudaStreamSynchronize(stream);
                 CudaMemoryPool::instance().release_stream(stream);
                 (void)cudaStreamDestroy(stream);
@@ -625,43 +623,6 @@ namespace lfs::core {
 #if LFS_HAS_CUDA
         check(cudaStreamCreateWithFlags(&s.stream,
                                         mode == Mode::LegacyOrdered ? cudaStreamDefault : cudaStreamNonBlocking));
-#else
-        throw std::runtime_error("CUDA tensor queues are unavailable in this build");
-#endif
-    }
-    TensorWorkQueue::TensorWorkQueue(GpuBackend backend, void* target) : impl_(std::make_unique<Impl>()) {
-        if (backend == GpuBackend::Vulkan) {
-#ifdef LFS_TENSOR_VULKAN
-            auto context = internal::acquire_vulkan_context();
-            const auto id = reinterpret_cast<uint64_t>(target);
-            if (target != nullptr && !context->recorders().owns_queue(id))
-                throw std::runtime_error("Borrowed tensor queues are unsupported on Vulkan");
-            impl_->backend = backend;
-            impl_->owns_stream = false;
-            impl_->queue_context = std::move(context);
-            impl_->recorder_id = id;
-            impl_->vulkan_queue = true;
-            impl_->borrowed_queue = true;
-            return;
-#else
-            throw std::runtime_error("Vulkan tensor queues are unavailable in this build");
-#endif
-        }
-        if (backend == GpuBackend::Metal) {
-            const auto id = reinterpret_cast<uint64_t>(target);
-            if (!gpu_backend_available(GpuBackend::Metal) || !internal::metal_queue::valid(id))
-                throw std::runtime_error("Borrowed Metal tensor queues must be live Metal queues");
-            impl_->backend = backend;
-            impl_->owns_stream = false;
-            impl_->metal_queue = id;
-            return;
-        }
-        if (backend != GpuBackend::CUDA)
-            throw std::runtime_error("Borrowed tensor queues are unsupported on Vulkan");
-        impl_->backend = backend;
-        impl_->owns_stream = false;
-#if LFS_HAS_CUDA
-        impl_->stream = static_cast<cudaStream_t>(target);
 #else
         throw std::runtime_error("CUDA tensor queues are unavailable in this build");
 #endif
@@ -920,7 +881,7 @@ namespace lfs::core {
             s.metal = internal::make_metal_work_queue(consumer);
             return;
 #else
-            throw std::runtime_error("Metal/Vulkan interoperable work queues are unavailable in this build");
+        throw std::runtime_error("Metal/Vulkan interoperable work queues are unavailable in this build");
 #endif
         }
 #if LFS_HAS_CUDA
@@ -950,14 +911,13 @@ namespace lfs::core {
     TensorWorkQueue::~TensorWorkQueue() {
         try {
 #ifdef LFS_TENSOR_VULKAN
-            if (impl_->vulkan_queue && !impl_->borrowed_queue && impl_->recorder_id != 0 &&
+            if (impl_->vulkan_queue && impl_->recorder_id != 0 &&
                 impl_->queue_context)
                 impl_->queue_context->recorders().destroy_queue(impl_->recorder_id);
 #endif
             if (impl_->owns_metal_queue)
                 internal::metal_queue::destroy(impl_->metal_queue);
-            // Stream ownership and import lifetime are independent. In particular,
-            // a borrowed default stream can still have outstanding timeline waits.
+            // Complete outstanding timeline waits before releasing their imports.
             if ((impl_->vulkan_queue || impl_->backend == GpuBackend::Metal) &&
                 (impl_->consumer != nullptr || !impl_->retired_timelines.empty() ||
                  impl_->callbacks_outstanding.load(std::memory_order_acquire) != 0))

@@ -396,7 +396,6 @@ namespace {
         EXPECT_THROW(
             (void)timeline.generatePathAtTimeStep(std::numeric_limits<float>::denorm_min()),
             std::length_error);
-        EXPECT_THROW((void)timeline.generatePath(0), std::invalid_argument);
     }
 
     TEST(SequencerTimelineRegressionTest, AnimationClipRejectsUnknownTypesAndDuplicateTargets) {

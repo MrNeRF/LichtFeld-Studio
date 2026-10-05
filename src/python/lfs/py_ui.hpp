@@ -843,11 +843,7 @@ namespace lfs::python {
         void unregister_menu(nb::object menu_class);
         void unregister_all();
 
-        void draw_menu_items(MenuLocation location);
-        bool has_items(MenuLocation location) const;
-
         std::vector<PyMenuClassInfo*> get_menu_bar_entries();
-        void draw_menu_bar_entry(const std::string& idname);
 
         vis::gui::MenuDropdownContent collect_menu_content(const std::string& idname);
         void execute_menu_callback(const std::string& idname, int callback_index);
@@ -924,25 +920,19 @@ namespace lfs::python {
         void show_input(const std::string& title, const std::string& message,
                         const std::string& default_value, nb::object callback);
         void show_message(const std::string& title, const std::string& message,
-                          MessageStyle style = MessageStyle::Info);
-        void show_message(const std::string& title, const std::string& message,
-                          MessageStyle style, nb::object callback);
+                          MessageStyle style = MessageStyle::Info, nb::object callback = {});
 
         void draw_modals();
 
         bool has_open_modals() const;
 
         void clear_for_test();
-        bool can_lock_mutex_for_test() const;
-        void run_pending_callback_for_test(std::function<void()> callback);
 
     private:
         PyModalRegistry() = default;
         ~PyModalRegistry() = default;
         PyModalRegistry(const PyModalRegistry&) = delete;
         PyModalRegistry& operator=(const PyModalRegistry&) = delete;
-
-        using ModalCallbackAction = std::function<void()>;
 
         mutable std::mutex mutex_;
         std::vector<PyModalDialog> modals_;

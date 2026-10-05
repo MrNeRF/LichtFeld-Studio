@@ -48,7 +48,6 @@ namespace lfs::core::nn {
 
         [[nodiscard]] static lfs::Result<WeightFile> open(const std::filesystem::path& path);
 
-        [[nodiscard]] bool contains(std::string_view name) const;
         [[nodiscard]] std::vector<std::string> names() const;
         [[nodiscard]] const TensorInfo* info(std::string_view name) const;
         [[nodiscard]] const nlohmann::json& header() const { return header_; }

@@ -46,19 +46,6 @@ namespace lfs::core::internal {
         };
         static_assert(sizeof(GemmPush) == 64);
 
-        struct CdistPush {
-            uint64_t a_address;
-            uint64_t b_address;
-            uint64_t output_address;
-            uint32_t rows;
-            uint32_t columns;
-            uint32_t features;
-            uint32_t pad0;
-            float p;
-            uint32_t pad1;
-        };
-        static_assert(sizeof(CdistPush) == 48);
-
         struct MiscPush {
             uint64_t output_address;
             uint64_t a_address;
@@ -72,7 +59,6 @@ namespace lfs::core::internal {
 
         // Matrix_misc kinds.
         constexpr uint32_t kEye = 0;
-        constexpr uint32_t kDiag = 1;
         constexpr uint32_t kDotPartial = 2;
         constexpr uint32_t kDotFinalize = 3;
 
@@ -258,26 +244,6 @@ namespace lfs::core::internal {
         context->memory().deallocate(partials);
     }
 
-    void VulkanBackendOps::diag(
-        const StorageRef diagonal, const StorageRef output, const size_t count, ExecContext) {
-        LFS_FACADE_TRACE(diag);
-        if (count == 0) {
-            return;
-        }
-        const auto context = acquire_vulkan_context();
-        const size_t elements = count * count;
-        const MiscPush push{
-            .output_address = address(output),
-            .a_address = address(diagonal),
-            .rows = checked_u32(count, "Vulkan diag size exceeds uint32"),
-            .columns = checked_u32(count, "Vulkan diag size exceeds uint32"),
-            .count = checked_u32(elements, "Vulkan diag element count exceeds uint32"),
-        };
-        const std::array reads{diagonal};
-        const std::array writes{output};
-        record_misc(*context, kDiag, push, reads, writes, dispatch_groups(*context, elements));
-    }
-
     void VulkanBackendOps::eye(
         const StorageRef output, const size_t rows, const size_t columns, ExecContext) {
         LFS_FACADE_TRACE(eye);
@@ -294,33 +260,6 @@ namespace lfs::core::internal {
         };
         const std::array writes{output};
         record_misc(*context, kEye, push, {}, writes, dispatch_groups(*context, elements));
-    }
-
-    void VulkanBackendOps::cdist(
-        const StorageRef lhs, const StorageRef rhs, const StorageRef output,
-        const size_t lhs_rows, const size_t rhs_rows, const size_t columns, const float p,
-        ExecContext) {
-        LFS_FACADE_TRACE(cdist);
-        const size_t outputs = lhs_rows * rhs_rows;
-        if (outputs == 0) {
-            return;
-        }
-        const auto context = acquire_vulkan_context();
-        const CdistPush push{
-            .a_address = address(lhs),
-            .b_address = address(rhs),
-            .output_address = address(output),
-            .rows = checked_u32(lhs_rows, "Vulkan cdist rows exceed uint32"),
-            .columns = checked_u32(rhs_rows, "Vulkan cdist columns exceed uint32"),
-            .features = checked_u32(columns, "Vulkan cdist features exceed uint32"),
-            .p = p,
-        };
-        const VulkanPipeline& pipeline =
-            context->pipelines().specialized("cdist", sizeof(CdistPush), {});
-        const std::array reads{lhs, rhs};
-        const std::array writes{output};
-        record_dispatch(*context, pipeline, push, reads, writes,
-                        dispatch_groups(*context, outputs), 1, 1);
     }
 
 } // namespace lfs::core::internal

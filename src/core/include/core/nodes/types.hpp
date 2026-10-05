@@ -103,7 +103,6 @@ namespace lfs::nodes {
 
     struct LFS_CORE_API FieldMemo {
         core::Tensor evaluate(const Field& field, const FieldContext& context);
-        void clear();
 
     private:
         struct Key {
@@ -124,7 +123,6 @@ namespace lfs::nodes {
         Field() = default;
         Field(std::string type_id, EvaluateFn evaluate, bool context_dependent = true);
 
-        [[nodiscard]] bool valid() const noexcept;
         [[nodiscard]] std::string_view type_id() const noexcept;
         [[nodiscard]] bool context_dependent() const noexcept;
         [[nodiscard]] core::Tensor evaluate(const FieldContext& context, FieldMemo& memo) const;
@@ -166,7 +164,6 @@ namespace lfs::nodes {
     LFS_CORE_API glm::mat4 rotation_matrix(glm::vec3 degrees);
     LFS_CORE_API Geometry geometry_from_splat_data(const core::SplatData& data);
     LFS_CORE_API std::unique_ptr<core::SplatData> splat_data_from_geometry(const Geometry& geometry);
-    LFS_CORE_API Geometry geometry_from_point_cloud(const core::PointCloud& points);
     LFS_CORE_API core::PointCloud point_cloud_from_geometry(const Geometry& geometry);
     LFS_CORE_API Geometry geometry_from_mesh(std::shared_ptr<const core::MeshData> mesh);
 

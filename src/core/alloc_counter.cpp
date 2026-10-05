@@ -27,10 +27,6 @@ namespace lfs::core::alloc_counter {
         return snapshot();
     }
 
-    void record(const std::uint64_t n) noexcept {
-        record_site(Site::Unknown, n);
-    }
-
     void record_site(const Site site, const std::uint64_t n) noexcept {
         if (n == 0) {
             return;

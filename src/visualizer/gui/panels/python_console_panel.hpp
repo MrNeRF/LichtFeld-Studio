@@ -95,7 +95,6 @@ namespace lfs::vis::gui::panels {
         std::vector<std::string> command_history_;
         int history_index_ = -1;
         mutable std::mutex mutex_;
-        static constexpr size_t MAX_MESSAGES = 1000;
 
         std::unique_ptr<terminal::TerminalWidget> terminal_;
         std::unique_ptr<terminal::TerminalWidget> output_terminal_;

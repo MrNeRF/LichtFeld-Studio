@@ -16,27 +16,6 @@
 
 namespace lfs::core {
 
-    struct DirectCudaAllocator {
-        [[nodiscard]] void* allocate(const size_t bytes,
-                                     cudaStream_t,
-                                     const std::string_view label) const {
-            void* ptr = nullptr;
-            LFS_CUDA_CHECK_MSG(cudaMalloc(&ptr, bytes),
-                               "CUDA allocation '{}' ({} bytes)", label, bytes);
-            return ptr;
-        }
-
-        void deallocate(void* ptr, cudaStream_t) const noexcept {
-            const cudaError_t status = cudaFree(ptr);
-            if (status != cudaSuccess) {
-                ensure_cuda_success(
-                    status, "direct CUDA allocation free", {},
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
-                cudaGetLastError();
-            }
-        }
-    };
-
     struct StreamOrderedCudaAllocator {
         [[nodiscard]] void* allocate(const size_t bytes,
                                      const cudaStream_t stream,

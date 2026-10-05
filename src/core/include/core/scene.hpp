@@ -475,9 +475,6 @@ namespace lfs::core {
             uint64_t generation = 0,
             bool include_hidden_splats = false);
         [[nodiscard]] bool installCombinedModelCache(CombinedModelBuild build) const;
-        [[nodiscard]] bool installCombinedModelCache(
-            std::shared_ptr<lfs::core::SplatData> model,
-            uint64_t generation) const;
         void requestCombinedModelBuild(bool include_hidden_splats = false) const;
         [[nodiscard]] bool combinedModelBuildPending() const;
         [[nodiscard]] std::string combinedModelBuildError() const;
@@ -576,7 +573,6 @@ namespace lfs::core {
         [[nodiscard]] int getVisibleNodeIndex(const std::string& name) const;
         [[nodiscard]] int getVisibleNodeIndex(NodeId node_id) const;
 
-        [[nodiscard]] std::vector<bool> getSelectedNodeMask(const std::string& selected_node_name) const;
         [[nodiscard]] std::vector<bool> getSelectedNodeMask(const std::vector<std::string>& selected_node_names) const;
 
         std::shared_ptr<lfs::core::Tensor> getSelectionMask() const;
@@ -596,9 +592,6 @@ namespace lfs::core {
         void setSelectionMask(
             SelectionDomain domain,
             std::shared_ptr<lfs::core::Tensor> mask);
-        void setSelectionMaskWithGroupCounts(std::shared_ptr<lfs::core::Tensor> mask,
-                                             size_t selected_count,
-                                             const SelectionGroupCounts& group_counts);
         // Interactive selection commit. The mask is normalized in place and
         // installed without reducing it on the host. Counts are filled by the
         // selection service's deferred GPU readback.
@@ -650,7 +643,6 @@ namespace lfs::core {
         [[nodiscard]] bool hasTrainingData() const;
 
         [[nodiscard]] std::shared_ptr<lfs::core::Camera> getCameraByUid(int uid);
-        [[nodiscard]] std::shared_ptr<const lfs::core::Camera> getCameraByUid(int uid) const;
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getAllCameras() const;
         [[nodiscard]] const std::vector<std::shared_ptr<lfs::core::Camera>>&
         getAllCamerasCached() const;
@@ -893,7 +885,6 @@ namespace lfs::core {
             std::shared_ptr<lfs::core::Tensor> mask,
             size_t expected_size,
             size_t* selected_count = nullptr) const;
-        void resizeSelectionIfSizeMismatch(size_t expected_size);
         void resizeSelectionIfSizeMismatch(
             SelectionDomain domain,
             size_t expected_size);

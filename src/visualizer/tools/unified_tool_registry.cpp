@@ -18,35 +18,7 @@ namespace lfs::vis {
         assert(!desc.id.empty());
         std::lock_guard lock(mutex_);
 
-        if (std::find(group_order_.begin(), group_order_.end(), desc.group) == group_order_.end()) {
-            group_order_.push_back(desc.group);
-        }
-
         tools_[desc.id] = std::move(desc);
-    }
-
-    void UnifiedToolRegistry::unregisterTool(const std::string& id) {
-        std::lock_guard lock(mutex_);
-        tools_.erase(id);
-
-        if (active_tool_id_ == id) {
-            active_tool_id_.clear();
-        }
-    }
-
-    void UnifiedToolRegistry::unregisterAllPython() {
-        std::lock_guard lock(mutex_);
-
-        for (auto it = tools_.begin(); it != tools_.end();) {
-            if (it->second.source == ToolSource::PYTHON) {
-                if (active_tool_id_ == it->first) {
-                    active_tool_id_.clear();
-                }
-                it = tools_.erase(it);
-            } else {
-                ++it;
-            }
-        }
     }
 
     std::vector<const ToolDescriptor*> UnifiedToolRegistry::getAllTools() const {
@@ -62,17 +34,6 @@ namespace lfs::vis {
                   [](const ToolDescriptor* a, const ToolDescriptor* b) { return a->order < b->order; });
 
         return result;
-    }
-
-    bool UnifiedToolRegistry::poll(const std::string& id) const {
-        std::lock_guard lock(mutex_);
-        const auto it = tools_.find(id);
-        if (it == tools_.end()) {
-            return false;
-        }
-
-        const auto& tool = it->second;
-        return !tool.poll_fn || tool.poll_fn();
     }
 
     void UnifiedToolRegistry::invoke(const std::string& id) {

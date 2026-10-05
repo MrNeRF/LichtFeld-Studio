@@ -423,11 +423,6 @@ namespace lfs::vis::gui {
         });
     }
 
-    void GlobalContextMenu::releaseRendererResources() {
-        if (mgr_)
-            mgr_->releaseCachedContext(direct_cache_);
-    }
-
     void GlobalContextMenu::EventListener::ProcessEvent(Rml::Event& event) {
         assert(owner);
         auto* target = event.GetTargetElement();

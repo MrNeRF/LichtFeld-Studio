@@ -52,7 +52,6 @@ namespace lfs::vis {
     };
 
     [[nodiscard]] LFS_VIS_API VulkanContext* vulkanContextOrNull(GraphicsContext* context) noexcept;
-    [[nodiscard]] LFS_VIS_API const VulkanContext* vulkanContextOrNull(const GraphicsContext* context) noexcept;
     [[nodiscard]] LFS_VIS_API const VulkanContext::Frame* vulkanFrameOrNull(
         const GraphicsContext* context, const GraphicsFrame& frame) noexcept;
 

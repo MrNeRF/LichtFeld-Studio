@@ -702,22 +702,6 @@ namespace lfs::vis::screen {
         EXPECT_FALSE(viewSettingsFromJson(nlohmann::json{{"orthographic", 1}}, ViewSettings{}));
     }
 
-    TEST(ViewLabel, NamesAxisAlignedAndUserViews) {
-        View3DSpace view;
-        view.camera.camera.setAxisAlignedView(1, false);
-        view.settings.orthographic = true;
-        EXPECT_EQ(viewLabel(view), "Top Orthographic");
-        view.camera.camera.setAxisAlignedView(2, false);
-        view.settings.orthographic = false;
-        EXPECT_EQ(viewLabel(view), "Front Perspective");
-        view.camera.camera.setAxisAlignedView(0, true);
-        EXPECT_EQ(viewLabel(view), "Left Perspective");
-        view.camera.setViewMatrix(lfs::rendering::makeVisualizerLookAtRotation(glm::vec3(3.0f, 2.0f, 1.0f),
-                                                                               glm::vec3(0.0f)),
-                                  glm::vec3(3.0f, 2.0f, 1.0f));
-        EXPECT_EQ(viewLabel(view), "User Perspective");
-    }
-
     // ---- Gestures ---------------------------------------------------------
 
     class GestureTest : public ScreenTest {

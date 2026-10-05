@@ -62,7 +62,6 @@ namespace lfs::vis {
 
         [[nodiscard]] VkImageView depthView(std::size_t resource_slot) const;
         [[nodiscard]] VkImage depthImage(std::size_t resource_slot) const;
-        [[nodiscard]] bool initialized() const;
 
     private:
         struct Impl;

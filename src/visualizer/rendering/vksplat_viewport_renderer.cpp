@@ -6286,21 +6286,6 @@ namespace lfs::vis {
         return {readback_ring_.outstandingCount(), readback_ring_.ringFullWaitCount(), readback_ring_.cellPinWaitCount()};
     }
 
-    std::size_t VksplatViewportRenderer::outstandingReadbackTickets() const {
-        std::lock_guard<std::mutex> lock(readback_mutex_);
-        return readback_ring_.outstandingCount();
-    }
-
-    std::uint64_t VksplatViewportRenderer::readbackRingFullWaitCount() const {
-        std::lock_guard<std::mutex> lock(readback_mutex_);
-        return readback_ring_.ringFullWaitCount();
-    }
-
-    std::uint64_t VksplatViewportRenderer::readbackCellPinWaitCount() const {
-        std::lock_guard<std::mutex> lock(readback_mutex_);
-        return readback_ring_.cellPinWaitCount();
-    }
-
     lfs::Result<glm::ivec2> VksplatViewportRenderer::latestOutputImageSize(
         const RenderTargetId target) const {
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);

@@ -1420,37 +1420,6 @@ apply_registered_chrome:
         return result;
     }
 
-    std::vector<PanelSummary> PanelRegistry::get_panel_summaries_for_space(
-        const PanelSpace space, const PanelDrawContext& ctx, const bool apply_poll) {
-        std::vector<PanelSnapshot> snapshots;
-        {
-            std::lock_guard lock(mutex_);
-            snapshots = collect_snapshots_locked(PanelRenderTarget::for_space(space), ctx);
-        }
-
-        std::vector<PanelSummary> result;
-        result.reserve(snapshots.size());
-        for (const auto& snap : snapshots) {
-            if (apply_poll) {
-                try {
-                    if (!PanelRegistry::check_poll(snap, ctx))
-                        continue;
-                } catch (const std::exception& e) {
-                    LOG_ERROR("Panel '{}' poll error: {}", snap.label, e.what());
-                    continue;
-                }
-            }
-            result.push_back({std::string(snap.label), std::string(snap.id), snap.space,
-                              snap.order, true, false});
-        }
-        std::stable_sort(result.begin(), result.end(), [](const PanelSummary& a, const PanelSummary& b) {
-            if (a.order != b.order)
-                return a.order < b.order;
-            return a.label < b.label;
-        });
-        return result;
-    }
-
     std::optional<PanelDetails> PanelRegistry::get_panel(const std::string& id) {
         std::lock_guard lock(mutex_);
         for (const auto& p : panels_) {
@@ -1912,17 +1881,6 @@ apply_registered_chrome:
         }
     }
 
-    bool PanelRegistry::needsAnimationFrame() const {
-        std::lock_guard lock(mutex_);
-        for (const auto& p : panels_) {
-            if (!p.enabled || p.error_disabled || !p.panel)
-                continue;
-            if (p.panel->needsAnimationFrame())
-                return true;
-        }
-        return false;
-    }
-
     namespace {
         // Shared visibility predicate for animation demand and scheduled delays.
         // Must stay in lockstep: a mismatch causes either pinned frames or stalled wakes.
@@ -2022,39 +1980,6 @@ apply_registered_chrome:
     bool PanelRegistry::needsAnimationFrameForVisiblePanels(
         const PanelAnimationVisibility visibility) const {
         return animationDemandForVisiblePanels(visibility).any();
-    }
-
-    std::string PanelRegistry::describeAnimationDemand(
-        const PanelAnimationVisibility visibility) const {
-        std::string result;
-        std::lock_guard lock(mutex_);
-        for (const auto& p : panels_) {
-            if (!p.enabled || p.error_disabled || !p.panel ||
-                !isPanelVisibleForAnimation(p, visibility) ||
-                !p.panel->needsAnimationFrame())
-                continue;
-
-            if (!result.empty())
-                result += ',';
-            result += p.id;
-            const auto detail = p.panel->animationDemandDescription();
-            if (!detail.empty()) {
-                result += '(';
-                result += detail;
-                result += ')';
-            }
-        }
-        return result;
-    }
-
-    bool PanelRegistry::needsImmediateAnimationFrameForVisiblePanels(
-        const PanelAnimationVisibility visibility) const {
-        std::lock_guard lock(mutex_);
-        return std::any_of(panels_.begin(), panels_.end(), [&](const auto& p) {
-            return p.enabled && !p.error_disabled && p.panel &&
-                   isPanelVisibleForAnimation(p, visibility) &&
-                   p.panel->needsImmediateAnimationFrame();
-        });
     }
 
     std::optional<double> PanelRegistry::nextScheduledAnimationDelayForVisiblePanels(

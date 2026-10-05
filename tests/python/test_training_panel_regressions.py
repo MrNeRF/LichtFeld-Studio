@@ -208,13 +208,13 @@ def test_toolbar_uses_short_primary_labels(training_panel_module, monkeypatch, i
     assert model.bindings["label_toolbar_edit"][0]() == "common.edit"
 
 
-def test_toolbar_starting_status_is_not_unknown(training_panel_module, monkeypatch):
+def test_toolbar_shows_starting_badge(training_panel_module, monkeypatch):
     module = training_panel_module
     monkeypatch.setattr(module, "_training_session_state", lambda: {})
     monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "starting")
     model = _ModelStub()
-    module.TrainingPanel()._bind_status(model, lambda: None)
-    assert "runtime.task_starting" in model.bindings["status_mode"][0]()
+    module.TrainingPanel()._bind_visibility(model, lambda: None, lambda: None)
+    assert model.bindings["show_ctrl_starting"][0]()
 
 
 def test_restore_failure_keeps_detail_below_error_badge(training_panel_module, monkeypatch):
@@ -225,7 +225,6 @@ def test_restore_failure_keeps_detail_below_error_badge(training_panel_module, m
     panel = module.TrainingPanel()
     panel._bind_status(model, lambda: None)
     panel._bind_visibility(model, lambda: None, lambda: None)
-    assert "status.error" in model.bindings["status_mode"][0]()
     assert "bad checkpoint" in model.bindings["error_message"][0]()
     assert model.bindings["show_ctrl_error"][0]()
     assert not model.bindings["show_ctrl_paused"][0]()
@@ -689,10 +688,9 @@ def test_saving_badge_tracks_transition_without_restarting_training(training_pan
     assert not model.bindings["show_ctrl_saving"][0]()
     saving["value"] = True
     assert panel._sync_saving_status()
-    assert set(dirty) == {"status_mode", "show_ctrl_stopping", "show_ctrl_saving"}
+    assert set(dirty) == {"show_ctrl_stopping", "show_ctrl_saving"}
     assert model.bindings["show_ctrl_saving"][0]()
     assert not model.bindings["show_ctrl_stopping"][0]()
-    assert "training.status_saving" in model.bindings["status_mode"][0]()
     dirty.clear()
     assert not panel._sync_saving_status()
     assert not dirty
@@ -1139,19 +1137,11 @@ def test_backend_disabled_conditions_prevent_new_conflicts_but_allow_correction(
     def disabled(name):
         return model.bindings[name][0]()
 
-    assert disabled("gut_disabled") is False
     assert disabled("gut_depth_supervision_disabled") is False
     assert disabled("gut_normal_supervision_disabled") is True
     assert disabled("gut_mip_filter_disabled") is True
     assert "gut_undistort_disabled" not in model.bindings
 
-    params.gut = False
-    assert disabled("gut_disabled") is True
-    params.use_depth_loss = False
-    params.undistort = True
-    assert disabled("gut_disabled") is False
-    params.strategy = "igs+"
-    assert disabled("gut_disabled") is True
 
 
 def test_strategy_switch_resyncs_generated_rows_and_requests_panel_update(
@@ -2463,7 +2453,7 @@ def _stub_stored_session(training_panel_module, monkeypatch, **overrides):
     return state
 
 
-def test_completed_stored_session_shows_complete_mode_and_buttons(
+def test_completed_stored_session_shows_completed_badge_and_buttons(
     training_panel_module, monkeypatch
 ):
     _stub_stored_session(
@@ -2490,9 +2480,7 @@ def test_completed_stored_session_shows_complete_mode_and_buttons(
         assert model.bindings["show_ctrl_completed"][0]() is True
         assert model.bindings["show_ctrl_paused"][0]() is False
         assert model.bindings["show_ctrl_ready"][0]() is False
-        assert "status.complete" in model.bindings["status_mode"][0]()
         assert "30,000/30,000" in model.bindings["progress_text"][0]()
-        assert "session_at_iteration" not in model.bindings["status_mode"][0]()
     finally:
         runtime.has_trainer._fallback = False
         runtime.training_state._fallback = "idle"
@@ -2500,7 +2488,7 @@ def test_completed_stored_session_shows_complete_mode_and_buttons(
         runtime.total_iterations._fallback = 0
 
 
-def test_paused_stored_session_shows_paused_mode_and_resume(
+def test_paused_stored_session_shows_paused_badge_and_resume(
     training_panel_module, monkeypatch
 ):
     _stub_stored_session(
@@ -2527,9 +2515,7 @@ def test_paused_stored_session_shows_paused_mode_and_resume(
         assert model.bindings["show_ctrl_paused"][0]() is True
         assert model.bindings["show_ctrl_completed"][0]() is False
         assert model.bindings["show_ctrl_ready"][0]() is False
-        assert "status.paused" in model.bindings["status_mode"][0]()
         assert "7,000/30,000" in model.bindings["progress_text"][0]()
-        assert "session_at_iteration" not in model.bindings["status_mode"][0]()
     finally:
         runtime.has_trainer._fallback = False
         runtime.training_state._fallback = "idle"
@@ -2565,9 +2551,7 @@ def test_stopped_stored_session_keeps_stopped_mode_and_edit_controls(
         assert model.bindings["show_ctrl_stopped"][0]() is True
         assert model.bindings["show_ctrl_completed"][0]() is False
         assert model.bindings["show_ctrl_ready"][0]() is False
-        assert "status.stopped" in model.bindings["status_mode"][0]()
         assert "7,000/30,000" in model.bindings["progress_text"][0]()
-        assert "session_at_iteration" not in model.bindings["status_mode"][0]()
     finally:
         runtime.has_trainer._fallback = False
         runtime.training_state._fallback = "idle"

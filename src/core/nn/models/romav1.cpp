@@ -127,19 +127,6 @@ namespace lfs::core::nn::models {
         return model;
     }
 
-    std::size_t RomaV1::weights_bytes() const {
-        std::size_t bytes = 0;
-        for (const auto& [name, tensor] : weights_) {
-            (void)name;
-            bytes += tensor.is_valid() ? tensor.bytes() : 0;
-        }
-        for (const auto& [name, tensor] : weight_taps_) {
-            (void)name;
-            bytes += tensor.is_valid() ? tensor.bytes() : 0;
-        }
-        return bytes;
-    }
-
     const Tensor& RomaV1::w(std::string_view name) const {
         const auto it = weights_.find(std::string(name));
         LFS_ASSERT_MSG(it != weights_.end(), std::format("RoMa v1 weight {} is not loaded", name));

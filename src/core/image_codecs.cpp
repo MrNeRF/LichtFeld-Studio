@@ -825,7 +825,7 @@ namespace lfs::core::image_codecs {
 #ifndef _WIN32
             if (hdr && target.sample_type == SampleType::Float32) {
                 const int descriptor = open(path.c_str(), O_RDONLY);
-                struct stat file_status {};
+                struct stat file_status{};
                 if (descriptor >= 0 && fstat(descriptor, &file_status) == 0 && file_status.st_size > 0 &&
                     file_status.st_size <= std::numeric_limits<int>::max()) {
                     const auto size = static_cast<std::size_t>(file_status.st_size);
@@ -1188,14 +1188,6 @@ namespace lfs::core::image_codecs {
         }
         std::vector<std::uint8_t> image_data(data, data + size);
         return decode_stb(image_data, false, result, error);
-    }
-
-    bool decode_jpeg_memory(const std::uint8_t* data, const size_t size, Image& result, std::string& error) {
-        if (!data || size == 0) {
-            error = "Empty JPEG buffer";
-            return false;
-        }
-        return decode_jpeg_bytes(data, size, result, error);
     }
 
     namespace {

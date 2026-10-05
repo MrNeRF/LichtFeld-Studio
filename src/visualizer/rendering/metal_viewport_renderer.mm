@@ -673,8 +673,6 @@ namespace lfs::vis {
                     state.tensor_backend = *tensor;
                     LOG_INFO("Metal viewport target {} rasterizes splats with tensor programs", output.value);
                 }
-                if (auto reserved = state.tensor_raster->reserve(count, f.size.x, f.size.y, capacity); !reserved)
-                    throw lfs::Exception(reserved.error());
                 // Tensor storage may be device-only (Vulkan): stage the status.
                 f.tensor_status = [device newBufferWithLength:sizeof(RasterStatus) options:MTLResourceStorageModeShared];
                 if (!f.tensor_status)
@@ -1159,13 +1157,12 @@ namespace lfs::vis {
                                        request.overlay.emphasis.dim_non_emphasized || request.overlay.emphasis.flash_intensity > 0 ||
                                        request.overlay.emphasis.focused_gaussian_id >= 0 || request.overlay.cursor.enabled ||
                                        request.overlay.markers.show_rings || request.overlay.markers.show_center_markers;
-            // The tensor-program rasterizer covers Gaussian and 3DGUT views with
-            // overlays so far; LOD cuts and the portal profile stay native. It
-            // runs on the backend of the resident splats.
+            // The tensor-program rasterizer covers every view except GPU-selected
+            // LOD cuts and paged RAD models, which stay native. It runs on the
+            // backend of the resident splats.
             const auto splat_backend = core::gpu_backend_of(model.means_raw());
             const auto beside_splats = [&](const core::Tensor* tensor) { return !tensor || core::gpu_backend_of(*tensor) == splat_backend; };
-            const bool tensor_frame = i.tensor_raster && splat_backend && !pager && !gpu_lod && !request.lod_indices &&
-                                      request.splat_render_profile == 0 && beside_splats(selection_enabled ? selection : nullptr) &&
+            const bool tensor_frame = i.tensor_raster && splat_backend && !pager && !gpu_lod && beside_splats(selection_enabled ? selection : nullptr) &&
                                       beside_splats(preview_enabled ? preview : nullptr);
             auto& f = i.acquire(slot, request, draw_count, false, tensor_frame ? splat_backend : std::nullopt);
             if (i.profiling_enabled && !f.gpu_profile)
@@ -1411,6 +1408,10 @@ namespace lfs::vis {
             const auto submit_tensor = [&]() -> id<MTLCommandBuffer> {
                 auto& state = i.target(slot);
                 const core::GpuBackendScope scope(state.tensor_backend);
+                // One rasterizer serves every frame of the target's ring: follow
+                // this frame's extent and capacity (no-op when unchanged).
+                if (auto reserved = state.tensor_raster->reserve(draw_count, uint32_t(f.size.x), uint32_t(f.size.y), f.capacity); !reserved)
+                    throw lfs::Exception(reserved.error());
                 if (!i.projector || i.projector_backend != state.tensor_backend) {
                     i.projector = std::make_unique<rendering::SplatProjector>(state.tensor_backend);
                     i.projector_backend = state.tensor_backend;
@@ -1444,9 +1445,19 @@ namespace lfs::vis {
                 if (request.gut && (!i.tensor_gut.is_valid() || i.tensor_gut.bytes() < size_t(draw_count) * sizeof(GutSplat) ||
                                     core::gpu_backend_of(i.tensor_gut) != state.tensor_backend))
                     i.tensor_gut = core::Tensor::empty({std::max<size_t>(16, size_t(draw_count) * sizeof(GutSplat))}, core::Device::GPU, core::DataType::UInt8);
-                const bool tight = !transparent && !needs_overlay && !request.gut;
+                // A host-selected LOD cut: physical indices, plus optional logical
+                // IDs, debug levels and transition weights.
+                const auto cut = [&](const auto* values) { return values ? std::span(values, draw_count) : std::span<std::remove_const_t<std::remove_pointer_t<decltype(values)>> const>{}; };
+                const bool lod_cut = request.lod_indices != nullptr;
+                const rendering::SplatLodInputs lod_inputs{cut(request.lod_indices), cut(request.lod_logical_indices), cut(request.lod_levels),
+                                                           cut(request.lod_weights), request.lod_debug_mode, uint32_t(model.size())};
+                // Native projection flags: Spark opacity, portal edge math.
+                const bool spark_opacity = projection.display.z == 1.f;
+                const bool portal_edges = projection.rasterization.w == 1.f && projection.display.z == 0.f;
+                const bool tight = !transparent && !needs_overlay && !request.gut && !spark_opacity && !portal_math;
                 if (auto projected = i.projector->project(sources, frame_projection, degree, request.gut ? rendering::SplatPrimitive::Gut : rendering::SplatPrimitive::Gaussian,
-                                                          tight, i.tensor_projected, request.gut ? &i.tensor_gut : nullptr, needs_overlay ? &overlay_inputs : nullptr);
+                                                          tight, i.tensor_projected, request.gut ? &i.tensor_gut : nullptr, needs_overlay ? &overlay_inputs : nullptr,
+                                                          lod_cut ? &lod_inputs : nullptr);
                     !projected)
                     throw lfs::Exception(projected.error());
                 // RasterParameters as the native rasterizer derives them for this view.
@@ -1462,11 +1473,12 @@ namespace lfs::vis {
                 // 3DGUT keeps the legacy Vulkan chain's color update and starts with
                 // 64-thread groups; the rasterizer narrows dense frames itself.
                 const bool gut = request.gut;
-                const bool macro_half = request.overlay.markers.show_rings && !transparent && !request.depth_view && !gut;
-                const bool precise_transparent = transparent && !gut;
-                raster.flags = (needs_overlay ? 1u : 0u) | (expected_depth ? 2u : 0u) | (gut ? 32u : 0u) | (macro_half ? 64u : 0u) | (gut ? 0u : 128u) |
-                               (request.depth_view ? 2048u : 0u) | (transparent ? 0u : 4096u) | (precise_transparent ? 16384u : 0u) |
-                               (projection.extent.z == uint32_t(CameraModel::Equirectangular) && !gut ? 8192u : 0u);
+                const bool macro_half = request.overlay.markers.show_rings && !transparent && !request.depth_view && !gut && !spark_opacity;
+                const bool precise_transparent = transparent && !gut && !spark_opacity;
+                raster.flags = (needs_overlay ? 1u : 0u) | (expected_depth ? 2u : 0u) | (portal_edges ? 4u : 0u) | (lod_cut ? 8u : 0u) |
+                               (spark_opacity ? 16u : 0u) | (gut && !spark_opacity ? 32u : 0u) | (macro_half ? 64u : 0u) |
+                               (gut || spark_opacity ? 0u : 128u) | (request.depth_view ? 2048u : 0u) | (transparent ? 0u : 4096u) |
+                               (precise_transparent ? 16384u : 0u) | (projection.extent.z == uint32_t(CameraModel::Equirectangular) && !gut ? 8192u : 0u);
                 const auto mask_extent = [](const core::Tensor* mask) { return uint32_t(std::min<size_t>(mask->bytes(), std::numeric_limits<uint32_t>::max())); };
                 raster.mask_limits = {selection_enabled ? mask_extent(selection) : 0u, preview_enabled ? mask_extent(preview) : 0u, 0, 0};
                 raster.background = {background.x, background.y, background.z, transparent ? 0.f : 1.f};
@@ -1479,9 +1491,10 @@ namespace lfs::vis {
                                                                    selection_enabled ? selection : nullptr, preview_enabled ? preview : nullptr,
                                                                    needs_overlay ? host_bytes(f.selection_colors, sizeof(request.overlay.selection_colors)) : std::span<const std::byte>{}};
                 raster.mode = uint32_t(request.gut ? rendering::SplatRasterMode::Gut : rendering::SplatRasterMode::Gaussian);
+                const rendering::SplatRasterLogical raster_logical{&i.projector->logical_ids(), uint32_t(model.size())};
                 if (auto rasterized = state.tensor_raster->rasterize(i.tensor_projected, request.gut ? &i.tensor_gut : nullptr, draw_count,
                                                                      rendering::SplatRasterMode(raster.mode), raster,
-                                                                     needs_overlay ? &raster_overlay : nullptr);
+                                                                     needs_overlay ? &raster_overlay : nullptr, lod_cut ? &raster_logical : nullptr);
                     !rasterized)
                     throw lfs::Exception(rasterized.error());
                 rendering::SplatPresentParameters presented;

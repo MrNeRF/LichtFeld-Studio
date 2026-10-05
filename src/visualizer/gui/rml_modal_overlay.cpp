@@ -727,11 +727,6 @@ namespace lfs::vis::gui {
         });
     }
 
-    void RmlModalOverlay::releaseRendererResources() {
-        if (rml_manager_)
-            rml_manager_->releaseCachedContext(direct_cache_);
-    }
-
     void RmlModalOverlay::OverlayEventListener::ProcessEvent(Rml::Event& event) {
         assert(overlay);
         auto* target = event.GetTargetElement();

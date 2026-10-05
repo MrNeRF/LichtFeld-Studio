@@ -25,22 +25,4 @@ namespace lfs::vis::gui {
         return {edge - half_width, edge + half_width};
     }
 
-    [[nodiscard]] inline float resizeContentWidth(float dock_width, float scale) {
-        return std::max(0.0f, dock_width - RESIZE_GRAB_HALF_WIDTH_DP * std::max(scale, 1.0f));
-    }
-
-    [[nodiscard]] inline ResizeHitZone bottomDockResizeHitZone(float edge, float scale, float grip_height) {
-        const auto edge_zone = resizeHitZone(edge, scale);
-        return {edge_zone.min, edge + grip_height + RESIZE_GRAB_HALF_WIDTH_DP * std::max(scale, 1.0f)};
-    }
-
-    struct ResizeDrag {
-        float start_edge;
-        float start_mouse;
-
-        [[nodiscard]] float edgeAt(float mouse, float minimum, float maximum) const {
-            return std::clamp(start_edge + mouse - start_mouse, minimum, maximum);
-        }
-    };
-
 } // namespace lfs::vis::gui

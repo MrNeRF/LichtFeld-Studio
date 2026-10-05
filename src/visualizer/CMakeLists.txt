@@ -77,7 +77,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/lod_page_cache.cpp
         rendering/lod_upload_engine.cpp
         rendering/spark_lod_controller.cpp
-        $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/split_view_composition.cpp>
         rendering/split_view_service.cpp
         rendering/viewport_artifact_service.cpp
         rendering/viewport_frame_lifecycle_service.cpp
@@ -230,7 +229,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operation/undo_entry.cpp
         operation/depth_window_undo_entry.cpp
         operation/undo_history.cpp
-        operation/operation.cpp
         operation/pipeline.cpp
         operation/ops/select_ops.cpp
         operation/ops/edit_ops.cpp

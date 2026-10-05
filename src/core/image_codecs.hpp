@@ -60,7 +60,6 @@ namespace lfs::core::image_codecs {
     bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error);
     bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
     bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error);
-    bool decode_jpeg_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
 
     // RGB uses 4:2:0 by default; full_chroma selects 4:4:4 for high-quality exports.
     LFS_CORE_API bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,

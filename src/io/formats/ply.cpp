@@ -83,11 +83,7 @@ namespace lfs::io {
         constexpr int MAX_DC_COMPONENTS = 48;
         constexpr int MAX_REST_COMPONENTS = 135;
         constexpr int COLOR_CHANNELS = 3;
-        constexpr int POSITION_DIMS = 3;
-        constexpr int SCALE_DIMS = 3;
-        constexpr int QUATERNION_DIMS = 4;
         constexpr float IDENTITY_QUATERNION_W = 1.0f;
-        constexpr int SH_DEGREE_3_REST_COEFFS = 15;
         constexpr int SH_DEGREE_OFFSET = 1;
 
         // Block sizes for parallel processing
@@ -557,7 +553,7 @@ namespace lfs::io {
                 return false;
             }
 
-            struct stat st {};
+            struct stat st{};
             if (fstat(fd, &st) < 0) {
                 return false;
             }

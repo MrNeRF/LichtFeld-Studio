@@ -57,15 +57,6 @@ namespace lfs::diagnostics {
         return std::numeric_limits<std::size_t>::max();
     }
 
-    void VramTimeline::clear() {
-        recent_.clear();
-        older_.clear();
-        markers_.clear();
-        previous_rows_.clear();
-        previous_raw_rows_.clear();
-        last_profiler_marker_id_ = 0;
-    }
-
     void VramTimeline::push(const VramProfilerSnapshot& snapshot, std::int64_t epoch_ms) {
         if (!snapshot.enabled)
             return;

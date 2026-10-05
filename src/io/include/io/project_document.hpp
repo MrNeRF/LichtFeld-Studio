@@ -27,10 +27,6 @@
 #include <string>
 #include <vector>
 
-namespace lfs::io {
-    struct LoadResult;
-}
-
 namespace lfs::io::project {
 
     // The current SCNG-bound checkpoint is resumable; older CKPT chapters are
@@ -267,8 +263,6 @@ namespace lfs::io::project {
 
         [[nodiscard]] const std::optional<std::filesystem::path>&
         source_path() const noexcept;
-        // Keep the source reader for lazy payloads, but report no user path.
-        void forget_source_path() noexcept;
         [[nodiscard]] const ProjectReader* source_reader() const noexcept;
         [[nodiscard]] std::optional<lfs::core::Uuid>
         source_commit_uuid() const noexcept;
@@ -347,10 +341,6 @@ namespace lfs::io::project {
         // Replaces the SFMO chapter; nullopt removes it.
         [[nodiscard]] lfs::Result<void>
         set_sfm_observations(std::optional<LazyChunkValue> payload);
-        [[nodiscard]] lfs::Result<void>
-        set_georeference(const ProjectGeoreference& value);
-        [[nodiscard]] lfs::Result<void>
-        capture_georeference(const lfs::io::LoadResult& load_result);
 
         [[nodiscard]] const SplatChapterPayload*
         find_splat(const lfs::core::Uuid& node_uuid) const noexcept;

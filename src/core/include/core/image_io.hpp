@@ -94,10 +94,7 @@ namespace lfs::core {
     // Converts a decoded normal-map prior (n in [-1,1]) between the OpenGL
     // camera convention (y up, z toward the viewer) and the OpenCV one used by
     // the rasterizer (y down, z forward) by flipping y and z in place.
-    LFS_CORE_API void flip_normal_prior_yz_hwc(float* data, size_t pixel_count);
     LFS_CORE_API void flip_normal_prior_yz_chw(float* data, size_t pixel_count);
-    LFS_CORE_API void transform_normal_prior_world_to_camera_hwc(
-        float* data, size_t pixel_count, const std::array<float, 9>& w2c);
     LFS_CORE_API void transform_normal_prior_world_to_camera_chw(
         float* data, size_t pixel_count, const std::array<float, 9>& w2c);
 
@@ -132,7 +129,6 @@ namespace lfs::core::image_io {
         static BatchImageSaver& instance();
         static BatchImageSaver* try_instance();
         static void wait_all_if_initialized();
-        static size_t pending_count_if_initialized();
 
         // Delete copy/move constructors
         BatchImageSaver(const BatchImageSaver&) = delete;
@@ -156,9 +152,6 @@ namespace lfs::core::image_io {
 
         // Flush all pending saves and stop threads (called automatically on destruction)
         void shutdown();
-
-        // Get number of pending saves
-        size_t pending_count() const;
 
         // Enable/disable batch saving (useful for debugging)
         void set_enabled(bool enabled) { enabled_ = enabled; }

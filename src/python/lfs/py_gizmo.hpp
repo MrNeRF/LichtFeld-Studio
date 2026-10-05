@@ -95,9 +95,6 @@ namespace lfs::python {
         void draw_line_3d(std::tuple<float, float, float> start, std::tuple<float, float, float> end,
                           std::tuple<float, float, float, float> color, float thickness = 1.0f);
 
-        [[nodiscard]] const std::vector<DrawCommand>& get_draw_commands() const { return draw_commands_; }
-        void clear_draw_commands() { draw_commands_.clear(); }
-
     private:
         mutable std::vector<DrawCommand> draw_commands_;
     };

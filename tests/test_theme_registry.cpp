@@ -351,26 +351,6 @@ TEST(ThemeRegistry, InvalidOptionalGradientDoesNotRejectTheme) {
     std::filesystem::remove(path, error);
 }
 
-TEST(ThemeRegistry, OptionalGradientsRoundTripThroughLegacyThemeSave) {
-    const auto path =
-        std::filesystem::temp_directory_path() / "lfs_optional_gradient_roundtrip.json";
-
-    lfs::vis::Theme source = lfs::vis::darkTheme();
-    source.gradients.progress = lfs::vis::ThemeGradient{
-        {0.1f, 0.2f, 0.3f, 0.4f},
-        {0.5f, 0.6f, 0.7f, 0.8f}};
-    ASSERT_TRUE(lfs::vis::saveTheme(source, lfs::core::path_to_utf8(path)));
-
-    lfs::vis::Theme loaded = lfs::vis::darkTheme();
-    ASSERT_TRUE(lfs::vis::loadTheme(loaded, lfs::core::path_to_utf8(path)));
-    ASSERT_TRUE(loaded.gradients.progress.has_value());
-    EXPECT_FLOAT_EQ(loaded.gradients.progress->start.w, 0.4f);
-    EXPECT_FLOAT_EQ(loaded.gradients.progress->end.z, 0.7f);
-
-    std::error_code error;
-    std::filesystem::remove(path, error);
-}
-
 TEST(ThemeRegistry, LegacyStandaloneThemeJsonRemainsLoadable) {
     const auto path =
         std::filesystem::temp_directory_path() / "lfs_legacy_theme_v1.json";

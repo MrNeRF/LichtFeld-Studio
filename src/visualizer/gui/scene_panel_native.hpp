@@ -62,7 +62,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool groupSelectedNodesIfFocused();
         [[nodiscard]] bool ungroupSelectedNodeIfFocused();
         [[nodiscard]] bool requestDeleteSelectionIfAvailable();
-        [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
 
     private:
         struct EventListener : Rml::EventListener {

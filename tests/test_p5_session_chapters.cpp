@@ -1289,38 +1289,6 @@ namespace {
     }
 
     TEST(P5SessionChapterTest,
-         SplitViewOffsetSurvivesPlyComparisonRestore) {
-        lfs::event::EventBridge::instance().clear_all();
-        lfs::vis::ViewerOptions options;
-        options.show_startup_overlay = false;
-        lfs::vis::VisualizerImpl viewer(options);
-        auto* rendering = viewer.getRenderingManager();
-        ASSERT_NE(rendering, nullptr);
-
-        auto staged = rendering->getSettings();
-        const auto saved_offset = std::size_t{7};
-        staged.split_view_mode =
-            rendering->getSettings().split_view_mode;
-        staged.split_view_offset = saved_offset;
-        rendering->updateSettings(staged);
-        rendering->restoreSplitViewMode(
-            lfs::vis::SplitViewMode::PLYComparison);
-        EXPECT_EQ(
-            rendering->getSettings().split_view_offset,
-            0u);
-
-        auto restored = rendering->getSettings();
-        restored.split_view_offset = saved_offset;
-        rendering->updateSettings(restored);
-        EXPECT_EQ(
-            rendering->getSettings().split_view_mode,
-            lfs::vis::SplitViewMode::PLYComparison);
-        EXPECT_EQ(
-            rendering->getSettings().split_view_offset,
-            saved_offset);
-    }
-
-    TEST(P5SessionChapterTest,
          MissingEditorFileDoesNotLeaveCleanPathBuffer) {
         lfs::event::EventBridge::instance().clear_all();
         lfs::vis::ViewerOptions options;

@@ -55,7 +55,6 @@ namespace lfs::sequencer {
         void setClipDuration(float duration);
 
         [[nodiscard]] CameraState evaluate(float time) const;
-        [[nodiscard]] std::vector<glm::vec3> generatePath(int samples_per_segment = DEFAULT_PATH_SAMPLES) const;
         [[nodiscard]] std::vector<glm::vec3> generatePathAtTimeStep(float sample_step_seconds) const;
 
         [[nodiscard]] bool saveToJson(const std::string& path) const;

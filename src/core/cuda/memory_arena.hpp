@@ -249,9 +249,8 @@ namespace lfs::core {
         RasterizerMemoryArena(const RasterizerMemoryArena&) = delete;
         RasterizerMemoryArena& operator=(const RasterizerMemoryArena&) = delete;
 
-        // Allow move operations
-        RasterizerMemoryArena(RasterizerMemoryArena&&) noexcept;
-        RasterizerMemoryArena& operator=(RasterizerMemoryArena&&) noexcept;
+        RasterizerMemoryArena(RasterizerMemoryArena&&) = delete;
+        RasterizerMemoryArena& operator=(RasterizerMemoryArena&&) = delete;
 
         // Stream-aware frames chain begin→end with a GPU event edge: begin_frame
         // waits (on `stream`) for the previous frame's completion event instead of
@@ -273,16 +272,6 @@ namespace lfs::core {
         // wait must have been installed before this frame can touch offset zero.
         void assert_frame_handoff(uint64_t frame_id) const;
 
-        // Bounded wait: with a render pending (set_rendering_active), the trainer
-        // cannot START a new frame, so waiting out its current one takes ~one
-        // iteration. The timeout covers the refining-iteration case where the
-        // trainer holds the frame while blocked on the exclusive render lock the
-        // caller's shared lock prevents — give up there instead of deadlocking.
-        std::optional<uint64_t> try_begin_frame_for(uint32_t timeout_ms, bool from_rendering = false) {
-            return try_begin_frame_for(timeout_ms, nullptr, from_rendering);
-        }
-        std::optional<uint64_t> try_begin_frame_for(uint32_t timeout_ms, cudaStream_t stream,
-                                                    bool from_rendering = false);
         using RenderHandoffToken = uint64_t;
         // Every live holder renews within a few milliseconds (the parked preview
         // polls at 4 ms, the navigation wait at 1 ms); the lease only bounds what
@@ -369,7 +358,6 @@ namespace lfs::core {
         std::function<char*(size_t)> get_allocator(uint64_t frame_id,
                                                    const char* label = nullptr);
         std::vector<BufferHandle> get_frame_buffers(uint64_t frame_id) const;
-        void reset_frame(uint64_t frame_id); // Keeps allocation, resets offset
         void cleanup_frames(int keep_recent = 3);
         // Named EXACT-3 boundaries only. Both methods globally gate begin_frame,
         // require zero active training/render frames, and device-synchronize
@@ -462,7 +450,6 @@ namespace lfs::core {
         static GlobalArenaManager& instance() { return global_arena_manager(); }
         RasterizerMemoryArena& get_arena();
         RasterizerMemoryArena* try_get_arena();
-        bool install_external_backing(RasterizerMemoryArena::ExternalBacking backing);
         bool try_install_external_backing(RasterizerMemoryArena::ExternalBacking backing,
                                           uint32_t timeout_ms = 0);
         bool grow_external_backing(const void* device_ptr, size_t new_size,

@@ -583,8 +583,7 @@ set_source_files_properties(test_tensor_expression_cuda.cu PROPERTIES
 function(lfs_tensor_private_access)
     set(_prefixes
         test_main test_tensor_ tensor_ bench_tensor_ test_allocator_ test_cuda_ test_stale_stream_
-        test_zero_stride_ test_strided_reduce_ expression_reference cuda_backend_test test_alloc_counter
-        test_zip_gather)
+        test_zero_stride_ test_strided_reduce_ expression_reference cuda_backend_test test_alloc_counter)
     foreach(_src IN LISTS ARGN)
         get_filename_component(_name "${_src}" NAME)
         foreach(_prefix IN LISTS _prefixes)
@@ -838,14 +837,11 @@ set(TEST_FILES
     test_strided_reduce_w2.cpp
     test_tensor_masking.cpp
     test_strided_tensor_ops.cpp
-    test_tensor_lazy_gather.cpp
-    test_zip_gather.cpp
     test_tensor_ordering_distance.cpp
     test_tensor_kmeans_workflow.cpp
     test_tensor_masked_select_rows.cpp
     test_tensor_bitwise.cpp
     test_tensor_accessor.cpp
-    test_tensor_random_advanced.cpp
     test_tensor_indexing_advanced.cpp
     test_tensor_clamping.cpp
     test_tensor_cumsum_convenience.cpp
@@ -1076,7 +1072,6 @@ set(TEST_FILES
     test_mesh_data.cpp
     test_mesh_offscreen_renderer.cpp
     test_align_transform.cpp
-    test_openmesh_bridge.cpp
     test_mesh_loader.cpp
     test_colmap_image_layout.cpp
     test_missing_dataset_images.cpp

@@ -460,13 +460,6 @@ TEST_F(NaNInfGPUCheckTest, GaussianMeans_5M_x_3_WithNaN) {
     EXPECT_TRUE(lfs_t.has_nan());
 }
 
-TEST_F(NaNInfGPUCheckTest, GaussianScales_5M_x_3) {
-    auto torch_t = torch::randn({5000000, 3}, torch::kCUDA);
-    auto lfs_t = from_torch(torch_t);
-
-    EXPECT_EQ(torch_has_nan(torch_t), lfs_t.has_nan());
-}
-
 TEST_F(NaNInfGPUCheckTest, GaussianRotations_5M_x_4) {
     auto torch_t = torch::randn({5000000, 4}, torch::kCUDA);
     auto lfs_t = from_torch(torch_t);

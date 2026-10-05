@@ -43,7 +43,6 @@ namespace lfs::vis::gui {
         void setPanelScreenOffset(float x, float y);
         void setFilterText(std::string_view text);
         void setSelectionMarkersVisible(bool visible);
-        [[nodiscard]] bool selectionMarkersVisible() const { return selection_markers_visible_; }
         [[nodiscard]] bool syncFromScene(const PanelDrawContext& ctx);
         [[nodiscard]] bool executeContextMenuAction(std::string_view action);
         [[nodiscard]] bool needsAnimationFrame() const {
@@ -52,11 +51,9 @@ namespace lfs::vis::gui {
                    !just_moved_ids_.empty();
         }
 
-        [[nodiscard]] size_t rootCount() const { return root_count_; }
         [[nodiscard]] size_t modelCount() const { return model_count_; }
         [[nodiscard]] size_t nodeCount() const { return node_snapshots_.size(); }
         [[nodiscard]] size_t selectedCount() const { return selected_ids_.size(); }
-        [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
         [[nodiscard]] SelectionActionState selectionActionState() const;
         void setSelectedVisibility(bool visible);
         void setSelectedTrainingEnabled(bool enabled);
@@ -75,9 +72,6 @@ namespace lfs::vis::gui {
         }
         void applySessionCollapseUuids(const std::vector<std::string>& uuids);
         void clearSessionCollapseUuids();
-        [[nodiscard]] bool hasSessionCollapseUuids() const {
-            return session_collapse_pending_;
-        }
 
         [[nodiscard]] static bool ownsContextMenuAction(std::string_view action);
 
@@ -122,7 +116,6 @@ namespace lfs::vis::gui {
             bool delete_enabled = false;
             bool can_rename = false;
             bool rename_enabled = false;
-            int camera_uid = -1;
             std::optional<std::string> camera_loss_icon_color;
         };
 
@@ -239,7 +232,6 @@ namespace lfs::vis::gui {
         void showModelsHeaderContextMenu(float mouse_x, float mouse_y);
         bool isModelsHeaderTarget(Rml::Element* target) const;
         void requestDeleteNodes(const std::vector<core::NodeId>& node_ids);
-        void deleteSelectedNodes();
         void toggleChildrenTraining(core::NodeId group_id, bool enabled);
         void toggleSelectedTraining(bool enabled);
         void executeAction(const std::string& action);
@@ -298,7 +290,6 @@ namespace lfs::vis::gui {
         bool session_collapse_pending_ = false;
         std::unordered_set<std::string> session_collapsed_uuids_;
         bool scene_has_nodes_ = false;
-        size_t root_count_ = 0;
         size_t model_count_ = 0;
         bool invert_masks_ = false;
         bool dom_dirty_ = true;

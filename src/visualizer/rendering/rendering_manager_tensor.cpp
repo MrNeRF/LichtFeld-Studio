@@ -282,7 +282,7 @@ namespace lfs::vis {
         view.vulkan_viewport_image_ = image;
         view.viewport_depth_image_ = depth;
         view.viewport_environment_ = buildViewportEnvironment(
-                frame_context, frame_settings, environmentBackgroundUsesTransparentViewerCompositing(frame_settings));
+            frame_context, frame_settings, environmentBackgroundUsesTransparentViewerCompositing(frame_settings));
         view.viewport_meshes_ = buildViewportMeshes(frame_context, frame_settings);
         view.vulkan_viewport_image_size_ = size;
         view.vulkan_viewport_image_alloc_size_ = size;
@@ -291,7 +291,9 @@ namespace lfs::vis {
         lfs::rendering::FrameMetadata metadata{
             .viewer_backend = lfs::rendering::ViewerBackend::Metal,
             .depth_panels = {lfs::rendering::FramePanelMetadata{
-                .depth = depth, .start_position = 0.0f, .end_position = 1.0f}},
+                .depth = depth,
+                .start_position = 0.0f,
+                .end_position = 1.0f}},
             .depth_panel_count = depth ? 1u : 0u,
             .valid = true,
             .far_plane = context.settings.depth_clip_enabled

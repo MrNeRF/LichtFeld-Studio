@@ -6,6 +6,7 @@
 #include "core/gpu_kernel_module.hpp"
 #include "core/tensor_readback.hpp"
 #include "core/tensor_upload.hpp"
+#include "scratch_arena.hpp"
 #include "splat_blend_discs.hpp"
 #include "splat_blend_gs32.hpp"
 #include "splat_blend_gs64.hpp"
@@ -15,7 +16,6 @@
 #include "splat_blend_gut32.hpp"
 #include "splat_blend_gut64.hpp"
 #include "splat_blend_points.hpp"
-#include "scratch_arena.hpp"
 #include "splat_present.hpp"
 #include "splat_tile_binner.hpp"
 
@@ -34,7 +34,7 @@ namespace lfs::rendering {
         using M = core::GpuKernelModule;
         constexpr auto RW = M::Access::ReadWrite;
         constexpr uint32_t kSingleSimd = 128, kSourceSorted = 256, kDepthBatches = 512, kDepthPrefix = 1024;
-        constexpr uint32_t kOpaqueBackground = 4096, kOverlay = 1;
+        constexpr uint32_t kOpaqueBackground = 4096, kOverlay = 1, kLogicalIds = 8;
         // Below this many sources the extra source sort is not worth its passes.
         constexpr uint32_t kSourceSortMinimum = 4096;
         // Depth batches split tiles longer than this into chunks blended in
@@ -55,9 +55,9 @@ namespace lfs::rendering {
 
         lfs::Result<void> failure(std::string detail) {
             return lfs::Result<void>::failure(make_error({.code = ErrorCode::InvalidArgument,
-                                                     .domain = ErrorDomain::Rendering,
-                                                     .detail = std::move(detail),
-                                                     .detection = LFS_SOURCE_SITE_CURRENT()}));
+                                                          .domain = ErrorDomain::Rendering,
+                                                          .detail = std::move(detail),
+                                                          .detection = LFS_SOURCE_SITE_CURRENT()}));
         }
     } // namespace
 
@@ -165,9 +165,7 @@ namespace lfs::rendering {
             case SplatRasterMode::Points: return load(splat_blend_points_entries(), slot);
             case SplatRasterMode::Discs: return load(splat_blend_discs_entries(), slot);
             }
-            return lfs::Result<M*>(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::Rendering,
-                                          .detail = std::format("Unknown splat raster mode {}", uint32_t(mode)),
-                                          .detection = LFS_SOURCE_SITE_CURRENT()}));
+            return lfs::Result<M*>(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::Rendering, .detail = std::format("Unknown splat raster mode {}", uint32_t(mode)), .detection = LFS_SOURCE_SITE_CURRENT()}));
         }
     };
 
@@ -198,8 +196,8 @@ namespace lfs::rendering {
     }
 
     lfs::Result<void> SplatRasterizer::rasterize(const Tensor& projected, const Tensor* gut, const uint32_t count,
-                                            const SplatRasterMode mode, const SplatRasterParameters& parameters,
-                                            const SplatRasterOverlay* overlay) {
+                                                 const SplatRasterMode mode, const SplatRasterParameters& parameters,
+                                                 const SplatRasterOverlay* overlay, const SplatRasterLogical* logical) {
         auto& s = *impl_;
         if (parameters.width != s.width || parameters.height != s.height || parameters.count != count ||
             parameters.mode != uint32_t(mode) || (mode == SplatRasterMode::Gut && !gut))
@@ -212,6 +210,9 @@ namespace lfs::rendering {
                          (!overlay->preview && parameters.mask_limits[1]))))
             return failure(std::format("Splat overlay inputs disagree with raster flags {:#x} (overlay={}, selection_count={}, preview_count={})",
                                        parameters.flags, overlay != nullptr, parameters.mask_limits[0], parameters.mask_limits[1]));
+        if (((parameters.flags & kLogicalIds) != 0) != (logical != nullptr) || (logical && (!logical->ids || !logical->count)))
+            return failure(std::format("Splat logical IDs disagree with raster flags {:#x} (logical={}, count={})", parameters.flags,
+                                       logical != nullptr, logical ? logical->count : 0));
         if (parameters.flags & (kSourceSorted | kDepthBatches | kDepthPrefix))
             return failure(std::format("Splat raster flags {:#x} are chosen by the rasterizer", parameters.flags));
         const core::GpuBackendScope scope(s.backend);
@@ -252,11 +253,11 @@ namespace lfs::rendering {
             M::Binding{48, overlay ? overlay->flags : nullptr}, M::Binding{56, overlay ? overlay->selection : nullptr},
             M::Binding{64, overlay ? overlay->preview : nullptr},
             M::Binding{72, overlay && !overlay->selection_colors.empty() ? &s.selection_colors : nullptr}, M::Binding{80, gut},
-            M::Binding{88, nullptr}, M::Binding{96, optional(s.depth_jobs)}, M::Binding{104, optional(s.partial_color), RW},
+            M::Binding{88, logical ? logical->ids : nullptr}, M::Binding{96, optional(s.depth_jobs)}, M::Binding{104, optional(s.partial_color), RW},
             M::Binding{112, optional(s.partial_depth), RW}, M::Binding{120, optional(s.partial_pick), RW},
             M::Binding{128, &s.color, RW}, M::Binding{136, &s.depth, RW}, M::Binding{144, &s.pick, RW}};
         const auto dispatch = [&](const char* function, const uint32_t dispatch_flags, const M::Dispatch& shape) {
-            const BlendParameters blend{.logical_count = count, .dispatch_flags = dispatch_flags};
+            const BlendParameters blend{.logical_count = logical ? logical->count : count, .dispatch_flags = dispatch_flags};
             auto call = shape;
             call.function = function;
             call.arguments = {std::as_bytes(std::span(&blend, 1)), bindings};
@@ -332,4 +333,3 @@ namespace lfs::rendering {
     const Tensor& SplatRasterizer::rgba() const { return impl_->rgba; }
     const Tensor& SplatRasterizer::linear_depth() const { return impl_->linear_depth; }
 } // namespace lfs::rendering
-

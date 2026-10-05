@@ -349,7 +349,7 @@ namespace lfs::core::radmath {
         return RAD_SQRT(t > 0.0f ? t : 0.0f);
     }
 
-    // Post-decode transforms applied by decode_rad_chunk_into, in order.
+    // Shared post-decode transforms, applied in the order below.
     LFS_RAD_HD float sh0Transform(const float v) {
         return (v - 0.5f) / kShC0;
     }

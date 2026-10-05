@@ -26,8 +26,6 @@ SUPPORTED_PLUGIN_FEATURES = (
     "settings.v1",
     "signals.v1",
 )
-DEFAULT_PLUGIN_API_SPEC = ">=1,<2"
-DEFAULT_LICHTFELD_VERSION_SPEC = ">=0.4.2"
 _V1_MANIFEST_HINT = (
     "v1 manifest requires tool.lichtfeld.plugin_api, "
     "tool.lichtfeld.lichtfeld_version, and tool.lichtfeld.required_features"

@@ -618,14 +618,4 @@ namespace lfs::vis {
 
     void VulkanScenePluginPipeline::shutdown() { impl_.reset(); }
 
-    std::size_t VulkanScenePluginPipeline::residentOutputCount() const {
-        if (!impl_)
-            return 0;
-        return static_cast<std::size_t>(std::count_if(
-            impl_->outputs.begin(),
-            impl_->outputs.end(),
-            [](const Impl::OutputResource& output) {
-                return output.image != VK_NULL_HANDLE;
-            }));
-    }
 } // namespace lfs::vis

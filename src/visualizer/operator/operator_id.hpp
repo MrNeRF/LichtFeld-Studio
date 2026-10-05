@@ -53,10 +53,5 @@ namespace lfs::vis::op {
 
     LFS_VIS_API const char* to_string(BuiltinOp op);
     LFS_VIS_API std::optional<BuiltinOp> builtin_op_from_string(std::string_view s);
-    LFS_VIS_API const char* builtin_op_label(BuiltinOp op);
-
-    LFS_VIS_API const char* to_string(BuiltinTool tool);
-    LFS_VIS_API std::optional<BuiltinTool> builtin_tool_from_string(std::string_view s);
-    LFS_VIS_API const char* builtin_tool_label(BuiltinTool tool);
 
 } // namespace lfs::vis::op

@@ -66,10 +66,6 @@ namespace lfs::python {
                            bool invert = false, float threshold = 0.5f);
         PyTensor load_depth(int resize_factor = 1, int max_width = 0);
 
-        // Access underlying camera
-        core::Camera* camera();
-        const core::Camera* camera() const;
-
     private:
         core::Camera* cam_;
     };

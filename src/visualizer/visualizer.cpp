@@ -16,7 +16,6 @@ namespace lfs::vis {
     namespace {
         std::mutex g_runtime_service_controls_mutex;
         RuntimeServiceControls g_runtime_service_controls;
-        std::atomic<std::uint64_t> g_runtime_service_revision{0};
     } // namespace
 
     void setRuntimeServiceControls(RuntimeServiceControls controls) {
@@ -32,7 +31,6 @@ namespace lfs::vis {
         }
         if (!action || !action())
             return false;
-        g_runtime_service_revision.fetch_add(1, std::memory_order_release);
         return true;
     }
 
@@ -44,12 +42,7 @@ namespace lfs::vis {
         }
         if (!action || !action())
             return false;
-        g_runtime_service_revision.fetch_add(1, std::memory_order_release);
         return true;
-    }
-
-    std::uint64_t runtimeServiceRevision() {
-        return g_runtime_service_revision.load(std::memory_order_acquire);
     }
 
     std::unique_ptr<Visualizer> Visualizer::create(const ViewerOptions& options) {

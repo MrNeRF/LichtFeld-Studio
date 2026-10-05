@@ -21,12 +21,6 @@ namespace lfs::nodes {
 
     class NodeContext;
 
-    struct TreeTypeInfo {
-        std::string id;
-        std::string label;
-        std::string description;
-    };
-
     struct SocketTypeInfo {
         std::string id;
         std::string label;
@@ -107,19 +101,6 @@ namespace lfs::nodes {
         bool uses_host = false;
         // Geometry outputs keep the input's elements in their order, so rows still match the source.
         bool keeps_elements = false;
-    };
-
-    class LFS_CORE_API TreeTypeRegistry {
-    public:
-        TreeTypeRegistry();
-        bool register_type(TreeTypeInfo info);
-        bool unregister_type(std::string_view id);
-        [[nodiscard]] std::optional<TreeTypeInfo> find(std::string_view id) const;
-        [[nodiscard]] std::vector<TreeTypeInfo> list() const;
-
-    private:
-        mutable std::shared_mutex mutex_;
-        std::unordered_map<std::string, TreeTypeInfo> types_;
     };
 
     class LFS_CORE_API SocketTypeRegistry {

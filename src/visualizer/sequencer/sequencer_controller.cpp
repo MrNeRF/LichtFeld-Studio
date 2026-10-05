@@ -71,14 +71,6 @@ namespace lfs::vis {
         return nodes.evaluateAtTime(seconds, fps);
     }
 
-    void SequencerController::setFramesPerSecond(const float fps) {
-        const float next = clampSequenceFps(fps);
-        if (frames_per_second_ != next) {
-            frames_per_second_ = next;
-            markTimelineChanged();
-        }
-    }
-
     float SequencerController::playbackStartTime() const {
         return (hasPlySequence() || timeline_.hasAnimationClip()) ? 0.0f : timeline_.startTime();
     }

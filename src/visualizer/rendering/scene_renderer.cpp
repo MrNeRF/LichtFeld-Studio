@@ -4,8 +4,8 @@
 #ifdef LFS_GRAPHICS_VULKAN
 #include "window/vulkan_graphics_context.hpp"
 #endif
-#include <stdexcept>
 #include <format>
+#include <stdexcept>
 
 namespace lfs::vis {
     namespace {

@@ -802,15 +802,6 @@ namespace lfs::vis {
         }
     }
 
-    void SceneManager::clearPlyPath(std::string name) {
-        const core::NodeId id = scene_.getNodeIdByName(name);
-        if (id == core::NULL_NODE) {
-            LOG_WARN("Cannot clear PLY path for missing node '{}'", name);
-            return;
-        }
-        clearPlyPath(id);
-    }
-
     void SceneManager::setDatasetPath(const std::filesystem::path& path) {
         std::lock_guard<std::mutex> lock(state_mutex_);
         dataset_path_ = path;
@@ -2610,19 +2601,6 @@ namespace lfs::vis {
         return scene_.getNodeTransform(node_name);
     }
 
-    glm::mat4 SceneManager::getSelectedNodeVisualizerWorldTransform() const {
-        std::shared_lock slock(selection_.mutex());
-        const auto& ids = selection_.selectedNodeIds();
-        if (ids.empty())
-            return glm::mat4(1.0f);
-
-        const auto* node = scene_.getNodeById(*ids.begin());
-        if (!node)
-            return glm::mat4(1.0f);
-
-        return scene_coords::nodeVisualizerWorldTransform(scene_, node->id);
-    }
-
     glm::vec3 SceneManager::getSelectionCenter() const {
         std::shared_lock slock(selection_.mutex());
         const auto& ids = selection_.selectedNodeIds();
@@ -2771,20 +2749,6 @@ namespace lfs::vis {
         return core::NULL_NODE;
     }
 
-    core::CropBoxData* SceneManager::getSelectedNodeCropBox() {
-        const core::NodeId cropbox_id = getSelectedNodeCropBoxId();
-        if (cropbox_id == core::NULL_NODE)
-            return nullptr;
-        return scene_.getCropBoxData(cropbox_id);
-    }
-
-    const core::CropBoxData* SceneManager::getSelectedNodeCropBox() const {
-        const core::NodeId cropbox_id = getSelectedNodeCropBoxId();
-        if (cropbox_id == core::NULL_NODE)
-            return nullptr;
-        return scene_.getCropBoxData(cropbox_id);
-    }
-
     core::NodeId SceneManager::getActiveSelectionCropBoxId() const {
         const auto renderable_cropboxes = scene_.getRenderableCropBoxes();
 
@@ -2849,20 +2813,6 @@ namespace lfs::vis {
         }
 
         return core::NULL_NODE;
-    }
-
-    core::EllipsoidData* SceneManager::getSelectedNodeEllipsoid() {
-        const core::NodeId ellipsoid_id = getSelectedNodeEllipsoidId();
-        if (ellipsoid_id == core::NULL_NODE)
-            return nullptr;
-        return scene_.getEllipsoidData(ellipsoid_id);
-    }
-
-    const core::EllipsoidData* SceneManager::getSelectedNodeEllipsoid() const {
-        const core::NodeId ellipsoid_id = getSelectedNodeEllipsoidId();
-        if (ellipsoid_id == core::NULL_NODE)
-            return nullptr;
-        return scene_.getEllipsoidData(ellipsoid_id);
     }
 
     core::NodeId SceneManager::getActiveSelectionEllipsoidId() const {
@@ -5773,10 +5723,6 @@ namespace lfs::vis {
 
     void SceneManager::clearAppearanceModel() {
         appearance_tensor_model_.reset();
-    }
-
-    bool SceneManager::hasAppearanceController() const {
-        return appearance_tensor_model_ && appearance_tensor_model_->hasController();
     }
 
     // --- Selection service and gaussian-level selection operations ---

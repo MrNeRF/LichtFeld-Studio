@@ -37,8 +37,6 @@ namespace lfs::vis {
 
         // Loading operations
         std::expected<void, std::string> loadPLY(const std::filesystem::path& path);
-        std::expected<void, std::string> loadSOG(const std::filesystem::path& path);
-        std::expected<void, std::string> loadSplatFile(const std::filesystem::path& path);
         std::expected<void, std::string> loadSplatFiles(
             const std::vector<std::filesystem::path>& paths);
         std::expected<void, std::string> loadDataset(const std::filesystem::path& path);

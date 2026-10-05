@@ -2729,7 +2729,7 @@ TEST_F(UnicodePathTest, ThemeSaveLoad) {
 
     auto theme_path = themes_dir / "カスタムテーマ_custom_theme.json";
 
-    // Simulate saveTheme
+    // Write JSON through a Unicode path
     {
         std::ofstream file;
         // Theme uses string paths, so test utf8_to_path conversion

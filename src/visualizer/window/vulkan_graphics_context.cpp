@@ -175,9 +175,5 @@ namespace lfs::vis {
         const auto implementation = dynamic_cast<VulkanGraphicsContext*>(context);
         return implementation ? &implementation->vulkanContext() : nullptr;
     }
-    const VulkanContext* vulkanContextOrNull(const GraphicsContext* const context) noexcept {
-        const auto implementation = dynamic_cast<const VulkanGraphicsContext*>(context);
-        return implementation ? &implementation->vulkanContext() : nullptr;
-    }
 
 } // namespace lfs::vis

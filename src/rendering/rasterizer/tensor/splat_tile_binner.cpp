@@ -86,8 +86,7 @@ namespace lfs::rendering {
             const ScanParameters blocks{.count = count, .primitive_counts = level == 0};
             const std::array block_bindings{M::Binding{0, &input}, M::Binding{8, &output, RW},
                                             M::Binding{16, &storage.sums, RW}, M::Binding{24, nullptr}};
-            if (auto r = run(*scan, {.function = "scan_blocks", .arguments = {bytes(blocks), block_bindings},
-                                     .groups = {groups, 1, 1}, .group = {256, 1, 1}});
+            if (auto r = run(*scan, {.function = "scan_blocks", .arguments = {bytes(blocks), block_bindings}, .groups = {groups, 1, 1}, .group = {256, 1, 1}});
                 !r)
                 return r;
             if (groups <= 1)
@@ -97,8 +96,7 @@ namespace lfs::rendering {
             const ScanParameters add{.count = count};
             const std::array add_bindings{M::Binding{0, nullptr}, M::Binding{8, &output, RW},
                                           M::Binding{16, nullptr}, M::Binding{24, &storage.offsets}};
-            return run(*scan, {.function = "scan_add", .arguments = {bytes(add), add_bindings},
-                               .groups = {groups, 1, 1}, .group = {256, 1, 1}});
+            return run(*scan, {.function = "scan_add", .arguments = {bytes(add), add_bindings}, .groups = {groups, 1, 1}, .group = {256, 1, 1}});
         }
 
         lfs::Result<void> sort_pass(M& module, const uint32_t pass) {
@@ -109,18 +107,15 @@ namespace lfs::rendering {
                                       M::Binding{32, &histogram, RW}, M::Binding{40, &histogram_offsets, RW},
                                       M::Binding{48, &digit_offsets, RW}, M::Binding{56, &status}};
             const M::Arguments arguments{bytes(parameters), bindings};
-            if (auto r = run(module, {.function = "sort_histogram", .arguments = arguments, .group = {256, 1, 1},
-                                     .indirect = &dispatch_args, .indirect_offset = kSortArgs});
+            if (auto r = run(module, {.function = "sort_histogram", .arguments = arguments, .group = {256, 1, 1}, .indirect = &dispatch_args, .indirect_offset = kSortArgs});
                 !r)
                 return r;
-            if (auto r = run(module, {.function = "sort_digit_scan", .arguments = arguments,
-                                     .groups = {256, 1, 1}, .group = {256, 1, 1}});
+            if (auto r = run(module, {.function = "sort_digit_scan", .arguments = arguments, .groups = {256, 1, 1}, .group = {256, 1, 1}});
                 !r)
                 return r;
             if (auto r = run(module, {.function = "sort_digit_offsets", .arguments = arguments, .group = {256, 1, 1}}); !r)
                 return r;
-            return run(module, {.function = "sort_scatter", .arguments = arguments, .group = {256, 1, 1},
-                               .indirect = &dispatch_args, .indirect_offset = kSortArgs});
+            return run(module, {.function = "sort_scatter", .arguments = arguments, .group = {256, 1, 1}, .indirect = &dispatch_args, .indirect_offset = kSortArgs});
         }
     };
 
@@ -153,7 +148,7 @@ namespace lfs::rendering {
             for (const uint32_t groups : levels)
                 level_bytes += size_t(groups) * 16 + 512;
             auto [counts, offsets, group_offsets, scan] = carve_arena<4>({size_t(splats) * 8, size_t(splats) * 8,
-                                                                         size_t(ceil_div(splats, 256)) * 8, level_bytes});
+                                                                          size_t(ceil_div(splats, 256)) * 8, level_bytes});
             s.counts = counts;
             s.offsets = offsets;
             s.group_offsets = group_offsets;
@@ -184,14 +179,14 @@ namespace lfs::rendering {
     }
 
     lfs::Result<void> SplatTileBinner::bin(const Tensor& splats, const Tensor& raster, const uint32_t count, const uint32_t tiles,
-                                      const bool source_sorted) {
+                                           const bool source_sorted) {
         auto& s = *impl_;
         if (count > s.max_splats || tiles > s.max_tiles || s.capacity == 0 || tiles == 0 || (source_sorted && count > s.capacity))
             return lfs::Result<void>::failure(make_error({.code = ErrorCode::InvalidArgument,
-                                                     .domain = ErrorDomain::Rendering,
-                                                     .detail = std::format("Tile binning exceeds its reservation (count={}/{}, tiles={}/{}, capacity={}, source_sorted={})",
-                                                                           count, s.max_splats, tiles, s.max_tiles, s.capacity, source_sorted),
-                                                     .detection = LFS_SOURCE_SITE_CURRENT()}));
+                                                          .domain = ErrorDomain::Rendering,
+                                                          .detail = std::format("Tile binning exceeds its reservation (count={}/{}, tiles={}/{}, capacity={}, source_sorted={})",
+                                                                                count, s.max_splats, tiles, s.max_tiles, s.capacity, source_sorted),
+                                                          .detection = LFS_SOURCE_SITE_CURRENT()}));
         const core::GpuBackendScope scope(s.backend);
         if (source_sorted && !s.sort32)
             s.sort32 = load(splat_sort32_entries(), s.backend);
@@ -213,21 +208,18 @@ namespace lfs::rendering {
                                       M::Binding{96, &s.indices[1], RW}, M::Binding{104, &s.group_offsets, RW},
                                       M::Binding{112, nullptr}};
             const M::Arguments arguments{bytes(parameters), bindings};
-            if (auto r = s.run(*s.tiles, {.function = "source_key_groups", .arguments = arguments,
-                                          .groups = {groups, 1, 1}, .group = {256, 1, 1}});
+            if (auto r = s.run(*s.tiles, {.function = "source_key_groups", .arguments = arguments, .groups = {groups, 1, 1}, .group = {256, 1, 1}});
                 !r)
                 return r;
             if (auto r = s.scan_counts(s.offsets, s.group_offsets, groups, 0); !r)
                 return r;
-            if (auto r = s.run(*s.tiles, {.function = "source_compact", .arguments = arguments,
-                                          .groups = {groups, 1, 1}, .group = {256, 1, 1}});
+            if (auto r = s.run(*s.tiles, {.function = "source_compact", .arguments = arguments, .groups = {groups, 1, 1}, .group = {256, 1, 1}});
                 !r)
                 return r;
             for (uint32_t pass = 0; pass < 4; ++pass)
                 if (auto r = s.sort_pass(tile_sort, pass); !r)
                     return r;
-            if (auto r = s.run(*s.tiles, {.function = "source_permutation", .arguments = arguments,
-                                          .groups = {groups, 1, 1}, .group = {256, 1, 1}});
+            if (auto r = s.run(*s.tiles, {.function = "source_permutation", .arguments = arguments, .groups = {groups, 1, 1}, .group = {256, 1, 1}});
                 !r)
                 return r;
             s.mark("source");
@@ -241,8 +233,7 @@ namespace lfs::rendering {
                                   M::Binding{112, nullptr}};
         const M::Arguments arguments{bytes(parameters), bindings};
         if (count != 0) {
-            if (auto r = s.run(*s.tiles, {.function = "tile_counts", .arguments = arguments,
-                                          .groups = {groups, 1, 1}, .group = {256, 1, 1}});
+            if (auto r = s.run(*s.tiles, {.function = "tile_counts", .arguments = arguments, .groups = {groups, 1, 1}, .group = {256, 1, 1}});
                 !r)
                 return r;
             if (auto r = s.scan_counts(counts, offsets, count, 0); !r)
@@ -257,8 +248,7 @@ namespace lfs::rendering {
         const uint32_t tile_passes = (std::bit_width(tiles - 1) + 7) / 8;
         const uint32_t passes = (source_sorted ? 0 : 4) + tile_passes;
         if (count != 0) {
-            if (auto r = s.run(*s.tiles, {.function = "tile_instances", .arguments = arguments,
-                                          .groups = {groups, 1, 1}, .group = {256, 1, 1}});
+            if (auto r = s.run(*s.tiles, {.function = "tile_instances", .arguments = arguments, .groups = {groups, 1, 1}, .group = {256, 1, 1}});
                 !r)
                 return r;
             s.mark("instances");
@@ -273,8 +263,7 @@ namespace lfs::rendering {
             auto sorted_bindings = bindings;
             sorted_bindings[5].tensor = &s.keys[s.sorted];
             sorted_bindings[6].tensor = &s.indices[s.sorted];
-            return s.run(*s.tiles, {.function = "tile_ranges", .arguments = {bytes(parameters), sorted_bindings},
-                                    .group = {256, 1, 1}, .indirect = &s.dispatch_args, .indirect_offset = kRangeArgs});
+            return s.run(*s.tiles, {.function = "tile_ranges", .arguments = {bytes(parameters), sorted_bindings}, .group = {256, 1, 1}, .indirect = &s.dispatch_args, .indirect_offset = kRangeArgs});
         }
         return {};
     }
@@ -289,8 +278,7 @@ namespace lfs::rendering {
                                   M::Binding{48, nullptr}, M::Binding{56, &s.ranges}, M::Binding{64, nullptr},
                                   M::Binding{72, nullptr}, M::Binding{80, &raster}, M::Binding{88, nullptr},
                                   M::Binding{96, nullptr}, M::Binding{104, nullptr}, M::Binding{112, &jobs, RW}};
-        return s.run(*s.tiles, {.function = "tile_depth_batches", .arguments = {bytes(parameters), bindings},
-                                .groups = {ceil_div(tiles, 256), 1, 1}, .group = {256, 1, 1}});
+        return s.run(*s.tiles, {.function = "tile_depth_batches", .arguments = {bytes(parameters), bindings}, .groups = {ceil_div(tiles, 256), 1, 1}, .group = {256, 1, 1}});
     }
 
     void SplatTileBinner::set_stage_marker(StageMarker marker) { impl_->marker = std::move(marker); }

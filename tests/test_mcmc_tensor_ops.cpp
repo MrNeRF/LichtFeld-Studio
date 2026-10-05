@@ -12,11 +12,6 @@
  *   - Root cause: Missing cudaStreamSynchronize() in nonzero() implementation
  *   - Fix: Added stream sync in tensor_masking_ops.cpp
  *
- * BUG #2: multinomial() int32/int64 mismatch
- *   - Symptom: Corrupted indices after sampling
- *   - Root cause: multinomial() returned Int32 but alive_indices needs Int64
- *   - Fix: Changed multinomial return type to Int64
- *
  * BUG #3: index_select() missing Int64 support
  *   - Symptom: Garbage values when selecting from alive_indices (Int64 tensor)
  *   - Root cause: index_select() only supported Float32 source data

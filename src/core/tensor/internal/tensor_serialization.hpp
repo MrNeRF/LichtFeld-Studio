@@ -39,15 +39,12 @@ namespace lfs::core {
             TensorLoadTiming* previous_ = nullptr;
         };
 
-        // Public operator>> always pins. Splat deserialize uses this sibling so
-        // host tensors at or above 256 MiB skip cudaHostAlloc / the pinned cache.
+        // Public operator>> always pins; this entry also supports pageable host storage.
         LFS_CORE_API void read_serialized_tensor(std::istream& is, Tensor& tensor,
                                                  bool use_pinned);
-        LFS_CORE_API void read_serialized_tensor_pageable_if_large(std::istream& is,
-                                                                   Tensor& tensor);
         // When `is` is backed by a contiguous memory streambuf, copies the
         // payload with cudaMemcpyAsync into a device tensor on `stream`.
-        // Otherwise falls back to read_serialized_tensor_pageable_if_large.
+        // Otherwise loads through host storage, using pageable memory at or above 256 MiB.
         LFS_LOCAL_SYMBOL void read_serialized_tensor_device_from_span_or_host(
             std::istream& is, Tensor& tensor, cudaStream_t stream);
     } // namespace serialization_detail

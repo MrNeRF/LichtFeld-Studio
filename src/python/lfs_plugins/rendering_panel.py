@@ -55,12 +55,12 @@ def _theme_vignette():
     return theme.vignette if theme else None
 
 
-def _set_theme_vignette_style(*, intensity=None, radius=None, softness=None):
+def _set_theme_vignette_style(*, radius=None, softness=None):
     vignette = _theme_vignette()
     if vignette is None:
         return
     lf.ui.set_theme_vignette_style(
-        float(vignette.intensity if intensity is None else intensity),
+        float(vignette.intensity),
         float(vignette.radius if radius is None else radius),
         float(vignette.softness if softness is None else softness),
     )

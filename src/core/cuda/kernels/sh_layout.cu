@@ -217,65 +217,6 @@ namespace lfs::core {
             }
         }
 
-        __device__ __forceinline__ float float4_component(const float4 v, const std::uint32_t component) {
-            switch (component) {
-            case 0:
-                return v.x;
-            case 1:
-                return v.y;
-            case 2:
-                return v.z;
-            default:
-                return v.w;
-            }
-        }
-
-        __device__ __forceinline__ float read_swizzled_rest_float(
-            const float4* __restrict__ src,
-            const std::uint32_t primitive_idx,
-            const std::uint32_t rest_float_offset,
-            const std::uint32_t src_slots_per_primitive) {
-            if (!src || rest_float_offset >= kShMaxCoeffsRest * kShChannels) {
-                return 0.0f;
-            }
-            const std::uint32_t slot = rest_float_offset / 4u;
-            const std::uint32_t component = rest_float_offset % 4u;
-            if (slot >= src_slots_per_primitive) {
-                return 0.0f;
-            }
-            return float4_component(src[shAt_device(primitive_idx, slot, src_slots_per_primitive)], component);
-        }
-
-        __global__ void pack_full_from_split_kernel(
-            const float* __restrict__ src_sh0,
-            const float4* __restrict__ src_shN,
-            float4* __restrict__ dst,
-            std::uint32_t n_primitives,
-            std::uint32_t padded_n,
-            std::uint32_t src_slots_per_primitive) {
-            const std::uint32_t p = blockIdx.x * blockDim.x + threadIdx.x;
-            if (p >= padded_n)
-                return;
-
-            const bool valid_primitive = p < n_primitives;
-            const float* sh0_row = valid_primitive ? src_sh0 + p * kShChannels : nullptr;
-
-#pragma unroll
-            for (std::uint32_t k = 0; k < kShRestFloat4PerPrimitive; ++k) {
-                float packed[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-#pragma unroll
-                for (std::uint32_t c = 0; c < 4u; ++c) {
-                    if (!valid_primitive)
-                        continue;
-                    const std::uint32_t full_float_offset = k * 4u + c;
-                    packed[c] = full_float_offset < kShChannels
-                                    ? sh0_row[full_float_offset]
-                                    : read_swizzled_rest_float(src_shN, p, full_float_offset - kShChannels, src_slots_per_primitive);
-                }
-                dst[shAt_device(p, k, kShRestFloat4PerPrimitive)] = make_float4(packed[0], packed[1], packed[2], packed[3]);
-            }
-        }
-
         __global__ void gather_from_linear_kernel(
             float4* __restrict__ dst,
             std::uint32_t dst_offset,
@@ -318,20 +259,6 @@ namespace lfs::core {
         const float* src_canonical,
         float* dst_swizzled,
         std::size_t n_primitives,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream) {
-        reorder_sh_to_swizzled(src_canonical,
-                               dst_swizzled,
-                               n_primitives,
-                               active_coeffs_rest,
-                               active_coeffs_rest,
-                               stream);
-    }
-
-    void reorder_sh_to_swizzled(
-        const float* src_canonical,
-        float* dst_swizzled,
-        std::size_t n_primitives,
         std::uint32_t src_coeffs_rest,
         std::uint32_t layout_coeffs_rest,
         cudaStream_t stream) {
@@ -349,20 +276,6 @@ namespace lfs::core {
             src_canonical, reinterpret_cast<float4*>(dst_swizzled),
             static_cast<std::uint32_t>(n_primitives), src_coeffs_rest, padded_n, slots);
         LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.reorder");
-    }
-
-    void undo_reorder_sh_from_swizzled(
-        const float* src_swizzled,
-        float* dst_canonical,
-        std::size_t n_primitives,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream) {
-        undo_reorder_sh_from_swizzled(src_swizzled,
-                                      dst_canonical,
-                                      n_primitives,
-                                      active_coeffs_rest,
-                                      active_coeffs_rest,
-                                      stream);
     }
 
     void undo_reorder_sh_from_swizzled(
@@ -541,22 +454,6 @@ namespace lfs::core {
         const int* src_indices,
         float* dst_linear,
         std::size_t n_src,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream) {
-        shN_swizzled_gather_to_linear(src_swizzled,
-                                      src_indices,
-                                      dst_linear,
-                                      n_src,
-                                      active_coeffs_rest,
-                                      active_coeffs_rest,
-                                      stream);
-    }
-
-    void shN_swizzled_gather_to_linear(
-        const float* src_swizzled,
-        const int* src_indices,
-        float* dst_linear,
-        std::size_t n_src,
         std::uint32_t dst_coeffs_rest,
         std::uint32_t layout_coeffs_rest,
         cudaStream_t stream) {
@@ -570,22 +467,6 @@ namespace lfs::core {
             reinterpret_cast<const float4*>(src_swizzled), src_indices, dst_linear,
             static_cast<std::uint32_t>(n_src), dst_coeffs_rest, slots);
         LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.gather_to_linear_i32");
-    }
-
-    void shN_swizzled_gather_to_linear_i64(
-        const float* src_swizzled,
-        const std::int64_t* src_indices,
-        float* dst_linear,
-        std::size_t n_src,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream) {
-        shN_swizzled_gather_to_linear_i64(src_swizzled,
-                                          src_indices,
-                                          dst_linear,
-                                          n_src,
-                                          active_coeffs_rest,
-                                          active_coeffs_rest,
-                                          stream);
     }
 
     void shN_swizzled_gather_to_linear_i64(
@@ -613,22 +494,6 @@ namespace lfs::core {
         std::size_t dst_offset,
         const float* src_linear,
         std::size_t n_src,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream) {
-        shN_swizzled_gather_from_linear(dst_swizzled,
-                                        dst_offset,
-                                        src_linear,
-                                        n_src,
-                                        active_coeffs_rest,
-                                        active_coeffs_rest,
-                                        stream);
-    }
-
-    void shN_swizzled_gather_from_linear(
-        float* dst_swizzled,
-        std::size_t dst_offset,
-        const float* src_linear,
-        std::size_t n_src,
         std::uint32_t src_coeffs_rest,
         std::uint32_t layout_coeffs_rest,
         cudaStream_t stream) {
@@ -647,22 +512,6 @@ namespace lfs::core {
         const int* dst_indices,
         const float* src_linear,
         std::size_t n_src,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream) {
-        shN_swizzled_scatter_linear(dst_swizzled,
-                                    dst_indices,
-                                    src_linear,
-                                    n_src,
-                                    active_coeffs_rest,
-                                    active_coeffs_rest,
-                                    stream);
-    }
-
-    void shN_swizzled_scatter_linear(
-        float* dst_swizzled,
-        const int* dst_indices,
-        const float* src_linear,
-        std::size_t n_src,
         std::uint32_t src_coeffs_rest,
         std::uint32_t layout_coeffs_rest,
         cudaStream_t stream) {
@@ -674,28 +523,6 @@ namespace lfs::core {
             reinterpret_cast<float4*>(dst_swizzled), dst_indices, src_linear,
             static_cast<std::uint32_t>(n_src), src_coeffs_rest, slots);
         LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.scatter_linear");
-    }
-
-    void sh_swizzled_pack_full_from_split(
-        const float* src_sh0,
-        const float* src_shN_swizzled,
-        float* dst_full_swizzled,
-        std::size_t n_primitives,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream) {
-        if (n_primitives == 0 || !src_sh0 || !dst_full_swizzled)
-            return;
-        const std::uint32_t padded_n = static_cast<std::uint32_t>(sh_swizzled_padded_n(n_primitives));
-        const auto src_slots = sh_float4_slots_for_rest(active_coeffs_rest);
-        const int grid = static_cast<int>((padded_n + BLOCK - 1) / BLOCK);
-        pack_full_from_split_kernel<<<grid, BLOCK, 0, stream>>>(
-            src_sh0,
-            reinterpret_cast<const float4*>(src_shN_swizzled),
-            reinterpret_cast<float4*>(dst_full_swizzled),
-            static_cast<std::uint32_t>(n_primitives),
-            padded_n,
-            src_slots);
-        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.pack_full_from_split");
     }
 
 } // namespace lfs::core

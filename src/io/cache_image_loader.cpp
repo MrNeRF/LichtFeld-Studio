@@ -43,14 +43,6 @@ namespace lfs::io {
         return DEFAULT_FALLBACK_AVAILABLE_GB * BYTES_PER_GB;
     }
 
-    double get_memory_usage_ratio() {
-        const std::size_t total = get_total_physical_memory();
-        if (total == 0)
-            return 1.0;
-        const std::size_t available = get_available_physical_memory();
-        return 1.0 - (static_cast<double>(available) / static_cast<double>(total));
-    }
-
     void CacheLoader::update_cache_params(bool use_cpu_memory, int num_expected_images,
                                           float min_cpu_free_GB, float min_cpu_free_memory_ratio,
                                           bool print_cache_status, int print_status_freq_num) {

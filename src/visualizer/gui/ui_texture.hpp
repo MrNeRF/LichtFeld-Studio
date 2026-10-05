@@ -30,7 +30,8 @@ namespace lfs::vis::gui {
             target[0] = source[0];
             target[1] = gray ? source[0] : source[1];
             target[2] = gray ? source[0] : source[2];
-            target[3] = channels == 2 ? source[1] : channels == 4 ? source[3] : 255;
+            target[3] = channels == 2 ? source[1] : channels == 4 ? source[3]
+                                                                  : 255;
         }
     }
 

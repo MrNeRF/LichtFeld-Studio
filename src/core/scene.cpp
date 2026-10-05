@@ -1310,15 +1310,6 @@ namespace lfs::core {
         return true;
     }
 
-    bool Scene::installCombinedModelCache(
-        std::shared_ptr<lfs::core::SplatData> model,
-        const uint64_t generation) const {
-        CombinedModelBuild build;
-        build.model = std::move(model);
-        build.generation = generation;
-        return installCombinedModelCache(std::move(build));
-    }
-
     void Scene::pollCombinedModelBuild() const {
         if (!combined_model_lifetime_) {
             return;
@@ -2138,11 +2129,6 @@ namespace lfs::core {
         setSelectionMask(
             domain,
             std::make_shared<Tensor>(std::move(output)));
-    }
-
-    void Scene::resizeSelectionIfSizeMismatch(const size_t expected_size) {
-        resizeSelectionIfSizeMismatch(
-            SelectionDomain::Splat, expected_size);
     }
 
     void Scene::resizeSelectionIfSizeMismatch(
@@ -2978,63 +2964,6 @@ namespace lfs::core {
         return -1;
     }
 
-    std::vector<bool> Scene::getSelectedNodeMask(const std::string& selected_node_name) const {
-        const auto consolidated_visible_count = [&]() -> std::optional<size_t> {
-            if (consolidated_ && !consolidated_node_slots_.empty()) {
-                return consolidated_node_slots_.size();
-            }
-            return std::nullopt;
-        }();
-        const size_t visible_count = std::count_if(nodes_.begin(), nodes_.end(),
-                                                   [this](const auto& n) {
-                                                       return effectiveModel(*n) && isNodeEffectivelyVisible(n->id);
-                                                   });
-        const size_t mask_count = consolidated_visible_count.value_or(visible_count);
-
-        if (selected_node_name.empty()) {
-            return std::vector<bool>(mask_count, false);
-        }
-
-        const SceneNode* selected = getNode(selected_node_name);
-        if (!selected) {
-            return std::vector<bool>(mask_count, false);
-        }
-
-        if (selected->type == NodeType::CROPBOX && selected->parent_id != NULL_NODE) {
-            selected = getNodeById(selected->parent_id);
-            if (!selected)
-                return {};
-        }
-
-        const NodeId selected_id = selected->id;
-        const auto isSelectedOrDescendant = [this, selected_id](const SceneNode* node) {
-            for (const SceneNode* n = node; n; n = (n->parent_id != NULL_NODE) ? getNodeById(n->parent_id) : nullptr) {
-                if (n->id == selected_id)
-                    return true;
-            }
-            return false;
-        };
-
-        if (consolidated_visible_count) {
-            std::vector<bool> mask(consolidated_node_slots_.size(), false);
-            for (size_t slot_index = 0; slot_index < consolidated_node_slots_.size(); ++slot_index) {
-                const auto& slot = consolidated_node_slots_[slot_index];
-                const auto* node = slot.id == NULL_NODE ? nullptr : getNodeById(slot.id);
-                mask[slot_index] = node && isSelectedOrDescendant(node);
-            }
-            return mask;
-        }
-
-        std::vector<bool> mask;
-        mask.reserve(visible_count);
-        for (const auto& node : nodes_) {
-            if (effectiveModel(*node) && isNodeEffectivelyVisible(node->id)) {
-                mask.push_back(isSelectedOrDescendant(node.get()));
-            }
-        }
-        return mask;
-    }
-
     std::vector<bool> Scene::getSelectedNodeMask(const std::vector<std::string>& selected_node_names) const {
         const auto consolidated_visible_count = [&]() -> std::optional<size_t> {
             if (consolidated_ && !consolidated_node_slots_.empty()) {
@@ -3251,45 +3180,6 @@ namespace lfs::core {
         events::state::SelectionChanged{
             .has_selection = count > 0,
             .count = selection_count}
-            .emit();
-        notifyMutation(MutationType::SELECTION_CHANGED);
-    }
-
-    void Scene::setSelectionMaskWithGroupCounts(std::shared_ptr<lfs::core::Tensor> mask,
-                                                const size_t selected_count,
-                                                const SelectionGroupCounts& group_counts) {
-        size_t count = selected_count;
-        bool has_selection = false;
-        const size_t expected_size = currentSelectionCapacity();
-        mask = normalizeSelectionMask(std::move(mask), expected_size, &count);
-        const bool counts_preserved = count == selected_count;
-
-        {
-            std::unique_lock lock(selection_mutex_);
-            selection_mask_ = std::move(mask);
-            const bool valid =
-                selection_mask_ && selection_mask_->is_valid() && selection_mask_->numel() > 0;
-
-            has_selection_ = valid && count > 0;
-            has_selection = has_selection_;
-            if (!has_selection_) {
-                selection_mask_.reset();
-                count = 0;
-            }
-        }
-
-        if (has_selection && counts_preserved) {
-            applySelectionGroupCounts(group_counts);
-            selection_group_counts_dirty_ = false;
-        } else {
-            clearSelectionGroupCounts();
-            selection_group_counts_dirty_ = has_selection;
-        }
-        selected_count_ = count;
-
-        events::state::SelectionChanged{
-            .has_selection = has_selection,
-            .count = static_cast<int>(std::min(count, static_cast<size_t>(std::numeric_limits<int>::max())))}
             .emit();
         notifyMutation(MutationType::SELECTION_CHANGED);
     }
@@ -5964,15 +5854,6 @@ namespace lfs::core {
     }
 
     std::shared_ptr<lfs::core::Camera> Scene::getCameraByUid(const int uid) {
-        for (const auto& node : nodes_) {
-            if (node->type == NodeType::CAMERA && node->camera && node->camera->uid() == uid) {
-                return node->camera;
-            }
-        }
-        return nullptr;
-    }
-
-    std::shared_ptr<const lfs::core::Camera> Scene::getCameraByUid(const int uid) const {
         for (const auto& node : nodes_) {
             if (node->type == NodeType::CAMERA && node->camera && node->camera->uid() == uid) {
                 return node->camera;

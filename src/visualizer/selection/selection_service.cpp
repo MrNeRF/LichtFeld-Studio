@@ -1914,10 +1914,6 @@ namespace lfs::vis {
         }
     }
 
-    size_t SelectionService::getTotalGaussianCount() const {
-        return activeSelectionGaussianCount(scene_manager_);
-    }
-
     bool SelectionService::hasScreenPositions() const {
         const auto screen_positions = getScreenPositions();
         return screen_positions && screen_positions->is_valid();
@@ -1947,18 +1943,6 @@ namespace lfs::vis {
         testing_screen_positions_ = std::move(screen_positions);
     }
 
-    void SelectionService::setTestingScreenPositionsForCamera(const int camera_index,
-                                                              std::shared_ptr<core::Tensor> screen_positions) {
-        if (camera_index < 0) {
-            return;
-        }
-        if (screen_positions && screen_positions->is_valid()) {
-            testing_camera_screen_positions_[camera_index] = std::move(screen_positions);
-            return;
-        }
-        testing_camera_screen_positions_.erase(camera_index);
-    }
-
     void SelectionService::setTestingViewport(ViewportInfo viewport) {
         testing_viewport_ = std::move(viewport);
     }
@@ -1972,19 +1956,8 @@ namespace lfs::vis {
         testing_hovered_gaussian_id_ = hovered_gaussian_id;
     }
 
-    bool SelectionService::hasTestingScreenPositionsForCamera(const int camera_index) const {
-        if (camera_index < 0) {
-            return false;
-        }
-        const auto it = testing_camera_screen_positions_.find(camera_index);
-        return it != testing_camera_screen_positions_.end() && it->second && it->second->is_valid();
-    }
-
     bool SelectionService::commandCameraValidationRequired(const int camera_index) const {
-        if (camera_index < 0) {
-            return false;
-        }
-        return !hasTestingScreenPositionsForCamera(camera_index);
+        return camera_index >= 0;
     }
 
     std::optional<SelectionProjectionContext> SelectionService::projectionContextFromViewerContext(
@@ -2273,13 +2246,6 @@ namespace lfs::vis {
     std::shared_ptr<core::Tensor> SelectionService::screenPositionsForCommandPass(
         const int camera_index, const SelectionProjectionContext& projection_context) const {
         if (camera_index >= 0) {
-            if (const auto it = testing_camera_screen_positions_.find(camera_index);
-                it != testing_camera_screen_positions_.end() &&
-                it->second &&
-                it->second->is_valid()) {
-                return it->second;
-            }
-            return renderScreenPositionsForProjectionContext(projection_context);
         }
         if (testing_screen_positions_ && testing_screen_positions_->is_valid()) {
             return testing_screen_positions_;
@@ -3154,14 +3120,6 @@ namespace lfs::vis {
                                                                           const int camera_index,
                                                                           const SelectionFilterState& filters,
                                                                           const SelectionProjectionContext& projection_context) {
-        if (camera_index >= 0) {
-            if (const auto it = testing_camera_screen_positions_.find(camera_index);
-                it != testing_camera_screen_positions_.end() &&
-                it->second &&
-                it->second->is_valid()) {
-                return pickHoveredGaussianIdFromScreenPositions(*it->second, {x, y}, filters, projection_context);
-            }
-        }
 
         if (!scene_manager_ || camera_index < 0) {
             return std::nullopt;
