@@ -126,7 +126,8 @@ namespace lfs::core::internal {
                         pass.depthAttachment.clearDepth = first.depth_clear;
                     }
                     id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
-                    [encoder setCullMode:MTLCullModeNone];
+                    // Metal's viewport keeps NDC +Y up, so CCW in NDC is CCW on screen.
+                    [encoder setFrontFacingWinding:MTLWindingCounterClockwise];
                     for (const auto& view : reads) [encoder useResource:view.buffer usage:MTLResourceUsageRead stages:MTLRenderStageVertex | MTLRenderStageFragment];
                     for (size_t i = 0; i < merged.writes.size(); ++i)
                         [encoder useResource:writes[i].buffer usage:MTLResourceUsageRead | MTLResourceUsageWrite stages:MTLRenderStageVertex | MTLRenderStageFragment];
@@ -137,6 +138,9 @@ namespace lfs::core::internal {
                         const auto viewport = draw.viewport.value_or(Module::Viewport{0, 0, float(width), float(height)});
                         [encoder setViewport:MTLViewport{viewport.x, viewport.y, viewport.width, viewport.height, 0, 1}];
                         [encoder setRenderPipelineState:pipelines[i]];
+                        [encoder setCullMode:draw.cull == Module::Cull::Back ? MTLCullModeBack
+                                             : draw.cull == Module::Cull::Front ? MTLCullModeFront
+                                                                                : MTLCullModeNone];
                         [encoder setDepthStencilState:depth_states[i]];
                         if (draw.scissor) {
                             const auto& rect = *draw.scissor;

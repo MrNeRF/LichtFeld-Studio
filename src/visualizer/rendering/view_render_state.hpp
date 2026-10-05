@@ -64,6 +64,7 @@ namespace lfs::vis {
         // vulkan_viewport_image_ (tensor compositor).
         std::shared_ptr<const lfs::core::Tensor> viewport_depth_image_;
         ViewportEnvironment viewport_environment_;
+        ViewportMeshPassDesc viewport_meshes_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
         StaleFrameGuard vksplat_stale_frame_guard_;

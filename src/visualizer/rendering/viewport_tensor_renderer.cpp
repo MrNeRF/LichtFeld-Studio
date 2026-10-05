@@ -13,6 +13,7 @@
 #include "viewport_grid_program.hpp"
 #include "viewport_overlay_program.hpp"
 #include "tensor_frame_uploads.hpp"
+#include "viewport_tensor_meshes.hpp"
 #include "viewport_vignette_program.hpp"
 #include "core/executable_path.hpp"
 #include "core/image_io.hpp"
@@ -257,6 +258,7 @@ namespace lfs::vis {
         Tensor dummy_records;
         Tensor dummy_depth;
         TensorFrameUploads uploads;
+        TensorMeshPass meshes;
         SceneUpscalerSelection upscaler{};
         // The environment map is loaded once per path, like SharedViewportGpuAssets.
         std::filesystem::path environment_path;
@@ -680,6 +682,9 @@ namespace lfs::vis {
             const bool environment = drawEnvironment(*destination, desc, rect);
             if (!compose(frame, desc, environment))
                 return;
+            meshes.record(*destination, desc,
+                          Module::Scissor{std::uint32_t(rect.x), std::uint32_t(rect.y), rect.width, rect.height},
+                          uploads);
             const std::size_t post_count = std::min<std::size_t>(
                 desc.post_ui_overlay_vertex_count, desc.overlay_triangles.size());
             const std::size_t base_count = desc.overlay_triangles.size() - post_count;
@@ -762,6 +767,9 @@ namespace lfs::vis {
         desc.scene_image_flip_y = view.vulkan_viewport_image_flip_y_;
         desc.depth_blit = {.depth = view.viewport_depth_image_};
         desc.environment = view.viewport_environment_;
+        desc.mesh_view_projection = view.viewport_meshes_.view_projection;
+        desc.mesh_camera_position = view.viewport_meshes_.camera_position;
+        desc.mesh_items = view.viewport_meshes_.items;
         desc.scene_outputs = {{
             .target = view.main_render_target_,
             .color = desc.scene_image,

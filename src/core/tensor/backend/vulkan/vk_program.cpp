@@ -295,7 +295,7 @@ namespace lfs::core::internal {
                 return result;
             }
             std::shared_ptr<Pipeline> raster(const Module::Draw& draw, VkFormat format, size_t bytes) {
-                const auto key = std::tuple{std::string(draw.vertex), std::string(draw.fragment), format, bytes, draw.blend, draw.depth != nullptr, draw.depth_compare, draw.depth_write};
+                const auto key = std::tuple{std::string(draw.vertex), std::string(draw.fragment), format, bytes, draw.blend, draw.depth != nullptr, draw.depth_compare, draw.depth_write, draw.cull};
                 if (auto found = raster_.find(key); found != raster_.end())
                     return found->second;
                 auto result = layout(bytes, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -328,7 +328,12 @@ namespace lfs::core::internal {
                 viewport.viewportCount = viewport.scissorCount = 1;
                 VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
                 raster.polygonMode = VK_POLYGON_MODE_FILL;
-                raster.cullMode = VK_CULL_MODE_NONE;
+                raster.cullMode = draw.cull == Module::Cull::Back ? VK_CULL_MODE_BACK_BIT
+                                  : draw.cull == Module::Cull::Front ? VK_CULL_MODE_FRONT_BIT
+                                                                     : VK_CULL_MODE_NONE;
+                // Vulkan decides facing in framebuffer space; the negative-height
+                // viewport maps NDC +Y up there, so NDC counter-clockwise stays front.
+                raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
                 raster.lineWidth = 1;
                 VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
                 multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -377,7 +382,7 @@ namespace lfs::core::internal {
             std::mutex mutex_;
             std::map<std::pair<std::string, Module::Stage>, std::vector<uint32_t>> sources_;
             std::map<std::pair<std::string, size_t>, std::shared_ptr<Pipeline>> compute_;
-            std::map<std::tuple<std::string, std::string, VkFormat, size_t, Module::Blend, bool, Module::Compare, bool>, std::shared_ptr<Pipeline>> raster_;
+            std::map<std::tuple<std::string, std::string, VkFormat, size_t, Module::Blend, bool, Module::Compare, bool, Module::Cull>, std::shared_ptr<Pipeline>> raster_;
             std::map<std::tuple<uint32_t, uint32_t, VkFormat, bool>, std::vector<std::shared_ptr<RasterResources>>> targets_;
         };
     } // namespace

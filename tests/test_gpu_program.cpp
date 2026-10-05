@@ -221,6 +221,39 @@ namespace {
             }
     }
 
+    TEST_P(Programs, CullingTreatsCounterClockwiseNdcAsFront) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP();
+        GpuBackendScope scope(GetParam());
+        auto loaded = M::load(program_contract_entries(), GetParam());
+        ASSERT_TRUE(loaded) << loaded.error().detail();
+        if (!(*loaded)->supports_raster())
+            GTEST_SKIP() << "Backend is compute-only";
+        constexpr size_t width = 32, height = 32;
+        // Left triangle counter-clockwise, right triangle clockwise (NDC +Y up).
+        std::array<std::array<float, 4>, 6> positions{{{-0.9f, -0.5f, 0.5f, 1}, {-0.1f, -0.5f, 0.5f, 1}, {-0.5f, 0.5f, 0.5f, 1},
+                                                       {0.1f, -0.5f, 0.5f, 1}, {0.5f, 0.5f, 0.5f, 1}, {0.9f, -0.5f, 0.5f, 1}}};
+        std::array<std::array<float, 4>, 6> colors{};
+        colors.fill({1, 1, 1, 1});
+        auto vertices = Tensor::from_blob(positions.data(), {6, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto vertex_colors = Tensor::from_blob(colors.data(), {6, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+        const Params params{};
+        const std::array bindings{M::Binding{0, &vertices}, M::Binding{8, &vertex_colors}};
+        const auto coverage = [&](M::Cull cull) {
+            auto color = Tensor::zeros({height, width, 4}, Device::GPU, DataType::UInt8);
+            auto result = (*loaded)->draw({.vertex = "vertexMain", .fragment = "fragmentMain", .arguments = {std::as_bytes(std::span(&params, 1)), bindings}, .color = &color, .vertex_count = 6, .cull = cull, .clear_color = true});
+            EXPECT_TRUE(result) << result.error().detail();
+            const auto pixels = color.to(Device::CPU);
+            // Sample the centroid row of each triangle: left half and right half.
+            const auto alpha = [&](size_t x) { return int(pixels.ptr<uint8_t>()[(18 * width + x) * 4 + 3]); };
+            return std::pair{alpha(8) > 0, alpha(24) > 0};
+        };
+        EXPECT_EQ(coverage(M::Cull::None), std::pair(true, true));
+        EXPECT_EQ(coverage(M::Cull::Back), std::pair(true, false));
+        EXPECT_EQ(coverage(M::Cull::Front), std::pair(false, true));
+        loaded->reset();
+    }
+
     TEST_P(Programs, InvalidBindingsReturnTypedErrors) {
         if (!gpu_backend_available(GetParam()))
             GTEST_SKIP();

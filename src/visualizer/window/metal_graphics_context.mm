@@ -551,11 +551,12 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
     GraphicsCapabilities MetalGraphicsContext::capabilities() const noexcept {
         return {
             .native_metal = true,
-            .mesh_rendering = false,
-            .wireframe = false,
-            .wide_lines = false,
+            .mesh_rendering = true,
+            // The tensor wireframe is drawn in the fragment shader at any width.
+            .wireframe = true,
+            .wide_lines = true,
             .minimum_line_width = 1.0f,
-            .maximum_line_width = 1.0f,
+            .maximum_line_width = 16.0f,
             .external_memory_interop = false,
             .external_semaphore_interop = false,
             .environment_map = true,

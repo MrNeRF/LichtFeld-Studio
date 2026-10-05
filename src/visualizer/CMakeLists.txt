@@ -46,6 +46,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:window/vulkan_graphics_context.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/viewport_reference_renderer.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/viewport_tensor_renderer.cpp>
+        $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/viewport_tensor_meshes.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:window/vulkan_context.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:window/vulkan_image_barrier_tracker.cpp>
         window/gpu_object_census.cpp
@@ -463,6 +464,12 @@ if(NOT LFS_GRAPHICS_VULKAN_BUILD)
         SOURCE rendering/viewport_overlay.slang
         VERTEX overlayVertex shapeVertex frustumVertex texturedVertex pivotVertex environmentVertex
         FRAGMENT overlayFragment shapeFragment texturedFragment pivotFragment environmentFragment)
+    lfs_add_gpu_program(lfs_visualizer viewport_mesh_program
+        SOURCE rendering/viewport_mesh.slang
+        VERTEX meshVertex wireVertex shadowVertex
+        FRAGMENT meshFragment wireFragment shadowFragment)
+    lfs_add_gpu_program(lfs_visualizer viewport_depth_program
+        SOURCE rendering/viewport_depth.slang COMPUTE seedDepth)
     lfs_add_gpu_program(lfs_visualizer viewport_grid_program
         SOURCE rendering/viewport_grid.slang
         VERTEX gridVertex FRAGMENT gridFragment)

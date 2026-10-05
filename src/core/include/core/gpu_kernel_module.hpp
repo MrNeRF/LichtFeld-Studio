@@ -58,6 +58,10 @@ namespace lfs::core {
         enum class Blend : uint8_t { Opaque,
                                      StraightAlpha,
                                      PremultipliedAlpha };
+        // Front faces wind counter-clockwise in NDC (+Y up), as in OpenGL.
+        enum class Cull : uint8_t { None,
+                                    Back,
+                                    Front };
         enum class Compare : uint8_t { Always,
                                        Less,
                                        LessEqual };
@@ -92,6 +96,7 @@ namespace lfs::core {
             // Defaults to the whole attachment.
             std::optional<Viewport> viewport;
             Blend blend = Blend::Opaque;
+            Cull cull = Cull::None;
             Compare depth_compare = Compare::Less;
             bool depth_write = true;
             bool clear_color = false;
