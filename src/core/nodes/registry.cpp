@@ -9,37 +9,6 @@
 
 namespace lfs::nodes {
 
-    TreeTypeRegistry::TreeTypeRegistry() {
-        register_type({"lfs.geometry", "Node Graph", "Non-destructive geometry modifiers"});
-    }
-
-    bool TreeTypeRegistry::register_type(TreeTypeInfo info) {
-        std::unique_lock lock(mutex_);
-        return types_.emplace(info.id, std::move(info)).second;
-    }
-
-    bool TreeTypeRegistry::unregister_type(std::string_view id) {
-        std::unique_lock lock(mutex_);
-        return types_.erase(std::string(id)) != 0;
-    }
-
-    std::optional<TreeTypeInfo> TreeTypeRegistry::find(std::string_view id) const {
-        std::shared_lock lock(mutex_);
-        if (const auto found = types_.find(std::string(id)); found != types_.end())
-            return found->second;
-        return std::nullopt;
-    }
-
-    std::vector<TreeTypeInfo> TreeTypeRegistry::list() const {
-        std::shared_lock lock(mutex_);
-        std::vector<TreeTypeInfo> result;
-        result.reserve(types_.size());
-        for (const auto& [_, info] : types_)
-            result.push_back(info);
-        std::ranges::sort(result, {}, &TreeTypeInfo::id);
-        return result;
-    }
-
     SocketTypeRegistry::SocketTypeRegistry() {
         register_type({std::string(ANY_SOCKET), "Any", {0.58f, 0.62f, 0.68f, 1.0f}});
         register_type({std::string(GEOMETRY_SOCKET), "Geometry", {0.34f, 0.64f, 0.93f, 1.0f}});
