@@ -96,14 +96,6 @@ namespace lfs::core::prop {
         unregister_group("operator." + operator_id);
     }
 
-    size_t PropertyRegistry::subscribe(PropertyCallback callback) {
-        std::lock_guard lock(mutex_);
-
-        size_t id = next_id_++;
-        global_subscribers_[id] = std::move(callback);
-        return id;
-    }
-
     size_t PropertyRegistry::subscribe(const std::string& group_id,
                                        const std::string& prop_id,
                                        PropertyCallback callback) {
@@ -117,7 +109,6 @@ namespace lfs::core::prop {
     void PropertyRegistry::unsubscribe(size_t id) {
         std::lock_guard lock(mutex_);
 
-        global_subscribers_.erase(id);
         for (auto& [_, subs] : prop_subscribers_) {
             subs.erase(id);
         }
@@ -131,10 +122,6 @@ namespace lfs::core::prop {
 
         {
             std::lock_guard lock(mutex_);
-
-            for (const auto& [_, cb] : global_subscribers_) {
-                callbacks.push_back(cb);
-            }
 
             auto it = prop_subscribers_.find({group_id, prop_id});
             if (it != prop_subscribers_.end()) {

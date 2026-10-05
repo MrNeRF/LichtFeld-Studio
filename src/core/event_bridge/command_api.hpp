@@ -76,14 +76,6 @@ namespace lfs::training {
         std::string description;
     };
 
-    struct MutableFieldInfo {
-        std::string name;
-        CommandTarget target;
-        std::string shape;
-        std::string description;
-        bool writable = true;
-    };
-
     struct Command {
         CommandTarget target;
         std::string op;
@@ -177,7 +169,6 @@ namespace lfs::training {
         void drain_enqueued(TrainingSnapshot& view);
 
         LFS_BRIDGE_API std::vector<OperationInfo> operations(std::optional<CommandTarget> target = std::nullopt) const;
-        LFS_BRIDGE_API std::vector<MutableFieldInfo> mutables(std::optional<CommandTarget> target = std::nullopt) const;
 
     private:
         CommandCenter();
@@ -198,7 +189,6 @@ namespace lfs::training {
 
         // Registry
         std::vector<OperationInfo> ops_;
-        std::vector<MutableFieldInfo> mutable_fields_;
 
         std::vector<Command> pending_commands_;
 
