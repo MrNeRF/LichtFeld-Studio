@@ -2656,8 +2656,8 @@ namespace lfs::core {
     Tensor Tensor::clamp(float min_val, float max_val) const {
         LFS_ASSERT_MSG(is_valid(),
                        "clamp requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
-                       "clamp currently supports only Float32 and Int32");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Float16 || dtype_ == DataType::Int32,
+                       "clamp currently supports Float32, Float16 and Int32");
         LFS_ASSERT_MSG(!std::isnan(min_val) && !std::isnan(max_val) && min_val <= max_val,
                        "clamp bounds must not be NaN and must be ordered");
 
@@ -2694,6 +2694,10 @@ namespace lfs::core {
 
                 // Use our optimized kernel
                 tensor_ops::launch_clamp_fused(src, dst, min_val, max_val, numel(), result.stream());
+            } else if (dtype_ == DataType::Float16) {
+                prepare_inputs_for_stream({this}, result.stream());
+                tensor_ops::launch_clamp_fused_half(ptr<__half>(), result.ptr<__half>(),
+                                                    min_val, max_val, numel(), result.stream());
             } else if (dtype_ == DataType::Int32) {
                 // Fallback: copy then clamp for int
                 LFS_CUDA_CHECK_MSG(
@@ -2711,7 +2715,14 @@ namespace lfs::core {
             }
         } else {
             // CPU: simple loop
-            if (dtype_ == DataType::Float32) {
+            if (dtype_ == DataType::Float16) {
+                const auto* src = ptr<__half>();
+                auto* dst = result.ptr<__half>();
+                for (size_t i = 0; i < numel(); ++i) {
+                    const float value = __half2float(src[i]);
+                    dst[i] = __float2half(std::isnan(value) ? value : std::clamp(value, min_val, max_val));
+                }
+            } else if (dtype_ == DataType::Float32) {
                 const float* src = ptr<float>();
                 float* dst = result.ptr<float>();
                 for (size_t i = 0; i < numel(); ++i) {

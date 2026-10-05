@@ -2622,8 +2622,8 @@ namespace lfs::core {
     Tensor& Tensor::clamp_(float min_val, float max_val) {
         LFS_ASSERT_MSG(is_valid(),
                        "clamp_ requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
-                       "clamp_ currently supports only Float32 and Int32");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Float16 || dtype_ == DataType::Int32,
+                       "clamp_ currently supports Float32, Float16 and Int32");
         LFS_ASSERT_MSG(!std::isnan(min_val) && !std::isnan(max_val) && min_val <= max_val,
                        "clamp_ bounds must not be NaN and must be ordered");
         if (dtype_ == DataType::Int32) {
@@ -2649,6 +2649,8 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             if (dtype_ == DataType::Float32) {
                 tensor_ops::launch_clamp_scalar(ptr<float>(), min_val, max_val, numel(), stream());
+            } else if (dtype_ == DataType::Float16) {
+                tensor_ops::launch_clamp_scalar_half(ptr<__half>(), min_val, max_val, numel(), stream());
             } else if (dtype_ == DataType::Int32) {
                 const int min_int = min_val == -std::numeric_limits<float>::infinity()
                                         ? std::numeric_limits<int>::lowest()
@@ -2661,7 +2663,13 @@ namespace lfs::core {
                                                     numel(), stream());
             }
         } else {
-            if (dtype_ == DataType::Float32) {
+            if (dtype_ == DataType::Float16) {
+                auto* data = ptr<__half>();
+                for (size_t i = 0; i < numel(); ++i) {
+                    const float value = __half2float(data[i]);
+                    data[i] = __float2half(std::isnan(value) ? value : std::clamp(value, min_val, max_val));
+                }
+            } else if (dtype_ == DataType::Float32) {
                 float* data = ptr<float>();
                 for (size_t i = 0; i < numel(); ++i) {
                     if (!std::isnan(data[i])) {

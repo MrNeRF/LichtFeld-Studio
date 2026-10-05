@@ -433,3 +433,18 @@ class TestTensorGPU:
         expected = numpy.array([4.0, 6.0], dtype=numpy.float32)
 
         numpy.testing.assert_allclose(result.cpu().numpy(), expected)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_half_clamp_preserves_dtype_and_values(lf, numpy, device):
+    values = numpy.array([-numpy.inf, -2, 0.5, 2, numpy.inf, numpy.nan], dtype=numpy.float32)
+    tensor = lf.Tensor.from_numpy(values).to("float16")
+    if device == "cuda":
+        tensor = tensor.cuda()
+    result = tensor.clamp(-1, 1)
+    assert result.dtype == "float16"
+    numpy.testing.assert_equal(
+        result.to("float32").cpu().numpy(),
+        numpy.array([-1, -1, 0.5, 1, 1, numpy.nan], dtype=numpy.float16),
+    )
+    numpy.testing.assert_equal(tensor.to("float32").cpu().numpy(), values)
