@@ -16,6 +16,8 @@ layout(push_constant) uniform TexturedOverlayPush {
     vec4 depth_params;
     // Valid-region UV for padded splat depth: xy = scale, zw = clamp max.
     vec4 uv_region;
+    // Zero for linear depth; otherwise clip-z/clip-w projection coefficients.
+    vec4 depth_projection;
 } u;
 
 void main() {
@@ -30,6 +32,15 @@ void main() {
         }
         uv = min(uv * u.uv_region.xy, u.uv_region.zw);
         float splat_depth = texture(u_splat_depth, uv).r;
+        if (abs(u.depth_projection.z) + abs(u.depth_projection.w) > 0.0) {
+            // Hardware clear depth is background, not a surface one unit away.
+            if (splat_depth >= 1.0) {
+                splat_depth = 1.0e10;
+            } else {
+                vec4 p = u.depth_projection;
+                splat_depth = (p.y - splat_depth * p.w) / (p.x - splat_depth * p.z);
+            }
+        }
         if (splat_depth > 0.0 && splat_depth < 1.0e9 && ViewDepth > splat_depth + 0.01) {
             discard;
         }

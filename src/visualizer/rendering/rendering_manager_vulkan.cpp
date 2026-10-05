@@ -22,11 +22,11 @@
 #include "rendering/image_layout.hpp"
 #include "rendering/passes/vulkan_scene_plugin_pipeline.hpp"
 #include "rendering_manager.hpp"
-#include "scene_temporal_frame_setup.hpp"
 #include "rendering_manager_split_view.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene_renderer.hpp"
 #include "scene_renderer_factory.hpp"
+#include "scene_temporal_frame_setup.hpp"
 #include "scene_training_interop.hpp"
 #include "scene_upscaler_plugin.hpp"
 #include "scene_upscaler_registry.hpp"
@@ -2775,6 +2775,15 @@ namespace lfs::vis {
                             render_result->size;
                         mesh_frame.depth_blit.depth_is_ndc =
                             render_result->viewer_backend != lfs::rendering::ViewerBackend::Metal;
+                        if (mesh_frame.depth_blit.depth_is_ndc) {
+                            const auto& view = pc_request.frame_view;
+                            const auto projection = lfs::rendering::createProjectionMatrix(
+                                view.size, lfs::rendering::focalLengthToVFov(view.focal_length_mm),
+                                view.orthographic, view.ortho_scale, view.near_plane, view.far_plane);
+                            mesh_frame.depth_blit.depth_projection = {
+                                projection[2][2], projection[3][2],
+                                projection[2][3], projection[3][3]};
+                        }
                         mesh_frame.depth_blit.flip_y = render_result->flip_y;
                         mesh_frame.depth_blit.near_plane = pc_request.frame_view.near_plane > 0.0f
                                                                ? pc_request.frame_view.near_plane

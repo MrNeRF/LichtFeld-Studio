@@ -19,6 +19,8 @@ layout(push_constant) uniform ShapeOverlayPush {
     vec4 params;
     // Valid-region UV for padded splat depth: xy = scale, zw = clamp max.
     vec4 uv_region;
+    // Zero for linear depth; otherwise clip-z/clip-w projection coefficients.
+    vec4 depth_projection;
 } pc;
 
 float sdSegment(vec2 p, vec2 a, vec2 b) {
@@ -59,6 +61,15 @@ void main() {
         }
         uv = min(uv * pc.uv_region.xy, pc.uv_region.zw);
         float splat_depth = texture(u_splat_depth, uv).r;
+        if (abs(pc.depth_projection.z) + abs(pc.depth_projection.w) > 0.0) {
+            // Hardware clear depth is background, not a surface one unit away.
+            if (splat_depth >= 1.0) {
+                splat_depth = 1.0e10;
+            } else {
+                vec4 p = pc.depth_projection;
+                splat_depth = (p.y - splat_depth * p.w) / (p.x - splat_depth * p.z);
+            }
+        }
         if (splat_depth > 0.0 && splat_depth < 1.0e9) {
             float fade = smoothstep(0.01, 0.15, ViewDepth - splat_depth);
             alpha *= mix(1.0, 0.25, fade);

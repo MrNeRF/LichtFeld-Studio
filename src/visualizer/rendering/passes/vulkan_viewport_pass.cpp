@@ -115,6 +115,7 @@ namespace lfs::vis {
             glm::vec4 depth_params{0.0f, 0.0f, 0.0f, 0.0f};
             // xy = uv_scale, zw = uv_clamp_max for padded splat depth.
             glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
+            glm::vec4 depth_projection{0.0f};
         };
 
         struct ShapeOverlayPush {
@@ -125,17 +126,19 @@ namespace lfs::vis {
             glm::vec4 params{0.0f, 0.0f, 0.0f, 0.0f};
             // xy = uv_scale, zw = uv_clamp_max for padded splat depth.
             glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
+            glm::vec4 depth_projection{0.0f};
         };
 
         struct FrustumPush {
             glm::vec4 viewport_rect{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 params{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
+            glm::vec4 depth_projection{0.0f};
             glm::mat4 view{1.0f};
             glm::vec4 viewport_panel{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 projection{0.0f, 0.0f, 0.0f, 0.0f};
         };
-        // 144 bytes exceeds the 128-byte Vulkan minimum for maxPushConstantsSize.
+        // 160 bytes exceeds the 128-byte Vulkan minimum for maxPushConstantsSize.
         // Acceptable only because CUDA requires NVIDIA hardware (reports 256).
         static_assert(sizeof(FrustumPush) <= 256);
 
@@ -2805,6 +2808,7 @@ namespace lfs::vis {
                 push.effects = overlay.effects;
                 push.viewport_rect = ctx.viewport_rect_push;
                 push.depth_params = depth_params;
+                push.depth_projection = params.depth_blit.depth_projection;
                 push.uv_region = glm::vec4(params.depth_blit.uv_scale,
                                            params.depth_blit.uv_clamp_max);
                 vkCmdBindDescriptorSets(command_buffer,
@@ -2851,7 +2855,8 @@ namespace lfs::vis {
                 .viewport_rect = ctx.viewport_rect_push,
                 .params = ctx.world_depth_params_push,
                 .uv_region = glm::vec4(params.depth_blit.uv_scale,
-                                       params.depth_blit.uv_clamp_max)};
+                                       params.depth_blit.uv_clamp_max),
+                .depth_projection = params.depth_blit.depth_projection};
             recordShapeOverlays(ctx.cmd, frame.shape_overlay, frame, world_shape_overlay_push);
         }
 
@@ -2906,6 +2911,7 @@ namespace lfs::vis {
                                         projection_mode);
                 push.uv_region = glm::vec4(params.depth_blit.uv_scale,
                                            params.depth_blit.uv_clamp_max);
+                push.depth_projection = params.depth_blit.depth_projection;
                 push.view = batch.view;
                 push.viewport_panel = glm::vec4(batch.viewport_pos, batch.viewport_size);
                 push.projection = glm::vec4(batch.render_size, batch.focal_x, batch.focal_y);
