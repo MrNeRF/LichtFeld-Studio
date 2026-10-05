@@ -34,7 +34,7 @@ namespace lfs::rendering {
         using M = core::GpuKernelModule;
         constexpr auto RW = M::Access::ReadWrite;
         constexpr uint32_t kSingleSimd = 128, kSourceSorted = 256, kDepthBatches = 512, kDepthPrefix = 1024;
-        constexpr uint32_t kOpaqueBackground = 4096;
+        constexpr uint32_t kOpaqueBackground = 4096, kOverlay = 1;
         // Below this many sources the extra source sort is not worth its passes.
         constexpr uint32_t kSourceSortMinimum = 4096;
         // Depth batches split tiles longer than this into chunks blended in
@@ -66,7 +66,7 @@ namespace lfs::rendering {
         SplatTileBinner binner;
         std::map<std::pair<uint32_t, bool>, std::unique_ptr<M>> blends;
         std::unique_ptr<M> fast_blend, batch_blend, prefix_blend, present;
-        Tensor raster, present_parameters, color, depth, pick, rgba, linear_depth;
+        Tensor raster, present_parameters, color, depth, pick, rgba, linear_depth, selection_colors;
         bool presented = false; // rgba and linear_depth hold an image of this extent
         // Replaced scratch returns to the tensor cache, which keeps blocks for
         // reuse; the viewer rarely regrows, so release them a frame later,
@@ -124,6 +124,12 @@ namespace lfs::rendering {
         explicit Impl(const core::GpuBackend b) : backend(b), binner(b) {}
 
         // Per-frame parameters ride the open batch, never waiting on the GPU.
+        void upload_bytes(Tensor& destination, const std::span<const std::byte> bytes) {
+            std::erase_if(uploads, [](core::TensorUpload& slot) { return slot.poll(); });
+            if (!destination.is_valid() || destination.bytes() != bytes.size())
+                destination = Tensor::empty({bytes.size()}, Device::GPU, DataType::UInt8);
+            uploads.emplace_back().enqueue_in_batch(destination, bytes);
+        }
         template <class T>
         void upload(Tensor& destination, const T& value) {
             std::erase_if(uploads, [](core::TensorUpload& slot) { return slot.poll(); });
@@ -192,7 +198,8 @@ namespace lfs::rendering {
     }
 
     lfs::Result<void> SplatRasterizer::rasterize(const Tensor& projected, const Tensor* gut, const uint32_t count,
-                                            const SplatRasterMode mode, const SplatRasterParameters& parameters) {
+                                            const SplatRasterMode mode, const SplatRasterParameters& parameters,
+                                            const SplatRasterOverlay* overlay) {
         auto& s = *impl_;
         if (parameters.width != s.width || parameters.height != s.height || parameters.count != count ||
             parameters.mode != uint32_t(mode) || (mode == SplatRasterMode::Gut && !gut))
@@ -200,6 +207,11 @@ namespace lfs::rendering {
                                        parameters.width, parameters.height, s.width, s.height, parameters.count, count,
                                        parameters.mode, uint32_t(mode), gut != nullptr));
         // The rasterizer owns source sorting and depth batches.
+        if (((parameters.flags & kOverlay) != 0) != (overlay != nullptr) ||
+            (overlay && (!overlay->parameters || !overlay->flags || (!overlay->selection && parameters.mask_limits[0]) ||
+                         (!overlay->preview && parameters.mask_limits[1]))))
+            return failure(std::format("Splat overlay inputs disagree with raster flags {:#x} (overlay={}, selection_count={}, preview_count={})",
+                                       parameters.flags, overlay != nullptr, parameters.mask_limits[0], parameters.mask_limits[1]));
         if (parameters.flags & (kSourceSorted | kDepthBatches | kDepthPrefix))
             return failure(std::format("Splat raster flags {:#x} are chosen by the rasterizer", parameters.flags));
         const core::GpuBackendScope scope(s.backend);
@@ -218,6 +230,8 @@ namespace lfs::rendering {
             }
         }
         s.upload(s.raster, frame);
+        if (overlay && !overlay->selection_colors.empty())
+            s.upload_bytes(s.selection_colors, overlay->selection_colors);
         if (auto r = s.binner.bin(projected, s.raster, count, frame.tiles, (frame.flags & kSourceSorted) != 0); !r)
             return r;
         s.mark("ranges");
@@ -231,8 +245,10 @@ namespace lfs::rendering {
         const auto optional = [batches](const Tensor& tensor) { return batches ? &tensor : nullptr; };
         const std::array bindings{
             M::Binding{0, &projected}, M::Binding{8, &s.binner.indices()}, M::Binding{16, &s.binner.ranges()},
-            M::Binding{24, &status, RW}, M::Binding{32, &s.raster}, M::Binding{40, nullptr}, M::Binding{48, nullptr},
-            M::Binding{56, nullptr}, M::Binding{64, nullptr}, M::Binding{72, nullptr}, M::Binding{80, gut},
+            M::Binding{24, &status, RW}, M::Binding{32, &s.raster}, M::Binding{40, overlay ? overlay->parameters : nullptr},
+            M::Binding{48, overlay ? overlay->flags : nullptr}, M::Binding{56, overlay ? overlay->selection : nullptr},
+            M::Binding{64, overlay ? overlay->preview : nullptr},
+            M::Binding{72, overlay && !overlay->selection_colors.empty() ? &s.selection_colors : nullptr}, M::Binding{80, gut},
             M::Binding{88, nullptr}, M::Binding{96, optional(s.depth_jobs)}, M::Binding{104, optional(s.partial_color), RW},
             M::Binding{112, optional(s.partial_depth), RW}, M::Binding{120, optional(s.partial_pick), RW},
             M::Binding{128, &s.color, RW}, M::Binding{136, &s.depth, RW}, M::Binding{144, &s.pick, RW}};

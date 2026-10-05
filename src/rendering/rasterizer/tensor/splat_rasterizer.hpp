@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 
 namespace lfs::rendering {
     // RasterParameters of splat_types.slang, field for field.
@@ -34,6 +35,17 @@ namespace lfs::rendering {
     };
     static_assert(sizeof(SplatPresentParameters) == 80);
 
+    // Overlay inputs of the blend (raster flag 1): the projection's overlay
+    // parameters and per-splat flags, byte selection/preview masks indexed by
+    // logical splat (extents in mask_limits), and the selection color table.
+    struct SplatRasterOverlay {
+        const core::Tensor* parameters = nullptr;
+        const core::Tensor* flags = nullptr;
+        const core::Tensor* selection = nullptr;
+        const core::Tensor* preview = nullptr;
+        std::span<const std::byte> selection_colors; // float4 per entry
+    };
+
     enum class SplatRasterMode : uint32_t { Gaussian,
                                             Points,
                                             Discs,
@@ -56,7 +68,8 @@ namespace lfs::rendering {
         // Blends `count` ProjectedSplat records (and 3DGUT geometry) into
         // color(), depth() and pick(). An instance overflow sets status().error.
         [[nodiscard]] lfs::Result<void> rasterize(const core::Tensor& projected, const core::Tensor* gut, uint32_t count,
-                                             SplatRasterMode mode, const SplatRasterParameters& parameters);
+                                             SplatRasterMode mode, const SplatRasterParameters& parameters,
+                                             const SplatRasterOverlay* overlay = nullptr);
 
         // Writes the display image (packed RGBA8) and linear view depth
         // (Float32) of the last rasterize() into rgba() and linear_depth(). An

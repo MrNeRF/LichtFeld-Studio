@@ -1146,10 +1146,13 @@ namespace lfs::vis {
                                        request.overlay.emphasis.dim_non_emphasized || request.overlay.emphasis.flash_intensity > 0 ||
                                        request.overlay.emphasis.focused_gaussian_id >= 0 || request.overlay.cursor.enabled ||
                                        request.overlay.markers.show_rings || request.overlay.markers.show_center_markers;
-            // The tensor-program rasterizer covers the plain splat view so far;
-            // overlays, LOD cuts, 3DGUT and the portal profile stay native.
+            // The tensor-program rasterizer covers Gaussian views with overlays so
+            // far; LOD cuts, 3DGUT and the portal profile stay native. It reads
+            // the resident tensors directly, so they must live on Metal.
+            const auto on_metal = [](const core::Tensor* tensor) { return !tensor || core::gpu_backend_of(*tensor) == core::GpuBackend::Metal; };
             const bool tensor_frame = i.tensor_raster && !pager && !gpu_lod && !request.lod_indices && !request.gut &&
-                                      request.splat_render_profile == 0 && !needs_overlay;
+                                      request.splat_render_profile == 0 && on_metal(&model.means_raw()) &&
+                                      on_metal(selection_enabled ? selection : nullptr) && on_metal(preview_enabled ? preview : nullptr);
             auto& f = i.acquire(slot, request, draw_count, false, tensor_frame);
             if (i.profiling_enabled && !f.gpu_profile)
                 f.gpu_profile = std::make_unique<GpuProfile>(i.reader.device());
@@ -1323,7 +1326,8 @@ namespace lfs::vis {
                 };
                 allocate(f.overlay_parameters, params->size() * sizeof(float), MTLResourceStorageModeShared);
                 std::memcpy(f.overlay_parameters.contents, params->data(), params->size() * sizeof(float));
-                allocate(f.overlay_flags, size_t(draw_count) * 4, MTLResourceStorageModePrivate);
+                if (!f.tensor) // the tensor projector owns its flags
+                    allocate(f.overlay_flags, size_t(draw_count) * 4, MTLResourceStorageModePrivate);
                 allocate(f.overlay_nodes, node_count, MTLResourceStorageModeShared);
                 auto nodes = static_cast<uint8_t*>(f.overlay_nodes.contents);
                 for (size_t n = 0; n < node_count; ++n)
@@ -1418,7 +1422,13 @@ namespace lfs::vis {
                 static_assert(sizeof(frame_projection) == sizeof(projection));
                 std::memcpy(&frame_projection, &projection, sizeof(projection));
                 const bool transparent = request.transparent_background;
-                if (auto projected = i.projector->project(sources, frame_projection, degree, rendering::SplatPrimitive::Gaussian, !transparent, i.tensor_projected); !projected)
+                const auto host_bytes = [](id<MTLBuffer> buffer, size_t bytes) { return std::span(static_cast<const std::byte*>(buffer.contents), bytes); };
+                const rendering::SplatOverlayInputs overlay_inputs{needs_overlay ? host_bytes(f.overlay_parameters, 207 * 16) : std::span<const std::byte>{},
+                                                                   node_count ? host_bytes(f.overlay_nodes, node_count) : std::span<const std::byte>{}};
+                const bool tight = !transparent && !needs_overlay;
+                if (auto projected = i.projector->project(sources, frame_projection, degree, rendering::SplatPrimitive::Gaussian, tight, i.tensor_projected,
+                                                          nullptr, needs_overlay ? &overlay_inputs : nullptr);
+                    !projected)
                     throw lfs::Exception(projected.error());
                 // RasterParameters as the native rasterizer derives them for this view.
                 rendering::SplatRasterParameters raster;
@@ -1428,15 +1438,25 @@ namespace lfs::vis {
                 raster.columns = (raster.width + 15) / 16;
                 raster.tiles = raster.columns * ((raster.height + 15) / 16);
                 raster.capacity = f.capacity;
-                raster.flags = (expected_depth ? 2u : 0u) | 128u | (request.depth_view ? 2048u : 0u) | (transparent ? 16384u : 4096u) |
-                               (projection.extent.z == uint32_t(CameraModel::Equirectangular) ? 8192u : 0u);
+                // Rings use the macro reference's half footprint, unless a separate
+                // median (depth view) or precise transparent blending is needed.
+                const bool macro_half = request.overlay.markers.show_rings && !transparent && !request.depth_view;
+                raster.flags = (needs_overlay ? 1u : 0u) | (expected_depth ? 2u : 0u) | (macro_half ? 64u : 0u) | 128u | (request.depth_view ? 2048u : 0u) |
+                               (transparent ? 16384u : 4096u) | (projection.extent.z == uint32_t(CameraModel::Equirectangular) ? 8192u : 0u);
+                const auto mask_extent = [](const core::Tensor* mask) { return uint32_t(std::min<size_t>(mask->bytes(), std::numeric_limits<uint32_t>::max())); };
+                raster.mask_limits = {selection_enabled ? mask_extent(selection) : 0u, preview_enabled ? mask_extent(preview) : 0u, 0, 0};
                 raster.background = {background.x, background.y, background.z, transparent ? 0.f : 1.f};
                 raster.render_origin = {overlay.render_origin.x, overlay.render_origin.y, 0, 0};
                 raster.intrinsics = {projection.intrinsics.x, projection.intrinsics.y, projection.intrinsics.z, projection.intrinsics.w};
                 raster.clip = {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w};
                 raster.camera = {projection.extent.x, projection.extent.y, projection.extent.z, projection.extent.w};
                 raster.panorama = {projection.panorama.x, projection.panorama.y, projection.panorama.z, projection.panorama.w};
-                if (auto rasterized = state.tensor_raster->rasterize(i.tensor_projected, nullptr, draw_count, rendering::SplatRasterMode::Gaussian, raster); !rasterized)
+                const rendering::SplatRasterOverlay raster_overlay{&i.projector->overlay_parameters(), &i.projector->overlay_flags(),
+                                                                   selection_enabled ? selection : nullptr, preview_enabled ? preview : nullptr,
+                                                                   needs_overlay ? host_bytes(f.selection_colors, sizeof(request.overlay.selection_colors)) : std::span<const std::byte>{}};
+                if (auto rasterized = state.tensor_raster->rasterize(i.tensor_projected, nullptr, draw_count, rendering::SplatRasterMode::Gaussian, raster,
+                                                                     needs_overlay ? &raster_overlay : nullptr);
+                    !rasterized)
                     throw lfs::Exception(rasterized.error());
                 rendering::SplatPresentParameters presented;
                 presented.exposure = present.exposure;

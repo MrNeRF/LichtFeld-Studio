@@ -44,6 +44,13 @@ namespace lfs::rendering {
         const core::Tensor* object_indices = nullptr;
     };
 
+    // Overlay filters (crop boxes, ellipsoids, view volume, node emphasis) of
+    // the desktop overlay parameter ABI: 207 float4, host bytes uploaded per frame.
+    struct SplatOverlayInputs {
+        std::span<const std::byte> parameters;
+        std::span<const std::byte> node_mask; // one byte per scene node
+    };
+
     enum class SplatPrimitive : uint32_t { Gaussian,
                                            Points,
                                            Discs,
@@ -61,7 +68,12 @@ namespace lfs::rendering {
         // `projected` holds count x 64 bytes; `gut` count x 64 bytes for Gut.
         [[nodiscard]] lfs::Result<void> project(const SplatSources& sources, const SplatProjection& projection, uint32_t degree,
                                            SplatPrimitive primitive, bool tight_bounds, core::Tensor& projected,
-                                           core::Tensor* gut = nullptr);
+                                           core::Tensor* gut = nullptr, const SplatOverlayInputs* overlay = nullptr);
+
+        // With overlay inputs, the uploaded parameters and the per-splat overlay
+        // flags of the last project(), for the blend.
+        [[nodiscard]] const core::Tensor& overlay_parameters() const;
+        [[nodiscard]] const core::Tensor& overlay_flags() const;
 
     private:
         struct Impl;

@@ -12,6 +12,7 @@
 #include <cstring>
 #include <gtest/gtest.h>
 #include <random>
+#include <span>
 #include <vector>
 
 namespace {
@@ -115,6 +116,34 @@ namespace {
                 EXPECT_EQ(opaque, size_t(kWidth) * kHeight) << "flags=" << flags;
             }
         }
+    }
+
+    // Overlay inputs (selection mask, colors, per-splat flags) bind and run.
+    TEST_P(SplatRasterizing, OverlayBlendRunsWithSelection) {
+        if (!lfs::core::gpu_backend_available(GetParam()) || GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        const auto splats = make_splats(600);
+        const auto count = uint32_t(splats.size());
+        const auto projected = upload(splats.data(), splats.size() * sizeof(Splat));
+        const std::vector<float> parameters(207 * 4, 0.f);
+        const auto parameter_tensor = upload(parameters.data(), parameters.size() * 4);
+        const auto flags = Tensor::zeros({count}, Device::GPU, DataType::UInt32);
+        std::vector<uint8_t> mask(count);
+        for (size_t i = 0; i < mask.size(); i += 3)
+            mask[i] = 1;
+        const auto selection = upload(mask.data(), mask.size());
+        const std::array<float, 4 * 8> colors{};
+        SplatRasterizer rasterizer(GetParam());
+        ASSERT_TRUE(rasterizer.reserve(count, kWidth, kHeight, 1'000'000));
+        auto raster = make_parameters(count, SplatRasterMode::Gaussian, 1 | 128 | 4096);
+        raster.mask_limits = {count, 0, 0, 0};
+        const lfs::rendering::SplatRasterOverlay overlay{&parameter_tensor, &flags, &selection, nullptr, std::as_bytes(std::span(colors))};
+        auto rasterized = rasterizer.rasterize(projected, nullptr, count, SplatRasterMode::Gaussian, raster, &overlay);
+        ASSERT_TRUE(rasterized) << rasterized.error().detail();
+        EXPECT_EQ(download<uint32_t>(rasterizer.status(), 6)[2], 0u);
+        // Overlay flags without inputs are rejected rather than read as null.
+        EXPECT_FALSE(rasterizer.rasterize(projected, nullptr, count, SplatRasterMode::Gaussian, raster));
     }
 
     // A completed dense frame of the same source count switches to source
