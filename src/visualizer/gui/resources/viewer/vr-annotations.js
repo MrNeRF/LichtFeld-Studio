@@ -4,8 +4,8 @@
  * When a WebXR session starts (immersive-vr or immersive-ar), this module
  * rebuilds the current label + measurement state as in-world 3D entities so
  * they remain visible inside the headset: labels become billboarded text
- * quads with orange point markers, measurements become white lines with
- * endpoint dots and a distance readout at the midpoint. The rest of the GUI
+ * quads with orange point markers, measurements become white dotted lines
+ * with endpoint dots and a distance readout at the midpoint. The rest of the GUI
  * (#ui) is hidden for the duration of the session and restored on exit.
  *
  * Locomotion: the viewer's XrNavigation script moves the rig with the LEFT
@@ -34,6 +34,9 @@ function initVrAnnotations(global) {
     const DOT_SIZE_M = 0.035;               // endpoint / label point markers
     const LABEL_GAP_M = 0.05;               // gap between marker and text quad
     const MEASURE_TEXT_OFFSET_M = 0.07;     // readout offset above the midpoint
+    const LINE_DOT_SIZE_M = 0.02;           // dots that make up a measurement line
+    const LINE_DOT_MIN_SPACING_M = 0.03;    // minimum gap between line dots
+    const LINE_DOT_MAX_COUNT = 80;          // cap per line so long lines stay cheap
 
     // ---- shared static resources (created once, kept across sessions) ------
     let planeMesh = null;
@@ -50,13 +53,18 @@ function initVrAnnotations(global) {
     // ---- per-session state ---------------------------------------------------
     let sessionRoot = null;       // parent of all in-world annotation entities
     const billboards = [];        // { entity, position } re-oriented every frame
-    const measureLines = [];      // { a: Vec3, b: Vec3 } redrawn every frame
     const sessionTextures = [];   // per-session textures, destroyed on end
     const sessionMaterials = [];  // per-session materials, destroyed on end
 
     const ensureStaticResources = () => {
         if (planeMesh) return;
         planeMesh = Mesh.fromGeometry(app.graphicsDevice, new PlaneGeometry({ widthSegments: 1, lengthSegments: 1 }));
+        // MeshInstance.destroy() destroys its mesh once the mesh's refCount
+        // drops below 1. This mesh is shared by every session and is cached
+        // here, so hold our own reference; otherwise ending the first VR
+        // session destroys it and every later session fails in draw() with
+        // "Cannot read properties of undefined (reading 'impl')".
+        planeMesh.incRefCount();
         dotTextureOrange = createDotTexture('#F60');
         dotTextureWhite = createDotTexture('#FFF');
     };
@@ -187,6 +195,35 @@ function initVrAnnotations(global) {
         entity.setRotation(_quat);
     };
 
+    // A measurement line drawn as evenly spaced small dot quads. Both
+    // app.drawLine() (immediate-mode layer) and a single stretched quad
+    // blanked/stalled the page in the headset, whereas dot quads render
+    // reliably. All dots of a line share one material, and are billboarded
+    // so they face the viewer.
+    const createDotLine = (a, b) => {
+        const length = a.distance(b);
+        const count = Math.max(2, Math.min(LINE_DOT_MAX_COUNT, Math.floor(length / LINE_DOT_MIN_SPACING_M)));
+        const material = createQuadMaterial(dotTextureWhite);
+        sessionMaterials.push(material);
+        // Skip the endpoints (they already have full-size dots); place dots at
+        // the interior fractions i / count.
+        for (let i = 1; i < count; i++) {
+            const t = i / count;
+            const position = new Vec3(
+                a.x + (b.x - a.x) * t,
+                a.y + (b.y - a.y) * t,
+                a.z + (b.z - a.z) * t
+            );
+            const meshInstance = new MeshInstance(planeMesh, material);
+            const entity = new Entity('lfsVrMeasureLineDot');
+            entity.addComponent('render', { meshInstances: [meshInstance] });
+            entity.setPosition(position);
+            entity.setLocalScale(LINE_DOT_SIZE_M, 1, LINE_DOT_SIZE_M);
+            sessionRoot.addChild(entity);
+            billboards.push({ entity, position });
+        }
+    };
+
     // ---- quad entities ---------------------------------------------------------------------
     const createQuadEntity = (name, texture, position, widthM, heightM) => {
         const material = createQuadMaterial(texture);
@@ -196,8 +233,10 @@ function initVrAnnotations(global) {
         entity.addComponent('render', { meshInstances: [meshInstance] });
         entity.setPosition(position);
         // The plane geometry is a unit quad in local XZ, so the entity scale
-        // (x, z) directly sets its world width/height.
-        entity.setScale(widthM, 1, heightM);
+        // (x, z) directly sets its world width/height. (Entity has no
+        // setScale(); sessionRoot sits at identity under app.root, so local
+        // scale equals world scale.)
+        entity.setLocalScale(widthM, 1, heightM);
         return entity;
     };
 
@@ -208,7 +247,7 @@ function initVrAnnotations(global) {
         const entity = new Entity(name);
         entity.addComponent('render', { meshInstances: [meshInstance] });
         entity.setPosition(position);
-        entity.setScale(DOT_SIZE_M, 1, DOT_SIZE_M);
+        entity.setLocalScale(DOT_SIZE_M, 1, DOT_SIZE_M);
         return entity;
     };
 
@@ -219,54 +258,68 @@ function initVrAnnotations(global) {
         sessionRoot = new Entity('lfsVrAnnotations');
         app.root.addChild(sessionRoot);
         billboards.length = 0;
-        measureLines.length = 0;
         sessionTextures.length = 0;
         sessionMaterials.length = 0;
 
+        // Each item is built in its own try/catch: a failure on one label or
+        // measurement must not abort the others (or the whole XR session).
         const labels = (window.__lfsLabelTool && window.__lfsLabelTool.get()) || [];
         for (const label of labels) {
-            const position = new Vec3(label.position[0], label.position[1], label.position[2]);
+            try {
+                const position = new Vec3(label.position[0], label.position[1], label.position[2]);
 
-            sessionRoot.addChild(createDotEntity('lfsVrLabelPoint', dotTextureOrange, position));
+                sessionRoot.addChild(createDotEntity('lfsVrLabelPoint', dotTextureOrange, position));
 
-            if (!label.text) continue;
-            const texture = createTextTexture(label.text);
-            sessionTextures.push(texture);
-            const textPos = new Vec3(position.x, position.y + LABEL_GAP_M, position.z);
-            const quad = createQuadEntity(
-                'lfsVrLabelText',
-                texture,
-                textPos,
-                texture.width * PX_TO_M,
-                TEXT_HEIGHT_M
-            );
-            sessionRoot.addChild(quad);
-            billboards.push({ entity: quad, position: textPos });
+                if (!label.text) continue;
+                const texture = createTextTexture(label.text);
+                sessionTextures.push(texture);
+                const textPos = new Vec3(position.x, position.y + LABEL_GAP_M, position.z);
+                const quad = createQuadEntity(
+                    'lfsVrLabelText',
+                    texture,
+                    textPos,
+                    texture.width * PX_TO_M,
+                    TEXT_HEIGHT_M
+                );
+                sessionRoot.addChild(quad);
+                billboards.push({ entity: quad, position: textPos });
+            } catch (err) {
+                console.error('[LFS VR] failed to build label', label, err);
+            }
         }
 
         const measurements = (window.__lfsMeasureTool && window.__lfsMeasureTool.get()) || [];
         for (const m of measurements) {
-            const a = new Vec3(m.a[0], m.a[1], m.a[2]);
-            const b = new Vec3(m.b[0], m.b[1], m.b[2]);
+            try {
+                const a = new Vec3(m.a[0], m.a[1], m.a[2]);
+                const b = new Vec3(m.b[0], m.b[1], m.b[2]);
 
-            sessionRoot.addChild(createDotEntity('lfsVrMeasurePointA', dotTextureWhite, a));
-            sessionRoot.addChild(createDotEntity('lfsVrMeasurePointB', dotTextureWhite, b));
+                sessionRoot.addChild(createDotEntity('lfsVrMeasurePointA', dotTextureWhite, a));
+                sessionRoot.addChild(createDotEntity('lfsVrMeasurePointB', dotTextureWhite, b));
 
-            const mid = new Vec3((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
-            const textPos = new Vec3(mid.x, mid.y + MEASURE_TEXT_OFFSET_M, mid.z);
-            const texture = createTextTexture(a.distance(b).toFixed(3));
-            sessionTextures.push(texture);
-            const quad = createQuadEntity(
-                'lfsVrMeasureText',
-                texture,
-                textPos,
-                texture.width * PX_TO_M,
-                TEXT_HEIGHT_M
-            );
-            sessionRoot.addChild(quad);
-            billboards.push({ entity: quad, position: textPos });
+                const mid = new Vec3((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+                const textPos = new Vec3(mid.x, mid.y + MEASURE_TEXT_OFFSET_M, mid.z);
 
-            measureLines.push({ a, b });
+                // Connecting line (skipped for degenerate / non-finite measurements).
+                const length = a.distance(b);
+                if (Number.isFinite(length) && length > 1e-6) {
+                    createDotLine(a, b);
+                }
+
+                const texture = createTextTexture(length.toFixed(3));
+                sessionTextures.push(texture);
+                const quad = createQuadEntity(
+                    'lfsVrMeasureText',
+                    texture,
+                    textPos,
+                    texture.width * PX_TO_M,
+                    TEXT_HEIGHT_M
+                );
+                sessionRoot.addChild(quad);
+                billboards.push({ entity: quad, position: textPos });
+            } catch (err) {
+                console.error('[LFS VR] failed to build measurement', m, err);
+            }
         }
     };
 
@@ -275,7 +328,6 @@ function initVrAnnotations(global) {
         sessionRoot.destroy(true);
         sessionRoot = null;
         billboards.length = 0;
-        measureLines.length = 0;
         for (const texture of sessionTextures) {
             texture.destroy();
         }
@@ -371,26 +423,44 @@ function initVrAnnotations(global) {
         }
     };
 
-    // ---- per-frame update (locomotion + billboards + immediate lines) -------------------
+    // ---- per-frame update (locomotion + billboards) -------------------------------------
+    let updateErrorLogged = false;
     const onUpdate = (dt) => {
         if (!app.xr || !app.xr.active) return;
 
         handleLocomotion(dt);
 
         if (!sessionRoot) return;
-        const camPos = camera.getPosition();
-        for (let i = 0; i < billboards.length; i++) {
-            orientBillboard(billboards[i].entity, billboards[i].position, camPos);
-        }
-        for (let i = 0; i < measureLines.length; i++) {
-            app.drawLine(measureLines[i].a, measureLines[i].b, Color.WHITE, true);
+        try {
+            const camPos = camera.getPosition();
+            for (let i = 0; i < billboards.length; i++) {
+                orientBillboard(billboards[i].entity, billboards[i].position, camPos);
+            }
+        } catch (err) {
+            if (!updateErrorLogged) {
+                updateErrorLogged = true;
+                console.error('[LFS VR] annotation update failed', err);
+            }
         }
     };
     app.on('update', onUpdate);
 
     // ---- XR session lifecycle ---------------------------------------------------------------
+    // IMPORTANT: PlayCanvas fires 'start' from inside a promise chain whose
+    // .catch() calls session.end(). Any exception escaping this listener
+    // therefore terminates the headset session immediately (and without a
+    // matching 'end' event). Never let annotation problems propagate.
     const onXrStart = () => {
-        buildAnnotations();
+        try {
+            buildAnnotations();
+        } catch (err) {
+            console.error('[LFS VR] failed to build annotations; continuing without them', err);
+            try {
+                destroyAnnotations();
+            } catch (cleanupErr) {
+                console.error('[LFS VR] annotation cleanup failed', cleanupErr);
+            }
+        }
         const ui = document.getElementById('ui');
         if (ui) {
             ui.classList.add('hidden');
@@ -398,7 +468,11 @@ function initVrAnnotations(global) {
     };
 
     const onXrEnd = () => {
-        destroyAnnotations();
+        try {
+            destroyAnnotations();
+        } catch (err) {
+            console.error('[LFS VR] annotation cleanup failed', err);
+        }
         const ui = document.getElementById('ui');
         if (ui) {
             ui.classList.remove('hidden');
