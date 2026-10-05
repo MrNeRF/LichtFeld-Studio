@@ -1055,27 +1055,34 @@ namespace lfs::vis::gui {
                         const auto cancel = [this, job, &stop_token]() {
                             return stop_token.stop_requested() || jobs_.cancelRequested(job);
                         };
-                        std::expected<lfs::io::LoadResult, std::string> staged;
+                        const lfs::LegacyErrorContext stage_error_context{
+                            .code = lfs::ErrorCode::Internal,
+                            .domain = lfs::ErrorDomain::IO,
+                            .operation = "stageSplatFile",
+                            .source = LFS_SOURCE_SITE_CURRENT(),
+                        };
+                        std::expected<lfs::io::LoadResult, lfs::Error> staged;
                         if (request.reframe_photo) {
                             auto generated = lfs::io::createAppleReframeSplat(request.path, {.progress = progress, .cancel_requested = cancel});
                             if (!generated) {
                                 user_error = generated.error().message;
-                                staged = std::unexpected(generated.error().format());
+                                staged = std::unexpected(lfs::make_legacy_error(
+                                    generated.error().format(), stage_error_context));
                             } else {
                                 staged = std::move(*generated);
                             }
                         } else {
-                            staged = viewer_->getSceneManager()->stageSplatFile(request.path, progress, cancel,
-                                                                                request.active_sh_degree >= 0, &user_error);
+                            auto legacy_staged = viewer_->getSceneManager()->stageSplatFile(
+                                request.path, progress, cancel,
+                                request.active_sh_degree >= 0, &user_error);
+                            if (!legacy_staged) {
+                                staged = std::unexpected(lfs::make_legacy_error(
+                                    std::move(legacy_staged.error()), stage_error_context));
+                            } else {
+                                staged = std::move(*legacy_staged);
+                            }
                         }
-                        return lfs::from_legacy_expected<lfs::io::LoadResult>(
-                            std::move(staged),
-                            lfs::LegacyErrorContext{
-                                .code = lfs::ErrorCode::Internal,
-                                .domain = lfs::ErrorDomain::IO,
-                                .operation = "stageSplatFile",
-                                .source = LFS_SOURCE_SITE_CURRENT(),
-                            });
+                        return lfs::Result<lfs::io::LoadResult>::from_expected(std::move(staged));
                     }();
 
                     const std::string error_message = result ? std::string{} : std::string(result.error().detail());
