@@ -51,6 +51,8 @@
 #define RMLUI_VK_API_VERSION VK_API_VERSION_1_3
 
 class RenderInterface_VK : public Rml::RenderInterface {
+    friend class RenderInterfaceVKTestAccess;
+
 public:
     static constexpr uint32_t kSwapchainBackBufferCount = 3;
     static constexpr VkDeviceSize kVideoMemoryForAllocation = 4 * 1024 * 1024; // [bytes]
