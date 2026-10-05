@@ -157,6 +157,20 @@ function initVrAnnotations(global) {
         return material;
     };
 
+    // All annotation quads are alpha-blended, so they are sorted back-to-front
+    // together with the splat (key = drawBucket * 1e9 + view distance, drawn in
+    // DESCENDING key order). With the default bucket (127) a quad that is farther
+    // from the camera than the splat's sort center is drawn BEFORE the splat and
+    // gets blended over, so e.g. the far end of a measurement line vanishes at
+    // some viewing angles. A lower bucket makes the quad sort after (draw on
+    // top of) everything at the default bucket, regardless of distance.
+    const ANNOTATION_DRAW_BUCKET = 0;
+    const createQuadMeshInstance = (material) => {
+        const meshInstance = new MeshInstance(planeMesh, material);
+        meshInstance.drawBucket = ANNOTATION_DRAW_BUCKET;
+        return meshInstance;
+    };
+
     // ---- billboard math -----------------------------------------------------------------
     // Orient a quad at `position` to face `cameraPos`, keeping text upright.
     // The fork's PlaneGeometry lies in local XZ with normal +Y, and the text
@@ -214,7 +228,7 @@ function initVrAnnotations(global) {
                 a.y + (b.y - a.y) * t,
                 a.z + (b.z - a.z) * t
             );
-            const meshInstance = new MeshInstance(planeMesh, material);
+            const meshInstance = createQuadMeshInstance(material);
             const entity = new Entity('lfsVrMeasureLineDot');
             entity.addComponent('render', { meshInstances: [meshInstance] });
             entity.setPosition(position);
@@ -228,7 +242,7 @@ function initVrAnnotations(global) {
     const createQuadEntity = (name, texture, position, widthM, heightM) => {
         const material = createQuadMaterial(texture);
         sessionMaterials.push(material);
-        const meshInstance = new MeshInstance(planeMesh, material);
+        const meshInstance = createQuadMeshInstance(material);
         const entity = new Entity(name);
         entity.addComponent('render', { meshInstances: [meshInstance] });
         entity.setPosition(position);
@@ -243,7 +257,7 @@ function initVrAnnotations(global) {
     const createDotEntity = (name, texture, position) => {
         const material = createQuadMaterial(texture);
         sessionMaterials.push(material);
-        const meshInstance = new MeshInstance(planeMesh, material);
+        const meshInstance = createQuadMeshInstance(material);
         const entity = new Entity(name);
         entity.addComponent('render', { meshInstances: [meshInstance] });
         entity.setPosition(position);
