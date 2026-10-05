@@ -5,8 +5,10 @@
 // operands, C pow, unsigned and half dtypes, saturating casts and fault
 // reporting. Each case runs on the CPU and on every available GPU backend.
 
+#include "core/error.hpp"
 #include "core/nn/ops.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_upload.hpp"
 
@@ -126,6 +128,39 @@ namespace {
             expect_floats(host<float>(lfs::core::nn::softmax(zeros, &mask).to(DataType::Float32)),
                           std::vector<float>(20, 0.f));
         }
+    }
+
+    TEST_P(TensorBackendSemantics, MultinomialRejectsUnsafeCountsBeforeDispatch) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "GPU indexing limits do not apply to CPU sampling";
+        const auto weights = Tensor::ones({1}, device());
+        const auto output = Tensor::empty({1}, device(), DataType::Int64);
+        const bool cuda = *GetParam().backend == GpuBackend::CUDA;
+        const size_t maximum = std::numeric_limits<uint32_t>::max();
+        // The last safe count solves count + ceil(count / 1024) <= UINT32_MAX.
+        const size_t last_safe = (maximum / 1025) * 1024 + (maximum % 1025) - 1;
+        for (const bool replacement : {false, true}) {
+            for (const size_t count : {cuda ? size_t{std::numeric_limits<int>::max()} + 1 : last_safe + 1,
+                                       size_t{4294000000}, maximum}) {
+                SCOPED_TRACE(count);
+                try {
+                    lfs::core::internal::backend_ops_for(weights).multinomial(
+                        lfs::core::internal::storage_ref(weights), lfs::core::internal::storage_ref(output),
+                        {.count = count, .sample_count = 1, .replacement = replacement}, {});
+                    FAIL() << "Unsafe count reached dispatch";
+                } catch (const lfs::Exception& error) {
+                    EXPECT_EQ(error.error().code(), lfs::ErrorCode::BoundsViolation);
+                    EXPECT_EQ(error.error().domain(), lfs::ErrorDomain::Tensor);
+                }
+            }
+        }
+        if (cuda) {
+            EXPECT_THROW(lfs::core::internal::backend_ops_for(weights).multinomial(
+                             lfs::core::internal::storage_ref(weights), lfs::core::internal::storage_ref(output),
+                             {.count = 1, .sample_count = size_t{std::numeric_limits<int>::max()} + 1, .replacement = true}, {}),
+                         lfs::Exception);
+        }
+        EXPECT_EQ(Tensor::multinomial(weights, 1, true).to_vector_int64(), std::vector<int64_t>{0});
     }
 
     TEST_P(TensorBackendSemantics, ScalarNonzeroHasOneEmptyRow) {

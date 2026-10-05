@@ -13,6 +13,7 @@
 
 #include "core/assert.hpp"
 #include "core/detail/fused_pointwise.hpp"
+#include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_environment.hpp"
 #include "core/tensor_image.hpp"
@@ -2162,9 +2163,18 @@ namespace lfs::core::internal {
             return;
         LFS_ASSERT_MSG(weights.dtype == DataType::Float32 && output.dtype == DataType::Int64,
                        "Metal multinomial requires Float32 weights and Int64 samples");
-        const auto context = acquire_context();
         const uint32_t categories = checked_u32(program.count, "Metal multinomial category count exceeds uint32");
         const uint32_t samples = checked_u32(program.sample_count, "Metal multinomial sample count exceeds uint32");
+        const size_t sum_blocks = (program.count + kSumBlock - 1) / kSumBlock;
+        if (program.count > size_t{std::numeric_limits<uint32_t>::max()} - sum_blocks) {
+            throw lfs::Exception(lfs::make_error({
+                .code = lfs::ErrorCode::BoundsViolation,
+                .domain = lfs::ErrorDomain::Tensor,
+                .user_message = "Metal multinomial category count exceeds safe indexing range",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
+        const auto context = acquire_context();
         // Validate on the device and read back only the two summary values.
         struct WeightStatistics {
             float maximum;
@@ -2184,7 +2194,7 @@ namespace lfs::core::internal {
             // Running sums within blocks, the blocks' offsets, then a binary
             // search per draw. The weights are scaled so their maximum sits
             // near 2^0, which keeps the sums finite.
-            const uint32_t blocks = (categories + kSumBlock - 1) / kSumBlock;
+            const uint32_t blocks = static_cast<uint32_t>(sum_blocks);
             const Scratch sums(*context, (program.count + blocks + 1) * sizeof(float));
             const RandomParams params{.seed = program.seed, .count = categories, .sample_count = samples, .first = multinomial_scale(statistics.maximum)};
             encode_random(*context, kRunningSums, {}, weights, sums.storage, params, thread_groups(blocks));

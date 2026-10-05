@@ -7,9 +7,11 @@
 #include "../../internal/tensor_impl.hpp"
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
+#include "core/error.hpp"
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 
 #include <cuda_runtime.h>
+#include <limits>
 
 namespace lfs::core::internal {
     namespace {
@@ -58,6 +60,16 @@ namespace lfs::core::internal {
         const StorageRef weights, const StorageRef output,
         const RandomProgram& program, const ExecContext context) {
         LFS_FACADE_TRACE(multinomial);
+        // Sampling kernels use signed int indices, including the Gumbel keys.
+        if (program.count > size_t{std::numeric_limits<int>::max()} ||
+            program.sample_count > size_t{std::numeric_limits<int>::max()}) {
+            throw lfs::Exception(lfs::make_error({
+                .code = lfs::ErrorCode::BoundsViolation,
+                .domain = lfs::ErrorDomain::Tensor,
+                .user_message = "CUDA multinomial count exceeds safe indexing range",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
         tensor_ops::launch_multinomial(
             cuda_const_pointer<float>(weights), cuda_pointer<int64_t>(output),
             program.count, program.sample_count, program.replacement,
