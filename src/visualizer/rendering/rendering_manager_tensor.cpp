@@ -19,6 +19,7 @@
 #include "scene_renderer_factory.hpp"
 #include "viewport_appearance_correction.hpp"
 #include "viewport_request_builder.hpp"
+#include "vksplat_shared_scratch_install.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "window/graphics_context.hpp"
 
@@ -102,13 +103,19 @@ namespace lfs::vis {
     }
 
     float RenderingManager::trainingRefreshIntervalSec(const ViewRenderState& view) const {
-        return view.framerate_controller_.getSettings().training_frame_refresh_time_sec;
+        const double viewer_turn_ms =
+            view.training_preview_turn_ms_.load(std::memory_order_relaxed);
+        return static_cast<float>(std::max<double>(
+            view.framerate_controller_.getSettings().training_frame_refresh_time_sec,
+            idlePreviewIntervalSec(viewer_turn_ms) + viewer_turn_ms * 1e-3));
     }
 
     void RenderingManager::pollTrainingRefresh(const bool is_training,
                                                const int current_iteration) {
         std::lock_guard lock(views_mutex_);
         for (auto& [id, view] : view_states_) {
+            if (!is_training)
+                view->training_preview_turn_ms_.store(0.0, std::memory_order_relaxed);
             const auto dirty = view->frame_lifecycle_service_.handleTrainingRefresh(
                 is_training, trainingRefreshIntervalSec(*view));
             if (!dirty)
@@ -325,6 +332,7 @@ namespace lfs::vis {
             .selection_flash_intensity = view.animation_state_.selectionFlashIntensity(),
             .scene_jitter_pixels = temporal_setup.jitter_pixels,
         };
+        const auto render_started = std::chrono::steady_clock::now();
         if (!context.preparing_import) {
             const glm::vec2 screen_position = context.viewport_region
                                                   ? glm::vec2{context.viewport_region->x, context.viewport_region->y}
@@ -854,6 +862,16 @@ namespace lfs::vis {
             .orthographic = context.settings.orthographic,
         };
         view.viewport_artifact_service_.updateFromImageOutput(image, metadata, size, true);
+        if (frame_context.training_active && training_refresh_dirty != 0) {
+            const double elapsed_ms = std::chrono::duration<double, std::milli>(
+                                          std::chrono::steady_clock::now() - render_started)
+                                          .count();
+            const double previous =
+                view.training_preview_turn_ms_.load(std::memory_order_relaxed);
+            view.training_preview_turn_ms_.store(
+                previous == 0.0 ? elapsed_ms : 0.9 * previous + 0.1 * elapsed_ms,
+                std::memory_order_relaxed);
+        }
         initialized_ = true;
         return {.image = std::move(image),
                 .image_generation = view.vulkan_viewport_image_generation_,

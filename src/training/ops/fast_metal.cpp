@@ -9,7 +9,7 @@
 #include "metal_kernels.hpp"
 
 #include "core/memory_pressure.hpp"
-#include "core/tensor_upload.hpp"
+#include "core/tensor_readback.hpp"
 #include "lfs/training/vram_ledger.hpp"
 
 #include <algorithm>
@@ -79,9 +79,10 @@ namespace lfs::training {
             Tensor ranges, final_transmittance, n_contrib;
             Tensor block_sums, counts, histogram;
             std::array<Tensor, 2> keys, values;
-            // The host's copy of the instance count, and the instance buffers'
+            // Reusable host copy of the instance count, and the instance buffers'
             // size, which lets a frame encode its raster tail before the count arrives.
-            Tensor count_copy;
+            core::TensorReadback count_readback;
+            std::array<uint32_t, 2> count_words{};
             uint32_t instance_capacity = 0;
             Frame frame;
             std::string message;
@@ -469,20 +470,17 @@ namespace lfs::training {
                             {kRenderNormalConstant, params.render_normal ? 1u : 0u}});
                 };
 
-                // The frame's one host round trip is the instance count. The host
-                // reads a copy that the raster tail does not touch, submitted with
-                // the scan, while the GPU runs the tail sized for the capacity of
-                // earlier frames. A frame needing more encodes the tail again.
-                reserve(s.count_copy, 2, DataType::UInt32, "fast.readback.count_copy");
-                s.count_copy.slice(0, 0, 2).copy_(s.counts.slice(0, 0, 2));
-                core::TensorFence counted(core::GpuBackend::Metal);
-                counted.record(core::TensorExecutionTarget::current());
+                // The frame's one host round trip is the instance count. Submit its
+                // small readback with the scan, then encode the raster tail sized for
+                // earlier frames while that readback completes. A generic Tensor::to
+                // would synchronize the later raster work before returning the count.
+                s.count_readback.enqueue(s.counts.slice(0, 0, 2));
                 const uint32_t speculated = s.instance_capacity;
                 if (speculated > 0)
                     encode_raster(speculated);
-                const Tensor counts = s.count_copy.slice(0, 0, 2).to(Device::CPU);
-                const uint32_t* words = counts.ptr<uint32_t>();
-                const uint64_t n_instances = uint64_t{words[0]} | (uint64_t{words[1]} << 32);
+                s.count_readback.wait(std::as_writable_bytes(std::span(s.count_words)));
+                const uint64_t n_instances = uint64_t{s.count_words[0]} |
+                                             (uint64_t{s.count_words[1]} << 32);
                 if (n_instances > static_cast<uint64_t>(std::numeric_limits<int>::max()))
                     return fail(s, Code::InstanceOverflow,
                                 std::format("FastGS instance count exceeds 32-bit range: {} instances from {} "

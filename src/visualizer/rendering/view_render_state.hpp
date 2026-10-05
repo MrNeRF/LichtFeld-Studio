@@ -80,6 +80,7 @@ namespace lfs::vis {
         bool navigation_pose_valid_ = false;
         std::chrono::steady_clock::time_point camera_settle_deadline_{};
         std::atomic<DirtyMask> training_refresh_dirty_{0};
+        std::atomic<double> training_preview_turn_ms_{0.0};
         int last_training_preview_iteration_ = -1;
         bool has_training_preview_iteration_ = false;
         std::uint64_t last_rendered_input_fingerprint_ = 0;
