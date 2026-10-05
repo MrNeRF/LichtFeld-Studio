@@ -1,12 +1,13 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "core/export.hpp"
 #include <string>
 namespace lfs::vis {
     // Capture bool-returning allocation failures without interrupting their
     // cleanup paths. Queued-attachment validation consumes the captured error.
-    class LFS_VIS_API GraphicsImportErrorScope {
+    // Header-only and not exported: MSVC rejects thread_local data in a DLL
+    // interface (C2492).
+    class GraphicsImportErrorScope {
         inline static thread_local std::string* current_ = nullptr;
         std::string* previous_;
 
