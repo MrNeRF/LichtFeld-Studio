@@ -842,7 +842,7 @@ namespace lfs::training {
                 alpha.sync_to_stream(consumer);
                 if (warp_to_distorted)
                     alpha = lfs::core::distort_mask_to_source_area(alpha, *inverse_warp, consumer);
-                auto coverage = squeeze_to_hw(alpha).ge(0.5f).to(lfs::core::DataType::UInt8);
+                auto coverage = squeeze_to_hw(alpha).ge(mask_splat->opacity).to(lfs::core::DataType::UInt8);
                 if (mask_splat->invert)
                     coverage = coverage.eq(0).to(lfs::core::DataType::UInt8);
                 metric_mask = validity_mask.is_valid()

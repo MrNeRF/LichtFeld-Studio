@@ -936,6 +936,11 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_mask_invert = v; }); },
                 "Scores the pixels outside the evaluation mask instead")
             .def_prop_rw(
+                "eval_mask_opacity",
+                [](PyOptimizationParams& self) { return self.params().eval_mask_opacity; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.eval_mask_opacity = v; }); },
+                "Rendered opacity a pixel needs to count as covered by a splat mask; lower widens the mask past the outline, higher pulls it in")
+            .def_prop_rw(
                 "densify_error_map",
                 [](PyOptimizationParams& self) { return self.params().densify_error_map; },
                 [](PyOptimizationParams&, DensifyErrorMap v) {

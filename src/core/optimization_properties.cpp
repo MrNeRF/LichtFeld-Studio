@@ -700,6 +700,15 @@ namespace lfs::core::param {
             .locale("training_params.eval_mask_invert")
             .tooltip("training.tooltip.eval_mask_invert")
             .flags(PROP_NEEDS_RESTART)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::eval_mask_opacity,
+                        "eval_mask_opacity", "Splat Mask Opacity", d.eval_mask_opacity, 0.01f, 1.0f,
+                        "Rendered opacity a pixel needs to count as covered by a splat mask; lower widens the mask past the outline, higher pulls it in")
+            .locale("training_params.eval_mask_opacity")
+            .tooltip("training.tooltip.eval_mask_opacity")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_NEEDS_RESTART)
 
             // Random initialization
             .all_strategies()

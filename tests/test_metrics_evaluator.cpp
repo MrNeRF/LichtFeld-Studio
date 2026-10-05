@@ -959,7 +959,8 @@ TEST(MetricsEvaluatorUndistort, ThinMaskFallsBackToPartialSsimWindows) {
 // Catches geometric masks projected through a pinhole when GUT renders a distorted camera natively,
 // without --undistort: they must select the same pixels as the source-lens path of --undistort.
 // Catches the splat mask scoring anything but what the splat covers when rendered with all its information:
-// the mask must equal the pixels whose rendered opacity is at least one half, and its inverse the rest.
+// the mask must equal the pixels whose rendered opacity reaches the cutoff, a higher cutoff a part of it, and the
+// inverse the rest.
 TEST(MetricsEvaluator, SplatMaskSelectsTheRenderedCoverage) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
@@ -1000,12 +1001,19 @@ TEST(MetricsEvaluator, SplatMaskSelectsTheRenderedCoverage) {
                            .alpha.cpu()
                            .to_vector();
     ASSERT_EQ(alpha.size(), static_cast<size_t>(kW * kH));
-    std::vector<uint8_t> expected(alpha.size());
-    std::ranges::transform(alpha, expected.begin(), [](const float value) { return value >= 0.5f ? 1 : 0; });
+    const auto expected_at = [&](const float cutoff) {
+        std::vector<uint8_t> expected(alpha.size());
+        std::ranges::transform(alpha, expected.begin(), [cutoff](const float value) { return value >= cutoff ? 1 : 0; });
+        return expected;
+    };
+    splat.opacity = 0.5f;
+    const auto wide = expected_at(0.5f);
+    EXPECT_EQ(mask_of(), wide);
+    splat.opacity = 0.85f;
+    const auto expected = expected_at(0.85f);
     const auto covered = std::ranges::count(expected, uint8_t{1});
     ASSERT_GT(covered, 0);
-    ASSERT_LT(covered, static_cast<std::ptrdiff_t>(expected.size()));
-
+    ASSERT_LT(covered, std::ranges::count(wide, uint8_t{1}));
     EXPECT_EQ(mask_of(), expected);
     splat.invert = true;
     const auto inverted = mask_of();

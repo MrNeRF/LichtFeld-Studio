@@ -520,6 +520,7 @@ class TrainingPanel(Panel):
             "dep_eval": params.enable_eval,
             "dep_undistort": params.undistort,
             "dep_eval_mask": params.enable_eval and bool(params.eval_mask),
+            "dep_eval_mask_splat": params.enable_eval and params.eval_mask.startswith("splat:"),
         }
         return bool(conditions.get(str(condition_id), True))
 
@@ -718,6 +719,13 @@ class TrainingPanel(Panel):
             and p().has_params()
             and p().enable_eval
             and bool(p().eval_mask),
+        )
+        model.bind_func(
+            "dep_eval_mask_splat",
+            lambda: p() is not None
+            and p().has_params()
+            and p().enable_eval
+            and p().eval_mask.startswith("splat:"),
         )
         model.bind_func(
             "has_eval_mask_clear",

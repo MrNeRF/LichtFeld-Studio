@@ -3017,8 +3017,12 @@ namespace lfs::training {
                     if (!splat)
                         return std::unexpected(std::format("Failed to load evaluation splat '{}': {}", *file,
                                                            splat.error().detail()));
-                    LOG_INFO("Evaluation mask: {} splats from {}{}", splat->size(), *file, invert ? " (inverted)" : "");
-                    evaluator_->set_eval_splat(lfs::training::EvaluationSplat{.model = std::move(*splat), .invert = invert});
+                    LOG_INFO("Evaluation mask: {} splats from {} at opacity {}{}", splat->size(), *file,
+                             params_.optimization.eval_mask_opacity, invert ? " (inverted)" : "");
+                    evaluator_->set_eval_splat(lfs::training::EvaluationSplat{
+                        .model = std::move(*splat),
+                        .opacity = params_.optimization.eval_mask_opacity,
+                        .invert = invert});
                 } else if (const auto file = lfs::core::param::eval_mask_points_file(params_.optimization.eval_mask)) {
                     auto means = lfs::training::load_evaluation_points(lfs::core::utf8_to_path(std::string(*file)),
                                                                        {origin.x, origin.y, origin.z});

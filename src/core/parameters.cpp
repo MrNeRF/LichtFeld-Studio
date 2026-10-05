@@ -543,6 +543,8 @@ namespace lfs::core {
                 return std::format("strategy must be one of mcmc, mrnf, or igs+ (got '{}')", strategy);
             if (eval_mask_invert && eval_mask.empty())
                 return "eval_mask_invert requires eval_mask";
+            if (!(eval_mask_opacity > 0.0f && eval_mask_opacity <= 1.0f))
+                return std::format("eval_mask_opacity must be greater than 0 and at most 1 (got {})", eval_mask_opacity);
             if (!eval_mask.empty() && !enable_eval)
                 return "eval_mask requires evaluation to be enabled";
             // The mask file is checked where it is read, so settings stored in a project stay valid

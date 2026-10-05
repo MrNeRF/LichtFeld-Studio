@@ -207,6 +207,7 @@ namespace lfs::core {
             EvalSpace eval_space = EvalSpace::Distorted;       // Reference image space used for evaluation
             std::string eval_mask = "";                        // Mesh path, bbox:..., cropbox, masks:<folder>, depth:near,far, points:radius,close or points:<file>; empty disables
             bool eval_mask_invert = false;                     // Score the pixels outside the evaluation mask instead
+            float eval_mask_opacity = 0.85f;                   // Rendered opacity a pixel needs to count as covered by a splat mask
             bool enable_save_eval_images = true;               // Save during evaluation images
             bool headless = false;                             // Disable visualization during training
             bool auto_train = false;                           // Start training immediately on startup

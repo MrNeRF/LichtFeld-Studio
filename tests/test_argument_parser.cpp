@@ -2058,6 +2058,16 @@ TEST(ArgumentParserTest, EvalPointsFileMaskParsesValidatesAndSurvivesResume) {
     const auto absent_splat = "splat:" + (directory / "absent.ply").string();
     const char* missing_splat[] = {"LichtFeld-Studio", "--eval", "--eval-mask", absent_splat.c_str()};
     EXPECT_FALSE(lfs::core::args::parse_args_and_params(static_cast<int>(std::size(missing_splat)), missing_splat));
+    EXPECT_FLOAT_EQ((*parsed_splat)->optimization.eval_mask_opacity, 0.85f);
+    const char* opacity_argv[] = {"LichtFeld-Studio", "--eval", "--eval-mask", splat_spec.c_str(), "--eval-mask-opacity", "0.6"};
+    const auto parsed_opacity = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(opacity_argv)), opacity_argv);
+    ASSERT_TRUE(parsed_opacity) << parsed_opacity.error();
+    EXPECT_FLOAT_EQ((*parsed_opacity)->optimization.eval_mask_opacity, 0.6f);
+    EXPECT_FLOAT_EQ(lfs::core::param::OptimizationParameters::from_json((*parsed_opacity)->optimization.to_json()).eval_mask_opacity, 0.6f);
+    for (const char* bad : {"0", "1.5"}) {
+        const char* bad_argv[] = {"LichtFeld-Studio", "--eval", "--eval-mask", splat_spec.c_str(), "--eval-mask-opacity", bad};
+        EXPECT_FALSE(lfs::core::args::parse_args_and_params(static_cast<int>(std::size(bad_argv)), bad_argv)) << bad;
+    }
     lfs::core::param::OptimizationParameters relative_splat;
     relative_splat.enable_eval = true;
     relative_splat.eval_mask = "splat:subject.ply";

@@ -2172,6 +2172,15 @@ class OptimizationParams:
     def eval_mask_invert(self, arg: bool, /) -> None: ...
 
     @property
+    def eval_mask_opacity(self) -> float:
+        """
+        Rendered opacity a pixel needs to count as covered by a splat mask; lower widens the mask past the outline, higher pulls it in
+        """
+
+    @eval_mask_opacity.setter
+    def eval_mask_opacity(self, arg: float, /) -> None: ...
+
+    @property
     def densify_error_map(self) -> DensifyErrorMap:
         """Densification error map: full SSIM or contrast-structure only"""
 

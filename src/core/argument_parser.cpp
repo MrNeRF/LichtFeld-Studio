@@ -95,8 +95,10 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--eval-all", "eval_all", Bool},
             OptimizationCliBinding{"--eval-space", "eval_space", Enum},
             OptimizationCliBinding{"--eval-mask", "eval_mask", String, false,
-                                   ". Sources: mesh:<file> pixels covered by the mesh; bbox:x0,y0,z0,x1,y1,z1 pixels covered by the axis-aligned box with that minimum and maximum corner; cropbox pixels covered by the training model's crop box; masks:<folder> one mask image per input image, matched by file name, white pixels scored; depth:near,far solid rendered pixels whose depth lies between near and far; points or points:radius,close pixels around the initial point cloud, each point drawn as a disk of radius pixels (default 2) with gaps up to twice close pixels filled (default 3); points:<file> the same around the points of a splat or point cloud PLY; splat:<file> pixels a splat PLY covers when rendered with its positions, sizes, rotations and opacities (opacity of at least one half); none clears a mask stored in a resumed project. Meshes, boxes, point files and splats use the dataset's coordinates"},
+                                   ". Sources: mesh:<file> pixels covered by the mesh; bbox:x0,y0,z0,x1,y1,z1 pixels covered by the axis-aligned box with that minimum and maximum corner; cropbox pixels covered by the training model's crop box; masks:<folder> one mask image per input image, matched by file name, white pixels scored; depth:near,far solid rendered pixels whose depth lies between near and far; points or points:radius,close pixels around the initial point cloud, each point drawn as a disk of radius pixels (default 2) with gaps up to twice close pixels filled (default 3); points:<file> the same around the points of a splat or point cloud PLY; splat:<file> pixels a splat PLY covers when rendered with its positions, sizes, rotations and opacities, counting pixels whose rendered opacity reaches --eval-mask-opacity; none clears a mask stored in a resumed project. Meshes, boxes, point files and splats use the dataset's coordinates"},
             OptimizationCliBinding{"--eval-mask-invert", "eval_mask_invert", Bool},
+            OptimizationCliBinding{"--eval-mask-opacity", "eval_mask_opacity", Float, false,
+                                   ". Applies to splat:<file> masks. A splat's edges fade out gradually, so the rendered opacity drops from 1 inside the subject to 0 outside over a few pixels; the cutoff picks where along that falloff the mask boundary lies. 0.5 includes a thin rim of background around the outline, 0.85 follows the outline of opaque subjects closely, and values near 1 start trimming the subject's edges"},
             OptimizationCliBinding{"--headless", "headless", Bool},
             OptimizationCliBinding{"--undistort", "undistort", Bool},
         };
@@ -823,6 +825,7 @@ namespace {
                     {"undistorted", lfs::core::param::EvalSpace::Undistorted}});
             ::args::ValueFlag<std::string> eval_mask(output_group, "source", lfs::core::args::optimization_cli_help("--eval-mask"), {"eval-mask"});
             ::args::Flag eval_mask_invert(output_group, "eval_mask_invert", lfs::core::args::optimization_cli_help("--eval-mask-invert"), {"eval-mask-invert"});
+            ::args::ValueFlag<float> eval_mask_opacity(output_group, "opacity", lfs::core::args::optimization_cli_help("--eval-mask-opacity"), {"eval-mask-opacity"});
             ::args::Flag no_download(output_group, "no_download", "Do not download optional model weights", {"no-download"});
             ::args::ValueFlagList<std::string> eval_steps(output_group, "eval_steps", "Evaluation iterations as a comma list, e.g. 1000,7000,30000 (replaces the default 7000,30000; the final iteration is always evaluated)", {"eval-steps"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
@@ -1396,6 +1399,7 @@ namespace {
                                         morton_reorder_interval_val = cli_option_present({"--morton-reorder-interval"}) ? std::optional<int>(::args::get(morton_reorder_interval)) : std::optional<int>(),
                                         sh_degree_val = cli_option_present({"--sh-degree"}) ? std::optional<int>(::args::get(sh_degree)) : std::optional<int>(),
                                         min_opacity_val = cli_option_present({"--min-opacity"}) ? std::optional<float>(::args::get(min_opacity)) : std::optional<float>(),
+                                        eval_mask_opacity_val = cli_option_present({"--eval-mask-opacity"}) ? std::optional<float>(::args::get(eval_mask_opacity)) : std::optional<float>(),
                                         cropbox_lr_scale_val = cli_option_present({"--cropbox-lr-scale"}) ? std::optional<float>(::args::get(cropbox_lr_scale)) : std::optional<float>(),
                                         cropbox_loss_weight_val = cli_option_present({"--cropbox-loss-weight"}) ? std::optional<float>(::args::get(cropbox_loss_weight)) : std::optional<float>(),
                                         init_num_pts_val = cli_option_present({"--init-num-pts"}) ? std::optional<int>(::args::get(init_num_pts)) : std::optional<int>(),
@@ -1602,6 +1606,7 @@ namespace {
                 setFlag(eval_all_flag, opt.enable_eval);
                 setVal(eval_space_val, opt.eval_space);
                 setVal(eval_mask_val, opt.eval_mask);
+                setVal(eval_mask_opacity_val, opt.eval_mask_opacity);
                 setFlag(eval_mask_invert_flag, opt.eval_mask_invert);
                 if (eval_mask_val && eval_mask_val->empty())
                     opt.eval_mask_invert = false;
@@ -1720,6 +1725,7 @@ namespace {
                 note_opt("eval_all", eval_all_flag);
                 note_opt("eval_space", eval_space_val.has_value());
                 note_opt("eval_mask", eval_mask_val.has_value());
+                note_opt("eval_mask_opacity", eval_mask_opacity_val.has_value());
                 note_opt("eval_mask_invert", eval_mask_invert_flag || (eval_mask_val && eval_mask_val->empty()));
                 note_opt("headless", headless_flag);
                 note_opt("auto_train", auto_train_flag);

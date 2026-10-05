@@ -68,6 +68,7 @@ NUMBER_PROPS = (
     "sparsify_steps",
     "init_rho",
     "ppisp_controller_lr",
+    "eval_mask_opacity",
 )
 
 BOOL_PROPS = (
@@ -222,6 +223,11 @@ DATASET_RUNS = (
         "dataset_eval_mask_invert",
         "eval_mask_invert",
         visibility_condition_id="dep_eval_mask",
+    ),
+    _run(
+        "dataset_eval_mask_opacity",
+        "eval_mask_opacity",
+        visibility_condition_id="dep_eval_mask_splat",
     ),
 )
 

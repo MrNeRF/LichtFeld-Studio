@@ -193,6 +193,7 @@ namespace lfs::training {
     // A splat whose rendered coverage selects the evaluated pixels.
     struct EvaluationSplat {
         lfs::core::SplatData model; // CUDA, SH degree 0, in the training world frame
+        float opacity = 0.85f;      // rendered opacity a pixel needs to count as covered
         bool invert = false;
     };
 
