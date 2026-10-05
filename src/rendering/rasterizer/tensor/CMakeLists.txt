@@ -4,7 +4,7 @@
 # Single-source splat rasterizer: Slang passes run through the tensor library
 # on Metal and Vulkan. It replaces the native Metal and vksplat rasterizers
 # pass by pass.
-add_library(lfs_tensor_rasterizer STATIC splat_projector.cpp splat_tile_binner.cpp splat_rasterizer.cpp splat_lod_selector.cpp)
+add_library(lfs_tensor_rasterizer STATIC splat_projector.cpp splat_tile_binner.cpp splat_rasterizer.cpp splat_lod_selector.cpp splat_selection_query.cpp)
 target_compile_features(lfs_tensor_rasterizer PUBLIC cxx_std_23)
 set_target_properties(lfs_tensor_rasterizer PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(lfs_tensor_rasterizer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -18,6 +18,7 @@ lfs_add_gpu_program(lfs_tensor_rasterizer splat_tiles SOURCE splat_tiles.slang
     COMPUTE tile_counts tile_status source_key_groups source_compact source_permutation tile_instances tile_ranges tile_depth_batches)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_project SOURCE splat_project.slang COMPUTE project_splats)
 lfs_add_gpu_program(lfs_tensor_rasterizer splat_lod SOURCE splat_lod.slang COMPUTE select_lod)
+lfs_add_gpu_program(lfs_tensor_rasterizer splat_selection SOURCE splat_selection.slang COMPUTE polygon_coverage selection_query)
 # Blend variants. The plain opaque view is specialized at compile time with
 # relaxed math, as the native rasterizer does: serial (128), and depth-batch
 # chunks (128|512) and prefix (128|512|1024). Generic blends per raster mode and

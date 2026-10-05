@@ -8,8 +8,10 @@
 #include "core/tensor_backend.hpp"
 #include "splat_preprocessor.hpp"
 #include "splat_project.hpp"
+#include "selection_query.hpp"
 #include "gpu_profile.hpp"
 #include "splat_rasterizer.hpp"
+#include "splat_selection_query.hpp"
 #include "splat_tile_binner.hpp"
 #include "tile_rasterizer.hpp"
 #include "tile_shader_source.hpp"
@@ -198,6 +200,182 @@ namespace {
         std::vector<uint8_t> result(bytes);
         std::memcpy(result.data(), staging.contents, bytes);
         return result;
+    }
+
+    int run_selection_parity(id<MTLDevice> device) {
+        constexpr uint32_t count = 517, width = 97, height = 73;
+        std::mt19937 rng(91);
+        std::uniform_real_distribution<float> unit(-1.f, 1.f), depth(.8f, 9.f), log_scale(-3.5f, -1.f), logit(-2.f, 4.f);
+        std::vector<float> means(count * 3), scales(count * 3), rotations(count * 4), opacity(count);
+        std::vector<uint8_t> deleted(count), visibility{1, 0, 1};
+        std::vector<int32_t> indices(count);
+        for (uint32_t n = 0; n < count; ++n) {
+            const float z = depth(rng);
+            means[n * 3] = unit(rng) * z * .7f;
+            means[n * 3 + 1] = unit(rng) * z * .5f;
+            means[n * 3 + 2] = n % 71 == 0 ? -z : z;
+            for (uint32_t c = 0; c < 3; ++c)
+                scales[n * 3 + c] = log_scale(rng);
+            for (uint32_t c = 0; c < 4; ++c)
+                rotations[n * 4 + c] = unit(rng);
+            if (n % 83 == 0)
+                rotations[n * 4] = rotations[n * 4 + 1] = rotations[n * 4 + 2] = rotations[n * 4 + 3] = 0;
+            opacity[n] = logit(rng);
+            deleted[n] = n % 19 == 0;
+            indices[n] = int32_t(n % visibility.size());
+        }
+        std::vector<_Float16> half_scales(scales.size()), half_rotations(rotations.size()), half_opacity(opacity.size());
+        std::transform(scales.begin(), scales.end(), half_scales.begin(), [](float value) { return _Float16(value); });
+        std::transform(rotations.begin(), rotations.end(), half_rotations.begin(), [](float value) { return _Float16(value); });
+        std::transform(opacity.begin(), opacity.end(), half_opacity.begin(), [](float value) { return _Float16(value); });
+
+        std::vector<simd_float4x4> transforms(3, matrix_identity_float4x4);
+        transforms[0].columns[3] = simd_make_float4(.08f, -.04f, .1f, 1);
+        transforms[1].columns[3] = simd_make_float4(-.15f, .06f, 0, 1);
+        const float object_angle = -.07f;
+        transforms[2].columns[0] = simd_make_float4(std::cos(object_angle), std::sin(object_angle), 0, 0);
+        transforms[2].columns[1] = simd_make_float4(-std::sin(object_angle), std::cos(object_angle), 0, 0);
+        transforms[2].columns[3] = simd_make_float4(.03f, .1f, -.05f, 1);
+        const std::vector<simd_float4> brush{
+            simd_make_float4(18.25f, 18.75f, 13.f * 13.f, 0), simd_make_float4(49.5f, 35.25f, 11.f * 11.f, 0),
+            simd_make_float4(78.25f, 54.75f, 9.f * 9.f, 0)};
+        const std::vector<simd_float4> rectangle{
+            simd_make_float4(8.5f, 9.25f, 29.75f, 27.5f), simd_make_float4(38.25f, 23.5f, 61.5f, 47.75f),
+            simd_make_float4(69.5f, 42.25f, 94.25f, 70.5f)};
+        const std::vector<simd_float4> ring{
+            simd_make_float4(8, 8, 2, 0), simd_make_float4(24, 20, 2, 0), simd_make_float4(40, 32, 2, 0), simd_make_float4(56, 44, 2, 0),
+            simd_make_float4(72, 56, 2, 0), simd_make_float4(88, 68, 2, 0), simd_make_float4(48, 12, 2, 0), simd_make_float4(16, 60, 2, 0)};
+        // Concave and intentionally partly outside the viewport.
+        const std::vector<simd_float2> polygon{
+            simd_make_float2(-18, 14), simd_make_float2(42, -11), simd_make_float2(108, 17), simd_make_float2(67, 35),
+            simd_make_float2(113, 83), simd_make_float2(35, 64), simd_make_float2(-9, 91), simd_make_float2(13, 48)};
+
+        auto native_means = native_buffer(device, means);
+        auto native_scales = native_buffer(device, scales);
+        auto native_rotations = native_buffer(device, rotations);
+        auto native_opacity = native_buffer(device, opacity);
+        auto native_half_scales = native_buffer(device, half_scales);
+        auto native_half_rotations = native_buffer(device, half_rotations);
+        auto native_half_opacity = native_buffer(device, half_opacity);
+        auto native_deleted = native_buffer(device, deleted);
+        auto native_indices = native_buffer(device, indices);
+        auto native_transforms = native_buffer(device, transforms);
+        auto native_visibility = native_buffer(device, visibility);
+        auto native_brush = native_buffer(device, brush);
+        auto native_rectangle = native_buffer(device, rectangle);
+        auto native_ring = native_buffer(device, ring);
+        auto native_polygon = native_buffer(device, polygon);
+
+        const auto tensor_means = tensor(means), tensor_scales = tensor(scales), tensor_rotations = tensor(rotations);
+        const auto tensor_opacity = tensor(opacity), tensor_half_scales = tensor(half_scales);
+        const auto tensor_half_rotations = tensor(half_rotations), tensor_half_opacity = tensor(half_opacity);
+        const auto tensor_deleted = tensor(deleted), tensor_indices = tensor(indices);
+        SelectionQuery native(device);
+        lfs::rendering::SplatSelectionQuery slang(GpuBackend::Metal);
+        auto queue = [device newCommandQueue];
+        int failures = 0;
+        const std::array cameras{CameraModel::Perspective, CameraModel::Orthographic, CameraModel::Equirectangular};
+        const std::array shapes{SelectionShape::Brush, SelectionShape::Rectangle, SelectionShape::Polygon, SelectionShape::Ring};
+        const auto camera_name = [](CameraModel camera) {
+            return camera == CameraModel::Perspective ? "perspective" : camera == CameraModel::Orthographic ? "orthographic"
+                                                                                                            : "equirectangular";
+        };
+        const auto shape_name = [](SelectionShape shape) {
+            switch (shape) {
+            case SelectionShape::Brush: return "brush";
+            case SelectionShape::Rectangle: return "rectangle";
+            case SelectionShape::Polygon: return "polygon";
+            case SelectionShape::Ring: return "ring";
+            }
+        };
+        for (const auto camera : cameras)
+            for (const bool gut : {false, true})
+                for (const bool half : {false, true})
+                    for (const auto shape : shapes) {
+                        const bool is_polygon = shape == SelectionShape::Polygon;
+                        const bool is_ring = shape == SelectionShape::Ring;
+                        const auto& primitive_values = shape == SelectionShape::Brush     ? brush
+                                                       : shape == SelectionShape::Rectangle ? rectangle
+                                                                                           : ring;
+                        id<MTLBuffer> primitive_buffer = shape == SelectionShape::Brush     ? native_brush
+                                                           : shape == SelectionShape::Rectangle ? native_rectangle
+                                                                                               : native_ring;
+                        SelectionParameters parameters;
+                        parameters.world_to_camera = matrix_identity_float4x4;
+                        const float camera_angle = .05f;
+                        parameters.world_to_camera.columns[0] = simd_make_float4(std::cos(camera_angle), 0, -std::sin(camera_angle), 0);
+                        parameters.world_to_camera.columns[2] = simd_make_float4(std::sin(camera_angle), 0, std::cos(camera_angle), 0);
+                        parameters.world_to_camera.columns[3] = simd_make_float4(.04f, -.03f, .15f, 1);
+                        parameters.intrinsics = camera == CameraModel::Orthographic ? simd_make_float4(34, 34, 48.5f, 36.5f)
+                                                                                    : simd_make_float4(54, 51, 48.5f, 36.5f);
+                        parameters.image = {width, height, uint32_t(camera), uint32_t(gut)};
+                        parameters.source = {count, uint32_t(shape), is_polygon ? 0u : uint32_t(primitive_values.size()),
+                                             is_polygon ? uint32_t(polygon.size()) : 0u};
+                        parameters.scene = {uint32_t(transforms.size()), 1, uint32_t(visibility.size()), count};
+                        parameters.payload = {uint32_t(half), 1, 0, 0};
+                        parameters.aabb = is_polygon ? simd_make_uint4(0, 0, width, height) : simd_make_uint4(0);
+                        parameters.ring = {.12f, kViewerNearClip, 0, 0};
+
+                        auto native_output = [device newBufferWithLength:count options:MTLResourceStorageModeShared];
+                        auto native_pick = [device newBufferWithLength:8 options:MTLResourceStorageModeShared];
+                        auto native_coverage = [device newBufferWithLength:size_t(width) * height options:MTLResourceStorageModePrivate];
+                        SelectionBuffers buffers;
+                        buffers.means = {native_means};
+                        buffers.log_scales = {half ? native_half_scales : native_scales};
+                        buffers.rotations = {half ? native_half_rotations : native_rotations};
+                        buffers.opacity = {half ? native_half_opacity : native_opacity};
+                        buffers.deleted = {native_deleted};
+                        buffers.transforms = {native_transforms};
+                        buffers.transform_indices = {native_indices};
+                        buffers.visibility = {native_visibility};
+                        buffers.primitives = {primitive_buffer};
+                        buffers.polygon_vertices = {native_polygon};
+                        buffers.polygon_mask = {native_coverage};
+                        buffers.output = {native_output};
+                        buffers.ring_pick = {native_pick};
+                        auto command = [queue commandBuffer];
+                        native.encode(command, buffers, parameters);
+                        [command commit];
+                        [command waitUntilCompleted];
+                        require(command.status == MTLCommandBufferStatusCompleted,
+                                std::format("Native selection failed: {}", command.error.localizedDescription.UTF8String ?: "unknown"));
+
+                        lfs::rendering::SplatSelectionParameters tensor_parameters;
+                        static_assert(sizeof(tensor_parameters) == sizeof(parameters));
+                        std::memcpy(&tensor_parameters, &parameters, sizeof(parameters));
+                        lfs::rendering::SplatSelectionInputs inputs;
+                        inputs.means = &tensor_means;
+                        inputs.log_scales = half ? &tensor_half_scales : &tensor_scales;
+                        inputs.rotations = half ? &tensor_half_rotations : &tensor_rotations;
+                        inputs.opacity = half ? &tensor_half_opacity : &tensor_opacity;
+                        inputs.deleted = &tensor_deleted;
+                        inputs.transform_indices = &tensor_indices;
+                        inputs.transforms = std::as_bytes(std::span(transforms));
+                        inputs.visibility = std::as_bytes(std::span(visibility));
+                        inputs.primitives = is_polygon ? std::span<const std::byte>{} : std::as_bytes(std::span(primitive_values));
+                        inputs.polygon_vertices = is_polygon ? std::as_bytes(std::span(polygon)) : std::span<const std::byte>{};
+                        auto tensor_output = Tensor::zeros({count}, Device::GPU, DataType::UInt8);
+                        auto tensor_pick = Tensor::empty({2}, Device::GPU, DataType::UInt32);
+                        auto queried = slang.query(inputs, tensor_parameters, tensor_output, is_ring ? &tensor_pick : nullptr);
+                        require(bool(queried), std::format("Tensor selection failed: {}", queried ? "" : queried.error().detail()));
+                        const auto actual = download<uint8_t>(tensor_output, count);
+                        const auto expected = std::span(static_cast<const uint8_t*>(native_output.contents), count);
+                        size_t mismatches = 0;
+                        for (size_t n = 0; n < count; ++n)
+                            mismatches += actual[n] != expected[n];
+                        std::array<uint32_t, 2> expected_pick{0xffffffffu, 0xffffffffu}, actual_pick = expected_pick;
+                        if (is_ring) {
+                            std::memcpy(expected_pick.data(), native_pick.contents, 8);
+                            const auto words = download<uint32_t>(tensor_pick, 2);
+                            std::copy(words.begin(), words.end(), actual_pick.begin());
+                        }
+                        const bool ok = mismatches == 0 && (!is_ring || actual_pick == expected_pick);
+                        std::printf("selection %-15s %-9s gut=%u half=%u mismatch=%zu pick=%u/%u native=%u/%u %s\n",
+                                    camera_name(camera), shape_name(shape), unsigned(gut), unsigned(half), mismatches,
+                                    actual_pick[0], actual_pick[1], expected_pick[0], expected_pick[1], ok ? "ok" : "FAIL");
+                        failures += ok ? 0 : 1;
+                    }
+        return failures;
     }
 
     // Full frames: native preprocessor + TileRasterizer against the Slang
@@ -622,7 +800,7 @@ namespace {
             Config{"discs", CameraModel::Perspective, PrimitiveMode::Discs, ShStorage::CanonicalFloat32, 0, false, false},
             Config{"points", CameraModel::Perspective, PrimitiveMode::Points, ShStorage::CanonicalFloat32, 0, false, false},
         };
-        int failures = 0;
+        int failures = run_selection_parity(device);
         for (const auto& config : configs) {
             const bool q16 = config.storage == ShStorage::Q16;
             const auto projection = make_projection(config);
