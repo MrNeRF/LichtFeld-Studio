@@ -3,6 +3,7 @@
 
 #include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
+#include "core/tensor.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -559,4 +560,47 @@ TEST(ImageIoTest, GalleryEnvironmentValidatesBeforeAllocationAndPreservesFloats)
         lfs::core::free_image_float(bad);
     }
     std::filesystem::remove(path);
+}
+
+// Catches the CUDA save path quantizing differently from the host path: a real image stretched past
+// [0, 1] must write the same bytes whether it is saved from the GPU or from the CPU.
+TEST(ImageIoTest, CudaImageSavesTheSameBytesAsTheHostImage) {
+    const auto source_path = std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/nn/lpips_crop_a.png";
+    auto [source, width, height, channels] = lfs::core::load_image(source_path);
+    ASSERT_NE(source, nullptr);
+    ASSERT_EQ(channels, 3);
+    const auto plane = static_cast<std::size_t>(width) * height;
+    std::vector<float> planes(plane * 3);
+    for (std::size_t pixel = 0; pixel < plane; ++pixel)
+        for (std::size_t c = 0; c < 3; ++c)
+            planes[c * plane + pixel] = static_cast<float>(source[pixel * 3 + c]) / 212.0f - 0.1f;
+    lfs::core::free_image(source);
+    const lfs::core::TensorShape shape{3, static_cast<std::size_t>(height), static_cast<std::size_t>(width)};
+    const auto host = lfs::core::Tensor::from_vector(planes, shape, lfs::core::Device::CPU);
+    const auto device = lfs::core::Tensor::from_vector(planes, shape, lfs::core::Device::CUDA);
+
+    const auto host_path = std::filesystem::temp_directory_path() / "lfs_image_io_host_save.png";
+    const auto device_path = std::filesystem::temp_directory_path() / "lfs_image_io_device_save.png";
+    lfs::core::save_image(host_path, host);
+    lfs::core::save_image(device_path, device);
+    auto host_loaded = lfs::core::load_image(host_path);
+    auto device_loaded = lfs::core::load_image(device_path);
+    std::error_code ec;
+    std::filesystem::remove(host_path, ec);
+    std::filesystem::remove(device_path, ec);
+
+    auto* const host_bytes = std::get<0>(host_loaded);
+    auto* const device_bytes = std::get<0>(device_loaded);
+    ASSERT_NE(host_bytes, nullptr);
+    ASSERT_NE(device_bytes, nullptr);
+    EXPECT_EQ(std::get<1>(device_loaded), width);
+    EXPECT_EQ(std::get<2>(device_loaded), height);
+    std::size_t clipped = 0;
+    for (std::size_t i = 0; i < plane * 3; ++i) {
+        clipped += host_bytes[i] == 0 || host_bytes[i] == 255;
+        ASSERT_EQ(device_bytes[i], host_bytes[i]) << "sample " << i;
+    }
+    EXPECT_GT(clipped, 0u);
+    lfs::core::free_image(host_bytes);
+    lfs::core::free_image(device_bytes);
 }
