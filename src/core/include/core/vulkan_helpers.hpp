@@ -8,6 +8,7 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <array>
 #include <vector>
 #include <vulkan/vulkan.h>
 #ifdef __APPLE__
@@ -272,14 +273,18 @@ namespace lfs::core {
         // memory imported from Metal (VK_EXT_metal_objects) would not alias it.
         // Keep buffers on their memory's MTLBuffer, MoltenVK's earlier default.
         constexpr uint32_t heap_placement = 0;
-        const VkLayerSettingEXT no_heaps{"MoltenVK", "MVK_CONFIG_USE_MTLHEAP", VK_LAYER_SETTING_TYPE_UINT32_EXT, 1,
-                                         &heap_placement};
+        // Programs are compiled for precise floating point (slangc -fp-mode
+        // precise); MoltenVK's default fast-math MSL compilation would undo it.
+        constexpr uint32_t precise_math = 0;
+        const std::array<VkLayerSettingEXT, 2> moltenvk{
+            VkLayerSettingEXT{"MoltenVK", "MVK_CONFIG_USE_MTLHEAP", VK_LAYER_SETTING_TYPE_UINT32_EXT, 1, &heap_placement},
+            VkLayerSettingEXT{"MoltenVK", "MVK_CONFIG_FAST_MATH_ENABLED", VK_LAYER_SETTING_TYPE_UINT32_EXT, 1, &precise_math}};
         VkLayerSettingsCreateInfoEXT settings{VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT};
         if (vulkan_instance_extension_available(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME)) {
             enabled_extensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
             settings.pNext = next;
-            settings.settingCount = 1;
-            settings.pSettings = &no_heaps;
+            settings.settingCount = uint32_t(moltenvk.size());
+            settings.pSettings = moltenvk.data();
             next = &settings;
         }
 #endif

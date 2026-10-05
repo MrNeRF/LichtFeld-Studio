@@ -100,7 +100,14 @@ if(BUILD_TESTS)
     add_test(NAME GpuProgramContracts COMMAND gpu_program_contracts)
     set_tests_properties(GpuProgramContracts PROPERTIES LABELS "tensor;gpu" TIMEOUT 120)
     if(TARGET lfs_tensor_rasterizer)
-        add_executable(tensor_rasterizer_contracts test_splat_tile_binner.cpp test_splat_rasterizer.cpp test_splat_lod_selector.cpp)
+        add_executable(tensor_rasterizer_contracts
+            test_splat_tile_binner.cpp
+            test_splat_rasterizer.cpp
+            test_splat_lod_selector.cpp
+            test_splat_raster_contracts.cpp
+            test_splat_projection_contracts.cpp
+            test_splat_spark_gut_contracts.cpp
+            test_splat_rad_contracts.cpp)
         target_link_libraries(tensor_rasterizer_contracts PRIVATE lfs_tensor_rasterizer GTest::gtest_main)
         target_compile_features(tensor_rasterizer_contracts PRIVATE cxx_std_23)
         add_test(NAME TensorRasterizerContracts COMMAND tensor_rasterizer_contracts)

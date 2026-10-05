@@ -11,6 +11,9 @@
 #include <span>
 
 namespace lfs::rendering {
+    // Viewer near clip (view-space depth), shared with the Vulkan reference.
+    inline constexpr float kSplatNearClip = LFS_SPLAT_NEAR_CLIP;
+
     // Projection of splat_project.slang (the native viewer's Projection),
     // column-major matrices.
     struct SplatProjection {

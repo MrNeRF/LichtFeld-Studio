@@ -8,13 +8,6 @@ using namespace metal;
 #define LFS_COLOR_MIX mix
 // Shared desktop tone curves are inserted here at configure time.
 @LFS_METAL_DISPLAY_COLOR@
-struct PresentParameters {
-    float exposure; uint tone; uint transparent; uint has_previous;
-    float depth_min,depth_max; uint depth_view,depth_mode;
-    float4 background;
-    uint4 capture;
-};
-struct FrameStatus { ulong required; uint error; uint unused; };
 float normalized_depth(float depth,float lo,float hi) {
     lo=max(lo,1e-4f); hi=max(hi,lo+1e-4f); depth=clamp(depth,lo,hi);
     const float linear=clamp((depth-lo)/max(hi-lo,1e-5f),0.0f,1.0f);
@@ -101,51 +94,4 @@ float3 depth_palette(float t) {
     if(t<.67f) return mix(mid0,mid1,smoothstep(.43f,.67f,t));
     if(t<.86f) return mix(mid1,near0,smoothstep(.67f,.86f,t));
     return mix(near0,near1,smoothstep(.86f,1.0f,t));
-}
-kernel void present_viewer(texture2d<float, access::read> color [[texture(0)]],
-    texture2d<float, access::read> depth [[texture(1)]],
-    texture2d<float, access::write> rgba [[texture(2)]],
-    texture2d<float, access::write> linear_depth [[texture(3)]],
-    texture2d<float, access::read> previous_color [[texture(4)]],
-    texture2d<float, access::read> previous_depth [[texture(5)]],
-    constant PresentParameters& p [[buffer(0)]],
-    device const FrameStatus& status [[buffer(1)]], uint2 pixel [[thread_position_in_grid]]) {
-    if(pixel.x>=rgba.get_width() || pixel.y>=rgba.get_height()) return;
-    if(status.error && p.has_previous) {
-        const uint2 previous=uint2(ulong(pixel.x)*previous_color.get_width()/rgba.get_width(),
-                                  ulong(pixel.y)*previous_color.get_height()/rgba.get_height());
-        rgba.write(previous_color.read(previous),pixel);
-        linear_depth.write(previous_depth.read(previous),pixel);
-        return;
-    }
-    float4 c=color.read(pixel);
-    const float4 d=depth.read(pixel);
-    // Match expected_depth_finalize.slang: normalized alpha-weighted view Z,
-    // with the same empty-coverage sentinel. Display depth remains median.
-    // In expected capture, channel Z contains the accumulated valid-depth
-    // weight, independently of visible alpha and invalid GUT contributors.
-    const float output_depth=p.capture.x?(d.z>1e-4f?d.x/d.z:1e10f):d.w;
-    linear_depth.write(float4(output_depth),pixel);
-    if(p.depth_view) {
-        const bool empty=d.y<.02f || d.w>=1e9f || d.w<=0;
-        const float hi=p.depth_max<=p.depth_min+1e-5f?p.depth_min+1:p.depth_max;
-        const float near_t=empty?0:1-normalized_depth(d.w,p.depth_min,hi);
-        const float3 rgb=p.depth_mode==1?float3(near_t):depth_palette(near_t);
-        const float coverage=empty?0:smoothstep(.02f,.72f,d.y);
-        rgba.write(p.transparent?float4(rgb,coverage):float4(mix(p.background.rgb,rgb,coverage),1),pixel);
-        return;
-    }
-    if(p.transparent) {
-        // Same zero-coverage contract as vksplat_compose.comp. Unpremultiply
-        // only published coverage, never amplify an effectively empty tail.
-        // Coverage is already retained in the FP32 depth payload. The color
-        // texture's half alpha can round a valid threshold contributor below
-        // zero coverage; use the original alpha for both threshold and division.
-        const float coverage=d.y;
-        if(coverage<=.5f/255.f) { rgba.write(float4(0),pixel); return; }
-        c.rgb/=coverage;
-        c.a=coverage;
-    }
-    c.rgb=lfsDisplayTone(max(c.rgb,0.0f),p.tone,p.exposure);
-    rgba.write(c,pixel);
 }

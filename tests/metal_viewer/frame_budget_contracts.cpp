@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "frame_budget.hpp"
+#include "metal_frame_budget.hpp"
 #include <cstdio>
 #include <limits>
 

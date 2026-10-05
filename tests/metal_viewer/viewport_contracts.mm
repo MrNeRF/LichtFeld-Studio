@@ -4,7 +4,7 @@
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
 #include "device_requirements.hpp"
-#include "frame_budget.hpp"
+#include "metal_frame_budget.hpp"
 #include "metal_viewport_renderer.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"

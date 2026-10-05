@@ -1,31 +1,29 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "metal_viewport_renderer.hpp"
-#include "core/environment.hpp"
 #include "core/logger.hpp"
+#include "core/gpu_elapsed.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
 #include "core/tensor_upload.hpp"
-#include "frame_budget.hpp"
-#include "gpu_profile.hpp"
-#include "lod_selector.hpp"
+#include "metal_frame_budget.hpp"
 #include "metal_present_source.hpp"
 #include "metal_rad_pager.hpp"
 #include "generic_readback_ticket_ring.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "scene_overlay_params.hpp"
-#include "selection_query.hpp"
-#include "splat_preprocessor.hpp"
 #include "splat_lod_selector.hpp"
 #include "splat_projector.hpp"
 #include "splat_rasterizer.hpp"
-#include "tile_rasterizer.hpp"
+#include "splat_selection_query.hpp"
 #ifdef LFS_GRAPHICS_VULKAN
 #include "vulkan_scene_output.hpp"
 #include "window/vulkan_context.hpp"
 #endif
 #include <algorithm>
+#include <glm/gtc/type_ptr.hpp>
+#include <simd/simd.h>
 #include <atomic>
 #include <bit>
 #include <cmath>
@@ -53,8 +51,30 @@ namespace lfs::vis {
         }
     } // namespace
     namespace {
-        using namespace rendering::metal;
         using Slot = RenderTargetId;
+        using rendering::metal::frameFitsWorkingSet;
+        using rendering::metal::viewportOutputReservationBytes;
+        enum class CameraModel : uint32_t { Perspective,
+                                            Orthographic,
+                                            Equirectangular };
+        constexpr float kViewerNearClip = rendering::kSplatNearClip;
+        // GPU records shared with the tensor programs (splat_project.slang,
+        // splat_types.slang, splat_lod.slang).
+        struct alignas(16) SceneObject {
+            simd_float4x4 model_to_world;
+            simd_float4 camera_local;
+            simd_uint4 flags; // visible, maximum active SH degree
+        };
+        static_assert(sizeof(SceneObject) == 96);
+        struct RasterStatus {
+            uint64_t required_instances = 0;
+            uint32_t error = 0, blend_threads = 0, maximum_tile_instances = 0, padding = 0;
+        };
+        static_assert(sizeof(RasterStatus) == 24);
+        struct LodCutStatus {
+            uint32_t selected = 0, overflow = 0;
+            float threshold_multiplier = 1;
+        };
         bool nativeStorage(const core::Tensor& tensor) {
             return core::tensor_supports_metal_access(tensor);
         }
@@ -101,14 +121,6 @@ namespace lfs::vis {
             std::memcpy(&result, &m, sizeof(m));
             return result;
         }
-        struct PresentParameters {
-            float exposure;
-            uint32_t tone, transparent, has_previous;
-            float depth_min, depth_max;
-            uint32_t depth_view, depth_mode;
-            simd_float4 background;
-            simd_uint4 capture;
-        };
         struct PointParameters {
             simd_float4x4 view_projection, view, crop_to_local;
             simd_float4 crop_min, crop_max, voxel_focal_ortho;
@@ -200,74 +212,56 @@ namespace lfs::vis {
             glm::ivec2 size{};
             uint32_t count = 0, capacity = 0;
             uint64_t generation = 0, consumer_serial = 0, producer_value = 0;
-            std::unique_ptr<RasterFrame> raster;
-            std::unique_ptr<GpuProfile> gpu_profile;
-            id<MTLBuffer> objects, overlay_parameters, overlay_flags, overlay_nodes, selection_colors;
-            std::array<id<MTLBuffer>, 4> lod_buffers;
-            std::array<id<MTLBuffer>, 3> page_maps;
+            id<MTLBuffer> objects, overlay_parameters, overlay_nodes, selection_colors;
             bool rad_bootstrap = false;
             uint64_t rad_signature = 0;
             id<MTLCommandBuffer> command;
             id<MTLTexture> point_depth;
-            std::unique_ptr<LodCutFrame> gpu_lod;
             bool gpu_lod_active = false;
             uint64_t gpu_tree_signature = 0;
             uint32_t gpu_capacity = 0, gpu_source_count = 0, gpu_chunks = 0;
             bool points = false;
-            bool tensor = false; // drawn by the tensor-program rasterizer
-            id<MTLBuffer> tensor_status; // host copy of its RasterStatus, read on completion
-            id<MTLBuffer> tensor_touches;   // host copy of the LOD cut's chunk touches
-            id<MTLBuffer> tensor_lod_counts; // host copy of the LOD cut's counts (selected, overflow, threshold)
-            // Results of a completed frame, from either rasterizer.
+            // Host copies of the tensor results, read after completion: the
+            // RasterStatus, and the LOD cut's counts (selected, overflow,
+            // threshold) and chunk touches. Tensor storage may be device-only.
+            id<MTLBuffer> raster_status, lod_counts, lod_touches;
+            // Opt-in GPU timestamps at the tensor stage boundaries.
+            std::unique_ptr<core::GpuElapsed> profile;
+            std::vector<std::string> profile_stages;
             RasterStatus rasterStatus() const {
-                if (raster)
-                    return raster->status();
-                return tensor_status ? *static_cast<const RasterStatus*>(tensor_status.contents) : RasterStatus{};
+                return raster_status ? *static_cast<const RasterStatus*>(raster_status.contents) : RasterStatus{};
             }
             bool lodResultReady() const {
-                return gpu_lod_active && (tensor ? tensor_lod_counts != nil : gpu_lod && !gpu_lod->busy()) &&
-                       command.status == MTLCommandBufferStatusCompleted;
+                return gpu_lod_active && lod_counts && command.status == MTLCommandBufferStatusCompleted;
             }
             LodCutStatus lodStatus() const {
-                if (!tensor)
-                    return gpu_lod->status();
-                const auto counts = static_cast<const uint32_t*>(tensor_lod_counts.contents);
+                const auto counts = static_cast<const uint32_t*>(lod_counts.contents);
                 return {counts[0], counts[1], std::bit_cast<float>(counts[2])};
             }
-            id<MTLBuffer> lodTouches() const { return tensor ? tensor_touches : gpu_lod->touches().buffer; }
             Image color, depth;
         };
     } // namespace
     struct MetalViewportRenderer::Impl {
         MetalViewportPresentation* context = nullptr;
-        struct NativeLodTree {
-            LodTreeBuffers buffers;
-            // The same metadata as tensors for the tensor rasterizer: bounds,
-            // links, chunk_to_page, page_age, page_frames, page_to_chunk.
+        struct LodTree {
+            // bounds, links, chunk_to_page, page_age, page_frames, page_to_chunk
             std::array<core::Tensor, 6> tensors;
             uint64_t signature = 0, last_used = 0;
             uint32_t nodes = 0, chunks = 0, roots = 0;
         };
-        std::map<const core::SplatLodTree*, NativeLodTree> lod_trees;
-        std::unique_ptr<LodSelector> lod_selector;
-        std::unique_ptr<SelectionQuery> selection_query;
+        std::map<const core::SplatLodTree*, LodTree> lod_trees;
+        std::unique_ptr<rendering::SplatSelectionQuery> selection_query;
+        core::GpuBackend selection_backend{};
         // Selection requests carry their own camera, not a render-target ID.
         // A dedicated pager avoids borrowing another view's RAD/model workspace.
         std::unique_ptr<MetalRadPager> selection_pager;
         MetalRadPager::Settings rad_settings;
         core::MetalTensorReader reader;
-        SplatPreprocessor preprocessor{reader.device()};
-        TileRasterizer rasterizer{reader.device()};
-        std::shared_ptr<RasterScratch> raster_scratch = std::make_shared<RasterScratch>(reader.device());
-        // Opt-in single-source rasterizer (tensor programs) for the plain splat view.
-        const bool tensor_raster = core::environment::flag("LFS_TENSOR_RASTER");
         std::unique_ptr<rendering::SplatProjector> projector;
         core::GpuBackend projector_backend{};
-        core::Tensor tensor_projected, tensor_gut;
-        id<MTLBuffer> projected, gut_geometry;
+        core::Tensor projected, gut_geometry;
         bool profiling_enabled = false;
         std::function<void()> retry_callback;
-        id<MTLComputePipelineState> present;
         id<MTLRenderPipelineState> point_pipeline;
         id<MTLDepthStencilState> point_depth_state;
         id<MTLSharedEvent> event;
@@ -306,13 +300,13 @@ namespace lfs::vis {
             // the retry sizes from it instead of waiting for that frame's slot.
             std::shared_ptr<std::atomic<uint64_t>> overflow_required = std::make_shared<std::atomic<uint64_t>>(0);
             std::unique_ptr<MetalRadPager> pager;
-            // Tensor-program raster scratch and display outputs.
-            std::unique_ptr<rendering::SplatRasterizer> tensor_raster;
-            std::unique_ptr<rendering::SplatLodSelector> tensor_lod;
-            core::GpuBackend tensor_lod_backend{};
-            std::array<core::Tensor, 3> tensor_page_maps; // chunk_to_page, page_age, page_to_chunk
-            std::deque<core::TensorUpload> tensor_uploads;
-            core::GpuBackend tensor_backend{};
+            // Raster scratch and display outputs, the LOD selector and RAD page
+            // maps, all on the backend of the resident splats.
+            std::unique_ptr<rendering::SplatRasterizer> raster;
+            std::unique_ptr<rendering::SplatLodSelector> lod;
+            core::GpuBackend backend{};
+            std::array<core::Tensor, 3> page_maps; // chunk_to_page, page_age, page_to_chunk
+            std::deque<core::TensorUpload> uploads;
         };
         std::unordered_map<RenderTargetId, TargetState, RenderTargetIdHash> targets;
         std::unordered_set<RenderTargetId, RenderTargetIdHash> released_targets;
@@ -367,10 +361,9 @@ namespace lfs::vis {
                     readback.target_released = true;
                 }
             if (targets.empty()) {
-                // Retired frames/commands retain their workspace versions until
-                // completion. A new scene starts with no high-water reservation.
-                raster_scratch = std::make_shared<RasterScratch>(reader.device());
-                projected = gut_geometry = nil;
+                // A new scene starts with no high-water reservation; tensors stay
+                // alive until their last GPU reader completes.
+                projected = gut_geometry = {};
             }
             if (permanent)
                 released_targets.insert(id);
@@ -448,9 +441,6 @@ namespace lfs::vis {
             auto library = [reader.device() newLibraryWithSource:[NSString stringWithUTF8String:kMetalPresentSource] options:options error:&error];
             if (!library)
                 throw std::runtime_error(std::format("Metal presentation shader compilation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
-            present = [reader.device() newComputePipelineStateWithFunction:[library newFunctionWithName:@"present_viewer"] error:&error];
-            if (!present)
-                throw std::runtime_error(std::format("Metal presentation pipeline creation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
             auto point_descriptor = [MTLRenderPipelineDescriptor new];
             point_descriptor.vertexFunction = [library newFunctionWithName:@"point_vertex"];
             point_descriptor.fragmentFunction = [library newFunctionWithName:@"point_fragment"];
@@ -518,9 +508,6 @@ namespace lfs::vis {
             auto library = [reader.device() newLibraryWithSource:[NSString stringWithUTF8String:kMetalPresentSource] options:options error:&error];
             if (!library)
                 throw std::runtime_error(std::format("Metal presentation shader compilation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
-            present = [reader.device() newComputePipelineStateWithFunction:[library newFunctionWithName:@"present_viewer"] error:&error];
-            if (!present)
-                throw std::runtime_error(std::format("Metal presentation pipeline creation failed (error_code={}, error_domain={}, error={})", long(error.code), error.domain.UTF8String ?: "none", error.localizedDescription.UTF8String ?: "none"));
             auto point_descriptor = [MTLRenderPipelineDescriptor new];
             point_descriptor.vertexFunction = [library newFunctionWithName:@"point_vertex"];
             point_descriptor.fragmentFunction = [library newFunctionWithName:@"point_fragment"];
@@ -542,7 +529,7 @@ namespace lfs::vis {
             context = &ctx;
         }
 #endif
-        NativeLodTree& prepareLodTree(const core::SplatData& model) {
+        LodTree& prepareLodTree(const core::SplatData& model) {
             const auto& tree = *model.lod_tree;
             const size_t n = tree.total_nodes(), chunk_size = core::SplatLodTree::kChunkSplats;
             uint64_t signature = 1469598103934665603ull;
@@ -617,33 +604,23 @@ namespace lfs::vis {
                         ++roots;
                 }
             }
-            NativeLodTree metadata;
+            LodTree metadata;
             metadata.signature = signature;
             metadata.nodes = uint32_t(n);
             metadata.chunks = uint32_t(chunks);
             metadata.roots = roots;
             metadata.last_used = serial;
-            const auto upload = [&](const void* data, size_t bytes) {
-                const auto device = reader.device();
-                if (!frameFitsWorkingSet(device.currentAllocatedSize, bytes, device.recommendedMaxWorkingSetSize))
-                    throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = bytes, .label = "viewer.lod.metadata", .operation = "viewer.buffer.allocate"});
-                auto buffer = [device newBufferWithBytes:data length:bytes options:MTLResourceStorageModeShared];
-                if (!buffer)
-                    throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = bytes, .label = "viewer.lod.metadata", .operation = "viewer.buffer.allocate"});
-                return BufferSlice{buffer};
+            // Uploaded beside the splats; the tensors keep them until their last reader completes.
+            const auto backend = model.means_raw().device() == core::Device::GPU ? core::gpu_backend_of(model.means_raw()) : std::nullopt;
+            if (!backend)
+                throw std::invalid_argument(std::format("GPU LOD requires resident GPU splats (device={}, nodes={})", int(model.means_raw().device()), n));
+            const core::GpuBackendScope scope(*backend);
+            const auto upload = [](const void* data, size_t bytes) {
+                return core::Tensor::from_blob(const_cast<void*>(data), {bytes}, core::Device::CPU, core::DataType::UInt8).to(core::Device::GPU);
             };
-            metadata.buffers = {upload(bounds.data(), bounds.size() * 4), upload(links.data(), links.size() * 4), upload(maps.data(), maps.size() * 4),
-                                upload(age.data(), age.size() * 4), upload(frames.data(), frames.size() * 16), upload(maps.data(), maps.size() * 4)};
-            if (const auto backend = model.means_raw().device() == core::Device::GPU ? core::gpu_backend_of(model.means_raw()) : std::nullopt;
-                tensor_raster && backend) {
-                const core::GpuBackendScope scope(*backend);
-                const auto to_tensor = [](const void* data, size_t bytes) {
-                    return core::Tensor::from_blob(const_cast<void*>(data), {bytes}, core::Device::CPU, core::DataType::UInt8).to(core::Device::GPU);
-                };
-                metadata.tensors = {to_tensor(bounds.data(), bounds.size() * 4), to_tensor(links.data(), links.size() * 4),
-                                    to_tensor(maps.data(), maps.size() * 4), to_tensor(age.data(), age.size() * 4),
-                                    to_tensor(frames.data(), frames.size() * 16), to_tensor(maps.data(), maps.size() * 4)};
-            }
+            metadata.tensors = {upload(bounds.data(), bounds.size() * 4), upload(links.data(), links.size() * 4),
+                                upload(maps.data(), maps.size() * 4), upload(age.data(), age.size() * 4),
+                                upload(frames.data(), frames.size() * 16), upload(maps.data(), maps.size() * 4)};
             // Views can use independent models. Bound the shared metadata
             // cache; command buffers retain evicted resources until GPU completion.
             if (!lod_trees.contains(&tree) && lod_trees.size() >= 4) {
@@ -654,8 +631,7 @@ namespace lfs::vis {
         }
         // `tensor` names the backend of the resident splats when the tensor
         // rasterizer draws the frame.
-        Frame& acquire(Slot output, const rendering::ViewportRenderRequest& request, uint32_t count, bool points = false,
-                       std::optional<core::GpuBackend> tensor = std::nullopt) {
+        Frame& acquire(Slot output, const rendering::ViewportRenderRequest& request, uint32_t count, bool points = false) {
             auto& state = target(output);
             // The published image may be cached by the compositor even after
             // its last GPU consumer completes. Never recycle it until another
@@ -676,15 +652,13 @@ namespace lfs::vis {
                 if (frame->command.status == MTLCommandBufferStatusError)
                     throw std::runtime_error(std::format("Metal command failed while acquiring a viewport frame (status={}, producer={}, consumer={}, error_code={}, error={})", long(frame->command.status), frame->producer_value, frame->consumer_serial, long(frame->command.error.code), frame->command.error.localizedDescription.UTF8String ?: "none"));
                 waitForConsumer(frame->consumer_serial);
-                if ((frame->raster && frame->raster->busy()) || (frame->gpu_lod && frame->gpu_lod->busy()))
-                    [frame->command waitUntilCompleted];
-                const auto status = frame->raster ? frame->raster->status() : RasterStatus{};
-                if (status.error != RasterError::None) {
+                [frame->command waitUntilCompleted];
+                if (const auto status = frame->rasterStatus(); status.error) {
                     if (status.required_instances > std::numeric_limits<uint32_t>::max())
                         throw std::runtime_error(std::format("Metal viewport instance count exceeds 32-bit indexing (required={}, capacity={})", status.required_instances, capacity));
                     capacity = std::max(capacity, withGrowthHeadroom(status.required_instances));
                 }
-                if (frame->points == points && frame->tensor == tensor.has_value() && frame->size == request.frame_view.size && frame->count >= count && frame->capacity >= capacity)
+                if (frame->points == points && frame->size == request.frame_view.size && frame->count >= count && frame->capacity >= capacity)
                     return *frame;
             }
             // Account for all Metal allocations on the shared device, including
@@ -692,11 +666,8 @@ namespace lfs::vis {
             // can exhaust unified memory; retain the last completed output.
             const auto device = reader.device();
             const auto outputs = viewportOutputReservationBytes(request.frame_view.size.x, request.frame_view.size.y, points);
-            const bool grow_scratch = !points && !tensor && (!raster_scratch->fits(request.frame_view.size.x, request.frame_view.size.y, count, capacity) ||
-                                                  !projected || projected.length < size_t(count) * sizeof(ProjectedSplat));
-            const auto reservation = grow_scratch ? frameReservationBytes(request.frame_view.size.x, request.frame_view.size.y, count, capacity, false) : outputs;
-            if (!frameFitsWorkingSet(device.currentAllocatedSize, reservation, device.recommendedMaxWorkingSetSize))
-                throw lfs::Exception(nativeError(std::format("Metal viewport reservation exceeds the recommended GPU working set (extent={}x{}, count={}, capacity={}, reservation={}, allocated={}, recommended={})", request.frame_view.size.x, request.frame_view.size.y, count, capacity, reservation, device.currentAllocatedSize, device.recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
+            if (!frameFitsWorkingSet(device.currentAllocatedSize, outputs, device.recommendedMaxWorkingSetSize))
+                throw lfs::Exception(nativeError(std::format("Metal viewport reservation exceeds the recommended GPU working set (extent={}x{}, count={}, capacity={}, reservation={}, allocated={}, recommended={})", request.frame_view.size.x, request.frame_view.size.y, count, capacity, outputs, device.currentAllocatedSize, device.recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
             auto candidate = std::make_unique<Frame>();
             auto& f = *candidate;
             f.size = request.frame_view.size;
@@ -704,28 +675,10 @@ namespace lfs::vis {
             f.capacity = capacity;
             f.generation = ++generation;
             f.points = points;
-            f.tensor = tensor.has_value();
-            if (tensor) {
-                auto& state = target(output);
-                const core::GpuBackendScope scope(*tensor);
-                if (!state.tensor_raster || state.tensor_backend != *tensor) {
-                    state.tensor_raster = std::make_unique<rendering::SplatRasterizer>(*tensor);
-                    state.tensor_backend = *tensor;
-                    LOG_INFO("Metal viewport target {} rasterizes splats with tensor programs", output.value);
-                }
-                // Tensor storage may be device-only (Vulkan): stage the status.
-                f.tensor_status = [device newBufferWithLength:sizeof(RasterStatus) options:MTLResourceStorageModeShared];
-                if (!f.tensor_status)
+            if (!points) {
+                f.raster_status = [device newBufferWithLength:sizeof(RasterStatus) options:MTLResourceStorageModeShared];
+                if (!f.raster_status)
                     throw lfs::Exception(nativeError("Metal raster status staging allocation failed", lfs::ErrorCode::ResourceExhausted));
-                if (!tensor_projected.is_valid() || tensor_projected.bytes() < size_t(count) * sizeof(ProjectedSplat) ||
-                    core::gpu_backend_of(tensor_projected) != *tensor)
-                    tensor_projected = core::Tensor::empty({std::max<size_t>(16, size_t(count) * sizeof(ProjectedSplat))}, core::Device::GPU, core::DataType::UInt8);
-            } else if (!points) {
-                f.raster = std::make_unique<RasterFrame>(device, f.size.x, f.size.y, count, capacity, raster_scratch);
-                if (!projected || projected.length < size_t(count) * sizeof(ProjectedSplat))
-                    projected = [device newBufferWithLength:std::max<size_t>(16, size_t(count) * sizeof(ProjectedSplat)) options:MTLResourceStorageModePrivate];
-                if (!projected)
-                    throw lfs::Exception(nativeError(std::format("Metal projected buffer allocation failed (count={}, bytes={})", count, size_t(count) * sizeof(ProjectedSplat)), lfs::ErrorCode::ResourceExhausted));
             } else {
                 auto depth_descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float width:f.size.x height:f.size.y mipmapped:NO];
                 depth_descriptor.storageMode = MTLStorageModePrivate;
@@ -826,99 +779,11 @@ namespace lfs::vis {
                 request.primitives.size() > std::numeric_limits<uint32_t>::max() || request.polygon_vertices.size() > std::numeric_limits<uint32_t>::max() ||
                 (polygon ? request.polygon_vertices.size() < 3 : request.primitives.empty()))
                 throw std::invalid_argument(std::format("Invalid native Metal selection request (splats={}, extent={}x{}, primitives={}, vertices={}, polygon={})", n, request.frame_view.size.x, request.frame_view.size.y, request.primitives.size(), request.polygon_vertices.size(), polygon));
-            // Editor masks stay on the model's tensor backend even when their
-            // producer is the native Metal renderer.
-            const auto backend = model.means_raw().device() == core::Device::GPU
-                                     ? core::gpu_backend_of(model.means_raw()).value_or(core::default_gpu_backend())
-                                     : core::default_gpu_backend();
-            const core::GpuBackendScope scope(backend);
-            if (!frameFitsWorkingSet(i.reader.device().currentAllocatedSize, n, i.reader.device().recommendedMaxWorkingSetSize))
-                throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = n, .label = "viewer.selection.result", .operation = "viewer.buffer.allocate"});
-            auto output = core::Tensor::empty({n}, core::Device::GPU, core::DataType::Bool);
-            SelectionParameters parameters;
-            auto view = glm::mat4(glm::transpose(rendering::dataCameraToWorldFromVisualizerRotation(request.frame_view.rotation)));
-            view[3] = glm::vec4(-glm::mat3(view) * request.frame_view.translation, 1);
-            parameters.world_to_camera = matrix(view);
-            const auto intrinsics = request.frame_view.getCameraIntrinsics();
-            parameters.intrinsics = {intrinsics.focal_x, intrinsics.focal_y, intrinsics.center_x, intrinsics.center_y};
-            parameters.image = {uint32_t(request.frame_view.size.x), uint32_t(request.frame_view.size.y), uint32_t(request.equirectangular ? CameraModel::Equirectangular : request.frame_view.orthographic ? CameraModel::Orthographic
-                                                                                                                                                                                                            : CameraModel::Perspective),
-                                uint32_t(request.gut)};
-            parameters.source = {uint32_t(n), uint32_t(request.shape), uint32_t(request.primitives.size()), uint32_t(request.polygon_vertices.size())};
-            parameters.payload = {uint32_t(model.non_sh_attrs_f16()), uint32_t(request.mip_filter), 0, 0};
-            parameters.ring.x = request.ring_width;
-            if (polygon) {
-                glm::vec2 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
-                for (const auto vertex : request.polygon_vertices) {
-                    if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y))
-                        throw std::invalid_argument(std::format("Invalid native selection polygon vertex (x={}, y={})", vertex.x, vertex.y));
-                    lo = glm::min(lo, vertex);
-                    hi = glm::max(hi, vertex);
-                }
-                const auto size = request.frame_view.size;
-                // Clamp in floating point before integer conversion, including
-                // huge off-screen gestures; no out-of-range C++ float cast.
-                const glm::ivec2 begin(glm::clamp(glm::floor(lo), glm::vec2(0), glm::vec2(size)));
-                const glm::ivec2 end(glm::clamp(glm::ceil(hi), glm::vec2(0), glm::vec2(size)));
-                if (end.x <= begin.x || end.y <= begin.y)
-                    return core::Tensor::zeros({n}, core::Device::GPU, core::DataType::Bool);
-                parameters.aabb = {uint32_t(begin.x), uint32_t(begin.y), uint32_t(end.x - begin.x), uint32_t(end.y - begin.y)};
-            }
-            const auto indices = request.scene.transform_indices.get();
-            const bool indexed = indices && indices->is_valid();
-            const size_t transforms = request.scene.model_transforms ? request.scene.model_transforms->size() : 0;
-            const auto upload = [&](const void* data, size_t bytes) -> BufferSlice {
-                if (!bytes)
-                    return {};
-                if (!frameFitsWorkingSet(i.reader.device().currentAllocatedSize, bytes, i.reader.device().recommendedMaxWorkingSetSize))
-                    throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = bytes, .label = "viewer.selection.upload", .operation = "viewer.buffer.allocate"});
-                auto buffer = [i.reader.device() newBufferWithBytes:data length:bytes options:MTLResourceStorageModeShared];
-                if (!buffer)
-                    throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = bytes, .label = "viewer.selection.upload", .operation = "viewer.buffer.allocate"});
-                return {buffer};
-            };
-            SelectionBuffers buffers;
-            if (transforms > std::numeric_limits<int32_t>::max() || request.scene.node_visibility_mask.size() > std::numeric_limits<uint32_t>::max())
-                throw std::invalid_argument(std::format("Native selection scene exceeds transform indexing limits (transforms={}, indexed={})", transforms, indexed));
-            if (transforms) {
-                for (const auto& transform : *request.scene.model_transforms)
-                    for (size_t col = 0; col < 4; ++col)
-                        for (size_t row = 0; row < 4; ++row)
-                            if (!std::isfinite(transform[col][row]))
-                                throw std::invalid_argument(std::format("Invalid native selection object matrix (column={}, row={}, value={})", col, row, transform[col][row]));
-                buffers.transforms = upload(request.scene.model_transforms->data(), transforms * sizeof(glm::mat4));
-            }
-            std::vector<uint8_t> visibility(request.scene.node_visibility_mask.begin(), request.scene.node_visibility_mask.end());
-            buffers.visibility = upload(visibility.data(), visibility.size());
-            parameters.scene = {uint32_t(transforms), uint32_t(indexed), uint32_t(visibility.size()), 0};
-            if (!polygon) {
-                for (const auto primitive : request.primitives)
-                    for (size_t axis = 0; axis < 4; ++axis)
-                        if (!std::isfinite(primitive[axis]))
-                            throw std::invalid_argument(std::format("Invalid native selection primitive (axis={}, value={})", axis, primitive[axis]));
-                buffers.primitives = upload(request.primitives.data(), request.primitives.size() * sizeof(glm::vec4));
-            } else {
-                buffers.polygon_vertices = upload(request.polygon_vertices.data(), request.polygon_vertices.size() * sizeof(glm::vec2));
-                const size_t bytes = size_t(parameters.aabb.z) * parameters.aabb.w;
-                if (bytes > std::numeric_limits<uint32_t>::max())
-                    throw std::invalid_argument(std::format("Native selection polygon exceeds shader indexing limits (bytes={}, width={}, height={})", bytes, uint32_t(parameters.aabb.z), uint32_t(parameters.aabb.w)));
-                if (!frameFitsWorkingSet(i.reader.device().currentAllocatedSize, bytes, i.reader.device().recommendedMaxWorkingSetSize))
-                    throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = bytes, .label = "viewer.selection.polygon", .operation = "viewer.buffer.allocate"});
-                auto mask = [i.reader.device() newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
-                if (!mask)
-                    throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = bytes, .label = "viewer.selection.polygon", .operation = "viewer.buffer.allocate"});
-                buffers.polygon_mask = {mask};
-            }
-            if (ring) {
-                auto pick = [i.reader.device() newBufferWithLength:8 options:MTLResourceStorageModeShared];
-                if (!pick)
-                    throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = 8, .label = "viewer.selection.pick", .operation = "viewer.buffer.allocate"});
-                buffers.ring_pick = {pick};
-            }
             const bool geometry = request.gut || ring;
+            // A paged model selects against its resident preview prefix.
             std::array<const core::Tensor*, 6> tensors{&model.means_raw(), geometry ? &model.scaling_raw() : nullptr,
                                                        geometry ? &model.rotation_raw() : nullptr, ring ? &model.opacity_raw() : nullptr,
-                                                       &model.deleted(), indexed ? indices : nullptr};
+                                                       &model.deleted(), nullptr};
             if (model.means_raw().device() == core::Device::CPU) {
                 auto& pager = i.selection_pager;
                 if (!pager)
@@ -934,28 +799,83 @@ namespace lfs::vis {
                     tensors[3] = &prefix[3];
                 tensors[4] = &pager->deleted(model);
             }
-            if (!i.selection_query)
-                i.selection_query = std::make_unique<SelectionQuery>(i.reader.device());
-            const std::array<core::Tensor*, 1> outputs{&output};
-            auto command = i.reader.submitWrites(tensors, outputs, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> input, std::span<const core::MetalTensorView> out) {
-                const auto slice = [&](size_t index) { return BufferSlice{input[index].buffer, input[index].offset}; };
-                buffers.means = slice(0);
-                buffers.log_scales = slice(1);
-                buffers.rotations = slice(2);
-                buffers.opacity = slice(3);
-                buffers.deleted = slice(4);
-                buffers.transform_indices = slice(5);
-                buffers.output = {out[0].buffer, out[0].offset};
-                parameters.scene.w = uint32_t(std::min(n, input[4].bytes));
-                i.selection_query->encode(command, buffers, parameters);
-            });
+            // Editor masks stay on the backend of the selected splats.
+            const auto backend = core::gpu_backend_of(*tensors[0]);
+            if (tensors[0]->device() != core::Device::GPU || !backend)
+                throw std::invalid_argument(std::format("Selection requires resident GPU splats (device={}, splats={})", int(tensors[0]->device()), n));
+            const core::GpuBackendScope scope(*backend);
+            if (!frameFitsWorkingSet(i.reader.device().currentAllocatedSize, n, i.reader.device().recommendedMaxWorkingSetSize))
+                throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = n, .label = "viewer.selection.result", .operation = "viewer.buffer.allocate"});
+            auto output = core::Tensor::empty({n}, core::Device::GPU, core::DataType::Bool);
+            rendering::SplatSelectionParameters parameters;
+            auto view = glm::mat4(glm::transpose(rendering::dataCameraToWorldFromVisualizerRotation(request.frame_view.rotation)));
+            view[3] = glm::vec4(-glm::mat3(view) * request.frame_view.translation, 1);
+            std::memcpy(parameters.world_to_camera.data(), glm::value_ptr(view), sizeof(parameters.world_to_camera));
+            const auto intrinsics = request.frame_view.getCameraIntrinsics();
+            parameters.intrinsics = {intrinsics.focal_x, intrinsics.focal_y, intrinsics.center_x, intrinsics.center_y};
+            parameters.image = {uint32_t(request.frame_view.size.x), uint32_t(request.frame_view.size.y),
+                                uint32_t(request.equirectangular ? CameraModel::Equirectangular : request.frame_view.orthographic ? CameraModel::Orthographic
+                                                                                                                                   : CameraModel::Perspective),
+                                uint32_t(request.gut)};
+            parameters.source = {uint32_t(n), uint32_t(request.shape), uint32_t(request.primitives.size()), uint32_t(request.polygon_vertices.size())};
+            parameters.payload = {uint32_t(model.non_sh_attrs_f16()), uint32_t(request.mip_filter), 0, 0};
+            parameters.ring = {request.ring_width, kViewerNearClip, 0, 0};
+            if (polygon) {
+                glm::vec2 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
+                for (const auto vertex : request.polygon_vertices) {
+                    if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y))
+                        throw std::invalid_argument(std::format("Invalid selection polygon vertex (x={}, y={})", vertex.x, vertex.y));
+                    lo = glm::min(lo, vertex);
+                    hi = glm::max(hi, vertex);
+                }
+                const auto size = request.frame_view.size;
+                // Clamp in floating point before integer conversion, including
+                // huge off-screen gestures; no out-of-range C++ float cast.
+                const glm::ivec2 begin(glm::clamp(glm::floor(lo), glm::vec2(0), glm::vec2(size)));
+                const glm::ivec2 end(glm::clamp(glm::ceil(hi), glm::vec2(0), glm::vec2(size)));
+                if (end.x <= begin.x || end.y <= begin.y)
+                    return core::Tensor::zeros({n}, core::Device::GPU, core::DataType::Bool);
+                parameters.aabb = {uint32_t(begin.x), uint32_t(begin.y), uint32_t(end.x - begin.x), uint32_t(end.y - begin.y)};
+            }
+            const auto indices = request.scene.transform_indices.get();
+            const bool indexed = indices && indices->is_valid();
+            const size_t transforms = request.scene.model_transforms ? request.scene.model_transforms->size() : 0;
+            if (transforms > std::numeric_limits<int32_t>::max() || request.scene.node_visibility_mask.size() > std::numeric_limits<uint32_t>::max())
+                throw std::invalid_argument(std::format("Selection scene exceeds transform indexing limits (transforms={}, indexed={})", transforms, indexed));
+            if (transforms)
+                for (const auto& transform : *request.scene.model_transforms)
+                    for (size_t col = 0; col < 4; ++col)
+                        for (size_t row = 0; row < 4; ++row)
+                            if (!std::isfinite(transform[col][row]))
+                                throw std::invalid_argument(std::format("Invalid selection object matrix (column={}, row={}, value={})", col, row, transform[col][row]));
+            if (!polygon)
+                for (const auto primitive : request.primitives)
+                    for (size_t axis = 0; axis < 4; ++axis)
+                        if (!std::isfinite(primitive[axis]))
+                            throw std::invalid_argument(std::format("Invalid selection primitive (axis={}, value={})", axis, primitive[axis]));
+            const std::vector<uint8_t> visibility(request.scene.node_visibility_mask.begin(), request.scene.node_visibility_mask.end());
+            tensors[5] = indexed ? indices : nullptr;
+            parameters.scene = {uint32_t(transforms), uint32_t(indexed), uint32_t(visibility.size()), uint32_t(std::min(n, tensors[4]->bytes()))};
+            rendering::SplatSelectionInputs inputs{tensors[0], tensors[1], tensors[2], tensors[3], tensors[4]->bytes() ? tensors[4] : nullptr, tensors[5]};
+            if (transforms)
+                inputs.transforms = std::as_bytes(std::span(*request.scene.model_transforms));
+            inputs.visibility = std::as_bytes(std::span(visibility));
+            if (!polygon)
+                inputs.primitives = std::as_bytes(std::span(request.primitives));
+            else
+                inputs.polygon_vertices = std::as_bytes(std::span(request.polygon_vertices));
+            if (!i.selection_query || i.selection_backend != *backend) {
+                i.selection_query = std::make_unique<rendering::SplatSelectionQuery>(*backend);
+                i.selection_backend = *backend;
+            }
+            auto pick = ring ? core::Tensor::empty({2}, core::Device::GPU, core::DataType::UInt32) : core::Tensor{};
+            if (auto queried = i.selection_query->query(inputs, parameters, output, ring ? &pick : nullptr); !queried)
+                throw lfs::Exception(queried.error());
             if (ring && request.picked_ring_id_out) {
-                [command waitUntilCompleted];
-                if (command.status != MTLCommandBufferStatusCompleted)
-                    throw std::runtime_error(std::format("Native Metal ring query failed (splats={}, status={}, error={})", n, long(command.status), command.error.localizedDescription.UTF8String ?: "none"));
-                const auto pick = reinterpret_cast<const uint32_t*>(static_cast<const char*>(buffers.ring_pick.buffer.contents) + buffers.ring_pick.offset);
-                if (pick[0] != 0xffffffffu && pick[1] < n)
-                    *request.picked_ring_id_out = pick[1];
+                const auto host = pick.to(core::Device::CPU);
+                const auto* words = static_cast<const uint32_t*>(host.data_ptr());
+                if (words[0] != 0xffffffffu && words[1] < n)
+                    *request.picked_ring_id_out = words[1];
             }
             return output;
         } catch (const std::exception& error) { return nativeError(error); }
@@ -1138,40 +1058,25 @@ namespace lfs::vis {
             // replacing latest, rather than retiring against the first consumer.
             i.drainRetiredTargets();
             i.stampConsumers();
-            (void)i.target(slot);
+            auto& state = i.target(slot);
             if (model.size() > std::numeric_limits<uint32_t>::max())
                 throw std::runtime_error(std::format("Metal primitive count exceeds indexing capacity (splats={}, max={})", model.size(), std::numeric_limits<uint32_t>::max()));
-            auto previous = i.latestFrame(slot);
-            if (previous && previous->points)
-                previous = nullptr;
-            if (previous && previous->raster && !previous->raster->busy()) {
-                const auto status = previous->raster->status();
-                if (status.required_instances > std::numeric_limits<uint32_t>::max())
-                    throw std::runtime_error(std::format("Metal instance indexing overflow (required_instances={}, max={})", status.required_instances, std::numeric_limits<uint32_t>::max()));
-                if (status.error != RasterError::None)
-                    i.target(slot).needed_capacity = withGrowthHeadroom(status.required_instances);
-            }
-            // Overflow fallback may only sample a matching published extent.
-            // acquire() keeps this publication alive throughout the attempt.
-            if (previous && previous->size != request.frame_view.size)
-                previous = nullptr;
             const bool rad = model.lod_tree && model.lod_tree->rad_source.valid() &&
                              (request.lod_gpu_traversal.enabled || model.lod_tree->total_nodes() > size_t(model.size()));
             MetalRadPager* pager = nullptr;
-            Impl::NativeLodTree paged_tree;
+            Impl::LodTree paged_tree;
             if (rad) {
-                auto& owner = i.target(slot).pager;
-                if (!owner)
-                    owner = std::make_unique<MetalRadPager>(i.reader.device());
-                pager = owner.get();
+                if (!state.pager)
+                    state.pager = std::make_unique<MetalRadPager>(i.reader.device());
+                pager = state.pager.get();
                 i.configurePager(*pager, model);
                 const Frame* completed = nullptr;
-                for (const auto& candidate : i.target(slot).frames)
+                for (const auto& candidate : state.frames)
                     if (candidate && candidate->lodResultReady() && candidate->rad_signature == pager->signature() &&
                         (!completed || candidate->producer_value > completed->producer_value))
                         completed = candidate.get();
-                const auto touches = completed ? BufferSlice{completed->lodTouches()} : BufferSlice{};
-                pager->advance(touches.buffer ? std::span<const uint32_t>(static_cast<const uint32_t*>(touches.buffer.contents), pager->cache().snapshot().logical_chunks) : std::span<const uint32_t>{});
+                pager->advance(completed ? std::span<const uint32_t>(static_cast<const uint32_t*>(completed->lod_touches.contents), pager->cache().snapshot().logical_chunks)
+                                         : std::span<const uint32_t>{});
                 if (wait_for_pages)
                     pager->waitForRoot();
                 paged_tree.nodes = pager->nodes();
@@ -1183,12 +1088,115 @@ namespace lfs::vis {
             auto* gpu_tree = gpu_lod ? (pager ? &paged_tree : &i.prepareLodTree(model)) : nullptr;
             const uint32_t source_count = pager && gpu_lod ? pager->physicalNodes() : uint32_t(model.size());
             const uint32_t logical_count = pager ? pager->nodes() : source_count;
-            const uint32_t draw_count = gpu_lod ? uint32_t(std::clamp<size_t>(request.lod_gpu_traversal.output_capacity, gpu_tree->roots, std::min(gpu_tree->nodes, source_count))) : uint32_t(pager ? model.size() : request.lod_indices ? request.lod_count
-                                                                                                                                                                                                                                          : model.size());
+            const uint32_t draw_count = gpu_lod ? uint32_t(std::clamp<size_t>(request.lod_gpu_traversal.output_capacity, gpu_tree->roots, std::min(gpu_tree->nodes, source_count)))
+                                                : uint32_t(pager ? model.size() : request.lod_indices ? request.lod_count
+                                                                                                      : model.size());
+            const int node_degree = request.scene.node_active_sh_degrees.empty() ? model.get_active_sh_degree() : *std::max_element(request.scene.node_active_sh_degrees.begin(), request.scene.node_active_sh_degrees.end());
+            const int max_degree = std::clamp(node_degree, 0, std::min(3, model.get_max_sh_degree()));
+            const uint32_t degree = static_cast<uint32_t>(std::clamp(request.sh_degree, 0, max_degree));
+            // The resident inputs: the model, a paged model's preview prefix, or its page pool.
             const auto selection = request.overlay.emphasis.mask.get();
             const auto preview = request.overlay.emphasis.transient_mask.mask;
             const bool selection_enabled = request.overlay.has_selection && selection && selection->is_valid();
             const bool preview_enabled = preview && preview->is_valid();
+            std::array<const core::Tensor*, 8> tensors{&model.means_raw(), &model.scaling_raw(), &model.rotation_raw(),
+                                                       &model.opacity_raw(), &model.sh0_raw(), degree ? &model.shN_raw() : nullptr,
+                                                       degree ? &model.shN_value_bounds() : nullptr, &model.deleted()};
+            if (pager) {
+                if (gpu_lod) {
+                    const auto& pool = pager->pool();
+                    const std::array<size_t, 7> order{0, 4, 3, 5, 1, 2, 6};
+                    for (size_t n = 0; n < order.size(); ++n)
+                        tensors[n] = &pool.regions[order[n]];
+                } else {
+                    const auto& prefix = pager->preview(model);
+                    for (size_t n = 0; n < prefix.size(); ++n)
+                        tensors[n] = &prefix[n];
+                }
+                tensors[7] = &pager->deleted(model);
+            }
+            // Every pass runs on the backend of the resident splats.
+            const auto backend = tensors[0]->device() == core::Device::GPU ? core::gpu_backend_of(*tensors[0]) : std::nullopt;
+            const auto beside_splats = [&](const core::Tensor* tensor) { return !tensor || core::gpu_backend_of(*tensor) == backend; };
+            if (!backend || !beside_splats(selection_enabled ? selection : nullptr) || !beside_splats(preview_enabled ? preview : nullptr))
+                throw std::invalid_argument(std::format("Viewport rendering requires GPU splats and masks on one backend (device={}, selection={}, preview={})",
+                                                        int(tensors[0]->device()), selection_enabled, preview_enabled));
+            const core::GpuBackendScope scope(*backend);
+            if (!state.raster || state.backend != *backend) {
+                state.raster = std::make_unique<rendering::SplatRasterizer>(*backend);
+                state.lod.reset();
+                state.backend = *backend;
+            }
+            if (!i.projector || i.projector_backend != *backend) {
+                i.projector = std::make_unique<rendering::SplatProjector>(*backend);
+                i.projector_backend = *backend;
+            }
+            auto& f = i.acquire(slot, request, draw_count);
+            f.gpu_lod_active = gpu_lod;
+            f.rad_bootstrap = pager && !gpu_lod;
+            f.rad_signature = pager ? pager->signature() : 0;
+            // One rasterizer serves every frame of the target's ring: follow
+            // this frame's extent and capacity (no-op when unchanged).
+            if (auto reserved = state.raster->reserve(draw_count, uint32_t(f.size.x), uint32_t(f.size.y), f.capacity); !reserved)
+                throw lfs::Exception(reserved.error());
+            const auto storage = pager && gpu_lod ? rendering::SplatShStorage::RadSigned8 : model.shN_value_quantized() ? rendering::SplatShStorage::Q16
+                                                                                    : model.shN_ieee_f16()          ? rendering::SplatShStorage::SwizzledFloat16
+                                                                                                                    : rendering::SplatShStorage::SwizzledFloat32;
+            const bool rad_pool = storage == rendering::SplatShStorage::RadSigned8;
+            rendering::SplatProjection projection;
+            const auto store = [](std::array<float, 16>& to, const glm::mat4& m) { std::memcpy(to.data(), glm::value_ptr(m), sizeof(to)); };
+            store(projection.model_to_world, glm::mat4(1));
+            auto view = glm::mat4(glm::transpose(rendering::dataCameraToWorldFromVisualizerRotation(request.frame_view.rotation)));
+            view[3] = glm::vec4(-glm::mat3(view) * request.frame_view.translation, 1);
+            store(projection.world_to_camera, view);
+            const auto camera = request.frame_view.translation;
+            projection.camera_local = {camera.x, camera.y, camera.z, 1};
+            const auto intrinsics = request.frame_view.getCameraIntrinsics();
+            // Rectilinear projection and GUT rays use crop-local pixels.
+            // Preserve full-camera dimensions/origin separately for binning,
+            // overlays, and periodic panorama projection.
+            projection.intrinsics = {intrinsics.focal_x, intrinsics.focal_y,
+                                     intrinsics.center_x - float(request.frame_view.subregion_origin.x),
+                                     intrinsics.center_y - float(request.frame_view.subregion_origin.y)};
+            // Viewer raster clipping differs from the desktop projection matrix's
+            // near/far planes. Derive the reference near threshold at configure.
+            const bool portal = request.splat_render_profile == 1;
+            const bool spark = (pager || gpu_lod || (request.lod_indices && request.lod_count)) && model.lod_tree && model.lod_tree->lod_opacity_encoded;
+            const bool portal_math = portal && !spark;
+            const bool mip = request.mip_filter && !(portal_math && request.gut);
+            const float dilation = portal_math && !request.gut ? .075f : mip ? .1f
+                                                                             : .3f;
+            const auto camera_model = request.equirectangular             ? CameraModel::Equirectangular
+                                      : request.frame_view.orthographic ? CameraModel::Orthographic
+                                                                        : CameraModel::Perspective;
+            projection.clip_scale = {kViewerNearClip, std::numeric_limits<float>::max(), request.scaling_modifier, dilation};
+            projection.extent = {uint32_t(f.size.x), uint32_t(f.size.y), uint32_t(camera_model), uint32_t(mip)};
+            projection.rasterization = {request.frame_view.rasterization_scale, expected_depth ? 1.f : 0.f, request.frame_view.far_plane, float(request.splat_render_profile)};
+            projection.display = {float(request.color_tonemapping), request.color_exposure, spark ? 1.f : 0.f, request.gut ? 0.f : 1.f};
+            const auto panorama_size = request.frame_view.cameraSize();
+            projection.panorama = {float(panorama_size.x), float(panorama_size.y), float(request.frame_view.subregion_origin.x), float(request.frame_view.subregion_origin.y)};
+            std::array<float, 2> render_origin{float(request.frame_view.subregion_origin.x), float(request.frame_view.subregion_origin.y)};
+            const auto allocate = [&](id<MTLBuffer> __strong& buffer, size_t bytes) {
+                if (!buffer || buffer.length < bytes)
+                    buffer = [i.reader.device() newBufferWithLength:std::max<size_t>(bytes, 16) options:MTLResourceStorageModeShared];
+                if (!buffer)
+                    throw lfs::Exception(nativeError(std::format("Metal frame staging allocation failed (bytes={}, target={})", bytes, slot.value), lfs::ErrorCode::ResourceExhausted));
+            };
+            size_t scene_count = 0;
+            if (request.scene.model_transforms && !request.scene.model_transforms->empty()) {
+                const auto& transforms = *request.scene.model_transforms;
+                if (transforms.size() > 1 && (!request.scene.transform_indices || !request.scene.transform_indices->is_valid()))
+                    throw std::invalid_argument(std::format("Multiple Metal scene transforms require primitive indices (transforms={}, draw_count={})", request.scene.model_transforms->size(), draw_count));
+                allocate(f.objects, transforms.size() * sizeof(SceneObject));
+                auto objects = static_cast<SceneObject*>(f.objects.contents);
+                for (size_t n = 0; n < transforms.size(); ++n) {
+                    const auto local = glm::inverse(transforms[n]) * glm::vec4(camera, 1);
+                    const bool visible = n >= request.scene.node_visibility_mask.size() || request.scene.node_visibility_mask[n];
+                    const int active = n < request.scene.node_active_sh_degrees.size() ? request.scene.node_active_sh_degrees[n] : degree;
+                    objects[n] = {matrix(transforms[n]), {local.x, local.y, local.z, 1}, {uint32_t(visible), uint32_t(std::clamp(active, 0, 3)), 0, 0}};
+                }
+                scene_count = transforms.size();
+            }
             const size_t node_count = request.overlay.emphasis.emphasized_node_mask.size();
             const bool needs_overlay = request.filters.crop_region || request.filters.ellipsoid_region ||
                                        !request.filters.crop_regions.empty() || !request.filters.ellipsoid_regions.empty() ||
@@ -1196,59 +1204,91 @@ namespace lfs::vis {
                                        request.overlay.emphasis.dim_non_emphasized || request.overlay.emphasis.flash_intensity > 0 ||
                                        request.overlay.emphasis.focused_gaussian_id >= 0 || request.overlay.cursor.enabled ||
                                        request.overlay.markers.show_rings || request.overlay.markers.show_center_markers;
-            // The tensor-program rasterizer runs on the backend of the resident
-            // splats: the model, a paged model's preview prefix or its page pool.
-            const auto& resident_means = pager ? (gpu_lod ? pager->pool().regions[0] : pager->preview(model)[0]) : model.means_raw();
-            const auto splat_backend = resident_means.device() == core::Device::GPU ? core::gpu_backend_of(resident_means) : std::nullopt;
-            const auto beside_splats = [&](const core::Tensor* tensor) { return !tensor || core::gpu_backend_of(*tensor) == splat_backend; };
-            const bool tensor_frame = i.tensor_raster && splat_backend && beside_splats(selection_enabled ? selection : nullptr) &&
-                                      beside_splats(preview_enabled ? preview : nullptr);
-            auto& f = i.acquire(slot, request, draw_count, false, tensor_frame ? splat_backend : std::nullopt);
-            if (i.profiling_enabled && !f.gpu_profile)
-                f.gpu_profile = std::make_unique<GpuProfile>(i.reader.device());
-            auto* profile = i.profiling_enabled ? f.gpu_profile.get() : nullptr;
-            if (profile)
-                profile->reset();
-            f.gpu_lod_active = gpu_lod;
-            f.rad_bootstrap = pager && !gpu_lod;
-            f.rad_signature = pager ? pager->signature() : 0;
-            LodSelection lod{};
-            LodParameters lod_parameters{};
+            if (needs_overlay) {
+                static_assert(detail::ParamCount == 207);
+                static_assert(detail::ViewWindow == 206 && detail::SelectionFlags == 24 && detail::EmphasisFlags == 20);
+                const auto params = detail::buildOverlayParamsCpuFloats(request, selection_enabled, preview_enabled, scene_count > 0, node_count, false);
+                if (!params)
+                    throw std::runtime_error(params.error());
+                allocate(f.overlay_parameters, params->size() * sizeof(float));
+                std::memcpy(f.overlay_parameters.contents, params->data(), params->size() * sizeof(float));
+                allocate(f.overlay_nodes, node_count);
+                auto nodes = static_cast<uint8_t*>(f.overlay_nodes.contents);
+                for (size_t n = 0; n < node_count; ++n)
+                    nodes[n] = request.overlay.emphasis.emphasized_node_mask[n];
+                allocate(f.selection_colors, sizeof(request.overlay.selection_colors));
+                std::memcpy(f.selection_colors.contents, request.overlay.selection_colors.data(), sizeof(request.overlay.selection_colors));
+                render_origin = {projection.panorama[2], projection.panorama[3]};
+            }
+            const auto host_bytes = [](id<MTLBuffer> buffer, size_t bytes) { return std::span(static_cast<const std::byte*>(buffer.contents), bytes); };
+            const auto resident = [](const core::Tensor* tensor) { return tensor && tensor->is_valid() && tensor->numel() ? tensor : nullptr; };
+            rendering::SplatSources sources;
+            sources.means = tensors[0];
+            sources.scales = tensors[1];
+            sources.rotations = tensors[2];
+            sources.opacity = tensors[3];
+            sources.sh0 = tensors[4];
+            sources.sh_rest = degree ? tensors[5] : nullptr;
+            sources.sh_bounds = resident(tensors[6]);
+            sources.deleted = resident(tensors[7]);
+            sources.count = source_count;
+            sources.layout_rest = uint32_t(model.max_sh_coeffs_rest());
+            sources.storage = storage;
+            sources.half_attributes = rad_pool || model.non_sh_attrs_f16();
+            sources.page_splats = rad_pool ? uint32_t(core::SplatLodTree::kChunkSplats) : 0;
+            sources.deleted_count = sources.deleted ? uint32_t(std::min<size_t>(sources.deleted->bytes(), std::numeric_limits<uint32_t>::max())) : 0;
+            if (scene_count) {
+                sources.objects = host_bytes(f.objects, scene_count * sizeof(SceneObject));
+                sources.object_indices = request.scene.transform_indices.get();
+            }
+            const bool transparent = request.transparent_background;
+            const rendering::SplatOverlayInputs overlay_inputs{needs_overlay ? host_bytes(f.overlay_parameters, 207 * 16) : std::span<const std::byte>{},
+                                                               node_count ? host_bytes(f.overlay_nodes, node_count) : std::span<const std::byte>{}};
+            if (request.gut && (!i.gut_geometry.is_valid() || i.gut_geometry.bytes() < size_t(draw_count) * 64 || core::gpu_backend_of(i.gut_geometry) != *backend))
+                i.gut_geometry = core::Tensor::empty({std::max<size_t>(16, size_t(draw_count) * 64)}, core::Device::GPU, core::DataType::UInt8);
+            if (!i.projected.is_valid() || i.projected.bytes() < size_t(draw_count) * 64 || core::gpu_backend_of(i.projected) != *backend)
+                i.projected = core::Tensor::empty({std::max<size_t>(16, size_t(draw_count) * 64)}, core::Device::GPU, core::DataType::UInt8);
+            // A LOD cut selected on the host: physical indices, plus optional
+            // logical IDs, debug levels and transition weights.
+            const auto cut = [&](const auto* values) { return values ? std::span(values, draw_count) : std::span<std::remove_const_t<std::remove_pointer_t<decltype(values)>> const>{}; };
+            const bool host_cut = !gpu_lod && request.lod_indices != nullptr;
+            const auto host_cut_tensors = host_cut ? i.projector->upload_cut({cut(request.lod_indices), cut(request.lod_logical_indices), cut(request.lod_levels),
+                                                                             cut(request.lod_weights), request.lod_debug_mode, uint32_t(model.size())})
+                                                   : rendering::SplatLodCut{};
+            // A GPU-selected cut: the LOD selector writes indices and its count.
+            rendering::SplatLodCut gpu_cut{};
             if (gpu_lod) {
-                if (!f.tensor) {
-                    if (!i.lod_selector)
-                        i.lod_selector = std::make_unique<LodSelector>(i.reader.device());
-                    if (!f.gpu_lod || f.gpu_capacity != draw_count || f.gpu_source_count != source_count || f.gpu_tree_signature != gpu_tree->signature)
-                        f.gpu_lod = std::make_unique<LodCutFrame>(i.reader.device(), draw_count, source_count, gpu_tree->chunks);
-                    lod = f.gpu_lod->selection(request.lod_debug_mode);
-                    lod.logical_count = logical_count;
-                }
-                f.gpu_capacity = draw_count;
-                f.gpu_source_count = source_count;
-                f.gpu_tree_signature = gpu_tree->signature;
-                f.gpu_chunks = gpu_tree->chunks;
+                if (!state.lod)
+                    state.lod = std::make_unique<rendering::SplatLodSelector>(*backend);
+                if (auto reserved = state.lod->reserve(draw_count, source_count, gpu_tree->chunks); !reserved)
+                    throw lfs::Exception(reserved.error());
+                rendering::SplatLodParameters lod_parameters;
                 const auto& p = request.lod_gpu_traversal;
                 lod_parameters.node_count = gpu_tree->nodes;
                 lod_parameters.physical_node_count = source_count;
                 lod_parameters.output_capacity = draw_count;
                 lod_parameters.logical_chunk_count = gpu_tree->chunks;
                 lod_parameters.chunk_splats = uint32_t(core::SplatLodTree::kChunkSplats);
+                rendering::SplatLodTree tree;
                 if (pager) {
                     lod_parameters.current_frame = uint32_t(pager->cache().frameIndex());
                     lod_parameters.fade_frames = wait_for_pages ? 0 : pager->fadeFrames();
+                    const auto& pool = pager->pool();
                     const auto& snapshot = pager->cache().snapshot();
                     const std::array<std::span<const uint32_t>, 3> maps{snapshot.chunk_to_page, snapshot.page_resident_frame, snapshot.page_to_chunk};
+                    std::erase_if(state.uploads, [](core::TensorUpload& upload) { return upload.poll(); });
                     for (size_t n = 0; n < maps.size(); ++n) {
-                        const size_t bytes = std::max<size_t>(16, maps[n].size_bytes());
-                        if (!f.page_maps[n] || f.page_maps[n].length < bytes)
-                            f.page_maps[n] = [i.reader.device() newBufferWithLength:bytes options:MTLResourceStorageModeShared];
-                        if (!f.page_maps[n])
-                            throw core::MemoryAllocationError({.domain = core::MemoryDomain::MetalDevice, .requested_bytes = bytes, .label = "viewer.rad.maps", .operation = "viewer.buffer.allocate"});
-                        std::memcpy(f.page_maps[n].contents, maps[n].data(), maps[n].size_bytes());
+                        auto& map = state.page_maps[n];
+                        const size_t bytes = std::max<size_t>(4, maps[n].size_bytes());
+                        if (!map.is_valid() || map.bytes() != bytes || core::gpu_backend_of(map) != *backend)
+                            map = core::Tensor::zeros({bytes}, core::Device::GPU, core::DataType::UInt8);
+                        if (!maps[n].empty())
+                            state.uploads.emplace_back().enqueue_in_batch(map, std::as_bytes(maps[n]));
                     }
-                    gpu_tree->buffers.chunk_to_page = {f.page_maps[0]};
-                    gpu_tree->buffers.page_age = {f.page_maps[1]};
-                    gpu_tree->buffers.page_to_chunk = {f.page_maps[2]};
+                    tree = {&pool.regions[7], &pool.regions[8], &state.page_maps[0], &state.page_maps[1], &pool.regions[6], &state.page_maps[2]};
+                } else {
+                    const auto& t = gpu_tree->tensors;
+                    tree = {&t[0], &t[1], &t[2], &t[3], &t[4], &t[5]};
                 }
                 lod_parameters.pixel_scale_limit = p.pixel_scale_limit;
                 lod_parameters.object_scale = p.object_scale;
@@ -1271,408 +1311,153 @@ namespace lfs::vis {
                 lod_parameters.ortho_half_height = p.ortho_half_height;
                 lod_parameters.viewport_foveation = uint32_t(p.viewport_foveation);
                 lod_parameters.orthographic = uint32_t(p.orthographic);
-            } else if (!pager && request.lod_indices) {
-                lod.enabled = true;
-                lod.debug = request.lod_debug_mode;
-                lod.count = draw_count;
-                lod.source_count = uint32_t(model.size());
-                const std::array<const void*, 4> sources = {request.lod_indices, request.lod_logical_indices, request.lod_levels, request.lod_weights};
-                std::array<BufferSlice*, 4> destinations = {&lod.indices, &lod.logical_indices, &lod.levels, &lod.weights};
-                for (size_t n = 0; n < sources.size(); ++n) {
-                    if (!sources[n])
-                        continue;
-                    const size_t bytes = std::max<size_t>(16, size_t(draw_count) * 4);
-                    auto& buffer = f.lod_buffers[n];
-                    if (!buffer || buffer.length < bytes) {
-                        const auto device = i.reader.device();
-                        if (!frameFitsWorkingSet(device.currentAllocatedSize, bytes, device.recommendedMaxWorkingSetSize))
-                            throw lfs::Exception(nativeError(std::format("Metal LOD selection exceeds the recommended GPU working set (bytes={}, allocated={}, recommended={})", bytes, device.currentAllocatedSize, device.recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
-                        buffer = [device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
-                    }
-                    if (!buffer)
-                        throw lfs::Exception(nativeError(std::format("Metal LOD selection allocation failed (bytes={}, draw_count={}, buffer_index={})", bytes, draw_count, n), lfs::ErrorCode::ResourceExhausted));
-                    if (draw_count)
-                        std::memcpy(buffer.contents, sources[n], size_t(draw_count) * 4);
-                    *destinations[n] = {buffer, 0};
-                }
+                if (auto selected = state.lod->select(tree, lod_parameters); !selected)
+                    throw lfs::Exception(selected.error());
+                const auto& selector = *state.lod;
+                gpu_cut = {&selector.indices(), &selector.logical_indices(), &selector.levels(), &selector.weights(), &selector.counts(),
+                           draw_count, request.lod_debug_mode, logical_count};
+                f.gpu_capacity = draw_count;
+                f.gpu_source_count = source_count;
+                f.gpu_tree_signature = gpu_tree->signature;
+                f.gpu_chunks = gpu_tree->chunks;
             }
-            if (request.gut && (!i.gut_geometry || i.gut_geometry.length < size_t(draw_count) * sizeof(GutSplat))) {
-                const size_t bytes = std::max<size_t>(16, size_t(draw_count) * sizeof(GutSplat));
-                const auto device = i.reader.device();
-                if (!frameFitsWorkingSet(device.currentAllocatedSize, bytes, device.recommendedMaxWorkingSetSize))
-                    throw lfs::Exception(nativeError(std::format("Metal 3DGUT reservation exceeds the recommended GPU working set (bytes={}, allocated={}, recommended={})", bytes, device.currentAllocatedSize, device.recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
-                i.gut_geometry = [device newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
-                if (!i.gut_geometry)
-                    throw lfs::Exception(nativeError(std::format("Metal 3DGUT geometry allocation failed (bytes={}, draw_count={}, allocated={}, recommended={})", bytes, draw_count, device.currentAllocatedSize, device.recommendedMaxWorkingSetSize), lfs::ErrorCode::ResourceExhausted));
-            }
-            const int node_degree = request.scene.node_active_sh_degrees.empty() ? model.get_active_sh_degree() : *std::max_element(request.scene.node_active_sh_degrees.begin(), request.scene.node_active_sh_degrees.end());
-            const int max_degree = std::clamp(node_degree, 0, std::min(3, model.get_max_sh_degree()));
-            const uint32_t degree = static_cast<uint32_t>(std::clamp(request.sh_degree, 0, max_degree));
-            const auto storage = pager && gpu_lod ? ShStorage::RadSigned8 : model.shN_value_quantized() ? ShStorage::Q16
-                                                                        : model.shN_ieee_f16()          ? ShStorage::SwizzledFloat16
-                                                                                                        : ShStorage::SwizzledFloat32;
-            Projection projection{};
-            projection.model_to_world = matrix(glm::mat4(1));
-            auto view = glm::mat4(glm::transpose(rendering::dataCameraToWorldFromVisualizerRotation(request.frame_view.rotation)));
-            view[3] = glm::vec4(-glm::mat3(view) * request.frame_view.translation, 1);
-            projection.world_to_camera = matrix(view);
-            const auto camera = request.frame_view.translation;
-            projection.camera_local = {camera.x, camera.y, camera.z, 1};
-            auto intrinsics = request.frame_view.getCameraIntrinsics();
-            // Rectilinear projection and GUT rays use crop-local pixels.
-            // Preserve full-camera dimensions/origin separately for binning,
-            // overlays, and periodic panorama projection.
-            projection.intrinsics = {intrinsics.focal_x, intrinsics.focal_y,
-                                     intrinsics.center_x - float(request.frame_view.subregion_origin.x),
-                                     intrinsics.center_y - float(request.frame_view.subregion_origin.y)};
-            // Viewer raster clipping differs from the desktop projection matrix's
-            // near/far planes. Derive the reference near threshold at configure.
-            const bool portal = request.splat_render_profile == 1;
-            const bool spark = (pager || gpu_lod || (request.lod_indices && request.lod_count)) && model.lod_tree && model.lod_tree->lod_opacity_encoded;
-            const bool portal_math = portal && !spark;
-            const bool mip = request.mip_filter && !(portal_math && request.gut);
-            const float dilation = portal_math && !request.gut ? .075f : mip ? .1f
-                                                                             : .3f;
-            projection.clip_scale = {kViewerNearClip, std::numeric_limits<float>::max(), request.scaling_modifier, dilation};
-            projection.extent = {uint32_t(f.size.x), uint32_t(f.size.y), uint32_t(request.equirectangular ? CameraModel::Equirectangular : request.frame_view.orthographic ? CameraModel::Orthographic
-                                                                                                                                                                           : CameraModel::Perspective),
-                                 uint32_t(mip)};
-            projection.rasterization = {request.frame_view.rasterization_scale, expected_depth ? 1.f : 0.f, request.frame_view.far_plane, float(request.splat_render_profile)};
-            projection.display = {float(request.color_tonemapping), request.color_exposure, spark ? 1.f : 0.f, request.gut ? 0.f : 1.f};
-            const auto panorama_size = request.frame_view.cameraSize();
-            projection.panorama = {float(panorama_size.x), float(panorama_size.y), float(request.frame_view.subregion_origin.x), float(request.frame_view.subregion_origin.y)};
-            SceneBuffers scene{};
-            OverlayBuffers overlay{};
-            overlay.render_origin = {float(request.frame_view.subregion_origin.x), float(request.frame_view.subregion_origin.y), 0, 0};
-            if (request.scene.model_transforms && !request.scene.model_transforms->empty()) {
-                const auto& transforms = *request.scene.model_transforms;
-                if (transforms.size() > 1 && (!request.scene.transform_indices || !request.scene.transform_indices->is_valid()))
-                    throw std::invalid_argument(std::format("Multiple Metal scene transforms require primitive indices (transforms={}, draw_count={})", request.scene.model_transforms->size(), draw_count));
-                const size_t bytes = transforms.size() * sizeof(SceneObject);
-                if (!f.objects || f.objects.length < bytes)
-                    f.objects = [i.reader.device() newBufferWithLength:bytes options:MTLResourceStorageModeShared];
-                if (!f.objects)
-                    throw lfs::Exception(nativeError(std::format("Metal scene object allocation failed (objects={}, bytes={})", scene.count, size_t(scene.count) * sizeof(SceneObject)), lfs::ErrorCode::ResourceExhausted));
-                auto objects = static_cast<SceneObject*>(f.objects.contents);
-                for (size_t n = 0; n < transforms.size(); ++n) {
-                    const auto local = glm::inverse(transforms[n]) * glm::vec4(camera, 1);
-                    const bool visible = n >= request.scene.node_visibility_mask.size() || request.scene.node_visibility_mask[n];
-                    const int active = n < request.scene.node_active_sh_degrees.size() ? request.scene.node_active_sh_degrees[n] : degree;
-                    objects[n] = {matrix(transforms[n]), {local.x, local.y, local.z, 1}, {uint32_t(visible), uint32_t(std::clamp(active, 0, 3)), 0, 0}};
-                }
-                scene.objects = {f.objects, 0};
-                scene.count = static_cast<uint32_t>(transforms.size());
-            }
-            if (needs_overlay) {
-                static_assert(detail::ParamCount == 207);
-                static_assert(detail::ViewWindow == 206 && detail::SelectionFlags == 24 && detail::EmphasisFlags == 20);
-                const auto params = detail::buildOverlayParamsCpuFloats(request, selection_enabled, preview_enabled, scene.count > 0, node_count, false);
-                if (!params)
-                    throw std::runtime_error(params.error());
-                const auto allocate = [&](id<MTLBuffer> __strong& buffer, size_t bytes, MTLResourceOptions options) {
-                    if (!buffer || buffer.length < bytes)
-                        buffer = [i.reader.device() newBufferWithLength:std::max<size_t>(bytes, 16) options:options];
-                    if (!buffer)
-                        throw lfs::Exception(nativeError(std::format("Metal overlay allocation failed (bytes={}, options={}, target={})", bytes, uint64_t(options), slot.value), lfs::ErrorCode::ResourceExhausted));
-                };
-                allocate(f.overlay_parameters, params->size() * sizeof(float), MTLResourceStorageModeShared);
-                std::memcpy(f.overlay_parameters.contents, params->data(), params->size() * sizeof(float));
-                if (!f.tensor) // the tensor projector owns its flags
-                    allocate(f.overlay_flags, size_t(draw_count) * 4, MTLResourceStorageModePrivate);
-                allocate(f.overlay_nodes, node_count, MTLResourceStorageModeShared);
-                auto nodes = static_cast<uint8_t*>(f.overlay_nodes.contents);
-                for (size_t n = 0; n < node_count; ++n)
-                    nodes[n] = request.overlay.emphasis.emphasized_node_mask[n];
-                allocate(f.selection_colors, sizeof(request.overlay.selection_colors), MTLResourceStorageModeShared);
-                std::memcpy(f.selection_colors.contents, request.overlay.selection_colors.data(), sizeof(request.overlay.selection_colors));
-                overlay = {{f.overlay_parameters, 0}, {f.overlay_flags, 0}, {}, {}, {f.overlay_nodes, 0}, {f.selection_colors, 0}, 207, uint32_t(node_count)};
-                overlay.render_origin = {projection.panorama.z, projection.panorama.w, 0, 0};
-            }
-            std::array<const core::Tensor*, 11> tensors{&model.means_raw(), &model.scaling_raw(), &model.rotation_raw(),
-                                                        &model.opacity_raw(), &model.sh0_raw(), degree ? &model.shN_raw() : nullptr,
-                                                        degree ? &model.shN_value_bounds() : nullptr, &model.deleted(), scene.count ? request.scene.transform_indices.get() : nullptr,
-                                                        selection_enabled ? selection : nullptr, preview_enabled ? preview : nullptr};
-            if (pager) {
-                if (gpu_lod) {
-                    const auto& pool = pager->pool();
-                    const std::array<size_t, 7> order{0, 4, 3, 5, 1, 2, 6};
-                    for (size_t n = 0; n < order.size(); ++n)
-                        tensors[n] = &pool.regions[order[n]];
-                } else {
-                    const auto& prefix = pager->preview(model);
-                    for (size_t n = 0; n < prefix.size(); ++n)
-                        tensors[n] = &prefix[n];
-                }
-                tensors[7] = &pager->deleted(model);
-            }
-            std::vector<const core::Tensor*> inputs_tensors(tensors.begin(), tensors.end());
-            if (pager && gpu_lod) {
-                inputs_tensors.push_back(&pager->pool().regions[7]);
-                inputs_tensors.push_back(&pager->pool().regions[8]);
+            const auto* lod_cut = gpu_lod ? &gpu_cut : host_cut ? &host_cut_tensors : nullptr;
+            // Projection flags of the native derivation: Spark opacity, portal edge math.
+            const bool spark_opacity = projection.display[2] == 1.f;
+            const bool portal_edges = projection.rasterization[3] == 1.f && projection.display[2] == 0.f;
+            const bool tight = !transparent && !needs_overlay && !request.gut && !spark_opacity && !portal_math;
+            const auto mark = [&f](const char* stage) {
+                if (!f.profile)
+                    return;
+                if (!f.profile->mark(f.profile_stages.size() + 1, nullptr))
+                    throw std::runtime_error(std::format("GPU timestamp failed (stage={})", stage));
+                f.profile_stages.emplace_back(stage);
+            };
+            f.profile = i.profiling_enabled ? std::make_unique<core::GpuElapsed>(*backend, 32) : nullptr;
+            f.profile_stages.clear();
+            if (f.profile && !f.profile->mark(0, nullptr))
+                throw std::runtime_error("GPU timestamp failed (stage=begin)");
+            state.raster->set_stage_marker(f.profile ? std::function<void(const char*)>(mark) : nullptr);
+            if (auto projected = i.projector->project(sources, projection, degree, request.gut ? rendering::SplatPrimitive::Gut : rendering::SplatPrimitive::Gaussian,
+                                                      tight, i.projected, request.gut ? &i.gut_geometry : nullptr, needs_overlay ? &overlay_inputs : nullptr, lod_cut);
+                !projected)
+                throw lfs::Exception(projected.error());
+            mark("projection");
+            rendering::SplatRasterParameters raster;
+            raster.count = draw_count;
+            raster.width = uint32_t(f.size.x);
+            raster.height = uint32_t(f.size.y);
+            raster.columns = (raster.width + 15) / 16;
+            raster.tiles = raster.columns * ((raster.height + 15) / 16);
+            raster.capacity = f.capacity;
+            raster.mode = uint32_t(request.gut ? rendering::SplatRasterMode::Gut : rendering::SplatRasterMode::Gaussian);
+            // Rings use the macro reference's half footprint, unless a separate
+            // median (depth view) or precise transparent blending is needed.
+            // 3DGUT keeps the legacy Vulkan chain's color update and starts with
+            // 64-thread groups; the rasterizer narrows dense frames itself.
+            const bool gut = request.gut;
+            const bool macro_half = request.overlay.markers.show_rings && !transparent && !request.depth_view && !gut && !spark_opacity;
+            const bool precise_transparent = transparent && !gut && !spark_opacity;
+            raster.flags = (needs_overlay ? 1u : 0u) | (expected_depth ? 2u : 0u) | (portal_edges ? 4u : 0u) | (lod_cut ? 8u : 0u) |
+                           (spark_opacity ? 16u : 0u) | (gut && !spark_opacity ? 32u : 0u) | (macro_half ? 64u : 0u) |
+                           (gut || spark_opacity ? 0u : 128u) | (request.depth_view ? 2048u : 0u) | (transparent ? 0u : 4096u) |
+                           (precise_transparent ? 16384u : 0u) | (camera_model == CameraModel::Equirectangular && !gut ? 8192u : 0u);
+            const auto mask_extent = [](const core::Tensor* mask) { return uint32_t(std::min<size_t>(mask->bytes(), std::numeric_limits<uint32_t>::max())); };
+            raster.mask_limits = {selection_enabled ? mask_extent(selection) : 0u, preview_enabled ? mask_extent(preview) : 0u, 0, 0};
+            const auto background = request.frame_view.background_color;
+            raster.background = {background.x, background.y, background.z, transparent ? 0.f : 1.f};
+            raster.render_origin = {render_origin[0], render_origin[1], 0, 0};
+            raster.intrinsics = projection.intrinsics;
+            raster.clip = {projection.clip_scale[0], expected_depth ? projection.rasterization[2] : projection.clip_scale[1], projection.clip_scale[2], projection.clip_scale[3]};
+            raster.camera = projection.extent;
+            raster.panorama = projection.panorama;
+            const rendering::SplatRasterOverlay raster_overlay{&i.projector->overlay_parameters(), &i.projector->overlay_flags(),
+                                                               selection_enabled ? selection : nullptr, preview_enabled ? preview : nullptr,
+                                                               needs_overlay ? host_bytes(f.selection_colors, sizeof(request.overlay.selection_colors)) : std::span<const std::byte>{}};
+            const rendering::SplatRasterLogical raster_logical{lod_cut && lod_cut->logical_indices ? lod_cut->logical_indices : lod_cut ? lod_cut->indices : nullptr,
+                                                               logical_count};
+            if (auto rasterized = state.raster->rasterize(i.projected, gut ? &i.gut_geometry : nullptr, draw_count, rendering::SplatRasterMode(raster.mode), raster,
+                                                          needs_overlay ? &raster_overlay : nullptr, lod_cut ? &raster_logical : nullptr);
+                !rasterized)
+                throw lfs::Exception(rasterized.error());
+            rendering::SplatPresentParameters presented;
+            presented.exposure = request.color_exposure;
+            presented.tone = portal ? 0u : uint32_t(request.color_tonemapping);
+            presented.transparent = uint32_t(transparent);
+            presented.depth_min = request.depth_view_min;
+            presented.depth_max = request.depth_view_max;
+            presented.depth_view = uint32_t(request.depth_view);
+            presented.depth_mode = uint32_t(request.depth_visualization_mode);
+            presented.background = {background.x, background.y, background.z, 1};
+            presented.capture = {uint32_t(expected_depth), 0, 0, 0};
+            if (auto shown = state.raster->present(presented); !shown)
+                throw lfs::Exception(shown.error());
+            state.raster->set_stage_marker(nullptr);
+            // LOD statistics and the RAD pager read the cut's counts and chunk
+            // touches after completion.
+            if (gpu_lod) {
+                allocate(f.lod_touches, size_t(gpu_tree->chunks) * 4);
+                allocate(f.lod_counts, 32);
+            } else {
+                f.lod_counts = nil;
             }
             if (i.serial == std::numeric_limits<uint64_t>::max())
                 throw std::runtime_error(std::format("Metal viewport timeline exhausted (serial={})", i.serial));
             const uint64_t serial = i.serial + 1;
-            const auto background = request.frame_view.background_color;
             const auto event = i.event;
-            const PresentParameters present{request.color_exposure, portal ? 0u : uint32_t(request.color_tonemapping), uint32_t(request.transparent_background), uint32_t(previous != nullptr), request.depth_view_min, request.depth_view_max, uint32_t(request.depth_view), uint32_t(request.depth_visualization_mode), {background.x, background.y, background.z, 1}, {uint32_t(expected_depth), 0, 0, 0}};
-            const bool refine = pager && (pager->pending() || !pager->rootReady());
-            // Completion: release presentation waits and record overflow demand
-            // from the frame's RasterStatus (shared storage) for the retry.
-            const auto finish = [&](id<MTLCommandBuffer> command, id<MTLBuffer> status_buffer, NSUInteger status_offset) {
-                const auto completion_event = event;
+            const auto& rasterizer = *state.raster;
+            const std::array<const core::Tensor*, 5> outputs{&rasterizer.rgba(), &rasterizer.linear_depth(), &rasterizer.status(),
+                                                             gpu_lod ? &state.lod->touches() : nullptr, gpu_lod ? &state.lod->counts() : nullptr};
+            // One native command publishes the tensor outputs into the viewport
+            // images and signals presentation.
+            f.command = i.reader.submit(outputs, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
+                // A blit on the readback queue may still sample a recycled slot.
+                // GPU ordering protects it without waiting on the host each frame.
+                if (i.next_readback)
+                    [command encodeWaitForEvent:i.readback_event value:i.next_readback];
+                const NSUInteger width = raster.width, height = raster.height;
+                auto blit = [command blitCommandEncoder];
+                [blit copyFromBuffer:views[0].buffer sourceOffset:views[0].offset sourceBytesPerRow:width * 4 sourceBytesPerImage:width * height * 4
+                          sourceSize:MTLSizeMake(width, height, 1) toTexture:f.color.texture destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                [blit copyFromBuffer:views[1].buffer sourceOffset:views[1].offset sourceBytesPerRow:width * 4 sourceBytesPerImage:width * height * 4
+                          sourceSize:MTLSizeMake(width, height, 1) toTexture:f.depth.texture destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                [blit copyFromBuffer:views[2].buffer sourceOffset:views[2].offset toBuffer:f.raster_status destinationOffset:0 size:sizeof(RasterStatus)];
+                if (gpu_lod) {
+                    [blit copyFromBuffer:views[3].buffer sourceOffset:views[3].offset toBuffer:f.lod_touches destinationOffset:0 size:size_t(gpu_tree->chunks) * 4];
+                    [blit copyFromBuffer:views[4].buffer sourceOffset:views[4].offset toBuffer:f.lod_counts destinationOffset:0 size:32];
+                }
+                [blit endEncoding];
                 const auto completion_value = serial;
-                [command encodeSignalEvent:completion_event value:completion_value];
+                [command encodeSignalEvent:event value:completion_value];
                 [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
-                    // Failed read-only producers must release presentation waits too;
+                    // Failed producers must release presentation waits too;
                     // their typed command error is inspected before resource reuse.
-                    if (completed.status == MTLCommandBufferStatusError && completion_event.signaledValue < completion_value)
-                        completion_event.signaledValue = completion_value;
+                    if (completed.status == MTLCommandBufferStatusError && event.signaledValue < completion_value)
+                        event.signaledValue = completion_value;
                 }];
+                // Record overflow demand for the retry, which redraws at a capacity that fits.
                 const auto completion_retry = i.retry_callback;
-                const auto overflow_required = i.target(slot).overflow_required;
+                const auto overflow_required = state.overflow_required;
+                const id<MTLBuffer> status_buffer = f.raster_status;
                 [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
-                    const auto* status = reinterpret_cast<const RasterStatus*>(static_cast<const std::byte*>(status_buffer.contents) + status_offset);
-                    if (completed.status != MTLCommandBufferStatusError && status->error != RasterError::None) {
+                    const auto* status = static_cast<const RasterStatus*>(status_buffer.contents);
+                    if (completed.status != MTLCommandBufferStatusError && status->error) {
                         uint64_t seen = overflow_required->load(std::memory_order_relaxed);
                         while (status->required_instances > seen &&
                                !overflow_required->compare_exchange_weak(seen, status->required_instances, std::memory_order_acq_rel)) {
                         }
                     }
-                    if (completion_retry && (completed.status == MTLCommandBufferStatusError || status->error != RasterError::None))
+                    if (completion_retry && (completed.status == MTLCommandBufferStatusError || status->error))
                         completion_retry();
                 }];
-            };
-            // Tensor-program frame: projection, binning, blending and present run
-            // on the tensor timeline; one native blit publishes the outputs.
-            const auto submit_tensor = [&]() -> id<MTLCommandBuffer> {
-                auto& state = i.target(slot);
-                const core::GpuBackendScope scope(state.tensor_backend);
-                // One rasterizer serves every frame of the target's ring: follow
-                // this frame's extent and capacity (no-op when unchanged).
-                if (auto reserved = state.tensor_raster->reserve(draw_count, uint32_t(f.size.x), uint32_t(f.size.y), f.capacity); !reserved)
-                    throw lfs::Exception(reserved.error());
-                if (!i.projector || i.projector_backend != state.tensor_backend) {
-                    i.projector = std::make_unique<rendering::SplatProjector>(state.tensor_backend);
-                    i.projector_backend = state.tensor_backend;
-                }
-                const auto resident = [](const core::Tensor* tensor) { return tensor && tensor->is_valid() && tensor->numel() ? tensor : nullptr; };
-                // The native inputs: the model, a paged model's preview prefix, or its page pool.
-                const bool rad_pool = storage == ShStorage::RadSigned8;
-                rendering::SplatSources sources;
-                sources.means = tensors[0];
-                sources.scales = tensors[1];
-                sources.rotations = tensors[2];
-                sources.opacity = tensors[3];
-                sources.sh0 = tensors[4];
-                sources.sh_rest = degree ? tensors[5] : nullptr;
-                sources.sh_bounds = resident(tensors[6]);
-                sources.deleted = resident(tensors[7]);
-                sources.count = source_count;
-                sources.layout_rest = uint32_t(model.max_sh_coeffs_rest());
-                sources.storage = rendering::SplatShStorage(uint32_t(storage));
-                sources.half_attributes = rad_pool || model.non_sh_attrs_f16();
-                sources.page_splats = rad_pool ? uint32_t(core::SplatLodTree::kChunkSplats) : 0;
-                sources.deleted_count = sources.deleted ? uint32_t(std::min<size_t>(sources.deleted->bytes(), std::numeric_limits<uint32_t>::max())) : 0;
-                if (scene.count) {
-                    sources.objects = std::span(static_cast<const std::byte*>(f.objects.contents), size_t(scene.count) * sizeof(SceneObject));
-                    sources.object_indices = request.scene.transform_indices.get();
-                }
-                rendering::SplatProjection frame_projection;
-                static_assert(sizeof(frame_projection) == sizeof(projection));
-                std::memcpy(&frame_projection, &projection, sizeof(projection));
-                const bool transparent = request.transparent_background;
-                const auto host_bytes = [](id<MTLBuffer> buffer, size_t bytes) { return std::span(static_cast<const std::byte*>(buffer.contents), bytes); };
-                const rendering::SplatOverlayInputs overlay_inputs{needs_overlay ? host_bytes(f.overlay_parameters, 207 * 16) : std::span<const std::byte>{},
-                                                                   node_count ? host_bytes(f.overlay_nodes, node_count) : std::span<const std::byte>{}};
-                if (request.gut && (!i.tensor_gut.is_valid() || i.tensor_gut.bytes() < size_t(draw_count) * sizeof(GutSplat) ||
-                                    core::gpu_backend_of(i.tensor_gut) != state.tensor_backend))
-                    i.tensor_gut = core::Tensor::empty({std::max<size_t>(16, size_t(draw_count) * sizeof(GutSplat))}, core::Device::GPU, core::DataType::UInt8);
-                // A host-selected LOD cut: physical indices, plus optional logical
-                // IDs, debug levels and transition weights.
-                const auto cut = [&](const auto* values) { return values ? std::span(values, draw_count) : std::span<std::remove_const_t<std::remove_pointer_t<decltype(values)>> const>{}; };
-                const bool lod_cut = !gpu_lod && request.lod_indices != nullptr;
-                const auto lod_cut_tensors = lod_cut ? i.projector->upload_cut({cut(request.lod_indices), cut(request.lod_logical_indices), cut(request.lod_levels),
-                                                                                 cut(request.lod_weights), request.lod_debug_mode, uint32_t(model.size())})
-                                                     : rendering::SplatLodCut{};
-                // A GPU-selected cut: the tensor selector writes indices and its count.
-                rendering::SplatLodCut gpu_cut{};
-                if (gpu_lod) {
-                    if (!state.tensor_lod || state.tensor_lod_backend != state.tensor_backend) {
-                        state.tensor_lod = std::make_unique<rendering::SplatLodSelector>(state.tensor_backend);
-                        state.tensor_lod_backend = state.tensor_backend;
-                    }
-                    if (auto reserved = state.tensor_lod->reserve(draw_count, source_count, gpu_tree->chunks); !reserved)
-                        throw lfs::Exception(reserved.error());
-                    rendering::SplatLodTree tree;
-                    if (pager) {
-                        const auto& pool = pager->pool();
-                        const auto& snapshot = pager->cache().snapshot();
-                        const std::array<std::span<const uint32_t>, 3> maps{snapshot.chunk_to_page, snapshot.page_resident_frame, snapshot.page_to_chunk};
-                        std::erase_if(state.tensor_uploads, [](core::TensorUpload& upload) { return upload.poll(); });
-                        for (size_t n = 0; n < maps.size(); ++n) {
-                            auto& map = state.tensor_page_maps[n];
-                            const size_t bytes = std::max<size_t>(4, maps[n].size_bytes());
-                            if (!map.is_valid() || map.bytes() != bytes || core::gpu_backend_of(map) != state.tensor_backend)
-                                map = core::Tensor::zeros({bytes}, core::Device::GPU, core::DataType::UInt8);
-                            if (!maps[n].empty())
-                                state.tensor_uploads.emplace_back().enqueue_in_batch(map, std::as_bytes(maps[n]));
-                        }
-                        tree = {&pool.regions[7], &pool.regions[8], &state.tensor_page_maps[0], &state.tensor_page_maps[1], &pool.regions[6], &state.tensor_page_maps[2]};
-                    } else {
-                        const auto& t = gpu_tree->tensors;
-                        tree = {&t[0], &t[1], &t[2], &t[3], &t[4], &t[5]};
-                    }
-                    rendering::SplatLodParameters selection_parameters;
-                    static_assert(sizeof(selection_parameters) == sizeof(lod_parameters));
-                    std::memcpy(&selection_parameters, &lod_parameters, sizeof(lod_parameters));
-                    if (auto selected = state.tensor_lod->select(tree, selection_parameters); !selected)
-                        throw lfs::Exception(selected.error());
-                    const auto& selector = *state.tensor_lod;
-                    gpu_cut = {&selector.indices(), &selector.logical_indices(), &selector.levels(), &selector.weights(), &selector.counts(),
-                               draw_count, request.lod_debug_mode, logical_count};
-                }
-                const auto* cut_used = gpu_lod ? &gpu_cut : lod_cut ? &lod_cut_tensors : nullptr;
-                // Native projection flags: Spark opacity, portal edge math.
-                const bool spark_opacity = projection.display.z == 1.f;
-                const bool portal_edges = projection.rasterization.w == 1.f && projection.display.z == 0.f;
-                const bool tight = !transparent && !needs_overlay && !request.gut && !spark_opacity && !portal_math;
-                if (auto projected = i.projector->project(sources, frame_projection, degree, request.gut ? rendering::SplatPrimitive::Gut : rendering::SplatPrimitive::Gaussian,
-                                                          tight, i.tensor_projected, request.gut ? &i.tensor_gut : nullptr, needs_overlay ? &overlay_inputs : nullptr,
-                                                          cut_used);
-                    !projected)
-                    throw lfs::Exception(projected.error());
-                // RasterParameters as the native rasterizer derives them for this view.
-                rendering::SplatRasterParameters raster;
-                raster.count = draw_count;
-                raster.width = uint32_t(f.size.x);
-                raster.height = uint32_t(f.size.y);
-                raster.columns = (raster.width + 15) / 16;
-                raster.tiles = raster.columns * ((raster.height + 15) / 16);
-                raster.capacity = f.capacity;
-                // Rings use the macro reference's half footprint, unless a separate
-                // median (depth view) or precise transparent blending is needed.
-                // 3DGUT keeps the legacy Vulkan chain's color update and starts with
-                // 64-thread groups; the rasterizer narrows dense frames itself.
-                const bool gut = request.gut;
-                const bool macro_half = request.overlay.markers.show_rings && !transparent && !request.depth_view && !gut && !spark_opacity;
-                const bool precise_transparent = transparent && !gut && !spark_opacity;
-                raster.flags = (needs_overlay ? 1u : 0u) | (expected_depth ? 2u : 0u) | (portal_edges ? 4u : 0u) | (cut_used ? 8u : 0u) |
-                               (spark_opacity ? 16u : 0u) | (gut && !spark_opacity ? 32u : 0u) | (macro_half ? 64u : 0u) |
-                               (gut || spark_opacity ? 0u : 128u) | (request.depth_view ? 2048u : 0u) | (transparent ? 0u : 4096u) |
-                               (precise_transparent ? 16384u : 0u) | (projection.extent.z == uint32_t(CameraModel::Equirectangular) && !gut ? 8192u : 0u);
-                const auto mask_extent = [](const core::Tensor* mask) { return uint32_t(std::min<size_t>(mask->bytes(), std::numeric_limits<uint32_t>::max())); };
-                raster.mask_limits = {selection_enabled ? mask_extent(selection) : 0u, preview_enabled ? mask_extent(preview) : 0u, 0, 0};
-                raster.background = {background.x, background.y, background.z, transparent ? 0.f : 1.f};
-                raster.render_origin = {overlay.render_origin.x, overlay.render_origin.y, 0, 0};
-                raster.intrinsics = {projection.intrinsics.x, projection.intrinsics.y, projection.intrinsics.z, projection.intrinsics.w};
-                raster.clip = {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w};
-                raster.camera = {projection.extent.x, projection.extent.y, projection.extent.z, projection.extent.w};
-                raster.panorama = {projection.panorama.x, projection.panorama.y, projection.panorama.z, projection.panorama.w};
-                const rendering::SplatRasterOverlay raster_overlay{&i.projector->overlay_parameters(), &i.projector->overlay_flags(),
-                                                                   selection_enabled ? selection : nullptr, preview_enabled ? preview : nullptr,
-                                                                   needs_overlay ? host_bytes(f.selection_colors, sizeof(request.overlay.selection_colors)) : std::span<const std::byte>{}};
-                raster.mode = uint32_t(request.gut ? rendering::SplatRasterMode::Gut : rendering::SplatRasterMode::Gaussian);
-                const rendering::SplatRasterLogical raster_logical{cut_used && cut_used->logical_indices ? cut_used->logical_indices : cut_used ? cut_used->indices : nullptr,
-                                                                   logical_count};
-                if (auto rasterized = state.tensor_raster->rasterize(i.tensor_projected, request.gut ? &i.tensor_gut : nullptr, draw_count,
-                                                                     rendering::SplatRasterMode(raster.mode), raster,
-                                                                     needs_overlay ? &raster_overlay : nullptr, cut_used ? &raster_logical : nullptr);
-                    !rasterized)
-                    throw lfs::Exception(rasterized.error());
-                rendering::SplatPresentParameters presented;
-                presented.exposure = present.exposure;
-                presented.tone = present.tone;
-                presented.transparent = present.transparent;
-                presented.depth_min = present.depth_min;
-                presented.depth_max = present.depth_max;
-                presented.depth_view = present.depth_view;
-                presented.depth_mode = present.depth_mode;
-                presented.background = {present.background.x, present.background.y, present.background.z, present.background.w};
-                presented.capture = {present.capture.x, 0, 0, 0};
-                if (auto shown = state.tensor_raster->present(presented); !shown)
-                    throw lfs::Exception(shown.error());
-                const auto& raster_output = *state.tensor_raster;
-                // LOD statistics and the RAD pager read the cut's counts and chunk
-                // touches after completion.
-                if (gpu_lod) {
-                    if (!f.tensor_touches || f.tensor_touches.length < size_t(gpu_tree->chunks) * 4)
-                        f.tensor_touches = [i.reader.device() newBufferWithLength:std::max<size_t>(16, size_t(gpu_tree->chunks) * 4) options:MTLResourceStorageModeShared];
-                    if (!f.tensor_lod_counts)
-                        f.tensor_lod_counts = [i.reader.device() newBufferWithLength:32 options:MTLResourceStorageModeShared];
-                    if (!f.tensor_touches || !f.tensor_lod_counts)
-                        throw lfs::Exception(nativeError("Metal LOD result staging allocation failed", lfs::ErrorCode::ResourceExhausted));
-                } else {
-                    f.tensor_lod_counts = nil;
-                }
-                const std::array<const core::Tensor*, 5> outputs{&raster_output.rgba(), &raster_output.linear_depth(), &raster_output.status(),
-                                                                 gpu_lod ? &state.tensor_lod->touches() : nullptr, gpu_lod ? &state.tensor_lod->counts() : nullptr};
-                return i.reader.submit(outputs, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
-                    if (i.next_readback)
-                        [command encodeWaitForEvent:i.readback_event value:i.next_readback];
-                    const NSUInteger width = raster.width, height = raster.height;
-                    auto blit = [command blitCommandEncoder];
-                    [blit copyFromBuffer:views[0].buffer sourceOffset:views[0].offset sourceBytesPerRow:width * 4 sourceBytesPerImage:width * height * 4
-                              sourceSize:MTLSizeMake(width, height, 1) toTexture:f.color.texture destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
-                    [blit copyFromBuffer:views[1].buffer sourceOffset:views[1].offset sourceBytesPerRow:width * 4 sourceBytesPerImage:width * height * 4
-                              sourceSize:MTLSizeMake(width, height, 1) toTexture:f.depth.texture destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
-                    [blit copyFromBuffer:views[2].buffer sourceOffset:views[2].offset toBuffer:f.tensor_status destinationOffset:0 size:sizeof(RasterStatus)];
-                    if (gpu_lod) {
-                        [blit copyFromBuffer:views[3].buffer sourceOffset:views[3].offset toBuffer:f.tensor_touches destinationOffset:0 size:size_t(gpu_tree->chunks) * 4];
-                        [blit copyFromBuffer:views[4].buffer sourceOffset:views[4].offset toBuffer:f.tensor_lod_counts destinationOffset:0 size:32];
-                    }
-                    [blit endEncoding];
-                    finish(command, f.tensor_status, 0);
-                });
-            };
-            f.command = f.tensor ? submit_tensor() : i.reader.submit(inputs_tensors, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
-                // A blit on the readback queue may still sample a recycled slot.
-                // GPU ordering protects it without waiting on the host each frame.
-                if (i.next_readback)
-                    [command encodeWaitForEvent:i.readback_event value:i.next_readback];
-                auto slice = [&](size_t n) { return BufferSlice{views[n].buffer, views[n].offset}; };
-                if (pager && gpu_lod) {
-                    gpu_tree->buffers.bounds = slice(11);
-                    gpu_tree->buffers.links = slice(12);
-                    gpu_tree->buffers.page_frames = slice(6);
-                }
-                if (gpu_lod)
-                    i.lod_selector->encode(command, gpu_tree->buffers, lod_parameters, *f.gpu_lod);
-                SplatBuffers inputs{slice(0), slice(1), slice(2), slice(3), slice(4), slice(5), slice(6), slice(7),
-                                    source_count, uint32_t(model.max_sh_coeffs_rest()), storage, model.non_sh_attrs_f16()};
-                if (pager && gpu_lod)
-                    inputs.rad_page_splats = uint32_t(core::SplatLodTree::kChunkSplats);
-                inputs.deleted_count = uint32_t(std::min<size_t>(views[7].bytes, std::numeric_limits<uint32_t>::max()));
-                scene.object_indices = slice(8);
-                overlay.selection = selection_enabled ? slice(9) : BufferSlice{};
-                overlay.preview = preview_enabled ? slice(10) : BufferSlice{};
-                overlay.selection_count = selection_enabled ? uint32_t(std::min<size_t>(views[9].bytes, std::numeric_limits<uint32_t>::max())) : 0;
-                overlay.preview_count = preview_enabled ? uint32_t(std::min<size_t>(views[10].bytes, std::numeric_limits<uint32_t>::max())) : 0;
-                i.preprocessor.encode(command, inputs, projection, degree, request.gut ? PrimitiveMode::Gut : PrimitiveMode::Gaussian, {i.projected, 0}, scene, overlay, request.gut ? BufferSlice{i.gut_geometry, 0} : BufferSlice{}, lod, profile,
-                                      !request.gut && !spark && !portal_math && !overlay.parameter_count &&
-                                          !request.transparent_background && !request.overlay.markers.show_rings);
-                i.rasterizer.encode(command, {i.projected, 0}, draw_count, request.gut ? RasterMode::Gut : RasterMode::Gaussian,
-                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{i.gut_geometry, 0} : BufferSlice{}, projection, lod, request.gut && !spark, request.overlay.markers.show_rings && !request.transparent_background && !request.gut && !spark, profile, request.depth_view);
-                auto encoder = profiledCompute(command, profile, GpuStage::Present);
-                [encoder setComputePipelineState:i.present];
-                [encoder setTexture:f.raster->color() atIndex:0];
-                [encoder setTexture:f.raster->depth() atIndex:1];
-                [encoder setTexture:f.color.texture atIndex:2];
-                [encoder setTexture:f.depth.texture atIndex:3];
-                [encoder setTexture:previous ? previous->color.texture : f.raster->color() atIndex:4];
-                [encoder setTexture:previous ? previous->depth.texture : f.raster->depth() atIndex:5];
-                [encoder setBytes:&present length:sizeof(present) atIndex:0];
-                [encoder setBuffer:f.raster->statusBuffer() offset:0 atIndex:1];
-                [encoder dispatchThreads:MTLSizeMake(f.size.x, f.size.y, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
-                [encoder endEncoding];
-                finish(command, f.raster->statusBuffer(), 0);
             });
+            const bool refine = pager && (pager->pending() || !pager->rootReady());
             if (pager && gpu_lod)
                 pager->noteRendererCompletion(serial);
             f.producer_value = serial;
             i.serial = serial;
             f.consumer_serial = i.consumerSerial();
-            i.target(slot).latest = &f;
+            state.latest = &f;
 #ifndef LFS_GRAPHICS_VULKAN
             return SceneRenderer::RenderResult{.generation = f.generation, .depth_generation = f.generation, .size = f.size, .alloc_size = f.size, .completion_value = serial, .lod_streaming_active = refine, .viewer_backend = rendering::ViewerBackend::Metal};
 #else
@@ -1876,7 +1661,7 @@ namespace lfs::vis {
         status.selected = std::min(cut.selected, completed->gpu_capacity);
         status.overflow = cut.overflow;
         status.pixel_scale_feedback = cut.threshold_multiplier;
-        const auto touches = BufferSlice{completed->lodTouches()};
+        const auto* touches = static_cast<const uint32_t*>(completed->lod_touches.contents);
         status.resident_chunks = status.chunk_count = status.pool_pages = completed->gpu_chunks;
         const auto& pager = i.target(slot).pager;
         if (pager && completed->rad_signature == pager->signature()) {
@@ -1886,10 +1671,9 @@ namespace lfs::vis {
             status.deferred_requests = pager->cache().deferredRequestCount();
             status.admission_frozen = pager->frozen();
         }
-        const auto values = static_cast<const uint32_t*>(touches.buffer.contents);
         for (size_t n = 0; n < status.chunk_count; ++n) {
-            status.touched_chunks += values[n] != 0;
-            status.miss_chunks += values[n] != 0 && values[n] != 0xffffffffu;
+            status.touched_chunks += touches[n] != 0;
+            status.miss_chunks += touches[n] != 0 && touches[n] != 0xffffffffu;
         }
         return status;
     }
@@ -1907,7 +1691,7 @@ namespace lfs::vis {
             FrameDiagnostics result;
             result.input_splats = frame->count;
             result.reserved_instances = frame->capacity;
-            if (frame->raster || frame->tensor) {
+            if (!frame->points) {
                 const auto status = frame->rasterStatus();
                 result.required_instances = status.required_instances;
                 result.blend_threads = status.blend_threads;
@@ -1916,9 +1700,26 @@ namespace lfs::vis {
             result.gpu_command_ms = (frame->command.GPUEndTime - frame->command.GPUStartTime) * 1000.;
             if (!std::isfinite(result.gpu_command_ms) || result.gpu_command_ms < 0)
                 throw std::runtime_error(std::format("Invalid native command GPU interval (start={}, end={}, duration_ms={})", frame->command.GPUStartTime, frame->command.GPUEndTime, result.gpu_command_ms));
-            if (impl_->profiling_enabled && frame->gpu_profile) {
-                result.counter_timestamps_available = frame->gpu_profile->available();
-                result.gpu_stage_ms = frame->gpu_profile->resolve();
+            if (frame->profile) {
+                // Stage buckets: projection, instances, sort, blend, present.
+                const auto bucket = [](const std::string& stage) -> size_t {
+                    if (stage == "projection")
+                        return 0;
+                    if (stage == "source" || stage == "counts" || stage == "instances")
+                        return 1;
+                    if (stage == "sort" || stage == "ranges")
+                        return 2;
+                    return stage == "present" ? 4 : 3;
+                };
+                result.counter_timestamps_available = true;
+                for (size_t n = 0; n < frame->profile_stages.size(); ++n) {
+                    const auto ms = frame->profile->milliseconds(n, n + 1);
+                    if (!ms) {
+                        result.counter_timestamps_available = false;
+                        break;
+                    }
+                    result.gpu_stage_ms[bucket(frame->profile_stages[n])] += *ms;
+                }
             }
             return result;
         } catch (const std::exception& error) {
@@ -1939,7 +1740,7 @@ namespace lfs::vis {
                 return false;
             if (frame->lodResultReady() && frame->lodStatus().overflow)
                 return false;
-            return frame->rasterStatus().error == RasterError::None;
+            return frame->rasterStatus().error == 0;
         } catch (const std::exception& error) {
             return nativeError(error);
         }
