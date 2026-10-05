@@ -79,6 +79,7 @@ set(TENSOR_SOURCES
         tensor/backend/cuda/cuda_ops_movement.cpp
         tensor/backend/cuda/cuda_services.cpp
         tensor/tensor.cpp
+        tensor/tensor_trace.cpp
         tensor/tensor_method_bodies.cpp
         tensor/tensor_serialization.cpp
         tensor/tensor_factory.cpp
