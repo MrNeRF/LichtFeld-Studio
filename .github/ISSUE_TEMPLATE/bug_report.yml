@@ -40,8 +40,8 @@ body:
   id: environment
   attributes:
     label: System and GPU
-    description: Include your operating system, GPU model, and NVIDIA driver version if known.
-    placeholder: Windows 11, RTX 4090 (24 GB), driver ...
+    description: Include your operating system, GPU model, and GPU driver version if known (for example, NVIDIA, AMD, or Intel).
+    placeholder: Windows 11, GPU model (VRAM), driver ...
   validations:
     required: true
 - type: textarea
