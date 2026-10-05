@@ -33,6 +33,7 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace lfs::vis {
@@ -831,22 +832,13 @@ namespace lfs::vis {
             return false;
         }
         SDL_AddEventWatch(watchEvent, this);
-        LOG_INFO("{} window context initialized",
+        // Directives inside macro arguments are undefined behaviour (MSVC C2059).
 #ifdef LFS_GRAPHICS_METAL
-                 "Metal"
+        constexpr std::string_view graphics_backend = "Metal";
 #else
-                 "Vulkan"
+        constexpr std::string_view graphics_backend = "Vulkan";
 #endif
-        );
-#ifdef __APPLE__
-        LOG_INFO("Desktop compositor backend active: {}",
-#ifdef LFS_GRAPHICS_METAL
-                 "metal"
-#else
-                 "vulkan"
-#endif
-        );
-#endif
+        LOG_INFO("{} window context initialized", graphics_backend);
         return true;
     }
 
