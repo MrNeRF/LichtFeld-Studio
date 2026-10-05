@@ -59,4 +59,29 @@ Merged `dev` at `76b85f18b0532d385ac13cbeea1b103de19e3428` without rebasing. Ups
 
 The remaining code change relative to dev is the macOS workflow: independent checks still execute after another test fails, the Metal capability report remains explicit, and the CPU application/visualizer coverage is retained. Upstream's new hybrid CI flags (`LFS_GRAPHICS_BACKEND=Vulkan`, `LFS_TENSOR_METAL=ON`, `LFS_TENSOR_VULKAN=ON`) are preserved alongside its Metal-only default app configuration and all newer runtime/test changes. No production source differs from the integrated dev revision.
 
-The merged revision is validated separately below; the earlier counts are historical.
+### GPU embedding build failure found during integration
+
+The first default build of merge `433354ccf1fb0bd23b1e4d2d07f681c2a0361967` reproduces a new upstream build failure: `tests/test_gpu_program.cpp` cannot include `program_contract.hpp`. The globally guarded GPU-program helper first runs `find_package(Python3)` in `src/core`; its executable variable is directory-scoped and unavailable to the later sibling call from `tests`. The generated Ninja embedding command for the test consists only of `cd`, so it succeeds without generating either declared output. This is not a missing shader dependency or a runtime GPU failure.
+
+Fix `12b9afcf0` resolves the interpreter inside `lfs_add_gpu_program`, in every caller's scope. The regenerated command runs the embedding script, creates both outputs, and the application/default test targets compile successfully. Shader generation flags, embedded artifacts, runtime calculations, admission policy, assertions and numerical tolerances are unchanged. The final integration diff contains this CMake helper fix, the retained macOS workflow changes and this record; both test files and all C++/Metal/Slang runtime sources match the pinned dev revision.
+
+### Verification of the integrated revision
+
+Tested runtime: `12b9afcf0` (full commit and source tree recorded in the local manifest). Same physical M4 Pro and SDK/toolchain as above, with the workflow's hybrid Vulkan graphics/Metal+Vulkan tensor flags, strict Metal device requirement, interop and depth contracts enabled. Application/default and excluded visualizer/drag-drop targets build. The application and eight main first-party dylibs still declare macOS 26.0.
+
+| Check | Result |
+|---|---|
+| Upstream snapshot fixtures, 3 GiB available/16 GiB total, Vulkan | 11 passed, no skips |
+| Same snapshot selection, Metal | 11 passed, no skips |
+| Expanded CPU CTest selection, SDL dummy driver | 12/12 passed |
+| Full portable Vulkan/VideoToolbox suite | 978 passed, 137 skipped, 5 disabled |
+| Vulkan HiGS depth and shared viewer selections | Each 1/1 passed |
+| New GPU program and tensor UI contracts | 2/2 passed |
+| Python node CPU selection | 29 passed, 17 deselected |
+| Python node GPU selection | 14 passed, 3 CUDA-unavailable skips, 29 deselected |
+| Viewer selection with Metal debug/shader validation | 19/19 passed |
+| Native backend benchmark smoke and parity selection | 233/233 passed |
+| actionlint 1.7.12 and workflow bash syntax | Passed; all 17 run blocks valid |
+| Changed-source whitespace | Passed |
+
+Commands, source/binary manifests, complete logs and GTest/pytest XML are retained locally in `/private/tmp/lfs-ci-merge-20261005`. The initial failed build remains recorded separately from the successful build and tests. Skipped/disabled cases are not counted as passes. These results cover the hybrid CI configuration on the physical M4; they do not establish hosted VM, Windows/CUDA, M5 or the new Metal-only application configuration behavior. Remote CI has not run this candidate. Dev is pinned at the merged revision rather than continually refetched during validation.
