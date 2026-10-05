@@ -524,6 +524,7 @@ namespace lfs::vis {
         try {
             return impl_->renderOffscreen(desc, projection, width, height);
         } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): translate tensor program exceptions at the typed facade boundary.
             return lfs::core::detail::task_failure_from_current_exception<lfs::rendering::MeshLayer>(
                 {.name = "mesh.tensor.offscreen", .domain = lfs::ErrorDomain::Rendering,
                  .site = LFS_SOURCE_SITE_CURRENT()});
