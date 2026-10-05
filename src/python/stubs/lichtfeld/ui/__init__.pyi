@@ -1916,6 +1916,9 @@ def save_project_file_dialog(default_name: str = 'project.licht', start_dir: str
     Choose a destination for a new LichtFeld project. Returns empty string if cancelled.
     """
 
+def open_image_file_dialog(start_dir: str = '') -> str:
+    """Select a still photo; returns empty if cancelled"""
+
 def open_ply_file_dialog(start_dir: str = '') -> str:
     """
     Open a file dialog to select a splat file (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.
@@ -2976,8 +2979,3 @@ def unregister_property_group(group_id: str) -> None:
 
 def property_group_info(group_id: str) -> dict:
     """Get registered property metadata for a property group"""
-
-
-def open_image_file_dialog(start_dir: str = "") -> str:
-    """Choose a still photo; empty when cancelled."""
-    ...
