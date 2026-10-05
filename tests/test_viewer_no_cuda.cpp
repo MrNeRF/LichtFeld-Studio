@@ -11,6 +11,8 @@
 #include "rendering/selection_ops.hpp"
 #if LFS_TENSOR_METAL
 #include "window/metal_graphics_context.hpp"
+#include <SDL3/SDL.h>
+#include <cstdlib>
 #endif
 
 #include <array>
@@ -42,6 +44,56 @@ TEST(ViewerNoCuda, MetalShutdownReleasesReservedFrameSlot) {
     graphics.shutdown();
     // Destroying a semaphore with an unreleased reservation traps in libdispatch.
 }
+
+TEST(ViewerNoCuda, MetalRenderPassPresentsAndResizesDrawable) {
+    if (!std::getenv("LFS_TEST_METAL_PRESENTATION"))
+        GTEST_SKIP() << "Set LFS_TEST_METAL_PRESENTATION=1 to exercise a real macOS drawable";
+    if (!gpu_backend_available(GpuBackend::Metal))
+        GTEST_SKIP() << "Metal backend unavailable";
+    const bool owns_video = !SDL_WasInit(SDL_INIT_VIDEO);
+    if (owns_video)
+        ASSERT_TRUE(SDL_InitSubSystem(SDL_INIT_VIDEO));
+    struct VideoCleanup {
+        bool owns;
+        ~VideoCleanup() {
+            if (owns)
+                SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        }
+    } cleanup{owns_video};
+    std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
+        SDL_CreateWindow("Metal presentation regression", 96, 64, SDL_WINDOW_METAL), SDL_DestroyWindow);
+    ASSERT_NE(window, nullptr) << SDL_GetError();
+    lfs::vis::MetalGraphicsContext graphics;
+    ASSERT_TRUE(graphics.initialize(window.get(), 96, 64));
+    for (const auto size : {std::array{96, 64}, std::array{128, 80}, std::array{64, 96}}) {
+        ASSERT_TRUE(SDL_SetWindowSize(window.get(), size[0], size[1]));
+        SDL_PumpEvents();
+        graphics.notifyFramebufferResized(size[0], size[1], lfs::vis::GraphicsResizeIntent::Interactive);
+        auto frame = graphics.beginFrame({0.2f, 0.4f, 0.8f, 1.0f});
+        ASSERT_TRUE(frame.has_value());
+        ASSERT_TRUE(frame->has_value());
+        auto* image = graphics.finalImageTensor(**frame);
+        ASSERT_NE(image, nullptr);
+        std::vector<std::uint8_t> pixels(size[0] * size[1] * 4);
+        for (int y = 0; y < size[1]; ++y) {
+            for (int x = 0; x < size[0]; ++x) {
+                const auto offset = (y * size[0] + x) * 4;
+                pixels[offset] = x * 255 / (size[0] - 1);
+                pixels[offset + 1] = y * 255 / (size[1] - 1);
+                pixels[offset + 2] = 64;
+                pixels[offset + 3] = 255;
+            }
+        }
+        GpuBackendScope scope(GpuBackend::Metal);
+        *image = Tensor::from_blob(pixels.data(), {static_cast<size_t>(size[1]), static_cast<size_t>(size[0]), 4},
+                                   Device::CPU, DataType::UInt8)
+                     .to(Device::GPU);
+        ASSERT_TRUE(graphics.endFrame().has_value()) << graphics.lastError();
+        ASSERT_TRUE(graphics.waitForSubmittedFrames()) << graphics.lastError();
+    }
+    graphics.shutdown();
+}
+
 #endif
 
 TEST(ViewerNoCuda, PreflightViewerOnlyCudaUsableUsesCuda) {
