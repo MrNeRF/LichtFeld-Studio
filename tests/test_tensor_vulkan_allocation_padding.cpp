@@ -7,6 +7,7 @@
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor/backend/vulkan/vk_memory.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_backend_vulkan.hpp"
 #include "core/tensor_upload.hpp"
 #include "core/tensor_vulkan_interop.hpp"
 
@@ -260,11 +261,73 @@ namespace {
         type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
         VkSemaphoreCreateInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         info.pNext = &type;
+        // Above the exportable range, and within it for a buffer no other API was given: a held buffer may be
+        // reused in flight either way.
+        for (const size_t count : {size_t{20} << 20, size_t{5} << 20}) {
+            VkSemaphore gate = VK_NULL_HANDLE;
+            ASSERT_EQ(vkCreateSemaphore(device, &info, nullptr, &gate), VK_SUCCESS);
+            ops.hold_freed_memory(true);
+            {
+                TensorWorkQueue queue(GpuBackend::Vulkan);
+                queue.set_consumer_timeline(device, {gate, 1, {}});
+                queue.wait_timeline(1);
+                Tensor doubled, refilled;
+                {
+                    TensorWorkQueue::Scope binding(queue);
+                    Tensor source = Tensor::full({count}, 1.0f, Device::GPU);
+                    const uint64_t buffer = native_allocation(source);
+                    // Eager reads of source; a lazy expression would keep it alive.
+                    doubled = Tensor::empty({count}, Device::GPU);
+                    doubled.copy_from(source);
+                    doubled.mul_(2.0f);
+                    source = Tensor();
+                    // Nothing has run yet: the gate holds every submission.
+                    refilled = Tensor::full({count}, 5.0f, Device::GPU);
+                    EXPECT_EQ(native_allocation(refilled), buffer);
+                    EXPECT_FALSE(queue.ready());
+                }
+                VkSemaphoreSignalInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+                signal.semaphore = gate;
+                signal.value = 1;
+                ASSERT_EQ(vkSignalSemaphore(device, &signal), VK_SUCCESS);
+                queue.wait();
+                EXPECT_FLOAT_EQ(doubled.min().item<float>(), 2.0f);
+                EXPECT_FLOAT_EQ(doubled.max().item<float>(), 2.0f);
+                EXPECT_FLOAT_EQ(refilled.min().item<float>(), 5.0f);
+            }
+            ops.hold_freed_memory(false);
+            vkDestroySemaphore(device, gate, nullptr);
+        }
+#endif
+    }
+
+    TEST_F(TensorVulkanAllocationPadding, HeldBufferGivenToCudaIsNotReusedInFlight) {
+#ifdef __APPLE__
+        GTEST_SKIP() << "MoltenVK must wait for device residency before freeing storage";
+#else
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        auto& ops = internal::backend_ops(GpuBackend::Vulkan);
+        ops.synchronize_device();
+        ops.trim();
+        const auto context = internal::acquire_vulkan_context();
+        const auto device = context->device();
+        if (!vulkan_backend_exports_memory())
+            GTEST_SKIP() << "Vulkan tensor backend is not exporting memory for CUDA";
+        VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        VkSemaphoreCreateInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        info.pNext = &type;
         VkSemaphore gate = VK_NULL_HANDLE;
         ASSERT_EQ(vkCreateSemaphore(device, &info, nullptr, &gate), VK_SUCCESS);
-        // Above the exportable range, so a held buffer may be reused in flight.
-        constexpr size_t count = size_t{20} << 20;
+        // Within the exportable range, where a CUDA view can reach the buffer.
+        constexpr size_t count = size_t{5} << 20;
         ops.hold_freed_memory(true);
+        Tensor source = Tensor::full({count}, 1.0f, Device::GPU);
+        const uint64_t buffer = native_allocation(source);
+        {
+            auto view = cuda_view_of_vulkan_tensor(source, nullptr);
+            ASSERT_TRUE(view) << lfs::format_for_developer(view.error());
+        }
         {
             TensorWorkQueue queue(GpuBackend::Vulkan);
             queue.set_consumer_timeline(device, {gate, 1, {}});
@@ -272,16 +335,13 @@ namespace {
             Tensor doubled, refilled;
             {
                 TensorWorkQueue::Scope binding(queue);
-                Tensor source = Tensor::full({count}, 1.0f, Device::GPU);
-                const uint64_t buffer = native_allocation(source);
-                // Eager reads of source; a lazy expression would keep it alive.
                 doubled = Tensor::empty({count}, Device::GPU);
                 doubled.copy_from(source);
                 doubled.mul_(2.0f);
                 source = Tensor();
-                // Nothing has run yet: the gate holds every submission.
+                // CUDA work is not ordered on the tensor queue, so the buffer waits for its last use to finish.
                 refilled = Tensor::full({count}, 5.0f, Device::GPU);
-                EXPECT_EQ(native_allocation(refilled), buffer);
+                EXPECT_NE(native_allocation(refilled), buffer);
                 EXPECT_FALSE(queue.ready());
             }
             VkSemaphoreSignalInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};

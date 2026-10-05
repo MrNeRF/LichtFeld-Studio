@@ -136,8 +136,9 @@ namespace lfs::core::internal {
         bool cacheable = false;
         // A direct-range buffer that a freed-memory hold may keep.
         bool holdable = false;
-        // No CUDA view can reach this buffer, so only the tensor queue uses it.
-        bool queue_ordered = false;
+        // Its block was handed to another API (a CUDA view or a Metal reader), whose work the tensor queue
+        // does not order; until then only the tensor queue uses the buffer.
+        bool shared_outside_queue = false;
         bool host_visible = false;
         std::byte* mapped = nullptr;
         StorageMeta descriptor_owner;
@@ -457,7 +458,6 @@ namespace lfs::core::internal {
             record->allocated_size = bucket_size;
             record->cacheable = cacheable;
             record->holdable = holdable;
-            record->queue_ordered = !exports_memory_ || bucket_size > kMaxExportSize;
             record->host_visible = host_visible;
 
 #if LFS_HAS_CUDA
@@ -644,12 +644,13 @@ namespace lfs::core::internal {
         if (storage.meta == nullptr || storage.backend != GpuBackend::Vulkan) {
             return std::nullopt;
         }
-        const AllocationRecord& record = allocation_for(storage);
+        AllocationRecord& record = allocation_for(storage);
         VmaAllocationInfo2 info{};
         vmaGetAllocationInfo2(context_.allocator(), record.allocation, &info);
         if (info.allocationInfo.deviceMemory == VK_NULL_HANDLE || info.blockSize == 0) {
             return std::nullopt;
         }
+        record.shared_outside_queue = true;
         return CudaBlockInfo{
             .memory = info.allocationInfo.deviceMemory,
             .allocation_offset = info.allocationInfo.offset,
@@ -933,7 +934,7 @@ namespace lfs::core::internal {
         std::vector<std::unique_ptr<AllocationRecord>> released;
         std::erase_if(retired_, [&](auto& record) {
             const bool done = record->last_use <= completed;
-            if (record->holdable && freed_memory_holds_ != 0 && (done || record->queue_ordered)) {
+            if (record->holdable && freed_memory_holds_ != 0 && (done || !record->shared_outside_queue)) {
                 held_.emplace(record->allocated_size, std::move(record));
                 return true;
             }
