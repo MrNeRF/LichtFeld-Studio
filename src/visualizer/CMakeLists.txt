@@ -72,9 +72,11 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/scene_upscaler_plugin_unavailable.cpp>
         rendering/scene_upscaler_registry.cpp
         rendering/scene_temporal_coordinator.cpp
+        rendering/scene_temporal_frame_setup.cpp
         rendering/scene_temporal_plan.cpp
         rendering/scene_temporal_resolve.cpp
         rendering/temporal_frame_tracker.cpp
+        $<$<BOOL:${LFS_TENSOR_METAL}>:rendering/tensor_scene_temporal_pipeline.cpp>
         rendering/lod_page_cache.cpp
         rendering/lod_upload_engine.cpp
         rendering/spark_lod_controller.cpp

@@ -172,7 +172,12 @@ if(BUILD_TESTS)
             test_splat_raster_contracts.cpp
             test_splat_projection_contracts.cpp
             test_splat_spark_gut_contracts.cpp
-            test_splat_rad_contracts.cpp)
+            test_splat_rad_contracts.cpp
+            test_tensor_scene_temporal.cpp
+            ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_resolve.cpp)
+        target_include_directories(tensor_rasterizer_contracts PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+            ${CMAKE_SOURCE_DIR}/src/visualizer)
         target_link_libraries(tensor_rasterizer_contracts PRIVATE lfs_tensor_rasterizer GTest::gtest_main)
         target_compile_features(tensor_rasterizer_contracts PRIVATE cxx_std_23)
         add_test(NAME TensorRasterizerContracts COMMAND tensor_rasterizer_contracts)

@@ -22,6 +22,7 @@
 #include "rendering/image_layout.hpp"
 #include "rendering/passes/vulkan_scene_plugin_pipeline.hpp"
 #include "rendering_manager.hpp"
+#include "scene_temporal_frame_setup.hpp"
 #include "rendering_manager_split_view.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene_renderer.hpp"
@@ -1120,13 +1121,9 @@ namespace lfs::vis {
             scene_renderer_->setCameraNavigating(
                 is_training && (frame_dirty & DirtyFlag::CAMERA) != 0);
         }
-        constexpr DirtyMask temporal_source_dirty =
-            DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::MESH |
-            DirtyFlag::VIEWPORT | DirtyFlag::BACKGROUND | DirtyFlag::SPLIT_VIEW;
-        const DirtyMask independently_dirty_temporal_sources =
-            frame_dirty & ~training_refresh_dirty & temporal_source_dirty;
         const bool lod_results_ready = lod_controller_ && lod_controller_->hasReadyResults();
         const bool lod_transition_active = lod_controller_ && lod_controller_->transitionActive();
+        const DirtyMask temporal_dirty = frame_dirty;
         if (lod_results_ready) {
             frame_dirty |= DirtyFlag::CAMERA;
         }
@@ -1146,40 +1143,34 @@ namespace lfs::vis {
             requested_plugin == nullptr ||
             (sceneUpscalerPluginSupportsOutputExtent(current_size) &&
              !resize_result.use_interactive_render_scale && !memory_pressure_active);
-        const bool temporal_eligible =
-            temporal_backend_requested && plugin_eligible && projection_supported &&
-            !frame_settings.equirectangular && !frame_settings.apply_appearance_correction &&
-            temporal_split_supported &&
-            lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
+        const auto temporal_setup = prepareSceneTemporalFrame(
+            view_state.temporal_convergence_,
+            {.backend_requested = temporal_backend_requested,
+             .runtime_ready = reported_upscaler.requested == requested_upscaler &&
+                              !reported_upscaler.fellBack(),
+             .pipeline_eligible = plugin_eligible,
+             .projection_supported = projection_supported,
+             .equirectangular = frame_settings.equirectangular,
+             .appearance_correction = frame_settings.apply_appearance_correction,
+             .split_supported = temporal_split_supported,
+             .raster_supported = lfs::rendering::isVkSplatBackend(frame_settings.raster_backend),
+             .interactive_scale = resize_result.use_interactive_render_scale,
+             .memory_pressure = memory_pressure_active,
+             .lod_results_ready = lod_results_ready,
+             .lod_transition_active = lod_transition_active,
+             .frame_dirty = temporal_dirty,
+             .training_refresh_dirty = training_refresh_dirty,
+             .settle_sample_count = plugin_jitter_phase_count > 0
+                                        ? plugin_jitter_phase_count
+                                        : TemporalConvergenceController::SAMPLE_COUNT,
+             .jitter_phase_count = plugin_jitter_phase_count});
+        const bool temporal_eligible = temporal_setup.eligible;
         {
             std::lock_guard lock(settings_mutex_);
-            view_state.scene_upscaler_mode_unsupported_ =
-                temporal_backend_requested && !resize_result.use_interactive_render_scale &&
-                !memory_pressure_active &&
-                (!projection_supported || frame_settings.equirectangular ||
-                 frame_settings.apply_appearance_correction || !temporal_split_supported);
+            view_state.scene_upscaler_mode_unsupported_ = temporal_setup.mode_unsupported;
         }
-        const bool training_refresh_only =
-            training_refresh_dirty != 0 && independently_dirty_temporal_sources == 0;
-        const bool allow_temporal_settle =
-            !training_refresh_only && !lod_results_ready && !lod_transition_active;
-        view_state.temporal_convergence_.prepare(
-            temporal_eligible,
-            (frame_dirty & temporal_source_dirty) != 0,
-            allow_temporal_settle,
-            plugin_jitter_phase_count > 0 ? plugin_jitter_phase_count
-                                          : TemporalConvergenceController::SAMPLE_COUNT,
-            plugin_jitter_phase_count);
-        glm::vec2 applied_temporal_jitter_pixels = view_state.temporal_convergence_.jitter();
-        if (temporal_backend_requested &&
-            (reported_upscaler.requested != requested_upscaler ||
-             reported_upscaler.fellBack())) {
-            // A newly requested temporal backend has not proved that it can
-            // present yet, and an explicit runtime fallback still presents this
-            // raster natively. Keep both cases unjittered; the exact applied
-            // zero offset is carried into the first valid history frame.
-            applied_temporal_jitter_pixels = glm::vec2(0.0f);
-        }
+        const bool training_refresh_only = temporal_setup.training_refresh_only;
+        const glm::vec2 applied_temporal_jitter_pixels = temporal_setup.jitter_pixels;
         const std::uint64_t temporal_camera_cut_generation =
             view_state.temporal_camera_cut_generation_.load(std::memory_order_acquire);
         const bool temporal_camera_cut =

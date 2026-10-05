@@ -808,10 +808,12 @@ namespace lfs::vis {
                                             ViewRenderState&) {
         impl_->upscaler = {
             .requested = desc.scene_upscaler,
-            .effective = SceneUpscalerBackend::Native,
-            .fallback = desc.scene_upscaler == SceneUpscalerBackend::Native
-                            ? SceneUpscalerFallback::None
-                            : SceneUpscalerFallback::UnsupportedMode,
+            .effective = desc.scene_upscaler_mode_unsupported
+                             ? SceneUpscalerBackend::Native
+                             : desc.scene_upscaler,
+            .fallback = desc.scene_upscaler_mode_unsupported
+                            ? SceneUpscalerFallback::UnsupportedMode
+                            : SceneUpscalerFallback::None,
         };
     }
 

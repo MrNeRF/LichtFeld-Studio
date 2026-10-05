@@ -36,6 +36,7 @@
 #include <vector>
 
 namespace lfs::vis {
+    class TensorSceneTemporalPipeline;
     struct FramebufferViewportRect {
         glm::ivec2 top_left{0, 0};
         glm::ivec2 size{0, 0};
@@ -85,6 +86,7 @@ namespace lfs::vis {
         std::uint64_t viewport_projection_generation_ = 1;
         std::uint64_t temporal_scene_revision_ = 1;
         TemporalConvergenceController temporal_convergence_;
+        std::shared_ptr<TensorSceneTemporalPipeline> tensor_temporal_pipeline_;
         std::atomic<std::uint64_t> temporal_camera_cut_generation_{0};
         std::uint64_t consumed_temporal_camera_cut_generation_ = 0;
         bool scene_reconstruction_request_logged_ = false;
