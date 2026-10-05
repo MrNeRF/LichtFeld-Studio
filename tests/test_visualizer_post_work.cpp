@@ -13727,8 +13727,6 @@ namespace lfs::vis {
             ASSERT_NE(gui, nullptr);
             gui->requestExitConfirmation(false);
             EXPECT_FALSE(gui->isExitConfirmationPending());
-            EXPECT_FALSE(
-                lfs::python::is_exit_popup_open());
         }
     }
 

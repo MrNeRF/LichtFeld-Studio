@@ -157,34 +157,18 @@ namespace lfs::python {
 
     } // namespace
 
-    PyTensor::PyTensor(Tensor tensor, bool owns_data)
-        : tensor_(std::move(tensor)),
-          owns_data_(owns_data) {}
+    PyTensor::PyTensor(Tensor tensor, bool)
+        : tensor_(std::move(tensor)) {}
 
     PyTensor::~PyTensor() = default;
 
-    PyTensor PyTensor::view_of(core::Tensor& t, uint64_t generation) {
-        PyTensor pt(t, false);
-        pt.source_gen_ = generation;
-        return pt;
-    }
-
-    void PyTensor::validate() const {
-        if (source_gen_ != 0 && source_gen_ != context().scene_generation)
-            throw std::runtime_error("Tensor data invalidated - scene changed");
-    }
-
     PyTensor::PyTensor(const PyTensor& other)
         : tensor_(other.tensor_),
-          owns_data_(other.owns_data_),
-          source_gen_(other.source_gen_),
           dlpack_managed_(other.dlpack_managed_) {}
 
     PyTensor& PyTensor::operator=(const PyTensor& other) {
         if (this != &other) {
             tensor_ = other.tensor_;
-            owns_data_ = other.owns_data_;
-            source_gen_ = other.source_gen_;
             dlpack_managed_ = other.dlpack_managed_;
         }
         return *this;
@@ -192,15 +176,11 @@ namespace lfs::python {
 
     PyTensor::PyTensor(PyTensor&& other) noexcept
         : tensor_(std::move(other.tensor_)),
-          owns_data_(other.owns_data_),
-          source_gen_(other.source_gen_),
           dlpack_managed_(std::move(other.dlpack_managed_)) {}
 
     PyTensor& PyTensor::operator=(PyTensor&& other) noexcept {
         if (this != &other) {
             tensor_ = std::move(other.tensor_);
-            owns_data_ = other.owns_data_;
-            source_gen_ = other.source_gen_;
             dlpack_managed_ = std::move(other.dlpack_managed_);
         }
         return *this;
@@ -274,7 +254,6 @@ namespace lfs::python {
     }
 
     PyTensor PyTensor::cpu() const {
-        validate();
         if (tensor_.device() == Device::CPU) {
             return PyTensor(tensor_);
         }
@@ -308,7 +287,6 @@ namespace lfs::python {
     }
 
     float PyTensor::item() const {
-        validate();
         if (tensor_.numel() != 1) {
             throw std::runtime_error("item() requires a tensor with exactly 1 element");
         }
@@ -324,7 +302,6 @@ namespace lfs::python {
     }
 
     int64_t PyTensor::item_int() const {
-        validate();
         if (tensor_.numel() != 1) {
             throw std::runtime_error("item() requires a tensor with exactly 1 element");
         }
@@ -339,7 +316,6 @@ namespace lfs::python {
     }
 
     bool PyTensor::item_bool() const {
-        validate();
         if (tensor_.numel() != 1) {
             throw std::runtime_error("item() requires a tensor with exactly 1 element");
         }
@@ -350,7 +326,6 @@ namespace lfs::python {
     }
 
     nb::object PyTensor::numpy(bool copy) const {
-        validate();
         Tensor host = tensor_.device() == Device::GPU ? tensor_.cpu() : tensor_;
         Tensor cpu_tensor = host.is_contiguous() ? std::move(host) : host.contiguous();
 
@@ -511,7 +486,6 @@ namespace lfs::python {
     }
 
     nb::object PyTensor::tolist() const {
-        validate();
         Tensor host = tensor_.device() == Device::GPU ? tensor_.cpu() : tensor_;
         Tensor cpu_tensor = host.is_contiguous() ? std::move(host) : host.contiguous();
 
@@ -545,7 +519,6 @@ namespace lfs::python {
     }
 
     size_t PyTensor::count_nonzero() const {
-        validate();
         return tensor_.count_nonzero();
     }
 

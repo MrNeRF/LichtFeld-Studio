@@ -78,11 +78,6 @@ namespace lfs::python {
         int depth = 0;
     };
 
-    struct PythonByteRange {
-        std::size_t start_byte = 0;
-        std::size_t end_byte = 0;
-    };
-
     struct PythonFoldRange {
         std::size_t start_byte = 0;
         std::size_t end_byte = 0;
@@ -127,10 +122,7 @@ namespace lfs::python {
         [[nodiscard]] const std::vector<PythonFoldRange>& foldRanges() const;
         [[nodiscard]] const std::vector<PythonSyntaxHighlight>& highlights() const;
         [[nodiscard]] std::string scopeAt(std::size_t byte_offset) const;
-        [[nodiscard]] std::optional<PythonByteRange> enclosingBlockRange(std::size_t byte_offset) const;
-        [[nodiscard]] std::vector<PythonByteRange> enclosingBlockRanges(std::size_t byte_offset) const;
         [[nodiscard]] bool hasTree() const;
-        [[nodiscard]] bool structureCurrent() const;
 
     private:
         struct Impl;

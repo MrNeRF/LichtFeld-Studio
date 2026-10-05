@@ -663,8 +663,6 @@ namespace lfs::python {
         std::vector<PythonFoldRange> current_fold_ranges;
         std::vector<PythonFoldRange> last_good_fold_ranges;
         std::vector<PythonSyntaxHighlight> current_highlights;
-        std::size_t code_size = 0;
-        bool current_structure_current = false;
 
         [[nodiscard]] bool ensure_parser() {
             if (parser != nullptr) {
@@ -675,14 +673,12 @@ namespace lfs::python {
             if (!parser) {
                 current_analysis = {};
                 current_analysis.summary = "Failed to create Python syntax parser";
-                current_structure_current = false;
                 return false;
             }
 
             if (!ts_parser_set_language(parser.get(), tree_sitter_python())) {
                 current_analysis = {};
                 current_analysis.summary = "Failed to initialize Python syntax parser";
-                current_structure_current = false;
                 parser.reset();
                 return false;
             }
@@ -691,7 +687,6 @@ namespace lfs::python {
         }
 
         void refresh_analysis(std::string_view code) {
-            code_size = code.size();
             current_analysis = analyze_tree(code, tree.get());
 
             std::vector<PythonSymbol> parsed_symbols = extract_symbols(tree.get(), code);
@@ -703,20 +698,17 @@ namespace lfs::python {
                 current_fold_ranges = std::move(parsed_fold_ranges);
                 last_good_symbols = current_symbols;
                 last_good_fold_ranges = current_fold_ranges;
-                current_structure_current = true;
                 return;
             }
 
             if (!parsed_symbols.empty() || !parsed_fold_ranges.empty()) {
                 current_symbols = std::move(parsed_symbols);
                 current_fold_ranges = std::move(parsed_fold_ranges);
-                current_structure_current = false;
                 return;
             }
 
             current_symbols = last_good_symbols;
             current_fold_ranges = last_good_fold_ranges;
-            current_structure_current = false;
         }
 
         [[nodiscard]] bool reset(std::string_view code) {
@@ -724,14 +716,11 @@ namespace lfs::python {
             current_symbols.clear();
             current_fold_ranges.clear();
             current_highlights.clear();
-            current_structure_current = false;
-            code_size = code.size();
 
             if (code.empty() || is_blank(code)) {
                 current_analysis = analyze_tree(code, nullptr);
                 last_good_symbols.clear();
                 last_good_fold_ranges.clear();
-                current_structure_current = true;
                 return true;
             }
 
@@ -742,7 +731,6 @@ namespace lfs::python {
             if (!fits_tree_sitter_u32(code.size())) {
                 current_analysis = {};
                 current_analysis.summary = "Python buffer is too large to parse";
-                current_structure_current = false;
                 return false;
             }
 
@@ -751,7 +739,6 @@ namespace lfs::python {
             if (!tree) {
                 current_analysis = {};
                 current_analysis.summary = "Failed to parse Python buffer";
-                current_structure_current = false;
                 return false;
             }
 
@@ -773,7 +760,6 @@ namespace lfs::python {
             if (!fits_tree_sitter_u32(code.size())) {
                 current_analysis = {};
                 current_analysis.summary = "Python buffer is too large to parse";
-                current_structure_current = false;
                 return false;
             }
 
@@ -852,61 +838,8 @@ namespace lfs::python {
         return join_scope_parts(scope_parts);
     }
 
-    std::optional<PythonByteRange> PythonSyntaxDocument::enclosingBlockRange(
-        const std::size_t byte_offset) const {
-        const auto ranges = enclosingBlockRanges(byte_offset);
-        if (ranges.empty()) {
-            return std::nullopt;
-        }
-        return ranges.front();
-    }
-
-    std::vector<PythonByteRange> PythonSyntaxDocument::enclosingBlockRanges(
-        const std::size_t byte_offset) const {
-        if (impl_->tree == nullptr || impl_->code_size == 0) {
-            return {};
-        }
-
-        std::vector<PythonByteRange> ranges;
-        const std::size_t query_byte = std::min(byte_offset, impl_->code_size - 1);
-        TSNode node = ts_node_descendant_for_byte_range(
-            ts_tree_root_node(impl_->tree.get()),
-            static_cast<std::uint32_t>(query_byte),
-            static_cast<std::uint32_t>(query_byte));
-
-        for (; !ts_node_is_null(node); node = ts_node_parent(node)) {
-            TSNode selected = node;
-            const std::string_view type = node_type(node);
-            if (is_symbol_container_type(type)) {
-                const TSNode parent = ts_node_parent(node);
-                if (!ts_node_is_null(parent) && node_type(parent) == "decorated_definition") {
-                    selected = parent;
-                }
-            } else if (!is_block_type(type)) {
-                continue;
-            }
-
-            const std::size_t start = ts_node_start_byte(selected);
-            const std::size_t end = ts_node_end_byte(selected);
-            if (start < end) {
-                const auto duplicate = std::ranges::any_of(ranges, [&](const PythonByteRange& range) {
-                    return range.start_byte == start && range.end_byte == end;
-                });
-                if (!duplicate) {
-                    ranges.push_back(PythonByteRange{.start_byte = start, .end_byte = end});
-                }
-            }
-        }
-
-        return ranges;
-    }
-
     bool PythonSyntaxDocument::hasTree() const {
         return impl_->tree != nullptr;
-    }
-
-    bool PythonSyntaxDocument::structureCurrent() const {
-        return impl_->current_structure_current;
     }
 
     PythonBufferAnalysis analyze_python_buffer(std::string_view code) {

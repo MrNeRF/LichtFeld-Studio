@@ -19,18 +19,6 @@ namespace lfs::python {
         return registry;
     }
 
-    static const char* menu_location_to_string(MenuLocation loc) {
-        switch (loc) {
-        case MenuLocation::File: return "FILE";
-        case MenuLocation::Edit: return "EDIT";
-        case MenuLocation::View: return "VIEW";
-        case MenuLocation::Window: return "WINDOW";
-        case MenuLocation::Help: return "HELP";
-        case MenuLocation::MenuBar: return "MENU_BAR";
-        default: return "UNKNOWN";
-        }
-    }
-
     static MenuLocation parse_menu_location(const std::string& s) {
         if (s == "EDIT")
             return MenuLocation::Edit;
@@ -313,36 +301,6 @@ namespace lfs::python {
         synced_from_python_ = false;
     }
 
-    void PyMenuRegistry::draw_menu_items(MenuLocation location) {
-        ensure_synced();
-        std::vector<PyMenuClassInfo> menu_classes_copy;
-        {
-            std::lock_guard lock(mutex_);
-            for (const auto& mc : menu_classes_) {
-                if (mc.location == location) {
-                    menu_classes_copy.push_back(mc);
-                }
-            }
-        }
-
-        (void)menu_classes_copy;
-    }
-
-    bool PyMenuRegistry::has_items(MenuLocation location) const {
-        ensure_synced();
-        std::lock_guard lock(mutex_);
-        for (const auto& mc : menu_classes_) {
-            if (mc.location == location) {
-                return true;
-            }
-        }
-        const char* const section = menu_location_to_string(location);
-        if (PyUIHookRegistry::instance().has_hooks("menu", section)) {
-            return true;
-        }
-        return false;
-    }
-
     void PyMenuRegistry::ensure_synced() const {
         if (!synced_from_python_) {
             synced_from_python_ = true;
@@ -362,42 +320,6 @@ namespace lfs::python {
         std::sort(result.begin(), result.end(),
                   [](const PyMenuClassInfo* a, const PyMenuClassInfo* b) { return a->order < b->order; });
         return result;
-    }
-
-    void PyMenuRegistry::draw_menu_bar_entry(const std::string& idname) {
-        PyMenuClassInfo* target = nullptr;
-        {
-            std::lock_guard lock(mutex_);
-            for (auto& mc : menu_classes_) {
-                if (mc.idname == idname) {
-                    target = &mc;
-                    break;
-                }
-            }
-        }
-
-        if (!target || !target->menu_instance.is_valid()) {
-            return;
-        }
-
-        nb::gil_scoped_acquire gil;
-
-        try {
-            bool should_draw = true;
-            if (nb::hasattr(target->menu_class, "poll")) {
-                should_draw = nb::cast<bool>(target->menu_class.attr("poll")(nb::none()));
-            }
-            if (!should_draw) {
-                return;
-            }
-            if (!has_schema_menu_items(*target) && nb::hasattr(target->menu_instance, "draw")) {
-                warn_legacy_menu_draw_once(idname);
-                PyUILayout layout(1);
-                target->menu_instance.attr("draw")(layout);
-            }
-        } catch (const std::exception& e) {
-            LOG_ERROR("Menu '{}' draw error: {}", idname, e.what());
-        }
     }
 
     void PyMenuRegistry::sync_from_python() const {

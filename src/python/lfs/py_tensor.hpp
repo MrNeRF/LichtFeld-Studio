@@ -20,7 +20,7 @@ namespace lfs::python {
     class PyTensor {
     public:
         PyTensor() = default;
-        explicit PyTensor(core::Tensor tensor, bool owns_data = true);
+        explicit PyTensor(core::Tensor tensor, bool = true);
         ~PyTensor();
 
         // Copy and move operations
@@ -268,16 +268,8 @@ namespace lfs::python {
         const core::Tensor& tensor() const { return tensor_; }
         core::Tensor& tensor() { return tensor_; }
 
-        // Factory for non-owning view with generation tracking
-        static PyTensor view_of(core::Tensor& t, uint64_t generation);
-
-        // Validate tensor is still valid (for non-owning views)
-        void validate() const;
-
     private:
         core::Tensor tensor_;
-        bool owns_data_ = true;
-        uint64_t source_gen_ = 0; // 0 = owning, no check needed
 
         // DLPack: shared ownership of managed tensor - deleter called when last copy destroyed
         std::shared_ptr<DLManagedTensor> dlpack_managed_;

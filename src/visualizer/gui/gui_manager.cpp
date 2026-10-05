@@ -8523,7 +8523,6 @@ namespace lfs::vis::gui {
         const bool training_in_progress) {
         exit_confirmation_requested_ = true;
         exit_confirmation_dismissed_ = false;
-        lfs::python::set_exit_popup_open(true);
         startup_overlay_.dismiss();
         lfs::core::events::cmd::
             ShowExitConfirmation{
@@ -8600,7 +8599,6 @@ namespace lfs::vis::gui {
 
     void GuiManager::dismissExitConfirmation() {
         exit_confirmation_dismissed_ = true;
-        lfs::python::set_exit_popup_open(false);
     }
 
     void GuiManager::noteExitPopupMirror(const bool open) {
