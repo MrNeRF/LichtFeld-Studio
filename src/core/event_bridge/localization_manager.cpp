@@ -300,11 +300,6 @@ namespace lfs::event {
         language_generation_.fetch_add(1, std::memory_order_release);
     }
 
-    bool LocalizationManager::hasOverride(const std::string& key) const {
-        const std::lock_guard lock(mutex_);
-        return overrides_.find(key) != overrides_.end();
-    }
-
     LocalizationManager::PluginCatalogToken LocalizationManager::registerPluginCatalog(
         const std::string_view owner_id,
         const std::string_view language_code,
@@ -353,7 +348,6 @@ namespace lfs::event {
         const PluginCatalogToken token = next_plugin_catalog_token_++;
 
         PluginCatalogRecord record{
-            .owner_id = std::string(owner_id),
             .language_code = std::string(language_code),
         };
         record.keys.reserve(normalized_entries.size());
@@ -400,19 +394,6 @@ namespace lfs::event {
         return true;
     }
 
-    std::size_t LocalizationManager::unregisterPluginCatalogs(const std::string_view owner_id) {
-        const std::lock_guard lock(mutex_);
-        std::vector<PluginCatalogToken> tokens;
-        for (const auto& [token, catalog] : plugin_catalogs_) {
-            if (catalog.owner_id == owner_id)
-                tokens.push_back(token);
-        }
-
-        for (const PluginCatalogToken token : tokens)
-            unregisterPluginCatalogLocked(token);
-        return tokens.size();
-    }
-
     std::vector<std::string> LocalizationManager::getAvailableLanguages() const {
         const std::lock_guard lock(mutex_);
         return available_languages_;
@@ -457,11 +438,6 @@ namespace lfs::event {
     std::string LocalizationManager::getCurrentLanguage() const {
         const std::lock_guard lock(mutex_);
         return current_language_;
-    }
-
-    bool LocalizationManager::reload() {
-        const std::string language_code = getCurrentLanguage();
-        return !language_code.empty() && setLanguage(language_code);
     }
 
     bool LocalizationManager::loadLanguage(const std::string& language_code) {
