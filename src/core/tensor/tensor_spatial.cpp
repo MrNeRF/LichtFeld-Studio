@@ -178,8 +178,8 @@ namespace lfs::core {
             const size_t groups = (count + kPointTreeFanout - 1) / kPointTreeFanout;
             const auto padded = groups * kPointTreeFanout == count
                                     ? rows
-                                    : Tensor::cat({rows, rows.slice(0, count - 1, count).expand({groups * kPointTreeFanout - count, width})}, 0);
-            return padded.contiguous().reshape({groups, size_t(kPointTreeFanout), width});
+                                    : Tensor::cat({rows, rows.slice(0, count - 1, count).expand({int(groups * kPointTreeFanout - count), int(width)})}, 0);
+            return padded.contiguous().reshape({int(groups), int(kPointTreeFanout), int(width)});
         }
 
         PointTree build_point_tree(const Tensor& points, const Tensor& references) {
