@@ -275,6 +275,9 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v7
 
+      - name: Test the gate scripts
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
+
       - name: Generate error-debt census
         run: python3 tools/error_debt_census.py > error-debt-census.json
 
