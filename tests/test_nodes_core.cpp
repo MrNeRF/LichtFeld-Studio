@@ -2165,7 +2165,7 @@ namespace {
             const auto points = tensor(xyz, {count, 3});
             const bool all = std::ranges::all_of(selected, [](bool value) { return value; });
             std::vector<float> mask(selected.begin(), selected.end());
-            const auto actual = all ? lfs::core::radius_connected_components(points, radius)
+            const auto actual = all ? lfs::core::radius_connected_components(points, radius, Tensor{})
                                     : lfs::core::radius_connected_components(points, radius, tensor(mask, {count}).to(lfs::core::DataType::Bool));
             EXPECT_EQ(actual.device(), device());
             EXPECT_EQ(actual.dtype(), lfs::core::DataType::Int32);
@@ -2195,7 +2195,7 @@ namespace {
         cut[2500] = false;
         check(line, std::vector<bool>(chain, true), 0.01f);
         check(line, cut, 0.01f);
-        EXPECT_EQ(lfs::core::radius_connected_components(Tensor::empty({0, 3}, device()), 1.0f).numel(), 0u);
+        EXPECT_EQ(lfs::core::radius_connected_components(Tensor::empty({0, 3}, device()), 1.0f, Tensor{}).numel(), 0u);
     }
 
     TEST_P(NodesCore, RadiusNeighborMinMatchesBruteForceForFloatAndInt) {
