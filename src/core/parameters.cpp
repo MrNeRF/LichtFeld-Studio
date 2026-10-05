@@ -423,14 +423,10 @@ namespace lfs::core {
                 return "eval_mask_invert requires eval_mask";
             if (!eval_mask.empty() && !enable_eval)
                 return "eval_mask requires evaluation to be enabled";
-            if (!eval_mask.empty()) {
-                const auto path = utf8_to_path(eval_mask);
-                if (!path.is_absolute())
-                    return "eval_mask must be an absolute path";
-                std::error_code error;
-                if (!std::filesystem::is_regular_file(path, error))
-                    return std::format("eval_mask file does not exist: {}", eval_mask);
-            }
+            // The mask file is checked where it is read, so settings stored in a project stay valid
+            // when the file moves.
+            if (!eval_mask.empty() && !utf8_to_path(eval_mask).is_absolute())
+                return "eval_mask must be an absolute path";
             if (iterations == 0 || iterations > MAX_ITERATION_VALUE)
                 return std::format("iterations must be within [1, {}] (got {})", MAX_ITERATION_VALUE, iterations);
             if (refine_every == 0 || refine_every > MAX_ITERATION_VALUE)
