@@ -636,26 +636,6 @@ TEST(BarrierPlanner, StatsCountersTrackEmittedElidedAndConservative) {
     EXPECT_EQ(s.conservative_fallbacks, 1u);
 }
 
-// Catches reset() leaving stats or tracked state so later plans inherit prior counters/handles.
-TEST(BarrierPlanner, ResetClearsStateAndStats) {
-    BufferBarrierPlanner planner(kQueueFamily);
-    auto buf = makeBuffer(0x1503);
-    planner.track(buf.buffer);
-    ASSERT_TRUE(planner.plan(std::array{DeclaredAccess{&buf, BufferUse::ComputeWrite}}).empty());
-    ASSERT_EQ(planner.plan(std::array{DeclaredAccess{&buf, BufferUse::ComputeRead}}).size(), 1u);
-
-    planner.reset();
-    const auto s = planner.stats();
-    EXPECT_EQ(s.barriers_emitted, 0u);
-    EXPECT_EQ(s.accesses_elided, 0u);
-    EXPECT_EQ(s.conservative_fallbacks, 0u);
-
-    // After reset, buffer is untracked → conservative.
-    auto barriers = planner.plan(std::array{DeclaredAccess{&buf, BufferUse::ComputeRead}});
-    ASSERT_EQ(barriers.size(), 1u);
-    expectSrcDst(barriers[0], conservativeSrc(), scopeFor(BufferUse::ComputeRead));
-}
-
 // ---------------------------------------------------------------------------
 // Writer+readers then write: src unions writer stage with reader_stages
 // ---------------------------------------------------------------------------

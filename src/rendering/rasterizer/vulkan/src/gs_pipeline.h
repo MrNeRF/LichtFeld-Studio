@@ -67,7 +67,6 @@ public:
     void untrackExternalParent(VkBuffer buffer);
     // Test / audit access to the host-side planner (not a render-path seam).
     [[nodiscard]] lfs::rendering::vulkan::BufferBarrierPlanner& barrierPlanner() noexcept;
-    [[nodiscard]] const lfs::rendering::vulkan::BufferBarrierPlanner& barrierPlanner() const noexcept;
 
     // Epic #1496 §3.2: plan transfer/fill/host accesses and emit ≤1 barrier2 when non-empty.
     // Requires an active command batch. No trailing barrier after the transfer op itself.
@@ -172,14 +171,6 @@ protected:
     CpuStageTimer timeCpuStage(std::string name) {
         return CpuStageTimer(this, std::move(name));
     }
-
-    void bufferMemoryBarrier(const std::vector<std::pair<_VulkanBuffer, BarrierMask>>& buffers, BarrierMask dstMask);
-    struct BufferBarrier {
-        _VulkanBuffer buffer;
-        BarrierMask src_mask;
-        BarrierMask dst_mask;
-    };
-    void bufferMemoryBarrier(const std::vector<BufferBarrier>& barriers);
 
     size_t current_vram = 0;
     size_t peak_vram = 0;
