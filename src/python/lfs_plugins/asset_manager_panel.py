@@ -41,7 +41,6 @@ from .project_inspector import (
     InspectionFactsPipeline,
     dialog_model,
     contents_rows,
-    pending_removals,
     license_name,
     license_value,
     details_rows,

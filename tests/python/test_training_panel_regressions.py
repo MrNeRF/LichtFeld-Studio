@@ -208,12 +208,12 @@ def test_toolbar_uses_short_primary_labels(training_panel_module, monkeypatch, i
     assert model.bindings["label_toolbar_edit"][0]() == "common.edit"
 
 
-def test_toolbar_starting_status_is_not_unknown(training_panel_module, monkeypatch):
+def test_toolbar_shows_starting_badge(training_panel_module, monkeypatch):
     module = training_panel_module
     monkeypatch.setattr(module, "_training_session_state", lambda: {})
     monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "starting")
     model = _ModelStub()
-    module.TrainingPanel()._bind_status(model, lambda: None)
+    module.TrainingPanel()._bind_visibility(model, lambda: None, lambda: None)
     assert model.bindings["show_ctrl_starting"][0]()
 
 
@@ -225,7 +225,6 @@ def test_restore_failure_keeps_detail_below_error_badge(training_panel_module, m
     panel = module.TrainingPanel()
     panel._bind_status(model, lambda: None)
     panel._bind_visibility(model, lambda: None, lambda: None)
-    assert model.bindings["show_ctrl_error"][0]()
     assert "bad checkpoint" in model.bindings["error_message"][0]()
     assert model.bindings["show_ctrl_error"][0]()
     assert not model.bindings["show_ctrl_paused"][0]()
