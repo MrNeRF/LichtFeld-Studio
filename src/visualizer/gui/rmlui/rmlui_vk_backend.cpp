@@ -1239,9 +1239,11 @@ RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewText
         if (embedded_project_preview) {
             auto reader = lfs::io::project::ProjectReader::open(path);
             if (!reader) {
-                LOG_WARN("Failed to inspect embedded project preview '{}': {}",
-                         lfs::core::path_to_utf8(path),
-                         lfs::format_for_developer(reader.error()));
+                // A catalog entry can outlive its file until the catalog marks it missing.
+                if (reader.error().code() != lfs::ErrorCode::NotFound)
+                    LOG_WARN("Failed to inspect embedded project preview '{}': {}",
+                             lfs::core::path_to_utf8(path),
+                             lfs::format_for_developer(reader.error()));
                 return result;
             }
             auto preview = reader->read_preview();

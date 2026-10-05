@@ -52,6 +52,8 @@
 #define RMLUI_VK_API_VERSION VK_API_VERSION_1_3
 
 class RenderInterface_VK : public lfs::vis::gui::UiRenderer {
+    friend class RenderInterfaceVKTestAccess;
+
 public:
     static constexpr uint32_t kSwapchainBackBufferCount = 3;
     // Retained panel geometry plus three in-flight generations of canvas meshes.
