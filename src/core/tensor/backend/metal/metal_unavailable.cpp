@@ -17,6 +17,7 @@ namespace lfs::core::internal::metal_queue {
     bool valid(const uint64_t id) { return id == 0; }
     uint64_t submit() { return 0; }
     bool ready(uint64_t) { return true; }
+    bool completed(uint64_t) { return true; }
     void wait(uint64_t) {}
     void wait_completed(uint64_t) {}
     std::byte* host(const StorageRef&) { unavailable(); }

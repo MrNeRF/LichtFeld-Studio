@@ -97,10 +97,23 @@ namespace lfs::core::internal {
                 for (size_t i = 0; i < 3; ++i)
                     LFS_ASSERT_MSG(launch.groups[i] <= context_->caps().max_workgroup_count[i],
                                    std::format("Program dispatch dimension {}: {} groups exceeds {}", i, launch.groups[i], context_->caps().max_workgroup_count[i]));
+                VkBuffer indirect = VK_NULL_HANDLE;
+                VkDeviceSize indirect_offset = 0;
+                if (launch.indirect) {
+                    const auto storage = storage_ref(*launch.indirect);
+                    indirect = VulkanMemory::buffer_for(storage);
+                    indirect_offset = VulkanMemory::offset_for(storage) + launch.indirect_offset * sizeof(uint32_t);
+                }
+                // Indirect counts are read in the draw-indirect stage.
+                const VkPipelineStageFlags2 stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                                    (indirect ? VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT : 0);
                 context_->recorders().record(reads, writes, [&](VkCommandBuffer command) {
                     vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline);
                     push(command, *pipeline, VK_SHADER_STAGE_COMPUTE_BIT, arguments);
-                    vkCmdDispatch(command, launch.groups[0], launch.groups[1], launch.groups[2]); }, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_WHOLE_SIZE, pipeline);
+                    if (indirect)
+                        vkCmdDispatchIndirect(command, indirect, indirect_offset);
+                    else
+                        vkCmdDispatch(command, launch.groups[0], launch.groups[1], launch.groups[2]); }, stage, VK_WHOLE_SIZE, pipeline);
             }
 
             void draw(std::span<const Module::Draw> draws, std::span<const ProgramArguments> arguments) override {

@@ -53,27 +53,32 @@ namespace lfs::core::internal {
                 return located.address + located.offset;
             }
 
+            // Compute records on the tensor queue's batched encoder, like the
+            // tensor ops: no command buffer or queue hop per dispatch.
             void dispatch(const Module::Dispatch& launch, const ProgramArguments& arguments) override {
-                std::lock_guard lock(mutex_);
-                auto& pipeline = compute_[std::string(launch.function)];
-                if (!pipeline) {
-                    NSError* error = nil;
-                    pipeline = [reader_.device() newComputePipelineStateWithFunction:functions_.at({std::string(launch.function), Module::Stage::Compute}) error:&error];
-                    if (!pipeline)
-                        throw TensorError(std::format("Slang Metal compute pipeline '{}': {}", launch.function, error.localizedDescription.UTF8String));
+                id<MTLComputePipelineState> pipeline;
+                {
+                    std::lock_guard lock(mutex_);
+                    auto& cached = compute_[std::string(launch.function)];
+                    if (!cached) {
+                        NSError* error = nil;
+                        cached = [context_->device() newComputePipelineStateWithFunction:functions_.at({std::string(launch.function), Module::Stage::Compute}) error:&error];
+                        if (!cached)
+                            throw TensorError(std::format("Slang Metal compute pipeline '{}': {}", launch.function, error.localizedDescription.UTF8String));
+                    }
+                    pipeline = cached;
                 }
-                const auto encode = [&](id<MTLCommandBuffer> command, std::span<const MetalTensorView> reads, std::span<const MetalTensorView> writes) {
-                    id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
-                    [encoder setComputePipelineState:pipeline];
-                    if (!arguments.parameters.empty())
-                        [encoder setBytes:arguments.parameters.data() length:arguments.parameters.size() atIndex:0];
-                    for (const auto& view : reads) [encoder useResource:view.buffer usage:MTLResourceUsageRead];
-                    for (const auto& view : writes) [encoder useResource:view.buffer usage:MTLResourceUsageRead | MTLResourceUsageWrite];
-                    [encoder dispatchThreadgroups:MTLSizeMake(launch.groups[0], launch.groups[1], launch.groups[2])
-                             threadsPerThreadgroup:MTLSizeMake(launch.group[0], launch.group[1], launch.group[2])];
-                    [encoder endEncoding];
-                };
-                submit(arguments, {}, encode);
+                std::vector<StorageRef> uses;
+                uses.reserve(arguments.reads.size() + arguments.writes.size());
+                for (const auto* list : {&arguments.reads, &arguments.writes})
+                    for (const Tensor* tensor : *list)
+                        uses.push_back(storage_ref(*tensor));
+                context_->dispatch(uses, {.pipeline = pipeline,
+                                          .buffers = {},
+                                          .params = arguments.parameters,
+                                          .grid = MTLSizeMake(launch.groups[0], launch.groups[1], launch.groups[2]),
+                                          .group_size = MTLSizeMake(launch.group[0], launch.group[1], launch.group[2]),
+                                          .indirect = launch.indirect ? address(*launch.indirect) + launch.indirect_offset * sizeof(uint32_t) : 0});
             }
 
             void draw(std::span<const Module::Draw> draws, std::span<const ProgramArguments> arguments) override {
@@ -82,9 +87,6 @@ namespace lfs::core::internal {
                 const auto width = first.color->size(1), height = first.color->size(0);
                 const bool bytes = first.color->dtype() == DataType::UInt8;
                 const MTLPixelFormat format = bytes ? MTLPixelFormatRGBA8Unorm : MTLPixelFormatRGBA32Float;
-                // Attachments are reused: every submission shares one queue, so
-                // Metal orders a reused texture after its previous pass.
-                const auto color = attachment(width, height, format);
                 const auto depth = first.depth ? attachment(width, height, MTLPixelFormatDepth32Float) : nil;
                 std::vector<id<MTLRenderPipelineState>> pipelines;
                 std::vector<id<MTLDepthStencilState>> depth_states;
@@ -103,9 +105,17 @@ namespace lfs::core::internal {
                     const auto color_view = writes[merged.writes.size()];
                     const auto depth_view = first.depth ? writes.back() : MetalTensorView{};
                     const auto color_row = width * (bytes ? 4 : 16), depth_row = width * 4;
-                    if (!first.clear_color || (first.depth && !first.clear_depth)) {
+                    // Render straight into the color tensor when its storage can
+                    // back a linear texture; otherwise through a cached attachment.
+                    id<MTLTexture> color = linear_texture(color_view, width, height, format, color_row);
+                    const bool copy_color = color == nil;
+                    // Attachments are reused: every submission shares one queue, so
+                    // Metal orders a reused texture after its previous pass.
+                    if (copy_color)
+                        color = attachment(width, height, format);
+                    if ((copy_color && !first.clear_color) || (first.depth && !first.clear_depth)) {
                         id<MTLBlitCommandEncoder> upload = [command blitCommandEncoder];
-                        if (!first.clear_color)
+                        if (copy_color && !first.clear_color)
                             [upload copyFromBuffer:color_view.buffer sourceOffset:color_view.offset sourceBytesPerRow:color_row sourceBytesPerImage:color_row * height
                                         sourceSize:MTLSizeMake(width, height, 1) toTexture:color destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
                         if (first.depth && !first.clear_depth)
@@ -157,13 +167,16 @@ namespace lfs::core::internal {
                     }
                     [encoder endEncoding];
 
-                    id<MTLBlitCommandEncoder> download = [command blitCommandEncoder];
-                    [download copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(width, height, 1)
-                                      toBuffer:color_view.buffer destinationOffset:color_view.offset destinationBytesPerRow:color_row destinationBytesPerImage:color_row * height];
-                    if (depth)
-                        [download copyFromTexture:depth sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(width, height, 1)
-                                          toBuffer:depth_view.buffer destinationOffset:depth_view.offset destinationBytesPerRow:depth_row destinationBytesPerImage:depth_row * height];
-                    [download endEncoding];
+                    if (copy_color || depth) {
+                        id<MTLBlitCommandEncoder> download = [command blitCommandEncoder];
+                        if (copy_color)
+                            [download copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(width, height, 1)
+                                              toBuffer:color_view.buffer destinationOffset:color_view.offset destinationBytesPerRow:color_row destinationBytesPerImage:color_row * height];
+                        if (depth)
+                            [download copyFromTexture:depth sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(width, height, 1)
+                                              toBuffer:depth_view.buffer destinationOffset:depth_view.offset destinationBytesPerRow:depth_row destinationBytesPerImage:depth_row * height];
+                        [download endEncoding];
+                    }
                 });
             }
 
@@ -189,6 +202,18 @@ namespace lfs::core::internal {
                 auto& cached = shared.attachments[key];
                 if (!cached) cached = texture(width, height, format);
                 return cached;
+            }
+
+            // A render target aliasing the tensor's own storage, or nil when the
+            // storage misses the device's linear-texture alignment.
+            id<MTLTexture> linear_texture(const MetalTensorView& view, size_t width, size_t height, MTLPixelFormat format, size_t row) {
+                const NSUInteger alignment = [reader_.device() minimumLinearTextureAlignmentForPixelFormat:format];
+                if (alignment == 0 || view.offset % alignment || row % alignment)
+                    return nil;
+                MTLTextureDescriptor* desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:width height:height mipmapped:NO];
+                desc.resourceOptions = view.buffer.resourceOptions;
+                desc.usage = MTLTextureUsageRenderTarget;
+                return [view.buffer newTextureWithDescriptor:desc offset:view.offset bytesPerRow:row];
             }
 
             id<MTLDepthStencilState> depth_state(const Module::Draw& draw) {
@@ -234,6 +259,7 @@ namespace lfs::core::internal {
                 return pipeline;
             }
 
+            std::shared_ptr<metal::Context> context_ = metal::acquire_context();
             MetalTensorReader& reader_ = shared_raster().reader;
             std::mutex mutex_;
             std::map<std::pair<std::string, Module::Stage>, id<MTLFunction>> functions_;

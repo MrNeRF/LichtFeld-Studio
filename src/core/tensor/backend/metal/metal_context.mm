@@ -209,7 +209,9 @@ namespace lfs::core::internal::metal {
             [arguments_ setAddress:params.gpuAddress + params_used_ atIndex:slot];
             params_used_ += (dispatch.params.size() + kParamsAlignment - 1) / kParamsAlignment * kParamsAlignment;
         }
-        if (dispatch.group_size.width == 0) {
+        if (dispatch.indirect != 0) {
+            [encoder dispatchThreadgroupsWithIndirectBuffer:dispatch.indirect threadsPerThreadgroup:dispatch.group_size];
+        } else if (dispatch.group_size.width == 0) {
             const NSUInteger width = std::min(dispatch.pipeline.maxTotalThreadsPerThreadgroup, kThreadgroupWidth);
             [encoder dispatchThreads:dispatch.grid threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
         } else {
@@ -866,6 +868,14 @@ namespace lfs::core::internal::metal_queue {
         if (@available(macOS 26.0, *)) {
             const auto context = context_for(serial);
             return !context || context->ready(serial);
+        }
+        return true;
+    }
+
+    bool completed(const uint64_t serial) {
+        if (@available(macOS 26.0, *)) {
+            const auto context = context_for(serial);
+            return !context || context->completed() >= serial;
         }
         return true;
     }

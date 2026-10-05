@@ -40,6 +40,7 @@ namespace lfs::core {
                                       ReadWrite };
         struct Binding {
             uint32_t parameter_offset; // offset of the Slang Ptr<T> field
+            // nullptr leaves the pointer 0: an optional input the shader tests.
             const Tensor* tensor;
             Access access = Access::Read;
         };
@@ -54,6 +55,11 @@ namespace lfs::core {
             Arguments arguments;
             std::array<uint32_t, 3> groups{1, 1, 1};
             std::array<uint32_t, 3> group{64, 1, 1};
+            // When set, the threadgroup counts are three uint32 that GPU work
+            // wrote at element `indirect_offset` of this Int32/UInt32 tensor;
+            // `groups` is ignored. Vulkan and Metal only.
+            const Tensor* indirect = nullptr;
+            size_t indirect_offset = 0;
         };
         enum class Blend : uint8_t { Opaque,
                                      StraightAlpha,

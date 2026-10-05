@@ -209,7 +209,11 @@ namespace lfs::vis {
                 impl_->layer.framebufferOnly = YES;
                 impl_->layer.maximumDrawableCount = kFramesInFlight;
                 impl_->layer.allowsNextDrawableTimeout = YES;
-                impl_->layer.displaySyncEnabled = YES;
+                // Like the Vulkan swapchain's MAILBOX mode: present without
+                // waiting for vblank so navigation stays low-latency and the GUI
+                // never blocks in present while it takes arena turns with
+                // training. The frame demand ledger paces idle frames.
+                impl_->layer.displaySyncEnabled = NO;
                 impl_->layer.presentsWithTransaction = NO;
                 impl_->resizeLayer();
 

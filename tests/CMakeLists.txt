@@ -93,6 +93,10 @@ if(BUILD_TESTS)
     target_compile_features(gpu_program_contracts PRIVATE cxx_std_23)
     lfs_add_gpu_program(gpu_program_contracts program_contract SOURCE shaders/program_contract.slang
         COMPUTE transform VERTEX vertexMain FRAGMENT fragmentMain)
+    lfs_add_gpu_program(gpu_program_contracts program_features SOURCE shaders/program_features.slang
+        COMPUTE waveOps sharedReduce atomics narrowAndWide prepareIndirect markIndirect optionalInput variant)
+    lfs_add_gpu_program(gpu_program_contracts program_features_variant SOURCE shaders/program_features.slang
+        COMPUTE variant DEFINES LFS_FEATURE_VARIANT=5)
     add_test(NAME GpuProgramContracts COMMAND gpu_program_contracts)
     set_tests_properties(GpuProgramContracts PROPERTIES LABELS "tensor;gpu" TIMEOUT 120)
 endif()

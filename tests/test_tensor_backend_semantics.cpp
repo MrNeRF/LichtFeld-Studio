@@ -7,6 +7,7 @@
 
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_upload.hpp"
 
 #include <gtest/gtest.h>
 
@@ -18,6 +19,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -237,6 +239,24 @@ namespace {
         });
         // The fault is consumed: unrelated work runs clean.
         EXPECT_FLOAT_EQ(make<float>(DataType::Float32, {3}, {1.f, 1.f, 1.f}).sum_scalar(), 3.f);
+    }
+
+    TEST_P(TensorBackendSemantics, InBatchUploadOrdersAfterPendingReaders) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Uploads target a GPU backend";
+        Tensor destination = Tensor::full({4099}, 3.0f, Device::GPU, DataType::Float32);
+        // A pending reader keeps the destination busy, so the bytes go through
+        // staging and a queued copy that must run after this read.
+        Tensor previous = Tensor::zeros({4099}, Device::GPU, DataType::Float32);
+        previous.copy_from(destination);
+        std::vector<float> values(4099, 7.0f);
+        lfs::core::TensorUpload upload;
+        upload.enqueue_in_batch(destination, std::as_bytes(std::span(values)));
+        values.assign(values.size(), 0.0f);
+        upload.wait();
+        EXPECT_TRUE(upload.poll());
+        EXPECT_EQ(destination.cpu().to_vector(), std::vector<float>(4099, 7.0f));
+        EXPECT_EQ(previous.cpu().to_vector(), std::vector<float>(4099, 3.0f));
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, TensorBackendSemantics,
