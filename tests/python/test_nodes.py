@@ -265,7 +265,7 @@ def test_posterize_selection_blends_rgb_and_fades_higher_sh(lf, numpy, weight):
     numpy.testing.assert_allclose(result.splats.shN.tolist(), 1.0 - weight, atol=1e-6)
 
 
-@pytest.mark.parametrize("device", ["cpu", "gpu"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
 @pytest.mark.parametrize("keep", [0, 1])
 def test_posterize_field_after_geometry_changes(lf, numpy, device, keep):
     tree = lf.nodes.new_tree("Posterize changed domain")
@@ -295,7 +295,7 @@ def test_posterize_field_after_geometry_changes(lf, numpy, device, keep):
     assert result.splats.shN.shape == (keep, 1, 3)
 
 
-@pytest.mark.parametrize("device", ["cpu", "gpu"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
 @pytest.mark.parametrize("levels", [0, 2, 32, 999])
 def test_posterize_degree_zero_and_level_limits(lf, numpy, device, levels):
     tree = lf.nodes.new_tree("Posterize zero SH degree")
@@ -313,7 +313,7 @@ def test_posterize_degree_zero_and_level_limits(lf, numpy, device, levels):
     numpy.testing.assert_allclose(result.splats.sh0.tolist(), expected, atol=1e-6)
 
 
-@pytest.mark.parametrize("device", ["cpu", "gpu"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
 def test_posterize_field_after_same_size_colour_edit(lf, numpy, device):
     tree = lf.nodes.new_tree("Posterize changed colours")
     colour = tree.add_node("lfs.colour_attribute")
@@ -339,7 +339,7 @@ def test_posterize_field_after_same_size_colour_edit(lf, numpy, device):
     numpy.testing.assert_allclose(result.splats.sh0.tolist(), expected, atol=1e-6)
 
 
-@pytest.mark.parametrize("device", ["cpu", "gpu"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
 def test_posterize_nan_selection_is_unselected(lf, numpy, device):
     tree = lf.nodes.new_tree("Posterize invalid selection")
     power = tree.add_node("lfs.math")
@@ -355,7 +355,7 @@ def test_posterize_nan_selection_is_unselected(lf, numpy, device):
     numpy.testing.assert_array_equal(result.splats.shN.tolist(), geometry.splats.shN.tolist())
 
 
-@pytest.mark.parametrize("device", ["cpu", "gpu"])
+@pytest.mark.parametrize("device", ["cpu", pytest.param("gpu", marks=pytest.mark.gpu)])
 def test_posterize_without_splats(lf, device):
     tree = lf.nodes.new_tree("Posterize without splats")
     _insert_between(tree, tree.add_node("lfs.posterize"), "Geometry")
