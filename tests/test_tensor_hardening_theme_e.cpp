@@ -37,10 +37,6 @@ namespace {
         }
     };
 
-    std::vector<int64_t> int64_values(const Tensor& tensor) {
-        return tensor.cpu().to_vector_int64();
-    }
-
 } // namespace
 TEST_F(CudaTest, E2_IntegerTensorTrueDivisionPromotesLikeTorch_CPUAndCUDA) {
     for (const Device device : {Device::CPU, Device::GPU}) {
