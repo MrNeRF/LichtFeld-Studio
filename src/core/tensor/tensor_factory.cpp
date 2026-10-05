@@ -28,18 +28,6 @@ namespace lfs::core {
 
     Tensor Tensor::from_external_owner(void* data,
                                        TensorShape shape,
-                                       const Device device,
-                                       const DataType dtype,
-                                       std::shared_ptr<void> owner,
-                                       const size_t capacity,
-                                       const cudaStream_t stream) {
-        return from_external_owner(
-            data, std::move(shape), device, dtype, std::move(owner), capacity, stream,
-            "external.unlabeled");
-    }
-
-    Tensor Tensor::from_external_owner(void* data,
-                                       TensorShape shape,
                                        Device device,
                                        DataType dtype,
                                        std::shared_ptr<void> owner,

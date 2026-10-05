@@ -989,41 +989,6 @@ namespace lfs::core {
     }
 
     // ============================================================================
-    // ScalarUnaryExpr::eval_impl() - Needs Tensor::empty()
-    // ============================================================================
-
-    template <typename InputExpr, typename ScalarUnaryOp>
-    Tensor ScalarUnaryExpr<InputExpr, ScalarUnaryOp>::eval_impl() const {
-        Tensor input_tensor = input_.eval();
-
-        std::optional<CUDAStreamGuard> execution_guard;
-        if (device_ == Device::GPU) {
-            execution_guard.emplace(prepare_inputs_for_stream({&input_tensor}));
-        }
-
-        Tensor result = internal::allocate_like(input_tensor, shape_, dtype_);
-
-        if (device_ == Device::GPU) {
-            internal::run_pointwise_unary(
-                input_tensor, result, op_,
-                internal::ExecContext{result.stream()});
-        } else {
-            // CPU fallback: apply scalar operation element-wise
-            const float* in_ptr = input_tensor.template ptr<float>();
-            float* out_ptr = result.template ptr<float>();
-            size_t n = result.numel();
-            for (size_t i = 0; i < n; ++i) {
-                out_ptr[i] = op_(in_ptr[i]);
-            }
-        }
-
-        if (internal::lazy_ir_active()) {
-            internal::lazy_ir_record_scalar_unary(input_tensor, result, typeid(ScalarUnaryOp).name());
-        }
-        return result;
-    }
-
-    // ============================================================================
     // PermutationExpr::eval_impl() - Lazy gather operation
     // ============================================================================
 

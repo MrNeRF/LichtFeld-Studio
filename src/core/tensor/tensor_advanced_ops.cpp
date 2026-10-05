@@ -423,13 +423,4 @@ namespace lfs::core {
     }
 
     // ============= SCALAR BOOLEAN REDUCTIONS =============
-    bool Tensor::any_scalar() const {
-        LFS_ASSERT_MSG(is_valid(),
-                       "any_scalar requires a valid tensor");
-        if (numel() == 0) {
-            return false;
-        }
-        return count_nonzero() > 0;
-    }
-
 } // namespace lfs::core

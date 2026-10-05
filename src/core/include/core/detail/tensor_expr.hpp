@@ -250,49 +250,6 @@ namespace lfs::core {
     };
 
     // ============================================================================
-    // SCALAR UNARY EXPRESSION: Unary operation with scalar parameter
-    // ============================================================================
-
-    template <typename InputExpr, typename ScalarUnaryOp>
-    class ScalarUnaryExpr : public TensorExpr<ScalarUnaryExpr<InputExpr, ScalarUnaryOp>> {
-    private:
-        InputExpr input_;
-        ScalarUnaryOp op_;
-        TensorShape shape_;
-        Device device_;
-        DataType dtype_;
-
-    public:
-        ScalarUnaryExpr(InputExpr input, ScalarUnaryOp op,
-                        TensorShape shape, Device device, DataType dtype)
-            : input_(std::move(input)),
-              op_(op),
-              shape_(std::move(shape)),
-              device_(device),
-              dtype_(dtype) {}
-
-        // Implemented in tensor_expr_impl.hpp
-        Tensor eval_impl() const;
-
-        ScalarUnaryExpr snapshot_impl() const {
-            return ScalarUnaryExpr(input_.snapshot(), op_, shape_, device_, dtype_);
-        }
-
-        template <typename NewOp>
-        auto map(NewOp new_op) const {
-            auto fused_op = ops::compose(op_, new_op);
-            return UnaryExpr<InputExpr, decltype(fused_op)>(
-                input_, fused_op, shape_, device_, dtype_);
-        }
-
-        const TensorShape& shape_impl() const { return shape_; }
-        Device device_impl() const { return device_; }
-        DataType dtype_impl() const { return dtype_; }
-        std::optional<GpuBackend> gpu_backend_impl() const { return input_.gpu_backend(); }
-        cudaStream_t stream_hint_impl() const { return input_.stream_hint(); }
-    };
-
-    // ============================================================================
     // PERMUTATION EXPRESSION: Lazy gather/indexing using permutation
     // ============================================================================
 

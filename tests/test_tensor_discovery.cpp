@@ -836,21 +836,7 @@ TEST_F(DiscoverySweep, ArangeDoesNotIncludeFloatingEndpoint) {
     expect_float_tensor(actual, expected, "floating-point arange endpoint exclusion");
 }
 
-TEST_F(DiscoverySweep, SplitBatchPreservesEmptyInput) {
-    for (const Device device : {Device::CPU, Device::GPU}) {
-        SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
-        const auto input = Tensor::empty({0, 3}, device, DataType::Float32);
-        const auto actual = Tensor::split_batch(input, 2);
-        const auto reference = torch::empty(
-            {0, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(device == Device::GPU ? torch::kCUDA : torch::kCPU));
-        const auto expected = reference.split(2, 0);
 
-        EXPECT_EQ(actual.size(), expected.size());
-        for (size_t i = 0; i < std::min(actual.size(), expected.size()); ++i) {
-            expect_shape(actual[i], expected[i], "empty split_batch chunk");
-        }
-    }
-}
 
 TEST_F(DiscoverySweep, AdaptiveAvgPoolRejectsEmptySpatialInput) {
     for (const Device device : {Device::CPU, Device::GPU}) {

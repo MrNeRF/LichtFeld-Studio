@@ -352,18 +352,6 @@ namespace lfs::core {
         return storage_accounting_state().vulkan_external.live_bytes.load(std::memory_order_relaxed);
     }
 
-    void Tensor::log_storage_memory() {
-        log_storage_memory({});
-    }
-
-    void Tensor::log_storage_memory(const std::string_view label) {
-        if (label.empty()) {
-            LOG_INFO("{}", storage_memory_summary());
-        } else {
-            LOG_INFO("{} - {}", label, storage_memory_summary());
-        }
-    }
-
     // TensorLeaf implementation
     TensorLeaf::TensorLeaf(Tensor tensor)
         : tensor_ptr_(std::make_shared<Tensor>(std::move(tensor))) {}
@@ -2684,43 +2672,6 @@ namespace lfs::core {
 
     // ============= Utility Functions =============
 
-    std::optional<Tensor> Tensor::try_reshape(TensorShape shape) const {
-        if (!is_valid()) {
-            return std::nullopt;
-        }
-
-        if (shape.elements() != numel()) {
-            return std::nullopt;
-        }
-
-        return reshape(shape);
-    }
-
-    std::vector<Tensor> Tensor::split_batch(const Tensor& tensor, size_t batch_size) {
-        std::vector<Tensor> batches;
-        LFS_ASSERT_MSG(tensor.is_valid(),
-                       "split_batch requires a valid tensor");
-        LFS_ASSERT_MSG(tensor.shape().rank() > 0,
-                       "split_batch requires at least one tensor dimension");
-        LFS_ASSERT_MSG(batch_size > 0,
-                       "split_batch batch size must be positive");
-
-        size_t total_size = tensor.shape()[0];
-        if (total_size == 0) {
-            batches.push_back(tensor);
-            return batches;
-        }
-        size_t num_batches = (total_size + batch_size - 1) / batch_size;
-
-        for (size_t i = 0; i < num_batches; ++i) {
-            size_t start = i * batch_size;
-            size_t end = std::min(start + batch_size, total_size);
-            batches.push_back(tensor.slice(0, start, end));
-        }
-
-        return batches;
-    }
-
     float Tensor::item() const {
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid(),
@@ -3090,53 +3041,6 @@ namespace lfs::core {
     }
 
     // ============= Validation & Assertions =============
-
-    Tensor& Tensor::assert_shape(TensorShape expected) {
-        return assert_shape(std::move(expected), {});
-    }
-
-    Tensor& Tensor::assert_shape(TensorShape expected, const std::string& msg) {
-        if (!is_valid()) {
-            std::string error_msg = "Cannot assert shape on invalid tensor";
-            throw TensorError(error_msg, this);
-        }
-
-        if (shape_ != expected) {
-            std::string error_msg = msg.empty() ? "Shape assertion failed: expected " + expected.str() + " but got " + shape_.str() : msg;
-            throw TensorError(error_msg, this);
-        }
-        return *this;
-    }
-
-    Tensor& Tensor::assert_device(Device expected) {
-        if (!is_valid()) {
-            std::string error_msg = "Cannot assert device on invalid tensor";
-            throw TensorError(error_msg, this);
-        }
-
-        if (device_ != expected) {
-            std::string error_msg = "Device assertion failed: expected " +
-                                    std::string(device_name(expected)) + " but got " +
-                                    std::string(device_name(device_));
-            throw TensorError(error_msg, this);
-        }
-        return *this;
-    }
-
-    Tensor& Tensor::assert_dtype(DataType expected) {
-        if (!is_valid()) {
-            std::string error_msg = "Cannot assert dtype on invalid tensor";
-            throw TensorError(error_msg, this);
-        }
-
-        if (dtype_ != expected) {
-            std::string error_msg = "DataType assertion failed: expected " +
-                                    std::string(dtype_name(expected)) + " but got " +
-                                    std::string(dtype_name(dtype_));
-            throw TensorError(error_msg, this);
-        }
-        return *this;
-    }
 
     Tensor& Tensor::assert_finite() {
         if (!is_valid()) {

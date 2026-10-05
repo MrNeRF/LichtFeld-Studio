@@ -1029,13 +1029,6 @@ namespace lfs::core {
                                           DataType dtype,
                                           std::shared_ptr<void> owner,
                                           size_t capacity,
-                                          cudaStream_t stream);
-        static Tensor from_external_owner(void* data,
-                                          TensorShape shape,
-                                          Device device,
-                                          DataType dtype,
-                                          std::shared_ptr<void> owner,
-                                          size_t capacity,
                                           cudaStream_t stream,
                                           std::string external_kind);
         // View of one byte range of `backing`. Shares the allocation and its
@@ -1152,8 +1145,6 @@ namespace lfs::core {
         static void shutdown_memory_pool();
         static void set_memory_pool_iteration(int iteration);
 
-        void set_bool(std::initializer_list<size_t> indices, bool value);
-        bool get_bool(std::initializer_list<size_t> indices) const;
         void set_bool(std::span<const size_t> indices, bool value);
         bool get_bool(std::span<const size_t> indices) const;
 
@@ -1382,8 +1373,6 @@ namespace lfs::core {
         static std::string storage_memory_summary();
         static std::size_t cuda_direct_storage_live_bytes();
         static std::size_t vulkan_external_storage_live_bytes();
-        static void log_storage_memory();
-        static void log_storage_memory(std::string_view label);
 
         // reserve() pre-allocates memory for future growth along dimension 0
         // Supports multi-dimensional tensors: [N, D1, D2, ...] reserves N "rows"
@@ -2067,7 +2056,6 @@ namespace lfs::core {
         std::pair<Tensor, Tensor> sort(int dim = -1, bool descending = false) const;
 
         // Scalar boolean reductions
-        bool any_scalar() const;
 
         // ============= OPERATOR OVERLOADS (Template-based) =============
 
@@ -2131,9 +2119,7 @@ namespace lfs::core {
         Tensor& uniform_(float low = 0.0f, float high = 1.0f);
         Tensor& normal_(float mean = 0.0f, float std = 1.0f);
 
-        std::optional<Tensor> try_reshape(TensorShape shape) const;
 
-        static std::vector<Tensor> split_batch(const Tensor& tensor, size_t batch_size);
 
         // Utility template methods
         template <typename Func>
@@ -2162,10 +2148,6 @@ namespace lfs::core {
         }
 
         // Validation & assertions
-        Tensor& assert_shape(TensorShape expected);
-        Tensor& assert_shape(TensorShape expected, const std::string& msg);
-        Tensor& assert_device(Device expected);
-        Tensor& assert_dtype(DataType expected);
         Tensor& assert_finite();
 
         // Comparison operations
@@ -2359,13 +2341,6 @@ namespace lfs::core {
 
         // Unary Operations
         Tensor operator-() const;
-        Tensor pow(float exponent) const;
-        Tensor sqrt() const;
-        Tensor abs() const;
-        Tensor neg() const;
-        Tensor sum() const;
-        Tensor mean() const;
-        Tensor square() const;
     };
 
     // Implementation of Tensor::operator[]
@@ -2542,9 +2517,7 @@ namespace lfs::core {
         size_t pool_reserved_high = 0;
 
         static MemoryInfo cuda();
-        static MemoryInfo cpu();
 
-        void log() const;
     };
 
     // ========================================================================

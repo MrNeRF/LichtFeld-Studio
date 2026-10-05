@@ -2159,16 +2159,6 @@ namespace lfs::core {
         return from_vector_impl(bytes, shape, device, DataType::Bool);
     }
 
-    void Tensor::set_bool(std::initializer_list<size_t> indices, bool value) {
-
-        preserve_lazy_snapshots_before_write();
-        set_bool(std::span<const size_t>(indices.begin(), indices.size()), value);
-    }
-
-    bool Tensor::get_bool(std::initializer_list<size_t> indices) const {
-        return get_bool(std::span<const size_t>(indices.begin(), indices.size()));
-    }
-
     // Location: After the existing get_bool/set_bool implementations (around line 800+)
     // grep -C 3 "bool Tensor::get_bool"
 

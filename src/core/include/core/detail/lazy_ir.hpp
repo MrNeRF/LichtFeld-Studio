@@ -26,7 +26,6 @@ namespace lfs::core {
             Leaf = 0,
             Unary = 1,
             Binary = 2,
-            ScalarUnary = 3,
             Permutation = 4,
             Deferred = 5,
             Reduce = 6
@@ -66,9 +65,6 @@ namespace lfs::core {
                                                 const Tensor& right,
                                                 const Tensor& output,
                                                 std::string_view op_name);
-        LFS_CORE_API void lazy_ir_record_scalar_unary(const Tensor& input,
-                                                      const Tensor& output,
-                                                      std::string_view op_name);
         LFS_CORE_API void lazy_ir_record_permutation(const Tensor& input,
                                                      const Tensor& indices,
                                                      const Tensor& output,

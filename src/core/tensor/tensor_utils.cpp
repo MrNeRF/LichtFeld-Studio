@@ -95,21 +95,4 @@ namespace lfs::core {
         return internal::backend_ops(GpuBackend::CUDA).stats();
     }
 
-    MemoryInfo MemoryInfo::cpu() {
-        MemoryInfo info;
-        info.free_bytes = 0;
-        info.total_bytes = 0;
-        info.allocated_bytes = 0;
-        info.device_id = -1;
-        return info;
-    }
-
-    void MemoryInfo::log() const {
-        LOG_INFO("Memory Info - Device: {}, Allocated: {:.2f} MB, Free: {:.2f} MB, Total: {:.2f} MB",
-                 device_id,
-                 allocated_bytes / (1024.0 * 1024.0),
-                 free_bytes / (1024.0 * 1024.0),
-                 total_bytes / (1024.0 * 1024.0));
-    }
-
 } // namespace lfs::core
