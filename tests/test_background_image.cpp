@@ -5,6 +5,7 @@
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
+#include "training/kernels/grad_alpha.hpp"
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
