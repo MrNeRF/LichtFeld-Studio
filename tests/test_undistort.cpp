@@ -4,6 +4,7 @@
 #include "core/camera.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
+#include "gut_camera_model_cuda.hpp"
 #include "io/formats/colmap.hpp"
 #include <algorithm>
 #include <array>
@@ -622,6 +623,44 @@ TEST(UndistortInverse, PinholeRoundTrip) {
 
 TEST(UndistortInverse, FisheyeRoundTrip) {
     expect_inverse_round_trip(CameraModelType::FISHEYE);
+}
+
+// Catches GUT rendering thin prism fisheye cameras with another model than COLMAP and the undistortion
+// (tangential and prism terms on the radially distorted point instead of the theta-scaled one), and an
+// unprojection that does not invert the projection.
+TEST(GutThinPrismFisheye, ProjectsLikeColmapAndInvertsItself) {
+    const gut_camera_model_test::ThinPrismCamera camera{
+        .focal = {600.0f, 610.0f},
+        .principal = {512.0f, 384.0f},
+        .resolution = {1024, 768},
+        .radial = {0.25f, -0.05f, 0.01f, -0.002f},
+        .thin_prism = {0.01f, -0.008f, 0.012f, -0.009f}};
+    const std::array<double, 8> extra{camera.radial[0], camera.radial[1], camera.thin_prism[0], camera.thin_prism[1],
+                                      camera.radial[2], camera.radial[3], camera.thin_prism[2], camera.thin_prism[3]};
+    std::vector<float> rays;
+    std::vector<float> expected;
+    for (const float theta : {0.15f, 0.35f, 0.55f}) {
+        for (const float azimuth : {0.3f, 1.9f, 3.6f, 5.1f}) {
+            const float u = std::tan(theta) * std::cos(azimuth);
+            const float v = std::tan(theta) * std::sin(azimuth);
+            rays.insert(rays.end(), {u, v, 1.0f});
+            const auto [x, y] = colmap_thin_prism_fisheye_reference(u, v, extra);
+            expected.push_back(static_cast<float>(camera.focal[0] * x + camera.principal[0]));
+            expected.push_back(static_cast<float>(camera.focal[1] * y + camera.principal[1]));
+        }
+    }
+
+    const auto projected = gut_camera_model_test::project(camera, rays);
+    const auto rays_back = gut_camera_model_test::unproject(camera, expected);
+    for (size_t i = 0; i < expected.size() / 2; ++i) {
+        EXPECT_EQ(projected[3 * i + 2], 1.0f) << i;
+        EXPECT_NEAR(projected[3 * i], expected[2 * i], 0.01f) << i;
+        EXPECT_NEAR(projected[3 * i + 1], expected[2 * i + 1], 0.01f) << i;
+        EXPECT_EQ(rays_back[4 * i + 3], 1.0f) << i;
+        const float norm = std::sqrt(rays[3 * i] * rays[3 * i] + rays[3 * i + 1] * rays[3 * i + 1] + 1.0f);
+        for (int c = 0; c < 3; ++c)
+            EXPECT_NEAR(rays_back[4 * i + c], rays[3 * i + c] / norm, 2e-5f) << i << " " << c;
+    }
 }
 
 TEST(UndistortInverse, ThinPrismFisheyeRoundTrip) {
