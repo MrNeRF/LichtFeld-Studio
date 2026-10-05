@@ -59,7 +59,7 @@ static void run() {
     require(context.initHeadless(), context.lastError().c_str());
     core::MetalTensorReader reader;
     vis::MetalRadPager pager(reader.device());
-    pager.configure(model, context, nullptr, {.pool_splats = 4096, .fade_frames = 0});
+    pager.configure(model, context.device(), nullptr, {.pool_splats = 4096, .fade_frames = 0});
     require(pager.pool().page_splats == 2048 && pager.physicalNodes() == 4096, "Native page-pool sizing differs");
     require(pager.cache().snapshot().resident_chunks == 0, "RAD pages published before any GPU upload");
     const auto await = [&](uint32_t chunk, std::span<const uint32_t> touches) {
@@ -99,7 +99,7 @@ static void run() {
     interest.back() = std::bit_cast<uint32_t>(1000.f);
     pager.advance(interest);
     const auto signature = pager.signature();
-    pager.configure(model, context, nullptr, {.pool_splats = 6144, .fade_frames = 0});
+    pager.configure(model, context.device(), nullptr, {.pool_splats = 6144, .fade_frames = 0});
     [command waitUntilCompleted];
     require(command.status == MTLCommandBufferStatusCompleted, "RAD page consumer failed during generation replacement");
     const auto links = static_cast<const core::RadMetaLinksQ*>(snapshot.contents);
@@ -166,7 +166,7 @@ static void run() {
     auto legacy_model = io::load_rad(legacy);
     require(bool(legacy_model), "Legacy RAD load failed");
     require(legacy_model->lod_tree->rad_source.chunk_size == 65536, "Legacy RAD fixture block size differs");
-    pager.configure(*legacy_model, context, nullptr, {.pool_splats = 4096, .fade_frames = 0});
+    pager.configure(*legacy_model, context.device(), nullptr, {.pool_splats = 4096, .fade_frames = 0});
     await(0, {});
     interest.assign(pager.cache().snapshot().logical_chunks, 0);
     interest[0] = 0xffffffffu;
