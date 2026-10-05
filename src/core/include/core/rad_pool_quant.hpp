@@ -15,7 +15,6 @@ namespace lfs::core::radq {
     // culling/selection shaders that require float positions.
     inline constexpr std::size_t kXyzBytes = 12;     // f32x3
     inline constexpr std::size_t kSh0Bytes = 8;      // f16x3 + 16-bit pad (uint2)
-    inline constexpr std::size_t kShNSlotBytes = 4;  // s8x4 per float4 slot (uchar4)
     inline constexpr std::size_t kRotationBytes = 8; // f16x4, pool order (w,x,y,z)
     inline constexpr std::size_t kScalingBytes = 8;  // log-domain f16x3 + pad
     inline constexpr std::size_t kOpacityBytes = 2;  // f16, post lod/logit transform
@@ -25,7 +24,6 @@ namespace lfs::core::radq {
     // page_to_chunk.
     inline constexpr std::size_t kMetaBoundsBytes = 8; // RadMetaBoundsQ (u16 x4)
     inline constexpr std::size_t kMetaLinksBytes = 12; // RadMetaLinksQ (u32 x3)
-    inline constexpr std::size_t kMetaLinksWords = 3;
 
     // Per-page dequant frame in the InputPageFrames region: float4[4].
     //   [0] = (sh1_max_abs, sh2_max_abs, sh3_max_abs, unused)

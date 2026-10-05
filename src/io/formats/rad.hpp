@@ -37,32 +37,6 @@ namespace lfs::io {
         std::vector<std::uint32_t> child_start;
     };
 
-    // Caller-provided destinations for a zero-copy chunk decode: properties
-    // land directly in these buffers (each sized for the caller's capacity)
-    // with the same post-decode transforms as load_rad_chunk. shN decodes via
-    // the canonical scratch (resized by the decoder); null members are skipped.
-    struct RadChunkDsts {
-        float* means = nullptr;        // [capacity*3]
-        float* opacity_raw = nullptr;  // [capacity]
-        float* sh0_raw = nullptr;      // [capacity*3]
-        float* scaling_raw = nullptr;  // [capacity*3]
-        float* rotation_raw = nullptr; // [capacity*4]
-        std::vector<float>* shN_canonical = nullptr;
-    };
-    struct RadChunkInfo {
-        std::uint64_t base = 0;
-        std::uint64_t count = 0;
-        int max_sh_degree = 0;
-        std::uint32_t sh_coeffs_rest = 0;
-        bool lod_opacity_encoded = false;
-    };
-    [[nodiscard]] std::expected<RadChunkInfo, std::string> decode_rad_chunk_into(
-        std::span<const std::uint8_t> data,
-        int fallback_max_sh,
-        bool lod_opacity_encoded,
-        std::size_t dst_capacity,
-        const RadChunkDsts& dsts);
-
     // Inflate-only chunk decode for the GPU dequant path: property planes land
     // in `dst` (an upload staging slot) still quantized, dimension-major, with
     // delta variants normalized away; the chunk's sidecar bounds/links planes
@@ -133,19 +107,6 @@ namespace lfs::io {
         std::uint32_t target_chunk_size,
         const RechunkProgressCallback& progress = nullptr,
         std::optional<core::ProvenanceStamp> provenance = {});
-    // Exposed for tests: scatter-derive parent/level over a BFS level-ordered,
-    // children-contiguous links plane. child_start may be non-monotone across
-    // parents within a level (multi-bucket converter layouts).
-    [[nodiscard]] std::expected<std::uint64_t, std::string> derive_rad_meta_parents_levels(
-        std::span<lfs::core::RadMetaLinksQ> links);
-    // Dequantizes one chunk's sidecar records into expanded node bounds/links
-    // records. Production keeps the quantized records resident and dequantizes
-    // in the selector; this remains the CPU reference for tests.
-    void expand_rad_meta_page(const lfs::core::SplatLodTree::NodeMetaView& view,
-                              std::uint32_t chunk,
-                              std::size_t node_count,
-                              lfs::core::NodeBoundsRecord* out_bounds,
-                              lfs::core::NodeLinksRecord* out_links);
 
     // One chunk of pack-domain splat arrays for streaming RAD export.
     // All values use the on-disk RAD domains: display alpha (lodOpacity),

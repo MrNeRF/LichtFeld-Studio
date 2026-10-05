@@ -137,13 +137,6 @@ namespace lfs::io {
             LnF16 = 3
         };
 
-        enum class RadOrientationEncoding : uint8_t {
-            Auto = 0,
-            F32 = 1,
-            F16 = 2,
-            Oct88R8 = 3
-        };
-
         enum class RadShEncoding : uint8_t {
             Auto = 0,
             F32 = 1,
@@ -4019,87 +4012,6 @@ namespace lfs::io {
         return result;
     }
 
-    std::expected<RadChunkInfo, std::string> decode_rad_chunk_into(
-        const std::span<const std::uint8_t> data,
-        const int fallback_max_sh,
-        bool lod_opacity_encoded,
-        const std::size_t dst_capacity,
-        const RadChunkDsts& dsts) {
-        auto parsed = parse_rad_chunk_header(data.data(), data.size());
-        if (!parsed) {
-            return std::unexpected(parsed.error());
-        }
-        const RadChunkMeta& chunk = parsed->meta;
-        if (chunk.splat_encoding.has_value() && chunk.splat_encoding->is_object()) {
-            const auto it = chunk.splat_encoding->find("lodOpacity");
-            if (it != chunk.splat_encoding->end() && it->is_boolean()) {
-                lod_opacity_encoded = it->get<bool>();
-            }
-        }
-        const int max_sh = std::clamp(chunk.max_sh > 0 ? chunk.max_sh : fallback_max_sh, 0, 3);
-        const int sh_coeffs = max_sh > 0 ? SH_COEFFS_FOR_DEGREE[max_sh] : 0;
-        const std::size_t count = static_cast<std::size_t>(chunk.count);
-        if (count > dst_capacity) {
-            return std::unexpected(std::format(
-                "RAD chunk holds {} splats, destination capacity is {}", count, dst_capacity));
-        }
-
-        float* shN = nullptr;
-        if (sh_coeffs > 0 && dsts.shN_canonical != nullptr) {
-            dsts.shN_canonical->assign(count * static_cast<std::size_t>(sh_coeffs) * 3u, 0.0f);
-            shN = dsts.shN_canonical->data();
-        }
-        if (auto err = decode_chunk_properties(data.data(),
-                                               chunk,
-                                               0,
-                                               parsed->payload_start,
-                                               parsed->has_payload_prefix,
-                                               parsed->chunk_end,
-                                               sh_coeffs,
-                                               dsts.means,
-                                               dsts.opacity_raw,
-                                               dsts.sh0_raw,
-                                               dsts.scaling_raw,
-                                               dsts.rotation_raw,
-                                               shN,
-                                               nullptr,
-                                               nullptr);
-            err.has_value()) {
-            return std::unexpected(std::move(*err));
-        }
-
-        // Same post-decode transforms as decode_rad_chunk_buffer, in place.
-        if (dsts.sh0_raw != nullptr) {
-            for (std::size_t i = 0; i < count * 3u; ++i) {
-                dsts.sh0_raw[i] = radmath::sh0Transform(dsts.sh0_raw[i]);
-            }
-        }
-        if (dsts.opacity_raw != nullptr) {
-            if (!lod_opacity_encoded) {
-                for (std::size_t i = 0; i < count; ++i) {
-                    dsts.opacity_raw[i] = radmath::opacityLogit(dsts.opacity_raw[i]);
-                }
-            } else {
-                for (std::size_t i = 0; i < count; ++i) {
-                    dsts.opacity_raw[i] = radmath::opacityLodEncoded(dsts.opacity_raw[i]);
-                }
-            }
-        }
-        if (dsts.scaling_raw != nullptr) {
-            for (std::size_t i = 0; i < count * 3u; ++i) {
-                dsts.scaling_raw[i] = radmath::scaleLog(dsts.scaling_raw[i]);
-            }
-        }
-
-        return RadChunkInfo{
-            .base = chunk.base,
-            .count = chunk.count,
-            .max_sh_degree = max_sh,
-            .sh_coeffs_rest = static_cast<std::uint32_t>(sh_coeffs),
-            .lod_opacity_encoded = lod_opacity_encoded,
-        };
-    }
-
     namespace {
 
         struct PackedPropInfo {
@@ -5196,46 +5108,6 @@ namespace lfs::io {
         return path;
     }
 
-    std::expected<std::uint64_t, std::string> derive_rad_meta_parents_levels(
-        const std::span<lfs::core::RadMetaLinksQ> links) {
-        const std::uint64_t n = links.size();
-        if (n == 0) {
-            return std::unexpected("empty links plane");
-        }
-        std::vector<std::uint32_t> parent(n, lfs::core::SplatLodTree::kInvalidPage);
-        std::vector<std::uint8_t> level(n, 0);
-        std::uint64_t leaf_count = 0;
-        std::uint64_t assigned = 0;
-        for (std::uint64_t i = 0; i < n; ++i) {
-            auto& rec = links[i];
-            rec.parent = parent[i];
-            rec.packed = (rec.packed & 0xff00ffffu) |
-                         ((static_cast<std::uint32_t>(level[i]) & 0xffu) << 16u);
-            const std::uint32_t cc = rec.packed & 0xffffu;
-            if (cc == 0) {
-                ++leaf_count;
-                continue;
-            }
-            const std::uint64_t cs = rec.child_start;
-            if (cs <= i || cs + cc > n) {
-                return std::unexpected(std::format(
-                    "corrupt LOD layout: node {} children [{}, {}) out of order", i, cs, cs + cc));
-            }
-            const std::uint8_t child_level =
-                static_cast<std::uint8_t>(std::min<std::uint32_t>(level[i] + 1u, 255u));
-            for (std::uint32_t c = 0; c < cc; ++c) {
-                parent[cs + c] = static_cast<std::uint32_t>(i);
-                level[cs + c] = child_level;
-            }
-            assigned += cc;
-        }
-        if (assigned != n - 1) {
-            return std::unexpected(std::format(
-                "corrupt LOD layout: {} of {} nodes have a parent", assigned, n - 1));
-        }
-        return leaf_count;
-    }
-
     std::expected<lfs::core::SplatLodTree::NodeMetaView, std::string> open_rad_meta_sidecar(
         const std::filesystem::path& rad_path) {
         const auto meta_path = rad_meta_sidecar_path(rad_path);
@@ -5303,33 +5175,6 @@ namespace lfs::io {
         view.leaf_count = header.leaf_count;
         view.file = std::move(file);
         return view;
-    }
-
-    void expand_rad_meta_page(const lfs::core::SplatLodTree::NodeMetaView& view,
-                              const std::uint32_t chunk,
-                              const std::size_t node_count,
-                              lfs::core::NodeBoundsRecord* const out_bounds,
-                              lfs::core::NodeLinksRecord* const out_links) {
-        const std::size_t logical_start =
-            static_cast<std::size_t>(chunk) * lfs::core::SplatLodTree::kChunkSplats;
-        const auto& frame = view.chunks[chunk];
-        for (std::size_t i = 0; i < node_count; ++i) {
-            const auto& q = view.bounds[logical_start + i];
-            const glm::vec3 center = frame.dequantCenter(q);
-            out_bounds[i] = {
-                .x = center.x,
-                .y = center.y,
-                .z = center.z,
-                .size = frame.dequantSize(q),
-            };
-            const auto& l = view.links[logical_start + i];
-            out_links[i] = {
-                .child_start = l.child_start,
-                .packed = l.packed,
-                .parent = l.parent,
-                .logical = static_cast<std::uint32_t>(logical_start + i),
-            };
-        }
     }
 
     Result<void> build_rad_meta_sidecar(
