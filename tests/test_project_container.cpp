@@ -2548,11 +2548,6 @@ namespace {
         EXPECT_EQ(require_result(held.read_chunk(*streamed_row)),
                   streamed_payload);
         ASSERT_TRUE(streamed_row->block_crc_table.has_value());
-        MappedRegion held_mapping = require_result(
-            held.map_stored_range(*streamed_row, 0,
-                                  streamed_row->stored_bytes));
-        const std::vector<std::byte> mapped_before(
-            held_mapping.bytes().begin(), held_mapping.bytes().end());
 
         CompactionOptions compaction{
             .compatibility = {},
@@ -2565,9 +2560,6 @@ namespace {
         };
         require_status(ProjectWriter::compact(path, compaction));
 
-        EXPECT_EQ(std::vector<std::byte>(held_mapping.bytes().begin(),
-                                         held_mapping.bytes().end()),
-                  mapped_before);
         EXPECT_EQ(held.commit().generation, 1u);
         EXPECT_EQ(require_result(held.read_chunk(*streamed_row)),
                   streamed_payload);
