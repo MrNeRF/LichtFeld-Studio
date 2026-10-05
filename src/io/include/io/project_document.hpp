@@ -27,10 +27,6 @@
 #include <string>
 #include <vector>
 
-namespace lfs::io {
-    struct LoadResult;
-}
-
 namespace lfs::io::project {
 
     // The current SCNG-bound checkpoint is resumable; older CKPT chapters are
