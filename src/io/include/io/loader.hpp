@@ -133,6 +133,12 @@ namespace lfs::io {
             ImportWorldOriginProvenance::None;
     };
 
+    struct PhotoReconstructionView {
+        float source_aspect = 1.0f;
+        std::array<float, 3> bounds_min{-1.0f, -1.0f, 0.0f};
+        std::array<float, 3> bounds_max{1.0f, 1.0f, 2.0f};
+    };
+
     struct LoadResult {
         std::variant<std::shared_ptr<SplatData>, LoadedScene, std::shared_ptr<MeshData>> data;
         Tensor scene_center;
@@ -142,6 +148,7 @@ namespace lfs::io {
         std::vector<std::string> warnings;
         std::optional<ImportGeoreference> georeference;
         std::optional<std::vector<std::uint8_t>> license_bytes;
+        std::optional<PhotoReconstructionView> photo_view;
     };
 
     /**

@@ -90,12 +90,15 @@ creation cost on every backend switch.
 ## Native Metal window presentation
 
 The native compositor produces a final RGBA8 tensor. `MetalGraphicsContext`
-converts it into the `CAMetalLayer` drawable with a compute encoder, so the
-layer must use `framebufferOnly = NO`. Apple specifies that
+presents it with a fullscreen-triangle render pass: the fragment shader reads
+the tensor buffer and writes to the `CAMetalLayer` drawable as a color attachment.
+The layer therefore keeps `framebufferOnly = YES`; tensor compute stays in buffers.
+Apple specifies that
 [framebuffer-only textures](https://developer.apple.com/documentation/metal/mtltexture/isframebufferonly)
-can only be render-pass attachments and cannot be bound to a compute encoder.
-The [CAMetalLayer property](https://developer.apple.com/documentation/quartzcore/cametallayer/framebufferonly)
-may remain enabled only if final presentation uses a render pass instead.
+can only be render-pass attachments and cannot be bound as texture arguments to
+compute, blit, or render encoders. A compute-based final conversion would require
+[CAMetalLayer.framebufferOnly](https://developer.apple.com/documentation/quartzcore/cametallayer/framebufferonly)
+to be disabled. The render-pass presentation avoids that incompatible usage.
 
 Validate native window presentation with Metal API Validation and the displayed
 window. The internal window-capture API reads the composited tensor before the

@@ -185,11 +185,13 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
             output_scales[i * 3u + 2u] = 0.0f;
             return;
         }
-        const float u = cuda_uniform(random_words(p.seed, i).x) * total;
+        // Keep small positive draws normal even when the device flushes subnormals.
+        const float probability_scale = total < 1.0f ? 18446744073709551616.0f : 1.0f; // 2^64
+        const float u = cuda_uniform(random_words(p.seed, i).x) * (total * probability_scale);
         uint left = 0u, right = domain_count - 1u, selected = domain_count - 1u;
         while (left <= right) {
             const uint middle = left + (right - left) / 2u;
-            if (cdf[middle] >= u) { selected = middle; if (middle == 0u) break; right = middle - 1u; }
+            if (cdf[middle] * probability_scale >= u) { selected = middle; if (middle == 0u) break; right = middle - 1u; }
             else left = middle + 1u;
         }
         const int64_t global_index = p.mode != 0u ? alive[selected] : int64_t(selected);

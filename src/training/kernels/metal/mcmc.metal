@@ -160,13 +160,15 @@ kernel void mcmc_sample(constant McmcSampleParams& p [[buffer(0)]], uint i [[thr
             p.sampled_scales[i * 3 + d] = 0.0f;
         return;
     }
-    const float u = mrnf_curand_uniform(mrnf_philox_block(p.seed, i).x) * total;
+    // Keep small positive draws normal even when fast math flushes subnormals.
+    const float probability_scale = total < 1.0f ? 18446744073709551616.0f : 1.0f;
+    const float u = mrnf_curand_uniform(mrnf_philox_block(p.seed, i).x) * (total * probability_scale);
     int left = 0;
     int right = int(p.categories) - 1;
     int selected = int(p.categories) - 1;
     while (left <= right) {
         const int mid = (left + right) / 2;
-        if (p.cumsum[mid] >= u) {
+        if (p.cumsum[mid] * probability_scale >= u) {
             selected = mid;
             right = mid - 1;
         } else {

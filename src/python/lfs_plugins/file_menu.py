@@ -5,6 +5,7 @@
 from collections.abc import Callable
 from pathlib import Path, PureWindowsPath
 import threading
+import time
 import uuid
 
 import lichtfeld as lf
@@ -329,6 +330,58 @@ class ImportPlyOperator(Operator):
             if not _run_import(path, _load):
                 return {"CANCELLED"}
         return {"FINISHED"}
+
+
+class CreateSplatFromPhotoOperator(Operator):
+    label = "menu.file.create_splat_from_photo"
+    description = "Create editable Gaussian splats from one photo using Apple Reframe"
+
+    def execute(self, context) -> set:
+        if not callable(getattr(lf, "create_splat_from_photo", None)):
+            return {"CANCELLED"}
+        path = lf.ui.open_image_file_dialog("")
+        if not path:
+            return {"CANCELLED"}
+        if not _run_import(path, lambda: lf.create_splat_from_photo(path)):
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+_reframe_probe_lock = threading.Lock()
+_reframe_probe_running = False
+_reframe_probe_checked = None
+_reframe_probe_ready = False
+
+
+def _probe_apple_reframe(available):
+    global _reframe_probe_running, _reframe_probe_checked, _reframe_probe_ready
+    ready = False
+    try:
+        ready = bool(available())
+    except Exception as exc:
+        lf.log.debug(f"Apple Reframe availability probe failed: {exc}")
+    finally:
+        with _reframe_probe_lock:
+            _reframe_probe_ready = ready
+            _reframe_probe_checked = time.monotonic()
+            _reframe_probe_running = False
+
+
+def _apple_reframe_available() -> bool:
+    """Read cached readiness; model loading always runs off the UI thread."""
+    global _reframe_probe_running
+    available = getattr(lf, "apple_reframe_available", None)
+    if not callable(available) or not callable(getattr(lf, "create_splat_from_photo", None)):
+        return False
+    with _reframe_probe_lock:
+        ready = _reframe_probe_ready
+        if _reframe_probe_running or (_reframe_probe_checked is not None
+                                     and time.monotonic() - _reframe_probe_checked < 30):
+            return ready
+        _reframe_probe_running = True
+    threading.Thread(target=_probe_apple_reframe, args=(available,),
+                     name="apple-reframe-availability", daemon=True).start()
+    return ready
 
 
 class ImportSsogOperator(Operator):
@@ -936,6 +989,7 @@ class FileMenu:
                 [
                     menu_operator(ImportDatasetOperator),
                     menu_operator(ImportPlyOperator),
+                    *([menu_operator(CreateSplatFromPhotoOperator)] if _apple_reframe_available() else []),
                     menu_operator(ImportSsogOperator),
                     menu_operator(ImportMeshOperator),
                     menu_operator(ImportCheckpointOperator),
@@ -976,7 +1030,11 @@ _operator_classes = [
 
 
 def register():
-    for cls in _operator_classes:
+    _apple_reframe_available()
+    classes = list(_operator_classes)
+    if callable(getattr(lf, "create_splat_from_photo", None)):
+        classes.append(CreateSplatFromPhotoOperator)
+    for cls in classes:
         lf.register_class(cls)
 
     lf.ui.on_show_new_project_dialog(_on_show_new_project_dialog)
@@ -994,5 +1052,8 @@ def register():
 
 
 def unregister():
-    for cls in reversed(_operator_classes):
+    classes = list(_operator_classes)
+    if callable(getattr(lf, "create_splat_from_photo", None)):
+        classes.append(CreateSplatFromPhotoOperator)
+    for cls in reversed(classes):
         lf.unregister_class(cls)

@@ -68,7 +68,7 @@ namespace lfs::vis {
         SDL_MetalView view = nullptr;
         CAMetalLayer* layer = nil;
         std::unique_ptr<lfs::core::MetalTensorReader> reader;
-        id<MTLComputePipelineState> rgba8_present = nil;
+        id<MTLRenderPipelineState> rgba8_present = nil;
         id<MTLComputePipelineState> rgba8_clear = nil;
         dispatch_semaphore_t frame_slots = dispatch_semaphore_create(kFramesInFlight);
         std::shared_ptr<SharedState> shared = std::make_shared<SharedState>();
@@ -208,12 +208,11 @@ namespace lfs::vis {
                     throw std::runtime_error("SDL_Metal_GetLayer returned no CAMetalLayer");
                 impl_->layer.device = impl_->reader->device();
                 impl_->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-                // endFrame writes the drawable through a compute encoder.
-                // Framebuffer-only textures are restricted to render-pass attachments
-                // and cannot be bound to MTLComputeCommandEncoder (Apple contract):
+                // The drawable is only a render attachment; tensor compute stays in buffers.
+                // Apple restricts framebuffer-only textures to render-pass attachments:
                 // https://developer.apple.com/documentation/metal/mtltexture/isframebufferonly
                 // https://developer.apple.com/documentation/quartzcore/cametallayer/framebufferonly
-                impl_->layer.framebufferOnly = NO;
+                impl_->layer.framebufferOnly = YES;
                 impl_->layer.maximumDrawableCount = kFramesInFlight;
                 impl_->layer.allowsNextDrawableTimeout = YES;
                 // Like the Vulkan swapchain's MAILBOX mode: present without
@@ -227,12 +226,16 @@ namespace lfs::vis {
                 static constexpr char source[] = R"metal(
 #include <metal_stdlib>
 using namespace metal;
-kernel void present_rgba8(device const uchar4* source [[buffer(0)]],
-                          texture2d<float, access::write> destination [[texture(0)]],
-                          uint2 gid [[thread_position_in_grid]]) {
-    if (gid.x >= destination.get_width() || gid.y >= destination.get_height()) return;
-    const uint index = gid.y * destination.get_width() + gid.x;
-    destination.write(float4(source[index]) / 255.0f, gid);
+vertex float4 present_vertex(uint vertex_id [[vertex_id]]) {
+    const float2 corners[] = {float2(-1.0f, -1.0f), float2(3.0f, -1.0f), float2(-1.0f, 3.0f)};
+    return float4(corners[vertex_id], 0.0f, 1.0f);
+}
+fragment float4 present_rgba8(float4 position [[position]],
+                             device const uchar4* source [[buffer(0)]],
+                             constant uint2& dimensions [[buffer(1)]]) {
+    const uint2 pixel = uint2(position.xy);
+    if (pixel.x >= dimensions.x || pixel.y >= dimensions.y) return float4(0.0f, 0.0f, 0.0f, 1.0f);
+    return float4(source[pixel.y * dimensions.x + pixel.x]) / 255.0f;
 }
 kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
                         constant uchar4& color [[buffer(1)]],
@@ -247,9 +250,12 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
                 options.mathMode = MTLMathModeSafe;
                 id<MTLLibrary> library = [impl_->reader->device()
                     newLibraryWithSource:@(source) options:options error:&error];
-                id<MTLFunction> function = [library newFunctionWithName:@"present_rgba8"];
+                MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
+                descriptor.vertexFunction = [library newFunctionWithName:@"present_vertex"];
+                descriptor.fragmentFunction = [library newFunctionWithName:@"present_rgba8"];
+                descriptor.colorAttachments[0].pixelFormat = impl_->layer.pixelFormat;
                 impl_->rgba8_present = [impl_->reader->device()
-                    newComputePipelineStateWithFunction:function error:&error];
+                    newRenderPipelineStateWithDescriptor:descriptor error:&error];
                 if (!impl_->rgba8_present)
                     throw std::runtime_error(std::format("Metal presenter pipeline creation failed: {}",
                                                          error ? error.localizedDescription.UTF8String : "unknown error"));
@@ -296,8 +302,10 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
         impl_->shutdown = true;
         if (impl_->active) {
             impl_->active = false;
-            impl_->releaseFrameSlot();
         }
+        // The event loop can reserve the next slot before beginFrame. Release
+        // that reservation even when no frame was subsequently started.
+        impl_->releaseFrameSlot();
         static_cast<void>(waitForSubmittedFrames());
         impl_->final_image = {};
         impl_->rgba8_present = nil;
@@ -393,12 +401,17 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
             id<MTLCommandBuffer> command = impl_->reader->submit(
                 tensors, [=](id<MTLCommandBuffer> buffer,
                              std::span<const lfs::core::MetalTensorView> views) {
-                    id<MTLComputeCommandEncoder> encoder = [buffer computeCommandEncoder];
-                    [encoder setComputePipelineState:pipeline];
-                    [encoder setBuffer:views[0].buffer offset:views[0].offset atIndex:0];
-                    [encoder setTexture:drawable.texture atIndex:0];
-                    [encoder dispatchThreads:MTLSizeMake(width, height, 1)
-                           threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+                    MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+                    pass.colorAttachments[0].texture = drawable.texture;
+                    pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+                    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                    id<MTLRenderCommandEncoder> encoder = [buffer renderCommandEncoderWithDescriptor:pass];
+                    [encoder setRenderPipelineState:pipeline];
+                    [encoder setFragmentBuffer:views[0].buffer offset:views[0].offset atIndex:0];
+                    const std::array<std::uint32_t, 2> dimensions{static_cast<std::uint32_t>(width),
+                                                                 static_cast<std::uint32_t>(height)};
+                    [encoder setFragmentBytes:dimensions.data() length:sizeof(dimensions) atIndex:1];
+                    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
                     [encoder endEncoding];
                     [buffer presentDrawable:drawable];
                     [buffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {

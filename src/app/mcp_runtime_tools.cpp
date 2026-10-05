@@ -527,7 +527,7 @@ namespace lfs::app {
             const std::string stage = tasks.getImportStage();
             const std::string outcome = tasks.getImportOutcome();
             const bool success = tasks.getImportSuccess();
-            const bool cancellable = tasks.canCancelGalleryImport();
+            const bool cancellable = tasks.canCancelImport();
 
             std::string status = "idle";
             if (active) {
@@ -1077,7 +1077,7 @@ namespace lfs::app {
             }
 
             if (job_id == "import.dataset") {
-                if (action == "cancel" && gui && gui->asyncTasks().requestGalleryImportCancel())
+                if (action == "cancel" && gui && gui->asyncTasks().requestImportCancel())
                     return {};
                 if (action != "dismiss") {
                     return std::unexpected("Action '" + action + "' is not supported for import.dataset");

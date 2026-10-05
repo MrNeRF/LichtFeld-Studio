@@ -524,6 +524,16 @@ TEST(ProgressOverlayPresentationTest, ImportHasPriorityAndClampsProgress) {
     EXPECT_EQ(presentation.stage, "Reading cameras");
 }
 
+TEST(ProgressOverlayPresentationTest, CancellablePhotoImportOffersCancel) {
+    lfs::vis::AppStore::ImportOverlayState state;
+    state.active = true;
+    state.cancellable = true;
+    state.dataset_type = "Apple Reframe";
+    const auto presentation = lfs::vis::gui::makeProgressOverlayPresentation(state, {});
+    EXPECT_EQ(presentation.action, lfs::vis::gui::ProgressOverlayPresentation::Action::CancelImport);
+    EXPECT_FALSE(presentation.action_label.empty());
+}
+
 TEST(ProgressOverlayPresentationTest, FailedImportCanBeDismissed) {
     lfs::vis::AppStore::ImportOverlayState import_state;
     import_state.show_completion = true;

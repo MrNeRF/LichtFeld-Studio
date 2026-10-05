@@ -10,6 +10,7 @@
 #include "lfs/training/ops/registry.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <optional>
@@ -196,4 +197,65 @@ TEST_F(McmcOpsBytes, FoldErrorZerosBothRows) {
     same(a, b);
     same(da, db);
     same(da, Tensor::zeros({2, n}, Device::GPU));
+}
+
+TEST(McmcSamplingRegression, SparseWeightsRemainScaleInvariant) {
+    constexpr size_t count = 32768;
+    const std::vector<float> opacity_values{0.1f, 0.2f, 0.3f, 0.4f, 0.5f};
+    auto opacity = Tensor::from_vector(opacity_values, {5}, Device::GPU);
+    auto scales = Tensor::zeros({5, 3}, Device::GPU);
+    auto alive = indices({4, 1, 2, 3, 0});
+    const auto* sampler = lfs::training::training_ops(*lfs::core::gpu_backend_of(opacity)).mcmc;
+    ASSERT_NE(sampler, nullptr);
+    for (const auto domain : {ops::SampleDomain::All, ops::SampleDomain::AliveIndices}) {
+        for (const int exponent : {0, -126}) {
+            SCOPED_TRACE(::testing::Message() << "gather=" << (domain == ops::SampleDomain::AliveIndices)
+                                              << " exponent=" << exponent);
+            const float unit = std::ldexp(1.0f, exponent);
+            auto weights = Tensor::from_vector({0.0f, unit, 0.0f, 3.0f * unit, 0.0f}, {5}, Device::GPU);
+            auto selected = Tensor::empty({count}, Device::GPU, DataType::Int64);
+            auto sampled_opacity = Tensor::empty({count}, Device::GPU);
+            auto sampled_scales = Tensor::empty({count, 3}, Device::GPU);
+            sampler->sample(weights, opacity, scales, alive, selected, sampled_opacity, sampled_scales, domain, 1234);
+            const auto values = selected.to_vector_int64();
+            const auto gathered = sampled_opacity.to_vector();
+            const auto gathered_scales = sampled_scales.to_vector();
+            size_t first = 0, zero_weight = 0;
+            for (size_t i = 0; i < count; ++i) {
+                const auto index = values[i];
+                ASSERT_GE(index, 0);
+                ASSERT_LT(index, 5);
+                zero_weight += index != 1 && index != 3;
+                first += index == 1;
+                ASSERT_FLOAT_EQ(gathered[i], opacity_values[index]);
+                for (size_t axis = 0; axis < 3; ++axis)
+                    ASSERT_FLOAT_EQ(gathered_scales[3 * i + axis], 1.0f);
+            }
+            EXPECT_EQ(zero_weight, 0);
+            EXPECT_NEAR(static_cast<double>(first) / count, 0.25, 0.015);
+        }
+    }
+}
+
+TEST(McmcSamplingRegression, ExactCdfStepsSkipZeroWeightPlateaus) {
+    auto opacity = Tensor::ones({5}, Device::GPU);
+    auto scales = Tensor::zeros({5, 3}, Device::GPU);
+    auto alive = indices({4, 1, 2, 3, 0});
+    const auto* sampler = lfs::training::training_ops(*lfs::core::gpu_backend_of(opacity)).mcmc;
+    ASSERT_NE(sampler, nullptr);
+    // Philox(seed, subsequence=0, offset=0) gives exactly 1/4 and 1.
+    const std::vector<uint64_t> seeds{29734499, 16390493};
+    for (auto domain : {ops::SampleDomain::All, ops::SampleDomain::AliveIndices}) {
+        for (int exponent : {0, -126}) {
+            const float unit = std::ldexp(1.0f, exponent);
+            auto weights = Tensor::from_vector({0.0f, unit, 0.0f, 3.0f * unit, 0.0f}, {5}, Device::GPU);
+            for (size_t draw = 0; draw < seeds.size(); ++draw) {
+                auto selected = Tensor::empty({1}, Device::GPU, DataType::Int64);
+                auto sampled_opacity = Tensor::empty({1}, Device::GPU);
+                auto sampled_scales = Tensor::empty({1, 3}, Device::GPU);
+                sampler->sample(weights, opacity, scales, alive, selected, sampled_opacity, sampled_scales, domain, seeds[draw]);
+                EXPECT_EQ(selected.to_vector_int64(), (std::vector<int64_t>{draw == 0 ? 1 : 3}));
+            }
+        }
+    }
 }

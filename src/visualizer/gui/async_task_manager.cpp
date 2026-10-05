@@ -26,6 +26,8 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/video_export_utils.hpp"
 #include "internal/resource_paths.hpp"
+#include "io/apple_reframe.hpp"
+#include "io/apple_reframe_conversion.hpp"
 #include "io/dataset_scene_import.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
@@ -936,7 +938,7 @@ namespace lfs::vis::gui {
                                           const bool replace_first,
                                           std::vector<std::string> name_hints,
                                           std::vector<bool> visibility,
-                                          std::optional<core::events::cmd::LoadGalleryScene> gallery, const bool import_batch) {
+                                          std::optional<core::events::cmd::LoadGalleryScene> gallery, const bool import_batch, const bool reframe_photo) {
         if (paths.empty()) {
             LOG_WARN("Splat load requested without paths");
             return false;
@@ -969,6 +971,8 @@ namespace lfs::vis::gui {
 
         splat_load_state_.job = *created;
         splat_load_state_.replace_first = replace_first;
+        splat_load_state_.reframe_photo = reframe_photo;
+        splat_load_state_.reframe_error.clear();
         splat_load_state_.validate_batch = import_batch && !gallery;
         viewer_->getSceneManager()->getScene().setImportValidation(splat_load_state_.validate_batch);
         splat_load_state_.gallery = std::move(gallery);
@@ -994,14 +998,15 @@ namespace lfs::vis::gui {
                     .is_visible = index >= visibility.size() || visibility[index],
                     .replace_scene = replace_first && index == 0,
                     .transform = splat_load_state_.gallery ? splat_load_state_.gallery->transforms[index] : glm::mat4{1.0f},
-                    .active_sh_degree = splat_load_state_.gallery ? splat_load_state_.gallery->sh_degrees[index] : -1});
+                    .active_sh_degree = splat_load_state_.gallery ? splat_load_state_.gallery->sh_degrees[index] : -1,
+                    .reframe_photo = reframe_photo});
             }
         }
 
         {
             const std::lock_guard lock(import_state_.mutex);
             import_state_.path = splat_load_state_.requests.front().path;
-            import_state_.dataset_type = "Splat";
+            import_state_.dataset_type = reframe_photo ? "Apple Reframe" : "Splat";
             import_state_.num_images = 0;
             import_state_.num_points = 0;
             import_state_.success = false;
@@ -1041,22 +1046,30 @@ namespace lfs::vis::gui {
                                 .detection = LFS_SOURCE_SITE_CURRENT(),
                             });
                         }
+                        const auto progress = [this, job, index, total = requests.size()](const float pct,
+                                                                                          const std::string& stage) {
+                            jobs_.report(job, (static_cast<float>(index) + pct / 100.0F) / static_cast<float>(total), stage);
+                            publishImportOverlayState();
+                            wakeMainThreadForAsyncWork();
+                        };
+                        const auto cancel = [this, job, &stop_token]() {
+                            return stop_token.stop_requested() || jobs_.cancelRequested(job);
+                        };
+                        std::expected<lfs::io::LoadResult, std::string> staged;
+                        if (request.reframe_photo) {
+                            auto generated = lfs::io::createAppleReframeSplat(request.path, {.progress = progress, .cancel_requested = cancel});
+                            if (!generated) {
+                                user_error = generated.error().message;
+                                staged = std::unexpected(generated.error().format());
+                            } else {
+                                staged = std::move(*generated);
+                            }
+                        } else {
+                            staged = viewer_->getSceneManager()->stageSplatFile(request.path, progress, cancel,
+                                                                                request.active_sh_degree >= 0, &user_error);
+                        }
                         return lfs::from_legacy_expected<lfs::io::LoadResult>(
-                            viewer_->getSceneManager()->stageSplatFile(
-                                request.path,
-                                [this, job, index, total = requests.size()](const float pct,
-                                                                            const std::string& stage) {
-                                    jobs_.report(job,
-                                                 (static_cast<float>(index) + pct / 100.0F) /
-                                                     static_cast<float>(total),
-                                                 stage);
-                                    publishImportOverlayState();
-                                    wakeMainThreadForAsyncWork();
-                                },
-                                [this, job, &stop_token]() {
-                                    return stop_token.stop_requested() || jobs_.cancelRequested(job);
-                                },
-                                request.active_sh_degree >= 0, &user_error),
+                            std::move(staged),
                             lfs::LegacyErrorContext{
                                 .code = lfs::ErrorCode::Internal,
                                 .domain = lfs::ErrorDomain::IO,
@@ -1081,7 +1094,7 @@ namespace lfs::vis::gui {
                     SplatLoadCompletion completion{
                         .request = request,
                         .result = result ? std::optional<lfs::io::LoadResult>(std::move(*result)) : std::nullopt,
-                        .error = result ? std::string{} : (splat_load_state_.validate_batch && !user_error.empty() && !isImportOutOfMemory(error_message) ? user_error : error_message),
+                        .error = result ? std::string{} : ((splat_load_state_.validate_batch || request.reframe_photo) && !user_error.empty() && !isImportOutOfMemory(error_message) ? user_error : error_message),
                         .stage_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - stage_started_at)};
                     {
@@ -1243,6 +1256,8 @@ namespace lfs::vis::gui {
         }
         for (auto& completion : completions) {
             if (!completion.error.empty()) {
+                if (completion.request.reframe_photo)
+                    splat_load_state_.reframe_error = completion.error;
                 ++splat_load_state_.failed_count;
                 if (splat_load_state_.validate_batch)
                     splat_load_state_.failures.emplace_back(completion.request.path, completion.error);
@@ -1281,7 +1296,33 @@ namespace lfs::vis::gui {
                     // earlier requests failed.
                     completion.request.replace_scene = true;
                 }
-                if (completion.request.replace_scene && splat_load_state_.loaded_count == 0) {
+                if (completion.request.reframe_photo) {
+                    if (jobs_.cancelRequested(splat_load_state_.job) || !scene_manager->canClearScene())
+                        throw std::runtime_error("Photo reconstruction cancelled because the scene is no longer editable");
+                    auto model = std::get<std::shared_ptr<core::SplatData>>(completion.result->data);
+                    const auto photo_view = completion.result->photo_view;
+                    const float aspect = photo_view ? photo_view->source_aspect : 1.0f;
+                    // The predictor works in a square canonical image. Preserve
+                    // its Gaussian covariance and restore source proportions
+                    // through the node transform (also captured by undo/redo).
+                    const auto placement = io::reframe::groundedPlacement(
+                        aspect, photo_view ? photo_view->bounds_min : std::array<float, 3>{-1.0f, -1.0f, 0.0f},
+                        photo_view ? photo_view->bounds_max : std::array<float, 3>{1.0f, 1.0f, 2.0f});
+                    const glm::vec3 translation{placement.translation[0], placement.translation[1], placement.translation[2]};
+                    // Face the standard scene camera by rotating the grounded
+                    // reconstruction 180 degrees around world Y, at the origin.
+                    // diag(-1, 1, -1) is an exact half-turn, not a reflection.
+                    const auto facing = glm::scale(glm::mat4{1.0f}, glm::vec3{-1.0f, 1.0f, -1.0f});
+                    const auto transform = facing * glm::translate(glm::mat4{1.0f}, translation) *
+                                           glm::scale(glm::mat4{1.0f}, glm::vec3{aspect, 1.0f, 1.0f} * placement.scale);
+                    node_name = scene_manager->addGeneratedSplatNode(
+                        std::make_unique<core::SplatData>(std::move(*model)), "",
+                        completion.request.name_hint, true, "Create Splat from Photo", transform);
+                    if (node_name.empty())
+                        throw std::runtime_error("Could not attach reconstructed splats");
+                    if (auto* rendering_manager = viewer_->getRenderingManager())
+                        rendering_manager->markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
+                } else if (completion.request.replace_scene && splat_load_state_.loaded_count == 0) {
                     node_name = scene_manager->attachLoadedSplatFile(
                         completion.request.path,
                         completion.request.name_hint,
@@ -1324,6 +1365,8 @@ namespace lfs::vis::gui {
                     }
                 }
             } catch (const std::exception& error) {
+                if (completion.request.reframe_photo)
+                    splat_load_state_.reframe_error = error.what();
                 viewer_->getGuiManager()->endImportRenderCheck();
                 LOG_ERROR("Import attachment failed for '{}': {}", core::path_to_utf8(completion.request.path), error.what());
                 if (splat_load_state_.validate_batch) {
@@ -1441,7 +1484,9 @@ namespace lfs::vis::gui {
                          LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE));
             jobs_.completed(splat_load_state_.job);
         } else {
-            jobs_.failed(splat_load_state_.job, "No splat files could be loaded");
+            jobs_.failed(splat_load_state_.job, splat_load_state_.reframe_photo
+                                                    ? (splat_load_state_.reframe_error.empty() ? "Photo reconstruction failed" : splat_load_state_.reframe_error)
+                                                    : "No splat files could be loaded");
         }
         // Gallery ownership ends with this job, before a dataset can commit its clear.
         splat_load_state_.gallery.reset();
@@ -1475,7 +1520,8 @@ namespace lfs::vis::gui {
             // Normal import replacement emits SceneCleared too; only history
             // restoration is a new explicit boundary here. Gallery retains
             // master's epoch invalidation on all scene clears.
-            if (!event.from_history && !canCancelGalleryImport())
+            const bool reframe_running = splat_load_state_.reframe_photo && jobs_.anyRunning(JobType::Import);
+            if (!event.from_history && !canCancelGalleryImport() && !reframe_running)
                 return;
             ++gallery_scene_epoch_;
             if (event.from_history) {
@@ -1489,6 +1535,17 @@ namespace lfs::vis::gui {
             startGalleryProjectExport({command.source_path, command.destination,
                                        command.payload_format, command.expected_commit_uuid});
         });
+
+#if defined(LFS_HAS_APPLE_REFRAME)
+        cmd::CreateSplatFromPhoto::when([this](const auto& command) {
+            auto* manager = viewer_->getSceneManager();
+            if (!manager || !manager->canClearScene())
+                throw std::runtime_error("The scene is not editable while training or another scene operation is active");
+            if (!startSplatLoad({command.path}, false,
+                                {core::path_to_utf8(command.path.stem()) + " (Reframe)"}, {}, std::nullopt, false, true))
+                throw std::runtime_error("Another import is active. Try again when it finishes.");
+        });
+#endif
 
         cmd::LoadGalleryScene::when([this](const auto& command) {
             std::vector<std::string> names;
@@ -2447,6 +2504,7 @@ namespace lfs::vis::gui {
         const auto job =
             jobs_.peek(import_state_.job);
         state.active = job && job->running();
+        state.cancellable = canCancelImport();
         state.show_completion = import_state_.show_completion.load();
         state.progress =
             job ? job->progress : 0.0F;
@@ -2589,6 +2647,18 @@ namespace lfs::vis::gui {
 
     bool AsyncTaskManager::requestGalleryImportCancel() {
         if (!canCancelGalleryImport())
+            return false;
+        return requestImportCancel();
+    }
+
+    bool AsyncTaskManager::canCancelImport() const {
+        const auto active = jobs_.active(JobType::Import);
+        return (splat_load_state_.gallery.has_value() || splat_load_state_.reframe_photo) &&
+               active && active->handle == splat_load_state_.job;
+    }
+
+    bool AsyncTaskManager::requestImportCancel() {
+        if (!canCancelImport())
             return false;
         jobs_.requestCancel(splat_load_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
         if (splat_load_state_.thread)

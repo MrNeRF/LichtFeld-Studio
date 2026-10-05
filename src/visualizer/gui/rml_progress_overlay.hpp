@@ -37,6 +37,7 @@ namespace lfs::vis::gui {
         enum class Action {
             None,
             DismissImport,
+            CancelImport,
             CancelVideoExport,
         };
 
@@ -63,7 +64,8 @@ namespace lfs::vis::gui {
     public:
         RmlProgressOverlay(RmlUIManager* rml_manager,
                            std::function<void()> dismiss_import,
-                           std::function<void()> cancel_video_export);
+                           std::function<void()> cancel_video_export,
+                           std::function<void()> cancel_import = {});
         ~RmlProgressOverlay();
 
         RmlProgressOverlay(const RmlProgressOverlay&) = delete;
@@ -94,6 +96,7 @@ namespace lfs::vis::gui {
         RmlUIManager* rml_manager_ = nullptr;
         std::function<void()> dismiss_import_;
         std::function<void()> cancel_video_export_;
+        std::function<void()> cancel_import_;
 
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;

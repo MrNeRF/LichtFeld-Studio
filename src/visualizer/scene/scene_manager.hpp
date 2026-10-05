@@ -133,7 +133,9 @@ namespace lfs::vis {
         std::string addGeneratedSplatNode(std::unique_ptr<core::SplatData> model,
                                           const std::string& source_name,
                                           const std::string& desired_name,
-                                          bool select_new_node = true);
+                                          bool select_new_node = true,
+                                          const std::string& history_label = "Add Simplified Splat",
+                                          std::optional<glm::mat4> initial_transform = std::nullopt);
         size_t consolidateNodeModels();
 
         [[nodiscard]] std::expected<void, std::string> canRemoveNode(core::NodeId id) const;

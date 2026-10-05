@@ -1,4 +1,5 @@
 {
+  "menu.file.create_splat_from_photo": "Create Splat from Photo - Apple Reframe",
   "node_editor.template_count_one": "{} template",
   "node_editor.templates_title": "Templates",
   "node_editor.template_all": "All",

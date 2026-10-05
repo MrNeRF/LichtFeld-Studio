@@ -4569,7 +4569,8 @@ namespace lfs::vis {
     std::string SceneManager::addGeneratedSplatNode(std::unique_ptr<core::SplatData> model,
                                                     const std::string& source_name,
                                                     const std::string& desired_name,
-                                                    const bool select_new_node) {
+                                                    const bool select_new_node, const std::string& history_label,
+                                                    const std::optional<glm::mat4> initial_transform) {
         if (!model) {
             LOG_ERROR("Cannot add generated splat node: model is null");
             return {};
@@ -4595,6 +4596,8 @@ namespace lfs::vis {
             }
         }
 
+        if (initial_transform)
+            local_transform = *initial_transform;
         const std::string generated_name = makeUniqueNodeName(scene_, desired_name.empty() ? "Simplified Splat" : desired_name);
 
         if (auto allocator = makeExternalSplatAllocator()) {
@@ -4648,7 +4651,7 @@ namespace lfs::vis {
                 .emit();
         }
 
-        pushSceneGraphHistoryEntry(*this, "Add Simplified Splat", std::move(history_before), {generated_name}, history_options,
+        pushSceneGraphHistoryEntry(*this, history_label, std::move(history_before), {generated_name}, history_options,
                                    {scene_.getNodeUuid(node_id)});
         return generated_name;
     }

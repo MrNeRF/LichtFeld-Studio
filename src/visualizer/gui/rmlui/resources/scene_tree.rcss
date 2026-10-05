@@ -539,6 +539,11 @@ scene-graph scrollbarvertical sliderbar {
     min-width: 0;
 }
 
+/* Keep the hierarchy gutter and icons fixed when long names are truncated. */
+.expand-toggle, .leaf-spacer, .row-icon, .node-icon {
+    flex-shrink: 0;
+}
+
 /* Expand/collapse toggle — inline before name */
 .expand-toggle {
     display: inline;
