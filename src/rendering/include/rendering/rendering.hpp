@@ -216,6 +216,9 @@ namespace lfs::rendering {
         bool depth_view = false;
         // Occlusion consumers need per-pixel depth, not HiGS batch-leading depth.
         bool require_exact_depth = false;
+        // Optional row-major bitset of 4x4 pixel regions (rounded up at edges).
+        // Empty requests exact depth everywhere.
+        std::vector<uint32_t> exact_depth_sample_mask{};
         float depth_view_min = DEFAULT_DEPTH_VIEW_MIN;
         float depth_view_max = DEFAULT_DEPTH_VIEW_MAX;
         DepthVisualizationMode depth_visualization_mode = DepthVisualizationMode::Palette;

@@ -242,6 +242,15 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                 tile_gauss_mask = ballot.x;
         }
         shared_tile_masks[mini_batch * HIGS_MACRO_TILE_SIZE_TILES + lane_id] = tile_gauss_mask;
+        if ((uniforms.mip_filter & 2u) != 0u) {
+            // Compose replays only the batch crossing the median. Retain the
+            // tile membership ballots we already computed so it can skip
+            // unrelated splats without repeating a 1024-splat tile test per pixel.
+            const uint replay_mask_index = higs_replay_mask_base(uniforms) +
+                pool_batch_idx * HIGS_REPLAY_MASK_WORDS_PER_BATCH +
+                mini_batch * HIGS_MACRO_TILE_SIZE_TILES + lane_id;
+            macro_batch_active_mask[replay_mask_index] = tile_gauss_mask;
+        }
     }
     GroupMemoryBarrierWithGroupSync();
 

@@ -316,6 +316,7 @@ set_tests_properties(lichtfeld_format_tests PROPERTIES
 
 add_executable(lichtfeld_frame_tests
     test_frame_demand_ledger.cpp
+    test_frustum_depth_coverage.cpp
     test_framerate_controller.cpp
     ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/framerate_controller.cpp)
 

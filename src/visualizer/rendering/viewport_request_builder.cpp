@@ -3,14 +3,154 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "viewport_request_builder.hpp"
+#include "core/camera.hpp"
+#include "frustum_depth_coverage.hpp"
 #include "rendering/model_renderability.hpp"
 #include "scene/scene_manager.hpp"
+#include <algorithm>
+#include <array>
 #include <type_traits>
 #include <vector>
 
 namespace lfs::vis {
 
     namespace {
+        [[nodiscard]] std::vector<uint32_t> frustumDepthSampleMask(
+            const FrameContext& ctx, const lfs::rendering::FrameView& view) {
+            // Offscreen/custom projections retain full exact depth.
+            if (!ctx.scene_manager || !ctx.viewport_region || view.orthographic || ctx.settings.equirectangular ||
+                ctx.viewport_region->width <= 0 || ctx.viewport_region->height <= 0 ||
+                view.subregion_full_size != glm::ivec2(0) || view.size.x <= 0 || view.size.y <= 0)
+                return {};
+            const auto& scene = ctx.scene_manager->getScene();
+            const auto& cameras = scene.getVisibleCamerasCached();
+            auto transforms = ctx.scene_state.camera_scene_transforms;
+            if (transforms.size() != cameras.size()) {
+                transforms = scene.getVisibleCameraSceneTransforms();
+                if (transforms.size() != cameras.size())
+                    transforms.assign(cameras.size(), glm::mat4(1));
+                for (auto& transform : transforms)
+                    transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
+            }
+            struct Cache {
+                const lfs::core::Scene* scene = nullptr;
+                uint64_t generation = 0, camera_generation = 0;
+                float scale = 0;
+                std::vector<std::weak_ptr<const lfs::core::Camera>> cameras;
+                std::vector<glm::mat4> transforms;
+                std::vector<std::array<glm::vec3, 5>> points;
+                bool full = false;
+            };
+            // Camera extrinsics may be on the GPU. Rebuild only when the scene
+            // or calibration changes, not every time the viewer camera moves.
+            static thread_local Cache cache;
+            const float scale = ctx.settings.camera_frustum_scale;
+            if (cache.scene != &scene || cache.generation != scene.renderGeneration() ||
+                cache.camera_generation != scene.cameraListGeneration() || cache.scale != scale ||
+                cache.cameras.size() != cameras.size() ||
+                !std::equal(cache.cameras.begin(), cache.cameras.end(), cameras.begin(),
+                            [](const auto& cached, const auto& camera) { return cached.lock() == camera; }) ||
+                cache.transforms != transforms) {
+                cache = {.scene = &scene, .generation = scene.renderGeneration(), .camera_generation = scene.cameraListGeneration(), .scale = scale, .cameras = {}, .transforms = transforms, .points = {}};
+                cache.cameras.assign(cameras.begin(), cameras.end());
+                for (size_t i = 0; i < cameras.size(); ++i) {
+                    if (!cameras[i] || scale <= 0)
+                        continue;
+                    const auto& camera = *cameras[i];
+                    if (camera.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR) {
+                        cache.full = true;
+                        break;
+                    }
+                    if (camera.camera_width() <= 0 || camera.camera_height() <= 0 || camera.FoVy() <= 0)
+                        continue;
+                    auto r = camera.R();
+                    auto t = camera.T();
+                    if (!r.is_valid() || !t.is_valid() || r.numel() < 9 || t.numel() < 3 ||
+                        r.dtype() != lfs::core::DataType::Float32 || t.dtype() != lfs::core::DataType::Float32) {
+                        cache.full = true;
+                        break;
+                    }
+                    r = r.cpu().contiguous();
+                    t = t.cpu().contiguous();
+                    glm::mat4 world_to_camera(1);
+                    for (int row = 0; row < 3; ++row) {
+                        for (int col = 0; col < 3; ++col)
+                            world_to_camera[col][row] = r.ptr<float>()[row * 3 + col];
+                        world_to_camera[3][row] = t.ptr<float>()[row];
+                    }
+                    const auto model = transforms[i] * glm::inverse(world_to_camera) *
+                                       lfs::rendering::DATA_TO_VISUALIZER_CAMERA_AXES_4;
+                    const float h = std::tan(camera.FoVy() * 0.5f) * scale;
+                    const float w = h * float(camera.camera_width()) / camera.camera_height();
+                    std::array<glm::vec3, 5> points{
+                        glm::vec3(0),
+                        {-w, -h, -scale},
+                        {w, -h, -scale},
+                        {w, h, -scale},
+                        {-w, h, -scale}};
+                    for (auto& point : points)
+                        point = glm::vec3(model * glm::vec4(point, 1));
+                    cache.points.push_back(points);
+                }
+            }
+            if (cache.full)
+                return {};
+            // Visible line radius is 0.75 + 1.0 AA pixels; four render pixels
+            // also cover bilinear depth neighbours and projection rounding.
+            const float pixel_scale = std::max({1.0f, ctx.settings.render_scale,
+                                                view.size.x / ctx.viewport_region->width,
+                                                view.size.y / ctx.viewport_region->height});
+            FrustumDepthCoverage coverage(view.size, 4.0f * pixel_scale);
+            const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(view.size, view.focal_length_mm);
+            const auto project = [&](glm::vec3 p) {
+                return glm::vec2(view.size) * 0.5f + glm::vec2(p.x, -p.y) *
+                                                         glm::vec2(fx, fy) / -p.z;
+            };
+            constexpr int edges[][2] = {{0, 1}, {0, 2}, {0, 3}, {0, 4}, {1, 2}, {2, 3}, {3, 4}, {4, 1}};
+            constexpr float near_z = -1e-4f;
+            for (auto points : cache.points) {
+                if (glm::distance(points[0], view.translation) < scale * 0.1f)
+                    continue;
+                bool quad_visible = true;
+                std::array<glm::vec2, 4> projected;
+                for (size_t i = 0; i < points.size(); ++i) {
+                    auto& point = points[i];
+                    point = glm::transpose(view.rotation) * (point - view.translation);
+                    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+                        return {}; // Invalid projection: retain the full-depth contract.
+                    if (i > 0) {
+                        quad_visible &= point.z < near_z;
+                        if (point.z < near_z) {
+                            const auto p = project(point);
+                            if (!std::isfinite(p.x) || !std::isfinite(p.y))
+                                return {};
+                            projected[i - 1] = p;
+                        }
+                    }
+                }
+                // Include the image plane even while its thumbnail is loading.
+                if (quad_visible)
+                    coverage.quad(projected);
+                for (const auto& edge : edges) {
+                    auto a = points[edge[0]], b = points[edge[1]];
+                    if (a.z >= near_z && b.z >= near_z)
+                        continue;
+                    if (a.z >= near_z) {
+                        a = glm::mix(a, b, (near_z - a.z) / (b.z - a.z));
+                        a.z = near_z;
+                    } else if (b.z >= near_z) {
+                        b = glm::mix(b, a, (near_z - b.z) / (a.z - b.z));
+                        b.z = near_z;
+                    }
+                    const auto pa = project(a), pb = project(b);
+                    if (!std::isfinite(pa.x) || !std::isfinite(pa.y) || !std::isfinite(pb.x) || !std::isfinite(pb.y))
+                        return {};
+                    coverage.line(pa, pb);
+                }
+            }
+            return coverage.take();
+        }
+
         [[nodiscard]] bool panelMatches(const std::optional<SplitViewPanelId> preview_panel,
                                         const std::optional<SplitViewPanelId> render_panel) {
             return !preview_panel || !render_panel || *preview_panel == *render_panel;
@@ -354,7 +494,9 @@ namespace lfs::vis {
                  .has_selection = selection_overlay_enabled && ctx.scene_state.has_selection},
             .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(ctx.settings),
             .depth_view = ctx.settings.depth_view,
-            .require_exact_depth = ctx.settings.show_camera_frustums,
+            .require_exact_depth = ctx.settings.show_camera_frustums ||
+                                   std::any_of(ctx.scene_state.meshes.begin(), ctx.scene_state.meshes.end(),
+                                               [](const auto& mesh) { return mesh.mesh != nullptr; }),
             .depth_view_min = ctx.settings.depth_view_min,
             .depth_view_max = ctx.settings.depth_view_max,
             .depth_visualization_mode = ctx.settings.depth_visualization_mode};
@@ -370,6 +512,12 @@ namespace lfs::vis {
         applyGaussianViewVolume(request.filters, ctx);
         request.frame_view.subregion_origin = subregion_origin;
         request.frame_view.subregion_full_size = subregion_full_size;
+        if (ctx.settings.show_camera_frustums && !ctx.training_active && !request.gut && !request.depth_view &&
+            ctx.settings.split_view_mode == SplitViewMode::Disabled &&
+            !render_panel && (!source_viewport || source_viewport == &ctx.viewport) &&
+            std::none_of(ctx.scene_state.meshes.begin(), ctx.scene_state.meshes.end(),
+                         [](const auto& mesh) { return mesh.mesh != nullptr; }))
+            request.exact_depth_sample_mask = frustumDepthSampleMask(ctx, request.frame_view);
         return request;
     }
 

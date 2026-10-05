@@ -1181,8 +1181,8 @@ struct Uniforms {
     float rasterization_scale;
 }
 
-// mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1), and
-// full-frame binning for banded exports (bit 2).
+// mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1),
+// full-frame binning for banded exports (bit 2), and a depth sample mask (bit 3).
 #ifndef LFS_BANDED_EXPORT_RENDER
 #define LFS_BANDED_EXPORT_RENDER 0
 #endif
@@ -1217,6 +1217,15 @@ uint higs_macro_grid_width(uint grid_width) {
 [ForceInline]
 uint higs_macro_grid_height(uint grid_height) {
     return (grid_height + HIGS_MACRO_T16_H - 1u) / HIGS_MACRO_T16_H;
+}
+
+// The active-mask buffer starts with one word per possible macro batch.
+// Exact-depth replay ballots follow that header and reuse the partials pool
+// across raster waves. Use the logical grid here, not its allocation bucket.
+[ForceInline]
+uint higs_replay_mask_base(Uniforms uniforms) {
+    return (uniforms.sort_capacity + RASTER_BATCH_SIZE - 1u) / RASTER_BATCH_SIZE +
+           higs_macro_grid_width(uniforms.grid_width) * higs_macro_grid_height(uniforms.grid_height);
 }
 
 static const uint OVERLAY_FLAG_DIM = 1;
