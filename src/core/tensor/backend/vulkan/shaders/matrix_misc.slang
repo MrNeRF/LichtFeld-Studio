@@ -2,6 +2,7 @@ static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 40;
 
 // 0 eye: output[rows][columns] with ones on the diagonal.
+// 1 diag: output[n][n] with the diagonal vector on the diagonal.
 // 2 dot partial: output[workgroup] = sum over its grid-stride slice of a * b.
 // 3 dot finalize: output[0] = sum of count partials in a.
 [SpecializationConstant]
@@ -77,7 +78,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
     Ptr<float, Access.ReadWrite> output = (Ptr<float, Access.ReadWrite>)parameters.outputAddress;
     Ptr<float, Access.Read> a = (Ptr<float, Access.Read>)parameters.aAddress;
     Ptr<float, Access.Read> b = (Ptr<float, Access.Read>)parameters.bAddress;
-    if (kKind == 0)
+    if (kKind <= 1)
     {
         for (uint index = dispatchThreadId.x; index < parameters.count; index += stride)
         {
@@ -85,7 +86,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
             const uint column = index - row * parameters.columns;
             float value = 0.0f;
             if (row == column)
-                value = 1.0f;
+                value = kKind == 0 ? 1.0f : a[row];
             output[index] = value;
         }
         return;

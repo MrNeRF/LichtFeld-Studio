@@ -215,6 +215,61 @@ TEST_F(CudaStreamTest, D2_DotWaitsForGatedProducer) {
         "D2 dot producer ordering");
     destroy_stream_safely(consumer);
 }
+
+TEST_F(CudaStreamTest, D2_DiagWaitsForGatedProducer) {
+    GateStream producer;
+    const cudaStream_t consumer = make_consumer_stream();
+    constexpr int count = 1024;
+
+    Tensor input;
+    {
+        CUDAStreamGuard guard(producer.get());
+        input = Tensor::zeros({count}, Device::GPU);
+    }
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    producer.close();
+    input.fill_(7.0f, producer.get());
+
+    Tensor result;
+    invoke_while_producer_is_gated(producer, consumer, [&] { result = Tensor::diag(input); });
+    ASSERT_EQ(cudaStreamSynchronize(consumer), cudaSuccess);
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    expect_float_values_match(
+        result, torch::diag(torch::full({count}, 7.0f, torch::TensorOptions().device(torch::kCUDA))),
+        "D2 diag producer ordering");
+    destroy_stream_safely(consumer);
+}
+
+TEST_F(CudaStreamTest, D2_MultinomialWaitsForGatedProducer) {
+    GateStream producer;
+    const cudaStream_t consumer = make_consumer_stream();
+
+    Tensor weights;
+    {
+        CUDAStreamGuard guard(producer.get());
+        weights = Tensor::zeros({2}, Device::GPU);
+    }
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    producer.close();
+    weights.fill_(1.0f, producer.get());
+
+    std::optional<Tensor> result;
+    invoke_while_producer_is_gated(
+        producer, consumer, [&] { result = Tensor::multinomial(weights, 4096, true); });
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(cudaStreamSynchronize(consumer), cudaSuccess);
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+
+    const auto values = result->cpu().to_vector_int64();
+    ASSERT_EQ(values.size(), 4096u);
+    EXPECT_TRUE(std::all_of(values.begin(), values.end(), [](const int64_t value) {
+        return value == 0 || value == 1;
+    }));
+    EXPECT_NE(std::count(values.begin(), values.end(), 0), 0);
+    EXPECT_NE(std::count(values.begin(), values.end(), 1), 0);
+    destroy_stream_safely(consumer);
+}
+
 TEST_F(CudaStreamTest, D3_WhereMetadataIsNotReusedAcrossConcurrentStreams) {
     cudaStream_t first_stream = make_consumer_stream();
     cudaStream_t second_stream = make_consumer_stream();

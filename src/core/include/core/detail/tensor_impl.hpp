@@ -206,6 +206,8 @@ namespace lfs::core {
         FromCUDA = 6,
         Normal = 7,
         Randint = 8,
+        Bernoulli = 9,
+        Multinomial = 10
     };
 
     // Stack-resident ranked size list (rank ≤ MAX_TENSOR_RANK). Replaces heap
@@ -437,7 +439,8 @@ namespace lfs::core {
             std::tuple<float, float, float>,
             std::pair<float, float>,
             std::pair<int, int>,
-            void*>
+            void*,
+            std::pair<void*, bool>>
             args;
     };
 
@@ -949,6 +952,7 @@ namespace lfs::core {
         // ============= CORE UNIFIED OPERATIONS =============
         static Tensor load(LoadOp op, const LoadArgs& args);
         Tensor movement(MovementOp op, const MovementArgs& args) const;
+        Tensor reduce(ReduceOp op) const;
         Tensor reduce(ReduceOp op, const ReduceArgs& args) const;
         // Internal helper for where() operation
         Tensor ternary(const Tensor& b, const Tensor& c) const;
@@ -984,14 +988,21 @@ namespace lfs::core {
         static Tensor uniform(TensorShape shape, float low = 0.0f, float high = 1.0f,
                               Device device = Device::GPU, DataType dtype = DataType::Float32,
                               std::optional<uint64_t> seed = std::nullopt);
+        static Tensor normal(TensorShape shape, float mean = 0.0f, float std = 1.0f,
+                             Device device = Device::GPU, DataType dtype = DataType::Float32);
         static Tensor randint(TensorShape shape, int low, int high,
                               Device device = Device::GPU, DataType dtype = DataType::Int32);
+        static Tensor bernoulli(TensorShape shape, float p = 0.5f,
+                                Device device = Device::GPU, DataType dtype = DataType::Float32);
         // Explicit seeds are local to the call and leave the global RNG untouched.
+        static Tensor multinomial(const Tensor& weights, int num_samples,
+                                  bool replacement = false, std::optional<uint64_t> seed = std::nullopt);
         static Tensor arange(float end);
         static Tensor arange(float start, float end, float step = 1.0f);
         static Tensor linspace(float start, float end, size_t steps, Device device = Device::GPU);
         static Tensor eye(size_t n, Device device = Device::GPU);
         static Tensor eye(size_t m, size_t n, Device device = Device::GPU);
+        static Tensor diag(const Tensor& diagonal);
 
         static Tensor from_blob(void* data, TensorShape shape, Device device, DataType dtype,
                                 cudaStream_t home_stream = nullptr) {
@@ -1012,6 +1023,13 @@ namespace lfs::core {
                                           DataType dtype,
                                           std::shared_ptr<void> owner,
                                           size_t capacity);
+        static Tensor from_external_owner(void* data,
+                                          TensorShape shape,
+                                          Device device,
+                                          DataType dtype,
+                                          std::shared_ptr<void> owner,
+                                          size_t capacity,
+                                          cudaStream_t stream);
         static Tensor from_external_owner(void* data,
                                           TensorShape shape,
                                           Device device,
@@ -1134,6 +1152,8 @@ namespace lfs::core {
         static void shutdown_memory_pool();
         static void set_memory_pool_iteration(int iteration);
 
+        void set_bool(std::initializer_list<size_t> indices, bool value);
+        bool get_bool(std::initializer_list<size_t> indices) const;
         void set_bool(std::span<const size_t> indices, bool value);
         bool get_bool(std::span<const size_t> indices) const;
 
@@ -1360,9 +1380,10 @@ namespace lfs::core {
             return state_ ? state_->exportable_bound_generation : 0u;
         }
         static std::string storage_memory_summary();
-        static void log_storage_memory(std::string_view label);
         static std::size_t cuda_direct_storage_live_bytes();
         static std::size_t vulkan_external_storage_live_bytes();
+        static void log_storage_memory();
+        static void log_storage_memory(std::string_view label);
 
         // reserve() pre-allocates memory for future growth along dimension 0
         // Supports multi-dimensional tensors: [N, D1, D2, ...] reserves N "rows"
@@ -1535,6 +1556,7 @@ namespace lfs::core {
         Tensor isfinite() const;
         Tensor logical_not() const;
 
+        Tensor normalize(int dim = -1, float eps = 1e-12f) const;
         Tensor logit(float eps = 1e-7f) const;
 
         // ============= BINARY OPERATIONS (Template-based) =============
@@ -1554,6 +1576,8 @@ namespace lfs::core {
         Tensor div(const Tensor& other) const;
 
         Tensor pow(const Tensor& other) const;
+
+        Tensor mod(const Tensor& other) const;
 
         Tensor maximum(const Tensor& other) const;
 
@@ -1881,6 +1905,7 @@ namespace lfs::core {
         }
 
         Tensor& clamp_(float min_val, float max_val);
+        Tensor& clamp_min_(float min);
         Tensor& clamp_max_(float max);
 
         // In-place operations (Template-based, direct functor dispatch - zero enum overhead!)
@@ -1904,6 +1929,7 @@ namespace lfs::core {
 
         // Neural network operations
         // Conv1x1: per-pixel linear transform [N,C_in,H,W] -> [N,C_out,H,W]
+        Tensor conv1x1(const Tensor& weight) const;
         Tensor conv1x1(const Tensor& weight, const Tensor& bias) const;
 
         // MaxPool2d: window-based max [N,C,H,W] -> [N,C,H/stride,W/stride]
@@ -1913,6 +1939,7 @@ namespace lfs::core {
         Tensor adaptive_avg_pool2d(int output_h, int output_w) const;
 
         // Linear: fully connected layer [...,in] -> [...,out]
+        Tensor linear(const Tensor& weight) const;
         Tensor linear(const Tensor& weight, const Tensor& bias) const;
 
         // Fused operations for performance
@@ -1982,6 +2009,7 @@ namespace lfs::core {
         auto gather_lazy(const Tensor& indices) const -> PermutationExpr<TensorLeaf, TensorLeaf>;
 
         Tensor nonzero() const;
+        std::vector<Tensor> nonzero_split() const;
 
         Tensor& scatter_(int dim, const Tensor& indices, const Tensor& src,
                          ScatterMode mode = ScatterMode::None);
@@ -2005,9 +2033,13 @@ namespace lfs::core {
         TensorIndexer operator[](const std::vector<Tensor>& indices);
         MaskedTensorProxy operator[](const Tensor& mask) const;
 
+        float& at(std::initializer_list<size_t> indices);
         float at(std::initializer_list<size_t> indices) const;
 
         // ============= ADVANCED OPERATIONS =============
+
+        // Pairwise distance
+        Tensor cdist(const Tensor& other, float p = 2.0f) const;
 
         // Min/max with indices
         std::pair<Tensor, Tensor> min_with_indices(int dim = -1, bool keepdim = false) const;
@@ -2033,6 +2065,9 @@ namespace lfs::core {
          * @return Pair of (sorted_values, indices). Indices are always Int64 dtype.
          */
         std::pair<Tensor, Tensor> sort(int dim = -1, bool descending = false) const;
+
+        // Scalar boolean reductions
+        bool any_scalar() const;
 
         // ============= OPERATOR OVERLOADS (Template-based) =============
 
@@ -2096,6 +2131,10 @@ namespace lfs::core {
         Tensor& uniform_(float low = 0.0f, float high = 1.0f);
         Tensor& normal_(float mean = 0.0f, float std = 1.0f);
 
+        std::optional<Tensor> try_reshape(TensorShape shape) const;
+
+        static std::vector<Tensor> split_batch(const Tensor& tensor, size_t batch_size);
+
         // Utility template methods
         template <typename Func>
         Tensor& inplace(Func&& func) {
@@ -2123,11 +2162,16 @@ namespace lfs::core {
         }
 
         // Validation & assertions
+        Tensor& assert_shape(TensorShape expected);
+        Tensor& assert_shape(TensorShape expected, const std::string& msg);
+        Tensor& assert_device(Device expected);
+        Tensor& assert_dtype(DataType expected);
         Tensor& assert_finite();
 
         // Comparison operations
         bool has_nan() const;
         bool has_inf() const;
+        bool all_close(const Tensor& other, float rtol = 1e-5f, float atol = 1e-8f) const;
 
         // Utility functions
         std::string str() const;
@@ -2138,6 +2182,9 @@ namespace lfs::core {
         std::vector<int> to_vector_int() const;
         std::vector<bool> to_vector_bool() const;
         std::vector<float> debug_values(size_t max_values = 100) const;
+
+        void print_formatted() const;
+        void print_formatted(const std::string& name, size_t max_per_dim = 10) const;
 
         // ============= TENSOR OPTIONS =============
         struct TensorOptions {
@@ -2156,6 +2203,8 @@ namespace lfs::core {
         }
 
     private:
+        void print_1d(size_t max_elem = 10) const;
+        void print_2d(size_t max_per_dim = 10) const;
         friend class TensorIndexer;
         friend class MaskedTensorProxy;
         friend class TensorRowProxy;
@@ -2310,6 +2359,13 @@ namespace lfs::core {
 
         // Unary Operations
         Tensor operator-() const;
+        Tensor pow(float exponent) const;
+        Tensor sqrt() const;
+        Tensor abs() const;
+        Tensor neg() const;
+        Tensor sum() const;
+        Tensor mean() const;
+        Tensor square() const;
     };
 
     // Implementation of Tensor::operator[]
@@ -2346,6 +2402,7 @@ namespace lfs::core {
 
         void operator=(float value);
         void operator=(const Tensor& other);
+        operator Tensor() const;
     };
 
     class LFS_CORE_API TensorIndexer {
@@ -2485,6 +2542,9 @@ namespace lfs::core {
         size_t pool_reserved_high = 0;
 
         static MemoryInfo cuda();
+        static MemoryInfo cpu();
+
+        void log() const;
     };
 
     // ========================================================================

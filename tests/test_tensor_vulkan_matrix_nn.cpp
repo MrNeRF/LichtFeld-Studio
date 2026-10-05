@@ -136,7 +136,7 @@ namespace {
         const Tensor b = upload(bias, {out_features});
         const std::vector<double> plain =
             matmul_reference(input, weight, batch, in_features, out_features, true);
-        expect_matrix(x.linear(w, Tensor{}), plain, in_features, "linear");
+        expect_matrix(x.linear(w), plain, in_features, "linear");
         std::vector<double> biased(plain);
         std::vector<double> rectified(plain);
         for (size_t i = 0; i < batch; ++i) {
@@ -173,7 +173,7 @@ namespace {
                           matmul_reference(input, weight, test.m, test.k, test.n, false), test.k, "mm " + label);
             const Tensor w = upload(weight, {test.n, test.k});
             const std::vector<double> plain = matmul_reference(input, weight, test.m, test.k, test.n, true);
-            expect_matrix(x.linear(w, Tensor{}), plain, test.k, "linear " + label);
+            expect_matrix(x.linear(w), plain, test.k, "linear " + label);
             std::vector<double> rectified(plain);
             for (size_t i = 0; i < test.m; ++i)
                 for (size_t j = 0; j < test.n; ++j)
@@ -281,7 +281,7 @@ namespace {
         }
     }
 
-    TEST_F(TensorVulkanMatrixNn, EyeWritesEveryElement) {
+    TEST_F(TensorVulkanMatrixNn, EyeAndDiagWriteEveryElement) {
         // Catches kernels that leave off-diagonal elements untouched or index the
         // diagonal by column.
         struct EyeCase {
@@ -301,7 +301,61 @@ namespace {
                 ASSERT_EQ(values[i], diagonal ? 1.0f : 0.0f) << "eye index=" << i;
             }
         }
+        for (const size_t count : {size_t{7}, size_t{1031}}) {
+            const std::vector<float> diagonal = signed_pattern(count, 15);
+            const std::vector<float> values = Tensor::diag(upload(diagonal, {count})).cpu().to_vector();
+            ASSERT_EQ(values.size(), count * count);
+            for (size_t i = 0; i < values.size(); ++i) {
+                const size_t row = i / count;
+                ASSERT_EQ(values[i], row == i % count ? diagonal[row] : 0.0f) << "diag index=" << i;
+            }
+        }
     }
+
+    TEST_F(TensorVulkanMatrixNn, CdistCoversEveryNormConvention) {
+        // Catches a distance kernel that applies the final root to the wrong norms
+        // or mixes up the row and column operands.
+        constexpr size_t rows = 37;
+        constexpr size_t columns = 19;
+        constexpr size_t features = 16;
+        std::vector<float> a = signed_pattern(rows * features, 16);
+        std::vector<float> b = signed_pattern(columns * features, 17);
+        b[5 * features + 3] = a[2 * features + 3];
+        const Tensor lhs = upload(a, {rows, features});
+        const Tensor rhs = upload(b, {columns, features});
+        const float infinity = std::numeric_limits<float>::infinity();
+        for (const float p : {2.0f, 1.0f, 0.0f, infinity, 3.0f}) {
+            const std::vector<float> values = lhs.cdist(rhs, p).cpu().to_vector();
+            ASSERT_EQ(values.size(), rows * columns);
+            for (size_t i = 0; i < rows; ++i) {
+                for (size_t j = 0; j < columns; ++j) {
+                    double distance = 0.0;
+                    for (size_t d = 0; d < features; ++d) {
+                        const double difference = std::abs(static_cast<double>(a[i * features + d]) - b[j * features + d]);
+                        if (p == 2.0f) {
+                            distance += difference * difference;
+                        } else if (p == 1.0f) {
+                            distance += difference;
+                        } else if (p == 0.0f) {
+                            distance += difference != 0.0 ? 1.0 : 0.0;
+                        } else if (std::isinf(p)) {
+                            distance = std::max(distance, difference);
+                        } else {
+                            distance += std::pow(difference, static_cast<double>(p));
+                        }
+                    }
+                    if (p == 2.0f) {
+                        distance = std::sqrt(distance);
+                    } else if (p != 1.0f && p != 0.0f && !std::isinf(p)) {
+                        distance = std::pow(distance, 1.0 / p);
+                    }
+                    ASSERT_NEAR(values[i * columns + j], distance, 1.0e-6 + 1.0e-4 * distance)
+                        << "p=" << p << " i=" << i << " j=" << j;
+                }
+            }
+        }
+    }
+
     TEST_F(TensorVulkanMatrixNn, PoolingMatchesTheCudaWindowRules) {
         // Catches wrong padding handling in max_pool2d, adaptive windows that
         // drop the last row or column, and a max that loses NaN.

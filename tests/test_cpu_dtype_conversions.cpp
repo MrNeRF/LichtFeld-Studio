@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "tensor_compare.hpp"
 
 #include <gtest/gtest.h>
 
@@ -205,7 +204,7 @@ TEST(CPUDtypeConversionTest, ProductionMuralPointCloudWorkflow) {
     const auto colors_gpu_float = colors_cpu.gpu().to(DataType::Float32);
 
     EXPECT_EQ(means_gpu.shape(), TensorShape({num_points, 3}));
-    EXPECT_TRUE(lfs::test::tensor_values_close(colors_cpu_float, colors_gpu_float.cpu()));
+    EXPECT_TRUE(colors_cpu_float.all_close(colors_gpu_float.cpu()));
     const auto normalized = (colors_gpu_float / 255.0f).cpu().to_vector();
     ASSERT_GE(normalized.size(), 2u);
     EXPECT_NEAR(normalized[0], 13.0f / 255.0f, 1e-6f);

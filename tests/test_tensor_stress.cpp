@@ -384,6 +384,29 @@ TEST_F(TensorStressTest, NumericalStability) {
     EXPECT_FALSE(custom_sqrt_small.has_nan());
     compare_tensors(custom_sqrt_small, torch_sqrt_small, 1e-6f, 1e-7f, "SqrtSmall");
 }
+
+TEST_F(TensorStressTest, NormalizationStability) {
+    // Test normalization with various distributions
+    auto custom_t = Tensor::randn({1000}, Device::GPU);
+
+    auto data = custom_t.to_vector();
+    auto torch_t = torch::from_blob(data.data(), {1000},
+                                    torch::TensorOptions().dtype(torch::kFloat32))
+                       .clone()
+                       .to(torch::kCUDA);
+
+    auto custom_normalized = custom_t.normalize();
+
+    auto torch_mean = torch_t.mean();
+    auto torch_std = torch_t.std(/*unbiased=*/false);
+    auto torch_normalized = (torch_t - torch_mean) / (torch_std + 1e-8f); // Add epsilon!
+
+    EXPECT_FALSE(custom_normalized.has_nan());
+    EXPECT_FALSE(custom_normalized.has_inf());
+
+    compare_tensors(custom_normalized, torch_normalized, 1e-4f, 1e-5f, "Normalize");
+}
+
 // ============= Concurrent Operations Tests =============
 
 TEST_F(TensorStressTest, ConcurrentOperations) {

@@ -139,8 +139,13 @@ namespace lfs::core {
                                          ExecContext context) = 0;
             virtual void dot_product(StorageRef lhs, StorageRef rhs, StorageRef output,
                                      size_t count, ExecContext context) = 0;
+            virtual void diag(StorageRef diagonal, StorageRef output, size_t count,
+                              ExecContext context) = 0;
             virtual void eye(StorageRef output, size_t rows, size_t columns,
                              ExecContext context) = 0;
+            virtual void cdist(StorageRef lhs, StorageRef rhs, StorageRef output,
+                               size_t lhs_rows, size_t rhs_rows, size_t columns, float p,
+                               ExecContext context) = 0;
             virtual void nearest_point_indices(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, size_t, size_t, size_t, float, ExecContext) = 0;
             virtual void camera_frustum_counts(StorageRef, StorageRef, StorageRef, size_t, size_t, float, ExecContext) = 0;
             virtual void radius_neighbors(StorageRef points, StorageRef references,
@@ -274,8 +279,12 @@ namespace lfs::core {
                               ExecContext context) = 0;
             virtual void uniform(StorageRef output, const RandomProgram& program,
                                  ExecContext context) = 0;
+            virtual void bernoulli(StorageRef output, const RandomProgram& program,
+                                   ExecContext context) = 0;
             virtual void randint(StorageRef output, const RandomProgram& program,
                                  ExecContext context) = 0;
+            virtual void multinomial(StorageRef weights, StorageRef output,
+                                     const RandomProgram& program, ExecContext context) = 0;
             // Odd-sized normal generation synchronizes after copying from its scratch.
             virtual void normal(StorageRef output, StorageRef odd_count_scratch,
                                 const RandomProgram& program, ExecContext context) = 0;
@@ -514,8 +523,13 @@ namespace lfs::core {
                                  ExecContext context) override;
             void dot_product(StorageRef lhs, StorageRef rhs, StorageRef output,
                              size_t count, ExecContext context) override;
+            void diag(StorageRef diagonal, StorageRef output, size_t count,
+                      ExecContext context) override;
             void eye(StorageRef output, size_t rows, size_t columns,
                      ExecContext context) override;
+            void cdist(StorageRef lhs, StorageRef rhs, StorageRef output,
+                       size_t lhs_rows, size_t rhs_rows, size_t columns, float p,
+                       ExecContext context) override;
             void nearest_point_indices(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, size_t, size_t, size_t, float, ExecContext) override;
             void camera_frustum_counts(StorageRef, StorageRef, StorageRef, size_t, size_t, float, ExecContext) override;
             void radius_neighbors(StorageRef points, StorageRef references,
@@ -608,8 +622,12 @@ namespace lfs::core {
                       ExecContext context) override;
             void uniform(StorageRef output, const RandomProgram& program,
                          ExecContext context) override;
+            void bernoulli(StorageRef output, const RandomProgram& program,
+                           ExecContext context) override;
             void randint(StorageRef output, const RandomProgram& program,
                          ExecContext context) override;
+            void multinomial(StorageRef weights, StorageRef output,
+                             const RandomProgram& program, ExecContext context) override;
             void normal(StorageRef output, StorageRef odd_count_scratch,
                         const RandomProgram& program, ExecContext context) override;
 

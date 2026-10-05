@@ -11,6 +11,107 @@
 
 namespace lfs::core {
 
+    // ============= PAIRWISE DISTANCE (CDIST) =============
+    Tensor Tensor::cdist(const Tensor& other, float p) const {
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
+                       "cdist requires valid tensors");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype() == DataType::Float32,
+                       "cdist currently supports only Float32 tensors");
+        LFS_ASSERT_MSG(device_ == other.device(),
+                       "cdist requires tensors on the same device");
+        internal::require_same_gpu_backend(*this, other, "cdist");
+        LFS_ASSERT_MSG(ndim() == 2 && other.ndim() == 2,
+                       "cdist requires rank-2 tensors");
+        LFS_ASSERT_MSG(size(1) == other.size(1),
+                       "cdist feature dimensions must match");
+        LFS_ASSERT_MSG(!std::isnan(p) && p >= 0.0f,
+                       "cdist p must be non-negative");
+
+        Tensor lhs_materialized;
+        Tensor rhs_materialized;
+        const Tensor& lhs = contiguous_read(lhs_materialized);
+        const Tensor& rhs = other.contiguous_read(rhs_materialized);
+
+        size_t N = size(0);
+        size_t M = other.size(0);
+        size_t D = size(1);
+
+        auto result = internal::allocate_like(*this, TensorShape{N, M}, dtype_);
+
+        if (device_ == Device::GPU) {
+            pin_operands({&lhs, &rhs});
+            const cudaStream_t execution_stream =
+                prepare_inputs_for_stream({&lhs, &rhs}, result.stream());
+            internal::backend_ops_for(lhs).cdist(
+                internal::storage_ref(lhs), internal::storage_ref(rhs),
+                internal::storage_ref(result), N, M, D, p,
+                internal::ExecContext{execution_stream});
+            // No sync - returns tensor
+        } else {
+            pin_operands({&lhs, &rhs});
+            const float* a_data = lhs.ptr<float>();
+            const float* b_data = rhs.ptr<float>();
+            float* out_data = result.ptr<float>();
+
+            if (p == 2.0f) {
+                for (size_t i = 0; i < N; ++i) {
+                    for (size_t j = 0; j < M; ++j) {
+                        float dist = 0.0f;
+                        for (size_t d = 0; d < D; ++d) {
+                            float diff = a_data[i * D + d] - b_data[j * D + d];
+                            dist += diff * diff;
+                        }
+                        out_data[i * M + j] = std::sqrt(dist);
+                    }
+                }
+            } else if (p == 1.0f) {
+                for (size_t i = 0; i < N; ++i) {
+                    for (size_t j = 0; j < M; ++j) {
+                        float dist = 0.0f;
+                        for (size_t d = 0; d < D; ++d) {
+                            dist += std::abs(a_data[i * D + d] - b_data[j * D + d]);
+                        }
+                        out_data[i * M + j] = dist;
+                    }
+                }
+            } else if (p == 0.0f) {
+                for (size_t i = 0; i < N; ++i) {
+                    for (size_t j = 0; j < M; ++j) {
+                        float dist = 0.0f;
+                        for (size_t d = 0; d < D; ++d) {
+                            dist += a_data[i * D + d] != b_data[j * D + d] ? 1.0f : 0.0f;
+                        }
+                        out_data[i * M + j] = dist;
+                    }
+                }
+            } else if (std::isinf(p)) {
+                for (size_t i = 0; i < N; ++i) {
+                    for (size_t j = 0; j < M; ++j) {
+                        float dist = 0.0f;
+                        for (size_t d = 0; d < D; ++d) {
+                            const float diff = std::abs(a_data[i * D + d] - b_data[j * D + d]);
+                            dist = ops::maximum_op{}(dist, diff);
+                        }
+                        out_data[i * M + j] = dist;
+                    }
+                }
+            } else {
+                for (size_t i = 0; i < N; ++i) {
+                    for (size_t j = 0; j < M; ++j) {
+                        float dist = 0.0f;
+                        for (size_t d = 0; d < D; ++d) {
+                            float diff = std::abs(a_data[i * D + d] - b_data[j * D + d]);
+                            dist += std::pow(diff, p);
+                        }
+                        out_data[i * M + j] = std::pow(dist, 1.0f / p);
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
     namespace {
         // The CPU loop's choice along `dim`, on the input's backend: the
         // first NaN after the first element, else the first element if it is
@@ -322,4 +423,13 @@ namespace lfs::core {
     }
 
     // ============= SCALAR BOOLEAN REDUCTIONS =============
+    bool Tensor::any_scalar() const {
+        LFS_ASSERT_MSG(is_valid(),
+                       "any_scalar requires a valid tensor");
+        if (numel() == 0) {
+            return false;
+        }
+        return count_nonzero() > 0;
+    }
+
 } // namespace lfs::core

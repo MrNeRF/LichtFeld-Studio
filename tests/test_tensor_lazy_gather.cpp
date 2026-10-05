@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "tensor_compare.hpp"
 
 #include <gtest/gtest.h>
 
@@ -24,7 +23,7 @@ TEST(TensorLazyGatherTest, MatchesTakeForDuplicatesAndNegativeIndices) {
     EXPECT_EQ(lazy.device(), input.device());
     EXPECT_EQ(lazy.cpu().to_vector(),
               (std::vector<float>{8.0f, 2.0f, 8.0f, 8.0f, -4.0f}));
-    EXPECT_TRUE(lfs::test::tensor_values_close(lazy, eager));
+    EXPECT_TRUE(lazy.all_close(eager));
 }
 
 TEST(TensorLazyGatherTest, FusedUnaryMatchesEagerComposition) {
@@ -39,7 +38,7 @@ TEST(TensorLazyGatherTest, FusedUnaryMatchesEagerComposition) {
     EXPECT_EQ(fused.shape(), TensorShape({2, 2}));
     EXPECT_EQ(fused.cpu().to_vector(),
               (std::vector<float>{3.0f, 4.0f, 2.0f, 3.0f}));
-    EXPECT_TRUE(lfs::test::tensor_values_close(fused, eager));
+    EXPECT_TRUE(fused.all_close(eager));
 }
 
 TEST(TensorLazyGatherTest, RejectsInvalidContractsBeforeDereference) {

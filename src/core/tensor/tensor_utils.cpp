@@ -50,6 +50,42 @@ namespace lfs::core {
         return t;
     }
 
+    Tensor Tensor::diag(const Tensor& diagonal) {
+        LFS_ASSERT_MSG(diagonal.is_valid(),
+                       "diag requires a valid tensor");
+        LFS_ASSERT_MSG(diagonal.ndim() == 1,
+                       "diag requires a rank-1 tensor");
+        LFS_ASSERT_MSG(diagonal.dtype() == DataType::Float32,
+                       "diag currently supports only Float32");
+
+        Tensor materialized;
+        const Tensor& dense_diagonal = diagonal.contiguous_read(materialized);
+        if (&dense_diagonal != &diagonal) {
+            return diag(dense_diagonal);
+        }
+
+        size_t n = diagonal.numel();
+        auto result = internal::allocate_zeros_like(
+            diagonal, TensorShape{n, n}, diagonal.dtype());
+        if (n == 0) {
+            return result;
+        }
+
+        if (diagonal.device() == Device::GPU) {
+            prepare_inputs_for_stream({&dense_diagonal}, result.stream());
+            internal::backend_ops_for(dense_diagonal).diag(internal::storage_ref(dense_diagonal), internal::storage_ref(result), n, internal::ExecContext{result.stream()});
+            // No sync - returns tensor
+        } else {
+            const float* diag_data = diagonal.ptr<float>();
+            float* mat_data = result.ptr<float>();
+            for (size_t i = 0; i < n; ++i) {
+                mat_data[i * n + i] = diag_data[i];
+            }
+        }
+
+        return result;
+    }
+
 } // namespace lfs::core
 
 // ============= MemoryInfo Implementation =============
@@ -57,6 +93,23 @@ namespace lfs::core {
 
     MemoryInfo MemoryInfo::cuda() {
         return internal::backend_ops(GpuBackend::CUDA).stats();
+    }
+
+    MemoryInfo MemoryInfo::cpu() {
+        MemoryInfo info;
+        info.free_bytes = 0;
+        info.total_bytes = 0;
+        info.allocated_bytes = 0;
+        info.device_id = -1;
+        return info;
+    }
+
+    void MemoryInfo::log() const {
+        LOG_INFO("Memory Info - Device: {}, Allocated: {:.2f} MB, Free: {:.2f} MB, Total: {:.2f} MB",
+                 device_id,
+                 allocated_bytes / (1024.0 * 1024.0),
+                 free_bytes / (1024.0 * 1024.0),
+                 total_bytes / (1024.0 * 1024.0));
     }
 
 } // namespace lfs::core

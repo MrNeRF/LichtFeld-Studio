@@ -3,7 +3,6 @@
 
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
-#include "tensor_compare.hpp"
 #include <cmath>
 #include <cuda_runtime.h>
 #include <expected>
@@ -245,7 +244,7 @@ TEST_F(TensorBasicTest, DeviceTransferRoundTrip) {
     compare_tensors(cuda2_custom, cuda2_torch, 1e-6f, 1e-7f, "DeviceTransfer_RoundTrip");
 
     // Verify round-trip preserves values
-    EXPECT_TRUE(lfs::test::tensor_values_close(cuda_custom, cuda2_custom, 1e-5f, 1e-6f))
+    EXPECT_TRUE(cuda_custom.all_close(cuda2_custom, 1e-5f, 1e-6f))
         << "Round-trip should preserve values";
     compare_tensors(cuda_custom, cuda_torch, 1e-6f, 1e-7f, "DeviceTransfer_RoundTrip_Original");
 }
@@ -275,7 +274,7 @@ TEST_F(TensorBasicTest, Clone) {
     compare_tensors(cloned_custom, cloned_torch, 1e-6f, 1e-7f, "Clone");
 
     // Verify original and clone match
-    EXPECT_TRUE(lfs::test::tensor_values_close(original_custom, cloned_custom, 1e-5f, 1e-6f))
+    EXPECT_TRUE(original_custom.all_close(cloned_custom, 1e-5f, 1e-6f))
         << "Clone should match original";
     compare_tensors(original_custom, original_torch, 1e-6f, 1e-7f, "Clone_Original");
 
@@ -332,7 +331,7 @@ TEST_F(TensorBasicTest, CopyFrom) {
     compare_tensors(tensor2_custom, tensor2_torch, 1e-6f, 1e-7f, "CopyFrom");
 
     // Verify tensor1 and tensor2 now match
-    EXPECT_TRUE(lfs::test::tensor_values_close(tensor1_custom, tensor2_custom, 1e-5f, 1e-6f))
+    EXPECT_TRUE(tensor1_custom.all_close(tensor2_custom, 1e-5f, 1e-6f))
         << "After copy, tensors should match";
     compare_tensors(tensor1_custom, tensor1_torch, 1e-6f, 1e-7f, "CopyFrom_Source");
 
@@ -509,6 +508,35 @@ TEST_F(TensorBasicTest, EmptyTensor) {
 }
 
 // ============= AllClose Tests =============
+
+TEST_F(TensorBasicTest, AllClose) {
+    auto tensor1_custom = Tensor::full({3, 3}, 1.0f, Device::GPU);
+    auto tensor2_custom = Tensor::full({3, 3}, 1.0f, Device::GPU);
+    auto tensor3_custom = Tensor::full({3, 3}, 1.00001f, Device::GPU);
+    auto tensor4_custom = Tensor::full({3, 3}, 2.0f, Device::GPU);
+
+    auto tensor1_torch = torch::full({3, 3}, 1.0f,
+                                     torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    auto tensor2_torch = torch::full({3, 3}, 1.0f,
+                                     torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    auto tensor3_torch = torch::full({3, 3}, 1.00001f,
+                                     torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    auto tensor4_torch = torch::full({3, 3}, 2.0f,
+                                     torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+
+    // Test our implementation
+    EXPECT_TRUE(tensor1_custom.all_close(tensor2_custom));
+    EXPECT_TRUE(tensor1_custom.all_close(tensor3_custom, 1e-4f));
+    EXPECT_FALSE(tensor1_custom.all_close(tensor3_custom, 1e-6f));
+    EXPECT_FALSE(tensor1_custom.all_close(tensor4_custom));
+
+    // Compare with PyTorch allclose
+    EXPECT_TRUE(torch::allclose(tensor1_torch, tensor2_torch));
+    EXPECT_TRUE(torch::allclose(tensor1_torch, tensor3_torch, 1e-4f));
+    EXPECT_FALSE(torch::allclose(tensor1_torch, tensor3_torch, 1e-6f));
+    EXPECT_FALSE(torch::allclose(tensor1_torch, tensor4_torch));
+}
+
 // ============= Item Tests =============
 
 TEST_F(TensorBasicTest, ItemScalar) {

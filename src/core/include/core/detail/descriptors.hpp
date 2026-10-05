@@ -333,11 +333,13 @@ namespace lfs::core {
 
         struct RandomProgram {
             size_t count = 0;
+            size_t sample_count = 0;
             float first = 0.0f;
             float second = 1.0f;
             int low = 0;
             int high = 0;
             uint64_t seed = 0;
+            bool replacement = false;
         };
 
         struct IndexProgram {

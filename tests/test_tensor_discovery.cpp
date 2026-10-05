@@ -280,6 +280,22 @@ TEST_F(DiscoverySweep, SortUsesLogicalViewValues) {
     expect_int64_tensor(actual_indices, expected_indices,
                         "sort indices from a transposed view");
 }
+
+TEST_F(DiscoverySweep, NonzeroSplitReturnsOneCoordinateTensorPerAxis) {
+    const std::vector<float> data = {1.0f, 0.0f,
+                                     0.0f, 2.0f};
+    const auto input = Tensor::from_vector(data, {2, 2}, Device::CPU);
+    const auto reference = torch::tensor(data, torch::kFloat32).reshape({2, 2});
+
+    const auto actual = input.nonzero_split();
+    const auto expected = reference.nonzero().unbind(1);
+    ASSERT_EQ(actual.size(), expected.size())
+        << "nonzero_split must mirror nonzero(as_tuple=true)";
+    for (size_t axis = 0; axis < actual.size(); ++axis) {
+        expect_int64_tensor(actual[axis], expected[axis], "nonzero_split coordinate axis");
+    }
+}
+
 TEST_F(DiscoverySweep, NoOpViewTransformsPreserveAliasing) {
     {
         const std::vector<float> data = {1.0f, 2.0f,
@@ -323,6 +339,43 @@ TEST_F(DiscoverySweep, RowProxyTensorConversionPreservesAliasing) {
     expect_float_tensor(actual_base, expected_base,
                         "Tensor converted from tensor[row] must alias the parent row");
 }
+
+TEST_F(DiscoverySweep, CdistMaterializesTheLeftView) {
+    const std::vector<float> lhs_data = {1.0f, 2.0f, 3.0f,
+                                         4.0f, 5.0f, 6.0f};
+    const std::vector<float> rhs_data = {0.0f, 0.0f};
+    const auto lhs = Tensor::from_vector(lhs_data, {2, 3}, Device::CPU).transpose(0, 1);
+    const auto rhs = Tensor::from_vector(rhs_data, {1, 2}, Device::CPU);
+    const auto reference_lhs = torch::tensor(lhs_data, torch::kFloat32)
+                                   .reshape({2, 3})
+                                   .transpose(0, 1);
+    const auto reference_rhs = torch::tensor(rhs_data, torch::kFloat32).reshape({1, 2});
+    const auto expected = (reference_lhs.unsqueeze(1) - reference_rhs.unsqueeze(0))
+                              .square()
+                              .sum(2)
+                              .sqrt();
+
+    expect_float_tensor(lhs.cdist(rhs, 2.0f), expected,
+                        "cdist with a non-contiguous left input");
+}
+
+TEST_F(DiscoverySweep, CdistSupportsZeroAndInfinityNorms) {
+    const std::vector<float> lhs_data = {0.0f, 2.0f, 3.0f};
+    const std::vector<float> rhs_data = {0.0f, 5.0f, 1.0f};
+    const auto lhs = Tensor::from_vector(lhs_data, {1, 3}, Device::CPU);
+    const auto rhs = Tensor::from_vector(rhs_data, {1, 3}, Device::CPU);
+    const auto reference_lhs = torch::tensor(lhs_data, torch::kFloat32).reshape({1, 3});
+    const auto reference_rhs = torch::tensor(rhs_data, torch::kFloat32).reshape({1, 3});
+
+    for (const float p : {0.0f, std::numeric_limits<float>::infinity()}) {
+        SCOPED_TRACE(::testing::Message() << "p=" << p);
+        const auto expected = torch::cdist(reference_lhs, reference_rhs, p);
+        std::optional<Tensor> actual;
+        ASSERT_NO_THROW(actual.emplace(lhs.cdist(rhs, p)));
+        expect_float_tensor(*actual, expected, "cdist norm domain");
+    }
+}
+
 TEST_F(DiscoverySweep, MaxPool2dPreservesNonFiniteMaxima) {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const std::vector<float> data = {1.0f, nan, 2.0f, 3.0f};
@@ -538,6 +591,16 @@ TEST_F(DiscoverySweep, FullShapeBooleanIndexingMatchesTorch) {
         ADD_FAILURE() << "mutable full-shape Bool indexing unexpectedly threw: "
                       << error.what();
     }
+
+    const auto const_input = Tensor::from_vector(data, {2, 3}, Device::CPU);
+    const auto const_mask = Tensor::from_vector(mask_data, {2, 3}, Device::CPU);
+    try {
+        const Tensor actual = const_input[const_mask];
+        expect_float_tensor(actual, expected, "const full-shape Bool operator[]");
+    } catch (const std::exception& error) {
+        ADD_FAILURE() << "const full-shape Bool indexing unexpectedly threw: "
+                      << error.what();
+    }
 }
 
 TEST_F(DiscoverySweep, MaskedOpsBroadcastMasksLikeTorch) {
@@ -645,6 +708,53 @@ TEST_F(DiscoverySweep, BoolMaskedFillUsesScalarTruthiness) {
         }
     }
 }
+
+TEST_F(DiscoverySweep, NormalAllowsZeroStandardDeviation) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
+        SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
+        auto options = torch::TensorOptions().dtype(torch::kFloat32);
+        if (device == Device::GPU)
+            options = options.device(torch::kCUDA);
+        auto expected = torch::empty({4}, options);
+        ASSERT_NO_THROW(expected.normal_(2.5, 0.0));
+
+        try {
+            const auto actual = Tensor::normal({4}, 2.5f, 0.0f, device);
+            expect_float_tensor(actual, expected, "normal with std=0");
+        } catch (const std::exception& error) {
+            ADD_FAILURE() << "normal unexpectedly rejected std=0: " << error.what();
+        }
+
+        auto actual_in_place = Tensor::empty({4}, device, DataType::Float32);
+        try {
+            actual_in_place.normal_(2.5f, 0.0f);
+            expect_float_tensor(actual_in_place, expected, "normal_ with std=0");
+        } catch (const std::exception& error) {
+            ADD_FAILURE() << "normal_ unexpectedly rejected std=0: " << error.what();
+        }
+    }
+}
+
+TEST_F(DiscoverySweep, MixedNormalApisAdvanceCudaGenerator) {
+    constexpr uint64_t seed = 0x12345;
+    constexpr size_t count = 8;
+
+    torch::manual_seed(seed);
+    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+    const auto torch_first = torch::randn({static_cast<int64_t>(count)}, options);
+    auto torch_second = torch::empty({static_cast<int64_t>(count)}, options);
+    torch_second.normal_();
+    EXPECT_FALSE(torch::equal(torch_first, torch_second))
+        << "Torch's sequential normal APIs must advance their shared generator";
+
+    Tensor::manual_seed(seed);
+    const auto first = Tensor::normal({count}, 0.0f, 1.0f, Device::GPU);
+    auto second = Tensor::empty({count}, Device::GPU, DataType::Float32);
+    second.normal_(0.0f, 1.0f);
+    EXPECT_NE(lfs_float_values(first), lfs_float_values(second))
+        << "static normal followed by normal_ reused the same CUDA subsequence";
+}
+
 TEST_F(DiscoverySweep, BatchedMatmulBroadcastsSingletonBatch) {
     const std::vector<float> left_data = {1.0f, 2.0f, 3.0f,
                                           4.0f, 5.0f, 6.0f};
@@ -725,6 +835,23 @@ TEST_F(DiscoverySweep, ArangeDoesNotIncludeFloatingEndpoint) {
         torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
     expect_float_tensor(actual, expected, "floating-point arange endpoint exclusion");
 }
+
+TEST_F(DiscoverySweep, SplitBatchPreservesEmptyInput) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
+        SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
+        const auto input = Tensor::empty({0, 3}, device, DataType::Float32);
+        const auto actual = Tensor::split_batch(input, 2);
+        const auto reference = torch::empty(
+            {0, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(device == Device::GPU ? torch::kCUDA : torch::kCPU));
+        const auto expected = reference.split(2, 0);
+
+        EXPECT_EQ(actual.size(), expected.size());
+        for (size_t i = 0; i < std::min(actual.size(), expected.size()); ++i) {
+            expect_shape(actual[i], expected[i], "empty split_batch chunk");
+        }
+    }
+}
+
 TEST_F(DiscoverySweep, AdaptiveAvgPoolRejectsEmptySpatialInput) {
     for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
@@ -1033,6 +1160,30 @@ TEST_F(DiscoverySweep, IntegerPowScalarOverloadRejectsNegativeIntegerExponent) {
             (void)result.cpu().to_vector_int(); }, std::runtime_error);
     }
 }
+
+TEST_F(DiscoverySweep, IntegerModuloByZeroThrowsInsteadOfCrashing) {
+    const auto reference = torch::tensor({7}, torch::kInt32);
+    const auto zero = torch::tensor({0}, torch::kInt32);
+    EXPECT_THROW(static_cast<void>(torch::remainder(reference, zero)), c10::Error);
+
+    EXPECT_EXIT(
+        {
+            try {
+                const auto input = Tensor::from_vector(
+                    std::vector<int>{7}, {1}, Device::CPU);
+                const auto divisor = Tensor::from_vector(
+                    std::vector<int>{0}, {1}, Device::CPU);
+                const auto values = input.mod(divisor).to_vector_int();
+                (void)values;
+                std::_Exit(2);
+            } catch (const std::exception&) {
+                std::_Exit(0);
+            }
+        },
+        ::testing::ExitedWithCode(0),
+        "");
+}
+
 TEST_F(DiscoverySweep, LargeNormalInplaceCallsDoNotReuseSubsequence) {
     constexpr size_t offset_step = 1'000'000;
     constexpr size_t tail_size = 8;

@@ -117,6 +117,24 @@ TEST(TensorOrderingTest, MinMaxWithIndicesReturnValuesAndLocations) {
         EXPECT_EQ(max_indices.cpu().to_vector_int64(), (std::vector<int64_t>{0, 1}));
     }
 }
+
+TEST(TensorDistanceTest, CdistL1AndL2HaveExactValues) {
+    const auto lhs = Tensor::from_vector(
+        std::vector<float>{0.0f, 0.0f, 3.0f, 4.0f}, {2, 2}, Device::GPU);
+    const auto rhs = Tensor::from_vector(
+        std::vector<float>{1.0f, 2.0f, -2.0f, 0.0f}, {2, 2}, Device::GPU);
+
+    const auto l1 = lhs.cdist(rhs, 1.0f).cpu().to_vector();
+    EXPECT_EQ(l1, (std::vector<float>{3.0f, 2.0f, 4.0f, 9.0f}));
+
+    const auto l2 = lhs.cdist(rhs, 2.0f).cpu().to_vector();
+    ASSERT_EQ(l2.size(), 4u);
+    EXPECT_NEAR(l2[0], std::sqrt(5.0f), 1e-5f);
+    EXPECT_NEAR(l2[1], 2.0f, 1e-5f);
+    EXPECT_NEAR(l2[2], std::sqrt(8.0f), 1e-5f);
+    EXPECT_NEAR(l2[3], std::sqrt(41.0f), 1e-5f);
+}
+
 TEST(TensorOrderingTest, ArgExtremeKernelMatchesCpu) {
     struct Case {
         std::vector<size_t> shape;

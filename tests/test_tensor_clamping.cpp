@@ -197,6 +197,19 @@ TEST_F(TensorClampTest, ClampInPlaceBasic) {
 
     compare_tensors(t_custom, t_torch, 1e-5f, 1e-7f, "ClampInPlace");
 }
+
+TEST_F(TensorClampTest, ClampMinInPlace) {
+    std::vector<float> data = {-5.0f, -2.0f, 0.0f, 2.0f, 5.0f};
+
+    auto t_custom = Tensor::from_vector(data, {5}, Device::CPU);
+    auto t_torch = torch::tensor(data);
+
+    t_custom.clamp_min_(0.0f);
+    t_torch.clamp_min_(0.0f);
+
+    compare_tensors(t_custom, t_torch, 1e-5f, 1e-7f, "ClampMinInPlace");
+}
+
 TEST_F(TensorClampTest, ClampMaxInPlace) {
     std::vector<float> data = {-5.0f, -2.0f, 0.0f, 2.0f, 5.0f};
 
@@ -428,7 +441,7 @@ TEST_F(TensorClampTest, ClampInPlaceChaining) {
     auto t_custom = Tensor::from_vector(data, {100}, Device::CPU);
     auto t_torch = torch::tensor(data);
 
-    t_custom.clamp_(-5.0f, std::numeric_limits<float>::infinity()).clamp_max_(5.0f);
+    t_custom.clamp_min_(-5.0f).clamp_max_(5.0f);
     t_torch.clamp_min_(-5.0f).clamp_max_(5.0f);
 
     compare_tensors(t_custom, t_torch, 1e-5f, 1e-7f, "ClampInPlaceChaining");

@@ -48,6 +48,15 @@ TEST(TensorLazyStatefulOpsTest, RandintIsEagerInLazyMode) {
     EXPECT_FALSE(t.has_lazy_expr());
     EXPECT_TRUE(t.is_valid());
 }
+
+TEST(TensorLazyStatefulOpsTest, BernoulliIsEagerInLazyMode) {
+    LazyTestGuard guard;
+
+    auto t = Tensor::bernoulli({500}, 0.5f, Device::CPU, DataType::Float32);
+    EXPECT_FALSE(t.has_lazy_expr());
+    EXPECT_TRUE(t.is_valid());
+}
+
 TEST(TensorLazyStatefulOpsTest, InplaceNormalIsEagerInLazyMode) {
     LazyTestGuard guard;
 

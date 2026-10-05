@@ -14,7 +14,6 @@
  * the pre-allocated capacity. This caused training failures during densification.
  */
 
-#include <array>
 #include <cmath>
 #include <core/tensor.hpp>
 #include <gtest/gtest.h>
@@ -170,6 +169,16 @@ TEST_F(TensorInplaceCapacityTest, ClampInplace_PreservesCapacity) {
     EXPECT_GE(tensor_2d_.min_scalar(), -1.0f);
     EXPECT_LE(tensor_2d_.max_scalar(), 1.0f);
 }
+
+TEST_F(TensorInplaceCapacityTest, ClampMinInplace_PreservesCapacity) {
+    tensor_2d_.uniform_(-10.0f, 10.0f);
+    tensor_2d_.clamp_min_(0.0f);
+    verifyCapacityPreserved(tensor_2d_, capacity_, "clamp_min_()");
+    verifyTensorValid(tensor_2d_, "clamp_min_()");
+
+    EXPECT_GE(tensor_2d_.min_scalar(), 0.0f);
+}
+
 TEST_F(TensorInplaceCapacityTest, ClampMaxInplace_PreservesCapacity) {
     tensor_2d_.uniform_(-10.0f, 10.0f);
     tensor_2d_.clamp_max_(0.0f);
@@ -189,7 +198,7 @@ TEST_F(TensorInplaceCapacityTest, MaskedFillInplace_PreservesCapacity) {
     auto cpu_mask = mask.cpu();
     for (size_t i = 0; i < initial_size_ / 2; i++) {
         for (size_t j = 0; j < 3; j++) {
-            cpu_mask.set_bool(std::array<size_t, 2>{i, j}, true);
+            cpu_mask.set_bool({i, j}, true);
         }
     }
     mask = cpu_mask.gpu();
