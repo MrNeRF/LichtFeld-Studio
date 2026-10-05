@@ -51,6 +51,18 @@ namespace lfs::rendering {
         std::span<const std::byte> node_mask; // one byte per scene node
     };
 
+    // A resident LOD cut selected on the host: physical indices address the
+    // source attributes; logical indices address scene and editor masks.
+    // Optional arrays are empty. Uploaded per frame.
+    struct SplatLodInputs {
+        std::span<const uint32_t> indices;
+        std::span<const uint32_t> logical_indices;
+        std::span<const uint32_t> levels;  // debug colors
+        std::span<const float> weights;    // transition fade
+        bool debug = false;
+        uint32_t logical_count = 0;        // zero uses the source count
+    };
+
     enum class SplatPrimitive : uint32_t { Gaussian,
                                            Points,
                                            Discs,
@@ -65,15 +77,20 @@ namespace lfs::rendering {
         SplatProjector(const SplatProjector&) = delete;
         SplatProjector& operator=(const SplatProjector&) = delete;
 
-        // `projected` holds count x 64 bytes; `gut` count x 64 bytes for Gut.
+        // Projects `count` sources, or the `lod` cut. `projected` holds one
+        // 64-byte record per drawn splat; `gut` as many for Gut.
         [[nodiscard]] lfs::Result<void> project(const SplatSources& sources, const SplatProjection& projection, uint32_t degree,
                                            SplatPrimitive primitive, bool tight_bounds, core::Tensor& projected,
-                                           core::Tensor* gut = nullptr, const SplatOverlayInputs* overlay = nullptr);
+                                           core::Tensor* gut = nullptr, const SplatOverlayInputs* overlay = nullptr,
+                                           const SplatLodInputs* lod = nullptr);
 
         // With overlay inputs, the uploaded parameters and the per-splat overlay
         // flags of the last project(), for the blend.
         [[nodiscard]] const core::Tensor& overlay_parameters() const;
         [[nodiscard]] const core::Tensor& overlay_flags() const;
+        // With a LOD cut, the logical ID of each drawn splat (the physical index
+        // when the cut has no logical indices), for the blend's masks.
+        [[nodiscard]] const core::Tensor& logical_ids() const;
 
     private:
         struct Impl;

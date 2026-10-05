@@ -46,6 +46,13 @@ namespace lfs::rendering {
         std::span<const std::byte> selection_colors; // float4 per entry
     };
 
+    // A LOD cut's logical splat IDs (raster flag 8): per drawn splat, the ID
+    // masks and logical_count address. `count` is the logical extent.
+    struct SplatRasterLogical {
+        const core::Tensor* ids = nullptr;
+        uint32_t count = 0;
+    };
+
     enum class SplatRasterMode : uint32_t { Gaussian,
                                             Points,
                                             Discs,
@@ -69,7 +76,8 @@ namespace lfs::rendering {
         // color(), depth() and pick(). An instance overflow sets status().error.
         [[nodiscard]] lfs::Result<void> rasterize(const core::Tensor& projected, const core::Tensor* gut, uint32_t count,
                                              SplatRasterMode mode, const SplatRasterParameters& parameters,
-                                             const SplatRasterOverlay* overlay = nullptr);
+                                             const SplatRasterOverlay* overlay = nullptr,
+                                             const SplatRasterLogical* logical = nullptr);
 
         // Writes the display image (packed RGBA8) and linear view depth
         // (Float32) of the last rasterize() into rgba() and linear_depth(). An

@@ -401,9 +401,12 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                     half2 delta = pixel_macro_coord - center;
                     if ((kRasterFlags & 8192u) != 0u)
                         delta.x -= half(r.panorama.x / overlay_tile_extent.x) * round(delta.x / half(r.panorama.x / overlay_tile_extent.x));
-                    // The macro reference rounds the X product before adding Y.
-                    const half dx = half(chol.x * delta.x);
-                    const half u = half(dx + chol.y * delta.y), v = half(chol.z * delta.y);
+                    // The macro reference rounds the X product before adding Y. Slang
+                    // drops half(...) casts of half values and joins the statements,
+                    // which lets the compiler fuse both products; an explicit fma
+                    // keeps the rounded X product as its addend.
+                    const half dx = chol.x * delta.x;
+                    const half u = fma(chol.y, delta.y, dx), v = chol.z * delta.y;
                     const half power = u * u + v * v;
                     if (!isfinite(power) || power < half(0) || power > chol.w)
                         continue;
