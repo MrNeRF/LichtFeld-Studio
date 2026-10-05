@@ -214,6 +214,8 @@ namespace lfs::rendering {
         GaussianOverlayState overlay;
         bool transparent_background = false;
         bool depth_view = false;
+        // Occlusion consumers need per-pixel depth, not HiGS batch-leading depth.
+        bool require_exact_depth = false;
         float depth_view_min = DEFAULT_DEPTH_VIEW_MIN;
         float depth_view_max = DEFAULT_DEPTH_VIEW_MAX;
         DepthVisualizationMode depth_visualization_mode = DepthVisualizationMode::Palette;

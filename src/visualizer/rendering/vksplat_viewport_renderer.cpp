@@ -9096,12 +9096,13 @@ namespace lfs::vis {
         const bool higs_candidate =
             !request.gut && renderer_.supportsFloat16Storage() && !synchronize_input_upload &&
             !depth_capture_mode_;
-        // Depth view colorizes the per-pixel median depth. mip_filter bit 1
+        // Depth view and camera-frustum occlusion consume per-pixel median depth.
+        // mip_filter bit 1
         // switches the macro compose to an exact per-pixel replay of the single
         // batch that crosses transmittance 0.5, so the map is smooth instead of
         // quantized to the crossing batch's leading splat. Bit 0 stays the mip
         // anti-aliasing flag; the raster reads them independently.
-        if (request.depth_view) {
+        if (request.depth_view || request.require_exact_depth) {
             uniforms.mip_filter |= 2u;
         }
         // Synchronous exports use the exact instance-count gate and must keep

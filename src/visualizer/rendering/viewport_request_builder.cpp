@@ -354,6 +354,7 @@ namespace lfs::vis {
                  .has_selection = selection_overlay_enabled && ctx.scene_state.has_selection},
             .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(ctx.settings),
             .depth_view = ctx.settings.depth_view,
+            .require_exact_depth = ctx.settings.show_camera_frustums,
             .depth_view_min = ctx.settings.depth_view_min,
             .depth_view_max = ctx.settings.depth_view_max,
             .depth_visualization_mode = ctx.settings.depth_visualization_mode};
