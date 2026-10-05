@@ -65,6 +65,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/rendering_manager_events.cpp
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/rendering_manager_vulkan.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/rendering_manager_tensor.cpp>
+        rendering/rendering_manager_gt_cache.cpp
+        rendering/rendering_manager_lod.cpp
         rendering/display_tensors.cpp
         rendering/rendering_manager_viewport.cpp
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/scene_upscaler_plugin.cpp>

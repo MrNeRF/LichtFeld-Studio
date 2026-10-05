@@ -91,48 +91,6 @@ namespace lfs::vis {
         return {};
     }
 
-    bool RenderingManager::gtRequestMatches(const GTComparisonImageJobRequest& lhs,
-                                            const GTComparisonImageJobRequest& rhs) {
-        return lhs.camera_uid == rhs.camera_uid && lhs.mode == rhs.mode &&
-               lhs.image_path == rhs.image_path && lhs.image_size == rhs.image_size &&
-               lhs.undistort_requested == rhs.undistort_requested;
-    }
-
-    bool RenderingManager::gtCacheEntryMatches(const GTComparisonImageCacheEntry& entry,
-                                               const GTComparisonImageJobRequest& request) {
-        return entry.camera_uid == request.camera_uid && entry.mode == request.mode &&
-               entry.image_path == request.image_path && entry.image_size == request.image_size &&
-               entry.undistort_requested == request.undistort_requested;
-    }
-
-    void RenderingManager::insertGTComparisonImageCacheEntry(
-        const GTComparisonImageJobRequest&, std::shared_ptr<lfs::core::Tensor>, std::string,
-        std::chrono::steady_clock::time_point) {}
-
-    RenderingManager::GTComparisonImageLookup RenderingManager::getOrQueueGTComparisonImage(
-        GTComparisonImageJobRequest) {
-        return {.status = GTComparisonImageStatus::Failed,
-                .error = "Ground-truth split view is unavailable on the Metal compositor"};
-    }
-
-    void RenderingManager::queueGTComparisonImagePrefetch(GTComparisonImageJobRequest) {}
-
-    void RenderingManager::invalidateGTComparisonImageCache(ViewRenderState& view) {
-        std::lock_guard lock(gt_comparison_image_mutex_);
-        gt_comparison_image_cache_.clear();
-        gt_comparison_image_cache_bytes_ = 0;
-        pending_gt_comparison_image_request_.reset();
-        active_gt_comparison_image_request_.reset();
-        prefetch_gt_comparison_image_requests_.clear();
-        view.split_left_source_ = nullptr;
-        view.split_right_source_size_ = {0, 0};
-    }
-
-    void RenderingManager::gtComparisonImageWorkerLoop(const std::stop_token stop_token) {
-        std::unique_lock lock(gt_comparison_image_mutex_);
-        gt_comparison_image_cv_.wait(lock, stop_token, [] { return false; });
-    }
-
     void RenderingManager::queueSharedScratchRetry(ViewRenderState& view,
                                                    const DirtyMask retry_dirty) {
         view.dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
@@ -335,10 +293,18 @@ namespace lfs::vis {
             if (!scene_renderer_)
                 scene_renderer_ = createSceneRenderer(*context.graphics_context);
             auto request = buildViewportRenderRequest(frame_context, size);
+            request.raster_backend =
+                lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
+            request.gut = lfs::rendering::isGutBackend(request.raster_backend);
+            std::vector<std::uint32_t> lod_touched_chunks;
+            prepareLodRequest(frame_settings, model, request, lod_touched_chunks);
             auto rendered = scene_renderer_->render(*model, request, true,
                                                     view.main_render_target_);
             if (!rendered)
                 return keep_previous(rendered.error());
+            noteLodPageGeneration(rendered->lod_page_generation);
+            if (rendered->lod_streaming_active)
+                requestViewFollowUp(view, DirtyFlag::CAMERA);
             auto outputs = scene_renderer_->readOutputTensors(view.main_render_target_);
             if (!outputs)
                 return keep_previous(lfs::format_for_developer(outputs.error()));

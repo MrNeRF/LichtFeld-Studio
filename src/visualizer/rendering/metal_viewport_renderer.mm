@@ -246,12 +246,10 @@ namespace lfs::vis {
 #endif
         void configurePager(MetalRadPager& pager, const core::SplatData& model) {
 #ifdef LFS_GRAPHICS_VULKAN
-            pager.configure(model, *context, completion, rad_settings);
+            pager.configure(model, context->device(), completion, rad_settings);
 #else
-            (void)pager;
-            (void)model;
-            // Page uploads run on a Metal/Vulkan interop queue today.
-            throw lfs::Exception(nativeError("Streaming RAD level-of-detail is not available in the Metal-only build yet; load the scene as a resident splat file instead", lfs::ErrorCode::Unsupported));
+            // Uploads wait for this renderer's completion event directly.
+            pager.configure(model, nullptr, (__bridge void*)event, rad_settings);
 #endif
         }
         uint64_t serial = 0;

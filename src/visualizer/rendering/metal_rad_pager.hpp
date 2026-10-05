@@ -10,7 +10,6 @@
 #include <span>
 
 namespace lfs::vis {
-    class VulkanContext;
     // Uses the shared decode scheduler and tensor upload engine. Residency is
     // published only after GPU completion; no full-tree CPU traversal is needed.
     class LFS_VIS_API MetalRadPager {
@@ -25,7 +24,9 @@ namespace lfs::vis {
         ~MetalRadPager();
         MetalRadPager(const MetalRadPager&) = delete;
         MetalRadPager& operator=(const MetalRadPager&) = delete;
-        void configure(const core::SplatData&, VulkanContext&, void* consumer_timeline, Settings);
+        // device: the presentation VkDevice whose timeline `consumer` belongs to,
+        // or null when `consumer` is the renderer's id<MTLSharedEvent>.
+        void configure(const core::SplatData&, void* device, void* consumer, Settings);
         void advance(std::span<const uint32_t> touches = {});
         // Call only after the consuming native command has been committed.
         void noteRendererCompletion(uint64_t submitted_value);

@@ -903,6 +903,10 @@ namespace lfs::core {
             s.metal = internal::make_metal_vulkan_queue(device, consumer);
             s.ready = static_cast<VkSemaphore>(s.metal->timeline());
             return;
+#elif defined(LFS_TENSOR_METAL)
+            // No Vulkan device: the consumer is the renderer's Metal shared event.
+            s.metal = internal::make_metal_work_queue(consumer);
+            return;
 #else
             throw std::runtime_error("Metal/Vulkan interoperable work queues are unavailable in this build");
 #endif

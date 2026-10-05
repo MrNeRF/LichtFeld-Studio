@@ -207,6 +207,7 @@ if(LFS_TENSOR_METAL)
         tensor/backend/metal/metal_module.mm
         tensor/backend/metal/metal_program.mm
         tensor/backend/metal/metal_tensor_reader.mm
+        tensor/backend/metal/metal_work_queue.mm
         ${_lfs_metal_kernels_cpp}
     )
     if(LFS_TENSOR_VULKAN)

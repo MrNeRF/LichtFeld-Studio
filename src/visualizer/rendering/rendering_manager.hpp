@@ -853,6 +853,11 @@ namespace lfs::vis {
         void requestViewFollowUp(ViewRenderState& view, DirtyMask flags);
         void queueSharedScratchRetry(ViewRenderState& view, DirtyMask retry_dirty);
         void notifyAsyncLodResultsReady();
+        // Fills the request's level-of-detail cut for `model` (rendering_manager_lod.cpp).
+        void prepareLodRequest(const RenderSettings& settings, const lfs::core::SplatData* model,
+                               lfs::rendering::ViewportRenderRequest& request,
+                               std::vector<std::uint32_t>& lod_touched_chunks);
+        void noteLodPageGeneration(std::uint64_t generation);
         void cameraMetricsWorkerLoop(std::stop_token stop_token);
         [[nodiscard]] GTComparisonImageLookup getOrQueueGTComparisonImage(
             GTComparisonImageJobRequest request);
