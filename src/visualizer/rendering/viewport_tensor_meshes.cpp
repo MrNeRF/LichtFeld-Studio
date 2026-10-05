@@ -7,6 +7,8 @@
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/tensor.hpp"
+#include "core/guarded_task.hpp"
+#include "mesh_offscreen_renderer.hpp"
 #include "rendering/render_constants.hpp"
 #include "tensor_frame_uploads.hpp"
 #include "viewport_depth_program.hpp"
@@ -127,20 +129,23 @@ namespace lfs::vis {
     struct TensorMeshPass::Impl {
         std::unique_ptr<Module> mesh_program;
         std::unique_ptr<Module> depth_program;
+        lfs::core::GpuBackend program_backend{};
         bool failed = false;
         Tensor white;        // 1x1 RGBA8 for absent textures
         Tensor dummy_shadow; // 1 float
         Tensor depth;        // [H,W] attachment
+        TensorFrameUploads offscreen_uploads;
         std::unordered_map<std::uint64_t, Mesh> meshes;
         std::uint64_t frame = 0;
 
-        bool ensurePrograms() {
-            if (mesh_program)
+        // Programs and helper tensors live on the backend of the target.
+        bool ensurePrograms(const lfs::core::GpuBackend backend) {
+            if (mesh_program && program_backend == backend)
                 return true;
             if (failed)
                 return false;
-            auto mesh = Module::load(viewport_mesh_program_entries());
-            auto seed = Module::load(viewport_depth_program_entries());
+            auto mesh = Module::load(viewport_mesh_program_entries(), backend);
+            auto seed = Module::load(viewport_depth_program_entries(), backend);
             if (!mesh || !seed || !(*mesh)->supports_raster()) {
                 LOG_ERROR("Could not load tensor mesh programs: {}",
                           !mesh ? mesh.error().detail() : !seed ? seed.error().detail()
@@ -148,10 +153,14 @@ namespace lfs::vis {
                 failed = true;
                 return false;
             }
+            const lfs::core::GpuBackendScope scope(backend);
             mesh_program = std::move(*mesh);
             depth_program = std::move(*seed);
+            program_backend = backend;
             white = Tensor::full({1, 1, 4}, 255, Device::GPU, DataType::UInt8);
             dummy_shadow = Tensor::ones({1}, Device::GPU, DataType::Float32);
+            depth = {};
+            meshes.clear();
             return true;
         }
 
@@ -323,12 +332,20 @@ namespace lfs::vis {
                 LOG_ERROR("Tensor mesh depth seed failed: {}", result.error().detail());
         }
 
-        void record(Tensor& destination, const ViewportFrameDesc& desc, const Module::Scissor& rect,
-                    TensorFrameUploads& uploads) {
+        [[nodiscard]] lfs::Status record(Tensor& destination, Tensor& depth_attachment,
+                                         const ViewportFrameDesc& desc,
+                                         const Module::Scissor& rect,
+                                         TensorFrameUploads& uploads,
+                                         const bool seed_splat_depth) {
             ++frame;
-            if (desc.mesh_items.empty() || rect.width == 0 || rect.height == 0 || !ensurePrograms())
-                return;
-            seedDepth(desc, rect, destination);
+            if (desc.mesh_items.empty() || rect.width == 0 || rect.height == 0)
+                return {};
+            const auto backend = lfs::core::gpu_backend_of(destination);
+            if (!backend || !ensurePrograms(*backend))
+                return {};
+            const lfs::core::GpuBackendScope scope(*backend);
+            if (seed_splat_depth)
+                seedDepth(desc, rect, destination);
 
             struct Draw {
                 std::string_view vertex, fragment;
@@ -383,7 +400,7 @@ namespace lfs::vis {
                 }
             }
             if (draws.empty())
-                return;
+                return {};
             const auto all_uniforms = uploads.upload(std::as_bytes(std::span(uniforms)),
                                                      {uniforms.size() * kRecords, 4}, DataType::Float32);
             std::deque<Tensor> slices;
@@ -407,7 +424,7 @@ namespace lfs::vis {
                                   .fragment = draw.fragment,
                                   .arguments = {std::as_bytes(std::span(&parameters[i], 1)), bindings[i]},
                                   .color = &destination,
-                                  .depth = &depth,
+                                  .depth = &depth_attachment,
                                   .vertex_count = draw.index_count,
                                   .scissor = rect,
                                   .viewport = viewport,
@@ -417,10 +434,74 @@ namespace lfs::vis {
                                   .depth_write = !draw.wire});
             }
             auto result = mesh_program->draw_batch(raster);
-            if (!result)
+            if (!result) {
                 LOG_ERROR("Tensor mesh pass ({} draws) failed: {}", raster.size(), result.error().detail());
+                return lfs::Status::failure(std::move(result.error()));
+            }
             // Meshes not drawn for a while release their GPU copies.
             std::erase_if(meshes, [&](const auto& entry) { return frame - entry.second.last_frame > 120; });
+            return {};
+        }
+
+        [[nodiscard]] lfs::Result<lfs::rendering::MeshLayer> renderOffscreen(
+            const ViewportMeshPassDesc& mesh_desc, const glm::mat4& projection,
+            const int width, const int height) {
+            if (width <= 0 || height <= 0) {
+                return lfs::make_error({
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::Rendering,
+                    .detail = "Mesh offscreen dimensions must be positive",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+
+            Tensor color = Tensor::zeros(
+                {static_cast<std::size_t>(height), static_cast<std::size_t>(width), 4},
+                Device::GPU, DataType::Float32);
+            Tensor device_depth = Tensor::full(
+                {static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
+                1.0f, Device::GPU, DataType::Float32);
+            ViewportFrameDesc frame;
+            frame.framebuffer_extent = {width, height};
+            frame.mesh_view_projection = mesh_desc.view_projection;
+            frame.mesh_camera_position = mesh_desc.camera_position;
+            frame.mesh_items = mesh_desc.items;
+            const Module::Scissor rect{0, 0, static_cast<std::uint32_t>(width),
+                                       static_cast<std::uint32_t>(height)};
+            if (auto status = record(color, device_depth, frame, rect,
+                                     offscreen_uploads, false);
+                !status) {
+                return std::move(status).error();
+            }
+
+            const Tensor host_color = color.cpu().contiguous();
+            const Tensor host_depth = device_depth.cpu().contiguous();
+            const std::size_t count = static_cast<std::size_t>(width) * height;
+            std::vector<float> rgba(4 * count);
+            std::vector<float> view_depth(count);
+            const float* source_color = host_color.ptr<float>();
+            const float* source_depth = host_depth.ptr<float>();
+            for (std::size_t pixel = 0; pixel < count; ++pixel) {
+                const float z_ndc = source_depth[pixel];
+                rgba[pixel] = source_color[4 * pixel];
+                rgba[count + pixel] = source_color[4 * pixel + 1];
+                rgba[2 * count + pixel] = source_color[4 * pixel + 2];
+                if (z_ndc >= 1.0f) {
+                    rgba[3 * count + pixel] = 0.0f;
+                    view_depth[pixel] = std::numeric_limits<float>::infinity();
+                } else {
+                    rgba[3 * count + pixel] = 1.0f;
+                    view_depth[pixel] = linearizeMeshViewDepth(z_ndc, projection);
+                }
+            }
+            return lfs::rendering::MeshLayer{
+                .rgba = Tensor::from_vector(
+                    rgba, {4, static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
+                    Device::CPU),
+                .view_depth = Tensor::from_vector(
+                    view_depth, {static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
+                    Device::CPU),
+            };
         }
     };
 
@@ -430,9 +511,23 @@ namespace lfs::vis {
     void TensorMeshPass::record(Tensor& destination, const ViewportFrameDesc& desc,
                                 const Module::Scissor& rect, TensorFrameUploads& uploads) {
         try {
-            impl_->record(destination, desc, rect, uploads);
+            // seedDepth sizes the splat-seeded depth attachment.
+            static_cast<void>(impl_->record(destination, impl_->depth, desc, rect, uploads, true));
         } catch (const std::exception& error) {
             LOG_ERROR("Tensor mesh pass failed: {}", error.what());
+        }
+    }
+
+    lfs::Result<lfs::rendering::MeshLayer> TensorMeshPass::renderOffscreen(
+        const ViewportMeshPassDesc& desc, const glm::mat4& projection,
+        const int width, const int height) {
+        try {
+            return impl_->renderOffscreen(desc, projection, width, height);
+        } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): translate tensor program exceptions at the typed facade boundary.
+            return lfs::core::detail::task_failure_from_current_exception<lfs::rendering::MeshLayer>(
+                {.name = "mesh.tensor.offscreen", .domain = lfs::ErrorDomain::Rendering,
+                 .site = LFS_SOURCE_SITE_CURRENT()});
         }
     }
 } // namespace lfs::vis

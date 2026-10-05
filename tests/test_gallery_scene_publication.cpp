@@ -823,6 +823,58 @@ TEST(GalleryProjectExportTest, CommitMismatchRefusesBeforeStagingAndDetectsLater
     EXPECT_THROW(verifyGalleryProjectCommit(path, commit), std::runtime_error);
 }
 
+// Catches a saved project whose HDR background is an external file failing to publish (it only accepted an
+// embedded HDR), and a missing HDR reported with the external splat data code instead of its own.
+TEST(GalleryProjectExportTest, ExternalHdrBackgroundPublishesAndMissingOneHasItsOwnError) {
+    TemporaryDirectory temporary;
+    const auto hdr = temporary.path / "sky.hdr";
+    std::filesystem::copy_file(std::filesystem::path(PROJECT_ROOT_PATH) / "src" / "visualizer" / "gui" / "assets" /
+                                   "environments" / "alps_field_1k.hdr",
+                               hdr);
+    const auto path = temporary.path / "external_hdr.licht";
+    std::filesystem::copy_file(portable_fixture("sog"), path);
+    auto source = require_result(ProjectDocument::open(path));
+    const auto reference = require_result(lfs::io::project::upsert_path_reference(
+        source.edit_references(), path.parent_path(), hdr, "view.environment", "environment_map"));
+    require_status(source.edit_view().dom().set("render_settings.environment_reference_uuid", reference.to_string()));
+    (void)require_result(source.save(path));
+
+    GalleryScenePublishRequest publication;
+    std::string commit;
+    prepareGalleryProjectPublication({path, temporary.path / "external.scene", ExportFormat::GALLERY_SOG, ""},
+                                     publication, commit);
+    EXPECT_EQ(std::filesystem::weakly_canonical(publication.environment_source), std::filesystem::weakly_canonical(hdr));
+
+    std::filesystem::remove(hdr);
+    GalleryScenePublishRequest missing;
+    try {
+        prepareGalleryProjectPublication({path, temporary.path / "missing.scene", ExportFormat::GALLERY_SOG, ""},
+                                         missing, commit);
+        FAIL() << "A missing HDR background must be refused";
+    } catch (const std::runtime_error& error) {
+        EXPECT_TRUE(std::string(error.what()).starts_with("gallery_project_hdr_unavailable:")) << error.what();
+    }
+}
+
+// Catches the bundled HDR background, which a project stores by name instead of as a file reference,
+// being refused as external or missing.
+TEST(GalleryProjectExportTest, BuiltinHdrBackgroundPublishes) {
+    TemporaryDirectory temporary;
+    const auto path = temporary.path / "builtin_hdr.licht";
+    std::filesystem::copy_file(portable_fixture("sog"), path);
+    auto source = require_result(ProjectDocument::open(path));
+    require_status(source.edit_view().dom().set_json("render_settings.environment_reference_uuid", nullptr));
+    require_status(source.edit_view().dom().set("render_settings.environment_builtin",
+                                                std::string(lfs::vis::kDefaultEnvironmentMapPath)));
+    (void)require_result(source.save(path));
+
+    GalleryScenePublishRequest publication;
+    std::string commit;
+    prepareGalleryProjectPublication({path, temporary.path / "builtin.scene", ExportFormat::GALLERY_SOG, ""},
+                                     publication, commit);
+    EXPECT_EQ(publication.environment_source, std::filesystem::path(lfs::vis::kDefaultEnvironmentMapPath));
+}
+
 TEST(GalleryProjectExportTest, MissingAndExternalPayloadsGiveSpecificFallbackError) {
     TemporaryDirectory temporary;
     for (const bool external : {false, true}) {

@@ -46,7 +46,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:window/vulkan_graphics_context.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/viewport_reference_renderer.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/viewport_tensor_renderer.cpp>
-        $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/viewport_tensor_meshes.cpp>
+        $<$<BOOL:${LFS_TENSOR_METAL}>:rendering/viewport_tensor_meshes.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:window/vulkan_context.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:window/vulkan_image_barrier_tracker.cpp>
         window/gpu_object_census.cpp
@@ -56,7 +56,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/camera_interaction_service.cpp
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/output_image_pool.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/mesh_offscreen_renderer.cpp>
-        $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/mesh_offscreen_renderer_unavailable.cpp>
+        $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/mesh_offscreen_renderer_tensor.cpp>
         rendering/viewer_splat_tensor_allocator.cpp
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/graphics_external_tensor_unavailable.cpp>
         rendering/rendering_manager.cpp
@@ -64,6 +64,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/rendering_manager_vulkan.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/rendering_manager_tensor.cpp>
         rendering/rendering_manager_gt_cache.cpp
+        rendering/rendering_manager_split_view.cpp
         rendering/rendering_manager_lod.cpp
         rendering/display_tensors.cpp
         rendering/rendering_manager_viewport.cpp
@@ -71,9 +72,11 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/scene_upscaler_plugin_unavailable.cpp>
         rendering/scene_upscaler_registry.cpp
         rendering/scene_temporal_coordinator.cpp
+        rendering/scene_temporal_frame_setup.cpp
         rendering/scene_temporal_plan.cpp
         rendering/scene_temporal_resolve.cpp
         rendering/temporal_frame_tracker.cpp
+        $<$<BOOL:${LFS_TENSOR_METAL}>:rendering/tensor_scene_temporal_pipeline.cpp>
         rendering/lod_page_cache.cpp
         rendering/lod_upload_engine.cpp
         rendering/spark_lod_controller.cpp
@@ -115,6 +118,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # GUI system
         gui/gui_manager.cpp
+        $<$<BOOL:${LFS_TENSOR_METAL}>:gui/rmlui/tensor_frosted_glass.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:gui/vulkan_ui_texture.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:gui/tensor_ui_texture.cpp>
         gui/global_context_menu.cpp
@@ -400,7 +404,7 @@ compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/environment.fra
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/depth_blit.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/depth_blit.frag.spv.h" kDepthBlitFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/split_view.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/split_view.frag.spv.h" kSplitViewFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vksplat_compose.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vksplat_compose.comp.spv.h" kVkSplatComposeCompSpv
-    "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/vulkan/shader/src/slang/display_color.inc")
+    "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/slang/display_color.inc")
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_motion_reproject.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_motion_reproject.comp.spv.h" kSceneMotionReprojectCompSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_plugin_depth.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_plugin_depth.comp.spv.h" kScenePluginDepthCompSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_temporal_resolve.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_temporal_resolve.comp.spv.h" kSceneTemporalResolveCompSpv)
@@ -423,13 +427,6 @@ if(LFS_GRAPHICS_VULKAN_BUILD)
 endif()
 if(LFS_TENSOR_METAL)
     enable_language(OBJCXX)
-    file(READ "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/vulkan/shader/src/slang/display_color.inc" LFS_METAL_DISPLAY_COLOR)
-    configure_file(rendering/metal_viewport_present.metal generated/metal_viewport_present.metal @ONLY)
-    file(READ "${CMAKE_CURRENT_BINARY_DIR}/generated/metal_viewport_present.metal" LFS_METAL_PRESENT_SOURCE)
-    configure_file(rendering/metal_present_source.hpp.in generated/metal_present_source.hpp @ONLY)
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-        "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/vulkan/shader/src/slang/display_color.inc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/rendering/metal_viewport_present.metal")
     set(_lfs_metal_arc_sources
         rendering/metal_viewport_renderer.mm
         rendering/metal_rad_pager.mm)
@@ -441,7 +438,6 @@ if(LFS_TENSOR_METAL)
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     unset(_lfs_metal_arc_sources)
     set_target_properties(lfs_visualizer PROPERTIES OBJCXX_STANDARD 23 OBJCXX_STANDARD_REQUIRED YES)
-    target_include_directories(lfs_visualizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_link_libraries(lfs_visualizer PRIVATE lfs_tensor_rasterizer "-framework Metal" "-framework Foundation")
     target_link_libraries(lfs_visualizer PRIVATE "-framework QuartzCore")
 endif()
@@ -457,21 +453,27 @@ if(NOT LFS_GRAPHICS_VULKAN_BUILD)
         SOURCE gui/rmlui/rmlui_mask.slang COMPUTE intersectMask)
     lfs_add_gpu_program(lfs_visualizer viewport_compose_program
         SOURCE rendering/viewport_compose.slang COMPUTE composeViewport)
+    lfs_add_gpu_program(lfs_visualizer split_view_tensor_program
+        SOURCE rendering/split_view_tensor.slang COMPUTE composeSplitView)
     lfs_add_gpu_program(lfs_visualizer viewport_vignette_program
         SOURCE rendering/viewport_vignette.slang COMPUTE applyVignette)
     lfs_add_gpu_program(lfs_visualizer viewport_overlay_program
         SOURCE rendering/viewport_overlay.slang
         VERTEX overlayVertex shapeVertex frustumVertex texturedVertex pivotVertex environmentVertex
         FRAGMENT overlayFragment shapeFragment texturedFragment pivotFragment environmentFragment)
+    lfs_add_gpu_program(lfs_visualizer viewport_grid_program
+        SOURCE rendering/viewport_grid.slang
+        VERTEX gridVertex FRAGMENT gridFragment)
+endif()
+if(LFS_TENSOR_METAL)
+    lfs_add_gpu_program(lfs_visualizer rmlui_frosted_glass_program
+        SOURCE gui/rmlui/rmlui_frosted_glass.slang COMPUTE resampleRgba8)
     lfs_add_gpu_program(lfs_visualizer viewport_mesh_program
         SOURCE rendering/viewport_mesh.slang
         VERTEX meshVertex wireVertex shadowVertex
         FRAGMENT meshFragment wireFragment shadowFragment)
     lfs_add_gpu_program(lfs_visualizer viewport_depth_program
         SOURCE rendering/viewport_depth.slang COMPUTE seedDepth)
-    lfs_add_gpu_program(lfs_visualizer viewport_grid_program
-        SOURCE rendering/viewport_grid.slang
-        VERTEX gridVertex FRAGMENT gridFragment)
 endif()
 if(WIN32)
     target_compile_definitions(lfs_visualizer PRIVATE VK_USE_PLATFORM_WIN32_KHR)

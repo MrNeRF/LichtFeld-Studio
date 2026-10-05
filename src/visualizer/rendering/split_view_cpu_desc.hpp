@@ -16,6 +16,8 @@ namespace lfs::vis {
         bool flip_y = false;
         glm::vec2 uv_scale{1.0f};
         glm::vec2 uv_clamp_max{1.0f};
+        glm::vec2 texcoord_scale{1.0f};
+        glm::vec2 texcoord_offset{0.0f};
         bool spatial_filter = false;
     };
 

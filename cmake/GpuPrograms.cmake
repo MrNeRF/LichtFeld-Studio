@@ -62,8 +62,10 @@ function(lfs_add_gpu_program target name)
                 add_custom_command(OUTPUT "${output}" "${output}.json" BYPRODUCTS "${cuda_source}"
                     COMMAND "${LFS_GPU_SLANGC}" "${source}" ${defines} -entry "${entry}" -stage compute
                         -target cuda -fp-mode precise -line-directive-mode none -o "${cuda_source}" -reflection-json "${output}.json"
-                    # The Slang CUDA prelude needs this for half-precision programs.
-                    COMMAND "${CMAKE_CUDA_COMPILER}" --ptx --std=c++17 --fmad=false -DSLANG_CUDA_ENABLE_HALF=1
+                    # Match the application's runtime SM floor; NVCC's default can be
+                    # too old for the half intrinsics enabled in the Slang CUDA prelude.
+                    COMMAND "${CMAKE_CUDA_COMPILER}" --ptx "--gpu-architecture=compute_${LFS_RUNTIME_MIN_SM}"
+                        --std=c++17 --fmad=false -DSLANG_CUDA_ENABLE_HALF=1
                         "${cuda_source}" -o "${output}"
                     DEPENDS "${source}" "${LFS_GPU_SLANGC}" VERBATIM)
                 list(APPEND outputs "${output}" "${output}.json")

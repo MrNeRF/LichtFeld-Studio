@@ -4,7 +4,7 @@
 #define LFS_COLOR_VEC3 vec3
 #define LFS_COLOR_UINT uint
 #define LFS_COLOR_MIX mix
-#include "../../../../rendering/rasterizer/vulkan/shader/src/slang/display_color.inc"
+#include "../../../../rendering/rasterizer/slang/display_color.inc"
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 

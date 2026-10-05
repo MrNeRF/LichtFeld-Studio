@@ -383,7 +383,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_TrainingSnapshotCancelTerminalizesBeforeSettlement_Test;
         friend class VisualizerImplResetTest_FailedAutosaveSettlementAppliesBackoffBeforeRetry_Test;
         friend class VisualizerImplResetTest_PendingCloseSuppressesBackgroundAutosave_Test;
-        friend class VisualizerImplResetTest_StoppingTrainerBlocksIdleCompactionAndAutosave_Test;
+        friend class VisualizerImplResetTest_StoppingTrainerBlocksAutosave_Test;
+        friend class VisualizerImplResetTest_IdleMaintenanceKeepsEverySave_Test;
         friend class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
         friend class VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
         friend class VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;

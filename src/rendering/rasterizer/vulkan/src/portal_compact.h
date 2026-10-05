@@ -12,7 +12,7 @@ namespace lfs::rendering {
     using glm::log;
     using glm::max;
     using glm::sqrt;
-#include "../shader/src/slang/portal_compact.inc"
+#include "../../slang/portal_compact.inc"
 #undef LFS_PORTAL_INLINE
 #undef LFS_PORTAL_VEC3
 #undef LFS_PORTAL_VEC4

@@ -28,6 +28,7 @@
 #include "python/python_buffer_analysis.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
+#include "python_test_support.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
 #include "tensor_test_support.hpp"
@@ -61,17 +62,12 @@
 #include <utility>
 #include <vector>
 
-namespace {
-    std::filesystem::path findPythonModuleDir();
-    void prependPythonPath(const std::filesystem::path& path);
-} // namespace
-
 class PythonIntegrationTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        const auto module_dir = findPythonModuleDir();
+        const auto module_dir = lfs::test::findPythonModuleDir();
         ASSERT_FALSE(module_dir.empty()) << "Could not locate built lichtfeld module for Python tests";
-        prependPythonPath(module_dir);
+        lfs::test::prependPythonPath(module_dir);
         (void)lfs::python::ensure_initialized();
     }
 
@@ -321,64 +317,6 @@ namespace {
         }
 
         return std::make_shared<lfs::core::Tensor>(std::move(image));
-    }
-
-    bool containsLichtfeldModule(const std::filesystem::path& dir) {
-        std::error_code ec;
-        if (!std::filesystem::exists(dir, ec)) {
-            return false;
-        }
-
-        for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-            std::error_code file_ec;
-            if (!it->is_regular_file(file_ec) || file_ec) {
-                continue;
-            }
-
-            const auto filename = it->path().filename().string();
-            const auto ext = it->path().extension().string();
-            if ((ext == ".so" || ext == ".pyd") && filename.rfind("lichtfeld", 0) == 0) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    std::filesystem::path findPythonModuleDir() {
-        std::error_code ec;
-        const auto cwd = std::filesystem::current_path(ec);
-        const auto project_root = std::filesystem::path(PROJECT_ROOT_PATH);
-
-        for (const auto& candidate : {
-                 cwd / "src" / "python",
-                 cwd.parent_path() / "src" / "python",
-                 project_root / "build" / "src" / "python",
-             }) {
-            if (containsLichtfeldModule(candidate)) {
-                return candidate;
-            }
-        }
-
-        return {};
-    }
-
-    void prependPythonPath(const std::filesystem::path& path) {
-        const auto value = path.string();
-        const char* existing = std::getenv("PYTHONPATH");
-#ifdef _WIN32
-        const char separator = ';';
-#else
-        const char separator = ':';
-#endif
-        const std::string combined =
-            existing && *existing ? value + separator + std::string(existing) : value;
-
-#ifdef _WIN32
-        _putenv_s("PYTHONPATH", combined.c_str());
-#else
-        setenv("PYTHONPATH", combined.c_str(), 1);
-#endif
     }
 
     std::string consumePythonError() {

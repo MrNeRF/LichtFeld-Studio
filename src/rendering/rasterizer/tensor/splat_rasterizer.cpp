@@ -11,8 +11,13 @@
 #include "splat_blend_gs32.hpp"
 #include "splat_blend_gs64.hpp"
 #include "splat_blend_gs_batch.hpp"
+#include "splat_blend_gs_depth.hpp"
+#include "splat_blend_gs_depth_batch.hpp"
+#include "splat_blend_gs_depth_prefix.hpp"
 #include "splat_blend_gs_fast.hpp"
 #include "splat_blend_gs_prefix.hpp"
+#include "splat_blend_gut_plain32.hpp"
+#include "splat_blend_gut_plain64.hpp"
 #include "splat_blend_gut32.hpp"
 #include "splat_blend_gut64.hpp"
 #include "splat_blend_points.hpp"
@@ -33,7 +38,8 @@ namespace lfs::rendering {
         using core::Tensor;
         using M = core::GpuKernelModule;
         constexpr auto RW = M::Access::ReadWrite;
-        constexpr uint32_t kSingleSimd = 128, kSourceSorted = 256, kDepthBatches = 512, kDepthPrefix = 1024;
+        constexpr uint32_t kGutSaturation = 32, kSingleSimd = 128, kSourceSorted = 256,
+                           kDepthBatches = 512, kDepthPrefix = 1024, kSeparateMedian = 2048;
         constexpr uint32_t kOpaqueBackground = 4096, kOverlay = 1, kLogicalIds = 8;
         // Below this many sources the extra source sort is not worth its passes.
         constexpr uint32_t kSourceSortMinimum = 4096;
@@ -65,7 +71,9 @@ namespace lfs::rendering {
         core::GpuBackend backend;
         SplatTileBinner binner;
         std::map<std::pair<uint32_t, bool>, std::unique_ptr<M>> blends;
-        std::unique_ptr<M> fast_blend, batch_blend, prefix_blend, present;
+        std::unique_ptr<M> fast_blend, batch_blend, prefix_blend;
+        std::unique_ptr<M> depth_blend, depth_batch_blend, depth_prefix_blend;
+        std::unique_ptr<M> gut_plain32_blend, gut_plain64_blend, present;
         Tensor raster, present_parameters, color, depth, pick, rgba, linear_depth, selection_colors;
         bool presented = false; // rgba and linear_depth hold an image of this extent
         // Replaced scratch returns to the tensor cache, which keeps blocks for
@@ -154,10 +162,20 @@ namespace lfs::rendering {
                 case kSingleSimd: return load(splat_blend_gs_fast_entries(), fast_blend);
                 case kSingleSimd | kDepthBatches: return load(splat_blend_gs_batch_entries(), batch_blend);
                 case kSingleSimd | kDepthBatches | kDepthPrefix: return load(splat_blend_gs_prefix_entries(), prefix_blend);
+                case kSingleSimd | kSeparateMedian:
+                    return load(splat_blend_gs_depth_entries(), depth_blend);
+                case kSingleSimd | kDepthBatches | kSeparateMedian:
+                    return load(splat_blend_gs_depth_batch_entries(), depth_batch_blend);
+                case kSingleSimd | kDepthBatches | kDepthPrefix | kSeparateMedian:
+                    return load(splat_blend_gs_depth_prefix_entries(), depth_prefix_blend);
                 default: break;
                 }
             }
             const bool single = (flags & kSingleSimd) != 0;
+            if (mode == SplatRasterMode::Gut &&
+                (flags & ~(kSourceSorted | kOpaqueBackground)) == (kGutSaturation | (single ? kSingleSimd : 0u)))
+                return load(single ? splat_blend_gut_plain32_entries() : splat_blend_gut_plain64_entries(),
+                            single ? gut_plain32_blend : gut_plain64_blend);
             auto& slot = blends[{uint32_t(mode), single}];
             switch (mode) {
             case SplatRasterMode::Gaussian: return load(single ? splat_blend_gs32_entries() : splat_blend_gs64_entries(), slot);

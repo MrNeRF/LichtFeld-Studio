@@ -59,6 +59,25 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+# The tensor HDR tonemapper against libplacebo, on clips ffmpeg encodes.
+if(LFS_TENSOR_METAL AND BUILD_TESTS)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(HDR_TEST_FFMPEG REQUIRED libavcodec libavformat libavutil)
+    find_program(LFS_HDR_TEST_FFMPEG NAMES ffmpeg)
+    add_executable(hdr_tonemap_contracts test_hdr_tonemap_tensor.cpp)
+    target_compile_features(hdr_tonemap_contracts PRIVATE cxx_std_23)
+    # FFmpeg links through lfs_video; a second link merges "-framework X" pairs.
+    target_include_directories(hdr_tonemap_contracts PRIVATE ${CMAKE_SOURCE_DIR}/src/io)
+    target_include_directories(hdr_tonemap_contracts SYSTEM PRIVATE ${HDR_TEST_FFMPEG_INCLUDE_DIRS})
+    target_compile_definitions(hdr_tonemap_contracts PRIVATE LFS_HDR_TEST_FFMPEG="${LFS_HDR_TEST_FFMPEG}"
+        $<$<BOOL:${LFS_USE_VULKAN}>:LFS_USE_VULKAN>)
+    target_link_libraries(hdr_tonemap_contracts PRIVATE lfs_video lfs_core GTest::gtest_main)
+    add_test(NAME HdrTonemapContracts COMMAND hdr_tonemap_contracts)
+    # libplacebo is the precise-math reference; MoltenVK defaults to fast math.
+    set_tests_properties(HdrTonemapContracts PROPERTIES ENVIRONMENT "MVK_CONFIG_FAST_MATH_ENABLED=0"
+        LABELS "tensor;gpu;video" TIMEOUT 300)
+endif()
+
 # Standalone tensor/training proofs must not pull in the Vulkan window or its
 # test harness when the core Vulkan backend is disabled.
 if(LFS_TENSOR_METAL AND BUILD_TESTS AND NOT LFS_TENSOR_VULKAN)
@@ -83,6 +102,51 @@ if(LFS_TENSOR_METAL AND BUILD_TESTS AND NOT LFS_TENSOR_VULKAN)
 endif()
 
 if(BUILD_TESTS)
+    if(LFS_TENSOR_METAL)
+        add_executable(tensor_mesh_offscreen_contracts test_tensor_mesh_offscreen.cpp)
+        target_compile_features(tensor_mesh_offscreen_contracts PRIVATE cxx_std_23)
+        target_compile_definitions(tensor_mesh_offscreen_contracts PRIVATE
+            LFS_TEST_VULKAN_MESH_REFERENCE=$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>)
+        target_include_directories(tensor_mesh_offscreen_contracts PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/visualizer
+            ${CMAKE_SOURCE_DIR}/src/rendering/include)
+        target_link_libraries(tensor_mesh_offscreen_contracts PRIVATE
+            lfs_visualizer lfs_core GTest::gtest_main)
+        add_test(NAME TensorMeshOffscreenContracts COMMAND tensor_mesh_offscreen_contracts)
+        set_tests_properties(TensorMeshOffscreenContracts PROPERTIES
+            LABELS "tensor;gpu;rendering" TIMEOUT 180)
+
+        add_executable(tensor_frosted_glass_contracts test_tensor_frosted_glass.cpp)
+        target_compile_features(tensor_frosted_glass_contracts PRIVATE cxx_std_23)
+        target_include_directories(tensor_frosted_glass_contracts PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/visualizer)
+        target_link_libraries(tensor_frosted_glass_contracts PRIVATE
+            lfs_visualizer lfs_core GTest::gtest_main)
+        add_test(NAME TensorFrostedGlassContracts COMMAND tensor_frosted_glass_contracts)
+        set_tests_properties(TensorFrostedGlassContracts PROPERTIES
+            LABELS "tensor;gpu;ui" TIMEOUT 120)
+        if(APPLE)
+            find_package(Python REQUIRED COMPONENTS Development.Embed)
+            target_link_options(tensor_mesh_offscreen_contracts PRIVATE
+                "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+            target_link_options(tensor_frosted_glass_contracts PRIVATE
+                "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+            target_link_libraries(tensor_mesh_offscreen_contracts PRIVATE lfs_python_embed)
+            target_link_libraries(tensor_frosted_glass_contracts PRIVATE lfs_python_embed)
+        endif()
+    endif()
+    add_executable(mesh2splat_tensor_contracts test_mesh2splat_tensor.cpp)
+    target_compile_features(mesh2splat_tensor_contracts PRIVATE cxx_std_23)
+    target_link_libraries(mesh2splat_tensor_contracts PRIVATE
+        lfs_rendering_tensor lfs_core GTest::gtest_main)
+    if(LFS_USE_VULKAN AND NOT APPLE)
+        target_compile_definitions(mesh2splat_tensor_contracts PRIVATE
+            LFS_MESH2SPLAT_VULKAN_REFERENCE)
+    endif()
+    add_test(NAME Mesh2SplatTensorContracts COMMAND mesh2splat_tensor_contracts)
+    set_tests_properties(Mesh2SplatTensorContracts PROPERTIES
+        LABELS "tensor;gpu" TIMEOUT 180
+        ENVIRONMENT "MVK_CONFIG_FAST_MATH_ENABLED=0")
     if(LFS_TENSOR_VULKAN)
         add_executable(ui_texture_tensor_contracts test_ui_texture_tensor.cpp)
         target_compile_features(ui_texture_tensor_contracts PRIVATE cxx_std_23)
@@ -108,13 +172,19 @@ if(BUILD_TESTS)
     set_tests_properties(GpuProgramContracts PROPERTIES LABELS "tensor;gpu" TIMEOUT 120)
     if(TARGET lfs_tensor_rasterizer)
         add_executable(tensor_rasterizer_contracts
+            test_splat_point_renderer.cpp
             test_splat_tile_binner.cpp
             test_splat_rasterizer.cpp
             test_splat_lod_selector.cpp
             test_splat_raster_contracts.cpp
             test_splat_projection_contracts.cpp
             test_splat_spark_gut_contracts.cpp
-            test_splat_rad_contracts.cpp)
+            test_splat_rad_contracts.cpp
+            test_tensor_scene_temporal.cpp
+            ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_resolve.cpp)
+        target_include_directories(tensor_rasterizer_contracts PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+            ${CMAKE_SOURCE_DIR}/src/visualizer)
         target_link_libraries(tensor_rasterizer_contracts PRIVATE lfs_tensor_rasterizer GTest::gtest_main)
         target_compile_features(tensor_rasterizer_contracts PRIVATE cxx_std_23)
         add_test(NAME TensorRasterizerContracts COMMAND tensor_rasterizer_contracts)
@@ -1095,6 +1165,8 @@ set(TEST_FILES
     test_rml_im_mode_layout.cpp
     test_rml_python_listener_lifetime.cpp
     test_status_bar_fit.cpp
+    test_gallery_file_panel_layout.cpp
+    test_rmlui_preview_decode.cpp
     test_training_progress_publisher.cpp
     test_startup_overlay_geometry.cpp
     test_vram_hud_geometry.cpp

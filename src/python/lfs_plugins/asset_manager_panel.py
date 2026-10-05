@@ -760,6 +760,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         )
         model.bind_func("asset_results_summary", self.get_asset_results_summary)
         model.bind_func("asset_search_empty", self.get_asset_search_empty)
+        model.bind_func("can_clean_missing", self.get_can_clean_missing)
         model.bind_func("catalog_notice", self.get_catalog_notice)
         model.bind_func("has_catalog_notice", self.get_has_catalog_notice)
         model.bind_func("catalog_loading", lambda: self._backend_load_active and not self._catalog_preview)
@@ -854,6 +855,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "import_project_tooltip": "projects.tooltip.add_existing",
             "no_search_results_label": "projects.status.no_search_results",
             "clear_search_label": "projects.action.clear_search",
+            "clean_missing_label": "projects.action.clean_missing",
             "search_placeholder": "projects.toolbar.search_icon",
             "select_item_hint": "projects.status.select_item",
             "folder_details_title": "projects.info_panel.folder_details",
@@ -916,6 +918,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("toggle_operations", self.toggle_operations),
             ("close_panel", self._on_close_panel),
             ("clear_search", lambda *_args: self.set_search_query("")),
+            ("clean_missing", self.on_clean_missing),
         ):
             model.bind_event(event, handler)
         self._handle = model.get_handle()
@@ -2133,6 +2136,21 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def get_asset_search_empty(self) -> bool:
         return bool(self._search_query.strip()) and not self._filtered_assets()
 
+    def _shown_missing_asset_ids(self) -> List[str]:
+        catalog = self._asset_index_assets()
+        return [row["id"] for row in self._filtered_assets()
+                if row.get("id") in catalog
+                and (not row.get("exists", True) or str(row.get("status") or "") == "MISSING")]
+
+    def get_can_clean_missing(self) -> bool:
+        return self._active_filter == "missing" and bool(self._shown_missing_asset_ids())
+
+    def on_clean_missing(self, _handle=None, _ev=None, _args=None) -> None:
+        missing = self._shown_missing_asset_ids()
+        removed = self._library_command("delete_assets", missing) if missing else 0
+        self._catalog_notice = tr("projects.status.cleaned_missing", count=int(removed or 0))
+        self.refresh_catalog(scan_folders=False)
+
     def get_catalog_notice(self) -> str:
         if self._asset_index and getattr(self._asset_index, "last_error", ""):
             return self._asset_index.last_error
@@ -2699,6 +2717,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "gallery_project_id": self._gallery_project_id(asset),
             "gallery_identity": self._gallery_state.get("identity"),
         })
+
+    def remember_gallery_details(self, project_id: str, title: str, description: str) -> None:
+        if project_id not in self._asset_index_assets():
+            return
+        if self._library_command(
+            "update_asset", project_id, gallery_details_draft={"title": title, "description": description}
+        ) is not None:
+            self.refresh_catalog(scan_folders=False)
 
     def open_project_operation(self, _handle=None, _ev=None, args=None) -> None:
         action = self._resolve_event_value(args, _ev, "data-project-operation")
@@ -3894,6 +3920,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._handle.dirty("assets")
             for field in (
                 "asset_results_summary",
+                "can_clean_missing",
                 "asset_list_top_spacer_height",
                 "asset_list_bottom_spacer_height",
                 "asset_gallery_top_spacer_height",

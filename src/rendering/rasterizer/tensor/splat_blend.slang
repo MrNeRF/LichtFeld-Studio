@@ -10,7 +10,7 @@
 //                    128 one 32-wide subgroup per 8x4 pixels, 512 depth batches,
 //                    1024 depth-batch prefix, 2048 separate median,
 //                    8192 panorama wrap, 16384 float footprint
-#include "../vulkan/shader/src/slang/config.slang"
+#include "../slang/config.slang"
 #include "splat_overlay.slang"
 #include "splat_types.slang"
 

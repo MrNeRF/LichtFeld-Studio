@@ -775,10 +775,10 @@ ALLOWLIST: tuple[AllowlistEntry, ...] = (
     ),
     AllowlistEntry(
         rule="expected-string",
-        file="src/rendering/mesh2splat_unavailable.cpp",
+        file="src/rendering/mesh2splat_tensor.cpp",
         line_pattern=r"std::expected",
         owner="metal-phase-2",
-        reason="the unavailable implementation must preserve the legacy mesh2splat public signature",
+        reason="the tensor-program implementation must preserve the legacy mesh2splat public signature",
         expiry="when mesh2splat migrates to structured errors",
     ),
     AllowlistEntry(

@@ -312,6 +312,7 @@ class GalleryFilePanel(Panel):
                 if review["open_project"]:
                     details["saveProject"] = bool(self._fields["save_project"])
                 controller.upload_format = self._fields["upload_format"]
+                self._remember_unpublished_details(review, details)
                 if review.get("unlinked"):
                     controller.publish_unlinked_scene(review["asset"], details, self._fields["upload_format"])
                 else:
@@ -329,6 +330,15 @@ class GalleryFilePanel(Panel):
         finally:
             self._submitting = False
             self._dirty()
+
+    def _remember_unpublished_details(self, review, details):
+        # A failed upload is retried from a fresh review. Linked projects keep their details in the link.
+        project_id = review["asset"]["id"]
+        if review.get("unlinked") or project_id in self._state.get("links", {}):
+            return
+        library = lf.ui.get_panel_object("lfs.asset_manager")
+        if library:
+            library.remember_gallery_details(project_id, details["title"], details["description"])
 
     def _eligibility_reason(self):
         if not self._review or self._review.get("mode") != "publish" or self._is_pull():

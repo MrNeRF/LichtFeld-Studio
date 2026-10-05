@@ -110,6 +110,8 @@ if(LFS_ENABLE_VULKAN_VALIDATION)
 endif()
 
 set(_VULKAN_SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/shader/src)
+# Includes shared with the tensor rasterizer passes.
+set(_SHARED_SLANG_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../slang)
 set(_VULKAN_GENERATED_OUT ${LFS_VULKAN_RASTERIZER_SPV_DIR}/generated)
 set(_VULKAN_RADIX_OUT ${LFS_VULKAN_RASTERIZER_SPV_DIR}/radix_sort)
 
@@ -119,6 +121,8 @@ file(MAKE_DIRECTORY ${_VULKAN_RADIX_OUT})
 file(GLOB _VULKAN_SLANG_ALL
         ${_VULKAN_SHADER_SRC}/slang/*.slang
         ${_VULKAN_SHADER_SRC}/slang/*.inc
+        ${_SHARED_SLANG_SRC}/*.slang
+        ${_SHARED_SLANG_SRC}/*.inc
 )
 set(_VULKAN_RADIX_DEPS
         ${_VULKAN_SHADER_SRC}/radix_sort/config.glsl
@@ -167,6 +171,7 @@ function(_vulkan_add_slang_shader OUT_NAME SRC_FILE)
                         ${_VULKAN_SLANG_FLAGS}
                         ${_defs}
                         -I${_VULKAN_SHADER_SRC}/slang
+                        -I${_SHARED_SLANG_SRC}
                         -o ${_out}
                 ${_spirv_validation}
                 DEPENDS ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
@@ -190,6 +195,7 @@ function(_vulkan_add_slang_shader OUT_NAME SRC_FILE)
                                 ${_VULKAN_SLANG_FLAGS} ${_defs}
                                 -DLFS_BANDED_EXPORT_RENDER=1
                                 -I${_VULKAN_SHADER_SRC}/slang
+                                -I${_SHARED_SLANG_SRC}
                                 -o ${_banded_out}
                         ${_banded_validation}
                         DEPENDS ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE} ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}

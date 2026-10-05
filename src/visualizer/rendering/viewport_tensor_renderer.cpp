@@ -15,6 +15,7 @@
 #include "tensor_frame_uploads.hpp"
 #include "view_render_state.hpp"
 #include "viewport_compose_program.hpp"
+#include "split_view_tensor_program.hpp"
 #include "viewport_grid_program.hpp"
 #include "viewport_overlay_program.hpp"
 #include "viewport_reference_state.hpp"
@@ -119,6 +120,59 @@ namespace lfs::vis {
         };
         static_assert(sizeof(VignetteParameters) == 48);
 
+        struct alignas(16) SplitViewParameters {
+            std::uint64_t destination = 0;
+            std::uint64_t left = 0;
+            std::uint64_t right = 0;
+            std::uint32_t destination_width = 0;
+            std::uint32_t destination_height = 0;
+            std::int32_t viewport_x = 0;
+            std::int32_t viewport_y = 0;
+            std::uint32_t viewport_width = 0;
+            std::uint32_t viewport_height = 0;
+            std::int32_t content_x = 0;
+            std::int32_t content_y = 0;
+            std::uint32_t content_width = 0;
+            std::uint32_t content_height = 0;
+            std::uint32_t left_width = 0;
+            std::uint32_t left_height = 0;
+            std::uint32_t left_channels = 0;
+            std::uint32_t left_float = 0;
+            std::uint32_t left_chw = 0;
+            std::uint32_t right_width = 0;
+            std::uint32_t right_height = 0;
+            std::uint32_t right_channels = 0;
+            std::uint32_t right_float = 0;
+            std::uint32_t right_chw = 0;
+            float split_position = 0.5f;
+            float left_start = 0.0f;
+            float left_end = 1.0f;
+            float right_start = 0.0f;
+            float right_end = 1.0f;
+            std::uint32_t left_normalize = 0;
+            std::uint32_t right_normalize = 0;
+            std::uint32_t left_flip_y = 0;
+            std::uint32_t right_flip_y = 0;
+            std::uint32_t left_filter = 0;
+            std::uint32_t right_filter = 0;
+            std::uint32_t loss_visualization = 0;
+            std::uint32_t padding = 0;
+            std::uint32_t vector_padding = 0;
+            std::array<float, 2> left_uv_scale{1, 1};
+            std::array<float, 2> left_uv_clamp{1, 1};
+            std::array<float, 2> right_uv_scale{1, 1};
+            std::array<float, 2> right_uv_clamp{1, 1};
+            std::array<float, 2> left_texcoord_scale{1, 1};
+            std::array<float, 2> left_texcoord_offset{0, 0};
+            std::array<float, 2> right_texcoord_scale{1, 1};
+            std::array<float, 2> right_texcoord_offset{0, 0};
+            std::array<float, 4> background{0, 0, 0, 1};
+        };
+        static_assert(offsetof(SplitViewParameters, destination_width) == 24);
+        static_assert(offsetof(SplitViewParameters, left_uv_scale) == 160);
+        static_assert(offsetof(SplitViewParameters, background) == 224);
+        static_assert(sizeof(SplitViewParameters) == 240);
+
         // Matches viewport_overlay.slang's Parameters.
         struct alignas(16) OverlayParameters {
             std::uint64_t vertices = 0;
@@ -188,6 +242,7 @@ namespace lfs::vis {
     struct ViewportReferenceRenderer::Impl {
         GraphicsContext* graphics = nullptr;
         std::unique_ptr<Module> compose_program;
+        std::unique_ptr<Module> split_program;
         std::unique_ptr<Module> vignette_program;
         std::unique_ptr<Module> overlay_program;
         std::unique_ptr<Module> grid_program;
@@ -222,11 +277,13 @@ namespace lfs::vis {
             if (compose_program)
                 return true;
             auto compose = Module::load(viewport_compose_program_entries());
+            auto split = Module::load(split_view_tensor_program_entries());
             auto vignette = Module::load(viewport_vignette_program_entries());
             auto overlay = Module::load(viewport_overlay_program_entries());
             auto grid = Module::load(viewport_grid_program_entries());
-            if (!compose || !vignette || !overlay || !grid) {
+            if (!compose || !split || !vignette || !overlay || !grid) {
                 const auto detail = !compose    ? compose.error().detail()
+                                    : !split    ? split.error().detail()
                                     : !vignette ? vignette.error().detail()
                                     : !overlay  ? overlay.error().detail()
                                                 : grid.error().detail();
@@ -234,6 +291,7 @@ namespace lfs::vis {
                 return false;
             }
             compose_program = std::move(*compose);
+            split_program = std::move(*split);
             vignette_program = std::move(*vignette);
             overlay_program = std::move(*overlay);
             grid_program = std::move(*grid);
@@ -292,6 +350,103 @@ namespace lfs::vis {
             });
             if (!result) {
                 LOG_ERROR("Tensor viewport composition failed: {}", result.error().detail());
+                return false;
+            }
+            return true;
+        }
+
+        bool composeSplit(const GraphicsFrame& frame, const ViewportFrameDesc& desc) {
+            Tensor* destination = graphics ? graphics->finalImageTensor(frame) : nullptr;
+            const auto& split = desc.split_view;
+            if (!destination || !destination->is_valid() || !split.left.image || !split.right.image)
+                return false;
+            const ImageLayout left_layout = imageLayout(*split.left.image);
+            const ImageLayout right_layout = imageLayout(*split.right.image);
+            if (!left_layout.valid || !right_layout.valid ||
+                split.left.image->device() != Device::GPU ||
+                split.right.image->device() != Device::GPU) {
+                return false;
+            }
+
+            const auto viewport = framebufferRect(desc);
+            glm::ivec4 content = split.content_rect;
+            const glm::ivec2 coordinates = split.coordinate_extent;
+            if (coordinates.x > 0 && coordinates.y > 0) {
+                const float scale_x = static_cast<float>(viewport.width) /
+                                      static_cast<float>(coordinates.x);
+                const float scale_y = static_cast<float>(viewport.height) /
+                                      static_cast<float>(coordinates.y);
+                const int right = static_cast<int>(std::lround(
+                    static_cast<float>(content.x + content.z) * scale_x));
+                const int bottom = static_cast<int>(std::lround(
+                    static_cast<float>(content.y + content.w) * scale_y));
+                content.x = static_cast<int>(std::lround(static_cast<float>(content.x) * scale_x));
+                content.y = static_cast<int>(std::lround(static_cast<float>(content.y) * scale_y));
+                content.z = std::max(right - content.x, 1);
+                content.w = std::max(bottom - content.y, 1);
+            }
+            content.x += viewport.x;
+            content.y += viewport.y;
+
+            const auto vec2 = [](const glm::vec2 value) {
+                return std::array<float, 2>{value.x, value.y};
+            };
+            SplitViewParameters parameters{
+                .destination_width = static_cast<std::uint32_t>(destination->size(1)),
+                .destination_height = static_cast<std::uint32_t>(destination->size(0)),
+                .viewport_x = viewport.x,
+                .viewport_y = viewport.y,
+                .viewport_width = viewport.width,
+                .viewport_height = viewport.height,
+                .content_x = content.x,
+                .content_y = content.y,
+                .content_width = static_cast<std::uint32_t>(std::max(content.z, 1)),
+                .content_height = static_cast<std::uint32_t>(std::max(content.w, 1)),
+                .left_width = left_layout.width,
+                .left_height = left_layout.height,
+                .left_channels = left_layout.channels,
+                .left_float = left_layout.floating_point ? 1u : 0u,
+                .left_chw = left_layout.chw ? 1u : 0u,
+                .right_width = right_layout.width,
+                .right_height = right_layout.height,
+                .right_channels = right_layout.channels,
+                .right_float = right_layout.floating_point ? 1u : 0u,
+                .right_chw = right_layout.chw ? 1u : 0u,
+                .split_position = split.split_position,
+                .left_start = split.left.start_position,
+                .left_end = split.left.end_position,
+                .right_start = split.right.start_position,
+                .right_end = split.right.end_position,
+                .left_normalize = split.left.normalize_x_to_panel ? 1u : 0u,
+                .right_normalize = split.right.normalize_x_to_panel ? 1u : 0u,
+                .left_flip_y = split.left.flip_y ? 1u : 0u,
+                .right_flip_y = split.right.flip_y ? 1u : 0u,
+                .left_filter = split.left.spatial_filter ? 1u : 0u,
+                .right_filter = split.right.spatial_filter ? 1u : 0u,
+                .loss_visualization = split.loss_visualization ? 1u : 0u,
+                .left_uv_scale = vec2(split.left.uv_scale),
+                .left_uv_clamp = vec2(split.left.uv_clamp_max),
+                .right_uv_scale = vec2(split.right.uv_scale),
+                .right_uv_clamp = vec2(split.right.uv_clamp_max),
+                .left_texcoord_scale = vec2(split.left.texcoord_scale),
+                .left_texcoord_offset = vec2(split.left.texcoord_offset),
+                .right_texcoord_scale = vec2(split.right.texcoord_scale),
+                .right_texcoord_offset = vec2(split.right.texcoord_offset),
+                .background = {split.background.r, split.background.g, split.background.b, 1.0f},
+            };
+            const std::array bindings{
+                Module::Binding{0, destination, Module::Access::ReadWrite},
+                Module::Binding{8, split.left.image.get()},
+                Module::Binding{16, split.right.image.get()},
+            };
+            auto result = split_program->dispatch({
+                .function = "composeSplitView",
+                .arguments = {std::as_bytes(std::span(&parameters, 1)), bindings},
+                .groups = {Module::groups_for(parameters.destination_width, 64),
+                           parameters.destination_height, 1},
+            });
+            if (!result) {
+                LOG_ERROR("Tensor split-view composition failed: {}", result.error().detail());
                 return false;
             }
             return true;
@@ -608,8 +763,10 @@ namespace lfs::vis {
             const auto rect = framebufferRect(desc);
             if (rect.width == 0 || rect.height == 0)
                 return;
-            const bool environment = drawEnvironment(*destination, desc, rect);
-            if (!compose(frame, desc, environment))
+            const bool environment = !desc.split_view.enabled && drawEnvironment(*destination, desc, rect);
+            const bool composed = desc.split_view.enabled ? composeSplit(frame, desc)
+                                                          : compose(frame, desc, environment);
+            if (!composed)
                 return;
             meshes.record(*destination, desc,
                           Module::Scissor{std::uint32_t(rect.x), std::uint32_t(rect.y), rect.width, rect.height},
@@ -651,10 +808,12 @@ namespace lfs::vis {
                                             ViewRenderState&) {
         impl_->upscaler = {
             .requested = desc.scene_upscaler,
-            .effective = SceneUpscalerBackend::Native,
-            .fallback = desc.scene_upscaler == SceneUpscalerBackend::Native
-                            ? SceneUpscalerFallback::None
-                            : SceneUpscalerFallback::UnsupportedMode,
+            .effective = desc.scene_upscaler_mode_unsupported
+                             ? SceneUpscalerBackend::Native
+                             : desc.scene_upscaler,
+            .fallback = desc.scene_upscaler_mode_unsupported
+                            ? SceneUpscalerFallback::UnsupportedMode
+                            : SceneUpscalerFallback::None,
         };
     }
 
@@ -689,6 +848,7 @@ namespace lfs::vis {
         desc.scene_image_flip_y = view.vulkan_viewport_image_flip_y_;
         desc.depth_blit = {.depth = view.viewport_depth_image_};
         desc.environment = view.viewport_environment_;
+        desc.split_view = view.split_view_;
         desc.mesh_view_projection = view.viewport_meshes_.view_projection;
         desc.mesh_camera_position = view.viewport_meshes_.camera_position;
         desc.mesh_items = view.viewport_meshes_.items;

@@ -25,6 +25,7 @@
 #include "viewport_interaction_context.hpp"
 #include "viewport_overlay_service.hpp"
 #include "viewport_reference_state.hpp"
+#include "viewport_frame_desc.hpp"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -35,6 +36,7 @@
 #include <vector>
 
 namespace lfs::vis {
+    class TensorSceneTemporalPipeline;
     struct FramebufferViewportRect {
         glm::ivec2 top_left{0, 0};
         glm::ivec2 size{0, 0};
@@ -65,6 +67,7 @@ namespace lfs::vis {
         std::shared_ptr<const lfs::core::Tensor> viewport_depth_image_;
         ViewportEnvironment viewport_environment_;
         ViewportMeshPassDesc viewport_meshes_;
+        ViewportSplitView split_view_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
         StaleFrameGuard vksplat_stale_frame_guard_;
@@ -83,6 +86,7 @@ namespace lfs::vis {
         std::uint64_t viewport_projection_generation_ = 1;
         std::uint64_t temporal_scene_revision_ = 1;
         TemporalConvergenceController temporal_convergence_;
+        std::shared_ptr<TensorSceneTemporalPipeline> tensor_temporal_pipeline_;
         std::atomic<std::uint64_t> temporal_camera_cut_generation_{0};
         std::uint64_t consumed_temporal_camera_cut_generation_ = 0;
         bool scene_reconstruction_request_logged_ = false;

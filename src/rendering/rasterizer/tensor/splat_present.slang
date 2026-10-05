@@ -10,7 +10,7 @@
 #define LFS_COLOR_VEC3 float3
 #define LFS_COLOR_UINT uint
 #define LFS_COLOR_MIX lerp
-#include "../vulkan/shader/src/slang/display_color.inc"
+#include "../slang/display_color.inc"
 
 struct PresentParameters {
     float exposure;
