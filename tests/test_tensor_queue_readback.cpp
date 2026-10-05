@@ -366,13 +366,6 @@ namespace {
         independent.wait();
         EXPECT_TRUE(called.load());
         EXPECT_TRUE(independent.ready());
-
-        // A destroyed queue's handle is no longer a valid target.
-        void* const stale = [] {
-            const TensorWorkQueue temporary(GpuBackend::Metal);
-            return temporary.native_handle();
-        }();
-        EXPECT_THROW(TensorWorkQueue(GpuBackend::Metal, stale), std::runtime_error);
     }
 
     TEST(TensorQueueContract, MetalExecutionTargetUploadReadbackAndTimestamps) {
@@ -550,7 +543,9 @@ namespace {
         for (bool default_stream : {false, true}) {
             SCOPED_TRACE(default_stream);
             TensorWorkQueue owned(GpuBackend::CUDA);
-            TensorWorkQueue producer(GpuBackend::CUDA, default_stream ? nullptr : owned.native_handle());
+            const TensorExecutionTarget producer = default_stream
+                                                       ? TensorExecutionTarget::default_queue(GpuBackend::CUDA)
+                                                       : TensorExecutionTarget(owned);
             TensorWorkQueue consumer(GpuBackend::CUDA);
             TensorExecutionTarget::Scope producer_scope(producer);
             const auto target = TensorExecutionTarget::current();
@@ -613,9 +608,11 @@ namespace {
                 SCOPED_TRACE(default_stream);
                 SCOPED_TRACE(strided);
                 TensorWorkQueue owned(GpuBackend::CUDA);
-                TensorWorkQueue producer(GpuBackend::CUDA, default_stream ? nullptr : owned.native_handle());
+                const TensorExecutionTarget producer = default_stream
+                                                           ? TensorExecutionTarget::default_queue(GpuBackend::CUDA)
+                                                           : TensorExecutionTarget(owned);
                 TensorWorkQueue consumer(GpuBackend::CUDA);
-                TensorWorkQueue::Scope producer_scope(producer);
+                TensorExecutionTarget::Scope producer_scope(producer);
                 Tensor source = Tensor::full({2, 3}, 1.f, Device::GPU);
                 Tensor view = strided ? source.transpose(0, 1) : source;
                 TensorReadback readback;
@@ -758,18 +755,16 @@ namespace {
         EXPECT_EQ(destination.to_vector(), std::vector<float>(32, 5.f));
     }
 
-    TEST(TensorQueueReadback, BorrowedTimelineImportsSurviveBlockedWaitAndReplacement) {
+    TEST(TensorQueueReadback, TimelineImportsSurviveBlockedWaitAndReplacement) {
         if (!gpu_backend_available(GpuBackend::CUDA))
             GTEST_SKIP();
         auto device_owner = HeadlessAdoptedDevice::try_create(true);
         if (!device_owner)
             GTEST_SKIP() << "Timeline exports unavailable";
         const auto device = static_cast<VkDevice>(device_owner->handles().device);
-        for (bool default_stream : {false, true}) {
-            SCOPED_TRACE(default_stream);
-            TensorWorkQueue owner(GpuBackend::CUDA);
-            auto borrowed = std::make_unique<TensorWorkQueue>(GpuBackend::CUDA,
-                                                              default_stream ? nullptr : owner.native_handle());
+        for (const auto mode : {TensorWorkQueue::Mode::Independent, TensorWorkQueue::Mode::LegacyOrdered}) {
+            SCOPED_TRACE(static_cast<int>(mode));
+            auto queue = std::make_unique<TensorWorkQueue>(GpuBackend::CUDA, mode);
             VkExportSemaphoreCreateInfo export_info{VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
 #ifdef _WIN32
             export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
@@ -785,11 +780,11 @@ namespace {
             ASSERT_EQ(vkCreateSemaphore(device, &info, nullptr, &semaphore), VK_SUCCESS);
             auto token = std::make_shared<int>(1);
             std::weak_ptr<int> weak = token;
-            borrowed->set_consumer_timeline(device, {semaphore, 1, token});
+            queue->set_consumer_timeline(device, {semaphore, 1, token});
             token.reset();
-            borrowed->wait_timeline(1);
-            borrowed->set_consumer_timeline(device, {});
-            auto destroyed = std::async(std::launch::async, [&] { borrowed.reset(); });
+            queue->wait_timeline(1);
+            queue->set_consumer_timeline(device, {});
+            auto destroyed = std::async(std::launch::async, [&] { queue.reset(); });
             const auto status = destroyed.wait_for(20ms);
             EXPECT_EQ(status, std::future_status::timeout);
             EXPECT_FALSE(weak.expired());
@@ -799,7 +794,6 @@ namespace {
             EXPECT_EQ(vkSignalSemaphore(device, &signal), VK_SUCCESS);
             destroyed.get();
             EXPECT_TRUE(weak.expired());
-            owner.wait();
             vkDestroySemaphore(device, semaphore, nullptr);
         }
     }
